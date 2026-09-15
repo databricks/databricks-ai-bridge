@@ -109,22 +109,23 @@ the existing CLI commands remain separate.
 ## Agent application
 
 `AgentApp` provides Mason's invocation HTTP contract, including foreground, streaming, background,
-polling, and event endpoints. By default its state is process-local. Set `durable_runtime=True` to
-use Lakebase persistence, heartbeats, and crash recovery after deployment:
+polling, and event endpoints. By default its state is process-local. When Mason attaches a
+Lakebase-backed Runtime Store during deployment, it persists invocation state, heartbeats, and
+recovery coordination:
 
 ```python
-from databricks_mason import AgentApp, DurableAgentContext
+from databricks_mason import AgentApp, InvocationContext
 
-app = AgentApp(durable_runtime=True)
+app = AgentApp()
 
 
 @app.invoke
-async def invoke(input: object, context: DurableAgentContext) -> object:
+async def invoke(input: object, context: InvocationContext) -> object:
     return await run_agent(input, session_id=context.session_id)
 
 
-@app.on_recovery
-async def recover(input: object, context: DurableAgentContext) -> object:
+@app.recover
+async def recover(input: object, context: InvocationContext) -> object:
     return await recover_agent(input, session_id=context.session_id)
 ```
 
@@ -142,15 +143,16 @@ The client supplies a UUID `id`, which is also the idempotency key for every inv
 `input` and `output` may be any JSON value. Transport fields are not passed to the callback. A
 top-level `session_id` is rejected, but a framework template may carry its own stable application
 session inside `input`. Polling uses only the invocation ID and relies on Databricks Apps
-authentication. Without the durable runtime, request state and events exist only in the serving
-process and horizontally scaled clients need sticky routing. With the durable runtime, Mason
-persists the input, attempt status, heartbeats, lifecycle events, application events, and output.
+authentication. Without a Lakebase-backed Runtime Store, request state and events exist only in
+the serving process and horizontally scaled clients need sticky routing. With a Lakebase-backed
+Runtime Store, Mason persists the input, attempt status, heartbeats, lifecycle events, application
+events, and output.
 
 Durability is enabled by default for both framework templates. Mason writes the durability setting
 to `agent.toml`, and `mason deploy` reuses or provisions a dedicated `<app>-durability` Lakebase
 project. Mason adds its `databricks_mason_runtime_<app-hash>` schema and tables to that database,
 giving each app one owned schema. A replacement worker claims a stale heartbeat and calls the
-`@app.on_recovery` handler. If that handler is omitted, startup warns that automatic crash recovery
+`@app.recover` handler. If that handler is omitted, startup warns that automatic crash recovery
 is disabled; register the same function for both decorators when replaying the initial invocation is
 safe. Agent checkpoint restoration and idempotent external side effects remain the developer's
 responsibility.

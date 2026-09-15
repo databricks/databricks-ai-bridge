@@ -15,22 +15,16 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic import JsonValue as PydanticJsonValue
 
-from databricks_mason.runtime.durability.attempt import DurableInvocationExecutor
-from databricks_mason.runtime.durability.store import (
-    DurableRuntimeStore,
-    default_durability_store,
-)
-from databricks_mason.runtime.execution import AttemptExecution, LocalInvocationExecutor
 from databricks_mason.runtime.runtime import Runtime
-from databricks_mason.runtime.store import InMemoryRuntimeStore, RuntimeStore
+from databricks_mason.runtime.store import RuntimeStore
 from databricks_mason.runtime.types import (
-    DurableAgentContext,
-    DurableAgentHook,
-    DurableExecution,
-    DurableExecutionContext,
-    DurableExecutionFailedError,
-    DurableExecutionStatus,
-    DurableRequestConflictError,
+    Invocation,
+    InvocationAttemptContext,
+    InvocationConflictError,
+    InvocationContext,
+    InvocationFailedError,
+    InvocationHook,
+    InvocationStatus,
     JsonObject,
     JsonValue,
 )
@@ -53,44 +47,31 @@ class _InvocationRequest(BaseModel):
 class AgentApp(FastAPI):
     """Expose agent handlers through Mason's invocation HTTP protocol.
 
-    The default runtime keeps background state and events in this process. Set
-    ``durable_runtime=True`` to use Mason's deployed Lakebase store, heartbeats, and crash recovery.
+    ``mason dev`` selects a process-local Runtime Store. A deployed Mason server receives a
+    Lakebase-backed Runtime Store, which preserves invocation state and can recover stale work when
+    a handler is registered with :meth:`recover`.
     """
 
     def __init__(
         self,
         *,
-        durable_runtime: bool = False,
-        durability_store: RuntimeStore | None = None,
+        runtime_store: RuntimeStore | None = None,
     ) -> None:
-        self.durable_runtime = durable_runtime
-        self._invoke_hook: DurableAgentHook | None = None
-        self._on_recovery_hook: DurableAgentHook | None = None
-        store = durability_store
-        if store is None:
-            store = default_durability_store() if durable_runtime else InMemoryRuntimeStore()
-        execution = AttemptExecution(self._execute, runtime_store=store)
-        if isinstance(store, DurableRuntimeStore):
-            executor = DurableInvocationExecutor(
-                execution,
-                runtime_store=store,
-                recovery_enabled=lambda: durable_runtime and self._on_recovery_hook is not None,
-                heartbeat_seconds=3.0,
-                stale_seconds=10.0,
-                scan_seconds=3.0,
-            )
-        else:
-            executor = LocalInvocationExecutor(execution, runtime_store=store)
-        self._runtime = Runtime(runtime_store=store, executor=executor)
+        self._invoke_hook: InvocationHook | None = None
+        self._recovery_hook: InvocationHook | None = None
+        self._runtime = Runtime.from_store(
+            self._execute,
+            runtime_store=runtime_store,
+            recovery_enabled=lambda: self._recovery_hook is not None,
+        )
 
         @asynccontextmanager
         async def lifespan(_: FastAPI):
             if self._invoke_hook is None:
                 raise RuntimeError("register an invocation handler with @app.invoke")
-            if self.durable_runtime and self._on_recovery_hook is None:
+            if self._runtime.is_durable and self._recovery_hook is None:
                 logger.warning(
-                    "No @app.on_recovery handler is registered; automatic crash recovery is "
-                    "disabled."
+                    "No @app.recover handler is registered; automatic crash recovery is disabled."
                 )
             await self._runtime.start()
             try:
@@ -114,18 +95,18 @@ class AgentApp(FastAPI):
             methods=["GET"],
         )
 
-    def invoke(self, function: DurableAgentHook) -> DurableAgentHook:
+    def invoke(self, function: InvocationHook) -> InvocationHook:
         """Register the handler for an invocation's first attempt."""
         if self._invoke_hook is not None:
             raise ValueError("an invocation handler is already registered")
         self._invoke_hook = function
         return function
 
-    def on_recovery(self, function: DurableAgentHook) -> DurableAgentHook:
+    def recover(self, function: InvocationHook) -> InvocationHook:
         """Register the handler used after an interrupted attempt becomes stale."""
-        if self._on_recovery_hook is not None:
+        if self._recovery_hook is not None:
             raise ValueError("a recovery handler is already registered")
-        self._on_recovery_hook = function
+        self._recovery_hook = function
         return function
 
     async def _bind_session(self, request: Request, call_next) -> Response:
@@ -137,62 +118,62 @@ class AgentApp(FastAPI):
 
     async def _execute(
         self,
-        execution_request: JsonValue,
-        execution_context: DurableExecutionContext,
+        invocation_request: JsonValue,
+        attempt_context: InvocationAttemptContext,
     ) -> JsonValue:
-        if not isinstance(execution_request, dict):
-            raise TypeError("execution request must be an object")
-        session_id = execution_request.get("session_id")
-        if not isinstance(session_id, str) or "input" not in execution_request:
-            raise TypeError("execution request must contain session_id and input")
+        if not isinstance(invocation_request, dict):
+            raise TypeError("invocation request must be an object")
+        session_id = invocation_request.get("session_id")
+        if not isinstance(session_id, str) or "input" not in invocation_request:
+            raise TypeError("invocation request must contain session_id and input")
 
-        context = DurableAgentContext(
-            invocation_id=execution_context.execution_id,
+        context = InvocationContext(
+            invocation_id=attempt_context.invocation_id,
             session_id=session_id,
-            attempt=execution_context.attempt,
-            _execution_context=execution_context,
+            attempt=attempt_context.attempt,
+            _attempt_context=attempt_context,
         )
-        function = self._on_recovery_hook if context.is_recovery else self._invoke_hook
+        function = self._recovery_hook if context.is_recovery else self._invoke_hook
         if function is None:
-            handler = "@app.on_recovery" if context.is_recovery else "@app.invoke"
+            handler = "@app.recover" if context.is_recovery else "@app.invoke"
             raise RuntimeError(f"no {handler} handler is registered")
-        return await function(copy.deepcopy(execution_request["input"]), context)
+        return await function(copy.deepcopy(invocation_request["input"]), context)
 
     async def _invoke_request(self, request: Request, body: _InvocationRequest) -> Response:
         invocation_id = str(body.id)
-        execution_request: JsonObject = {
+        invocation_request: JsonObject = {
             "session_id": request.state.session_id or invocation_id,
             "input": copy.deepcopy(body.input),
         }
         try:
             if body.background:
-                state = await self._runtime.submit(invocation_id, execution_request)
+                state = await self._runtime.submit(invocation_id, invocation_request)
                 return JSONResponse(
                     self._accepted_payload(state, stream=body.stream),
                     status_code=202,
                 )
             if body.stream:
-                await self._runtime.submit(invocation_id, execution_request)
+                await self._runtime.submit(invocation_id, invocation_request)
                 return StreamingResponse(
                     self._event_stream(invocation_id),
                     media_type="text/event-stream",
                 )
-            output = await self._runtime.invoke(invocation_id, execution_request)
+            output = await self._runtime.invoke(invocation_id, invocation_request)
             return JSONResponse({"id": invocation_id, "status": "completed", "output": output})
-        except DurableRequestConflictError as exc:
+        except InvocationConflictError as exc:
             raise HTTPException(409, "id was already used for another request") from exc
-        except DurableExecutionFailedError as exc:
-            raise HTTPException(500, "agent execution failed") from exc
+        except InvocationFailedError as exc:
+            raise HTTPException(500, "agent invocation failed") from exc
 
     async def _get_request(self, invocation_id: UUID) -> JSONResponse:
-        state = await self._runtime.get_execution(str(invocation_id))
+        state = await self._runtime.get_invocation(str(invocation_id))
         if state is None:
             raise HTTPException(404, "invocation not found")
         return JSONResponse(self._state_payload(state))
 
     async def _events(self, invocation_id: UUID, after: int = 0) -> StreamingResponse:
         normalized_invocation_id = str(invocation_id)
-        if await self._runtime.get_execution(normalized_invocation_id) is None:
+        if await self._runtime.get_invocation(normalized_invocation_id) is None:
             raise HTTPException(404, "invocation not found")
         return StreamingResponse(
             self._event_stream(normalized_invocation_id, after),
@@ -207,14 +188,14 @@ class AgentApp(FastAPI):
                 event_type = event.event.get("type", "message")
                 yield f"id: {cursor}\nevent: {event_type}\ndata: {json.dumps(event.event)}\n\n"
 
-            state = await self._runtime.get_execution(invocation_id)
+            state = await self._runtime.get_invocation(invocation_id)
             if state is None or state.is_terminal:
                 return
             await asyncio.sleep(self._runtime.poll_seconds)
 
     @staticmethod
-    def _accepted_payload(state: DurableExecution, *, stream: bool) -> JsonObject:
-        invocation_id = state.execution_id
+    def _accepted_payload(state: Invocation, *, stream: bool) -> JsonObject:
+        invocation_id = state.invocation_id
         payload: JsonObject = {
             "id": invocation_id,
             "status": state.status.value.lower(),
@@ -225,13 +206,13 @@ class AgentApp(FastAPI):
         return payload
 
     @staticmethod
-    def _state_payload(state: DurableExecution) -> JsonObject:
+    def _state_payload(state: Invocation) -> JsonObject:
         payload: JsonObject = {
-            "id": state.execution_id,
+            "id": state.invocation_id,
             "status": state.status.value.lower(),
         }
-        if state.status == DurableExecutionStatus.COMPLETED:
+        if state.status == InvocationStatus.COMPLETED:
             payload["output"] = copy.deepcopy(state.response)
-        elif state.status == DurableExecutionStatus.FAILED:
-            payload["error"] = "agent execution failed"
+        elif state.status == InvocationStatus.FAILED:
+            payload["error"] = "agent invocation failed"
         return payload

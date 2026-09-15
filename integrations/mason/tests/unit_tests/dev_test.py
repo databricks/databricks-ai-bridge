@@ -113,7 +113,7 @@ def test_dev_filters_build_index_env_via_entry_point(tmp_path: pathlib.Path):
     )
     dev_yaml = dev_mod._dev_entry_point(tmp_path / "app.yaml")
     names = {e["name"] for e in yaml.safe_load(dev_yaml.read_text())["env"]}
-    assert names == {"AGENT_SESSION_STORE", "DATABRICKS_MASON_RUNTIME_LOCAL"}
+    assert names == {"AGENT_SESSION_STORE", "DATABRICKS_MASON_RUNTIME_STORE_LOCAL"}
 
 
 def test_dev_uses_local_entry_point_without_index_override(tmp_path: pathlib.Path):
@@ -124,7 +124,7 @@ def test_dev_uses_local_entry_point_without_index_override(tmp_path: pathlib.Pat
     env = {e["name"]: e["value"] for e in yaml.safe_load(dev_yaml.read_text())["env"]}
     assert env == {
         "AGENT_SESSION_STORE": "s",
-        "DATABRICKS_MASON_RUNTIME_LOCAL": "true",
+        "DATABRICKS_MASON_RUNTIME_STORE_LOCAL": "true",
     }
     original_env = yaml.safe_load((tmp_path / "app.yaml").read_text())["env"]
     assert original_env == [{"name": "AGENT_SESSION_STORE", "value": "s"}]

@@ -1,4 +1,4 @@
-"""Lakebase-backed durability for Mason Runtime."""
+"""Lakebase-backed Runtime Store with heartbeat-based recovery."""
 
 from __future__ import annotations
 
@@ -15,12 +15,12 @@ from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from databricks_mason.runtime.durability.store import DurableRuntimeStore
-from databricks_mason.runtime.store import DEFAULT_RUNTIME_SCHEMA
+from databricks_mason.runtime.store import DEFAULT_RUNTIME_STORE_SCHEMA
 from databricks_mason.runtime.types import (
-    DurableEvent,
-    DurableExecution,
-    DurableExecutionStatus,
-    DurableRequestConflictError,
+    Invocation,
+    InvocationConflictError,
+    InvocationEvent,
+    InvocationStatus,
     JsonObject,
     JsonValue,
 )
@@ -44,9 +44,9 @@ def _serialize_json_value(value: JsonValue) -> str:
     return json.dumps(value, allow_nan=False)
 
 
-def _validate_execution_id(execution_id: str) -> None:
-    if not execution_id:
-        raise ValueError("execution_id must not be empty")
+def _validate_invocation_id(invocation_id: str) -> None:
+    if not invocation_id:
+        raise ValueError("invocation_id must not be empty")
 
 
 class _AppsPostgresLakebase:
@@ -126,11 +126,11 @@ class _AppsPostgresLakebase:
 
 
 class LakebaseDurableRuntimeStore(DurableRuntimeStore):
-    """Persist shared execution state, attempt leases, and ordered events in Lakebase.
+    """Persist invocation state, attempt leases, and ordered events in Lakebase.
 
-    The ``executions`` table is the source of truth for idempotency and lifecycle state. Conditional
+    The ``invocations`` table is the source of truth for idempotency and lifecycle state. Conditional
     SQL updates claim an attempt and fence completion, failure, heartbeat, and event writes by its
-    attempt number. The ``execution_events`` table provides an ordered replay cursor. Because every
+    attempt number. The ``invocation_events`` table provides an ordered replay cursor. Because every
     app replica connects to the same schema, another replica can detect a stale heartbeat, claim the
     next attempt, and continue after process or pod loss.
 
@@ -146,7 +146,7 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
         project: str | None = None,
         branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
-        schema: str = DEFAULT_RUNTIME_SCHEMA,
+        schema: str = DEFAULT_RUNTIME_STORE_SCHEMA,
         lakebase: _AsyncLakebase | None = None,
     ) -> None:
         if not _SCHEMA_NAME.fullmatch(schema):
@@ -172,8 +172,8 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
 
         self._lakebase = lakebase
         self._engine = lakebase.engine
-        self._table = f"{schema}.executions"
-        self._events_table = f"{schema}.execution_events"
+        self._table = f"{schema}.invocations"
+        self._events_table = f"{schema}.invocation_events"
 
     @classmethod
     def from_app_resource(
@@ -186,7 +186,7 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
         username: str | None = None,
         sslmode: str | None = None,
         workspace_client: WorkspaceClient | None = None,
-        schema: str = DEFAULT_RUNTIME_SCHEMA,
+        schema: str = DEFAULT_RUNTIME_STORE_SCHEMA,
     ) -> "LakebaseDurableRuntimeStore":
         """Use connection coordinates injected for a Databricks Apps Postgres resource."""
         if not _SCHEMA_NAME.fullmatch(schema):
@@ -237,7 +237,7 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                 text(
                     f"""
                     CREATE TABLE IF NOT EXISTS {self._table} (
-                        execution_id TEXT PRIMARY KEY,
+                        invocation_id TEXT PRIMARY KEY,
                         status TEXT NOT NULL,
                         attempt INTEGER NOT NULL DEFAULT 0,
                         heartbeat_at TIMESTAMPTZ,
@@ -253,8 +253,8 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                     f"""
                     CREATE TABLE IF NOT EXISTS {self._events_table} (
                         sequence_number BIGSERIAL PRIMARY KEY,
-                        execution_id TEXT NOT NULL
-                            REFERENCES {self._table}(execution_id) ON DELETE CASCADE,
+                        invocation_id TEXT NOT NULL
+                            REFERENCES {self._table}(invocation_id) ON DELETE CASCADE,
                         attempt INTEGER NOT NULL,
                         event JSONB NOT NULL,
                         CHECK (jsonb_typeof(event) = 'object')
@@ -265,15 +265,15 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
             await connection.execute(
                 text(
                     f"""
-                    CREATE INDEX IF NOT EXISTS execution_events_replay_idx
-                    ON {self._events_table} (execution_id, sequence_number)
+                    CREATE INDEX IF NOT EXISTS invocation_events_replay_idx
+                    ON {self._events_table} (invocation_id, sequence_number)
                     """
                 )
             )
             await connection.execute(
                 text(
                     f"""
-                    CREATE INDEX IF NOT EXISTS executions_recovery_idx
+                    CREATE INDEX IF NOT EXISTS invocations_recovery_idx
                     ON {self._table} (status, heartbeat_at)
                     WHERE status IN ('QUEUED', 'ACTIVE')
                     """
@@ -283,77 +283,77 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
     async def close(self) -> None:
         await self._engine.dispose()
 
-    async def accept(self, execution_id: str, request: JsonValue) -> DurableExecution:
-        _validate_execution_id(execution_id)
+    async def accept(self, invocation_id: str, request: JsonValue) -> Invocation:
+        _validate_invocation_id(invocation_id)
         serialized_request = _serialize_json_value(request)
         async with self._engine.begin() as connection:
             await connection.execute(
                 text(
                     f"""
-                    INSERT INTO {self._table} (execution_id, status, request)
-                    VALUES (:execution_id, 'QUEUED', CAST(:request AS JSONB))
-                    ON CONFLICT (execution_id) DO NOTHING
+                    INSERT INTO {self._table} (invocation_id, status, request)
+                    VALUES (:invocation_id, 'QUEUED', CAST(:request AS JSONB))
+                    ON CONFLICT (invocation_id) DO NOTHING
                     """
                 ),
-                {"execution_id": execution_id, "request": serialized_request},
+                {"invocation_id": invocation_id, "request": serialized_request},
             )
             row = (
                 (
                     await connection.execute(
                         text(
                             f"""
-                        SELECT execution_id, status, attempt, heartbeat_at,
+                        SELECT invocation_id, status, attempt,
                                request::TEXT AS request_json,
                                response::TEXT AS response_json
                         FROM {self._table}
-                        WHERE execution_id=:execution_id
+                        WHERE invocation_id=:invocation_id
                         """
                         ),
-                        {"execution_id": execution_id},
+                        {"invocation_id": invocation_id},
                     )
                 )
                 .mappings()
                 .one()
             )
 
-        state = self._to_execution(row)
+        state = self._to_invocation(row)
         if state.request != request:
-            raise DurableRequestConflictError(
-                f"execution {execution_id!r} was already accepted with a different request"
+            raise InvocationConflictError(
+                f"invocation {invocation_id!r} was already accepted with a different request"
             )
         return state
 
-    async def get(self, execution_id: str) -> DurableExecution | None:
-        _validate_execution_id(execution_id)
+    async def get(self, invocation_id: str) -> Invocation | None:
+        _validate_invocation_id(invocation_id)
         async with self._engine.connect() as connection:
             row = (
                 (
                     await connection.execute(
                         text(
                             f"""
-                        SELECT execution_id, status, attempt, heartbeat_at,
+                        SELECT invocation_id, status, attempt,
                                request::TEXT AS request_json,
                                response::TEXT AS response_json
                         FROM {self._table}
-                        WHERE execution_id=:execution_id
+                        WHERE invocation_id=:invocation_id
                         """
                         ),
-                        {"execution_id": execution_id},
+                        {"invocation_id": invocation_id},
                     )
                 )
                 .mappings()
                 .one_or_none()
             )
-        return self._to_execution(row) if row is not None else None
+        return self._to_invocation(row) if row is not None else None
 
-    async def recoverable_execution_ids(self, stale_seconds: float) -> list[str]:
+    async def recoverable_invocation_ids(self, stale_seconds: float) -> list[str]:
         async with self._engine.connect() as connection:
             rows = (
                 (
                     await connection.execute(
                         text(
                             f"""
-                        SELECT execution_id
+                        SELECT invocation_id
                         FROM {self._table}
                         WHERE status='QUEUED'
                            OR (status='ACTIVE' AND (
@@ -371,27 +371,27 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
             )
         return list(rows)
 
-    async def claim(self, execution_id: str) -> DurableExecution | None:
+    async def claim(self, invocation_id: str) -> Invocation | None:
         """Claim a newly queued invocation for its first attempt."""
-        return await self._claim(execution_id, stale_seconds=None)
+        return await self._claim(invocation_id, stale_seconds=None)
 
     async def claim_recoverable(
         self,
-        execution_id: str,
+        invocation_id: str,
         stale_seconds: float,
-    ) -> DurableExecution | None:
+    ) -> Invocation | None:
         """Claim a queued or stale invocation for a replacement attempt."""
-        return await self._claim(execution_id, stale_seconds=stale_seconds)
+        return await self._claim(invocation_id, stale_seconds=stale_seconds)
 
     async def _claim(
         self,
-        execution_id: str,
+        invocation_id: str,
         *,
         stale_seconds: float | None,
-    ) -> DurableExecution | None:
-        _validate_execution_id(execution_id)
+    ) -> Invocation | None:
+        _validate_invocation_id(invocation_id)
         eligibility = "status='QUEUED'"
-        parameters: dict[str, str | float] = {"execution_id": execution_id}
+        parameters: dict[str, str | float] = {"invocation_id": invocation_id}
         if stale_seconds is not None:
             eligibility = """
                 status='QUEUED'
@@ -409,9 +409,9 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                             f"""
                         UPDATE {self._table}
                         SET status='ACTIVE', attempt=attempt+1, heartbeat_at=NOW()
-                        WHERE execution_id=:execution_id
+                        WHERE invocation_id=:invocation_id
                           AND ({eligibility})
-                        RETURNING execution_id, status, attempt, heartbeat_at,
+                        RETURNING invocation_id, status, attempt,
                                   request::TEXT AS request_json,
                                   response::TEXT AS response_json
                         """
@@ -426,42 +426,42 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                 await connection.execute(
                     text(
                         f"""
-                        INSERT INTO {self._events_table} (execution_id, attempt, event)
-                        VALUES (:execution_id, :attempt, CAST(:event AS JSONB))
+                        INSERT INTO {self._events_table} (invocation_id, attempt, event)
+                        VALUES (:invocation_id, :attempt, CAST(:event AS JSONB))
                         """
                     ),
                     {
-                        "execution_id": execution_id,
+                        "invocation_id": invocation_id,
                         "attempt": int(row["attempt"]),
                         "event": _serialize_json_value({"type": "run.started"}),
                     },
                 )
-        return self._to_execution(row) if row is not None else None
+        return self._to_invocation(row) if row is not None else None
 
-    async def heartbeat(self, execution_id: str, attempt: int) -> bool:
-        _validate_execution_id(execution_id)
+    async def heartbeat(self, invocation_id: str, attempt: int) -> bool:
+        _validate_invocation_id(invocation_id)
         async with self._engine.begin() as connection:
             result = await connection.execute(
                 text(
                     f"""
                     UPDATE {self._table}
                     SET heartbeat_at=NOW()
-                    WHERE execution_id=:execution_id
+                    WHERE invocation_id=:invocation_id
                       AND attempt=:attempt
                       AND status='ACTIVE'
                     """
                 ),
-                {"execution_id": execution_id, "attempt": attempt},
+                {"invocation_id": invocation_id, "attempt": attempt},
             )
         return result.rowcount == 1
 
     async def complete(
         self,
-        execution_id: str,
+        invocation_id: str,
         attempt: int,
         response: JsonValue,
     ) -> bool:
-        _validate_execution_id(execution_id)
+        _validate_invocation_id(invocation_id)
         serialized_response = _serialize_json_value(response)
         async with self._engine.begin() as connection:
             result = await connection.execute(
@@ -469,13 +469,13 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                     f"""
                     UPDATE {self._table}
                     SET status='COMPLETED', response=CAST(:response AS JSONB)
-                    WHERE execution_id=:execution_id
+                    WHERE invocation_id=:invocation_id
                       AND attempt=:attempt
                       AND status='ACTIVE'
                     """
                 ),
                 {
-                    "execution_id": execution_id,
+                    "invocation_id": invocation_id,
                     "attempt": attempt,
                     "response": serialized_response,
                 },
@@ -484,43 +484,43 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                 await connection.execute(
                     text(
                         f"""
-                        INSERT INTO {self._events_table} (execution_id, attempt, event)
-                        VALUES (:execution_id, :attempt, CAST(:event AS JSONB))
+                        INSERT INTO {self._events_table} (invocation_id, attempt, event)
+                        VALUES (:invocation_id, :attempt, CAST(:event AS JSONB))
                         """
                     ),
                     {
-                        "execution_id": execution_id,
+                        "invocation_id": invocation_id,
                         "attempt": attempt,
                         "event": _serialize_json_value({"type": "run.completed"}),
                     },
                 )
         return result.rowcount == 1
 
-    async def fail(self, execution_id: str, attempt: int) -> bool:
-        _validate_execution_id(execution_id)
+    async def fail(self, invocation_id: str, attempt: int) -> bool:
+        _validate_invocation_id(invocation_id)
         async with self._engine.begin() as connection:
             result = await connection.execute(
                 text(
                     f"""
                     UPDATE {self._table}
                     SET status='FAILED'
-                    WHERE execution_id=:execution_id
+                    WHERE invocation_id=:invocation_id
                       AND attempt=:attempt
                       AND status='ACTIVE'
                     """
                 ),
-                {"execution_id": execution_id, "attempt": attempt},
+                {"invocation_id": invocation_id, "attempt": attempt},
             )
             if result.rowcount == 1:
                 await connection.execute(
                     text(
                         f"""
-                        INSERT INTO {self._events_table} (execution_id, attempt, event)
-                        VALUES (:execution_id, :attempt, CAST(:event AS JSONB))
+                        INSERT INTO {self._events_table} (invocation_id, attempt, event)
+                        VALUES (:invocation_id, :attempt, CAST(:event AS JSONB))
                         """
                     ),
                     {
-                        "execution_id": execution_id,
+                        "invocation_id": invocation_id,
                         "attempt": attempt,
                         "event": _serialize_json_value({"type": "run.failed"}),
                     },
@@ -529,23 +529,23 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
 
     async def append_event(
         self,
-        execution_id: str,
+        invocation_id: str,
         attempt: int,
         event: JsonObject,
     ) -> int | None:
         """Append an event only while the caller owns the active attempt."""
-        _validate_execution_id(execution_id)
+        _validate_invocation_id(invocation_id)
         serialized_event = _serialize_json_value(event)
         async with self._engine.begin() as connection:
             result = await connection.execute(
                 text(
                     f"""
-                    INSERT INTO {self._events_table} (execution_id, attempt, event)
-                    SELECT :execution_id, :attempt, CAST(:event AS JSONB)
+                    INSERT INTO {self._events_table} (invocation_id, attempt, event)
+                    SELECT :invocation_id, :attempt, CAST(:event AS JSONB)
                     WHERE EXISTS (
                         SELECT 1
                         FROM {self._table}
-                        WHERE execution_id=:execution_id
+                        WHERE invocation_id=:invocation_id
                           AND attempt=:attempt
                           AND status='ACTIVE'
                     )
@@ -553,7 +553,7 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                     """
                 ),
                 {
-                    "execution_id": execution_id,
+                    "invocation_id": invocation_id,
                     "attempt": attempt,
                     "event": serialized_event,
                 },
@@ -563,33 +563,33 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
 
     async def events(
         self,
-        execution_id: str,
+        invocation_id: str,
         after_sequence: int | None = None,
-    ) -> list[DurableEvent]:
-        """Return ordered events for one execution after an optional cursor."""
-        _validate_execution_id(execution_id)
+    ) -> list[InvocationEvent]:
+        """Return ordered events for one invocation after an optional cursor."""
+        _validate_invocation_id(invocation_id)
         async with self._engine.connect() as connection:
             result = await connection.execute(
                 text(
                     f"""
-                    SELECT sequence_number, execution_id, attempt,
+                    SELECT sequence_number, invocation_id, attempt,
                            event::TEXT AS event_json
                     FROM {self._events_table}
-                    WHERE execution_id=:execution_id
+                    WHERE invocation_id=:invocation_id
                       AND (:after_sequence IS NULL OR sequence_number > :after_sequence)
                     ORDER BY sequence_number
                     """
                 ),
                 {
-                    "execution_id": execution_id,
+                    "invocation_id": invocation_id,
                     "after_sequence": after_sequence,
                 },
             )
             rows = result.mappings().all()
         return [
-            DurableEvent(
+            InvocationEvent(
                 sequence_number=int(row["sequence_number"]),
-                execution_id=str(row["execution_id"]),
+                invocation_id=str(row["invocation_id"]),
                 attempt=int(row["attempt"]),
                 event=json.loads(row["event_json"]),
             )
@@ -597,12 +597,11 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
         ]
 
     @staticmethod
-    def _to_execution(row: Mapping[str, Any] | RowMapping) -> DurableExecution:
-        return DurableExecution(
-            execution_id=str(row["execution_id"]),
-            status=DurableExecutionStatus(str(row["status"])),
+    def _to_invocation(row: Mapping[str, Any] | RowMapping) -> Invocation:
+        return Invocation(
+            invocation_id=str(row["invocation_id"]),
+            status=InvocationStatus(str(row["status"])),
             attempt=int(row["attempt"]),
-            heartbeat_at=row["heartbeat_at"],
             request=json.loads(row["request_json"]),
             response=json.loads(row["response_json"]) if row["response_json"] else None,
         )

@@ -15,7 +15,7 @@ from agent.mcps import build_mcp_servers
 # Importing the tools package auto-registers every tool module.
 from agent.tools import all_tools
 from databricks_mason import (
-    DurableAgentContext,
+    InvocationContext,
     workspace_client,
     workspace_headers,
 )
@@ -113,7 +113,7 @@ def _payload(value: Any) -> dict[str, Any]:
     return value
 
 
-def _session_id(payload: dict[str, Any], context: DurableAgentContext) -> str:
+def _session_id(payload: dict[str, Any], context: InvocationContext) -> str:
     value = payload.get("session_id") or context.session_id
     if not isinstance(value, str) or not value:
         raise ValueError("session_id must be a non-empty string")
@@ -127,17 +127,17 @@ def _actor(payload: dict[str, Any], session_id: str) -> str:
     return value
 
 
-async def invoke(value: Any, context: DurableAgentContext) -> dict:
-    """Run the first attempt for one durable invocation."""
+async def invoke(value: Any, context: InvocationContext) -> dict:
+    """Run the first attempt for one invocation."""
     return await _run_agent(_payload(value), context)
 
 
-async def on_recovery(value: Any, context: DurableAgentContext) -> dict:
+async def recover(value: Any, context: InvocationContext) -> dict:
     """Replay the persisted application input after the runtime replaces a stale worker."""
     return await _run_agent(_payload(value), context)
 
 
-async def _run_agent(payload: dict[str, Any], context: DurableAgentContext) -> dict:
+async def _run_agent(payload: dict[str, Any], context: InvocationContext) -> dict:
     session_id = _session_id(payload, context)
     actor = _actor(payload, session_id)
     # Start a root MLflow trace around the invocation so it is recorded: OpenAI autolog only nests
@@ -164,7 +164,7 @@ async def _run_agent(payload: dict[str, Any], context: DurableAgentContext) -> d
 
 async def _persisted_agent_events(
     payload: dict[str, Any],
-    context: DurableAgentContext,
+    context: InvocationContext,
     session_id: str,
     actor: str,
 ) -> AsyncGenerator[dict, None]:

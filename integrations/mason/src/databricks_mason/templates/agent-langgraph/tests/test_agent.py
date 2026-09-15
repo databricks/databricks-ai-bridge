@@ -129,7 +129,7 @@ async def test_invoke_starts_turn_and_recovery_resumes_current_checkpoint(monkey
     payload = {"session_id": "session-1", "messages": [{"role": "user", "content": "hi"}]}
 
     await agent_module.invoke(payload, context)
-    await agent_module.on_recovery(payload, context)
+    await agent_module.recover(payload, context)
 
     assert calls[0][0] == {"messages": payload["messages"]}
     assert calls[1][0] is None
@@ -152,7 +152,7 @@ async def test_recovery_replays_input_without_current_checkpoint(monkeypatch):
     monkeypatch.setattr(agent_module, "_run_agent", fake_run_agent)
     monkeypatch.setattr(agent_module, "checkpointer", lambda: Saver())
     messages = [{"role": "user", "content": "hi"}]
-    await agent_module.on_recovery(
+    await agent_module.recover(
         {"session_id": "session-1", "messages": messages},
         SimpleNamespace(invocation_id="inv-1", session_id="runtime-session"),
     )

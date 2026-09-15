@@ -17,14 +17,14 @@ class Heartbeat:
         self,
         *,
         runtime_store: DurableRuntimeStore,
-        execution_id: str,
+        invocation_id: str,
         attempt: int,
         heartbeat_seconds: float,
     ) -> None:
         if heartbeat_seconds <= 0:
             raise ValueError("heartbeat_seconds must be positive")
         self._runtime_store = runtime_store
-        self._execution_id = execution_id
+        self._invocation_id = invocation_id
         self._attempt = attempt
         self._heartbeat_seconds = heartbeat_seconds
         self._task: asyncio.Task[None] | None = None
@@ -32,7 +32,7 @@ class Heartbeat:
     async def __aenter__(self) -> Heartbeat:
         self._task = asyncio.create_task(
             self._run(),
-            name=f"durable-heartbeat-{self._execution_id}-{self._attempt}",
+            name=f"durable-heartbeat-{self._invocation_id}-{self._attempt}",
         )
         return self
 
@@ -47,13 +47,13 @@ class Heartbeat:
         while True:
             try:
                 owns_attempt = await self._runtime_store.heartbeat(
-                    self._execution_id,
+                    self._invocation_id,
                     self._attempt,
                 )
             except Exception:
                 logger.warning(
                     "Durable heartbeat failed: %s attempt=%d",
-                    self._execution_id,
+                    self._invocation_id,
                     self._attempt,
                     exc_info=True,
                 )

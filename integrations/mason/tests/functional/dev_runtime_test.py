@@ -188,6 +188,7 @@ def test_scaffolded_agent_boots_and_answers_locally(tmp_path: pathlib.Path) -> N
         for entry in (yaml.safe_load(manifest.read_text()).get("env") or [])
         if isinstance(entry, dict) and "name" in entry
     }
+    assert manifest_env["DATABRICKS_MASON_RUNTIME_STORE_LOCAL"] == "true"
     manifest.unlink(missing_ok=True)  # don't leave the local-only manifest in the project tree
 
     # 4. Fake model serving.
@@ -201,8 +202,8 @@ def test_scaffolded_agent_boots_and_answers_locally(tmp_path: pathlib.Path) -> N
     #
     #    DATABRICKS_APP_NAME reproduces a real local run: `mason dev` runs the app as an Apps-style
     #    local process, where the durable runtime falls back to in-memory *only* via
-    #    DATABRICKS_MASON_RUNTIME_LOCAL. Without an app name the durable store no-ops to in-memory and
-    #    that path is never exercised; with it, a boot that doesn't get the marker fails here.
+    #    DATABRICKS_MASON_RUNTIME_STORE_LOCAL. The assertion above and successful boot together
+    #    verify that the dev manifest selects the in-memory Runtime Store.
     app_port = _free_port()
     home = tmp_path / "home"
     home.mkdir()

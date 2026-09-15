@@ -9,18 +9,16 @@ import pytest
 from fastapi import FastAPI
 
 from databricks_mason import AgentApp
-from databricks_mason.runtime.durability.attempt import DurableInvocationExecutor
-from databricks_mason.runtime.durability.store import InMemoryDurabilityStore
 from databricks_mason.runtime.store import (
-    RUNTIME_ENDPOINT_ENV,
-    RUNTIME_LOCAL_ENV,
-    RUNTIME_SCHEMA_ENV,
+    RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV,
+    RUNTIME_STORE_LOCAL_ENV,
+    RUNTIME_STORE_SCHEMA_ENV,
     InMemoryRuntimeStore,
 )
 from databricks_mason.runtime.types import (
-    DurableExecution,
-    DurableExecutionContext,
-    DurableExecutionStatus,
+    Invocation,
+    InvocationAttemptContext,
+    InvocationStatus,
 )
 
 _ROUTING_COOKIE = "__Host-databricks-app-router"
@@ -33,10 +31,10 @@ async def echo(input, context):
 
 
 def make_app(invoke=echo, *, recover=None) -> AgentApp:
-    app = AgentApp(durable_runtime=True, durability_store=InMemoryDurabilityStore())
+    app = AgentApp(runtime_store=InMemoryRuntimeStore())
     app.invoke(invoke)
     if recover is not None:
-        app.on_recovery(recover)
+        app.recover(recover)
     return app
 
 
@@ -140,7 +138,7 @@ async def test_recovery_attempt_uses_recovery_hook() -> None:
     app = make_app(invoke, recover=recover)
     result = await app._execute(
         {"input": "hello", "session_id": "session-1"},
-        DurableExecutionContext(_RUN_1, 2),
+        InvocationAttemptContext(_RUN_1, 2),
     )
 
     assert result == {"input": "hello", "session_id": "session-1"}
@@ -148,15 +146,13 @@ async def test_recovery_attempt_uses_recovery_hook() -> None:
 
 
 @pytest.mark.asyncio
-async def test_omitting_recovery_hook_disables_recovery() -> None:
+async def test_recovery_attempt_requires_a_recovery_hook() -> None:
     app = make_app()
-    async with app.router.lifespan_context(app):
-        assert isinstance(app._runtime.executor, DurableInvocationExecutor)
 
-    with pytest.raises(RuntimeError, match="@app.on_recovery"):
+    with pytest.raises(RuntimeError, match="@app.recover"):
         await app._execute(
             {"input": {}, "session_id": "session-1"},
-            DurableExecutionContext(_RUN_1, 2),
+            InvocationAttemptContext(_RUN_1, 2),
         )
 
 
@@ -329,7 +325,7 @@ async def test_agent_failure_returns_500_and_failed_event() -> None:
         events = await app._runtime.get_events(_RUN_1)
 
     assert response.status_code == 500
-    assert response.json() == {"detail": "agent execution failed"}
+    assert response.json() == {"detail": "agent invocation failed"}
     assert [event.event for event in events] == [
         {"type": "run.started"},
         {"type": "run.failed"},
@@ -337,19 +333,19 @@ async def test_agent_failure_returns_500_and_failed_event() -> None:
 
 
 def test_app_is_asgi_app_with_instance_scoped_decorators() -> None:
-    app = AgentApp(durable_runtime=True, durability_store=InMemoryDurabilityStore())
+    app = AgentApp(runtime_store=InMemoryRuntimeStore())
 
     @app.invoke
     async def invoke(input, context):
         return input
 
-    @app.on_recovery
+    @app.recover
     async def recover(input, context):
         return input
 
     assert isinstance(app, FastAPI)
     assert app._invoke_hook is invoke
-    assert app._on_recovery_hook is recover
+    assert app._recovery_hook is recover
     with pytest.raises(ValueError, match="already registered"):
         app.invoke(echo)
 
@@ -373,23 +369,21 @@ def test_app_allows_custom_routes_alongside_invocation_routes() -> None:
 
 
 def test_agent_app_defaults_to_process_local_state_outside_apps(monkeypatch) -> None:
-    monkeypatch.delenv(RUNTIME_LOCAL_ENV, raising=False)
-    monkeypatch.delenv("DATABRICKS_APP_NAME", raising=False)
-    monkeypatch.delenv(RUNTIME_ENDPOINT_ENV, raising=False)
-    monkeypatch.delenv(RUNTIME_SCHEMA_ENV, raising=False)
+    monkeypatch.delenv(RUNTIME_STORE_LOCAL_ENV, raising=False)
+    monkeypatch.delenv(RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV, raising=False)
+    monkeypatch.delenv(RUNTIME_STORE_SCHEMA_ENV, raising=False)
 
     app = AgentApp()
 
-    assert app.durable_runtime is False
+    assert app._runtime.is_durable is False
     assert isinstance(app._runtime.runtime_store, InMemoryRuntimeStore)
 
 
 def test_state_payload_nests_completed_application_response() -> None:
-    state = DurableExecution(
-        execution_id=_RUN_2,
-        status=DurableExecutionStatus.COMPLETED,
+    state = Invocation(
+        invocation_id=_RUN_2,
+        status=InvocationStatus.COMPLETED,
         attempt=1,
-        heartbeat_at=None,
         request={"input": {}, "session_id": "session-1"},
         response={"id": "application-id", "status": "application-status"},
     )

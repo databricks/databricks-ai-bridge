@@ -32,11 +32,11 @@ from databricks_mason.project_config import (
     load_project_metadata,
     require_managed_tool_support,
 )
+from databricks_mason.runtime.store import RUNTIME_STORE_LOCAL_ENV
 from databricks_mason.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
 
 # Default local port; `databricks apps run-local` listens here unless --app-port overrides it.
 _DEFAULT_APP_PORT = 8000
-_LOCAL_RUNTIME_ENV = "DATABRICKS_MASON_RUNTIME_LOCAL"
 _LOCAL_APP_YAML = "app.masondev.yaml"
 
 # Env vars that pin a package index for the *deployed* Apps build (a cloud-only workaround, see
@@ -263,7 +263,7 @@ def _dev_entry_point(
 ) -> pathlib.Path:
     """Write the local-only app manifest consumed by ``apps run-local``.
 
-    The manifest marks the process as local so durability uses its in-memory store. Keeping this in
+    The manifest marks the process as local so Mason Runtime uses its in-memory store. Keeping this in
     the entry point is more reliable than forwarding ``--env`` through the Databricks CLI and does
     not mutate the deployable ``app.yaml``. Deploy-only package-index variables are also removed.
     ``extra_env`` is merged in (overriding any same-named entries) for dev-only overrides such as
@@ -282,12 +282,14 @@ def _dev_entry_point(
         e for e in (env or []) if not (isinstance(e, dict) and e.get("name") in _BUILD_INDEX_ENVS)
     ]
     filtered = [
-        e for e in filtered if not (isinstance(e, dict) and e.get("name") == _LOCAL_RUNTIME_ENV)
+        e
+        for e in filtered
+        if not (isinstance(e, dict) and e.get("name") == RUNTIME_STORE_LOCAL_ENV)
     ]
     for name, value in (extra_env or {}).items():
         filtered = [e for e in filtered if not (isinstance(e, dict) and e.get("name") == name)]
         filtered.append({"name": name, "value": value})
-    filtered.append({"name": _LOCAL_RUNTIME_ENV, "value": "true"})
+    filtered.append({"name": RUNTIME_STORE_LOCAL_ENV, "value": "true"})
     doc["env"] = filtered
     # The Apps CLI rejects hidden or hyphenated entry-point filenames.
     dev_yaml = app_yaml.parent / _LOCAL_APP_YAML

@@ -1,27 +1,25 @@
-"""Public contracts shared by Mason Runtime, stores, and agent applications.
+"""Contracts shared by Mason Runtime, stores, and agent applications.
 
-The runtime returns ``DurableExecution`` snapshots and ordered ``DurableEvent`` records. Each
-executor call receives a ``DurableExecutionContext`` for attempt fencing and event emission.
-``AgentApp`` adapts that lower-level context into
-``DurableAgentContext`` for functions registered with ``@app.invoke`` and
-``@app.on_recovery``.
+The runtime returns :class:`Invocation` snapshots and ordered :class:`InvocationEvent` records.
+An executor receives an :class:`InvocationAttemptContext` for attempt fencing and event emission.
+``AgentApp`` adapts that lower-level context into :class:`InvocationContext` for functions
+registered with ``@app.invoke`` and ``@app.recover``.
 
 All request, response, and event payloads use the recursive ``JsonValue`` / ``JsonObject`` aliases,
-so Runtime Store values can be persisted identically by in-memory and Lakebase implementations.
+so Runtime Store values can be stored consistently by in-memory and Lakebase implementations.
 """
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime
 from enum import Enum
 from typing import TypeAlias
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 JsonObject = dict[str, JsonValue]
-DurableEventEmitter = Callable[[JsonObject], Awaitable[int]]
+InvocationEventEmitter = Callable[[JsonObject], Awaitable[int]]
 
 
-class DurableExecutionStatus(str, Enum):
+class InvocationStatus(str, Enum):
     """Lifecycle states stored by Mason Runtime."""
 
     QUEUED = "QUEUED"
@@ -31,42 +29,41 @@ class DurableExecutionStatus(str, Enum):
 
 
 @dataclass(frozen=True)
-class DurableExecution:
-    """A store snapshot for one idempotent execution and its current owning attempt."""
+class Invocation:
+    """A Runtime Store snapshot for one idempotent invocation and its owning attempt."""
 
-    execution_id: str
-    status: DurableExecutionStatus
+    invocation_id: str
+    status: InvocationStatus
     attempt: int
-    heartbeat_at: datetime | None
     request: JsonValue
     response: JsonValue
 
     @property
     def is_terminal(self) -> bool:
-        """Whether this execution can no longer transition or emit events."""
+        """Whether this invocation can no longer transition or emit events."""
         return self.status in {
-            DurableExecutionStatus.COMPLETED,
-            DurableExecutionStatus.FAILED,
+            InvocationStatus.COMPLETED,
+            InvocationStatus.FAILED,
         }
 
 
 @dataclass(frozen=True)
-class DurableEvent:
-    """One persisted event emitted by a durable execution attempt."""
+class InvocationEvent:
+    """One persisted event emitted by an invocation attempt."""
 
     sequence_number: int
-    execution_id: str
+    invocation_id: str
     attempt: int
     event: JsonObject
 
 
 @dataclass(frozen=True)
-class DurableExecutionContext:
+class InvocationAttemptContext:
     """Attempt metadata and event emission passed to the runtime's executor function."""
 
-    execution_id: str
+    invocation_id: str
     attempt: int
-    _emit: DurableEventEmitter | None = field(default=None, repr=False, compare=False)
+    _emit: InvocationEventEmitter | None = field(default=None, repr=False, compare=False)
 
     @property
     def is_recovery(self) -> bool:
@@ -76,42 +73,42 @@ class DurableExecutionContext:
     async def emit(self, event: JsonObject) -> int:
         """Persist an ordered event and return its replay cursor."""
         if self._emit is None:
-            raise RuntimeError("event emission is not available for this execution context")
+            raise RuntimeError("event emission is not available for this invocation context")
         return await self._emit(event)
 
 
-DurableExecutorFn = Callable[[JsonValue, DurableExecutionContext], Awaitable[JsonValue]]
+InvocationExecutorFn = Callable[[JsonValue, InvocationAttemptContext], Awaitable[JsonValue]]
 
 
 @dataclass(frozen=True)
-class DurableAgentContext:
+class InvocationContext:
     """Invocation/session metadata and event emission for a decorated agent function."""
 
     invocation_id: str
     session_id: str
     attempt: int
-    _execution_context: DurableExecutionContext = field(repr=False, compare=False)
+    _attempt_context: InvocationAttemptContext = field(repr=False, compare=False)
 
     @property
     def is_recovery(self) -> bool:
-        """Whether ``@app.on_recovery`` is handling a replacement attempt."""
+        """Whether ``@app.recover`` is handling a replacement attempt."""
         return self.attempt > 1
 
     async def emit(self, event: JsonObject) -> int:
         """Persist an ordered application event and return its replay cursor."""
-        return await self._execution_context.emit(event)
+        return await self._attempt_context.emit(event)
 
 
-DurableAgentHook = Callable[[JsonValue, DurableAgentContext], Awaitable[JsonValue]]
+InvocationHook = Callable[[JsonValue, InvocationContext], Awaitable[JsonValue]]
 
 
-class DurableRequestConflictError(ValueError):
-    """Raised when an execution ID is reused with a different request."""
+class InvocationConflictError(ValueError):
+    """Raised when an invocation ID is reused with a different request."""
 
 
-class DurableExecutionNotFoundError(LookupError):
-    """Raised when waiting for an unknown execution ID."""
+class InvocationNotFoundError(LookupError):
+    """Raised when waiting for an unknown invocation ID."""
 
 
-class DurableExecutionFailedError(RuntimeError):
-    """Raised when a durable execution reaches the failed state."""
+class InvocationFailedError(RuntimeError):
+    """Raised when an invocation reaches the failed state."""

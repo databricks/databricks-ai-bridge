@@ -36,6 +36,10 @@ from databricks_mason.databricks_cli import _databricks
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import require_managed_tool_support
 from databricks_mason.render import field
+from databricks_mason.runtime.store import (
+    RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV,
+    RUNTIME_STORE_SCHEMA_ENV,
+)
 from databricks_mason.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
 from databricks_mason.tracing import (
     TRACES_EXPERIMENT_ID_ENV,
@@ -45,8 +49,6 @@ from databricks_mason.tracing import (
     experiment_url,
 )
 
-_AGENT_DURABILITY_STORE_ENV = "DATABRICKS_MASON_RUNTIME_ENDPOINT"
-_AGENT_DURABILITY_SCHEMA_ENV = "DATABRICKS_MASON_RUNTIME_SCHEMA"
 # TEMPORARY: the Apps build environment currently can't reach the internal pypi proxy, so builds
 # time out installing dependencies. Point the build at public PyPI (sanctioned interim workaround)
 # until the proxy is reachable from the build sandbox again, then drop this default. pip reads
@@ -553,8 +555,8 @@ def deploy(
         durability_backend = lakebase_durability_store.get_or_create_backend(
             name, obj.profile, create=True
         )
-        env_updates[_AGENT_DURABILITY_STORE_ENV] = durability_backend.endpoint_path
-        env_updates[_AGENT_DURABILITY_SCHEMA_ENV] = durability_schema
+        env_updates[RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV] = durability_backend.endpoint_path
+        env_updates[RUNTIME_STORE_SCHEMA_ENV] = durability_schema
         provisioned["Agent durability store"] = durability_backend.database_path
     if pip_index_url:
         for env in _PIP_INDEX_ENVS:

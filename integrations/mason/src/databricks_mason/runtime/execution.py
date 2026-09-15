@@ -10,10 +10,10 @@ from typing import Protocol, cast
 
 from databricks_mason.runtime.store import RuntimeStore
 from databricks_mason.runtime.types import (
-    DurableExecution,
-    DurableExecutionContext,
-    DurableExecutionStatus,
-    DurableExecutorFn,
+    Invocation,
+    InvocationAttemptContext,
+    InvocationExecutorFn,
+    InvocationStatus,
     JsonObject,
     JsonValue,
 )
@@ -39,54 +39,60 @@ def _copy_json_object(value: JsonObject, name: str) -> JsonObject:
 class InvocationExecutor(Protocol):
     """Schedule invocation attempts for one runtime process."""
 
-    async def start(self) -> None: ...
+    async def start(self) -> None:
+        """Start any background scheduling owned by this executor."""
+        ...
 
-    async def stop(self) -> None: ...
+    async def stop(self) -> None:
+        """Stop scheduled work and release executor resources."""
+        ...
 
-    def ensure_scheduled(self, state: DurableExecution) -> None: ...
+    def ensure_scheduled(self, state: Invocation) -> None:
+        """Arrange for a newly accepted invocation to run on this process."""
+        ...
 
 
 class AttemptExecution:
     """Call the agent hook and commit one already-claimed attempt."""
 
-    def __init__(self, execute_fn: DurableExecutorFn, *, runtime_store: RuntimeStore) -> None:
+    def __init__(self, execute_fn: InvocationExecutorFn, *, runtime_store: RuntimeStore) -> None:
         self._execute_fn = execute_fn
         self._runtime_store = runtime_store
 
-    async def run(self, claimed: DurableExecution) -> None:
-        execution_id = claimed.execution_id
+    async def run(self, claimed: Invocation) -> None:
+        invocation_id = claimed.invocation_id
         try:
 
             async def emit(event: JsonObject) -> int:
                 sequence_number = await self._runtime_store.append_event(
-                    execution_id,
+                    invocation_id,
                     claimed.attempt,
                     _copy_json_object(event, "event"),
                 )
                 if sequence_number is None:
                     raise RuntimeError(
-                        f"execution {execution_id!r} no longer owns attempt {claimed.attempt}"
+                        f"invocation {invocation_id!r} no longer owns attempt {claimed.attempt}"
                     )
                 return sequence_number
 
             response = await self._execute_fn(
                 copy.deepcopy(claimed.request),
-                DurableExecutionContext(
-                    execution_id=execution_id,
+                InvocationAttemptContext(
+                    invocation_id=invocation_id,
                     attempt=claimed.attempt,
                     _emit=emit,
                 ),
             )
             response = copy_json_value(response, "executor response")
             completed = await self._runtime_store.complete(
-                execution_id,
+                invocation_id,
                 claimed.attempt,
                 response,
             )
             if not completed:
                 logger.info(
                     "Skipped completion after Runtime Store ownership changed: %s attempt=%d",
-                    execution_id,
+                    invocation_id,
                     claimed.attempt,
                 )
         except asyncio.CancelledError:
@@ -94,20 +100,20 @@ class AttemptExecution:
         except Exception:
             logger.exception(
                 "Invocation execution failed: %s attempt=%d",
-                execution_id,
+                invocation_id,
                 claimed.attempt,
             )
             try:
-                await self._runtime_store.fail(execution_id, claimed.attempt)
+                await self._runtime_store.fail(invocation_id, claimed.attempt)
             except Exception:
                 logger.exception(
                     "Failed to persist invocation failure: %s attempt=%d",
-                    execution_id,
+                    invocation_id,
                     claimed.attempt,
                 )
 
 
-class LocalInvocationExecutor:
+class LocalInvocationExecutor(InvocationExecutor):
     """Run background invocations inside the current process without heartbeats."""
 
     def __init__(self, execution: AttemptExecution, *, runtime_store: RuntimeStore) -> None:
@@ -125,30 +131,30 @@ class LocalInvocationExecutor:
         await asyncio.gather(*tasks, return_exceptions=True)
         self._tasks.clear()
 
-    def ensure_scheduled(self, state: DurableExecution) -> None:
-        if state.status != DurableExecutionStatus.QUEUED:
+    def ensure_scheduled(self, state: Invocation) -> None:
+        if state.status != InvocationStatus.QUEUED:
             return
-        current = self._tasks.get(state.execution_id)
+        current = self._tasks.get(state.invocation_id)
         if current is not None and not current.done():
             return
         task = asyncio.create_task(
-            self._run(state.execution_id),
-            name=f"invocation-{state.execution_id}",
+            self._run(state.invocation_id),
+            name=f"invocation-{state.invocation_id}",
         )
-        self._tasks[state.execution_id] = task
-        task.add_done_callback(lambda completed: self._discard_task(state.execution_id, completed))
+        self._tasks[state.invocation_id] = task
+        task.add_done_callback(lambda completed: self._discard_task(state.invocation_id, completed))
 
-    async def _run(self, execution_id: str) -> None:
+    async def _run(self, invocation_id: str) -> None:
         try:
-            claimed = await self._runtime_store.claim(execution_id)
+            claimed = await self._runtime_store.claim(invocation_id)
         except Exception:
-            logger.exception("Failed to claim invocation: %s", execution_id)
+            logger.exception("Failed to claim invocation: %s", invocation_id)
             return
         if claimed is not None:
             await self._execution.run(claimed)
 
-    def _discard_task(self, execution_id: str, completed: asyncio.Task[None]) -> None:
-        if self._tasks.get(execution_id) is completed:
-            self._tasks.pop(execution_id, None)
+    def _discard_task(self, invocation_id: str, completed: asyncio.Task[None]) -> None:
+        if self._tasks.get(invocation_id) is completed:
+            self._tasks.pop(invocation_id, None)
         if not completed.cancelled():
             completed.exception()
