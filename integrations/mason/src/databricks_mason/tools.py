@@ -101,7 +101,23 @@ def add_sandbox_to_manifest(
 
 @click.group()
 def tools() -> None:
-    """Manage Databricks-managed tools declared in agent.toml."""
+    """Manage the tools an agent can call, declared in the project's agent.toml.
+
+    Tools are what let an agent act beyond the language model itself — query governed data, call a
+    service, or run a function — and each one is recorded in agent.toml so `mason dev` / `mason
+    deploy` wire it in. `mason tools add` manages these Databricks-managed tool types:
+
+    \b
+      sandbox       Query Unity Catalog data via system.ai.sandbox, scoped
+                    to the tables, volumes, or paths you choose.
+      mcp           A Databricks-managed MCP service (see `mason mcp list`),
+                    e.g. system.ai.python_exec.
+      uc-function   An existing Unity Catalog function (catalog.schema.function).
+
+    Add one with `mason tools add <type>`, see what's configured with `mason tools list`, and drop
+    one with `mason tools remove`. Custom Python tools are code-first — write them directly in your
+    project's code rather than through the CLI.
+    """
 
 
 @tools.group("add")
@@ -148,7 +164,7 @@ def add_sandbox(
     tool_id: str,
     source: pathlib.Path,
 ) -> None:
-    """Bind system.ai.sandbox with protected downscoping."""
+    """Add a data sandbox tool (system.ai.sandbox), scoped to specific Unity Catalog resources."""
     add_sandbox_to_manifest(obj, source.resolve(), scopes, permission, tool_id=tool_id)
 
 
@@ -163,8 +179,8 @@ def add_mcp(
     tool_id: str | None,
     source: pathlib.Path,
 ) -> None:
-    """Bind a Databricks managed MCP SERVICE."""
-    _require_arg(service, "managed MCP service name (e.g. system.ai.web_search)")
+    """Add a Databricks-managed MCP service as a tool (see `mason mcp list` for available services)."""
+    _require_arg(service, "managed MCP service name (e.g. system.ai.python_exec)")
     _add_spec(
         obj,
         source.resolve(),
@@ -183,7 +199,7 @@ def add_uc_function(
     tool_id: str | None,
     source: pathlib.Path,
 ) -> None:
-    """Bind an existing three-part Unity Catalog function."""
+    """Add an existing Unity Catalog function (catalog.schema.function) as a tool."""
     _require_arg(function_name, "Unity Catalog function name (catalog.schema.function)")
     _add_spec(
         obj,
