@@ -18,7 +18,7 @@ Session reflects transcript history; Memory requires `AGENT_MEMORY_STORE`. The t
 the only manual capability choice.
 
 The chat header's model picker lists the workspace's ready chat serving endpoints
-(`GET /api/demo/config` → `models`, discovered from `serving_endpoints.list()` and filtered to the
+(`GET /api/ui/config` → `models`, discovered from `serving_endpoints.list()` and filtered to the
 `llm/v1/chat` task), with `agent.agent.MODEL` pinned as the default. Each request sends the selected
 endpoint as `model` in the invocation body; the agent is rebuilt per turn, so the picker changes the
 model for the next turn without a restart. Discovery is best-effort: if listing is unavailable (e.g.

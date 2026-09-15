@@ -1,8 +1,8 @@
 """Lakebase/Apps resource plumbing for a deployed app.
 
 Binds Databricks Apps resources onto an app so its service principal gets the platform-managed
-grant: a `postgres` `database` resource for the durable runtime's Lakebase (see
-`lakebase_durability_store`) and the tracing `experiment` resource.
+grant: a `postgres` `database` resource for Mason Runtime's Lakebase store (see
+`lakebase_store`) and the tracing `experiment` resource.
 
 Managed-store (session/memory) table access is NOT granted here. The deployed app reaches those
 stores over the conversation-store REST API, which grants the app's service principal read/write
@@ -20,7 +20,7 @@ from databricks_mason.databricks_cli import _databricks
 
 @dataclass(frozen=True)
 class LakebaseBackend:
-    """A Lakebase database + endpoint bound as a `postgres` app resource (the durable runtime's store)."""
+    """A Lakebase database and endpoint bound as a `postgres` app resource."""
 
     project: str
     branch: str

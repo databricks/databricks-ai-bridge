@@ -244,26 +244,18 @@ def test_load_rejects_store_table_without_name(tmp_path: pathlib.Path):
         AgentProject.load(tmp_path)
 
 
-def test_load_accepts_disabled_durability_table(tmp_path: pathlib.Path):
-    _write_manifest(
-        tmp_path,
-        'schema_version = 1\n\n[agent]\nframework = "openai"\n\n[durability]\nenabled = false\n',
-    )
-    assert AgentProject.load(tmp_path).durability_enabled is False
-
-
 def test_load_without_root_finds_project_from_working_directory(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
     _write_manifest(
         tmp_path,
-        'schema_version = 1\n\n[agent]\nframework = "openai"\n\n[durability]\nenabled = true\n',
+        'schema_version = 1\n\n[agent]\nframework = "openai"\n',
     )
     nested = tmp_path / "runtime"
     nested.mkdir()
     monkeypatch.chdir(nested)
 
-    assert AgentProject.load().durability_enabled is True
+    assert AgentProject.load().framework == "openai"
 
 
 def test_load_without_discoverable_project_uses_cli_error(
@@ -273,12 +265,3 @@ def test_load_without_discoverable_project_uses_cli_error(
 
     with pytest.raises(AgentCliError, match="Could not locate agent.toml"):
         AgentProject.load()
-
-
-def test_load_rejects_non_boolean_durability_setting(tmp_path: pathlib.Path):
-    _write_manifest(
-        tmp_path,
-        'schema_version = 1\n\n[agent]\nframework = "openai"\n\n[durability]\nenabled = "no"\n',
-    )
-    with pytest.raises(AgentCliError, match="enabled = true or false"):
-        AgentProject.load(tmp_path)

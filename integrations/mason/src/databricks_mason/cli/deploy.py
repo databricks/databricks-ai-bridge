@@ -2,7 +2,7 @@
 
 `mason deploy` is the integrated entry point: it provisions the memory/session stores
 bound in `agent.toml`, grants the app's service principal access to them, then rolls out
-the deployment. Durable agents use a dedicated, app-owned Lakebase project. `agent.toml` is the
+the deployment. Mason Runtime deployments receive an app-owned Runtime Store. `agent.toml` is the
 CLI's authoring source, resolved here into the `AGENT_MEMORY_STORE` / `AGENT_SESSION_STORE` env
 vars written into `app.yaml` — the runtime reads those, never `agent.toml`. `mason deployments`
 covers the lifecycle verbs
@@ -23,12 +23,13 @@ from typing import Any, Optional
 import click
 import yaml
 
+import databricks_mason.lakebase_durability_store as lakebase_store
 from databricks_mason import (
-    lakebase_durability_store,
     render,
     timefmt,
 )
 from databricks_mason.app_resources import (
+    LakebaseBackend,
     apply_experiment_resource,
     apply_postgres_resources,
 )
@@ -41,7 +42,11 @@ from databricks_mason.cli.tracing import (
 )
 from databricks_mason.databricks_cli import _databricks
 from databricks_mason.errors import AgentCliError
-from databricks_mason.project_config import require_managed_tool_support
+from databricks_mason.project_config import (
+    is_custom_server_template,
+    load_project_metadata,
+    require_managed_tool_support,
+)
 from databricks_mason.render import field
 from databricks_mason.runtime.store import (
     RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV,
@@ -439,6 +444,30 @@ def _grant_store_access(
     return None
 
 
+def _reconcile_runtime_store(
+    project,
+    source: pathlib.Path,
+    deployment_name: str,
+    profile: Optional[str],
+) -> Optional[LakebaseBackend]:
+    """Create or reuse the implicit Runtime Store for a Mason Runtime deployment."""
+    if project is None:
+        return None
+    try:
+        is_mason_runtime = not is_custom_server_template(load_project_metadata(source).template)
+    except AgentCliError:
+        # Metadata-less projects may use a custom server. Do not attach an unused Runtime Store
+        # unless the project explicitly came from a Mason server template.
+        return None
+    if not is_mason_runtime:
+        return None
+
+    # TODO: Replace this temporary direct Lakebase provisioning path with the Conversation Store
+    # POST /api/2.0/agents/runtime-stores API once that backend contract is available.
+    with render.status("Reconciling Runtime Store…"):
+        return lakebase_store.get_or_create_backend(deployment_name, profile, create=True)
+
+
 # --- mason deploy -----------------------------------------------------------
 
 
@@ -610,11 +639,11 @@ def deploy(
     with render.progress("Waiting for agent compute to start (this can take a few minutes)…"):
         _wait_for_running(name, obj.profile)
 
-    if durability_backend is not None:
-        resource_error = apply_postgres_resources(name, [durability_backend], obj.profile)
+    if runtime_backend is not None:
+        resource_error = apply_postgres_resources(name, [runtime_backend], obj.profile)
         if resource_error:
             raise AgentCliError(
-                "Could not attach the Lakebase resource required for durable execution.",
+                "Could not attach the Lakebase resource required for the Runtime Store.",
                 hint=resource_error,
             )
 

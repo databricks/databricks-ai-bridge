@@ -105,8 +105,8 @@ def dev(
     # the per-project experiment and wire its env. Tracing is best-effort locally — if it can't be set
     # up (e.g. no mlflow installed, or offline), dev still runs the agent, just without traces.
     memory_store, session_store = store_bindings(source_dir)
-    # `mason dev` never provisions stores (unlike `mason deploy`); warn so the missing durability /
-    # long-term memory isn't a silent surprise.
+    # `mason dev` never provisions stores (unlike `mason deploy`); warn so missing long-term memory
+    # or conversation state is not a silent surprise.
     if not memory_store:
         render.warning(
             "No memory store bound — long-term memory is disabled. Run 'mason memory bind <name>'."
@@ -186,8 +186,8 @@ def dev(
     if app_port is not None:
         args += ["--app-port", str(app_port)]
 
-    # Run against a local-only manifest that marks durability as in-memory, removes deploy-only
-    # package-index overrides, and injects any locally-resolved store ids.
+    # Run against a local-only manifest that forces the Runtime Store in-process, removes deploy-only
+    # package-index overrides, and injects any locally resolved store ids.
     entry_point = _dev_entry_point(app_yaml, local_env or None)
     # run-local resolves this relative to cwd and rejects an absolute alternate-manifest path.
     args += ["--entry-point", entry_point.name]
@@ -236,11 +236,7 @@ def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
         )
     else:
         # No page is served at `/`, so give a copy-pasteable request instead of just the URL.
-        try:
-            durable = AgentProject.load(source_dir).durability_enabled
-        except AgentCliError:
-            durable = False
-        uses_runtime_api = durable or template in {"agent-langgraph", "agent-openai"}
+        uses_runtime_api = template in {"agent-langgraph", "agent-openai"}
         endpoint = f"{base}/api/invocations" if uses_runtime_api else f"{base}/invocations"
         body = (
             '{"id": "00000000-0000-4000-8000-000000000000", '

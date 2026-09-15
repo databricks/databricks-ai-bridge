@@ -26,7 +26,19 @@ from databricks_mason.runtime.tool_manifest import (
 TRACING_TABLE = "tracing"
 
 _SCHEMA_VERSION = 1
-_DURABILITY_TABLE = "durability"
+# Commented-out store bindings written into a freshly scaffolded agent.toml (None = blank line).
+_STORE_EXAMPLE_LINES = (
+    None,
+    "Managed long-term memory (optional): `mason deploy` creates + binds one by default;",
+    "run `mason memory bind <name>`, or uncomment and set a store name here:",
+    "[memory_store]",
+    'name = "my-memory-store"',
+    None,
+    "Durable conversation history (optional): `mason deploy` creates + binds one by default;",
+    "run `mason sessions bind <name>`, or uncomment and set a store name here:",
+    "[session_store]",
+    'name = "my-session-store"',
+)
 _SUPPORTED_FRAMEWORKS = {"langgraph", "openai"}
 _SUPPORTED_SCOPE_KINDS = {"table", "volume", "workspace"}
 _SUPPORTED_PERMISSIONS = {"read_only", "read_write"}
@@ -207,17 +219,6 @@ def _store_name_from_manifest(value: object, table: str) -> str | None:
     return _required_string(cast(Mapping[str, Any], value).get("name"), f"[{table}] name")
 
 
-def _durability_from_manifest(value: object) -> bool:
-    if value is None:
-        return False
-    if not isinstance(value, Mapping):
-        raise AgentCliError("agent.toml [durability] must be a table.")
-    enabled = cast(Mapping[str, Any], value).get("enabled")
-    if not isinstance(enabled, bool):
-        raise AgentCliError("agent.toml [durability] must set enabled = true or false.")
-    return enabled
-
-
 def _store_id_from_manifest(value: object) -> str | None:
     """Read the optional bare store ``id`` from a ``[memory_store]`` table, or None if absent."""
     if not isinstance(value, Mapping):
@@ -311,7 +312,6 @@ class AgentProject:
         session_store: str | None = None,
         memory_store_id: str | None = None,
         deployment_name: str | None = None,
-        durability_enabled: bool = False,
         trace_experiment_id: str | None = None,
         trace_disabled: bool = False,
     ) -> None:
@@ -327,7 +327,6 @@ class AgentProject:
         self.memory_store_id = memory_store_id
         # The deployment's base name (`mason deploy` prefixes it with `mason-`); None until named.
         self.deployment_name = deployment_name
-        self.durability_enabled = durability_enabled
         # Tracing config: an explicit experiment id override (None = default per-project experiment), and
         # whether tracing is disabled (tracing is on by default; this flag turns it off).
         self.trace_experiment_id = trace_experiment_id
@@ -384,7 +383,6 @@ class AgentProject:
         session_store = _store_name_from_manifest(
             document.get(SESSION_STORE_TABLE), SESSION_STORE_TABLE
         )
-        durability_enabled = _durability_from_manifest(document.get(_DURABILITY_TABLE))
         tracing_table = document.get(TRACING_TABLE)
         trace_experiment_id: str | None = None
         trace_disabled = False
@@ -403,7 +401,6 @@ class AgentProject:
             session_store,
             memory_store_id,
             str(deployment_name) if deployment_name is not None else None,
-            durability_enabled,
             trace_experiment_id,
             trace_disabled,
         )
@@ -414,9 +411,6 @@ class AgentProject:
         root: pathlib.Path | str,
         *,
         framework: str,
-        durability_enabled: bool = False,
-        memory_store: str | None = None,
-        session_store: str | None = None,
     ) -> "AgentProject":
         if framework not in _SUPPORTED_FRAMEWORKS:
             raise AgentCliError(f"Unsupported Mason framework {framework!r}.")
@@ -427,23 +421,17 @@ class AgentProject:
         agent = tomlkit.table()
         agent.add("framework", framework)
         document.add("agent", agent)
-        durability = tomlkit.table()
-        durability.add("enabled", durability_enabled)
-        document.add(_DURABILITY_TABLE, durability)
-        project = cls(
+        # Commented examples so a fresh project shows how managed stores are bound. `mason deploy`
+        # creates + binds these by default; uncomment (or run `mason memory/sessions bind`) to pin
+        # specific store names. They're comments, so `load` treats the project as unbound until then.
+        for line in _STORE_EXAMPLE_LINES:
+            document.add(tomlkit.nl() if line is None else tomlkit.comment(line))
+        return cls(
             project_root,
             document,
             framework,
             [],
-            durability_enabled=durability_enabled,
         )
-        # agent.toml is the source of truth for stores: declare the ones we were given as active
-        # bindings (name only — `mason deploy` creates them and resolves the id at deploy time).
-        if memory_store:
-            project.bind_memory_store(memory_store)
-        if session_store:
-            project.bind_session_store(session_store)
-        return project
 
     def set_deployment_name(self, name: str) -> bool:
         """Record the deployment's base name under [agent].deployment_name. True if it changed."""

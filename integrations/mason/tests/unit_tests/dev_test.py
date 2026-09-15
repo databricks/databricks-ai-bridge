@@ -377,28 +377,11 @@ def test_dev_surfaces_invalid_custom_server_manifest_before_starting(
     db.assert_not_called()
 
 
-def test_dev_announces_durable_api_endpoint(tmp_path: pathlib.Path):
+def test_dev_standard_template_uses_runtime_api(tmp_path: pathlib.Path):
     (tmp_path / "app.yaml").write_text("command: []\n")
     AgentProject.create(
         tmp_path,
         framework="langgraph",
-        durability_enabled=True,
-    ).write()
-
-    with mock.patch.object(dev_mod, "_databricks"):
-        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
-
-    assert result.exit_code == 0, result.output
-    assert "http://localhost:8000/api/invocations" in result.output
-    assert "00000000-0000-4000-8000-000000000000" in result.output
-
-
-def test_dev_standard_template_uses_runtime_api_without_durable_runtime(tmp_path: pathlib.Path):
-    (tmp_path / "app.yaml").write_text("command: []\n")
-    AgentProject.create(
-        tmp_path,
-        framework="langgraph",
-        durability_enabled=False,
     ).write()
     (tmp_path / ".mason").mkdir()
     (tmp_path / ".mason" / "project.toml").write_text(
