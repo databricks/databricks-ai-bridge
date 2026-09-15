@@ -219,16 +219,49 @@ def _resolve_memory_store(client, display_name: str) -> Optional[dict]:
             return None
 
 
+_LAKEBASE_PERMISSION_DOCS = (
+    "https://docs.databricks.com/aws/en/oltp/projects/manage-project-permissions"
+)
+
+
+def _store_create_permission_error(name: str, kind: str, cause: AgentCliError) -> AgentCliError:
+    """PERMISSION_DENIED on create: the workspace admin has restricted Lakebase project creation."""
+    return AgentCliError(
+        f"You don't have permission to create {kind} store '{name}'.",
+        error_code=cause.error_code,
+        hint=(
+            "Creating a managed store provisions a Lakebase project, which your workspace admin "
+            "has restricted. Ask your workspace admin to grant you permission to create Lakebase "
+            f"projects ({_LAKEBASE_PERMISSION_DOCS}), or bind an existing store you can access "
+            "with --no-create-stores."
+        ),
+    )
+
+
+def _store_access_error(name: str, kind: str) -> AgentCliError:
+    """The store already exists but isn't accessible to the caller."""
+    return AgentCliError(
+        f"{kind.capitalize()} store '{name}' already exists but you don't have access to it.",
+        hint=(
+            "Ask the store's owner or your workspace admin to grant you access, or bind a "
+            "different store you can access with --no-create-stores."
+        ),
+    )
+
+
 def _ensure_memory_store(client, display_name: str) -> tuple[dict, bool]:
     """Create the memory store, or resolve it if it already exists. Returns (store, created)."""
     try:
         return client.create_memory_store(display_name, retry_transient=True), True
     except AgentCliError as exc:
+        if exc.error_code == "PERMISSION_DENIED":
+            raise _store_create_permission_error(display_name, "memory", exc) from exc
         if exc.error_code != "ALREADY_EXISTS":
             raise
     store = _resolve_memory_store(client, display_name)
     if store is None:
-        raise AgentCliError(f"Memory store '{display_name}' exists but could not be resolved.")
+        # ALREADY_EXISTS but not in the caller's listing: the store isn't accessible to them.
+        raise _store_access_error(display_name, "memory")
     return store, False
 
 
@@ -237,9 +270,16 @@ def _ensure_session_store(client, name: str) -> tuple[dict, bool]:
     try:
         return client.create_session_store(name, retry_transient=True), True
     except AgentCliError as exc:
+        if exc.error_code == "PERMISSION_DENIED":
+            raise _store_create_permission_error(name, "session", exc) from exc
         if exc.error_code != "ALREADY_EXISTS":
             raise
-    return client.get_session_store(name), False
+    try:
+        return client.get_session_store(name), False
+    except AgentCliError as exc:
+        if exc.error_code == "PERMISSION_DENIED":
+            raise _store_access_error(name, "session") from exc
+        raise
 
 
 def _load_project(source: pathlib.Path):
