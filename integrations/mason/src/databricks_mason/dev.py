@@ -20,11 +20,11 @@ from databricks_mason.agent_project import AgentProject
 from databricks_mason.databricks_cli import _databricks
 from databricks_mason.deploy import (
     _load_project,
+    _resolve_memory_store,
     _upsert_manifest_env,
     mlflow_tracing_config,
     resolve_trace_experiment_id,
     store_bindings,
-    validate_stores,
 )
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import (
@@ -32,6 +32,7 @@ from databricks_mason.project_config import (
     load_project_metadata,
     require_managed_tool_support,
 )
+from databricks_mason.runtime.tool_manifest import MEMORY_STORE_ENV
 
 # Default local port; `databricks apps run-local` listens here unless --app-port overrides it.
 _DEFAULT_APP_PORT = 8000
@@ -108,10 +109,44 @@ def dev(
             "Run 'mason sessions bind <name>'."
         )
     env_updates: dict[str, str] = {}
-    # Stores legitimately require auth, so build the client eagerly only when stores are bound.
-    if memory_store or session_store:
-        with render.status("Checking stores…"):
-            validate_stores(obj.client(), memory_store=memory_store, session_store=session_store)
+    local_env: dict[str, str] = {}
+    # Stores are declared in agent.toml but created by `mason deploy`; dev never creates them. Check
+    # existence for a friendly warning, and wire the memory store's id (the entries API key) into the
+    # local-only manifest so long-term memory works locally when the store already exists.
+    # Best-effort: if the client/auth is unavailable (offline, no credentials), degrade to the same
+    # "declared but not created yet" warning and keep running, mirroring the tracing block below.
+    if memory_store:
+        try:
+            with render.status("Checking memory store…"):
+                resolved = _resolve_memory_store(obj.client(), memory_store)
+            if resolved is None:
+                render.warning(
+                    f"Memory store '{memory_store}' is declared but not created yet — long-term memory "
+                    "is disabled locally. Run `mason deploy` to create it."
+                )
+            else:
+                store_id = (render.field(resolved, "name") or "").split("/", 1)[-1] or None
+                if store_id:
+                    local_env[MEMORY_STORE_ENV] = store_id
+        except Exception:  # noqa: BLE001 - store check must never block a local run
+            render.warning(
+                f"Memory store '{memory_store}' is declared but not created yet — long-term memory "
+                "is disabled locally. Run `mason deploy` to create it."
+            )
+    if session_store:
+        try:
+            with render.status("Checking session store…"):
+                obj.client().get_session_store(session_store)
+        except AgentCliError:
+            render.warning(
+                f"Session store '{session_store}' is declared but not created yet — conversation "
+                "history is in-memory (not durable). Run `mason deploy` to create it."
+            )
+        except Exception:  # noqa: BLE001 - store check must never block a local run
+            render.warning(
+                f"Session store '{session_store}' is declared but not created yet — conversation "
+                "history is in-memory (not durable). Run `mason deploy` to create it."
+            )
     # Tracing is best-effort: build the client and provision inside the try so ANY failure (no auth /
     # offline, no mlflow, permission) degrades to running without traces rather than aborting a purely
     # local run.
@@ -139,9 +174,9 @@ def dev(
     if app_port is not None:
         args += ["--app-port", str(app_port)]
 
-    # Run against a local-only manifest that marks durability as in-memory and removes deploy-only
-    # package-index overrides.
-    entry_point = _dev_entry_point(app_yaml)
+    # Run against a local-only manifest that marks durability as in-memory, removes deploy-only
+    # package-index overrides, and injects any locally-resolved store ids.
+    entry_point = _dev_entry_point(app_yaml, local_env or None)
     # run-local resolves this relative to cwd and rejects an absolute alternate-manifest path.
     args += ["--entry-point", entry_point.name]
 
@@ -213,12 +248,16 @@ def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
         )
 
 
-def _dev_entry_point(app_yaml: pathlib.Path) -> pathlib.Path:
+def _dev_entry_point(
+    app_yaml: pathlib.Path, extra_env: dict[str, str] | None = None
+) -> pathlib.Path:
     """Write the local-only app manifest consumed by ``apps run-local``.
 
     The manifest marks the process as local so durability uses its in-memory store. Keeping this in
     the entry point is more reliable than forwarding ``--env`` through the Databricks CLI and does
     not mutate the deployable ``app.yaml``. Deploy-only package-index variables are also removed.
+    ``extra_env`` is merged in (overriding any same-named entries) for dev-only overrides such as
+    the resolved memory-store id.
     """
     try:
         doc = yaml.safe_load(app_yaml.read_text()) or {}
@@ -235,6 +274,9 @@ def _dev_entry_point(app_yaml: pathlib.Path) -> pathlib.Path:
     filtered = [
         e for e in filtered if not (isinstance(e, dict) and e.get("name") == _LOCAL_RUNTIME_ENV)
     ]
+    for name, value in (extra_env or {}).items():
+        filtered = [e for e in filtered if not (isinstance(e, dict) and e.get("name") == name)]
+        filtered.append({"name": name, "value": value})
     filtered.append({"name": _LOCAL_RUNTIME_ENV, "value": "true"})
     doc["env"] = filtered
     # The Apps CLI rejects hidden or hyphenated entry-point filenames.

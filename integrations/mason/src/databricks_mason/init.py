@@ -21,7 +21,7 @@ from typing import Optional
 import click
 
 from databricks_mason import render
-from databricks_mason.agent_project import AgentProject
+from databricks_mason.agent_project import AgentProject, default_store_name
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import write_project_metadata
 
@@ -139,6 +139,19 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
     hidden=True,
     help="Deprecated: the chat app is included by default; this flag is a no-op.",
 )
+@click.option(
+    "--memory-store",
+    "memory_store",
+    default=None,
+    help="Name for the declared memory store (default: derived from the directory, <dir>-memory). "
+    "Only --server mason declares stores by default.",
+)
+@click.option(
+    "--session-store",
+    "session_store",
+    default=None,
+    help="Name for the declared session store (default: derived from the directory, <dir>-session).",
+)
 @click.pass_obj
 def init(
     obj,
@@ -149,6 +162,8 @@ def init(
     profile: Optional[str],
     disable_chat_app: bool,
     enable_chat_app: bool,
+    memory_store: Optional[str],
+    session_store: Optional[str],
 ) -> None:
     """Scaffold a local agent project from a mason template.
 
@@ -186,10 +201,15 @@ def init(
         _copy_packaged_template(template_name, dest, overlay_names)
         template_ref = _bundled_template_ref()
         write_project_metadata(dest, framework=selected_framework, template=template_name)
+        if mason_server:
+            memory_store = memory_store or default_store_name(dest.name, "memory")
+            session_store = session_store or default_store_name(dest.name, "session")
         project = AgentProject.create(
             dest,
             framework=selected_framework,
             durability_enabled=durable_runtime,
+            memory_store=memory_store,
+            session_store=session_store,
         )
         project.write()
         env_profile = profile or obj.profile

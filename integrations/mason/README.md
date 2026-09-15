@@ -169,16 +169,17 @@ mason [-p <profile>] [-o text|json]
   logout
   init         [--framework openai|langgraph] [--server mason|custom]
                [--no-durable-runtime] [--disable-chat-app]
+               [--memory-store NAME] [--session-store NAME]
                [--profile P] [directory]
   dev          [--source PATH] [--prepare-environment] [--app-port PORT]
                [--with-traces C.S]
   memory
-    bind         STORE [--source PATH] [--no-create-stores]
+    bind         STORE [--source PATH]
     unbind       [--source PATH]
     stores     create | list | get | update | delete
     entries    create | get | list | search | update | delete
   sessions     create | list | get | update | delete | fork
-    bind         STORE [--source PATH] [--no-create-stores]
+    bind         STORE [--source PATH]
     unbind       [--source PATH]
     stores     create | list | get | update | delete
     items      list | append | pop | clear
@@ -334,9 +335,10 @@ mason memory bind mason-demo-memory
 mason --profile <profile> deploy mason-agent-demo --source .
 ```
 
-(Binding creates a missing store automatically; pass `--no-create-stores` to require it already
-exists. The agent reads the bound stores from `agent.toml` at runtime; `deploy` grants the app's
-service principal access to them.)
+(`bind` declares the store name in `agent.toml`; `mason deploy` creates any declared-but-missing
+store and grants the app's service principal access to it. The memory store id flows to the runtime
+via the `AGENT_MEMORY_STORE` env var, injected by `deploy` and `mason dev` — it is not persisted
+in `agent.toml`.)
 
 The chat UI generates a stable application session UUID in browser local storage, places it inside
 the durable invocation's opaque `input`, and creates a fresh invocation UUID per turn. The

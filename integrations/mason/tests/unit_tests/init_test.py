@@ -145,7 +145,10 @@ def test_init_custom_server_uses_minimal_template(tmp_path: pathlib.Path, framew
     assert copied.call_args.args[0] == f"custom-agent-{framework}"
     assert copied.call_args.args[2] == ()  # no chat-app overlay for the custom server
     with (dest / "agent.toml").open("rb") as manifest_file:
-        assert tomli.load(manifest_file)["durability"] == {"enabled": False}
+        manifest = tomli.load(manifest_file)
+    assert manifest["durability"] == {"enabled": False}
+    assert "memory_store" not in manifest
+    assert "session_store" not in manifest
     with (dest / ".mason" / "project.toml").open("rb") as config_file:
         assert tomli.load(config_file)["template"] == f"custom-agent-{framework}"
     assert "Custom FastAPI" in result.output
@@ -167,11 +170,14 @@ def test_init_creates_canonical_agent_manifest(tmp_path: pathlib.Path):
     result = CliRunner().invoke(init_mod.init, ["--framework", "openai", str(dest)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     with (dest / "agent.toml").open("rb") as manifest_file:
-        assert tomli.load(manifest_file) == {
-            "schema_version": 1,
-            "agent": {"framework": "openai"},
-            "durability": {"enabled": True},
-        }
+        manifest = tomli.load(manifest_file)
+    assert manifest == {
+        "schema_version": 1,
+        "agent": {"framework": "openai"},
+        "durability": {"enabled": True},
+        "memory_store": {"name": "proj-memory"},
+        "session_store": {"name": "proj-session"},
+    }
 
 
 def test_init_langgraph_does_not_vendor_runtime_plumbing(tmp_path: pathlib.Path):
@@ -296,3 +302,25 @@ def test_init_no_profile_writes_no_env(tmp_path: pathlib.Path):
         result = CliRunner().invoke(init_mod.init, [str(dest)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     assert not (dest / ".env").exists()  # no profile -> scaffold-only, no .env
+
+
+def test_init_store_name_overrides(tmp_path: pathlib.Path):
+    dest = tmp_path / "proj"
+    result = CliRunner().invoke(
+        init_mod.init,
+        [
+            "--framework",
+            "openai",
+            "--memory-store",
+            "mem-x",
+            "--session-store",
+            "sess-y",
+            str(dest),
+        ],
+        obj=_Ctx(),
+    )
+    assert result.exit_code == 0, result.output
+    with (dest / "agent.toml").open("rb") as manifest_file:
+        manifest = tomli.load(manifest_file)
+    assert manifest["memory_store"] == {"name": "mem-x"}
+    assert manifest["session_store"] == {"name": "sess-y"}
