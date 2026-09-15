@@ -15,13 +15,15 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic import JsonValue as PydanticJsonValue
 
-from databricks_mason.runtime.durability.runtime import DurableRuntime
+from databricks_mason.runtime.durability.attempt import DurableInvocationExecutor
 from databricks_mason.runtime.durability.store import (
-    InMemoryDurabilityStore,
+    DurableRuntimeStore,
     default_durability_store,
 )
-from databricks_mason.runtime.durability.types import (
-    DurabilityStore,
+from databricks_mason.runtime.execution import AttemptExecution, LocalInvocationExecutor
+from databricks_mason.runtime.runtime import Runtime
+from databricks_mason.runtime.store import InMemoryRuntimeStore, RuntimeStore
+from databricks_mason.runtime.types import (
     DurableAgentContext,
     DurableAgentHook,
     DurableExecution,
@@ -59,30 +61,38 @@ class AgentApp(FastAPI):
         self,
         *,
         durable_runtime: bool = False,
-        durability_store: DurabilityStore | None = None,
+        durability_store: RuntimeStore | None = None,
     ) -> None:
         self.durable_runtime = durable_runtime
         self._invoke_hook: DurableAgentHook | None = None
         self._on_recovery_hook: DurableAgentHook | None = None
         store = durability_store
         if store is None:
-            store = default_durability_store() if durable_runtime else InMemoryDurabilityStore()
-        self._runtime = DurableRuntime(
-            self._execute,
-            durability_store=store,
-        )
+            store = default_durability_store() if durable_runtime else InMemoryRuntimeStore()
+        execution = AttemptExecution(self._execute, runtime_store=store)
+        if isinstance(store, DurableRuntimeStore):
+            executor = DurableInvocationExecutor(
+                execution,
+                runtime_store=store,
+                recovery_enabled=lambda: durable_runtime and self._on_recovery_hook is not None,
+                heartbeat_seconds=3.0,
+                stale_seconds=10.0,
+                scan_seconds=3.0,
+            )
+        else:
+            executor = LocalInvocationExecutor(execution, runtime_store=store)
+        self._runtime = Runtime(runtime_store=store, executor=executor)
 
         @asynccontextmanager
         async def lifespan(_: FastAPI):
             if self._invoke_hook is None:
                 raise RuntimeError("register an invocation handler with @app.invoke")
-            recover = self.durable_runtime and self._on_recovery_hook is not None
-            if self.durable_runtime and not recover:
+            if self.durable_runtime and self._on_recovery_hook is None:
                 logger.warning(
                     "No @app.on_recovery handler is registered; automatic crash recovery is "
                     "disabled."
                 )
-            await self._runtime.start(recover=recover)
+            await self._runtime.start()
             try:
                 yield
             finally:

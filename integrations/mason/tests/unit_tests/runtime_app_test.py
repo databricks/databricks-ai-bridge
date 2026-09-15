@@ -1,7 +1,6 @@
 """Tests for the SDK-provided agent application."""
 
 import asyncio
-import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -10,13 +9,15 @@ import pytest
 from fastapi import FastAPI
 
 from databricks_mason import AgentApp
-from databricks_mason.runtime.durability.store import (
+from databricks_mason.runtime.durability.attempt import DurableInvocationExecutor
+from databricks_mason.runtime.durability.store import InMemoryDurabilityStore
+from databricks_mason.runtime.store import (
     RUNTIME_ENDPOINT_ENV,
     RUNTIME_LOCAL_ENV,
     RUNTIME_SCHEMA_ENV,
-    InMemoryDurabilityStore,
+    InMemoryRuntimeStore,
 )
-from databricks_mason.runtime.durability.types import (
+from databricks_mason.runtime.types import (
     DurableExecution,
     DurableExecutionContext,
     DurableExecutionStatus,
@@ -31,17 +32,17 @@ async def echo(input, context):
     return input
 
 
-def make_app(invoke=echo, *, on_recovery=None) -> AgentApp:
+def make_app(invoke=echo, *, recover=None) -> AgentApp:
     app = AgentApp(durable_runtime=True, durability_store=InMemoryDurabilityStore())
     app.invoke(invoke)
-    if on_recovery is not None:
-        app.on_recovery(on_recovery)
+    if recover is not None:
+        app.on_recovery(recover)
     return app
 
 
 @asynccontextmanager
 async def running_client(app: AgentApp) -> AsyncIterator[httpx.AsyncClient]:
-    await app._runtime.start(recover=app.durable_runtime and app._on_recovery_hook is not None)
+    await app._runtime.start()
     try:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
@@ -125,7 +126,7 @@ async def test_body_session_and_resume_metadata_are_rejected() -> None:
 
 
 @pytest.mark.asyncio
-async def test_recovery_attempt_uses_on_recovery_hook() -> None:
+async def test_recovery_attempt_uses_recovery_hook() -> None:
     calls = []
 
     async def invoke(input, context):
@@ -136,7 +137,7 @@ async def test_recovery_attempt_uses_on_recovery_hook() -> None:
         calls.append("recover")
         return {"input": input, "session_id": context.session_id}
 
-    app = make_app(invoke, on_recovery=recover)
+    app = make_app(invoke, recover=recover)
     result = await app._execute(
         {"input": "hello", "session_id": "session-1"},
         DurableExecutionContext(_RUN_1, 2),
@@ -147,13 +148,11 @@ async def test_recovery_attempt_uses_on_recovery_hook() -> None:
 
 
 @pytest.mark.asyncio
-async def test_omitting_on_recovery_warns_and_disables_recovery(caplog) -> None:
+async def test_omitting_recovery_hook_disables_recovery() -> None:
     app = make_app()
-    with caplog.at_level(logging.WARNING):
-        async with app.router.lifespan_context(app):
-            assert app._runtime._recovery_scheduler._scanner is None
+    async with app.router.lifespan_context(app):
+        assert isinstance(app._runtime.executor, DurableInvocationExecutor)
 
-    assert "crash recovery is disabled" in caplog.text
     with pytest.raises(RuntimeError, match="@app.on_recovery"):
         await app._execute(
             {"input": {}, "session_id": "session-1"},
@@ -338,7 +337,7 @@ async def test_agent_failure_returns_500_and_failed_event() -> None:
 
 
 def test_app_is_asgi_app_with_instance_scoped_decorators() -> None:
-    app = AgentApp(durability_store=InMemoryDurabilityStore())
+    app = AgentApp(durable_runtime=True, durability_store=InMemoryDurabilityStore())
 
     @app.invoke
     async def invoke(input, context):
@@ -355,37 +354,34 @@ def test_app_is_asgi_app_with_instance_scoped_decorators() -> None:
         app.invoke(echo)
 
 
-def test_app_exposes_only_api_invocation_routes() -> None:
+def test_app_allows_custom_routes_alongside_invocation_routes() -> None:
     app = make_app()
+
+    @app.get("/health")
+    async def health():
+        return {"status": "ok"}
+
     paths = app.openapi()["paths"]
 
     assert set(paths) == {
         "/api/invocations",
         "/api/invocations/{invocation_id}",
         "/api/invocations/{invocation_id}/events",
+        "/health",
     }
-    assert {getattr(route, "path", None) for route in app.routes} == set(paths)
+    assert "/health" in {getattr(route, "path", None) for route in app.routes}
 
 
-def test_agent_app_defaults_to_process_local_state_even_inside_apps(monkeypatch) -> None:
+def test_agent_app_defaults_to_process_local_state_outside_apps(monkeypatch) -> None:
     monkeypatch.delenv(RUNTIME_LOCAL_ENV, raising=False)
-    monkeypatch.setenv("DATABRICKS_APP_NAME", "mason-agent")
+    monkeypatch.delenv("DATABRICKS_APP_NAME", raising=False)
     monkeypatch.delenv(RUNTIME_ENDPOINT_ENV, raising=False)
     monkeypatch.delenv(RUNTIME_SCHEMA_ENV, raising=False)
 
     app = AgentApp()
 
     assert app.durable_runtime is False
-    assert isinstance(app._runtime.durability_store, InMemoryDurabilityStore)
-
-
-def test_deployed_app_without_durability_resource_fails_startup(monkeypatch) -> None:
-    monkeypatch.delenv(RUNTIME_LOCAL_ENV, raising=False)
-    monkeypatch.setenv("DATABRICKS_APP_NAME", "mason-agent")
-    monkeypatch.delenv(RUNTIME_ENDPOINT_ENV, raising=False)
-
-    with pytest.raises(RuntimeError, match=RUNTIME_ENDPOINT_ENV):
-        AgentApp(durable_runtime=True)
+    assert isinstance(app._runtime.runtime_store, InMemoryRuntimeStore)
 
 
 def test_state_payload_nests_completed_application_response() -> None:

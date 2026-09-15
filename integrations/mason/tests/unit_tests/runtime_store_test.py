@@ -1,4 +1,4 @@
-"""Tests for the Lakebase durability store."""
+"""Tests for Runtime Store implementations."""
 
 import json
 from contextlib import asynccontextmanager
@@ -7,15 +7,18 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from databricks_mason.runtime.durability.store import (
+from databricks_mason.runtime.durability.lakebase_runtime_store import (
+    LakebaseDurableRuntimeStore,
+)
+from databricks_mason.runtime.durability.store import DurableRuntimeStore
+from databricks_mason.runtime.store import (
     RUNTIME_ENDPOINT_ENV,
     RUNTIME_LOCAL_ENV,
     RUNTIME_SCHEMA_ENV,
-    InMemoryDurabilityStore,
-    LakebaseDurabilityStore,
-    default_durability_store,
+    InMemoryRuntimeStore,
+    default_runtime_store,
 )
-from databricks_mason.runtime.durability.types import (
+from databricks_mason.runtime.types import (
     DurableExecutionStatus,
     DurableRequestConflictError,
 )
@@ -54,7 +57,14 @@ def test_default_store_is_local_without_an_attached_resource(monkeypatch):
     monkeypatch.delenv("DATABRICKS_APP_NAME", raising=False)
     monkeypatch.delenv(RUNTIME_ENDPOINT_ENV, raising=False)
 
-    assert isinstance(default_durability_store(), InMemoryDurabilityStore)
+    assert isinstance(default_runtime_store(), InMemoryRuntimeStore)
+
+
+def test_only_lakebase_store_has_durable_runtime_capabilities():
+    lakebase, _ = mock_lakebase()
+
+    assert not isinstance(InMemoryRuntimeStore(), DurableRuntimeStore)
+    assert isinstance(LakebaseDurableRuntimeStore(lakebase=lakebase), DurableRuntimeStore)
 
 
 def test_default_store_uses_the_attached_lakebase_resource(monkeypatch):
@@ -66,9 +76,13 @@ def test_default_store_uses_the_attached_lakebase_resource(monkeypatch):
     )
     monkeypatch.setenv(RUNTIME_SCHEMA_ENV, "databricks_mason_runtime_app")
     from_app_resource = MagicMock(return_value=expected)
-    monkeypatch.setattr(LakebaseDurabilityStore, "from_app_resource", from_app_resource)
+    monkeypatch.setattr(
+        LakebaseDurableRuntimeStore,
+        "from_app_resource",
+        from_app_resource,
+    )
 
-    assert default_durability_store() is expected
+    assert default_runtime_store() is expected
     from_app_resource.assert_called_once_with(
         endpoint="projects/project/branches/production/endpoints/primary",
         schema="databricks_mason_runtime_app",
@@ -82,7 +96,7 @@ def test_default_store_ignores_deploy_env_outside_apps(monkeypatch):
         RUNTIME_ENDPOINT_ENV, "projects/project/branches/production/endpoints/primary"
     )
 
-    assert isinstance(default_durability_store(), InMemoryDurabilityStore)
+    assert isinstance(default_runtime_store(), InMemoryRuntimeStore)
 
 
 def test_default_store_rejects_missing_resource_inside_apps(monkeypatch):
@@ -91,17 +105,17 @@ def test_default_store_rejects_missing_resource_inside_apps(monkeypatch):
     monkeypatch.delenv(RUNTIME_ENDPOINT_ENV, raising=False)
 
     with pytest.raises(RuntimeError, match=RUNTIME_ENDPOINT_ENV):
-        default_durability_store()
+        default_runtime_store()
 
 
 def test_default_store_uses_memory_when_apps_run_local_sets_an_app_name(monkeypatch):
     monkeypatch.setenv(RUNTIME_LOCAL_ENV, "true")
-    monkeypatch.setenv("DATABRICKS_APP_NAME", "local-durability-app")
+    monkeypatch.setenv("DATABRICKS_APP_NAME", "local-runtime-store-app")
     monkeypatch.setenv(
         RUNTIME_ENDPOINT_ENV, "projects/project/branches/production/endpoints/primary"
     )
 
-    assert isinstance(default_durability_store(), InMemoryDurabilityStore)
+    assert isinstance(default_runtime_store(), InMemoryRuntimeStore)
 
 
 def execution_row(**overrides):
@@ -120,7 +134,7 @@ def execution_row(**overrides):
 @pytest.mark.asyncio
 async def test_initialize_creates_execution_and_event_tables():
     lakebase, connection = mock_lakebase()
-    store = LakebaseDurabilityStore(lakebase=lakebase)
+    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
 
     await store.initialize()
 
@@ -140,7 +154,7 @@ async def test_initialize_creates_execution_and_event_tables():
 async def test_accept_returns_existing_request_when_it_matches():
     lakebase, connection = mock_lakebase()
     connection.execute.side_effect = [MagicMock(), mapping_result(execution_row())]
-    store = LakebaseDurabilityStore(lakebase=lakebase)
+    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
 
     state = await store.accept("session-1", {"input": "hello"})
 
@@ -153,7 +167,7 @@ async def test_accept_returns_existing_request_when_it_matches():
 async def test_accept_rejects_same_id_with_different_request():
     lakebase, connection = mock_lakebase()
     connection.execute.side_effect = [MagicMock(), mapping_result(execution_row())]
-    store = LakebaseDurabilityStore(lakebase=lakebase)
+    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
 
     with pytest.raises(DurableRequestConflictError):
         await store.accept("session-1", {"input": "different"})
@@ -166,9 +180,9 @@ async def test_claim_returns_request_and_incremented_attempt():
     connection.execute.return_value = mapping_result(
         execution_row(status="ACTIVE", attempt=2, heartbeat_at=heartbeat)
     )
-    store = LakebaseDurabilityStore(lakebase=lakebase)
+    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
 
-    state = await store.claim("session-1", 10)
+    state = await store.claim_recoverable("session-1", 10)
 
     assert state is not None
     assert state.attempt == 2
@@ -189,7 +203,7 @@ async def test_get_decodes_any_cached_json_response(response_json):
             response_json=response_json,
         )
     )
-    store = LakebaseDurabilityStore(lakebase=lakebase)
+    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
 
     state = await store.get("session-1")
 
@@ -202,7 +216,7 @@ async def test_get_decodes_any_cached_json_response(response_json):
 async def test_complete_persists_response_and_lifecycle_event_atomically():
     lakebase, connection = mock_lakebase()
     connection.execute.return_value = MagicMock(rowcount=1)
-    store = LakebaseDurabilityStore(lakebase=lakebase)
+    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
 
     assert await store.complete("session-1", 2, ["done"]) is True
 
@@ -218,7 +232,7 @@ async def test_complete_persists_response_and_lifecycle_event_atomically():
 async def test_fail_persists_lifecycle_event_atomically():
     lakebase, connection = mock_lakebase()
     connection.execute.return_value = MagicMock(rowcount=1)
-    store = LakebaseDurabilityStore(lakebase=lakebase)
+    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
 
     assert await store.fail("session-1", 2) is True
 
@@ -232,7 +246,7 @@ async def test_append_event_returns_replay_cursor_for_owned_attempt():
     result = MagicMock()
     result.scalar_one_or_none.return_value = 7
     connection.execute.return_value = result
-    store = LakebaseDurabilityStore(lakebase=lakebase)
+    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
 
     sequence_number = await store.append_event(
         "session-1",
@@ -262,7 +276,7 @@ async def test_events_returns_ordered_replay_data():
             }
         ]
     )
-    store = LakebaseDurabilityStore(lakebase=lakebase)
+    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
 
     events = await store.events("session-1", after_sequence=7)
 
@@ -274,13 +288,13 @@ async def test_events_returns_ordered_replay_data():
 
 def test_schema_name_is_validated():
     lakebase, _ = mock_lakebase()
-    with pytest.raises(ValueError, match="invalid durability schema"):
-        LakebaseDurabilityStore(lakebase=lakebase, schema="bad-schema;drop")
+    with pytest.raises(ValueError, match="invalid Runtime Store schema"):
+        LakebaseDurableRuntimeStore(lakebase=lakebase, schema="bad-schema;drop")
 
 
 @pytest.mark.asyncio
 async def test_store_rejects_empty_execution_id():
     lakebase, _ = mock_lakebase()
-    store = LakebaseDurabilityStore(lakebase=lakebase)
+    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
     with pytest.raises(ValueError, match="must not be empty"):
         await store.accept("", {})

@@ -1,4 +1,4 @@
-"""Tests for DurableRuntime orchestration."""
+"""Tests for Runtime orchestration and local/durable executors."""
 
 import asyncio
 import copy
@@ -6,8 +6,10 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from databricks_mason.runtime.durability.runtime import DurableRuntime
-from databricks_mason.runtime.durability.types import (
+from databricks_mason.runtime.durability.attempt import DurableInvocationExecutor
+from databricks_mason.runtime.execution import AttemptExecution, LocalInvocationExecutor
+from databricks_mason.runtime.runtime import Runtime
+from databricks_mason.runtime.types import (
     DurableEvent,
     DurableExecution,
     DurableExecutionContext,
@@ -18,7 +20,7 @@ from databricks_mason.runtime.durability.types import (
 )
 
 
-class MemoryDurabilityStore:
+class MemoryRuntimeStore:
     def __init__(self) -> None:
         self.states: dict[str, DurableExecution] = {}
         self.initialized = False
@@ -46,7 +48,7 @@ class MemoryDurabilityStore:
             request=copy.deepcopy(request),
             response=None,
         )
-        self.states[execution_id] = state
+        self.states[state.execution_id] = state
         return state
 
     async def get(self, execution_id: str) -> DurableExecution | None:
@@ -67,7 +69,13 @@ class MemoryDurabilityStore:
             )
         ]
 
-    async def claim(
+    async def claim(self, execution_id: str) -> DurableExecution | None:
+        state = self.states[execution_id]
+        if state.status != DurableExecutionStatus.QUEUED:
+            return None
+        return self._claim(state)
+
+    async def claim_recoverable(
         self,
         execution_id: str,
         stale_seconds: float,
@@ -83,6 +91,9 @@ class MemoryDurabilityStore:
         )
         if not recoverable:
             return None
+        return self._claim(state)
+
+    def _claim(self, state: DurableExecution) -> DurableExecution:
         state = DurableExecution(
             execution_id=state.execution_id,
             status=DurableExecutionStatus.ACTIVE,
@@ -91,8 +102,8 @@ class MemoryDurabilityStore:
             request=state.request,
             response=None,
         )
-        self.states[execution_id] = state
-        self._append_event(execution_id, state.attempt, {"type": "run.started"})
+        self.states[state.execution_id] = state
+        self._append_event(state.execution_id, state.attempt, {"type": "run.started"})
         return state
 
     async def heartbeat(self, execution_id: str, attempt: int) -> bool:
@@ -181,13 +192,23 @@ class MemoryDurabilityStore:
         ]
 
 
-def make_runtime(executor, store=None, **kwargs):
-    return DurableRuntime(
-        executor,
-        durability_store=store or MemoryDurabilityStore(),
-        heartbeat_seconds=0.01,
-        stale_seconds=0.05,
-        scan_seconds=0.01,
+def make_runtime(execute_fn, store=None, *, durable=False, recover=False, **kwargs):
+    runtime_store = store or MemoryRuntimeStore()
+    execution = AttemptExecution(execute_fn, runtime_store=runtime_store)
+    if durable:
+        executor = DurableInvocationExecutor(
+            execution,
+            runtime_store=runtime_store,
+            recovery_enabled=lambda: recover,
+            heartbeat_seconds=0.01,
+            stale_seconds=0.05,
+            scan_seconds=0.01,
+        )
+    else:
+        executor = LocalInvocationExecutor(execution, runtime_store=runtime_store)
+    return Runtime(
+        runtime_store=runtime_store,
+        executor=executor,
         poll_seconds=0.005,
         **kwargs,
     )
@@ -201,7 +222,7 @@ async def test_invoke_persists_request_and_response():
         calls.append((request, context))
         return {"output": request["input"]}
 
-    store = MemoryDurabilityStore()
+    store = MemoryRuntimeStore()
     runtime = make_runtime(execute, store)
     await runtime.start()
     try:
@@ -216,6 +237,51 @@ async def test_invoke_persists_request_and_response():
     assert state.response == {"output": "hello"}
     assert calls[0][1].attempt == 1
     assert calls[0][1].is_recovery is False
+
+
+@pytest.mark.asyncio
+async def test_local_execution_does_not_use_heartbeats():
+    release = asyncio.Event()
+
+    async def execute(request: dict, context: DurableExecutionContext) -> dict:
+        await release.wait()
+        return {"output": "done"}
+
+    store = MemoryRuntimeStore()
+    runtime = make_runtime(execute, store)
+    await runtime.start()
+    try:
+        await runtime.submit("session-1", {"input": "hello"})
+        await asyncio.sleep(0.03)
+        assert store.heartbeats == []
+        release.set()
+        assert await runtime.wait("session-1") == {"output": "done"}
+    finally:
+        await runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_durable_execution_heartbeats_while_agent_is_running():
+    release = asyncio.Event()
+
+    async def execute(request: dict, context: DurableExecutionContext) -> dict:
+        await release.wait()
+        return {"output": "done"}
+
+    store = MemoryRuntimeStore()
+    runtime = make_runtime(execute, store, durable=True)
+    await runtime.start()
+    try:
+        await runtime.submit("session-1", {"input": "hello"})
+        for _ in range(20):
+            if store.heartbeats:
+                break
+            await asyncio.sleep(0.005)
+        assert store.heartbeats
+        release.set()
+        assert await runtime.wait("session-1") == {"output": "done"}
+    finally:
+        await runtime.stop()
 
 
 @pytest.mark.asyncio
@@ -262,7 +328,7 @@ async def test_stale_attempt_reuses_request_and_marks_recovery():
         contexts.append((request, context))
         return {"output": "recovered"}
 
-    store = MemoryDurabilityStore()
+    store = MemoryRuntimeStore()
     store.states["session-1"] = DurableExecution(
         execution_id="session-1",
         status=DurableExecutionStatus.ACTIVE,
@@ -271,7 +337,7 @@ async def test_stale_attempt_reuses_request_and_marks_recovery():
         request={"input": "original"},
         response=None,
     )
-    runtime = make_runtime(execute, store)
+    runtime = make_runtime(execute, store, durable=True, recover=True)
     await runtime.start()
     try:
         response = await runtime.wait("session-1")
@@ -335,7 +401,7 @@ async def test_wait_observes_response_completed_by_another_process():
         executor_called = True
         return {}
 
-    store = MemoryDurabilityStore()
+    store = MemoryRuntimeStore()
     store.states["session-1"] = DurableExecution(
         execution_id="session-1",
         status=DurableExecutionStatus.ACTIVE,
@@ -423,23 +489,12 @@ async def test_request_and_response_may_be_any_json_value():
 
 
 @pytest.mark.asyncio
-async def test_subclass_can_own_execution_wiring():
-    class Runtime(DurableRuntime):
-        async def execute(
-            self,
-            request: JsonValue,
-            context: DurableExecutionContext,
-        ) -> JsonValue:
-            assert isinstance(request, dict)
-            return {"attempt": context.attempt, "input": request["input"]}
+async def test_runtime_uses_injected_execution_wiring():
+    async def execute(request: JsonValue, context: DurableExecutionContext) -> JsonValue:
+        assert isinstance(request, dict)
+        return {"attempt": context.attempt, "input": request["input"]}
 
-    runtime = Runtime(
-        durability_store=MemoryDurabilityStore(),
-        heartbeat_seconds=0.01,
-        stale_seconds=0.05,
-        scan_seconds=0.01,
-        poll_seconds=0.005,
-    )
+    runtime = make_runtime(execute)
     await runtime.start()
     try:
         assert await runtime.invoke("session-1", {"input": "hello"}) == {
@@ -455,7 +510,7 @@ async def test_start_and_stop_manage_store_lifecycle():
     async def execute(request: dict, context: DurableExecutionContext) -> dict:
         return {}
 
-    store = MemoryDurabilityStore()
+    store = MemoryRuntimeStore()
     runtime = make_runtime(execute, store)
 
     await runtime.start()

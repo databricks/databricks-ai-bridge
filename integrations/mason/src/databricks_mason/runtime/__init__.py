@@ -15,9 +15,9 @@ The re-exports below are resolved lazily (PEP 562) so importing a neutral submod
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from databricks_mason.runtime.durability.app import AgentApp
-    from databricks_mason.runtime.durability.types import DurableAgentContext
+    from databricks_mason.runtime.app import AgentApp
     from databricks_mason.runtime.tracing import configure_tracing, start_trace
+    from databricks_mason.runtime.types import DurableAgentContext
     from databricks_mason.runtime.workspace import workspace_client, workspace_headers
 
 __all__ = [
@@ -34,8 +34,8 @@ __all__ = [
 ]
 
 _MODULE_BY_NAME = {
-    "AgentApp": "durability.app",
-    "DurableAgentContext": "durability.types",
+    "AgentApp": "app",
+    "DurableAgentContext": "types",
     "configure_tracing": "tracing",
     "start_trace": "tracing",
     "workspace_client": "workspace",
