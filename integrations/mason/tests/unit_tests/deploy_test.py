@@ -610,6 +610,8 @@ def test_deploy_runtime_store_uses_dedicated_backend_with_session_store(
     )
 
     assert result.exit_code == 0, result.output
+    assert "Runtime Store" not in result.output
+    assert selected.database_path not in result.output
     assert [event[0] for event in events] == ["attach", "deploy"]
     backend = events[0][1][0]
     assert backend == selected
