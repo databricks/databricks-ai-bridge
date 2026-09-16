@@ -1,8 +1,24 @@
 import pytest
-from databricks_mason import AgentApp
-from databricks_mason.runtime.store import InMemoryRuntimeStore
 from fastapi.testclient import TestClient
 from runtime import ui
+
+from databricks_mason import AgentApp
+from databricks_mason.runtime.store import (
+    RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV,
+    RUNTIME_STORE_LOCAL_ENV,
+    RUNTIME_STORE_SCHEMA_ENV,
+    InMemoryRuntimeStore,
+)
+
+
+@pytest.fixture(autouse=True)
+def _clear_runtime_store_env(monkeypatch):
+    for name in (
+        RUNTIME_STORE_LOCAL_ENV,
+        RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV,
+        RUNTIME_STORE_SCHEMA_ENV,
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
 class _FakeStateClient:
@@ -154,11 +170,6 @@ def test_demo_ui_routes(monkeypatch):
     assert "recovery" not in config
     assert client.get("/api/demo/config").status_code == 404
 
-    client.app.runtime_store_persistent = True
-    durable_config = client.get("/api/ui/config").json()
-    assert durable_config["streaming"]["mode"] == "Runtime Store"
-    assert durable_config["background"]["mode"] == "Runtime Store"
-
     assert client.get("/api/demo/models").json() == {
         "default": "databricks-gpt-5-2",
         "available": ["databricks-gpt-5-2"],
@@ -179,6 +190,45 @@ def test_demo_ui_routes(monkeypatch):
 
     assert client.post("/api/demo/memory/search", json={"query": "profile"}).status_code == 503
     assert client.post("/api/demo/sessions", json={"session_id": "ignored"}).status_code == 503
+
+
+@pytest.mark.parametrize(
+    ("local", "endpoint", "schema", "persistent"),
+    [
+        (None, None, None, False),
+        ("true", None, None, False),
+        ("true", "endpoint", "runtime_schema", False),
+        ("TRUE", "endpoint", "runtime_schema", False),
+        ("TrUe", "endpoint", "runtime_schema", False),
+        (None, "endpoint", "runtime_schema", True),
+        ("false", "endpoint", "runtime_schema", True),
+        (None, "endpoint", None, False),
+        (None, None, "runtime_schema", False),
+        (None, "", "runtime_schema", False),
+        (None, "endpoint", "", False),
+    ],
+)
+def test_demo_config_reports_runtime_store_configuration(
+    monkeypatch, local, endpoint, schema, persistent
+):
+    for name, value in (
+        (RUNTIME_STORE_LOCAL_ENV, local),
+        (RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV, endpoint),
+        (RUNTIME_STORE_SCHEMA_ENV, schema),
+    ):
+        if value is not None:
+            monkeypatch.setenv(name, value)
+    client = _client(monkeypatch)
+
+    response = client.get("/api/ui/config")
+    assert response.status_code == 200
+    config = response.json()
+    for capability in ("streaming", "background"):
+        assert config[capability]["enabled"] is True
+        assert config[capability]["persistent"] is persistent
+        assert config[capability]["mode"] == (
+            "Runtime Store" if persistent else "In-process Runtime Store"
+        )
 
 
 def test_demo_config_distinguishes_run_local_from_a_deployed_app(monkeypatch):
