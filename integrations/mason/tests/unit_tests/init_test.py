@@ -348,3 +348,122 @@ def test_init_store_name_overrides(tmp_path: pathlib.Path):
         manifest = tomli.load(manifest_file)
     assert manifest["memory_store"] == {"name": "mem-x"}
     assert manifest["session_store"] == {"name": "sess-y"}
+
+
+@pytest.mark.parametrize("chat_app", [True, False])
+def test_existing_prepares_migration_without_changing_application(
+    tmp_path: pathlib.Path, chat_app: bool
+):
+    original = {
+        "agent.py": b"# existing graph\n",
+        "pyproject.toml": b"[project]\nname = 'existing'\n",
+        "agent.toml": b"# existing bindings\n",
+        "app.yaml": b"command: [existing-server]\n",
+        ".env": b"DATABRICKS_CONFIG_PROFILE=keep\n",
+        ".mason/project.toml": b"# existing metadata\n",
+        ".claude/skills/other/SKILL.md": b"# another skill\n",
+    }
+    for name, data in original.items():
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+
+    args = [
+        "--existing",
+        "--framework",
+        "langgraph",
+        "--profile",
+        "selected",
+        "--memory-store",
+        "chosen-memory",
+        "--session-store",
+        "chosen-session",
+        str(tmp_path),
+    ]
+    if not chat_app:
+        args.append("--disable-chat-app")
+    result = CliRunner().invoke(init_mod.init, args, obj=_Ctx(output="json"))
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    skill = tmp_path / ".claude/skills/mason-migrate"
+    assert pathlib.Path(payload["skill"]).is_file()
+    assert pathlib.Path(payload["prompt_file"]).read_text().strip() == payload["prompt"]
+    assert payload["mode"] == "existing"
+    assert payload["chat_app_enabled"] is chat_app
+    settings = json.loads((skill / "references/migration.json").read_text())
+    assert settings["profile"] == "selected"
+    assert settings["chat_app_enabled"] is chat_app
+    reference = skill / "references/template"
+    with (reference / "agent.toml").open("rb") as manifest_file:
+        manifest = tomli.load(manifest_file)
+    assert manifest["memory_store"] == {"name": "chosen-memory"}
+    assert manifest["session_store"] == {"name": "chosen-session"}
+    assert manifest["durability"] == {"enabled": True}
+    for name, data in original.items():
+        assert (tmp_path / name).read_bytes() == data
+
+
+def test_existing_defaults_to_current_directory(tmp_path: pathlib.Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(init_mod.init, ["--existing"], obj=_Ctx(profile="saved"))
+    assert result.exit_code == 0, result.output
+    settings = json.loads(
+        (tmp_path / ".claude/skills/mason-migrate/references/migration.json").read_text()
+    )
+    assert settings["profile"] == "saved"
+    assert not (tmp_path / ".env").exists()
+    assert not (tmp_path / "agent.toml").exists()
+
+
+@pytest.mark.parametrize("conflict", ["skill", "file", "symlink"])
+def test_existing_refuses_migration_path_conflicts(tmp_path: pathlib.Path, conflict: str):
+    claude = tmp_path / ".claude"
+    if conflict == "skill":
+        skill = claude / "skills/mason-migrate"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("user instructions")
+    elif conflict == "file":
+        claude.write_text("user file")
+    else:
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        claude.symlink_to(elsewhere, target_is_directory=True)
+    before = {str(path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+    result = CliRunner().invoke(init_mod.init, ["--existing", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code != 0
+    assert {
+        str(path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()
+    } == before
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--existing", "--framework", "openai"],
+        ["--existing", "--server", "custom"],
+    ],
+)
+def test_existing_rejects_unsupported_modes(tmp_path: pathlib.Path, args: list[str]):
+    result = CliRunner().invoke(init_mod.init, [*args, str(tmp_path)], obj=_Ctx())
+    assert result.exit_code != 0
+    assert not (tmp_path / ".claude").exists()
+
+
+def test_existing_missing_directory_is_rejected(tmp_path: pathlib.Path):
+    dest = tmp_path / "missing"
+    result = CliRunner().invoke(init_mod.init, ["--existing", str(dest)], obj=_Ctx())
+    assert result.exit_code != 0
+    assert not dest.exists()
+
+
+def test_existing_failed_copy_leaves_no_artifacts(tmp_path: pathlib.Path, monkeypatch):
+    def failed_copy(name, dest, overlay_names=()):
+        dest.mkdir(parents=True)
+        (dest / "partial.txt").write_text("partial")
+        raise AgentCliError("copy failed")
+
+    monkeypatch.setattr(init_mod, "_copy_packaged_template", failed_copy)
+    result = CliRunner().invoke(init_mod.init, ["--existing", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code != 0
+    assert list(tmp_path.iterdir()) == []

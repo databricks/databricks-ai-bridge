@@ -36,7 +36,13 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("login",): (("mason login --profile <profile>", "save a profile as your default"),),
     ("logout",): (("mason logout", "forget the saved default profile"),),
-    ("init",): (("mason init my-agent", "scaffold a new agent project"),),
+    ("init",): (
+        ("mason init my-agent", "scaffold a new agent project"),
+        (
+            "mason init --framework langgraph --existing .",
+            "prepare a Claude migration skill for an existing agent",
+        ),
+    ),
     ("dev",): (("mason dev", "run the agent locally with a chat UI"),),
     ("memory",): (
         ("mason memory stores create --display-name agent-memory", "create a memory store"),
