@@ -326,3 +326,33 @@ jobs:
         run: |
           uv run --resolution ${{ matrix.uv-resolution }} \
             --exact --group tests pytest tests/unit_tests
+
+  mason_dev_functional:
+    runs-on: ${{ matrix.os }}
+    name: "mason_dev_functional (${{ matrix.os }})"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.12"
+      # Build the wheel and run the functional tier from a venv it's installed into, so the tests
+      # exercise the shipped artifact (a packaging gap fails here) rather than an editable source
+      # tree. `mason` on PATH is the wheel's console script; MASON_WHEEL pins the scaffolded agent's
+      # databricks-mason at the same wheel.
+      - name: Build and install the mason wheel
+        working-directory: integrations/mason
+        run: |
+          uv build --wheel --out-dir dist
+          uv venv .venv-functional
+          uv pip install --python .venv-functional/bin/python "$(ls dist/*.whl)" --group tests
+      - name: Run mason functional tests against the wheel
+        working-directory: integrations/mason
+        run: MASON_WHEEL="$(ls "$PWD"/dist/*.whl)" .venv-functional/bin/pytest tests/functional/

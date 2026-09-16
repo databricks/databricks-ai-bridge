@@ -1,4 +1,4 @@
-"""OpenAI Agents SDK adapter for running an agent on Databricks (installed via ``databricks-mason[runtime-openai]``).
+"""OpenAI Agents SDK adapter for running an agent on Databricks (installed via ``databricks-mason[openai]``).
 
 Composable pieces you drop into an existing OpenAI Agents SDK agent — a session store, MCP servers
 declared in ``agent.toml``, long-term memory tools, and MLflow tracing. Each maps onto a slot the
@@ -21,7 +21,7 @@ Agents SDK already has, so migrating an existing agent is a graft, not a rewrite
     result = await Runner.run(agent, messages, session=session_store(session_id))
 
 These need the agent stack (openai-agents, databricks-openai, mlflow), so they sit behind the
-``[runtime-openai]`` extra to keep a plain ``databricks-mason`` CLI install light.
+``[openai]`` extra to keep a plain ``databricks-mason`` installation independent of agent frameworks.
 
 ``__all__`` is the curated surface. Other entry points (``DatabricksSessionStore``) are reachable by
 their submodule paths but not re-exported here.
@@ -33,7 +33,11 @@ if TYPE_CHECKING:
     from databricks_mason.openai.mcp import mcp_servers
     from databricks_mason.openai.memory import memory_tools
     from databricks_mason.openai.sessions import session_store
-    from databricks_mason.runtime import tag_session, workspace_client, workspace_headers
+    from databricks_mason.runtime import (
+        start_trace,
+        workspace_client,
+        workspace_headers,
+    )
 
 
 def configure_tracing() -> None:
@@ -58,7 +62,8 @@ __all__ = [
     "session_store",
     # MLflow tracing (OpenAI autolog bound in) — call configure_tracing() once at startup.
     "configure_tracing",
-    "tag_session",
+    # Wrap each invocation in start_trace() so a trace is recorded (pass session_id= to tag it).
+    "start_trace",
     # Workspace SDK client construction.
     "workspace_client",
     "workspace_headers",
@@ -70,7 +75,7 @@ _MODULE_BY_NAME = {
     "mcp_servers": "databricks_mason.openai.mcp",
     "memory_tools": "databricks_mason.openai.memory",
     "session_store": "databricks_mason.openai.sessions",
-    "tag_session": "databricks_mason.runtime",
+    "start_trace": "databricks_mason.runtime",
     "workspace_client": "databricks_mason.runtime",
     "workspace_headers": "databricks_mason.runtime",
 }

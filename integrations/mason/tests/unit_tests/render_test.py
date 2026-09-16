@@ -47,6 +47,14 @@ def test_hyperlink_carries_url_and_plain_text():
     assert "link https://example.com/app" in str(link.style)
 
 
+def test_warning_prints_yellow_message():
+    con, buf = _console()
+    render.warning("careful now", con=con)
+    out = buf.getvalue()
+    assert "careful now" in out
+    assert "⚠" in out
+
+
 def test_hyperlink_without_url_is_plain():
     link = render.hyperlink("my-app", None)
     assert link.plain == "my-app"
@@ -73,6 +81,22 @@ def test_resource_table_renders_title_and_count():
     assert "1 item" in out
 
 
+def test_resource_table_keeps_no_wrap_column_full_width_when_narrow():
+    buf = io.StringIO()
+    con = Console(file=buf, width=60, no_color=True)
+    long_name = "memory-store-with-a-long-id"
+    render.resource_table(
+        "Stores",
+        [("Name", "left"), ("Resource name", "left"), ("Description", "left")],
+        [["demo", long_name, "some long description text here"]],
+        con=con,
+        no_wrap=[1],
+    )
+    out = buf.getvalue()
+    assert long_name in out  # resource name reserved full-width, never truncated
+    assert "DESCRIPTION" in out.upper()  # no column is dropped; it just narrows/wraps
+
+
 def test_success_next_steps_render_command_and_description():
     con, buf = _console()
     render.success(
@@ -84,22 +108,75 @@ def test_success_next_steps_render_command_and_description():
         con=con,
     )
     out = buf.getvalue()
-    # The header defines the `$` marker when at least one step is a command.
-    assert "$ = run in your terminal" in out
-    # Commands get a `$ ` prompt prefix and show their description.
-    assert "$ mason init my-agent" in out
+    # Plural heading when there is more than one step.
+    assert "Next steps" in out
+    # Commands are copy-safe: no `$` prompt prefix, so they paste straight into a shell.
+    assert "mason init my-agent" in out
+    assert "$ mason init my-agent" not in out
+    assert "$ = run in your terminal" not in out
     assert "Scaffold a new agent project" in out
-    # A bare-string step renders as prose with a `•` bullet (not a command prompt).
-    assert "• Open http://localhost:8000 to chat with it" in out
+    # A bare-string step renders as prose (no command accent, no bullet).
+    assert "Open http://localhost:8000 to chat with it" in out
 
 
-def test_success_prose_only_next_steps_omit_terminal_hint():
+def test_success_single_next_step_uses_singular_heading():
+    con, buf = _console()
+    render.success(
+        "Deployed",
+        next_steps=[("mason deployments logs my-agent", "stream the logs")],
+        con=con,
+    )
+    out = buf.getvalue()
+    assert "Next step" in out
+    assert "Next steps" not in out  # singular when there is exactly one step
+
+
+def test_success_prose_only_next_steps():
     con, buf = _console()
     render.success("Done", next_steps=["Set DATABRICKS_CONFIG_PROFILE in .env"], con=con)
     out = buf.getvalue()
-    assert "Next steps" in out
+    assert "Next step" in out  # singular for one step
     assert "$ = run in your terminal" not in out  # no command -> no marker legend
     assert "Set DATABRICKS_CONFIG_PROFILE in .env" in out
+
+
+def test_diagnostic_renders_severity_keyword_and_help_line():
+    con, buf = _console()
+    render.diagnostic(
+        "warning",
+        "active virtualenv ignored",
+        help="pass --active to target the active environment",
+        con=con,
+    )
+    out = buf.getvalue()
+    assert "warning: active virtualenv ignored" in out
+    # The fix lives on an indented `help:` line, cargo/uv style.
+    assert "  help: pass --active to target the active environment" in out
+
+
+def test_diagnostic_error_uses_cargo_code_form():
+    con, buf = _console()
+    render.diagnostic("error", "store not found", code="NOT_FOUND", con=con)
+    # cargo's `error[CODE]:` form keeps the machine-relevant code visible in the human line.
+    assert "error[NOT_FOUND]: store not found" in buf.getvalue()
+
+
+def test_diagnostic_colors_only_the_keyword_leaving_message_and_fix_readable():
+    # Regression: styling must not bleed onto the message/fix. Only the severity keyword is colored
+    # and the `help:` label bold; the message and fix stay at the default foreground so they are
+    # fully legible on any terminal. The style resets right after the keyword/label.
+    import io
+
+    from rich.console import Console
+
+    from databricks_mason.theme import MASON_THEME
+
+    buf = io.StringIO()
+    con = Console(file=buf, width=120, force_terminal=True, theme=MASON_THEME)
+    render.diagnostic("error", "boom happened", help="do the fix", con=con)
+    raw = buf.getvalue()
+    assert "error\x1b[0m: boom happened" in raw  # reset lands after the keyword; message is default
+    assert "help:\x1b[0m do the fix" in raw  # reset lands after the label; fix is default
 
 
 def test_detail_renders_breadcrumb_status_and_snippet():

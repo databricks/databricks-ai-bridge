@@ -6,12 +6,13 @@ from resource_test_fixtures import (
     SESSION_STORE,
     STORE_ID,
     item_payload,
+    memory_payload,
     resource_client,
     session_payload,
     session_store_payload,
 )
 
-from databricks_mason import Session, SessionItem, SessionStore
+from databricks_mason import ExtractedMemory, Session, SessionItem, SessionStore
 
 
 def test_create_list_and_get_stores() -> None:
@@ -72,6 +73,18 @@ def test_update_and_delete_store() -> None:
         metadata={"environment": "prod"},
     )
     api.delete_session_store.assert_called_once_with(SESSION_STORE)
+
+
+def test_grant_permission() -> None:
+    client, api = resource_client()
+    api.get_session_store.return_value = session_store_payload()
+    store = client.session_stores.get(SESSION_STORE)
+
+    store.grant_permission("sp-123")
+
+    api.grant_session_store_permission.assert_called_once_with(
+        SESSION_STORE, "sp-123", permission="WRITE"
+    )
 
 
 def test_add_get_and_list_sessions() -> None:
@@ -190,6 +203,45 @@ def test_item_operations_and_pagination() -> None:
     assert empty is None
     api.append_session_items.assert_called_once_with(SESSION_STORE, SESSION_ID, [user_data])
     api.clear_session_items.assert_called_once_with(SESSION_STORE, SESSION_ID)
+
+
+def test_extract_memories_returns_typed_entries() -> None:
+    client, api = resource_client()
+    api.get_session_store.return_value = session_store_payload()
+    api.get_session.return_value = session_payload()
+    api.extract_memories.return_value = {
+        "name": "extractions/abc",
+        "entries": [memory_payload(path="/prefs/style.md")],
+    }
+    session = client.session_stores.get(SESSION_STORE).get(SESSION_ID)
+
+    entries = session.extract_memories(memory_store="mem", instructions="only prefs")
+
+    assert isinstance(entries[0], ExtractedMemory)
+    assert entries[0].path == "/prefs/style.md"
+    assert entries[0].create_time is not None  # timestamps parsed
+    api.extract_memories.assert_called_once_with(
+        SESSION_STORE,
+        SESSION_ID,
+        "mem",
+        instructions="only prefs",
+        dry_run=False,
+    )
+
+
+def test_extract_memories_dry_run_empty_entries() -> None:
+    client, api = resource_client()
+    api.get_session_store.return_value = session_store_payload()
+    api.get_session.return_value = session_payload()
+    api.extract_memories.return_value = {"name": "extractions/abc"}  # no entries key
+    session = client.session_stores.get(SESSION_STORE).get(SESSION_ID)
+
+    entries = session.extract_memories(memory_store="mem", dry_run=True)
+
+    assert entries == []
+    api.extract_memories.assert_called_once_with(
+        SESSION_STORE, SESSION_ID, "mem", instructions=None, dry_run=True
+    )
 
 
 def test_append_items_requires_an_item() -> None:

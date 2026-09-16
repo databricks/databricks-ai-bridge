@@ -12,14 +12,17 @@ import configparser
 import os
 import pathlib
 import time
-from typing import Any, Optional
-
-from databricks.sdk import WorkspaceClient
+from typing import TYPE_CHECKING, Any, Optional
 
 from databricks_mason import models
 from databricks_mason.errors import TRANSIENT_ERROR_CODES, AgentCliError, wrap_api_error
 
+if TYPE_CHECKING:
+    from databricks.sdk import WorkspaceClient
+
 _BASE = "/api/agents/v1"
+# ExtractMemories only binds the 2.0 path (no /agents/v1 alias), so it needs its own base.
+_BASE_2_0 = "/api/2.0/agents"
 _MCP_SERVICES_PATH = "/api/2.1/unity-catalog/mcp-services"
 
 # Transient backend failures (e.g. a CANCELLED RPC) usually clear on a retry, so retry safe
@@ -27,6 +30,11 @@ _MCP_SERVICES_PATH = "/api/2.1/unity-catalog/mcp-services"
 # attempt may have committed even when its response was lost.
 _MAX_ATTEMPTS = 2
 _RETRY_BASE_DELAY_S = 0.2
+
+# Bound the SDK's own retry budget (default 300s). The SDK retries every HTTP 429/503 as platform
+# throttling, so an interactive command otherwise hangs up to 5 minutes on a sustained 429 before
+# surfacing anything; cap it so throttling fails fast with a clear error.
+_CLI_RETRY_TIMEOUT_S = 60
 
 
 def _query(**kwargs: Any) -> dict[str, Any]:
@@ -92,8 +100,21 @@ def _profile_host(profile: str) -> Optional[str]:
     return parser.get(profile, "host", fallback=None)
 
 
+def _bound_retry_timeout(client: WorkspaceClient) -> WorkspaceClient:
+    # Shorten the SDK's default 300s retry budget so 429/503 throttling fails in ~1 min, not ~5.
+    try:
+        client.api_client._api_client._retry_timeout_seconds = _CLI_RETRY_TIMEOUT_S
+    except AttributeError:
+        pass
+    return client
+
+
 def _workspace_client(profile: Optional[str]) -> WorkspaceClient:
-    client = WorkspaceClient(profile=profile)
+    # Imported here (not at module top) so the ~0.7s databricks.sdk import is paid only when a
+    # command actually builds a client, not on every CLI invocation.
+    from databricks.sdk import WorkspaceClient
+
+    client = _bound_retry_timeout(WorkspaceClient(profile=profile))
     if not profile or not client.config.workspace_id:
         return client
 
@@ -103,10 +124,12 @@ def _workspace_client(profile: Optional[str]) -> WorkspaceClient:
         return client
 
     workspace_id = str(client.config.workspace_id)
-    return WorkspaceClient(
-        profile=profile,
-        host=configured_host,
-        custom_headers={"X-Databricks-Org-Id": workspace_id},
+    return _bound_retry_timeout(
+        WorkspaceClient(
+            profile=profile,
+            host=configured_host,
+            custom_headers={"X-Databricks-Org-Id": workspace_id},
+        )
     )
 
 
@@ -405,6 +428,40 @@ class _MasonApiClient:
     def delete_session_store(self, name: str) -> dict:
         return self._do("DELETE", f"{_BASE}/{session_store_path(name)}")
 
+    # --- store permission grants --------------------------------------------
+
+    def grant_session_store_permission(
+        self, name: str, principal_client_id: str, permission: str = "WRITE"
+    ) -> dict:
+        """Grant a service principal READ/WRITE on a session store.
+
+        The store service performs the underlying Lakebase role provisioning and GRANTs itself, so
+        this succeeds without the caller owning the store or holding MANAGE on its Lakebase.
+        """
+        return self._do(
+            "POST",
+            f"{_BASE}/{session_store_path(name)}/permissions:grant",
+            body={
+                "principal": {"type": "SERVICE_PRINCIPAL", "name": principal_client_id},
+                "permission": permission,
+            },
+            safe_to_retry=True,
+        )
+
+    def grant_memory_store_permission(
+        self, name: str, principal_client_id: str, permission: str = "WRITE"
+    ) -> dict:
+        """Grant a service principal READ/WRITE on a memory store (``name`` is its resource id)."""
+        return self._do(
+            "POST",
+            f"{_BASE}/{memory_store_path(name)}/permissions:grant",
+            body={
+                "principal": {"type": "SERVICE_PRINCIPAL", "name": principal_client_id},
+                "permission": permission,
+            },
+            safe_to_retry=True,
+        )
+
     # --- sessions ------------------------------------------------------------
 
     def create_session(
@@ -534,4 +591,32 @@ class _MasonApiClient:
     def clear_session_items(self, store: str, session_id: str) -> dict:
         return self._do(
             "POST", f"{_BASE}/session-stores/{store}/sessions/{session_id}/items:clear", body={}
+        )
+
+    def extract_memories(
+        self,
+        store: str,
+        session_id: str,
+        memory_store: str,
+        *,
+        instructions: Optional[str] = None,
+        dry_run: bool = False,
+    ) -> models.ExtractMemoriesResponse:
+        """Synchronously distill a session's transcript into memory entries.
+
+        Writes the entries to `memory_store` and returns them; pass `dry_run=True` to return the
+        extracted entries without persisting them.
+        """
+        body = _body(
+            memory_store=memory_store_path(memory_store),
+            instructions=instructions,
+            dry_run=dry_run or None,
+        )
+        return _as(
+            models.ExtractMemoriesResponse,
+            self._do(
+                "POST",
+                f"{_BASE_2_0}/session-stores/{store}/sessions/{session_id}/extractions",
+                body=body,
+            ),
         )

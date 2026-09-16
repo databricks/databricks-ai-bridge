@@ -1,0 +1,44 @@
+# Mason LangGraph Chat App Overlay
+
+`mason init --framework langgraph` copies this framework-specific overlay after the base
+`agent-langgraph` template (it is included by default; `--disable-chat-app` opts out). It is
+intentionally not a post-generation mutation command.
+
+## Installed files
+
+- `ui/` contains the zero-build chat client.
+- `runtime/ui.py` serves the assets and exposes demo APIs for memory and sessions.
+- `runtime/main.py` installs the chat routes on the base FastAPI runtime.
+- `tests/test_demo_ui.py` verifies the browser-facing routes.
+
+## Behavior
+
+The capability indicators are automatic. Streaming and background reflect the runtime contract;
+Session reflects checkpoint history; Memory requires `AGENT_MEMORY_STORE`. The transport selector is
+the only manual capability choice.
+
+The chat header's model picker lists the workspace's ready chat serving endpoints
+(`GET /api/ui/config` → `models`, discovered from `serving_endpoints.list()` and filtered to the
+`llm/v1/chat` task), with `agent.agent.MODEL` pinned as the default. Each request sends the selected
+endpoint as `model` in the invocation body; the agent is rebuilt per turn, so the picker changes the
+model for the next turn without a restart. Discovery is best-effort: if listing is unavailable (e.g.
+no permission), the picker falls back to just the default. Omitting `model` uses `MODEL`.
+
+A large workspace can expose thousands of endpoints, so the picker is capped (`_MODEL_LIMIT`, 20)
+and ranked — default first, then `databricks-*` foundation models, then other custom/external chat
+endpoints — so the cap keeps the canonical choices. The list call is unpaginated and occasionally
+fails on big workspaces, so it is retried a few times before falling back to the default.
+
+The UI reads local history from the LangGraph checkpoint and managed history from Session Store
+items. It keeps a stable application session UUID in browser local storage and includes it inside
+every durable invocation's `input`; each turn gets a separate invocation UUID. The router cookie is
+independent and may still provide sticky replica routing.
+
+The Sessions card creates new session UUIDs in the browser. With a managed Session Store,
+`GET /api/demo/sessions` lists the most recent sessions for the signed-in actor and each Open action
+calls `POST /api/demo/sessions/{session_id}/open`. Opening a session verifies ownership and reloads
+its transcript and pending LangGraph state. In local in-memory mode only the current browser session
+can be listed because there is no shared session index.
+
+Transcript responses include only user, assistant, tool, system, and human-decision message items;
+checkpoint fragments remain in Session Store but are never returned to the chat UI.

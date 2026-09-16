@@ -5,8 +5,8 @@ from __future__ import annotations
 import click
 from click.testing import CliRunner
 
-from databricks_mason import cli
-from databricks_mason import help as help_mod
+import databricks_mason.cli.app as cli
+from databricks_mason.cli import help as help_mod
 
 
 def _command_paths(group: click.Group, prefix: tuple[str, ...] = ()):
@@ -47,13 +47,38 @@ def test_root_registers_supported_commands():
     assert "add-sandbox" not in names
 
 
+def test_root_help_describes_the_product_and_links_out():
+    # The root page should say what Mason is in plain language (not lead with internal API detail)
+    # and point a reader to docs + support, per CLI help best practices.
+    result = CliRunner().invoke(cli.mason, ["--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "building and deploying custom AI agents on Databricks" in result.output
+    # No internal API path in the user-facing description.
+    assert "agents/v1" not in result.output
+    # Docs and issues links appear (root only).
+    assert help_mod._DOCS_URL in result.output
+    assert help_mod._ISSUES_URL in result.output
+
+
+def test_group_help_has_no_raw_api_paths():
+    # Group descriptions should read for users, not expose REST endpoints.
+    runner = CliRunner()
+    for path in ((), *_command_paths(cli.mason)):
+        result = runner.invoke(cli.mason, [*path, "--help"])
+        assert result.exit_code == 0, (path, result.output)
+        # The Docs/Issues footer legitimately carries the repo URL on the root page; the offending
+        # pattern we guard against is the raw API path that used to lead group descriptions.
+        assert "/api/agents/v1" not in result.output, path
+
+
 def test_nested_command_help_shows_usage_options_and_examples():
     result = CliRunner().invoke(cli.mason, ["tools", "add", "sandbox", "--help"])
 
     assert result.exit_code == 0, result.output
     assert "Usage: mason tools add sandbox [OPTIONS]" in result.output
     assert "--scope TEXT" in result.output
-    assert "Examples:" in result.output
+    assert "EXAMPLES" in result.output
     assert "mason tools add sandbox --scope table:samples.nyctaxi.trips" in result.output
 
 
@@ -61,13 +86,14 @@ def test_tools_help_explains_add_workflow():
     result = CliRunner().invoke(cli.mason, ["tools", "--help"])
 
     assert result.exit_code == 0, result.output
-    assert "Manage tools configured in an agent project's agent.toml." in result.output
-    assert "Add a sandbox, MCP service, UC function, or Python tool." in result.output
-    assert "Remove a tool binding from this agent." in result.output
-    assert "List tools configured for this agent." in result.output
+    assert "Tools are what let an agent act" in result.output
+    # The CLI-addable tool types are described on the group page (Python tools are code-first,
+    # written directly in the project — see #509 upstream — so they are not a `tools add` type).
+    for tool_type in ("sandbox", "mcp", "uc-function"):
+        assert tool_type in result.output
     assert "mason tools add --help" in result.output
-    assert "mason tools add mcp system.ai.web_search" in result.output
-    assert "mason tools remove mcp system.ai.web_search" in result.output
+    assert "mason tools add mcp system.ai.python_exec" in result.output
+    assert "mason tools remove mcp system.ai.python_exec" in result.output
 
 
 def test_tools_remove_help_shows_id_and_project_targeting():
@@ -76,8 +102,8 @@ def test_tools_remove_help_shows_id_and_project_targeting():
     assert result.exit_code == 0, result.output
     assert "Usage: mason tools remove [OPTIONS] TOOL_ID [MCP_SERVICE]" in result.output
     assert "--source DIRECTORY" in result.output
-    assert "mason tools remove mcp system.ai.web_search" in result.output
-    assert "mason tools remove web_search" in result.output
+    assert "mason tools remove mcp system.ai.python_exec" in result.output
+    assert "mason tools remove python_exec" in result.output
 
 
 def test_tools_add_help_explains_types_and_project_targeting():
@@ -88,11 +114,15 @@ def test_tools_add_help_explains_types_and_project_targeting():
     assert "Pass --source PATH to target another project." in result.output
     for example in (
         "mason tools add sandbox --scope table:samples.nyctaxi.trips",
-        "mason tools add mcp system.ai.web_search",
+        "mason tools add mcp system.ai.python_exec",
         "mason tools add uc-function catalog.schema.lookup_ticket",
-        "mason tools add python lookup-ticket",
     ):
         assert example in result.output
+    # `mason tools add python` was removed (Python tools are code-first); the subcommand must not be
+    # advertised. Checked as the command invocation, not a bare "python" substring, so the legitimate
+    # `system.ai.python_exec` MCP example above is still allowed.
+    assert "mason tools add python" not in result.output
+    assert "\n  python " not in result.output  # no `python` row in the add-group command list
 
 
 def test_help_examples_recommend_the_default_happy_path():
@@ -127,7 +157,10 @@ def test_every_command_has_an_example_in_option_help():
     for path in ((), *_command_paths(cli.mason)):
         result = runner.invoke(cli.mason, [*path, "--help"])
         assert result.exit_code == 0, (path, result.output)
-        assert "Examples:" in result.output, path
+        # The root leads with a numbered "Getting started" path; subcommands show "Examples".
+        # Headings render uppercased and grayed (facelift §6); CliRunner strips the color codes.
+        expected = "GETTING STARTED" if path == () else "EXAMPLES"
+        assert expected in result.output, path
 
 
 def test_root_examples_render_inline_comments():
@@ -156,7 +189,7 @@ def test_long_commands_stack_the_comment_above():
     epilog = help_mod._example_epilog(
         (("mason x " + "y" * help_mod._INLINE_COMMENT_MAX, "does a long thing"),)
     )
-    lines = epilog.splitlines()
+    lines = [click.unstyle(ln) for ln in epilog.splitlines()]  # drop the graying color codes
     comment_i = next(i for i, ln in enumerate(lines) if "# does a long thing" in ln)
     # comment sits on its own line, immediately above the command
     assert lines[comment_i].strip() == "# does a long thing"
@@ -189,3 +222,144 @@ def test_session_delete_has_force_option():
     delete = cli.sessions.commands["delete"]
 
     assert "force" in {parameter.name for parameter in delete.params}
+
+
+# --- did-you-mean & grouped listing (facelift §1, §4) ------------------------
+
+
+def test_unknown_command_suggests_close_match():
+    result = CliRunner().invoke(cli.mason, ["tolls", "list"])
+    assert result.exit_code != 0
+    # Diagnostic grammar: an `error:` keyword and a `help:` line with a ranked suggestion.
+    assert "error: unknown command `tolls`" in result.output
+    assert "did you mean `tools`" in result.output
+
+
+def test_doubled_mason_is_named_directly():
+    result = CliRunner().invoke(cli.mason, ["mason", "login"])
+    assert result.exit_code != 0
+    assert "you typed `mason` twice" in result.output
+
+
+def test_unknown_nested_command_suggests_within_group():
+    result = CliRunner().invoke(cli.mason, ["memory", "storx"])
+    assert result.exit_code != 0
+    assert "unknown command `storx`" in result.output
+    assert "did you mean `stores`" in result.output
+
+
+def test_bad_option_uses_diagnostic_grammar():
+    # Click's own usage errors (bad/unknown option) render in the mason diagnostic grammar, not
+    # Click's stock `Error: …` / `Usage:` block.
+    result = CliRunner().invoke(cli.mason, ["init", "--nope", "x"])
+    assert result.exit_code != 0
+    # Click's message wording varies across versions ("No such option: --nope" vs "'--nope'"), so
+    # assert on the parts we own: the `error:` keyword, the offending option, and the `help:` line.
+    assert "error: No such option" in result.output
+    assert "--nope" in result.output
+    assert "help: run `mason init --help`" in result.output
+    # Not Click's default framing.
+    assert "Try 'mason" not in result.output
+
+
+def test_missing_argument_uses_diagnostic_grammar():
+    result = CliRunner().invoke(cli.mason, ["memory", "stores", "get"])
+    assert result.exit_code != 0
+    assert "error: Missing argument" in result.output
+    assert "help: run `mason memory stores get --help`" in result.output
+
+
+def test_unknown_command_without_close_match_points_to_help():
+    result = CliRunner().invoke(cli.mason, ["zzzzz"])
+    assert result.exit_code != 0
+    assert "unknown command `zzzzz`" in result.output
+    assert "mason --help" in result.output
+
+
+def test_root_help_shows_numbered_getting_started_path():
+    result = CliRunner().invoke(cli.mason, ["--help"])
+    assert result.exit_code == 0, result.output
+    out = result.output
+    assert "GETTING STARTED" in out
+    # Read just the numbered block (login/init/deploy also appear in the prose description above).
+    block = out[out.index("GETTING STARTED") :]
+    block = block[: block.index("Not authenticated")]
+    numbered = [ln.strip() for ln in block.splitlines() if ln.strip()[:1].isdigit()]
+    # The path is numbered and ordered: login (1) → init (2) → cd (3) → dev (4) → deploy (5).
+    assert numbered[0].startswith("1") and "mason login --profile" in numbered[0]
+    assert numbered[1].startswith("2") and "mason init my-agent" in numbered[1]
+    assert numbered[4].startswith("5") and "mason deploy my-agent" in numbered[4]
+
+
+def test_help_dims_headings_and_descriptions_not_names():
+    # Headings and the description column recede via the terminal's adaptive dim attribute (SGR 2),
+    # while command/option names keep full intensity. Assert on the raw ANSI (color forced on).
+    import click
+
+    ctx = cli.mason.make_context("mason", [], resilient_parsing=True)
+    ctx.color = True
+    raw = cli.mason.get_help(ctx)
+    dim = "\x1b[2m"  # SGR 2 = faint/dim, adaptive to the terminal's own foreground
+    lines = raw.splitlines()
+
+    # A section heading (uppercase, no colon) is dimmed.
+    setup = next(ln for ln in lines if click.unstyle(ln).strip() == "SETUP")
+    assert setup.startswith(dim)
+    # A command row dims the description but not the name.
+    login = next(ln for ln in lines if click.unstyle(ln).strip().startswith("login"))
+    assert dim in login  # the description is dimmed
+    assert not login.startswith(dim)  # the `login` name is at full intensity
+
+
+def test_epilog_headings_align_flush_left_with_sections():
+    # GETTING STARTED / EXAMPLES are epilog blocks; Click indents epilogs one level by default,
+    # which left them 2 columns right of OPTIONS/SETUP. They should sit flush-left like real
+    # sections, with their rows at the same 2-space column as command rows.
+    result = CliRunner().invoke(cli.mason, ["--help"])
+    assert result.exit_code == 0, result.output
+
+    def indent(line: str) -> int:
+        return len(line) - len(line.lstrip(" "))
+
+    lines = result.output.splitlines()
+    heading = {"OPTIONS", "SETUP", "GETTING STARTED"}
+    for name in heading:
+        line = next(ln for ln in lines if ln.strip() == name)
+        assert indent(line) == 0, (name, line)
+    # A numbered getting-started row aligns with an OPTIONS/command row at column 2.
+    row = next(ln for ln in lines if ln.strip().startswith("1  mason login"))
+    assert indent(row) == 2, row
+
+
+def test_root_help_dims_capability_descriptions_but_not_labels_or_prose():
+    import click
+
+    ctx = cli.mason.make_context("mason", [], resilient_parsing=True)
+    ctx.color = True
+    raw = cli.mason.get_help(ctx)
+    dim = "\x1b[2m"
+    lines = raw.splitlines()
+
+    # In a capabilities row the label (left column) stays full-weight; only the description recedes.
+    models = next(ln for ln in lines if click.unstyle(ln).strip().startswith("Models"))
+    assert not models.startswith(dim)  # the "Models" label is not dimmed
+    assert models.index("Models") < models.index(dim)  # dim begins at the description, after label
+    # The prose introducing and following the block stays at full weight.
+    intro = next(ln for ln in lines if "combine the platform's capabilities" in click.unstyle(ln))
+    assert dim not in intro
+    closing = next(ln for ln in lines if "provisions and wires these" in click.unstyle(ln))
+    assert dim not in closing
+
+
+def test_root_help_groups_commands_by_intent():
+    result = CliRunner().invoke(cli.mason, ["--help"])
+    assert result.exit_code == 0, result.output
+    out = result.output
+    # The command list reads as a workflow: SETUP → DEVELOP → SHIP, in that order.
+    assert "SETUP" in out and "DEVELOP" in out and "SHIP" in out
+    assert out.index("SETUP") < out.index("DEVELOP") < out.index("SHIP")
+    # Commands land under their section.
+    setup_to_develop = out[out.index("SETUP") : out.index("DEVELOP")]
+    assert "login" in setup_to_develop and "init" in setup_to_develop
+    ship_onward = out[out.index("SHIP") :]
+    assert "deploy" in ship_onward

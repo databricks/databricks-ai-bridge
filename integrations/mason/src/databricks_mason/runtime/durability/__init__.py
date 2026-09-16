@@ -1,1 +1,1 @@
-"""Durable agent application and execution internals."""
+"""Persistence and recovery internals for Mason Runtime."""

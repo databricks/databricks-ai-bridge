@@ -366,7 +366,7 @@ class Runner:
                 else:
                     self._author_direct(project, framework)
                 self._write_python_marker(project)
-                app_name = f"mason-tools-{framework[:2]}-{authoring[:2]}-{run_suffix}"
+                app_name = f"agent-mason-t-{framework[:2]}-{authoring[:2]}-{run_suffix}"
                 cases.append(ProjectCase(framework, authoring, project, app_name))
         return cases
 
@@ -411,10 +411,18 @@ class Runner:
                 "--name",
                 "mason_uc_marker",
             ],
-            ["tools", "add", "python", "matrix-marker"],
         ]
         for args in commands:
             self.run([str(self.mason), *args, "--source", str(project)])
+        listed = self.run(
+            [str(self.mason), "--output", "json", "tools", "list", "--source", str(project)]
+        )
+        tool_ids = {tool["id"] for tool in json.loads(listed.stdout)["tools"]}
+        expected = {"sandbox", "web_search", "mason_uc_marker"}
+        if tool_ids != expected:
+            raise MatrixError(
+                f"managed tools list mismatch: expected {sorted(expected)}, got {sorted(tool_ids)}"
+            )
 
     def _author_direct(self, project: pathlib.Path, framework: str) -> None:
         fixture = pathlib.Path(__file__).parent / "fixtures" / "direct_agent.toml"

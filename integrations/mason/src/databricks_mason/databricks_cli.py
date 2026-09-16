@@ -3,7 +3,7 @@
 Mason shells out to the ``databricks`` CLI for the operations it doesn't call over the REST client
 (``apps`` lifecycle, ``sync``, ``postgres`` endpoint/credential lookups). This is the single place
 that builds the argv, threads the ``--profile`` through, and normalizes a non-zero exit into an
-``AgentCliError``. Kept separate from any one caller so ``deploy``, ``dev``, and ``store_access``
+``AgentCliError``. Kept separate from any one caller so ``deploy``, ``dev``, and ``app_resources``
 share it without importing each other.
 """
 

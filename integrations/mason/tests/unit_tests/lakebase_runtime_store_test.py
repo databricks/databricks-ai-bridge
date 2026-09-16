@@ -1,0 +1,70 @@
+"""Tests for Runtime Store Lakebase selection and fallback provisioning."""
+
+import json
+import types
+
+import pytest
+
+from databricks_mason import lakebase_runtime_store as runtime_store
+from databricks_mason.errors import AgentCliError
+
+
+def test_backend_uses_one_deterministic_autoscaling_project() -> None:
+    backend = runtime_store.backend("mason-My_App")
+
+    assert backend.project == "mason-my-app-runtime-store"
+    assert backend.branch == "production"
+    assert backend.endpoint_id == "primary"
+    assert backend.database == "databricks-postgres"
+    assert backend.resource_name == "postgres-runtime-store"
+    assert backend.schema == runtime_store.get_lakebase_schema("mason-My_App")
+    assert backend.schema.startswith("databricks_mason_runtime_")
+    assert backend.schema != runtime_store.get_lakebase_schema("mason-other-app")
+
+
+def test_get_or_create_backend_reuses_existing_project(monkeypatch) -> None:
+    calls = []
+
+    def fake_databricks(args, profile, **kwargs):
+        calls.append(args)
+        return types.SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(runtime_store, "_databricks", fake_databricks)
+
+    selected = runtime_store.get_or_create_backend("mason-app", "prof", create=True)
+
+    assert selected.project == "mason-app-runtime-store"
+    assert calls == [["postgres", "get-project", "projects/mason-app-runtime-store"]]
+
+
+def test_get_or_create_backend_creates_missing_project(monkeypatch) -> None:
+    calls = []
+
+    def fake_databricks(args, profile, **kwargs):
+        calls.append(args)
+        return types.SimpleNamespace(
+            returncode=0 if args[:2] == ["postgres", "create-project"] else 1,
+            stdout="",
+            stderr="not found",
+        )
+
+    monkeypatch.setattr(runtime_store, "_databricks", fake_databricks)
+
+    selected = runtime_store.get_or_create_backend("mason-app", "prof", create=True)
+
+    assert selected.project == "mason-app-runtime-store"
+    create = calls[1]
+    assert create[:3] == ["postgres", "create-project", "mason-app-runtime-store"]
+    payload = json.loads(create[create.index("--json") + 1])
+    assert payload["spec"]["display_name"] == "Mason Runtime Store for mason-app"
+
+
+def test_get_or_create_backend_respects_no_create_stores(monkeypatch) -> None:
+    monkeypatch.setattr(
+        runtime_store,
+        "_databricks",
+        lambda *args, **kwargs: types.SimpleNamespace(returncode=1, stdout="", stderr="not found"),
+    )
+
+    with pytest.raises(AgentCliError, match="does not exist"):
+        runtime_store.get_or_create_backend("mason-app", "prof", create=False)

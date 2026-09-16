@@ -18,11 +18,31 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
-# Databricks brand accent.
-ACCENT = "#FF3621"
-MUTED = "grey62"
+from databricks_mason import theme
 
-_stdout = Console()
+# Semantic styles from the facelift palette (see `theme.py`). Color carries meaning, never
+# decoration: LINK (blue) for URLs, COMMAND (cyan) for the actionable next step, SUCCESS (green)
+# for the ✔ and success boxes, and the mid-tone greys for descriptions/metadata. There is no
+# decorative brand accent — the design reserves every color for a signal. These are raw hex/style
+# strings, not themed names, so they render on any `Console` a caller passes in — not just the
+# module's own themed stdout.
+SECONDARY = theme.SECONDARY  # descriptions, section labels
+DIM = theme.DIM  # metadata: timestamps, key labels, breadcrumbs
+FAINT = theme.FAINT  # tree branches, placeholders
+SUCCESS = theme.GREEN
+LINK = theme.BLUE
+COMMAND = theme.CYAN
+WARNING = theme.AMBER
+ERROR = theme.RED
+
+# Severity-keyword styles for `diagnostic`: error=red, warning=amber, note=blue.
+_SEVERITY_STYLE = {
+    "error": f"bold {theme.RED}",
+    "warning": f"bold {theme.AMBER}",
+    "note": f"bold {theme.BLUE}",
+}
+
+_stdout = Console(theme=theme.MASON_THEME)
 
 
 def console() -> Console:
@@ -62,7 +82,7 @@ def progress(message: str, con: Optional[Console] = None) -> Iterator[None]:
     if errors._OUTPUT_MODE == "json":
         yield
         return
-    con.print(f"[{MUTED}]•[/] {message}")
+    con.print(f"[{DIM}]•[/] {message}")
     # Empty status text: the persistent line above already carries the message, so the spinner
     # underneath is just the animated glyph — no duplicated sentence.
     with con.status("", spinner="dots"):
@@ -100,26 +120,63 @@ def confirm_destroy(target: str, *, assume_yes: bool) -> None:
 
 
 def status_pill(status: Optional[str]) -> Text:
-    """Create a colored ●/○ status indicator."""
+    """Create a colored ●/○ status indicator, using the palette's semantic colors."""
     value = (status or "").strip().upper()
     if value in {"ACTIVE", "RUNNING", "READY"}:
-        return Text("● ", style="green") + Text(value.title(), style="green")
+        return Text("● ", style=SUCCESS) + Text(value.title(), style=SUCCESS)
     if value in {"PENDING", "CREATING", "STARTING", "DEPLOYING"}:
-        return Text("○ ", style="yellow") + Text(value.title(), style="yellow")
+        return Text("○ ", style=WARNING) + Text(value.title(), style=WARNING)
     if value in {"DISABLED", "DELETED", "STOPPED", "ERROR", "FAILED"}:
-        return Text("⨯ ", style="red") + Text(value.title(), style="red")
-    return Text("● ", style=MUTED) + Text(value.title() or "Unknown", style=MUTED)
+        return Text("⨯ ", style=ERROR) + Text(value.title(), style=ERROR)
+    return Text("● ", style=DIM) + Text(value.title() or "Unknown", style=DIM)
+
+
+def warning(message: str, con: Optional[Console] = None) -> None:
+    """Print a yellow ⚠ warning line (non-fatal; the command keeps running)."""
+    (con or _stdout).print(Text("⚠ ", style="yellow") + Text(message, style="yellow"))
 
 
 def hyperlink(text: str, url: Optional[str]) -> Text:
     """A terminal hyperlink (OSC 8): renders `text`, opens `url` on click; plain text if no url.
 
-    Supported terminals show `text` as clickable so the full URL needn't fit on screen; others
-    fall back to the plain text. Use `-o json` for the raw URL where a terminal lacks OSC 8.
+    Blue + underline, because the palette reserves blue for links/URLs. Supported terminals show
+    `text` as clickable so the full URL needn't fit on screen; others fall back to the plain text.
+    Use `-o json` for the raw URL where a terminal lacks OSC 8.
     """
     if not url:
         return Text(text)
-    return Text(text, style=f"{ACCENT} underline link {url}")
+    return Text(text, style=f"{LINK} underline link {url}")
+
+
+def diagnostic(
+    severity: Literal["error", "warning", "note"],
+    message: str,
+    *,
+    code: Optional[str] = None,
+    help: Optional[str] = None,
+    con: Optional[Console] = None,
+) -> None:
+    """Render one cargo/uv-style diagnostic.
+
+    A color-coded severity keyword, a plain-language message, and an optional indented ``help:``
+    line carrying the fix::
+
+        warning: active virtualenv ignored — `VIRTUAL_ENV` doesn't match `.venv`
+          help: pass --active to target the active environment
+
+    ``code`` renders cargo's ``error[CODE]:`` form (errors only). The severity keyword is colored
+    (error=red, warning=amber, note=blue); the message and fix use the default foreground so they
+    stay readable on any terminal background.
+    """
+    con = con or _stdout
+    keyword = f"{severity}[{code}]" if code and severity == "error" else severity
+    # `Text.assemble` styles each span independently; `Text(a, style=s) + Text(b)` would instead make
+    # `s` the whole line's container style, coloring the message/fix too (and dimming the fix so far
+    # it's hard to read). Only the severity keyword and the `help:` label carry weight/color; the
+    # message and the fix stay at the terminal's default foreground so they're fully legible.
+    con.print(Text.assemble((keyword, _SEVERITY_STYLE[severity]), (f": {message}", "")))
+    if help:
+        con.print(Text.assemble(("  help:", "bold"), (f" {help}", "")))
 
 
 # --- list view ---------------------------------------------------------------
@@ -132,34 +189,56 @@ def resource_table(
     *,
     subtitle: Optional[str] = None,
     con: Optional[Console] = None,
+    no_wrap: Optional[Sequence[int]] = None,
 ) -> None:
     """Render a titled list table.
 
     `columns` is a sequence of (header, justify) where justify is left/right/center.
+    `no_wrap` column indexes are kept full-width; the rest narrow to fit the terminal.
     """
     con = con or _stdout
     rows = list(rows)
+    no_wrap_cols = set(no_wrap or ())
 
     con.print()
-    con.print(Text(title, style=f"bold {ACCENT}"))
+    con.print(Text(title, style="bold"))
     if subtitle:
-        con.print(Text(subtitle, style=MUTED))
+        con.print(Text(subtitle, style=SECONDARY))
 
+    # Dim, uppercase headers; columns size to content so they always line up.
     table = Table(box=box.SIMPLE_HEAD, expand=False, pad_edge=False, show_edge=False)
-    for header, justify in columns:
-        table.add_column(header.upper(), justify=justify, header_style=f"bold {MUTED}")
+    for i, (header, justify) in enumerate(columns):
+        # Reserve a no_wrap column's full content width so Rich narrows the others instead.
+        min_width = (
+            max([len(header)] + [_cell_len(row[i]) for row in rows], default=0)
+            if i in no_wrap_cols
+            else None
+        )
+        table.add_column(
+            header.upper(),
+            justify=justify,
+            header_style=f"bold {DIM}",
+            no_wrap=i in no_wrap_cols,
+            min_width=min_width,
+        )
     for row in rows:
         table.add_row(*[_cell(v) for v in row])
     con.print(table)
 
-    con.print(Text(f"{len(rows)} item{'s' if len(rows) != 1 else ''}", style=MUTED))
+    con.print(Text(f"{len(rows)} item{'s' if len(rows) != 1 else ''}", style=DIM))
+
+
+def _cell_len(value: Any) -> int:
+    if value is None:
+        return 1  # em-dash placeholder
+    return len(value.plain if isinstance(value, Text) else str(value))
 
 
 def _cell(value: Any) -> Any:
     if isinstance(value, Text):
         return value
     if value is None:
-        return Text("—", style=MUTED)
+        return Text("—", style=DIM)
     return str(value)
 
 
@@ -184,13 +263,13 @@ def detail(
     con = con or _stdout
 
     con.print()
-    con.print(Text(f"{breadcrumb}  ›  ", style=MUTED) + Text(name, style="bold"))
+    con.print(Text(f"{breadcrumb}  ›  ", style=DIM) + Text(name, style="bold"))
     if status is not None:
         con.print(status_pill(status))
     con.print()
 
     grid = Table.grid(padding=(0, 3))
-    grid.add_column(style=MUTED, justify="left")
+    grid.add_column(style=DIM, justify="left")
     grid.add_column(justify="left")
     for key, value in fields.items():
         grid.add_row(key, _cell(value))
@@ -203,7 +282,7 @@ def detail(
                 _snippet_group(snippets),
                 title="Starter code",
                 title_align="left",
-                border_style=MUTED,
+                border_style=DIM,
                 box=box.ROUNDED,
             )
         )
@@ -214,7 +293,7 @@ def _snippet_group(snippets: Sequence[tuple[str, str, str]]) -> RenderableType:
     for i, (label, lexer, code) in enumerate(snippets):
         if i:
             parts.append(Text())
-        parts.append(Text(label, style=f"bold {MUTED}"))
+        parts.append(Text(label, style=f"bold {DIM}"))
         parts.append(Syntax(code.strip(), lexer, background_color="default", word_wrap=True))
     return Group(*parts)
 
@@ -229,44 +308,42 @@ def success(
     next_steps: "Optional[Sequence[str | tuple[str, str]]]" = None,
     con: Optional[Console] = None,
 ) -> None:
-    """A green success panel with optional details and a Next steps list.
+    """A green success panel with optional details and a Next step(s) list.
 
-    Each next step is either a ``(command, description)`` pair — the command is highlighted and
-    the description explains what it does — or a bare string for a non-command instruction (e.g.
-    ``"Open http://localhost:8000"``), rendered as plain prose. Commands are shown so they can be
-    copied and run in a terminal.
+    Each next step is either a ``(command, description)`` pair — the command is shown in cyan (the
+    actionable accent) with the description in secondary — or a bare string for a non-command
+    instruction (e.g. ``"Open http://localhost:8000"``), rendered as prose. Commands are
+    **copy-safe**: no ``$`` prompt prefix, so they paste straight into a shell. The heading is
+    "Next step" or "Next steps", chosen automatically from the count.
     """
     con = con or _stdout
-    body: list[RenderableType] = [Text("✓ ", style="green") + Text(title, style="bold")]
+    body: list[RenderableType] = [Text("✔ ", style=SUCCESS) + Text(title, style="bold")]
 
     if fields:
         grid = Table.grid(padding=(0, 3))
-        grid.add_column(style=MUTED)
+        grid.add_column(style=DIM)
         grid.add_column()
         for key, value in fields.items():
             grid.add_row(key, _cell(value))
         body.append(grid)
 
     if next_steps:
-        has_command = any(isinstance(step, tuple) for step in next_steps)
-        # When any step is a command, define the `$` marker so the convention is self-explanatory.
-        header = Text("Next steps", style=f"bold {MUTED}")
-        if has_command:
-            header += Text("   ($ = run in your terminal)", style=MUTED)
-        body.append(header)
+        # Singular vs plural from the count, per the design.
+        heading = "Next step" if len(next_steps) == 1 else "Next steps"
+        body.append(Text(heading, style=SECONDARY))
         # A two-column grid aligns every command's description at the same offset.
         steps = Table.grid(padding=(0, 2))
         steps.add_column()
-        steps.add_column(style=MUTED)
+        steps.add_column(style=SECONDARY)
         for step in next_steps:
             if isinstance(step, tuple):
-                # A `$ ` prompt prefix marks a runnable command (both in accent).
+                # The actionable command is cyan; its description trails in secondary.
                 command, description = step
-                steps.add_row(Text("$ ", style=ACCENT) + Text(command, style=ACCENT), description)
+                steps.add_row(Text(command, style=COMMAND), description)
             else:
-                # Prose (e.g. "Open <url>") gets a muted bullet, not a command prompt.
-                steps.add_row(Text("• ", style=MUTED) + Text(step), "")
+                # Prose (e.g. "Open <url>") renders plainly — no command accent, no prompt marker.
+                steps.add_row(Text(step), "")
         body.append(steps)
 
     con.print()
-    con.print(Panel(Group(*body), border_style="green", box=box.ROUNDED))
+    con.print(Panel(Group(*body), border_style=SUCCESS, box=box.ROUNDED))

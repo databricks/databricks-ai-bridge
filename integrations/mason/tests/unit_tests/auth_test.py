@@ -11,8 +11,9 @@ import sys
 from unittest import mock
 
 from click.testing import CliRunner
+from databricks.sdk.errors import Unauthenticated
 
-from databricks_mason import auth
+from databricks_mason.cli import auth
 
 
 class _Ctx:
@@ -114,7 +115,7 @@ def test_login_reauthenticates_unauthenticated_api_response(tmp_path, monkeypatc
     monkeypatch.setenv("MASON_CONFIG_HOME", str(tmp_path))
     validated = mock.Mock(current_user="me@example.com", host="https://ws")
     validate_profile = mock.Mock(
-        side_effect=[auth.Unauthenticated("expired credentials"), (validated, "me@example.com")]
+        side_effect=[Unauthenticated("expired credentials"), (validated, "me@example.com")]
     )
     monkeypatch.setattr(auth, "_validate_profile", validate_profile)
     monkeypatch.setattr(auth, "_is_interactive", lambda: True)

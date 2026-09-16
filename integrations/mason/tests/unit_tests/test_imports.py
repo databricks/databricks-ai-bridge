@@ -12,15 +12,16 @@ def test_public_surface() -> None:
         "Memory",
         "MemorySearchResult",
         "MemoryStore",
+        "ExtractedMemory",
         "Session",
         "SessionItem",
         "SessionStore",
     }
     lazy = {
         "AgentApp",
-        "DurableAgentContext",
+        "InvocationContext",
         "configure_tracing",
-        "tag_session",
+        "start_trace",
         "workspace_client",
         "workspace_headers",
     }
@@ -35,10 +36,10 @@ def test_public_surface() -> None:
     assert AgentApp is RuntimeAgentApp
 
 
-def test_durable_runtime_public_surface_is_application_only() -> None:
+def test_runtime_public_surface_is_application_only() -> None:
     import databricks_mason.runtime as runtime
 
     assert "AgentApp" in runtime.__all__
-    assert "DurableAgentContext" in runtime.__all__
-    assert "DurableRuntime" not in runtime.__all__
-    assert "LakebaseDurabilityStore" not in runtime.__all__
+    assert "InvocationContext" in runtime.__all__
+    assert "Runtime" not in runtime.__all__
+    assert "LakebaseDurableRuntimeStore" not in runtime.__all__

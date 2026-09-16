@@ -4,14 +4,19 @@ from typing import TYPE_CHECKING
 
 from databricks_mason.client import MasonClient
 from databricks_mason.memory_store import Memory, MemorySearchResult, MemoryStore
-from databricks_mason.session_store import Session, SessionItem, SessionStore
+from databricks_mason.session_store import (
+    ExtractedMemory,
+    Session,
+    SessionItem,
+    SessionStore,
+)
 
 if TYPE_CHECKING:
     from databricks_mason.runtime import (
         AgentApp,
-        DurableAgentContext,
+        InvocationContext,
         configure_tracing,
-        tag_session,
+        start_trace,
         workspace_client,
         workspace_headers,
     )
@@ -21,13 +26,14 @@ __all__ = [
     "Memory",
     "MemorySearchResult",
     "MemoryStore",
+    "ExtractedMemory",
     "Session",
     "SessionItem",
     "SessionStore",
     "AgentApp",
-    "DurableAgentContext",
+    "InvocationContext",
     "configure_tracing",
-    "tag_session",
+    "start_trace",
     "workspace_client",
     "workspace_headers",
 ]
@@ -35,9 +41,9 @@ __all__ = [
 _RUNTIME_REEXPORTS = frozenset(
     {
         "AgentApp",
-        "DurableAgentContext",
+        "InvocationContext",
         "configure_tracing",
-        "tag_session",
+        "start_trace",
         "workspace_client",
         "workspace_headers",
     }

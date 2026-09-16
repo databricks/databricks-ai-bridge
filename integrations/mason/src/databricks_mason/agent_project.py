@@ -15,15 +15,23 @@ from tomlkit import TOMLDocument
 from tomlkit.exceptions import ParseError
 
 from databricks_mason.errors import AgentCliError
-from databricks_mason.runtime.tool_manifest import MEMORY_STORE_TABLE, SESSION_STORE_TABLE
+from databricks_mason.project_types import (
+    AgentFramework,
+    AgentServer,
+    parse_framework,
+    parse_server,
+)
+from databricks_mason.runtime import tool_manifest
+from databricks_mason.runtime.tool_manifest import (
+    MEMORY_STORE_TABLE,
+    SESSION_STORE_TABLE,
+)
 
 # The tracing binding (`mason tracing configure` / `disable`). Tracing is on by default (a per-project
 # MLflow experiment); this table only records an explicit experiment override or a disable.
 TRACING_TABLE = "tracing"
 
 _SCHEMA_VERSION = 1
-_DURABILITY_TABLE = "durability"
-_SUPPORTED_FRAMEWORKS = {"langgraph", "openai"}
 _SUPPORTED_SCOPE_KINDS = {"table", "volume", "workspace"}
 _SUPPORTED_PERMISSIONS = {"read_only", "read_write"}
 _TOOL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -107,7 +115,6 @@ class ToolSource:
     kind: str
     service: str | None = None
     function: str | None = None
-    entrypoint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -147,15 +154,10 @@ class ToolSpec:
             if self.policy.downscope:
                 raise AgentCliError("UC function tools do not accept sandbox scopes.")
         elif kind == "python":
-            entrypoint = self.source.entrypoint or ""
-            module, separator, callable_name = entrypoint.partition(":")
-            if not separator or not module or not callable_name.isidentifier():
-                raise AgentCliError(
-                    f"Invalid Python tool entrypoint {entrypoint!r}.",
-                    hint="Use module.path:callable_name.",
-                )
-            if self.policy.downscope:
-                raise AgentCliError("Python tools do not accept sandbox scopes.")
+            raise AgentCliError(
+                "Python tools are code-first and cannot be declared in agent.toml.",
+                hint="Remove this entry and wire the tool through framework-native agent code.",
+            )
         else:
             raise AgentCliError(f"Unsupported tool source kind {kind!r}.")
 
@@ -183,18 +185,21 @@ class ToolSpec:
             source=ToolSource(kind="uc_function", function=function),
         )
 
-    @classmethod
-    def python(cls, tool_id: str, *, entrypoint: str) -> "ToolSpec":
-        return cls(
-            id=tool_id,
-            source=ToolSource(kind="python", entrypoint=entrypoint),
-        )
-
 
 def _required_string(value: object, description: str) -> str:
     if not isinstance(value, str) or not value:
-        raise AgentCliError(f"Tool manifest must declare {description}.")
+        raise AgentCliError(f"agent.toml must declare {description}.")
     return value
+
+
+def default_store_name(project_name: str, suffix: str) -> str:
+    """A store display name derived from the project directory, e.g. ``my-agent`` -> ``my-agent-memory``.
+
+    Sanitized to the store display-name charset (lower-case alphanumerics and hyphens); a name that
+    reduces to nothing (e.g. a directory of only punctuation) falls back to ``agent``.
+    """
+    slug = re.sub(r"[^a-z0-9-]+", "-", project_name.lower()).strip("-") or "agent"
+    return f"{slug}-{suffix}"
 
 
 def _store_name_from_manifest(value: object, table: str) -> str | None:
@@ -204,16 +209,6 @@ def _store_name_from_manifest(value: object, table: str) -> str | None:
     if not isinstance(value, Mapping):
         raise AgentCliError(f"agent.toml [{table}] must be a table.")
     return _required_string(cast(Mapping[str, Any], value).get("name"), f"[{table}] name")
-
-
-def _durability_from_manifest(value: object) -> bool:
-    if value is None:
-        return False
-    if not isinstance(value, Mapping):
-        raise AgentCliError("agent.toml [durability] must be a table.")
-    if cast(Mapping[str, Any], value).get("enabled") is not True:
-        raise AgentCliError("agent.toml [durability] must set enabled = true.")
-    return True
 
 
 def _store_id_from_manifest(value: object) -> str | None:
@@ -263,9 +258,6 @@ def _tool_from_manifest(value: object) -> ToolSpec:
             kind=kind,
             service=source.get("service") if isinstance(source.get("service"), str) else None,
             function=source.get("function") if isinstance(source.get("function"), str) else None,
-            entrypoint=source.get("entrypoint")
-            if isinstance(source.get("entrypoint"), str)
-            else None,
         ),
         policy=ToolPolicy(tuple(_scope_from_manifest(item) for item in downscope_value)),
     )
@@ -282,7 +274,7 @@ def _tool_table(spec: ToolSpec) -> Any:
     table = tomlkit.table()
     table.add("id", spec.id)
     source_values = {"kind": spec.source.kind}
-    for key in ("service", "function", "entrypoint"):
+    for key in ("service", "function"):
         value = getattr(spec.source, key)
         if value is not None:
             source_values[key] = value
@@ -300,19 +292,19 @@ def _tool_table(spec: ToolSpec) -> Any:
 
 
 class AgentProject:
-    """Loaded mutable view of a project's canonical tool manifest."""
+    """Loaded mutable view of a project's canonical agent manifest."""
 
     def __init__(
         self,
         root: pathlib.Path,
         document: TOMLDocument,
-        framework: str,
+        framework: AgentFramework,
+        server: AgentServer,
         tools: list[ToolSpec],
         memory_store: str | None = None,
         session_store: str | None = None,
         memory_store_id: str | None = None,
         deployment_name: str | None = None,
-        durability_enabled: bool = False,
         trace_experiment_id: str | None = None,
         trace_disabled: bool = False,
     ) -> None:
@@ -320,23 +312,32 @@ class AgentProject:
         self.path = root / "agent.toml"
         self._document = document
         self.framework = framework
+        # Server selection is deployment behavior, so agent.toml—not hidden template metadata—is
+        # the source of truth for whether Mason provisions and wires a Runtime Store.
+        self.server = server
         self.tools = tools
         # Managed store bindings declared in agent.toml; None = unbound. memory_store_id is the bare
         # store id the runtime needs for the entries API (the display name can't be used there).
         self.memory_store = memory_store
         self.session_store = session_store
         self.memory_store_id = memory_store_id
-        # The deployment's base name (`mason deploy` prefixes it with `mason-`); None until named.
+        # The deployment's base name (`mason deploy` prefixes it with `agent-mason-`); None until named.
         self.deployment_name = deployment_name
-        self.durability_enabled = durability_enabled
         # Tracing config: an explicit experiment id override (None = default per-project experiment), and
         # whether tracing is disabled (tracing is on by default; this flag turns it off).
         self.trace_experiment_id = trace_experiment_id
         self.trace_disabled = trace_disabled
 
     @classmethod
-    def load(cls, root: pathlib.Path | str) -> "AgentProject":
-        project_root = pathlib.Path(root).expanduser().resolve()
+    def load(cls, root: pathlib.Path | str | None = None) -> "AgentProject":
+        try:
+            project_root = (
+                tool_manifest.project_root()
+                if root is None
+                else pathlib.Path(root).expanduser().resolve()
+            )
+        except RuntimeError as exc:
+            raise AgentCliError(str(exc)) from exc
         path = project_root / "agent.toml"
         try:
             document = tomlkit.parse(path.read_text(encoding="utf-8"))
@@ -356,9 +357,8 @@ class AgentProject:
         agent = document.get("agent")
         if not isinstance(agent, Mapping):
             raise AgentCliError("agent.toml must declare an [agent] table.")
-        framework = _required_string(agent.get("framework"), "agent.framework")
-        if framework not in _SUPPORTED_FRAMEWORKS:
-            raise AgentCliError(f"Unsupported Mason framework {framework!r}.")
+        framework = parse_framework(_required_string(agent.get("framework"), "agent.framework"))
+        server = parse_server(_required_string(agent.get("server"), "agent.server"))
         deployment_name = agent.get("deployment_name")
         if deployment_name is not None and not (
             isinstance(deployment_name, str) and deployment_name
@@ -378,7 +378,6 @@ class AgentProject:
         session_store = _store_name_from_manifest(
             document.get(SESSION_STORE_TABLE), SESSION_STORE_TABLE
         )
-        durability_enabled = _durability_from_manifest(document.get(_DURABILITY_TABLE))
         tracing_table = document.get(TRACING_TABLE)
         trace_experiment_id: str | None = None
         trace_disabled = False
@@ -392,12 +391,12 @@ class AgentProject:
             project_root,
             document,
             framework,
+            server,
             tools,
             memory_store,
             session_store,
             memory_store_id,
             str(deployment_name) if deployment_name is not None else None,
-            durability_enabled,
             trace_experiment_id,
             trace_disabled,
         )
@@ -408,28 +407,32 @@ class AgentProject:
         root: pathlib.Path | str,
         *,
         framework: str,
-        durability_enabled: bool = False,
+        server: str,
+        memory_store: str | None = None,
+        session_store: str | None = None,
     ) -> "AgentProject":
-        if framework not in _SUPPORTED_FRAMEWORKS:
-            raise AgentCliError(f"Unsupported Mason framework {framework!r}.")
+        selected_framework = parse_framework(framework)
+        selected_server = parse_server(server)
         project_root = pathlib.Path(root).expanduser().resolve()
         document = tomlkit.document()
         document.add("schema_version", _SCHEMA_VERSION)
         document.add(tomlkit.nl())
         agent = tomlkit.table()
-        agent.add("framework", framework)
+        agent.add("framework", selected_framework.value)
+        agent.add("server", selected_server.value)
         document.add("agent", agent)
-        if durability_enabled:
-            durability = tomlkit.table()
-            durability.add("enabled", True)
-            document.add(_DURABILITY_TABLE, durability)
-        return cls(
+        project = cls(
             project_root,
             document,
-            framework,
+            selected_framework,
+            selected_server,
             [],
-            durability_enabled=durability_enabled,
         )
+        if memory_store:
+            project.bind_memory_store(memory_store)
+        if session_store:
+            project.bind_session_store(session_store)
+        return project
 
     def set_deployment_name(self, name: str) -> bool:
         """Record the deployment's base name under [agent].deployment_name. True if it changed."""
@@ -452,7 +455,7 @@ class AgentProject:
 
             def _summary(s: ToolSpec) -> str:
                 src = s.source
-                return src.service or src.function or src.entrypoint or src.kind
+                return src.service or src.function or src.kind
 
             raise AgentCliError(
                 f"Tool id {spec.id!r} already exists with a different configuration "
@@ -484,9 +487,9 @@ class AgentProject:
     def bind_memory_store(self, name: str, store_id: str | None = None) -> bool:
         """Declare the memory store binding in agent.toml. Returns True if it changed.
 
-        ``store_id`` is the bare store id (``memory-stores/<id>`` minus the prefix). The runtime needs
-        the id, not the display name, to build the entries API path, so we record it alongside the
-        name to keep resolution a pure agent.toml read.
+        ``store_id`` is the bare store id (``memory-stores/<id>`` minus the prefix). `mason deploy`
+        resolves the id fresh and injects it via ``AGENT_MEMORY_STORE``; the field is only recorded for
+        legacy/hand-written bindings that pin the id in the manifest.
         """
         return self._set_store(MEMORY_STORE_TABLE, name, store_id)
 
