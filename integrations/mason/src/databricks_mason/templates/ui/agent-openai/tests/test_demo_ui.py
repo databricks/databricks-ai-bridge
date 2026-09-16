@@ -1,8 +1,24 @@
 import pytest
-from databricks_mason import AgentApp
-from databricks_mason.runtime.store import InMemoryRuntimeStore
 from fastapi.testclient import TestClient
 from runtime import ui
+
+from databricks_mason import AgentApp
+from databricks_mason.runtime.store import (
+    RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV,
+    RUNTIME_STORE_LOCAL_ENV,
+    RUNTIME_STORE_SCHEMA_ENV,
+    InMemoryRuntimeStore,
+)
+
+
+@pytest.fixture(autouse=True)
+def _clear_runtime_store_env(monkeypatch):
+    for name in (
+        RUNTIME_STORE_LOCAL_ENV,
+        RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV,
+        RUNTIME_STORE_SCHEMA_ENV,
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
 class _FakeStateClient:
@@ -113,14 +129,17 @@ def test_demo_ui_routes(monkeypatch):
 
     index = client.get("/")
     assert index.status_code == 200
+    assert index.headers["cache-control"] == "no-store"
     assert 'id="new-session"' in index.text
     assert 'id="session-list"' in index.text
     assert 'id="model-select"' in index.text
     app_script = client.get("/ui-assets/app.js")
     assert app_script.status_code == 200
+    assert app_script.headers["cache-control"] == "no-store"
     assert "mason memory bind <store-name>" in app_script.text
     assert "refreshSessionView({ hydrateChat: true })" in app_script.text
     assert "function renderModels(" in app_script.text
+    assert 'demoUrl("/api/ui/config")' in app_script.text
     assert 'demoUrl("/api/demo/models")' in app_script.text
     assert 'fetch("/api/session/new"' not in app_script.text
     assert "/api/demo/sessions/${encodeURIComponent(sessionId)}/open" in app_script.text
@@ -130,7 +149,7 @@ def test_demo_ui_routes(monkeypatch):
     assert "@media (min-width: 1181px)" in styles
     assert "scrollbar-gutter: stable" in styles
 
-    config = client.get("/api/demo/config").json()
+    config = client.get("/api/ui/config").json()
     assert config["session_id"] == "routing-session"
     assert config["deployed"] is False
     assert config["models"] == {
@@ -139,13 +158,17 @@ def test_demo_ui_routes(monkeypatch):
     }
     assert config["streaming"]["enabled"] is True
     assert config["background"]["enabled"] is True
-    assert config["background"]["durable"] is True
+    assert config["streaming"]["persistent"] is False
+    assert config["streaming"]["mode"] == "In-process Runtime Store"
+    assert config["background"]["persistent"] is False
+    assert config["background"]["mode"] == "In-process Runtime Store"
     assert config["memory"]["enabled"] is False
     assert config["session"]["managed"] is False
     assert config["session"]["history"] is True
     assert config["session"]["mode"] == "In-process session"
     assert "durability" not in config
     assert "recovery" not in config
+    assert client.get("/api/demo/config").status_code == 404
 
     assert client.get("/api/demo/models").json() == {
         "default": "databricks-gpt-5-2",
@@ -169,13 +192,52 @@ def test_demo_ui_routes(monkeypatch):
     assert client.post("/api/demo/sessions", json={"session_id": "ignored"}).status_code == 503
 
 
+@pytest.mark.parametrize(
+    ("local", "endpoint", "schema", "persistent"),
+    [
+        (None, None, None, False),
+        ("true", None, None, False),
+        ("true", "endpoint", "runtime_schema", False),
+        ("TRUE", "endpoint", "runtime_schema", False),
+        ("TrUe", "endpoint", "runtime_schema", False),
+        (None, "endpoint", "runtime_schema", True),
+        ("false", "endpoint", "runtime_schema", True),
+        (None, "endpoint", None, False),
+        (None, None, "runtime_schema", False),
+        (None, "", "runtime_schema", False),
+        (None, "endpoint", "", False),
+    ],
+)
+def test_demo_config_reports_runtime_store_configuration(
+    monkeypatch, local, endpoint, schema, persistent
+):
+    for name, value in (
+        (RUNTIME_STORE_LOCAL_ENV, local),
+        (RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV, endpoint),
+        (RUNTIME_STORE_SCHEMA_ENV, schema),
+    ):
+        if value is not None:
+            monkeypatch.setenv(name, value)
+    client = _client(monkeypatch)
+
+    response = client.get("/api/ui/config")
+    assert response.status_code == 200
+    config = response.json()
+    for capability in ("streaming", "background"):
+        assert config[capability]["enabled"] is True
+        assert config[capability]["persistent"] is persistent
+        assert config[capability]["mode"] == (
+            "Runtime Store" if persistent else "In-process Runtime Store"
+        )
+
+
 def test_demo_config_distinguishes_run_local_from_a_deployed_app(monkeypatch):
     monkeypatch.setenv("DATABRICKS_APP_NAME", "app")
     monkeypatch.setenv("DATABRICKS_APP_URL", "http://127.0.0.1:8000")
-    assert _client(monkeypatch).get("/api/demo/config").json()["deployed"] is False
+    assert _client(monkeypatch).get("/api/ui/config").json()["deployed"] is False
 
     monkeypatch.setenv("DATABRICKS_APP_URL", "https://agent.example.databricksapps.com")
-    assert _client(monkeypatch).get("/api/demo/config").json()["deployed"] is True
+    assert _client(monkeypatch).get("/api/ui/config").json()["deployed"] is True
 
 
 def test_demo_config_does_not_wait_for_model_discovery(monkeypatch):
@@ -187,7 +249,7 @@ def test_demo_config_does_not_wait_for_model_discovery(monkeypatch):
         lambda: calls.append(True) or ["databricks-gpt-5-2", "databricks-gpt-5-5"],
     )
 
-    assert client.get("/api/demo/config").status_code == 200
+    assert client.get("/api/ui/config").status_code == 200
     assert calls == []
     assert client.get("/api/demo/models").json()["available"] == [
         "databricks-gpt-5-2",
@@ -199,7 +261,7 @@ def test_demo_config_does_not_wait_for_model_discovery(monkeypatch):
 def test_unmanaged_local_history_route(monkeypatch):
     client = _client(monkeypatch, history=True, session_id="local-session")
 
-    config = client.get("/api/demo/config").json()
+    config = client.get("/api/ui/config").json()
     assert config["session"]["managed"] is False
     assert config["session"]["history"] is True
 
@@ -361,7 +423,7 @@ async def test_local_history_reads_messages_from_in_process_session(monkeypatch)
 def test_managed_memory_and_session_routes(monkeypatch):
     client = _client(monkeypatch, configured=True, session_id="s1")
 
-    config = client.get("/api/demo/config").json()
+    config = client.get("/api/ui/config").json()
     assert config["memory"] == {
         "enabled": True,
         "store": "memory-stores/store",
@@ -410,14 +472,11 @@ def test_managed_memory_and_session_routes(monkeypatch):
         "previous_session_id": "s1",
         "managed": True,
     }
+    assert client.get("/api/ui/config", params={"session_id": "s2"}).json()["session_id"] == "s2"
     assert (
-        client.get("/api/demo/config", params={"session_id": "s2"}).json()["session_id"]
-        == "s2"
-    )
-    assert (
-        client.get("/api/demo/session/items", params={"session_id": "s2"}).json()[
-            "session_items"
-        ][0]["data"]["content"]
+        client.get("/api/demo/session/items", params={"session_id": "s2"}).json()["session_items"][
+            0
+        ]["data"]["content"]
         == "s2"
     )
 

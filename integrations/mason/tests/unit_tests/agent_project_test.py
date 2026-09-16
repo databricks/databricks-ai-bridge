@@ -5,15 +5,18 @@ from __future__ import annotations
 import pathlib
 
 import pytest
+import tomli
 
 from databricks_mason.agent_project import AgentProject, Scope, ToolSpec, default_store_name
 from databricks_mason.errors import AgentCliError
+from databricks_mason.project_types import AgentFramework, AgentServer
 
 
 def _write_manifest(root: pathlib.Path, body: str | None = None) -> pathlib.Path:
     path = root / "agent.toml"
     path.write_text(
-        body or 'schema_version = 1\n# keep me\n\n[agent]\nframework = "langgraph"\n',
+        body
+        or 'schema_version = 1\n# keep me\n\n[agent]\nframework = "langgraph"\nserver = "mason"\n',
         encoding="utf-8",
     )
     return path
@@ -32,6 +35,7 @@ def test_agent_project_round_trips_tool_specs_without_losing_comments(tmp_path: 
     assert "# keep me" in path.read_text(encoding="utf-8")
     loaded = AgentProject.load(tmp_path)
     assert loaded.framework == "langgraph"
+    assert loaded.server == "mason"
     assert loaded.tools[0].source.kind == "sandbox"
     assert loaded.tools[0].policy.downscope == (
         Scope(kind="table", value="samples.nyctaxi.trips", permission="read_only"),
@@ -39,7 +43,10 @@ def test_agent_project_round_trips_tool_specs_without_losing_comments(tmp_path: 
 
 
 def test_add_same_tool_is_idempotent(tmp_path: pathlib.Path):
-    _write_manifest(tmp_path, 'schema_version = 1\n\n[agent]\nframework = "openai"\n')
+    _write_manifest(
+        tmp_path,
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n',
+    )
     project = AgentProject.load(tmp_path)
     spec = ToolSpec.mcp("web", service="system.ai.web_search")
 
@@ -94,6 +101,7 @@ def test_load_rejects_python_tool_entries_with_code_first_migration(tmp_path: pa
 
 [agent]
 framework = "langgraph"
+server = "mason"
 
 [[tools]]
 id = "lookup-ticket"
@@ -154,7 +162,7 @@ def test_bind_and_unbind_stores_round_trip(tmp_path: pathlib.Path):
 
 def test_create_declares_given_store_names(tmp_path: pathlib.Path):
     AgentProject.create(
-        tmp_path, framework="openai", memory_store="mem-x", session_store="sess-y"
+        tmp_path, framework="openai", server="mason", memory_store="mem-x", session_store="sess-y"
     ).write()
 
     reloaded = AgentProject.load(tmp_path)
@@ -164,11 +172,72 @@ def test_create_declares_given_store_names(tmp_path: pathlib.Path):
 
 def test_create_without_store_names_declares_none(tmp_path: pathlib.Path):
     # create() declares only the names it is given; init applies the dir-derived defaults.
-    AgentProject.create(tmp_path, framework="openai").write()
+    AgentProject.create(tmp_path, framework="openai", server="mason").write()
 
     reloaded = AgentProject.load(tmp_path)
     assert reloaded.memory_store is None
     assert reloaded.session_store is None
+
+
+@pytest.mark.parametrize("framework", list(AgentFramework))
+@pytest.mark.parametrize("server", list(AgentServer))
+def test_project_selections_round_trip_as_enums_and_serialize_as_values(
+    tmp_path: pathlib.Path, framework: AgentFramework, server: AgentServer
+):
+    project = AgentProject.create(tmp_path, framework=framework, server=server)
+    assert project.framework is framework
+    assert project.server is server
+    project.write()
+
+    manifest = tomli.loads((tmp_path / "agent.toml").read_text())
+    assert manifest["agent"] == {"framework": framework.value, "server": server.value}
+    reloaded = AgentProject.load(tmp_path)
+    assert reloaded.framework is framework
+    assert reloaded.server is server
+
+
+@pytest.mark.parametrize("selection", ["framework", "server"])
+def test_load_and_create_share_unsupported_selection_validation(
+    tmp_path: pathlib.Path, selection: str
+):
+    values = {"framework": "langgraph", "server": "mason", selection: "unsupported"}
+    with pytest.raises(AgentCliError) as created:
+        AgentProject.create(tmp_path, **values)
+    assert not (tmp_path / "agent.toml").exists()
+
+    path = _write_manifest(
+        tmp_path,
+        "schema_version = 1\n\n[agent]\n"
+        f'framework = "{values["framework"]}"\nserver = "{values["server"]}"\n',
+    )
+    before = path.read_text()
+    with pytest.raises(AgentCliError) as loaded:
+        AgentProject.load(tmp_path)
+
+    assert (
+        loaded.value.message
+        == created.value.message
+        == (f"Unsupported Mason {selection} 'unsupported'.")
+    )
+    assert loaded.value.hint == created.value.hint
+    assert path.read_text() == before
+
+
+@pytest.mark.parametrize("selection", ["framework", "server"])
+@pytest.mark.parametrize("raw", [None, '""', "42"])
+def test_required_project_selections_name_agent_manifest(
+    tmp_path: pathlib.Path, selection: str, raw: str | None
+):
+    values = {"framework": '"langgraph"', "server": '"mason"', selection: raw}
+    _write_manifest(
+        tmp_path,
+        "schema_version = 1\n\n[agent]\n"
+        + "".join(f"{key} = {value}\n" for key, value in values.items() if value is not None),
+    )
+
+    with pytest.raises(AgentCliError) as error:
+        AgentProject.load(tmp_path)
+    assert error.value.message == f"agent.toml must declare agent.{selection}."
 
 
 @pytest.mark.parametrize(
@@ -177,6 +246,18 @@ def test_create_without_store_names_declares_none(tmp_path: pathlib.Path):
 )
 def test_default_store_name_sanitizes(raw: str, expected: str):
     assert default_store_name(raw, "memory") == expected
+
+
+@pytest.mark.parametrize("server", ["", "other"])
+def test_load_rejects_missing_or_unsupported_server(tmp_path: pathlib.Path, server: str):
+    server_line = f'server = "{server}"\n' if server else ""
+    _write_manifest(
+        tmp_path,
+        f'schema_version = 1\n\n[agent]\nframework = "openai"\n{server_line}',
+    )
+
+    with pytest.raises(AgentCliError, match="server"):
+        AgentProject.load(tmp_path)
 
 
 def test_deployment_name_round_trips(tmp_path: pathlib.Path):
@@ -199,7 +280,8 @@ def test_deployment_name_round_trips(tmp_path: pathlib.Path):
 
 def test_load_rejects_empty_deployment_name(tmp_path: pathlib.Path):
     _write_manifest(
-        tmp_path, 'schema_version = 1\n\n[agent]\nframework = "openai"\ndeployment_name = ""\n'
+        tmp_path,
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\ndeployment_name = ""\n',
     )
     with pytest.raises(AgentCliError, match="deployment_name"):
         AgentProject.load(tmp_path)
@@ -238,18 +320,10 @@ def test_bind_memory_store_records_id(tmp_path: pathlib.Path):
 def test_load_rejects_store_table_without_name(tmp_path: pathlib.Path):
     _write_manifest(
         tmp_path,
-        'schema_version = 1\n\n[agent]\nframework = "openai"\n\n[session_store]\ndescription = "x"\n',
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n\n[session_store]\ndescription = "x"\n',
     )
     with pytest.raises(AgentCliError, match="session_store"):
         AgentProject.load(tmp_path)
-
-
-def test_load_accepts_disabled_durability_table(tmp_path: pathlib.Path):
-    _write_manifest(
-        tmp_path,
-        'schema_version = 1\n\n[agent]\nframework = "openai"\n\n[durability]\nenabled = false\n',
-    )
-    assert AgentProject.load(tmp_path).durability_enabled is False
 
 
 def test_load_without_root_finds_project_from_working_directory(
@@ -257,13 +331,13 @@ def test_load_without_root_finds_project_from_working_directory(
 ) -> None:
     _write_manifest(
         tmp_path,
-        'schema_version = 1\n\n[agent]\nframework = "openai"\n\n[durability]\nenabled = true\n',
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n',
     )
     nested = tmp_path / "runtime"
     nested.mkdir()
     monkeypatch.chdir(nested)
 
-    assert AgentProject.load().durability_enabled is True
+    assert AgentProject.load().framework == "openai"
 
 
 def test_load_without_discoverable_project_uses_cli_error(
@@ -273,12 +347,3 @@ def test_load_without_discoverable_project_uses_cli_error(
 
     with pytest.raises(AgentCliError, match="Could not locate agent.toml"):
         AgentProject.load()
-
-
-def test_load_rejects_non_boolean_durability_setting(tmp_path: pathlib.Path):
-    _write_manifest(
-        tmp_path,
-        'schema_version = 1\n\n[agent]\nframework = "openai"\n\n[durability]\nenabled = "no"\n',
-    )
-    with pytest.raises(AgentCliError, match="enabled = true or false"):
-        AgentProject.load(tmp_path)

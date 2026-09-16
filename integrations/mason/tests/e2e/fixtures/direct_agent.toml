@@ -2,6 +2,7 @@ schema_version = 1
 
 [agent]
 framework = "__FRAMEWORK__"
+server = "mason"
 
 [[tools]]
 id = "sandbox"

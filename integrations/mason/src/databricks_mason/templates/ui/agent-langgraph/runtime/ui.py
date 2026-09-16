@@ -10,11 +10,17 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from databricks_mason import workspace_client
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+
+from databricks_mason import workspace_client
+from databricks_mason.runtime.store import (
+    RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV,
+    RUNTIME_STORE_LOCAL_ENV,
+    RUNTIME_STORE_SCHEMA_ENV,
+)
 
 _UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
 _INSTANCE_ID = uuid.uuid4().hex[:12]  # identifies this process in the UI
@@ -306,6 +312,7 @@ def _require_session() -> None:
 
 async def _checkpoint_history(session_id: str, actor: str) -> dict[str, Any]:
     from agent.agent import create_agent_graph
+
     from databricks_mason.langgraph.session_store import thread_config
 
     graph = await create_agent_graph(actor)
@@ -356,27 +363,50 @@ def _chat_session_items(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def install_ui(app: FastAPI) -> None:
-    """Mount the Mason demo UI and its runtime control endpoints."""
+    """Mount the Mason UI and its runtime control endpoints."""
     app.mount("/ui-assets", StaticFiles(directory=_UI_ROOT), name="mason-demo-ui-assets")
+
+    @app.middleware("http")
+    async def disable_ui_caching(request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path == "/" or request.url.path.startswith("/ui-assets/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.get("/", include_in_schema=False)
     async def index() -> FileResponse:
         return FileResponse(_UI_ROOT / "index.html")
 
-    @app.get("/api/demo/config", include_in_schema=False)
-    async def demo_config(request: Request) -> dict:
+    @app.get("/api/ui/config", include_in_schema=False)
+    async def ui_config(request: Request) -> dict:
         actor = _request_actor(request)
         memory_store = _memory_store()
         session_store = _session_store()
         default_model = _default_model()
+        # Match runtime store selection: mason dev's local marker overrides deployment settings.
+        runtime_store_persistent = (
+            os.getenv(RUNTIME_STORE_LOCAL_ENV, "").lower() != "true"
+            and bool(os.getenv(RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV))
+            and bool(os.getenv(RUNTIME_STORE_SCHEMA_ENV))
+        )
+        runtime_store_mode = "Runtime Store" if runtime_store_persistent else "In-process Runtime Store"
         return {
             "session_id": _request_session_id(request),
             "instance_id": _INSTANCE_ID,
             "viewer": actor if actor != "agent" else "Local developer",
             "deployed": _is_deployed(),
             "models": {"default": default_model, "available": [default_model]},
-            "streaming": {"enabled": True, "transport": "Server-sent events"},
-            "background": {"enabled": True, "durable": True},
+            "streaming": {
+                "enabled": True,
+                "transport": "Server-sent events",
+                "persistent": runtime_store_persistent,
+                "mode": runtime_store_mode,
+            },
+            "background": {
+                "enabled": True,
+                "persistent": runtime_store_persistent,
+                "mode": runtime_store_mode,
+            },
             "session": {
                 "durable": bool(session_store),
                 "managed": bool(session_store),

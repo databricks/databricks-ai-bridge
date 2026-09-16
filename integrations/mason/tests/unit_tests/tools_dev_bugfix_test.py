@@ -8,7 +8,6 @@ from click.testing import CliRunner
 
 from databricks_mason.agent_project import AgentProject
 from databricks_mason.cli.tools import tools
-from databricks_mason.project_config import write_project_metadata
 
 
 class _Ctx:
@@ -21,8 +20,7 @@ def _project(tmp_path: pathlib.Path, framework: str = "langgraph") -> pathlib.Pa
     (project / "agent" / "tools").mkdir(parents=True)
     (project / "tests" / "tools").mkdir(parents=True)
     (project / "agent" / "mcps.py").write_text("ORIGINAL = True\n", encoding="utf-8")
-    write_project_metadata(project, framework=framework, template=f"agent-{framework}")
-    AgentProject.create(project, framework=framework).write()
+    AgentProject.create(project, framework=framework, server="mason").write()
     return project
 
 
