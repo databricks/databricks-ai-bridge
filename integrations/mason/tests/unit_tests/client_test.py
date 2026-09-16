@@ -5,6 +5,7 @@ from __future__ import annotations
 import pathlib
 import subprocess
 import types
+from datetime import datetime, timezone
 from unittest import mock
 
 import pytest
@@ -79,6 +80,76 @@ def test_create_session_store_uses_transitional_request(
     )
     assert store.session_store_name == "support-history"
     assert store.session_store_id == "store-uuid"
+
+
+@pytest.mark.parametrize(
+    ("identity", "expected_id"),
+    [
+        pytest.param(
+            {"session_store_name": "support-history", "session_store_id": "store-uuid"},
+            "store-uuid",
+            id="legacy",
+        ),
+        pytest.param({"name": "session-stores/support-history"}, None, id="canonical"),
+        pytest.param(
+            {
+                "name": "session-stores/support-history",
+                "session_store_name": "support-history",
+                "session_store_id": "store-uuid",
+            },
+            "store-uuid",
+            id="both",
+        ),
+    ],
+)
+def test_session_store_response_compatibility(identity, expected_id):
+    """Mock workspace HTTP responses to exercise the real transport and resource parsers."""
+    workspace = mock.Mock()
+    client = MasonClient(workspace)
+    payload = {
+        **identity,
+        "description": "Support history",
+        "metadata": {"environment": "poc"},
+        "creator_user_id": "123",
+        "create_time": "2026-08-14T01:02:03Z",
+        "update_time": "2026-08-14T02:03:04.500Z",
+    }
+    updated_payload = {**payload, "metadata": {"environment": "prod"}}
+    workspace.api_client.do.side_effect = [
+        payload,
+        payload,
+        {"session_stores": [payload]},
+        updated_payload,
+        {"session_id": "case-456", "actor_id": "customer-123"},
+        {},
+    ]
+
+    created = client.session_stores.create("support-history")
+    fetched = client.session_stores.get(created.name)
+    listed = list(client.session_stores.list())
+    updated = created.update(metadata={"environment": "prod"})
+    session = created.add(actor_id="customer-123", session_id="case-456")
+    updated.delete()
+
+    for store in [created, fetched, *listed, updated]:
+        assert store.name == "support-history"
+        assert store.session_store_id == expected_id
+        assert store.description == "Support history"
+        assert store.creator_user_id == "123"
+        assert store.create_time == datetime(2026, 8, 14, 1, 2, 3, tzinfo=timezone.utc)
+        assert store.update_time == datetime(2026, 8, 14, 2, 3, 4, 500000, tzinfo=timezone.utc)
+    assert len(listed) == 1
+    assert created.metadata == {"environment": "poc"}
+    assert updated.metadata == {"environment": "prod"}
+    assert session.store_name == "support-history"
+    assert [call.args for call in workspace.api_client.do.call_args_list] == [
+        ("POST", "/api/2.0/agents/session-stores"),
+        ("GET", "/api/agents/v1/session-stores/support-history"),
+        ("GET", "/api/agents/v1/session-stores"),
+        ("PATCH", "/api/agents/v1/session-stores/support-history"),
+        ("POST", "/api/agents/v1/session-stores/support-history/sessions"),
+        ("DELETE", "/api/agents/v1/session-stores/support-history"),
+    ]
 
 
 @mock.patch("databricks.sdk.WorkspaceClient")

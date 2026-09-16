@@ -400,6 +400,11 @@ required by the older backend; the latter is the canonical create ID for the new
 Description and metadata remain in the request body. Other session-store and session operations
 continue to use `/api/agents/v1`, and the public Python API is unchanged.
 
+Store responses accept both the legacy `session_store_name` field and the canonical
+`name: "session-stores/{id}"` field. `SessionStore.name` remains the unprefixed store name for
+subsequent operations. The optional `session_store_id` preserves the backend's legacy UUID when
+returned and is `None` when omitted; it is not inferred from the canonical resource name.
+
 Release this transitional client and upgrade affected consumers before rolling out the backend
 API changes. Retain both query parameters until older backends no longer need `session_store_name`.
 
