@@ -7,12 +7,14 @@ model; it is skipped unless a workspace profile is configured.
 
 import os
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
-from agent.agent import _serialize_events
 from agent.tools import all_tools
-from databricks_mason.langgraph.session_store import checkpointer, thread_config
 from langchain_core.tools import BaseTool
+from runtime.adapter import _serialize_events
+
+from databricks_mason.langgraph.session_store import checkpointer, thread_config
 
 
 def test_tools_autoregister():
@@ -65,9 +67,7 @@ def test_chat_model_forwards_account_routing_header(monkeypatch):
     monkeypatch.setenv("DATABRICKS_WORKSPACE_ID", "123456")
     model = _RoutedChatDatabricks(endpoint="test-endpoint")
 
-    assert model._get_client_kwargs()["default_headers"] == {
-        "X-Databricks-Org-Id": "123456"
-    }
+    assert model._get_client_kwargs()["default_headers"] == {"X-Databricks-Org-Id": "123456"}
 
 
 def test_thread_config_from_session_id():
@@ -110,54 +110,74 @@ class _FakeStoreClient:
 
 
 @pytest.mark.asyncio
-async def test_invoke_starts_turn_and_recovery_resumes_current_checkpoint(monkeypatch):
+async def test_recovery_input_resumes_current_checkpoint(monkeypatch):
     import agent.agent as agent_module
-
-    calls = []
-
-    async def fake_run_agent(agent_input, payload, context):
-        calls.append((agent_input, payload, context))
-        return {"output": []}
 
     class Saver:
         async def aget_tuple(self, config):
             return SimpleNamespace(metadata={"databricks_mason.invocation_id": "inv-1"})
 
-    monkeypatch.setattr(agent_module, "_run_agent", fake_run_agent)
     monkeypatch.setattr(agent_module, "checkpointer", lambda: Saver())
-    context = SimpleNamespace(invocation_id="inv-1", session_id="runtime-session")
-    payload = {"session_id": "session-1", "messages": [{"role": "user", "content": "hi"}]}
+    original = {"messages": [{"role": "user", "content": "hi"}]}
+    recovered = await agent_module.recovery_input(
+        original,
+        session_id="session-1",
+        actor="actor-1",
+        invocation_id="inv-1",
+    )
 
-    await agent_module.invoke(payload, context)
-    await agent_module.recover(payload, context)
-
-    assert calls[0][0] == {"messages": payload["messages"]}
-    assert calls[1][0] is None
+    assert recovered is None
 
 
 @pytest.mark.asyncio
 async def test_recovery_replays_input_without_current_checkpoint(monkeypatch):
     import agent.agent as agent_module
 
-    calls = []
-
-    async def fake_run_agent(agent_input, payload, context):
-        calls.append(agent_input)
-        return {"output": []}
-
     class Saver:
         async def aget_tuple(self, config):
             return None
 
-    monkeypatch.setattr(agent_module, "_run_agent", fake_run_agent)
     monkeypatch.setattr(agent_module, "checkpointer", lambda: Saver())
-    messages = [{"role": "user", "content": "hi"}]
-    await agent_module.recover(
-        {"session_id": "session-1", "messages": messages},
-        SimpleNamespace(invocation_id="inv-1", session_id="runtime-session"),
+    original = {"messages": [{"role": "user", "content": "hi"}]}
+    recovered = await agent_module.recovery_input(
+        original,
+        session_id="session-1",
+        actor="actor-1",
+        invocation_id="inv-1",
     )
 
-    assert calls == [{"messages": messages}]
+    assert recovered is original
+
+
+@pytest.mark.asyncio
+async def test_adapter_calls_same_run_agent_for_invoke_and_recovery(monkeypatch):
+    import runtime.adapter as adapter
+
+    calls = []
+
+    async def fake_run_agent(agent_input, **kwargs):
+        calls.append((agent_input, kwargs))
+        if False:
+            yield None
+
+    async def fake_recovery_input(agent_input, **_kwargs):
+        return None
+
+    monkeypatch.setattr(adapter, "run_agent", fake_run_agent)
+    monkeypatch.setattr(adapter, "recovery_input", fake_recovery_input)
+    context = SimpleNamespace(
+        invocation_id="inv-1",
+        session_id="runtime-session",
+        emit=AsyncMock(),
+    )
+    payload = {"session_id": "session-1", "messages": [{"role": "user", "content": "hi"}]}
+
+    await adapter.invoke(payload, context)
+    await adapter.recover(payload, context)
+
+    assert calls[0][0] == {"messages": payload["messages"]}
+    assert calls[1][0] is None
+    assert calls[0][1] == calls[1][1]
 
 
 def _has_workspace_auth() -> bool:
@@ -173,12 +193,15 @@ def _has_workspace_auth() -> bool:
 )
 @pytest.mark.asyncio
 async def test_agent_responds_end_to_end():
-    from agent.agent import configure, create_agent_graph
+    from agent.agent import configure, run_agent
 
     configure()
-    agent = await create_agent_graph("test-actor")
-    result = await agent.ainvoke(
-        {"messages": [{"role": "user", "content": "Reply with the single word: pong"}]},
-        config=thread_config("test-e2e", "test-actor"),
-    )
-    assert result["messages"][-1].content
+    events = [
+        event
+        async for event in run_agent(
+            {"messages": [{"role": "user", "content": "Reply with the single word: pong"}]},
+            session_id="test-e2e",
+            actor="test-actor",
+        )
+    ]
+    assert events

@@ -6,12 +6,15 @@ model; it is skipped unless a workspace profile is configured.
 """
 
 import os
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from agents import FunctionTool
-from agent.agent import _agent_events, _apply_decisions, _normalize_item, _serialize_events
+from agent.agent import resume_agent
 from agent.tools import all_tools
+from agents import FunctionTool
+from runtime.adapter import _normalize_item, _serialize_events
 
 
 def test_tools_autoregister():
@@ -62,6 +65,7 @@ class _FakeStreamResult:
 
     def __init__(self, events, interruptions, state):
         self._events, self.interruptions, self._state = events, interruptions, state
+        self.final_output = None
 
     async def stream_events(self):
         for event in self._events:
@@ -112,7 +116,8 @@ async def test_agent_events_omit_unavailable_mcp_servers(monkeypatch):
         lambda *_args, **_kwargs: _FakeStreamResult([], [], None),
     )
 
-    assert [event async for event in _agent_events({"messages": []}, "s", "actor")] == []
+    async with agent_module.run_agent([], session_id="s", actor="actor") as result:
+        assert [event async for event in result.stream_events()] == []
     # create_agent(actor, mcp) — the healthy servers are the second positional arg.
     assert create_agent.call_args.args[1] == [healthy]
     assert healthy.cache_tools_list is True
@@ -126,26 +131,26 @@ async def test_agent_events_omit_unavailable_mcp_servers(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_serialize_events_relays_interrupt_as_native_event():
-    from agent.agent import _pending_runs
-
     approval = _FakeToolApproval("send_message", '{"recipient": "x", "body": "y"}', "call-1")
     sentinel_state = object()
     result = _FakeStreamResult([], [approval], sentinel_state)
 
-    events = [e async for e in _serialize_events(result, "sess-1")]
+    events = [e async for e in _serialize_events(result)]
 
     assert events == [
         {
             "type": "interrupt",
             "id": "call-1",
-            "value": {"action_requests": [{"name": "send_message", "args": {"recipient": "x", "body": "y"}}]},
+            "value": {
+                "action_requests": [
+                    {"name": "send_message", "args": {"recipient": "x", "body": "y"}}
+                ]
+            },
         }
     ]
-    # The paused run is stashed in-process, keyed by session id, for a later resume.
-    assert _pending_runs.pop("sess-1") is sentinel_state
 
 
-def test_apply_decisions_approves_pending_run(monkeypatch):
+def test_resume_agent_approves_pending_run(monkeypatch):
     from agent.agent import _pending_runs
 
     approved = []
@@ -161,14 +166,14 @@ def test_apply_decisions_approves_pending_run(monkeypatch):
             raise AssertionError("should not reject on approve")
 
     _pending_runs["sess-2"] = _State()
-    _apply_decisions("sess-2", {"decisions": [{"type": "approve"}]})
+    resume_agent("sess-2", {"decisions": [{"type": "approve"}]})
     assert approved == ["item-a"]
     assert "sess-2" not in _pending_runs  # popped so it can't be resumed twice
 
 
-def test_apply_decisions_without_pending_run_raises():
+def test_resume_agent_without_pending_run_raises():
     with pytest.raises(RuntimeError, match="No paused run"):
-        _apply_decisions("never-started", {"decisions": [{"type": "approve"}]})
+        resume_agent("never-started", {"decisions": [{"type": "approve"}]})
 
 
 def test_configure_raises_clear_error_without_auth(monkeypatch):
@@ -237,23 +242,34 @@ class _FakeStoreClient:
 
 
 @pytest.mark.asyncio
-async def test_invoke_and_recovery_use_same_application_payload(monkeypatch):
-    import agent.agent as agent_module
+async def test_adapter_recovery_marks_replayed_agent_input(monkeypatch):
+    import runtime.adapter as adapter
 
     calls = []
 
-    async def fake_run_agent(payload, context):
-        calls.append((payload, context))
-        return {"output": []}
+    @asynccontextmanager
+    async def fake_run_agent(agent_input, **kwargs):
+        calls.append((agent_input, kwargs))
+        yield _FakeStreamResult([], [], None)
 
-    monkeypatch.setattr(agent_module, "_run_agent", fake_run_agent)
+    monkeypatch.setattr(adapter, "run_agent", fake_run_agent)
     payload = {"session_id": "session-1", "messages": [{"role": "user", "content": "hi"}]}
-    context = object()
+    context = SimpleNamespace(session_id="runtime-session", emit=AsyncMock())
 
-    await agent_module.invoke(payload, context)
-    await agent_module.recover(payload, context)
+    await adapter.invoke(payload, context)
+    await adapter.recover(payload, context)
 
-    assert calls == [(payload, context), (payload, context)]
+    assert calls == [
+        (payload["messages"], {"session_id": "session-1", "actor": "session-1", "model": None}),
+        (
+            [
+                {"role": "developer", "content": adapter._RECOVERY_INSTRUCTION},
+                *payload["messages"],
+            ],
+            {"session_id": "session-1", "actor": "session-1", "model": None},
+        ),
+    ]
+    assert payload["messages"] == [{"role": "user", "content": "hi"}]
 
 
 def _has_workspace_auth() -> bool:
@@ -269,16 +285,13 @@ def _has_workspace_auth() -> bool:
 )
 @pytest.mark.asyncio
 async def test_agent_responds_end_to_end():
-    from agents import Runner
-
-    from agent.agent import configure, create_agent
-    from databricks_mason.openai import session_store
+    from agent.agent import configure, run_agent
 
     configure()
-    agent = create_agent("test-actor")
-    result = await Runner.run(
-        agent,
+    async with run_agent(
         [{"role": "user", "content": "Reply with the single word: pong"}],
-        session=session_store("test-e2e", "test-actor"),
-    )
-    assert result.final_output
+        session_id="test-e2e",
+        actor="test-actor",
+    ) as result:
+        _ = [event async for event in result.stream_events()]
+        assert result.final_output

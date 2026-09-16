@@ -4,20 +4,21 @@ import os
 from pathlib import Path
 
 # Importing the agent is side-effect-free (no env is read until configure()), so it sits up top.
-import agent.agent
 import uvicorn
+from agent.agent import configure
 from dotenv import load_dotenv
 
 from databricks_mason import AgentApp
+from runtime.adapter import invoke, recover
 
 # override=False so injected DATABRICKS_* (from `mason dev -p` or the deploy platform) win over a
 # checked-in .env.
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=False)
-agent.agent.configure()
+configure()
 
 app = AgentApp()
-app.invoke(agent.agent.invoke)
-app.recover(agent.agent.recover)
+app.invoke(invoke)
+app.recover(recover)
 
 
 def main() -> None:

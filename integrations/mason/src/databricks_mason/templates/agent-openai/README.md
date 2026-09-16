@@ -5,6 +5,22 @@ events in memory during `mason dev`. The generated app enables the durable runti
 deployment stores them in an app-owned Lakebase schema and recovers interrupted work. Initialize
 with `--no-durable-runtime` for process-local deployed state instead.
 
+The generated project separates portable agent execution from Mason's HTTP protocol:
+
+```text
+client -> runtime/main.py -> runtime/adapter.py -> agent/agent.py:run_agent
+```
+
+- `agent/agent.py` owns the framework-native agent, sessions, tools, MCP lifetime, HITL state, and
+  `run_agent`.
+- `runtime/adapter.py` owns the agent-author integration hooks: Mason input/output translation plus
+  `invoke` and `recover`.
+- `runtime/main.py` constructs the server and registers those hooks.
+
+To bring an existing Agents SDK agent, keep its normal execution code in `agent/agent.py`, expose a
+`run_agent` function that returns the native streaming result, and make only the small payload/event
+mapping changes needed in `runtime/adapter.py`.
+
 ## Run locally
 
 ```bash
@@ -48,7 +64,7 @@ curl -sS http://localhost:8000/api/invocations \
 curl -sS "http://localhost:8000/api/invocations/$INVOCATION_ID" | jq
 ```
 
-SSE records contain the events emitted by `agent/agent.py`: token `delta`s, completed `message`s,
+SSE records contain events translated by `runtime/adapter.py`: token `delta`s, completed `message`s,
 and HITL `interrupt`s. Replay from a cursor with
 `GET /api/invocations/{id}/events?after={sequence}`.
 
@@ -72,12 +88,15 @@ history, but not a pending approval across restarts or replicas.
 
 ## Crash recovery
 
-When `[durability] enabled = true` in `agent.toml`, `runtime/main.py` registers both `@app.invoke` and
-`@app.recover`. OpenAI Agents SDK does not currently expose LangGraph-style node checkpoints, so
-recovery replays the persisted application input against the same session. Invocation state and
-emitted events survive process loss in deployed Lakebase, but tool calls and other external side
-effects remain at-least-once and must be idempotent. With `--no-durable-runtime`, only `@app.invoke`
-is registered and invocation state and events remain process-local.
+`runtime/main.py` always registers the adapter's `invoke` and `recover` hooks. Both call the same
+`agent.agent.run_agent` function. OpenAI Agents SDK does not currently expose LangGraph-style node
+checkpoints, so `recover` replays the original application input against the same session. The
+adapter prepends a developer instruction telling the agent that this is a recovery attempt and that
+some tool calls or external side effects may already have completed or may still be in progress.
+When deployment attaches a Runtime Store, invocation state and emitted events survive process loss
+and Mason can call `recover` on a replacement worker. Without a Runtime Store, invocation state
+remains process-local and interrupted work is not automatically recovered. External side effects
+remain at-least-once and must be idempotent.
 
 ## Chat app
 
@@ -87,7 +106,8 @@ Use `mason init --framework openai --disable-chat-app` for API-only output.
 
 ## Configure and deploy
 
-- Change model/instructions in `agent/agent.py`.
+- Change the model, instructions, tools, and framework-native execution in `agent/agent.py`.
+- Change `runtime/adapter.py` only to map a different application input/output contract.
 - Add local tools under `agent/tools/`; modules are auto-discovered.
 - Add MCP servers in `agent/mcps.py` or with `mason tools add mcp`.
 - Bind long-term memory with `mason memory bind <store>`.
