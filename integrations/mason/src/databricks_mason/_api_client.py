@@ -21,6 +21,8 @@ if TYPE_CHECKING:
     from databricks.sdk import WorkspaceClient
 
 _BASE = "/api/agents/v1"
+# ExtractMemories only binds the 2.0 path (no /agents/v1 alias), so it needs its own base.
+_BASE_2_0 = "/api/2.0/agents"
 _MCP_SERVICES_PATH = "/api/2.1/unity-catalog/mcp-services"
 
 # Transient backend failures (e.g. a CANCELLED RPC) usually clear on a retry, so retry safe
@@ -589,4 +591,32 @@ class _MasonApiClient:
     def clear_session_items(self, store: str, session_id: str) -> dict:
         return self._do(
             "POST", f"{_BASE}/session-stores/{store}/sessions/{session_id}/items:clear", body={}
+        )
+
+    def extract_memories(
+        self,
+        store: str,
+        session_id: str,
+        memory_store: str,
+        *,
+        instructions: Optional[str] = None,
+        dry_run: bool = False,
+    ) -> models.ExtractMemoriesResponse:
+        """Synchronously distill a session's transcript into memory entries.
+
+        Writes the entries to `memory_store` and returns them; pass `dry_run=True` to return the
+        extracted entries without persisting them.
+        """
+        body = _body(
+            memory_store=memory_store_path(memory_store),
+            instructions=instructions,
+            dry_run=dry_run or None,
+        )
+        return _as(
+            models.ExtractMemoriesResponse,
+            self._do(
+                "POST",
+                f"{_BASE_2_0}/session-stores/{store}/sessions/{session_id}/extractions",
+                body=body,
+            ),
         )
