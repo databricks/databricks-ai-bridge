@@ -2,11 +2,24 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 
 import click
 
+from databricks_mason._group import apply_group_class, dim
+
 CommandPath = tuple[str, ...]
+
+# Root commands grouped by intent, so the top-level `mason --help` reads as a workflow instead of a
+# flat alphabetical dump. Ordered SETUP → DEVELOP → SHIP, matching the
+# getting-started path. Any command missing here still lists under "Other commands" (see
+# `_group.MasonGroup`).
+_COMMAND_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("SETUP", ("login", "logout", "init")),
+    ("DEVELOP", ("dev", "tools", "memory", "sessions", "mcp", "tracing")),
+    ("SHIP", ("deploy", "deployments")),
+)
 
 # Each example is either a bare command, or a (command, comment) pair. The comment is a short gloss
 # rendered beside/above the command so a first-time reader can tell what each example does without
@@ -336,24 +349,47 @@ def _example_epilog(examples: tuple[Example, ...]) -> str:
     pairs = [_split(example) for example in examples]
     stack = any(comment and len(cmd) > _INLINE_COMMENT_MAX for cmd, comment in pairs)
     inline_width = max((len(cmd) for cmd, comment in pairs if comment), default=0)
-    lines = ["\b", "Examples:"]
+    # Heading grayed + uppercased to match the formatter-rendered sections (OPTIONS/SETUP/…); the
+    # commands stay at the terminal's default foreground and the `# comments` are grayed like every
+    # other description on the page. `ljust` is computed on the plain command so alignment survives.
+    lines = ["\b", dim("EXAMPLES")]
     for cmd, comment in pairs:
         if not comment:
             lines.append(f"  {cmd}")
         elif stack:
-            lines.append(f"  # {comment}")
+            lines.append(f"  {dim(f'# {comment}')}")
             lines.append(f"  {cmd}")
         else:
-            lines.append(f"  {cmd.ljust(inline_width)}  # {comment}")
+            lines.append(f"  {cmd.ljust(inline_width)}  {dim(f'# {comment}')}")
+    return "\n".join(lines)
+
+
+def _getting_started_epilog() -> str:
+    """The root's numbered "Getting started" path: login → init → cd → dev → deploy.
+
+    A numbered, ordered path — rather than an unlabeled grab-bag of examples — removes the
+    "blank-page problem" for a first-time reader: it says *start here, in this order*. Reuses the
+    root happy-path examples so the path and their glosses stay in one place.
+    """
+    pairs = [_split(example) for example in _EXAMPLES[()]]
+    width = max(len(cmd) for cmd, _ in pairs)
+    lines = ["\b", dim("GETTING STARTED")]
+    for i, (cmd, comment) in enumerate(pairs, start=1):
+        row = f"  {i}  {cmd.ljust(width)}"
+        if comment:
+            row += f"  {dim(f'# {comment}')}"
+        lines.append(row)
     return "\n".join(lines)
 
 
 def _root_epilog() -> str:
-    """The root help footer: the quickstart examples, an auth note, then Docs/Issues links.
+    """The root help footer: the numbered getting-started path, an auth note, then Docs/Issues links.
 
     Each block is its own `\\b` paragraph so Click renders it verbatim (commands and URLs intact)
     instead of rewrapping it.
     """
+    # The auth note (setup instructions) and the Docs/Issues links stay at full intensity — this is
+    # important standalone content, not the secondary command *descriptions* that the graying is for.
     auth = "\n".join(
         [
             "\b",
@@ -363,15 +399,58 @@ def _root_epilog() -> str:
         ]
     )
     links = "\n".join(["\b", f"Docs:   {_DOCS_URL}", f"Issues: {_ISSUES_URL}"])
-    return f"{_example_epilog(_EXAMPLES[()])}\n\n{auth}\n\n{links}"
+    return f"{_getting_started_epilog()}\n\n{auth}\n\n{links}"
+
+
+# A capabilities row: indent, label (single word), a 2+ space gap, then the description.
+_CAPABILITY_ROW = re.compile(r"^(\s*)(\S+)(\s{2,})(.*)$")
+
+
+def _dim_capabilities_block(help_text: str) -> str:
+    """Gray only the *descriptions* in the root docstring's `\\b` capabilities block.
+
+    The block (Models/Tools/…) is a reference list that lives in the docstring, which the formatter
+    leaves at full contrast. Match the rest of the help page: the label column (left) stays at full
+    weight and the description recedes as secondary. A row is ``indent label  description``; a
+    wrapped continuation line has no label, so it dims whole. Leading indent is preserved so
+    alignment and Click's dedent are unaffected. Scoped to the single `\\b` verbatim block (marked by
+    a lone ``\\x08``), up to the next blank line.
+    """
+    out: list[str] = []
+    dimming = False
+    for line in help_text.split("\n"):
+        stripped = line.strip()
+        if not dimming and stripped == "\x08":
+            dimming = True
+            out.append(line)
+        elif dimming and stripped == "":
+            dimming = False
+            out.append(line)
+        elif dimming:
+            row = _CAPABILITY_ROW.match(line)
+            if row:
+                indent, label, gap, description = row.groups()
+                # Label full-weight; only the description recedes.
+                out.append(f"{indent}{label}{gap}{dim(description)}")
+            else:
+                # A wrapped continuation line (no label) is all description — dim it whole.
+                lead = line[: len(line) - len(line.lstrip(" "))]
+                out.append(lead + dim(line[len(lead) :]))
+        else:
+            out.append(line)
+    return "\n".join(out)
 
 
 def configure_help(root: click.Group) -> None:
-    """Attach curated short help and examples to the root and every existing command."""
+    """Attach curated short help and examples, and upgrade the group class (typo suggestions +
+    intent-grouped root listing)."""
     root.epilog = _root_epilog()
+    if root.help:
+        root.help = _dim_capabilities_block(root.help)
     for path, command in _walk(root):
         if path in _SHORT_HELP:
             command.short_help = _SHORT_HELP[path]
         examples = _EXAMPLES.get(path)
         if examples:
             command.epilog = _example_epilog(examples)
+    apply_group_class(root, _COMMAND_SECTIONS)

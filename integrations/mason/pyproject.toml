@@ -8,7 +8,9 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "click>=8.1",
+    # >=8.4: the --help graying styles the description column with ANSI, and 8.4+ measures column
+    # widths / wraps with ANSI-aware `term_len`, so the styling doesn't break table alignment.
+    "click>=8.4",
     "databricks-sdk>=0.94.0",
     # mlflow-skinny is the lightweight MLflow client (tracking + tracing REST APIs, incl. the
     # Databricks tracking backend) with no server/UI/ML-flavor stack. `mason tracing` and the

@@ -11,7 +11,6 @@ from typing import Optional
 
 import click
 from rich.console import Console
-from rich.text import Text
 
 # Error codes indicating that a preview API is unavailable in the workspace.
 _PREVIEW_ERROR_CODES = frozenset({"NOT_IMPLEMENTED", "UNIMPLEMENTED", "FEATURE_DISABLED"})
@@ -64,11 +63,17 @@ class AgentCliError(click.ClickException):
                 payload["hint"] = self.hint
             click.echo(json.dumps({"error": payload}, indent=2), err=True)
             return
-        console = Console(stderr=True)
-        label = f"Error [{self.error_code}]" if self.error_code else "Error"
-        console.print(Text(f"{label}: ", style="bold red") + Text(self.message))
-        if self.hint:
-            console.print(Text(self.hint, style="grey62"))
+        # Render in the cargo/uv diagnostic grammar: a red `error:` (or cargo's
+        # `error[CODE]:`) keyword, the message, and an indented `help:` line carrying the fix.
+        from databricks_mason import render
+
+        render.diagnostic(
+            "error",
+            self.message,
+            code=self.error_code,
+            help=self.hint,
+            con=Console(stderr=True),
+        )
 
 
 def wrap_api_error(exc: Exception) -> AgentCliError:

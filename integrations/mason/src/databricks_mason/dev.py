@@ -167,8 +167,10 @@ def dev(
         if experiment_id:
             env_updates.update(mlflow_tracing_config(experiment_id).env())
     except Exception as exc:  # noqa: BLE001 - tracing must never block a local run
-        render.console().print(
-            f"[yellow]⚠[/] Tracing not enabled: {exc}. Proceeding without tracing."
+        render.diagnostic(
+            "warning",
+            f"tracing not enabled — {exc}",
+            help="running without traces; set it up later with `mason tracing configure`",
         )
     if env_updates:
         _upsert_manifest_env(source_dir, env_updates)
