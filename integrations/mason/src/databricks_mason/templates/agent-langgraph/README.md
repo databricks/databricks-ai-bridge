@@ -5,6 +5,21 @@ memory during `mason dev`. The generated app enables the durable runtime by defa
 stores them in an app-owned Lakebase schema and recovers interrupted work. Initialize with
 `--no-durable-runtime` for process-local deployed state instead.
 
+The generated project separates portable agent execution from Mason's HTTP protocol:
+
+```text
+client -> runtime/main.py -> runtime/adapter.py -> agent/agent.py:run_agent
+```
+
+- `agent/agent.py` owns the framework-native agent, sessions, tools, MCP lifetime, and `run_agent`.
+- `runtime/adapter.py` owns the agent-author integration hooks: Mason input/output translation plus
+  `invoke` and `recover`.
+- `runtime/main.py` constructs the server and registers those hooks.
+
+To bring an existing LangGraph agent, keep its normal execution code in `agent/agent.py`, expose a
+`run_agent` function that yields native LangGraph events, and make only the small payload/event
+mapping changes needed in `runtime/adapter.py`.
+
 ## Run locally
 
 ```bash
@@ -48,7 +63,7 @@ curl -sS http://localhost:8000/api/invocations \
 curl -sS "http://localhost:8000/api/invocations/$INVOCATION_ID" | jq
 ```
 
-SSE records contain the events emitted by `agent/agent.py`: token `delta`s, completed `message`s,
+SSE records contain events translated by `runtime/adapter.py`: token `delta`s, completed `message`s,
 and HITL `interrupt`s. Replay from a cursor with
 `GET /api/invocations/{id}/events?after={sequence}`.
 
@@ -77,12 +92,12 @@ mason sessions bind my-agent-sessions
 
 ## Crash recovery
 
-When `[durability] enabled = true` in `agent.toml`, `runtime/main.py` registers both `@app.invoke` and
-`@app.recover`. The initial attempt writes the invocation ID into LangGraph checkpoint metadata
-with synchronous checkpoint durability. A recovery attempt continues from that checkpoint when it
-exists; otherwise it safely replays the persisted application input. Invocation state and emitted
-events survive process loss in deployed Lakebase. With `--no-durable-runtime`, only `@app.invoke`
-is registered and invocation state and events remain process-local.
+`runtime/main.py` always registers the adapter's `invoke` and `recover` hooks. Both call the same
+`agent.agent.run_agent` function. Recovery changes only the agent input: it passes `None` when the
+current invocation has a LangGraph checkpoint, or replays the original application input when no
+such checkpoint exists. When deployment attaches a Runtime Store, invocation state and emitted
+events survive process loss and Mason can call `recover` on a replacement worker. Without a Runtime
+Store, invocation state remains process-local and interrupted work is not automatically recovered.
 
 External side effects are still at-least-once. Make tools idempotent because work performed between
 the last checkpoint and a crash can run again.
@@ -95,7 +110,8 @@ Use `mason init --framework langgraph --disable-chat-app` for API-only output.
 
 ## Configure and deploy
 
-- Change model/instructions in `agent/agent.py`.
+- Change the model, instructions, tools, graph, and framework-native execution in `agent/agent.py`.
+- Change `runtime/adapter.py` only to map a different application input/output contract.
 - Add local tools under `agent/tools/`; modules are auto-discovered.
 - Add MCP servers in `agent/mcps.py` or with `mason tools add mcp`.
 - Bind long-term memory with `mason memory bind <store>`.
