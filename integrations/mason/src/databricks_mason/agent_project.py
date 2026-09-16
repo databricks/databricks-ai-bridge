@@ -15,6 +15,12 @@ from tomlkit import TOMLDocument
 from tomlkit.exceptions import ParseError
 
 from databricks_mason.errors import AgentCliError
+from databricks_mason.project_types import (
+    AgentFramework,
+    AgentServer,
+    parse_framework,
+    parse_server,
+)
 from databricks_mason.runtime import tool_manifest
 from databricks_mason.runtime.tool_manifest import (
     MEMORY_STORE_TABLE,
@@ -26,8 +32,6 @@ from databricks_mason.runtime.tool_manifest import (
 TRACING_TABLE = "tracing"
 
 _SCHEMA_VERSION = 1
-_SUPPORTED_FRAMEWORKS = {"langgraph", "openai"}
-_SUPPORTED_SERVERS = {"custom", "mason"}
 _SUPPORTED_SCOPE_KINDS = {"table", "volume", "workspace"}
 _SUPPORTED_PERMISSIONS = {"read_only", "read_write"}
 _TOOL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -184,7 +188,7 @@ class ToolSpec:
 
 def _required_string(value: object, description: str) -> str:
     if not isinstance(value, str) or not value:
-        raise AgentCliError(f"Tool manifest must declare {description}.")
+        raise AgentCliError(f"agent.toml must declare {description}.")
     return value
 
 
@@ -294,8 +298,8 @@ class AgentProject:
         self,
         root: pathlib.Path,
         document: TOMLDocument,
-        framework: str,
-        server: str,
+        framework: AgentFramework,
+        server: AgentServer,
         tools: list[ToolSpec],
         memory_store: str | None = None,
         session_store: str | None = None,
@@ -353,12 +357,8 @@ class AgentProject:
         agent = document.get("agent")
         if not isinstance(agent, Mapping):
             raise AgentCliError("agent.toml must declare an [agent] table.")
-        framework = _required_string(agent.get("framework"), "agent.framework")
-        if framework not in _SUPPORTED_FRAMEWORKS:
-            raise AgentCliError(f"Unsupported Mason framework {framework!r}.")
-        server = _required_string(agent.get("server"), "agent.server")
-        if server not in _SUPPORTED_SERVERS:
-            raise AgentCliError(f"Unsupported Mason server {server!r}.")
+        framework = parse_framework(_required_string(agent.get("framework"), "agent.framework"))
+        server = parse_server(_required_string(agent.get("server"), "agent.server"))
         deployment_name = agent.get("deployment_name")
         if deployment_name is not None and not (
             isinstance(deployment_name, str) and deployment_name
@@ -411,23 +411,21 @@ class AgentProject:
         memory_store: str | None = None,
         session_store: str | None = None,
     ) -> "AgentProject":
-        if framework not in _SUPPORTED_FRAMEWORKS:
-            raise AgentCliError(f"Unsupported Mason framework {framework!r}.")
-        if server not in _SUPPORTED_SERVERS:
-            raise AgentCliError(f"Unsupported Mason server {server!r}.")
+        selected_framework = parse_framework(framework)
+        selected_server = parse_server(server)
         project_root = pathlib.Path(root).expanduser().resolve()
         document = tomlkit.document()
         document.add("schema_version", _SCHEMA_VERSION)
         document.add(tomlkit.nl())
         agent = tomlkit.table()
-        agent.add("framework", framework)
-        agent.add("server", server)
+        agent.add("framework", selected_framework.value)
+        agent.add("server", selected_server.value)
         document.add("agent", agent)
         project = cls(
             project_root,
             document,
-            framework,
-            server,
+            selected_framework,
+            selected_server,
             [],
         )
         if memory_store:

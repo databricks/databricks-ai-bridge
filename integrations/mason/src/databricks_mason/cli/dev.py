@@ -27,6 +27,7 @@ from databricks_mason.cli.deploy import (
 from databricks_mason.databricks_cli import _databricks
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import require_managed_tool_support
+from databricks_mason.project_types import AgentServer
 from databricks_mason.runtime.store import RUNTIME_STORE_LOCAL_ENV
 from databricks_mason.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
 
@@ -207,13 +208,13 @@ def dev(
         entry_point.unlink(missing_ok=True)
 
 
-def _announce_local_url(source_dir: pathlib.Path, port: int, server: str | None) -> None:
+def _announce_local_url(source_dir: pathlib.Path, port: int, server: AgentServer | None) -> None:
     """Print how to reach the running app: the chat UI if present, else a sample invoke request."""
     base = f"http://localhost:{port}"
     deploy_name = source_dir.resolve().name
     tool_step: str | tuple[str, str] = (
         "Edit agent/agent.py to give the agent a tool"
-        if server == "custom"
+        if server == AgentServer.CUSTOM
         else ("mason tools add mcp <service>", "Give the agent a tool")
     )
     if (source_dir / "runtime" / "ui.py").is_file():
@@ -229,7 +230,7 @@ def _announce_local_url(source_dir: pathlib.Path, port: int, server: str | None)
         )
     else:
         # No page is served at `/`, so give a copy-pasteable request instead of just the URL.
-        uses_runtime_api = server == "mason"
+        uses_runtime_api = server == AgentServer.MASON
         endpoint = f"{base}/api/invocations" if uses_runtime_api else f"{base}/invocations"
         body = (
             '{"id": "00000000-0000-4000-8000-000000000000", '

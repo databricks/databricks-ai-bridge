@@ -35,13 +35,6 @@ def _no_tracing_by_default(monkeypatch):
     monkeypatch.setattr(deploy_mod, "resolve_trace_experiment_id", lambda *a, **k: None)
 
 
-@pytest.fixture(autouse=True)
-def _no_app_resource_mutation_by_default(monkeypatch):
-    # Custom-server deploys detach stale Mason-managed resources through the Databricks CLI. Keep
-    # deploy tests hermetic; the cleanup-specific test overrides this stub and verifies the call.
-    monkeypatch.setattr(deploy_mod, "remove_app_resources", lambda *a, **k: None)
-
-
 def test_upsert_manifest_env_scaffolds_when_missing(tmp_path: pathlib.Path):
     scaffolded = deploy_mod._upsert_manifest_env(
         tmp_path, {"AGENT_MEMORY_STORE": "memory-stores/x"}
@@ -69,6 +62,29 @@ def test_upsert_manifest_env_updates_existing(tmp_path: pathlib.Path):
     assert doc["command"] == ["uvicorn", "app:app"]  # preserved
     by_name = {e["name"]: e["value"] for e in doc["env"]}
     assert by_name == {"AGENT_MEMORY_STORE": "new", "AGENT_SESSION_STORE": "s"}
+
+
+def test_upsert_manifest_env_preserves_unrelated_entries_and_replaces_value_from(
+    tmp_path: pathlib.Path,
+):
+    unrelated = {"name": "USER_SECRET", "valueFrom": "user-secret-resource"}
+    (tmp_path / "app.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "command": ["uvicorn", "app:app"],
+                "env": [
+                    unrelated,
+                    {"name": "AGENT_MEMORY_STORE", "valueFrom": "old-resource"},
+                    "invalid-entry",
+                ],
+            }
+        )
+    )
+
+    assert deploy_mod._upsert_manifest_env(tmp_path, {"AGENT_MEMORY_STORE": "new"}) is False
+
+    doc = yaml.safe_load((tmp_path / "app.yaml").read_text())
+    assert doc["env"] == [unrelated, {"name": "AGENT_MEMORY_STORE", "value": "new"}]
 
 
 def test_ensure_session_store_reuses_on_already_exists():
@@ -201,11 +217,12 @@ class _FakeCtx:
 def _write_agent_manifest(
     source: pathlib.Path,
     *,
+    framework: str = "langgraph",
     server: str = "mason",
     memory: str | None = None,
     session: str | None = None,
 ) -> None:
-    body = f'schema_version = 1\n\n[agent]\nframework = "langgraph"\nserver = "{server}"\n'
+    body = f'schema_version = 1\n\n[agent]\nframework = "{framework}"\nserver = "{server}"\n'
     if memory:
         body += f'\n[memory_store]\nname = "{memory}"\n'
     if session:
@@ -461,8 +478,9 @@ def test_reconcile_runtime_store_skips_project_without_agent_manifest(monkeypatc
     get_or_create.assert_not_called()
 
 
-def test_deploy_custom_server_removes_stale_runtime_store_wiring(
-    tmp_path: pathlib.Path, monkeypatch
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+def test_deploy_custom_server_skips_runtime_store_provisioning_and_binding(
+    tmp_path: pathlib.Path, monkeypatch, framework: str
 ) -> None:
     src = tmp_path / "app"
     src.mkdir()
@@ -470,35 +488,25 @@ def test_deploy_custom_server_removes_stale_runtime_store_wiring(
         yaml.safe_dump(
             {
                 "command": ["x"],
-                "env": [
-                    {
-                        "name": "DATABRICKS_MASON_RUNTIME_STORE_LAKEBASE_ENDPOINT",
-                        "value": "old-endpoint",
-                    },
-                    {"name": "DATABRICKS_MASON_RUNTIME_STORE_SCHEMA", "value": "old-schema"},
-                    {"name": "USER_ENV", "value": "keep"},
-                ],
+                "env": [{"name": "USER_ENV", "value": "keep"}],
             }
         )
     )
-    _write_agent_manifest(src, server="custom")
+    _write_agent_manifest(src, framework=framework, server="custom")
 
     get_or_create = mock.Mock()
     attach = mock.Mock()
-    removed: dict[str, object] = {}
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda app, profile: True)
+    calls = []
+
+    def fake_databricks(args, profile, **kwargs):
+        calls.append(args)
+        assert profile == "prof"
+        return types.SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda app, profile: False)
     monkeypatch.setattr(deploy_mod.lakebase_store, "get_or_create_backend", get_or_create)
     monkeypatch.setattr(deploy_mod, "apply_postgres_resources", attach)
-    monkeypatch.setattr(
-        deploy_mod,
-        "remove_app_resources",
-        lambda app, names, profile: removed.update(app=app, names=names, profile=profile),
-    )
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kwargs: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
+    monkeypatch.setattr(deploy_mod, "_databricks", fake_databricks)
 
     result = CliRunner().invoke(
         deploy_mod.deploy,
@@ -509,11 +517,9 @@ def test_deploy_custom_server_removes_stale_runtime_store_wiring(
     assert result.exit_code == 0, result.output
     get_or_create.assert_not_called()
     attach.assert_not_called()
-    assert removed == {
-        "app": "agent-mason-myapp",
-        "names": frozenset({"postgres-runtime-store"}),
-        "profile": "prof",
-    }
+    assert any(args[:3] == ["apps", "create", "agent-mason-myapp"] for args in calls)
+    assert any(args[:3] == ["apps", "deploy", "agent-mason-myapp"] for args in calls)
+    assert not any(args[:2] in (["apps", "update"], ["apps", "create-update"]) for args in calls)
     env = {
         entry["name"]: entry["value"]
         for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]

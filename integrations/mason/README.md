@@ -149,6 +149,8 @@ failures. Recovery is at-least-once, so external side effects must be idempotent
 Memory Stores separately preserve the state used by your agent.
 
 Use `server = "custom"` to deploy your own HTTP server without provisioning a Runtime Store.
+Changing the server type of an existing deployment is not supported. To use a different server,
+scaffold a new project with the desired `mason init --server` option and deploy it under a new name.
 See the [runtime guide](src/databricks_mason/runtime/README.md) for agent hooks, full API examples,
 and recovery behavior.
 

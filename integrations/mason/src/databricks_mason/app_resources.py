@@ -12,7 +12,6 @@ server-side (see `deploy._grant_store_access`), so no direct Lakebase grant is n
 from __future__ import annotations
 
 import json
-from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Optional
 
@@ -120,29 +119,6 @@ def apply_postgres_resources(
     payload = {"resources": preserved + ours}
     result = _databricks(
         ["apps", "update", app, "--json", json.dumps(payload)], profile, capture=True, check=False
-    )
-    if result.returncode == 0:
-        return None
-    return (result.stderr or result.stdout or "").strip() or "unknown error"
-
-
-def remove_app_resources(
-    app: str, resource_names: Collection[str], profile: Optional[str]
-) -> Optional[str]:
-    """Remove Mason-owned app resources by name while preserving every other resource."""
-    resources = _current_app_resources(app, profile)
-    remaining = [
-        resource
-        for resource in resources
-        if not (isinstance(resource, dict) and resource.get("name") in resource_names)
-    ]
-    if len(remaining) == len(resources):
-        return None
-    result = _databricks(
-        ["apps", "update", app, "--json", json.dumps({"resources": remaining})],
-        profile,
-        capture=True,
-        check=False,
     )
     if result.returncode == 0:
         return None

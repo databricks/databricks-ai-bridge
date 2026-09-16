@@ -24,6 +24,12 @@ from databricks_mason import render
 from databricks_mason.agent_project import AgentProject, default_store_name
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import write_project_metadata
+from databricks_mason.project_types import (
+    AgentFramework,
+    AgentServer,
+    parse_framework,
+    parse_server,
+)
 
 # Templates ship inside this package (databricks_mason/templates/), so `mason init` always copies
 # the one for the installed CLI — the scaffold can't drift from the databricks-mason it runs
@@ -42,8 +48,10 @@ class _AgentTemplate:
 
 # Framework -> its bundled templates.
 _TEMPLATES = {
-    "langgraph": _AgentTemplate("agent-langgraph", "custom-agent-langgraph", "ui/agent-langgraph"),
-    "openai": _AgentTemplate("agent-openai", "custom-agent-openai", "ui/agent-openai"),
+    AgentFramework.LANGGRAPH: _AgentTemplate(
+        "agent-langgraph", "custom-agent-langgraph", "ui/agent-langgraph"
+    ),
+    AgentFramework.OPENAI: _AgentTemplate("agent-openai", "custom-agent-openai", "ui/agent-openai"),
 }
 
 
@@ -105,14 +113,14 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
 @click.argument("directory", required=False)
 @click.option(
     "--framework",
-    type=click.Choice(sorted(_TEMPLATES)),
+    type=click.Choice([framework.value for framework in AgentFramework]),
     default=None,
     help="Agent framework to scaffold (defaults to langgraph).",
 )
 @click.option(
     "--server",
-    type=click.Choice(["mason", "custom"]),
-    default="mason",
+    type=click.Choice([server.value for server in AgentServer]),
+    default=AgentServer.MASON.value,
     show_default=True,
     help="Use Mason's invocation server or a minimal custom FastAPI server.",
 )
@@ -174,8 +182,9 @@ def init(
     HTTP contract and Runtime Store. Pass --server custom for a minimal foreground-only
     FastAPI server.
     """
-    selected_framework = framework or "langgraph"
-    mason_server = server == "mason"
+    selected_framework = parse_framework(framework or AgentFramework.LANGGRAPH)
+    selected_server = parse_server(server)
+    mason_server = selected_server == AgentServer.MASON
     template = _TEMPLATES[selected_framework]
     template_name = template.mason_server if mason_server else template.custom_server
     chat_app_enabled = mason_server and not disable_chat_app
@@ -200,7 +209,7 @@ def init(
         project = AgentProject.create(
             dest,
             framework=selected_framework,
-            server=server,
+            server=selected_server,
             memory_store=memory_store,
             session_store=session_store,
         )
@@ -214,11 +223,11 @@ def init(
     if obj.output == "json":
         render.emit_json(
             {
-                "framework": selected_framework,
+                "framework": selected_framework.value,
                 "template": template_name,
                 "template_ref": template_ref,
                 "directory": str(dest),
-                "server": server,
+                "server": selected_server.value,
                 "chat_app_enabled": chat_app_enabled,
                 "env_profile": env_profile if wrote_env else None,
             }
@@ -226,7 +235,7 @@ def init(
         return
 
     fields = {
-        "Framework": selected_framework,
+        "Framework": selected_framework.value,
         "Server": "Mason AgentApp" if mason_server else "Custom FastAPI",
         "Template ref": template_ref,
         "Directory": str(dest),

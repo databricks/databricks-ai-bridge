@@ -5,9 +5,11 @@ from __future__ import annotations
 import pathlib
 
 import pytest
+import tomli
 
 from databricks_mason.agent_project import AgentProject, Scope, ToolSpec, default_store_name
 from databricks_mason.errors import AgentCliError
+from databricks_mason.project_types import AgentFramework, AgentServer
 
 
 def _write_manifest(root: pathlib.Path, body: str | None = None) -> pathlib.Path:
@@ -175,6 +177,67 @@ def test_create_without_store_names_declares_none(tmp_path: pathlib.Path):
     reloaded = AgentProject.load(tmp_path)
     assert reloaded.memory_store is None
     assert reloaded.session_store is None
+
+
+@pytest.mark.parametrize("framework", list(AgentFramework))
+@pytest.mark.parametrize("server", list(AgentServer))
+def test_project_selections_round_trip_as_enums_and_serialize_as_values(
+    tmp_path: pathlib.Path, framework: AgentFramework, server: AgentServer
+):
+    project = AgentProject.create(tmp_path, framework=framework, server=server)
+    assert project.framework is framework
+    assert project.server is server
+    project.write()
+
+    manifest = tomli.loads((tmp_path / "agent.toml").read_text())
+    assert manifest["agent"] == {"framework": framework.value, "server": server.value}
+    reloaded = AgentProject.load(tmp_path)
+    assert reloaded.framework is framework
+    assert reloaded.server is server
+
+
+@pytest.mark.parametrize("selection", ["framework", "server"])
+def test_load_and_create_share_unsupported_selection_validation(
+    tmp_path: pathlib.Path, selection: str
+):
+    values = {"framework": "langgraph", "server": "mason", selection: "unsupported"}
+    with pytest.raises(AgentCliError) as created:
+        AgentProject.create(tmp_path, **values)
+    assert not (tmp_path / "agent.toml").exists()
+
+    path = _write_manifest(
+        tmp_path,
+        "schema_version = 1\n\n[agent]\n"
+        f'framework = "{values["framework"]}"\nserver = "{values["server"]}"\n',
+    )
+    before = path.read_text()
+    with pytest.raises(AgentCliError) as loaded:
+        AgentProject.load(tmp_path)
+
+    assert (
+        loaded.value.message
+        == created.value.message
+        == (f"Unsupported Mason {selection} 'unsupported'.")
+    )
+    assert loaded.value.hint == created.value.hint
+    assert path.read_text() == before
+
+
+@pytest.mark.parametrize("selection", ["framework", "server"])
+@pytest.mark.parametrize("raw", [None, '""', "42"])
+def test_required_project_selections_name_agent_manifest(
+    tmp_path: pathlib.Path, selection: str, raw: str | None
+):
+    values = {"framework": '"langgraph"', "server": '"mason"', selection: raw}
+    _write_manifest(
+        tmp_path,
+        "schema_version = 1\n\n[agent]\n"
+        + "".join(f"{key} = {value}\n" for key, value in values.items() if value is not None),
+    )
+
+    with pytest.raises(AgentCliError) as error:
+        AgentProject.load(tmp_path)
+    assert error.value.message == f"agent.toml must declare agent.{selection}."
 
 
 @pytest.mark.parametrize(

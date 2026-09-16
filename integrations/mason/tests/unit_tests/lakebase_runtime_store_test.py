@@ -5,7 +5,7 @@ import types
 
 import pytest
 
-from databricks_mason import lakebase_durability_store as runtime_store
+from databricks_mason import lakebase_runtime_store as runtime_store
 from databricks_mason.errors import AgentCliError
 
 

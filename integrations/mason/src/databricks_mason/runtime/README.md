@@ -151,7 +151,8 @@ Mason manages the Runtime Store's database, schema, and access with the deployme
 create or bind it separately. Session and Memory Stores are independently named resources that
 can be shared intentionally between agents.
 
-When switching a deployment to `server = "custom"`, Mason removes the Runtime Store environment
-configuration and detaches its Apps resource. It preserves the database and its data.
+Changing the server type of an existing deployment is not supported. Scaffold a new project with
+the desired `mason init --server` option and deploy it under a new name. `agent.toml` remains editable,
+but changing its `server` field does not convert application code or clean up deployment resources.
 
 For runtime contributors, see the [architecture and code map](ARCHITECTURE.md).

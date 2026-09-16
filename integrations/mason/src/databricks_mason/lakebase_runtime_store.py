@@ -1,4 +1,4 @@
-"""Provision and locate the Lakebase database used by a Mason Runtime Store."""
+"""Provision and locate the Lakebase database for a Mason Runtime Store."""
 
 from __future__ import annotations
 

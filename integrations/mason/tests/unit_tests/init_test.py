@@ -16,6 +16,7 @@ from click.testing import CliRunner
 
 from databricks_mason.cli import init as init_mod
 from databricks_mason.errors import AgentCliError
+from databricks_mason.project_types import AgentFramework, AgentServer
 
 
 class _Ctx:
@@ -47,13 +48,14 @@ def _hermetic_install(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_framework_templates_map_to_names():
-    langgraph = init_mod._TEMPLATES["langgraph"]
+    assert set(init_mod._TEMPLATES) == set(AgentFramework)
+    langgraph = init_mod._TEMPLATES[AgentFramework.LANGGRAPH]
     assert (langgraph.mason_server, langgraph.custom_server, langgraph.chat_app) == (
         "agent-langgraph",
         "custom-agent-langgraph",
         "ui/agent-langgraph",
     )
-    openai = init_mod._TEMPLATES["openai"]
+    openai = init_mod._TEMPLATES[AgentFramework.OPENAI]
     assert (openai.mason_server, openai.custom_server, openai.chat_app) == (
         "agent-openai",
         "custom-agent-openai",
@@ -225,6 +227,31 @@ def test_init_rejects_unknown_framework(tmp_path: pathlib.Path):
         init_mod.init, ["--framework", "nope", str(tmp_path / "x")], obj=_Ctx()
     )
     assert result.exit_code != 0  # click.Choice rejects it
+
+
+def test_init_help_keeps_lowercase_selection_values():
+    result = CliRunner().invoke(init_mod.init, ["--help"], obj=_Ctx())
+    assert result.exit_code == 0, result.output
+    assert "[langgraph|openai]" in result.output
+    assert "[mason|custom]" in result.output
+    assert "AgentFramework" not in result.output
+    assert "AgentServer" not in result.output
+
+
+@pytest.mark.parametrize("framework", list(AgentFramework))
+@pytest.mark.parametrize("server", list(AgentServer))
+def test_init_json_keeps_lowercase_framework_and_server(
+    tmp_path: pathlib.Path, framework: AgentFramework, server: AgentServer
+):
+    result = CliRunner().invoke(
+        init_mod.init,
+        ["--framework", framework.value, "--server", server.value, str(tmp_path / "proj")],
+        obj=_Ctx(output="json"),
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["framework"] == framework.value
+    assert payload["server"] == server.value
 
 
 def test_write_env_seeds_profile_from_example(tmp_path: pathlib.Path):
