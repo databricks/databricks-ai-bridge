@@ -15,7 +15,7 @@ from databricks_mason.runtime.store import (
     RUNTIME_STORE_LOCAL_ENV,
     RUNTIME_STORE_SCHEMA_ENV,
     InMemoryRuntimeStore,
-    default_runtime_store,
+    runtime_store_from_environment,
 )
 from databricks_mason.runtime.types import (
     InvocationConflictError,
@@ -51,12 +51,12 @@ def mapping_result(value):
     return result
 
 
-def test_default_store_is_local_without_an_attached_resource(monkeypatch):
+def test_environment_store_is_local_without_an_attached_resource(monkeypatch):
     monkeypatch.delenv(RUNTIME_STORE_LOCAL_ENV, raising=False)
     monkeypatch.delenv(RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV, raising=False)
     monkeypatch.delenv(RUNTIME_STORE_SCHEMA_ENV, raising=False)
 
-    assert isinstance(default_runtime_store(), InMemoryRuntimeStore)
+    assert isinstance(runtime_store_from_environment(), InMemoryRuntimeStore)
 
 
 def test_only_lakebase_store_has_durable_runtime_capabilities():
@@ -66,7 +66,7 @@ def test_only_lakebase_store_has_durable_runtime_capabilities():
     assert isinstance(LakebaseDurableRuntimeStore(lakebase=lakebase), DurableRuntimeStore)
 
 
-def test_default_store_uses_the_attached_lakebase_resource(monkeypatch):
+def test_environment_store_uses_the_attached_lakebase_resource(monkeypatch):
     expected = MagicMock()
     monkeypatch.delenv(RUNTIME_STORE_LOCAL_ENV, raising=False)
     monkeypatch.setenv(
@@ -81,14 +81,14 @@ def test_default_store_uses_the_attached_lakebase_resource(monkeypatch):
         from_app_resource,
     )
 
-    assert default_runtime_store() is expected
+    assert runtime_store_from_environment() is expected
     from_app_resource.assert_called_once_with(
         endpoint="projects/project/branches/production/endpoints/primary",
         schema="databricks_mason_runtime_app",
     )
 
 
-def test_default_store_rejects_an_incomplete_lakebase_resource(monkeypatch):
+def test_environment_store_rejects_an_incomplete_lakebase_resource(monkeypatch):
     monkeypatch.delenv(RUNTIME_STORE_LOCAL_ENV, raising=False)
     monkeypatch.delenv(RUNTIME_STORE_SCHEMA_ENV, raising=False)
     monkeypatch.setenv(
@@ -97,10 +97,10 @@ def test_default_store_rejects_an_incomplete_lakebase_resource(monkeypatch):
     )
 
     with pytest.raises(RuntimeError, match=RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV):
-        default_runtime_store()
+        runtime_store_from_environment()
 
 
-def test_default_store_local_marker_overrides_attached_resource(monkeypatch):
+def test_environment_store_local_marker_overrides_attached_resource(monkeypatch):
     monkeypatch.setenv(RUNTIME_STORE_LOCAL_ENV, "true")
     monkeypatch.setenv(
         RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV,
@@ -108,7 +108,7 @@ def test_default_store_local_marker_overrides_attached_resource(monkeypatch):
     )
     monkeypatch.setenv(RUNTIME_STORE_SCHEMA_ENV, "databricks_mason_runtime_app")
 
-    assert isinstance(default_runtime_store(), InMemoryRuntimeStore)
+    assert isinstance(runtime_store_from_environment(), InMemoryRuntimeStore)
 
 
 def invocation_row(**overrides):
@@ -183,18 +183,34 @@ async def test_claim_returns_request_and_incremented_attempt():
 
 
 @pytest.mark.asyncio
-async def test_recoverable_invocation_query_uses_durable_lease():
+async def test_queued_invocation_query_only_selects_queued_work():
     lakebase, connection = mock_lakebase()
     result = MagicMock()
     result.scalars.return_value.all.return_value = ["session-1"]
     connection.execute.return_value = result
     store = LakebaseDurableRuntimeStore(lakebase=lakebase)
 
-    assert await store.recoverable_invocation_ids(10) == ["session-1"]
+    assert await store.queued_invocation_ids() == ["session-1"]
+
+    query = str(connection.execute.await_args.args[0])
+    assert "status='QUEUED'" in query
+    assert "heartbeat_at" not in query
+
+
+@pytest.mark.asyncio
+async def test_stale_invocation_query_uses_durable_lease():
+    lakebase, connection = mock_lakebase()
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = ["session-1"]
+    connection.execute.return_value = result
+    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
+
+    assert await store.stale_invocation_ids(10) == ["session-1"]
 
     query = str(connection.execute.await_args.args[0])
     assert "SELECT invocation_id" in query
     assert "heartbeat_at" in query
+    assert "status='QUEUED'" not in query
     assert connection.execute.await_args.args[1] == {"stale": 10}
 
 

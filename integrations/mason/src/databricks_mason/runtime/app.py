@@ -59,11 +59,17 @@ class AgentApp(FastAPI):
     ) -> None:
         self._invoke_hook: InvocationHook | None = None
         self._recovery_hook: InvocationHook | None = None
-        self._runtime = Runtime.from_store(
-            self._execute,
-            runtime_store=runtime_store,
-            recovery_enabled=lambda: self._recovery_hook is not None,
-        )
+        if runtime_store is None:
+            self._runtime = Runtime.from_environment(
+                self._execute,
+                recovery_enabled=lambda: self._recovery_hook is not None,
+            )
+        else:
+            self._runtime = Runtime.from_store(
+                self._execute,
+                runtime_store=runtime_store,
+                recovery_enabled=lambda: self._recovery_hook is not None,
+            )
 
         @asynccontextmanager
         async def lifespan(_: FastAPI):

@@ -26,8 +26,9 @@ Runtime
 
 ## Lifecycle
 
-`AgentApp` constructs `Runtime.from_store(...)`. The selected Runtime Store determines the execution
-mode:
+`AgentApp` uses `Runtime.from_environment(...)` for Mason-managed processes and
+`Runtime.from_store(...)` when a caller supplies a store explicitly. The selected Runtime Store
+determines the execution mode:
 
 - `InMemoryRuntimeStore` uses `Runtime.local()` and `LocalInvocationExecutor`. It supports the same
   foreground, background, polling, streaming, and replay APIs, but state ends with the process.
@@ -41,9 +42,11 @@ owned by `DurableRuntimeStore` and its Lakebase implementation.
 `RuntimeStore.accept(invocation_id, request)` defines idempotency. The same ID and request returns
 the existing invocation; the same ID and different request raises `InvocationConflictError`.
 
-`@app.recover` is optional. A durable Runtime Store still persists results and events without it;
-registering the hook enables the recovery scanner to replace stale attempts. Recovery is at least
-once, so agent side effects must be idempotent.
+The durable executor always scans for persisted `QUEUED` invocations, including after process
+restart, and starts their first attempt through `@app.invoke`. Reads also schedule queued work as a
+safety net when a request moves between replicas. `@app.recover` is optional: registering it enables
+a separate scanner to replace stale `ACTIVE` attempts. Recovery is at least once, so agent side
+effects must be idempotent.
 
 ## Code map
 

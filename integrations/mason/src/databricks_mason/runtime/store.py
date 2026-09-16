@@ -211,8 +211,8 @@ class InMemoryRuntimeStore(RuntimeStore):
         return persisted
 
 
-def default_runtime_store() -> RuntimeStore:
-    """Use an injected Lakebase store, or process-local state when no store is attached.
+def runtime_store_from_environment() -> RuntimeStore:
+    """Construct the Runtime Store selected by the process environment.
 
     ``mason dev`` sets the local marker to override any inherited Lakebase variables. A deployed
     Mason server receives both Lakebase variables from ``mason deploy``. Direct ASGI use and tests

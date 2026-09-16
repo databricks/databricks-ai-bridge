@@ -37,9 +37,14 @@ class DurableInvocationExecutor(InvocationExecutor):
         self._stale_seconds = stale_seconds
         self._scan_seconds = scan_seconds
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._queued_scanner: asyncio.Task[None] | None = None
         self._recovery_scheduler: RecoveryScheduler | None = None
 
     async def start(self) -> None:
+        self._queued_scanner = asyncio.create_task(
+            self._scan_queued_loop(),
+            name="databricks-durable-runtime-queued-scanner",
+        )
         self._recovery_scheduler = RecoveryScheduler(
             scheduler=self,
             runtime_store=self._runtime_store,
@@ -49,9 +54,16 @@ class DurableInvocationExecutor(InvocationExecutor):
         self._recovery_scheduler.start(recover=self._recovery_enabled())
 
     async def stop(self) -> None:
+        if self._queued_scanner is not None:
+            self._queued_scanner.cancel()
         if self._recovery_scheduler is not None:
             await self._recovery_scheduler.stop()
             self._recovery_scheduler = None
+        await asyncio.gather(
+            *([self._queued_scanner] if self._queued_scanner is not None else []),
+            return_exceptions=True,
+        )
+        self._queued_scanner = None
         tasks = list(self._tasks.values())
         for task in tasks:
             task.cancel()
@@ -65,8 +77,20 @@ class DurableInvocationExecutor(InvocationExecutor):
         self._schedule(state.invocation_id, recovery=False)
 
     def ensure_recovery_scheduled(self, invocation_id: str) -> None:
-        """Schedule queued or stale durable work discovered by the recovery scanner."""
+        """Schedule stale active work discovered by the recovery scanner."""
         self._schedule(invocation_id, recovery=True)
+
+    async def _scan_queued_loop(self) -> None:
+        """Continuously schedule persisted first attempts, including after process restart."""
+        while True:
+            try:
+                for invocation_id in await self._runtime_store.queued_invocation_ids():
+                    self._schedule(invocation_id, recovery=False)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Databricks durable runtime queued invocation scan failed")
+            await asyncio.sleep(self._scan_seconds)
 
     def _schedule(self, invocation_id: str, *, recovery: bool) -> None:
         current = self._tasks.get(invocation_id)

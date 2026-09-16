@@ -3,9 +3,11 @@
 import asyncio
 import copy
 from datetime import datetime, timedelta, timezone
+from typing import Any, cast
 
 import pytest
 
+import databricks_mason.runtime.runtime as runtime_module
 from databricks_mason.runtime.durability.execution import DurableInvocationExecutor
 from databricks_mason.runtime.execution import LocalInvocationExecutor
 from databricks_mason.runtime.runtime import Runtime
@@ -59,11 +61,18 @@ class MemoryDurableRuntimeStore:
         state = self.states.get(invocation_id)
         return copy.deepcopy(state) if state is not None else None
 
-    async def recoverable_invocation_ids(self, stale_seconds: float) -> list[str]:
+    async def queued_invocation_ids(self) -> list[str]:
         return [
             invocation_id
             for invocation_id, state in self.states.items()
-            if self._is_recoverable(state, stale_seconds)
+            if state.status == InvocationStatus.QUEUED
+        ]
+
+    async def stale_invocation_ids(self, stale_seconds: float) -> list[str]:
+        return [
+            invocation_id
+            for invocation_id, state in self.states.items()
+            if self._is_stale(state, stale_seconds)
         ]
 
     async def claim(self, invocation_id: str) -> Invocation | None:
@@ -78,7 +87,7 @@ class MemoryDurableRuntimeStore:
         stale_seconds: float,
     ) -> Invocation | None:
         state = self.states.get(invocation_id)
-        if state is None or not self._is_recoverable(state, stale_seconds):
+        if state is None or not self._is_stale(state, stale_seconds):
             return None
         return self._claim(state)
 
@@ -171,9 +180,7 @@ class MemoryDurableRuntimeStore:
         self._append_event(claimed.invocation_id, claimed.attempt, {"type": "run.started"})
         return copy.deepcopy(claimed)
 
-    def _is_recoverable(self, state: Invocation, stale_seconds: float) -> bool:
-        if state.status == InvocationStatus.QUEUED:
-            return True
+    def _is_stale(self, state: Invocation, stale_seconds: float) -> bool:
         if state.status != InvocationStatus.ACTIVE:
             return False
         heartbeat_at = self._heartbeat_at.get(state.invocation_id)
@@ -253,6 +260,20 @@ def test_runtime_factories_select_execution_capabilities() -> None:
     assert durable.is_durable is True
 
 
+def test_runtime_from_environment_resolves_store_before_factory_selection(monkeypatch) -> None:
+    async def execute(request: JsonValue, context: InvocationAttemptContext) -> JsonValue:
+        return request
+
+    store = InMemoryRuntimeStore()
+    resolve = lambda: store
+    monkeypatch.setattr(runtime_module, "runtime_store_from_environment", resolve)
+
+    runtime = Runtime.from_environment(execute)
+
+    assert runtime.runtime_store is store
+    assert isinstance(runtime.executor, LocalInvocationExecutor)
+
+
 def test_local_factory_rejects_durable_store() -> None:
     async def execute(request: JsonValue, context: InvocationAttemptContext) -> JsonValue:
         return request
@@ -266,7 +287,7 @@ def test_durable_factory_rejects_local_store() -> None:
         return request
 
     with pytest.raises(TypeError, match="DurableRuntimeStore"):
-        Runtime.durable(execute, runtime_store=InMemoryRuntimeStore())
+        Runtime.durable(execute, runtime_store=cast(Any, InMemoryRuntimeStore()))
 
 
 @pytest.mark.asyncio
@@ -433,6 +454,29 @@ async def test_durable_runtime_does_not_recover_without_a_recovery_hook() -> Non
 
 
 @pytest.mark.asyncio
+async def test_durable_runtime_starts_persisted_queued_work_without_recovery_hook() -> None:
+    contexts = []
+
+    async def execute(request: dict, context: InvocationAttemptContext) -> dict:
+        contexts.append(context)
+        return {"output": request["input"]}
+
+    store = MemoryDurableRuntimeStore()
+    await store.accept("session-1", {"input": "persisted before restart"})
+    runtime = make_durable_runtime(execute, store, recover=False)
+
+    await runtime.start()
+    try:
+        assert await runtime.wait("session-1") == {"output": "persisted before restart"}
+    finally:
+        await runtime.stop()
+
+    assert len(contexts) == 1
+    assert contexts[0].attempt == 1
+    assert contexts[0].is_recovery is False
+
+
+@pytest.mark.asyncio
 async def test_executor_failure_is_persisted_as_terminal_state() -> None:
     async def execute(request: dict, context: InvocationAttemptContext) -> dict:
         raise RuntimeError("boom")
@@ -466,6 +510,24 @@ async def test_submit_returns_before_background_execution_finishes() -> None:
         assert state.status == InvocationStatus.QUEUED
         release.set()
         assert await runtime.wait("session-1") == {"output": "done"}
+    finally:
+        await runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_get_invocation_schedules_queued_work_accepted_by_another_process() -> None:
+    async def execute(request: dict, context: InvocationAttemptContext) -> dict:
+        return {"output": request["input"]}
+
+    store = InMemoryRuntimeStore()
+    runtime = make_local_runtime(execute, store)
+    await runtime.start()
+    try:
+        await store.accept("session-1", {"input": "accepted elsewhere"})
+        state = await runtime.get_invocation("session-1")
+        assert state is not None
+        assert state.status == InvocationStatus.QUEUED
+        assert await runtime.wait("session-1") == {"output": "accepted elsewhere"}
     finally:
         await runtime.stop()
 

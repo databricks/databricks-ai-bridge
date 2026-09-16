@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from databricks_mason.runtime.execution import (
     AttemptExecution,
@@ -15,7 +16,7 @@ from databricks_mason.runtime.execution import (
 from databricks_mason.runtime.store import (
     InMemoryRuntimeStore,
     RuntimeStore,
-    default_runtime_store,
+    runtime_store_from_environment,
 )
 from databricks_mason.runtime.types import (
     Invocation,
@@ -27,6 +28,9 @@ from databricks_mason.runtime.types import (
     JsonValue,
 )
 
+if TYPE_CHECKING:
+    from databricks_mason.runtime.durability.store import DurableRuntimeStore
+
 
 class Runtime:
     """Coordinate one Mason process's invocation lifecycle.
@@ -34,8 +38,9 @@ class Runtime:
     A Runtime Store owns invocation state: requests, status, events, and results. An invocation
     executor turns queued state into agent attempts. This facade accepts idempotent requests,
     delegates scheduling to the executor, and polls the store for foreground results or event replay.
-    Use :meth:`local` for process-local execution, :meth:`durable` for a Lakebase-backed store, or
-    :meth:`from_store` when the environment chooses the store implementation.
+    Use :meth:`local` for process-local execution, :meth:`durable` for a durable store,
+    :meth:`from_store` for an explicit store, or :meth:`from_environment` when Mason configures the
+    store through the process environment.
     """
 
     def __init__(
@@ -82,7 +87,7 @@ class Runtime:
         cls,
         execute_fn: InvocationExecutorFn,
         *,
-        runtime_store: RuntimeStore | None = None,
+        runtime_store: DurableRuntimeStore,
         recovery_enabled: Callable[[], bool] | None = None,
         heartbeat_seconds: float = 3.0,
         stale_seconds: float = 10.0,
@@ -98,15 +103,14 @@ class Runtime:
         from databricks_mason.runtime.durability.execution import DurableInvocationExecutor
         from databricks_mason.runtime.durability.store import DurableRuntimeStore
 
-        store = default_runtime_store() if runtime_store is None else runtime_store
-        if not isinstance(store, DurableRuntimeStore):
+        if not isinstance(runtime_store, DurableRuntimeStore):
             raise TypeError("Runtime.durable requires a DurableRuntimeStore")
-        execution = AttemptExecution(execute_fn, runtime_store=store)
+        execution = AttemptExecution(execute_fn, runtime_store=runtime_store)
         return cls(
-            runtime_store=store,
+            runtime_store=runtime_store,
             executor=DurableInvocationExecutor(
                 execution,
-                runtime_store=store,
+                runtime_store=runtime_store,
                 recovery_enabled=recovery_enabled or (lambda: True),
                 heartbeat_seconds=heartbeat_seconds,
                 stale_seconds=stale_seconds,
@@ -120,7 +124,7 @@ class Runtime:
         cls,
         execute_fn: InvocationExecutorFn,
         *,
-        runtime_store: RuntimeStore | None = None,
+        runtime_store: RuntimeStore,
         recovery_enabled: Callable[[], bool] | None = None,
         heartbeat_seconds: float = 3.0,
         stale_seconds: float = 10.0,
@@ -128,20 +132,41 @@ class Runtime:
         poll_seconds: float = 1.0,
     ) -> Runtime:
         """Construct the local or durable Runtime required by the selected Runtime Store."""
-        store = default_runtime_store() if runtime_store is None else runtime_store
         from databricks_mason.runtime.durability.store import DurableRuntimeStore
 
-        if isinstance(store, DurableRuntimeStore):
+        if isinstance(runtime_store, DurableRuntimeStore):
             return cls.durable(
                 execute_fn,
-                runtime_store=store,
+                runtime_store=runtime_store,
                 recovery_enabled=recovery_enabled,
                 heartbeat_seconds=heartbeat_seconds,
                 stale_seconds=stale_seconds,
                 scan_seconds=scan_seconds,
                 poll_seconds=poll_seconds,
             )
-        return cls.local(execute_fn, runtime_store=store, poll_seconds=poll_seconds)
+        return cls.local(execute_fn, runtime_store=runtime_store, poll_seconds=poll_seconds)
+
+    @classmethod
+    def from_environment(
+        cls,
+        execute_fn: InvocationExecutorFn,
+        *,
+        recovery_enabled: Callable[[], bool] | None = None,
+        heartbeat_seconds: float = 3.0,
+        stale_seconds: float = 10.0,
+        scan_seconds: float = 3.0,
+        poll_seconds: float = 1.0,
+    ) -> Runtime:
+        """Construct the Runtime selected by Mason's process environment."""
+        return cls.from_store(
+            execute_fn,
+            runtime_store=runtime_store_from_environment(),
+            recovery_enabled=recovery_enabled,
+            heartbeat_seconds=heartbeat_seconds,
+            stale_seconds=stale_seconds,
+            scan_seconds=scan_seconds,
+            poll_seconds=poll_seconds,
+        )
 
     @property
     def is_durable(self) -> bool:
@@ -199,9 +224,12 @@ class Runtime:
         return await self.wait(invocation_id, timeout=timeout)
 
     async def get_invocation(self, invocation_id: str) -> Invocation | None:
-        """Return the current state for an invocation ID."""
+        """Return current state and ensure queued first-attempt work is scheduled locally."""
         self._require_started()
-        return await self.runtime_store.get(invocation_id)
+        state = await self.runtime_store.get(invocation_id)
+        if state is not None:
+            self.executor.ensure_scheduled(state)
+        return state
 
     async def wait(
         self,

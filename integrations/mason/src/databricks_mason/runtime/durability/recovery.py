@@ -21,7 +21,7 @@ class RecoverySchedulerTarget(Protocol):
 
 
 class RecoveryScheduler:
-    """Find queued or stale durable attempts when recovery is enabled."""
+    """Find stale active attempts when recovery is enabled."""
 
     def __init__(
         self,
@@ -60,9 +60,7 @@ class RecoveryScheduler:
     async def _scan_loop(self) -> None:
         while True:
             try:
-                invocation_ids = await self._runtime_store.recoverable_invocation_ids(
-                    self._stale_seconds
-                )
+                invocation_ids = await self._runtime_store.stale_invocation_ids(self._stale_seconds)
                 for invocation_id in invocation_ids:
                     self._scheduler.ensure_recovery_scheduled(invocation_id)
             except asyncio.CancelledError:

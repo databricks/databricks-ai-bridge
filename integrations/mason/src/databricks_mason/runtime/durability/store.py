@@ -12,8 +12,12 @@ from databricks_mason.runtime.types import Invocation
 class DurableRuntimeStore(RuntimeStore, Protocol):
     """Extend Runtime Store operations with durable recovery coordination."""
 
-    async def recoverable_invocation_ids(self, stale_seconds: float) -> list[str]:
-        """List queued invocations and active invocations whose heartbeat is stale."""
+    async def queued_invocation_ids(self) -> list[str]:
+        """List invocations waiting to begin their first attempt."""
+        ...
+
+    async def stale_invocation_ids(self, stale_seconds: float) -> list[str]:
+        """List active invocations whose heartbeat is stale."""
         ...
 
     async def claim_recoverable(
@@ -21,7 +25,7 @@ class DurableRuntimeStore(RuntimeStore, Protocol):
         invocation_id: str,
         stale_seconds: float,
     ) -> Invocation | None:
-        """Claim queued or stale work and return its new active attempt."""
+        """Replace a stale active attempt and return the new active attempt."""
         ...
 
     async def heartbeat(self, invocation_id: str, attempt: int) -> bool:

@@ -346,7 +346,7 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
             )
         return self._to_invocation(row) if row is not None else None
 
-    async def recoverable_invocation_ids(self, stale_seconds: float) -> list[str]:
+    async def queued_invocation_ids(self) -> list[str]:
         async with self._engine.connect() as connection:
             rows = (
                 (
@@ -356,10 +356,29 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                         SELECT invocation_id
                         FROM {self._table}
                         WHERE status='QUEUED'
-                           OR (status='ACTIVE' AND (
+                        ORDER BY invocation_id
+                        """
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        return list(rows)
+
+    async def stale_invocation_ids(self, stale_seconds: float) -> list[str]:
+        async with self._engine.connect() as connection:
+            rows = (
+                (
+                    await connection.execute(
+                        text(
+                            f"""
+                        SELECT invocation_id
+                        FROM {self._table}
+                        WHERE status='ACTIVE' AND (
                                heartbeat_at IS NULL
                                OR heartbeat_at < NOW() - (:stale * INTERVAL '1 second')
-                           ))
+                           )
                         ORDER BY heartbeat_at NULLS FIRST
                         """
                         ),
@@ -380,7 +399,7 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
         invocation_id: str,
         stale_seconds: float,
     ) -> Invocation | None:
-        """Claim a queued or stale invocation for a replacement attempt."""
+        """Replace a stale active attempt."""
         return await self._claim(invocation_id, stale_seconds=stale_seconds)
 
     async def _claim(
@@ -394,11 +413,10 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
         parameters: dict[str, str | float] = {"invocation_id": invocation_id}
         if stale_seconds is not None:
             eligibility = """
-                status='QUEUED'
-                OR (status='ACTIVE' AND (
+                status='ACTIVE' AND (
                     heartbeat_at IS NULL
                     OR heartbeat_at < NOW() - (:stale * INTERVAL '1 second')
-                ))
+                )
             """
             parameters["stale"] = stale_seconds
         async with self._engine.begin() as connection:
