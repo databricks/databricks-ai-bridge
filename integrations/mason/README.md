@@ -20,17 +20,15 @@ From source:
 pip install 'git+https://github.com/databricks/databricks-ai-bridge.git#subdirectory=integrations/mason'
 ```
 
-The CLI installation intentionally excludes HTTP-server and agent-framework dependencies.
-Mason-generated projects declare a framework dependency bundle automatically. The existing
-`runtime` extra bundles LangGraph dependencies; `runtime-openai` bundles OpenAI Agents dependencies.
-Both include the shared HTTP runtime. To use one of these bundles in an existing agent:
+The base package includes the CLI, store SDK, and `AgentApp` HTTP runtime. Add a framework extra
+for the LangGraph or OpenAI Agents adapter. Generated projects declare the matching extra:
 
 ```sh
 # LangGraph
-pip install 'databricks-mason[runtime]'
+pip install 'databricks-mason[langgraph]'
 
 # OpenAI Agents SDK
-pip install 'databricks-mason[runtime-openai]'
+pip install 'databricks-mason[openai]'
 ```
 
 ## Shell completion
