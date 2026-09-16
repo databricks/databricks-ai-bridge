@@ -343,6 +343,16 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           python-version: "3.12"
-      - name: Run mason functional tests
+      # Build the wheel and run the functional tier from a venv it's installed into, so the tests
+      # exercise the shipped artifact (a packaging gap fails here) rather than an editable source
+      # tree. `mason` on PATH is the wheel's console script; MASON_WHEEL pins the scaffolded agent's
+      # databricks-mason at the same wheel.
+      - name: Build and install the mason wheel
         working-directory: integrations/mason
-        run: uv run --exact --group tests pytest tests/functional/
+        run: |
+          uv build --wheel --out-dir dist
+          uv venv .venv-functional
+          uv pip install --python .venv-functional/bin/python "$(ls dist/*.whl)" --group tests
+      - name: Run mason functional tests against the wheel
+        working-directory: integrations/mason
+        run: MASON_WHEEL="$(ls "$PWD"/dist/*.whl)" .venv-functional/bin/pytest tests/functional/
