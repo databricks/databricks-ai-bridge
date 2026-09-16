@@ -462,8 +462,11 @@ def test_deploy_custom_server_removes_stale_runtime_store_wiring(
             {
                 "command": ["x"],
                 "env": [
-                    {"name": "DATABRICKS_MASON_RUNTIME_ENDPOINT", "value": "old-endpoint"},
-                    {"name": "DATABRICKS_MASON_RUNTIME_SCHEMA", "value": "old-schema"},
+                    {
+                        "name": "DATABRICKS_MASON_RUNTIME_STORE_LAKEBASE_ENDPOINT",
+                        "value": "old-endpoint",
+                    },
+                    {"name": "DATABRICKS_MASON_RUNTIME_STORE_SCHEMA", "value": "old-schema"},
                     {"name": "USER_ENV", "value": "keep"},
                 ],
             }
@@ -507,8 +510,8 @@ def test_deploy_custom_server_removes_stale_runtime_store_wiring(
         for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
     }
     assert env["USER_ENV"] == "keep"
-    assert "DATABRICKS_MASON_RUNTIME_ENDPOINT" not in env
-    assert "DATABRICKS_MASON_RUNTIME_SCHEMA" not in env
+    assert "DATABRICKS_MASON_RUNTIME_STORE_LAKEBASE_ENDPOINT" not in env
+    assert "DATABRICKS_MASON_RUNTIME_STORE_SCHEMA" not in env
 
 
 def test_deploy_mason_server_provisions_runtime_store(tmp_path: pathlib.Path, monkeypatch) -> None:
@@ -546,10 +549,10 @@ def test_deploy_mason_server_provisions_runtime_store(tmp_path: pathlib.Path, mo
         entry["name"]: entry["value"]
         for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
     }
-    assert "DATABRICKS_MASON_RUNTIME_STORE_LAKEBASE_ENDPOINT" not in env
+    assert "DATABRICKS_MASON_RUNTIME_STORE_LAKEBASE_ENDPOINT" in env
     assert deployed_env is not None
-    assert "DATABRICKS_MASON_RUNTIME_STORE_LAKEBASE_ENDPOINT" not in deployed_env
-    assert "DATABRICKS_MASON_RUNTIME_STORE_SCHEMA" not in deployed_env
+    assert "DATABRICKS_MASON_RUNTIME_STORE_LAKEBASE_ENDPOINT" in deployed_env
+    assert "DATABRICKS_MASON_RUNTIME_STORE_SCHEMA" in deployed_env
 
 
 def test_deploy_runtime_store_uses_dedicated_backend_with_session_store(
@@ -610,7 +613,7 @@ def test_deploy_runtime_store_uses_dedicated_backend_with_session_store(
     }
     assert env["DATABRICKS_MASON_RUNTIME_STORE_LAKEBASE_ENDPOINT"] == backend.endpoint_path
     assert env["DATABRICKS_MASON_RUNTIME_STORE_SCHEMA"] == (
-        deploy_mod.lakebase_durability_store.get_lakebase_schema("agent-mason-myapp")
+        deploy_mod.lakebase_store.get_lakebase_schema("agent-mason-myapp")
     )
 
 

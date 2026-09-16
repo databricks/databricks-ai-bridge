@@ -575,16 +575,18 @@ def deploy(
     if session_store:
         env_updates[SESSION_STORE_ENV] = session_store
 
-    durability_backend = None
-    durability_enabled = bool(project and project.durability_enabled)
-    if durability_enabled:
-        durability_schema = lakebase_durability_store.get_lakebase_schema(name)
-        durability_backend = lakebase_durability_store.get_or_create_backend(
-            name, obj.profile, create=True
+    runtime_backend = _reconcile_runtime_store(project, name, obj.profile)
+    runtime_env_removals = frozenset()
+    runtime_resource_names = frozenset()
+    if runtime_backend is not None:
+        env_updates[RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV] = runtime_backend.endpoint_path
+        env_updates[RUNTIME_STORE_SCHEMA_ENV] = runtime_backend.schema
+        provisioned["Runtime Store"] = runtime_backend.database_path
+    elif project is not None and project.server == "custom":
+        runtime_env_removals = frozenset(
+            {RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV, RUNTIME_STORE_SCHEMA_ENV}
         )
-        env_updates[RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV] = durability_backend.endpoint_path
-        env_updates[RUNTIME_STORE_SCHEMA_ENV] = durability_schema
-        provisioned["Agent durability store"] = durability_backend.database_path
+        runtime_resource_names = frozenset({lakebase_store.backend(name).resource_name})
     if pip_index_url:
         for env in _PIP_INDEX_ENVS:
             env_updates[env] = pip_index_url

@@ -27,11 +27,7 @@ from databricks_mason.cli.deploy import (
 )
 from databricks_mason.databricks_cli import _databricks
 from databricks_mason.errors import AgentCliError
-from databricks_mason.project_config import (
-    is_custom_server_template,
-    load_project_metadata,
-    require_managed_tool_support,
-)
+from databricks_mason.project_config import require_managed_tool_support
 from databricks_mason.runtime.store import RUNTIME_STORE_LOCAL_ENV
 from databricks_mason.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
 
