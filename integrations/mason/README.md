@@ -20,16 +20,8 @@ From source:
 pip install 'git+https://github.com/databricks/databricks-ai-bridge.git#subdirectory=integrations/mason'
 ```
 
-The base package includes the CLI, store SDK, and `AgentApp` HTTP runtime. Add a framework extra
-for the LangGraph or OpenAI Agents adapter. Generated projects declare the matching extra:
-
-```sh
-# LangGraph
-pip install 'databricks-mason[langgraph]'
-
-# OpenAI Agents SDK
-pip install 'databricks-mason[openai]'
-```
+The base package includes the CLI, store SDK, and `AgentApp` HTTP runtime. Generated projects
+declare their framework dependencies automatically.
 
 ## Shell completion
 Add this to `~/.zshrc`:
