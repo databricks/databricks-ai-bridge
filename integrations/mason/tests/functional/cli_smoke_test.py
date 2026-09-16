@@ -3,8 +3,10 @@
 These complement the in-process CliRunner unit tests, which already own detailed behavior (arg
 handling, help text, agent.toml effects). CliRunner imports the command modules in-process, so it
 can't catch a regression that only shows up under the real console script — a broken entry point, a
-packaging/dependency gap, an import that fails only when installed. Running the actual `mason` binary
-here does. Everything runs with an isolated HOME and no Databricks config, so no workspace is used.
+packaging/dependency gap, an import that fails only when installed. This runs the `mason` on PATH,
+next to the interpreter running the tests: CI installs the built wheel and runs pytest from that
+venv (so CI exercises the shipped artifact), while a local `uv run` provides the editable install.
+Everything runs with an isolated HOME and no Databricks config, so no workspace is used.
 """
 
 from __future__ import annotations
