@@ -106,18 +106,51 @@ the existing CLI commands remain separate.
 ## Runtime
 
 `AgentApp` runs your agent through one HTTP API for synchronous, streaming, and background
-invocations. Register an invoke handler, emit progress events, and return a result. You can also
-add your own FastAPI endpoints.
+invocations. Register an `@app.invoke` handler, publish progress with `await context.emit(event)`,
+and return a JSON result. You can also add your own FastAPI endpoints.
 
-`mason dev` keeps execution state in process. For projects with `[agent].server = "mason"`,
-`mason deploy` provisions a persistent Runtime Store for requests, status, events, and results.
-Register a recovery handler to restart interrupted work after worker failures. Session and Memory
-Stores separately preserve the state used by your agent.
+Start from a template, edit the agent code in `agent/`, and run it locally before deploying:
+
+```sh
+mason init my-agent --framework langgraph --server mason --profile <profile>
+cd my-agent
+mason dev
+# Stop the local server when ready to deploy.
+mason --profile <profile> deploy my-agent
+```
+
+Use `--framework openai` for OpenAI Agents. Templates keep agent code separate from the runtime
+adapter and declare default Session and Memory Store bindings in `agent.toml`.
+
+Each managed run is an **invocation**. Send a client-generated UUID `id` and your agent's `input`:
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "input": {"messages": [{"role": "user", "content": "Hello"}]},
+  "background": true,
+  "stream": true
+}
+```
+
+| Endpoint | Behavior |
+| --- | --- |
+| `POST /api/invocations` | Defaults to synchronous execution: `200` with the result under `output`. `stream: true` returns SSE events. `background: true` returns `202` with a status URL; adding `stream: true` also includes an events URL. |
+| `GET /api/invocations/{id}` | Returns the invocation status and, when completed, its output. |
+| `GET /api/invocations/{id}/events?after={cursor}` | Streams events after the last received event ID, allowing clients to reconnect. |
+
+The UUID also acts as an idempotency key: repeating the same request reuses the existing invocation
+while its record is retained; using the ID for a different request returns `409`.
+
+`mason dev` keeps execution state in process and loses it on restart. For projects with
+`[agent].server = "mason"`, `mason deploy` provisions a persistent Runtime Store for requests,
+status, events, and results. Register `@app.recover` to restart interrupted work after worker
+failures. Recovery is at-least-once, so external side effects must be idempotent. Session and
+Memory Stores separately preserve the state used by your agent.
 
 Use `server = "custom"` to deploy your own HTTP server without provisioning a Runtime Store.
-
-See the [runtime guide](src/databricks_mason/runtime/README.md) for setup, agent hooks, the
-invocation API, and recovery behavior.
+See the [runtime guide](src/databricks_mason/runtime/README.md) for agent hooks, full API examples,
+and recovery behavior.
 
 ## Commands
 
