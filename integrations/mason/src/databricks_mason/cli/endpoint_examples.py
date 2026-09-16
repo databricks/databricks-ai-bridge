@@ -2,28 +2,17 @@
 
 from __future__ import annotations
 
+import shlex
+
 
 def agent_invoke_command(target: str, *, uses_runtime_api: bool) -> str:
-    """Build a narrow, shell-safe command that fits in Mason's success panel."""
+    """Build a single-line example, generating a fresh runtime invocation ID on every run."""
     path = "/api/invocations" if uses_runtime_api else "/invocations"
-    lines = ["INVOCATION_ID=$(uuidgen)"] if uses_runtime_api else []
-    lines.extend(
-        [
-            "mason endpoint invoke \\",
-            f"  {target} \\",
-            f"  --path {path} \\",
-            '  --json "{',
-        ]
-    )
+    body = '{"input":[{"role":"user","content":"hi"}]}'
     if uses_runtime_api:
-        lines.append('    \\"id\\":\\"$INVOCATION_ID\\",')
-    lines.extend(
-        [
-            '    \\"input\\":[{',
-            '      \\"role\\":\\"user\\",',
-            '      \\"content\\":\\"hi\\"',
-            "    }]",
-            '  }"',
-        ]
-    )
-    return "\n".join(lines)
+        # Double quotes allow command substitution while preserving the JSON's literal quotes.
+        body = '{"id":"$(uuidgen)",' + body[1:]
+        json_arg = '"' + body.replace('"', r"\"") + '"'
+    else:
+        json_arg = shlex.quote(body)
+    return f"mason endpoint invoke {target} --path {path} --json {json_arg}"

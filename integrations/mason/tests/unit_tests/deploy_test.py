@@ -741,27 +741,29 @@ def test_deploy_reports_app_url(tmp_path: pathlib.Path, monkeypatch):
     assert captured["url"] == "https://myapp-123.databricksapps.com"
 
 
-@pytest.mark.parametrize(
-    ("server", "path", "uses_invocation_id"),
-    [
-        ("mason", "/api/invocations", True),
-        ("custom", "/invocations", False),
-    ],
-)
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("server,chat_ui", [("mason", True), ("mason", False), ("custom", False)])
 def test_deploy_recommends_invoking_deployed_agent(
     tmp_path: pathlib.Path,
     monkeypatch,
+    framework: str,
     server: str,
-    path: str,
-    uses_invocation_id: bool,
+    chat_ui: bool,
 ):
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _write_agent_manifest(src, server=server)
+    _write_agent_manifest(src, framework=framework, server=server)
+    if chat_ui:
+        (src / "runtime").mkdir()
+        (src / "runtime" / "ui.py").write_text("# chat UI\n")
+    selected = deploy_mod.lakebase_store.backend("agent-mason-myapp")
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(deploy_mod.lakebase_store, "get_or_create_backend", lambda *a, **k: None)
+    monkeypatch.setattr(
+        deploy_mod.lakebase_store, "get_or_create_backend", lambda *a, **k: selected
+    )
+    monkeypatch.setattr(deploy_mod, "apply_postgres_resources", lambda *a, **k: None)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
@@ -775,11 +777,22 @@ def test_deploy_recommends_invoking_deployed_agent(
     )
 
     assert result.exit_code == 0, result.output
-    output = " ".join(result.output.split())
-    assert "mason endpoint invoke" in output
-    assert "agent-mason-myapp" in output
-    assert f"--path {path}" in output
-    assert ("INVOCATION_ID=$(uuidgen)" in output) is uses_invocation_id
+    commands = [line for line in result.output.splitlines() if line.startswith("mason endpoint")]
+    assert len(commands) == 1, result.output
+    command = commands[0]
+    path = "/api/invocations" if server == "mason" else "/invocations"
+    assert f"mason endpoint invoke agent-mason-myapp --path {path} --json " in command
+    assert "│" not in command
+    assert ("$(uuidgen)" in command) is (server == "mason")
+    assert "Runtime Store" not in result.output
+    assert selected.database_path not in result.output
+    env = {
+        entry["name"]: entry["value"]
+        for entry in yaml.safe_load((src / "app.yaml").read_text()).get("env", [])
+    }
+    if server == "mason":
+        # Hiding the display field must not disable the deployed runtime's backend.
+        assert env["DATABRICKS_MASON_RUNTIME_STORE_LAKEBASE_ENDPOINT"] == selected.endpoint_path
 
 
 def test_deploy_sync_keeps_directly_edited_agent_manifest(tmp_path: pathlib.Path, monkeypatch):

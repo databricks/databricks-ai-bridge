@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from rich.console import Console
 
 from databricks_mason import render, timefmt
@@ -129,6 +130,24 @@ def test_success_single_next_step_uses_singular_heading():
     out = buf.getvalue()
     assert "Next step" in out
     assert "Next steps" not in out  # singular when there is exactly one step
+
+
+@pytest.mark.parametrize("width", [40, 80, 200])
+@pytest.mark.parametrize("terminal", [False, True])
+def test_success_commands_are_standalone_unwrapped_lines(width: int, terminal: bool):
+    buf = io.StringIO()
+    con = Console(file=buf, width=width, no_color=True, force_terminal=terminal)
+    command = "mason endpoint invoke --url http://localhost:8000 --path /invocations " + (
+        '--json \'{"input":[{"role":"user","content":"hi"}]}\''
+    )
+    render.success("Started", next_steps=[(command, "Send a test request")], con=con)
+
+    lines = buf.getvalue().splitlines()
+    # No stripping, joining, or removal of frame characters: copy the entire printed line.
+    assert command in lines
+    command_index = lines.index(command)
+    assert lines[command_index - 1] == "Send a test request"
+    assert any(line.startswith("╰") for line in lines[:command_index])
 
 
 def test_success_prose_only_next_steps():

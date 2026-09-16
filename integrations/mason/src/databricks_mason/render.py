@@ -308,12 +308,12 @@ def success(
     next_steps: "Optional[Sequence[str | tuple[str, str]]]" = None,
     con: Optional[Console] = None,
 ) -> None:
-    """A green success panel with optional details and a Next step(s) list.
+    """A green success panel with optional details, followed by a Next step(s) list.
 
-    Each next step is either a ``(command, description)`` pair — the command is shown in cyan (the
-    actionable accent) with the description in secondary — or a bare string for a non-command
-    instruction (e.g. ``"Open http://localhost:8000"``), rendered as prose. Commands are
-    **copy-safe**: no ``$`` prompt prefix, so they paste straight into a shell. The heading is
+    Each next step is either a ``(command, description)`` pair — the description is shown above
+    the cyan command — or a bare string for a non-command instruction, rendered as prose.
+    Commands are outside the panel, without prompts, padding, or hard wrapping, so copying a
+    whole command line preserves its shell syntax even in narrow terminals. The heading is
     "Next step" or "Next steps", chosen automatically from the count.
     """
     con = con or _stdout
@@ -327,23 +327,19 @@ def success(
             grid.add_row(key, _cell(value))
         body.append(grid)
 
+    con.print()
+    con.print(Panel(Group(*body), border_style=SUCCESS, box=box.ROUNDED))
+
     if next_steps:
         # Singular vs plural from the count, per the design.
         heading = "Next step" if len(next_steps) == 1 else "Next steps"
-        body.append(Text(heading, style=SECONDARY))
-        # A two-column grid aligns every command's description at the same offset.
-        steps = Table.grid(padding=(0, 2))
-        steps.add_column()
-        steps.add_column(style=SECONDARY)
+        con.print(Text(heading, style=SECONDARY))
         for step in next_steps:
             if isinstance(step, tuple):
-                # The actionable command is cyan; its description trails in secondary.
                 command, description = step
-                steps.add_row(Text(command, style=COMMAND), description)
+                con.print(Text(description, style=SECONDARY))
+                # Let the terminal soft-wrap; Rich must not insert newlines into shell syntax.
+                con.print(Text(command, style=COMMAND), soft_wrap=True)
             else:
                 # Prose (e.g. "Open <url>") renders plainly — no command accent, no prompt marker.
-                steps.add_row(Text(step), "")
-        body.append(steps)
-
-    con.print()
-    con.print(Panel(Group(*body), border_style=SUCCESS, box=box.ROUNDED))
+                con.print(Text(step))
