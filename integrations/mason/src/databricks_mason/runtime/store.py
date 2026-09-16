@@ -214,9 +214,8 @@ class InMemoryRuntimeStore(RuntimeStore):
 def runtime_store_from_environment() -> RuntimeStore:
     """Construct the Runtime Store selected by the process environment.
 
-    ``mason dev`` sets the local marker to override any inherited Lakebase variables. A deployed
-    Mason server receives both Lakebase variables from ``mason deploy``. Direct ASGI use and tests
-    have neither, and intentionally use process-local state.
+    The local marker overrides any inherited Lakebase variables. When both Lakebase variables are
+    set, the runtime uses durable storage. Otherwise, it intentionally uses process-local state.
     """
     if os.getenv(RUNTIME_STORE_LOCAL_ENV, "").lower() == "true":
         return InMemoryRuntimeStore()
