@@ -574,7 +574,6 @@ def deploy(
     if runtime_backend is not None:
         env_updates[RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV] = runtime_backend.endpoint_path
         env_updates[RUNTIME_STORE_SCHEMA_ENV] = runtime_backend.schema
-        provisioned["Runtime Store"] = runtime_backend.database_path
     if pip_index_url:
         for env in _PIP_INDEX_ENVS:
             env_updates[env] = pip_index_url
