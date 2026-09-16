@@ -51,6 +51,37 @@ def test_create_memory_store(workspace_client):
 
 
 @mock.patch("databricks.sdk.WorkspaceClient")
+@pytest.mark.parametrize(
+    ("description", "metadata", "expected_body"),
+    [
+        (None, None, {}),
+        (
+            "Support history",
+            {"environment": "poc"},
+            {"description": "Support history", "metadata": {"environment": "poc"}},
+        ),
+        ("", {}, {"description": "", "metadata": {}}),
+    ],
+)
+def test_create_session_store_uses_transitional_request(
+    workspace_client, description, metadata, expected_body
+):
+    client, do = _client(workspace_client)
+    do.return_value = {"session_store_name": "support-history", "session_store_id": "store-uuid"}
+
+    store = client.create_session_store("support-history", description, metadata)
+
+    do.assert_called_once_with(
+        "POST",
+        "/api/2.0/agents/session-stores",
+        query={"session_store_name": "support-history", "session_store_id": "support-history"},
+        body=expected_body,
+    )
+    assert store.session_store_name == "support-history"
+    assert store.session_store_id == "store-uuid"
+
+
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_list_memory_stores_query(workspace_client):
     c, do = _client(workspace_client)
     c.list_memory_stores(page_size=10)

@@ -21,7 +21,6 @@ if TYPE_CHECKING:
     from databricks.sdk import WorkspaceClient
 
 _BASE = "/api/agents/v1"
-# ExtractMemories only binds the 2.0 path (no /agents/v1 alias), so it needs its own base.
 _BASE_2_0 = "/api/2.0/agents"
 _MCP_SERVICES_PATH = "/api/2.1/unity-catalog/mcp-services"
 
@@ -386,8 +385,8 @@ class _MasonApiClient:
             models.SessionStore,
             self._do(
                 "POST",
-                f"{_BASE}/session-stores",
-                query={"session_store_name": name},
+                f"{_BASE_2_0}/session-stores",
+                query={"session_store_name": name, "session_store_id": name},
                 body=body,
                 safe_to_retry=retry_transient,
             ),
