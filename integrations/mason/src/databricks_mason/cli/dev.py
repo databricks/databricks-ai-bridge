@@ -17,8 +17,7 @@ import yaml
 
 from databricks_mason import render
 from databricks_mason.agent_project import AgentProject
-from databricks_mason.databricks_cli import _databricks
-from databricks_mason.deploy import (
+from databricks_mason.cli.deploy import (
     _load_project,
     _resolve_memory_store,
     _upsert_manifest_env,
@@ -26,6 +25,7 @@ from databricks_mason.deploy import (
     resolve_trace_experiment_id,
     store_bindings,
 )
+from databricks_mason.databricks_cli import _databricks
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import (
     is_custom_server_template,

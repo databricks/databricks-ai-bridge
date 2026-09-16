@@ -32,6 +32,13 @@ from databricks_mason.app_resources import (
     apply_experiment_resource,
     apply_postgres_resources,
 )
+from databricks_mason.cli.tracing import (
+    TRACES_EXPERIMENT_ID_ENV,
+    TRACES_TRACKING_URI_ENV,
+    create_experiment_idempotent,
+    default_experiment_name,
+    experiment_url,
+)
 from databricks_mason.databricks_cli import _databricks
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import require_managed_tool_support
@@ -41,13 +48,6 @@ from databricks_mason.runtime.store import (
     RUNTIME_STORE_SCHEMA_ENV,
 )
 from databricks_mason.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
-from databricks_mason.tracing import (
-    TRACES_EXPERIMENT_ID_ENV,
-    TRACES_TRACKING_URI_ENV,
-    create_experiment_idempotent,
-    default_experiment_name,
-    experiment_url,
-)
 
 # TEMPORARY: the Apps build environment currently can't reach the internal pypi proxy, so builds
 # time out installing dependencies. Point the build at public PyPI (sanctioned interim workaround)

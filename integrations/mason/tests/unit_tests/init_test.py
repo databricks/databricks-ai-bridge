@@ -14,7 +14,7 @@ import pytest
 import tomli
 from click.testing import CliRunner
 
-from databricks_mason import init as init_mod
+from databricks_mason.cli import init as init_mod
 from databricks_mason.errors import AgentCliError
 
 

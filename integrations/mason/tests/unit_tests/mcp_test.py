@@ -6,7 +6,7 @@ import json
 
 from click.testing import CliRunner
 
-from databricks_mason.mcp import mcp
+from databricks_mason.cli.mcp import mcp
 
 
 class _Client:

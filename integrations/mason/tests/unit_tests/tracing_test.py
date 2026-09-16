@@ -14,8 +14,8 @@ from unittest import mock
 import pytest
 from click.testing import CliRunner
 
-from databricks_mason import tracing as tracing_mod
 from databricks_mason.agent_project import AgentProject
+from databricks_mason.cli import tracing as tracing_mod
 from databricks_mason.errors import AgentCliError
 
 _AGENT_TOML = 'schema_version = 1\n\n[agent]\nframework = "openai"\n'
