@@ -1,6 +1,6 @@
 import pytest
 from databricks_mason import AgentApp
-from databricks_mason.runtime.durability.store import InMemoryDurabilityStore
+from databricks_mason.runtime.store import InMemoryRuntimeStore
 from fastapi.testclient import TestClient
 from runtime import ui
 
@@ -101,9 +101,9 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
     async def invoke_handler(request, context):
         return {"output": [], "session_id": context.session_id}
 
-    app = AgentApp(durable_runtime=True, durability_store=InMemoryDurabilityStore())
+    app = AgentApp(runtime_store=InMemoryRuntimeStore())
     app.invoke(invoke_handler)
-    app.on_recovery(invoke_handler)
+    app.recover(invoke_handler)
     ui.install_ui(app)
     client = TestClient(app, base_url="https://testserver")
     client.cookies.set("__Host-databricks-app-router", session_id)

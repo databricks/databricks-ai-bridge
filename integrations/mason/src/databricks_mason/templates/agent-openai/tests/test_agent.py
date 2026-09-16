@@ -251,7 +251,7 @@ async def test_invoke_and_recovery_use_same_application_payload(monkeypatch):
     context = object()
 
     await agent_module.invoke(payload, context)
-    await agent_module.on_recovery(payload, context)
+    await agent_module.recover(payload, context)
 
     assert calls == [(payload, context), (payload, context)]
 

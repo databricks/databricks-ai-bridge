@@ -472,10 +472,10 @@ def test_deploy_non_durable_template_does_not_enable_runtime_store(
         entry["name"]: entry["value"]
         for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
     }
-    assert "DATABRICKS_MASON_RUNTIME_ENDPOINT" not in env
+    assert "DATABRICKS_MASON_RUNTIME_STORE_LAKEBASE_ENDPOINT" not in env
     assert deployed_env is not None
-    assert "DATABRICKS_MASON_RUNTIME_ENDPOINT" not in deployed_env
-    assert "DATABRICKS_MASON_RUNTIME_SCHEMA" not in deployed_env
+    assert "DATABRICKS_MASON_RUNTIME_STORE_LAKEBASE_ENDPOINT" not in deployed_env
+    assert "DATABRICKS_MASON_RUNTIME_STORE_SCHEMA" not in deployed_env
 
 
 def test_deploy_rejects_invalid_project_instead_of_silently_skipping_durability(
@@ -550,14 +550,14 @@ def test_deploy_durability_binding_uses_dedicated_backend_with_session_store(
     )
     assert backend.tables == ()
     deployed_env = events[1][1]
-    assert deployed_env["DATABRICKS_MASON_RUNTIME_ENDPOINT"] == backend.endpoint_path
-    assert deployed_env["DATABRICKS_MASON_RUNTIME_SCHEMA"] == backend.schema
+    assert deployed_env["DATABRICKS_MASON_RUNTIME_STORE_LAKEBASE_ENDPOINT"] == backend.endpoint_path
+    assert deployed_env["DATABRICKS_MASON_RUNTIME_STORE_SCHEMA"] == backend.schema
     env = {
         entry["name"]: entry["value"]
         for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
     }
-    assert env["DATABRICKS_MASON_RUNTIME_ENDPOINT"] == backend.endpoint_path
-    assert env["DATABRICKS_MASON_RUNTIME_SCHEMA"] == (
+    assert env["DATABRICKS_MASON_RUNTIME_STORE_LAKEBASE_ENDPOINT"] == backend.endpoint_path
+    assert env["DATABRICKS_MASON_RUNTIME_STORE_SCHEMA"] == (
         deploy_mod.lakebase_durability_store.get_lakebase_schema("agent-mason-myapp")
     )
 

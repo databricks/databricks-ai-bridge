@@ -1,15 +1,15 @@
 from databricks_mason import AgentApp
-from databricks_mason.runtime.durability.store import InMemoryDurabilityStore
+from databricks_mason.runtime.store import InMemoryRuntimeStore
 
 
 async def _invoke(request, context):
     return request
 
 
-def test_runtime_exposes_only_durable_invocation_routes() -> None:
-    app = AgentApp(durable_runtime=True, durability_store=InMemoryDurabilityStore())
+def test_runtime_exposes_invocation_routes() -> None:
+    app = AgentApp(runtime_store=InMemoryRuntimeStore())
     app.invoke(_invoke)
-    app.on_recovery(_invoke)
+    app.recover(_invoke)
     paths = app.openapi()["paths"]
 
     assert paths["/api/invocations"]["post"]

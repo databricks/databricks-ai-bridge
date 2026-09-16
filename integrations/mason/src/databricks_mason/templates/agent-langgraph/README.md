@@ -78,7 +78,7 @@ mason sessions bind my-agent-sessions
 ## Crash recovery
 
 When `[durability] enabled = true` in `agent.toml`, `runtime/main.py` registers both `@app.invoke` and
-`@app.on_recovery`. The initial attempt writes the invocation ID into LangGraph checkpoint metadata
+`@app.recover`. The initial attempt writes the invocation ID into LangGraph checkpoint metadata
 with synchronous checkpoint durability. A recovery attempt continues from that checkpoint when it
 exists; otherwise it safely replays the persisted application input. Invocation state and emitted
 events survive process loss in deployed Lakebase. With `--no-durable-runtime`, only `@app.invoke`

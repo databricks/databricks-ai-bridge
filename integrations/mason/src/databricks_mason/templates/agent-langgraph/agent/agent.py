@@ -14,7 +14,7 @@ from agent.mcps import build_mcp_servers
 # Importing the tools package auto-registers every tool module.
 from agent.tools import all_tools
 from databricks_mason import (
-    DurableAgentContext,
+    InvocationContext,
     workspace_client,
     workspace_headers,
 )
@@ -114,7 +114,7 @@ def _payload(value: Any) -> dict[str, Any]:
     return value
 
 
-def _session_id(payload: dict[str, Any], context: DurableAgentContext) -> str:
+def _session_id(payload: dict[str, Any], context: InvocationContext) -> str:
     value = payload.get("session_id") or context.session_id
     if not isinstance(value, str) or not value:
         raise ValueError("session_id must be a non-empty string")
@@ -138,14 +138,14 @@ def _invocation_input(payload: dict[str, Any]) -> Any:
     return {"messages": messages}
 
 
-async def invoke(value: Any, context: DurableAgentContext) -> dict:
-    """Run the first attempt for one durable invocation."""
+async def invoke(value: Any, context: InvocationContext) -> dict:
+    """Run the first attempt for one invocation."""
     payload = _payload(value)
     return await _run_agent(_invocation_input(payload), payload, context)
 
 
-async def on_recovery(value: Any, context: DurableAgentContext) -> dict:
-    """Continue from a checkpoint after the durable runtime replaces a stale worker."""
+async def recover(value: Any, context: InvocationContext) -> dict:
+    """Continue from a checkpoint after Mason Runtime replaces a stale worker."""
     payload = _payload(value)
     session_id = _session_id(payload, context)
     actor = _actor(payload, session_id)
@@ -160,7 +160,7 @@ async def on_recovery(value: Any, context: DurableAgentContext) -> dict:
 async def _run_agent(
     agent_input: Any,
     payload: dict[str, Any],
-    context: DurableAgentContext,
+    context: InvocationContext,
 ) -> dict:
     session_id = _session_id(payload, context)
     actor = _actor(payload, session_id)
@@ -194,7 +194,7 @@ async def _run_agent(
 
 async def _persisted_agent_events(
     agent_input: Any,
-    context: DurableAgentContext,
+    context: InvocationContext,
     *,
     session_id: str,
     actor: str,
