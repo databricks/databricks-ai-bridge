@@ -10,6 +10,13 @@ from openai.types.responses import ResponseTextDeltaEvent
 
 from databricks_mason import InvocationContext
 
+_RECOVERY_INSTRUCTION = (
+    "This is a recovery attempt after a previous worker stopped before completing this invocation. "
+    "Continue the same task, but assume some tool calls or external side effects may already have "
+    "completed or may still be in progress. Check current state before repeating side effects and "
+    "avoid duplicate actions when possible."
+)
+
 
 def _payload(value: Any) -> dict[str, Any]:
     if isinstance(value, list):
@@ -33,7 +40,12 @@ def _actor(payload: dict[str, Any], session_id: str) -> str:
     return value
 
 
-def _agent_input(payload: dict[str, Any], session_id: str) -> list[Any] | Any:
+def _agent_input(
+    payload: dict[str, Any],
+    session_id: str,
+    *,
+    recovery: bool = False,
+) -> list[Any] | Any:
     if (resume := payload.get("resume")) is not None:
         if not isinstance(resume, dict):
             raise ValueError("resume must be an object")
@@ -41,6 +53,8 @@ def _agent_input(payload: dict[str, Any], session_id: str) -> list[Any] | Any:
     messages = payload.get("messages") or []
     if not isinstance(messages, list):
         raise ValueError("messages must be a list")
+    if recovery:
+        return [{"role": "developer", "content": _RECOVERY_INSTRUCTION}, *messages]
     return messages
 
 
@@ -49,17 +63,21 @@ async def invoke(value: Any, context: InvocationContext) -> dict:
 
 
 async def recover(value: Any, context: InvocationContext) -> dict:
-    # The Agents SDK has no checkpoint-resume primitive, so recovery reruns the same application input.
-    return await _invoke_agent(_payload(value), context)
+    return await _invoke_agent(_payload(value), context, recovery=True)
 
 
-async def _invoke_agent(payload: dict[str, Any], context: InvocationContext) -> dict:
+async def _invoke_agent(
+    payload: dict[str, Any],
+    context: InvocationContext,
+    *,
+    recovery: bool = False,
+) -> dict:
     session_id = _session_id(payload, context)
     actor = _actor(payload, session_id)
     model = payload.get("model")
     outputs = []
     async with run_agent(
-        _agent_input(payload, session_id),
+        _agent_input(payload, session_id, recovery=recovery),
         session_id=session_id,
         actor=actor,
         model=model if isinstance(model, str) else None,

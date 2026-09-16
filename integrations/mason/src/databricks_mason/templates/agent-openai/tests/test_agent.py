@@ -242,7 +242,7 @@ class _FakeStoreClient:
 
 
 @pytest.mark.asyncio
-async def test_adapter_invoke_and_recovery_use_same_agent_input(monkeypatch):
+async def test_adapter_recovery_marks_replayed_agent_input(monkeypatch):
     import runtime.adapter as adapter
 
     calls = []
@@ -261,8 +261,15 @@ async def test_adapter_invoke_and_recovery_use_same_agent_input(monkeypatch):
 
     assert calls == [
         (payload["messages"], {"session_id": "session-1", "actor": "session-1", "model": None}),
-        (payload["messages"], {"session_id": "session-1", "actor": "session-1", "model": None}),
+        (
+            [
+                {"role": "developer", "content": adapter._RECOVERY_INSTRUCTION},
+                *payload["messages"],
+            ],
+            {"session_id": "session-1", "actor": "session-1", "model": None},
+        ),
     ]
+    assert payload["messages"] == [{"role": "user", "content": "hi"}]
 
 
 def _has_workspace_auth() -> bool:

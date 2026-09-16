@@ -49,7 +49,8 @@ Keep `agent/agent.py` runnable without Mason request or context types. If you br
 put its framework-native execution in `run_agent`. The small `runtime/adapter.py` is the agent-author
 integration point: it translates the application payload, calls `run_agent`, emits Mason events, and
 shapes the response. Its `recover` hook calls the same `run_agent` with the original application input
-because the Agents SDK does not expose checkpoint continuation.
+plus a developer instruction warning that the prior attempt may have partially completed because the
+Agents SDK does not expose checkpoint continuation.
 
 ## State and recovery
 

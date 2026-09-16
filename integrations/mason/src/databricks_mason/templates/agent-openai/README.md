@@ -90,11 +90,13 @@ history, but not a pending approval across restarts or replicas.
 
 `runtime/main.py` always registers the adapter's `invoke` and `recover` hooks. Both call the same
 `agent.agent.run_agent` function. OpenAI Agents SDK does not currently expose LangGraph-style node
-checkpoints, so `recover` passes the original application input to `run_agent` against the same
-session. When deployment attaches a Runtime Store, invocation state and emitted events survive
-process loss and Mason can call `recover` on a replacement worker. Without a Runtime Store,
-invocation state remains process-local and interrupted work is not automatically recovered. Tool
-calls and other external side effects remain at-least-once and must be idempotent.
+checkpoints, so `recover` replays the original application input against the same session. The
+adapter prepends a developer instruction telling the agent that this is a recovery attempt and that
+some tool calls or external side effects may already have completed or may still be in progress.
+When deployment attaches a Runtime Store, invocation state and emitted events survive process loss
+and Mason can call `recover` on a replacement worker. Without a Runtime Store, invocation state
+remains process-local and interrupted work is not automatically recovered. External side effects
+remain at-least-once and must be idempotent.
 
 ## Chat app
 
