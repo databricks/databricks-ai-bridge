@@ -269,6 +269,11 @@ def test_dev_announces_chat_ui_when_overlay_present(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     assert "Chat UI" in result.output
     assert "http://localhost:9000" in result.output
+    output = " ".join(result.output.split())
+    assert "mason endpoint invoke" in output
+    assert "--url http://localhost:9000" in output
+    assert "--path /api/invocations" in output
+    assert "INVOCATION_ID=$(uuidgen)" in output
 
 
 def test_dev_announces_api_endpoint_when_no_ui(tmp_path: pathlib.Path):
@@ -279,7 +284,10 @@ def test_dev_announces_api_endpoint_when_no_ui(tmp_path: pathlib.Path):
     assert "API-only" in result.output
     assert "http://localhost:8000/invocations" in result.output
     # a copy-pasteable sample request, not just the bare endpoint
-    assert "curl -X POST" in " ".join(result.output.split())
+    output = " ".join(result.output.split())
+    assert "mason endpoint invoke" in output
+    assert "--url http://localhost:8000" in output
+    assert "--path /invocations" in output
 
 
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])

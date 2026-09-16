@@ -739,6 +739,47 @@ def test_deploy_reports_app_url(tmp_path: pathlib.Path, monkeypatch):
     assert captured["url"] == "https://myapp-123.databricksapps.com"
 
 
+@pytest.mark.parametrize(
+    ("server", "path", "uses_invocation_id"),
+    [
+        ("mason", "/api/invocations", True),
+        ("custom", "/invocations", False),
+    ],
+)
+def test_deploy_recommends_invoking_deployed_agent(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+    server: str,
+    path: str,
+    uses_invocation_id: bool,
+):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _write_agent_manifest(src, server=server)
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(deploy_mod.lakebase_store, "get_or_create_backend", lambda *a, **k: None)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src)],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    output = " ".join(result.output.split())
+    assert "mason endpoint invoke" in output
+    assert "agent-mason-myapp" in output
+    assert f"--path {path}" in output
+    assert ("INVOCATION_ID=$(uuidgen)" in output) is uses_invocation_id
+
+
 def test_deploy_sync_keeps_directly_edited_agent_manifest(tmp_path: pathlib.Path, monkeypatch):
     src = tmp_path / "app"
     src.mkdir()

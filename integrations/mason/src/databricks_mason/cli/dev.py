@@ -24,6 +24,7 @@ from databricks_mason.cli.deploy import (
     resolve_trace_experiment_id,
     store_bindings,
 )
+from databricks_mason.cli.endpoint_examples import agent_invoke_command
 from databricks_mason.databricks_cli import _databricks
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import require_managed_tool_support
@@ -212,17 +213,25 @@ def _announce_local_url(source_dir: pathlib.Path, port: int, server: AgentServer
     """Print how to reach the running app: the chat UI if present, else a sample invoke request."""
     base = f"http://localhost:{port}"
     deploy_name = source_dir.resolve().name
+    has_chat_ui = (source_dir / "runtime" / "ui.py").is_file()
+    uses_runtime_api = has_chat_ui or server == AgentServer.MASON
+    path = "/api/invocations" if uses_runtime_api else "/invocations"
+    invoke_step = (
+        agent_invoke_command(f"--url {base}", uses_runtime_api=uses_runtime_api),
+        "Send a test request",
+    )
     tool_step: str | tuple[str, str] = (
         "Edit agent/agent.py to give the agent a tool"
         if server == AgentServer.CUSTOM
         else ("mason tools add mcp <service>", "Give the agent a tool")
     )
-    if (source_dir / "runtime" / "ui.py").is_file():
+    if has_chat_ui:
         render.success(
             "Starting agent",
             fields={"Chat UI": base},
             next_steps=[
                 f"Open {base} to chat with your agent",
+                invoke_step,
                 tool_step,
                 ("mason memory bind <store>", "Attach a memory / session store"),
                 (f"mason deploy {deploy_name}", "Deploy it to Databricks"),
@@ -230,20 +239,12 @@ def _announce_local_url(source_dir: pathlib.Path, port: int, server: AgentServer
         )
     else:
         # No page is served at `/`, so give a copy-pasteable request instead of just the URL.
-        uses_runtime_api = server == AgentServer.MASON
-        endpoint = f"{base}/api/invocations" if uses_runtime_api else f"{base}/invocations"
-        body = (
-            '{"id": "00000000-0000-4000-8000-000000000000", '
-            '"input": [{"role": "user", "content": "hi"}]}'
-            if uses_runtime_api
-            else '{"input": [{"role": "user", "content": "hi"}]}'
-        )
-        sample = f"curl -X POST {endpoint} -H 'Content-Type: application/json' -d '{body}'"
+        endpoint = f"{base}{path}"
         render.success(
             "Starting API-only agent (no chat UI — see `mason init --help`)",
             fields={"Invoke": f"POST {endpoint}"},
             next_steps=[
-                (sample, "Send a test request"),
+                invoke_step,
                 tool_step,
                 (f"mason deploy {deploy_name}", "Deploy it to Databricks"),
             ],
