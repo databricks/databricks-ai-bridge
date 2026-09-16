@@ -1440,21 +1440,55 @@ def test_prepare_inputs_with_extra_params():
     assert result["param2"] == "value2"
 
 
-def test_convert_dict_to_message_with_non_string_content():
-    """Test _convert_dict_to_message handles non-string content by JSON encoding it."""
-    # Test with list of dict content (matching gpt oss)
-    message_dict = {
-        "role": "assistant",
-        "content": [
-            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "asdf"}]},
-            {"type": "text", "text": "asdf"},
-        ],
-    }
-    result = _convert_dict_to_message(message_dict, None)
-    expected = AIMessage(
-        content='[{"type": "reasoning", "summary": [{"type": "summary_text", "text": "asdf"}]}, {"type": "text", "text": "asdf"}]'
+def test_convert_dict_to_message_preserves_structured_content():
+    content = [
+        {
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": "", "signature": "abc"}],
+        },
+        {"type": "text", "text": "The answer"},
+    ]
+
+    result = _convert_dict_to_message({"role": "assistant", "content": content}, None)
+
+    assert result.content == content
+    assert result.text == "The answer"
+
+
+def test_convert_dict_to_message_chunk_preserves_structured_content():
+    reasoning = [
+        {
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": "", "signature": "abc"}],
+        }
+    ]
+
+    reasoning_chunk = _convert_dict_to_message_chunk(
+        {"role": "assistant", "content": reasoning}, None
     )
-    assert result == expected
+    first_text_chunk = _convert_dict_to_message_chunk(
+        {"content": "The answer"}, "assistant", text_block_index=len(reasoning)
+    )
+    second_text_chunk = _convert_dict_to_message_chunk(
+        {"content": " has spaces"}, "assistant", text_block_index=len(reasoning)
+    )
+    result = reasoning_chunk + first_text_chunk + second_text_chunk
+
+    assert result.content == [
+        *reasoning,
+        {"type": "text", "text": "The answer has spaces", "index": 1},
+    ]
+    assert result.text == "The answer has spaces"
+
+
+def test_convert_dict_to_message_serializes_unsupported_content():
+    content = {"unexpected": "value"}
+
+    message = _convert_dict_to_message({"role": "assistant", "content": content}, None)
+    chunk = _convert_dict_to_message_chunk({"role": "assistant", "content": content}, None)
+
+    assert message.content == json.dumps(content)
+    assert chunk.content == json.dumps(content)
 
 
 ### Test custom_inputs and custom_outputs functionality ###
