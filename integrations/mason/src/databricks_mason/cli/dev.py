@@ -16,7 +16,6 @@ import click
 import yaml
 
 from databricks_mason import render
-from databricks_mason.agent_project import AgentProject
 from databricks_mason.cli.deploy import (
     _load_project,
     _resolve_memory_store,
@@ -94,7 +93,7 @@ def dev(
 
     project = _load_project(source_dir)
     if project is not None and project.tools:
-        require_managed_tool_support(project.server)
+        require_managed_tool_support(source_dir)
 
     # Read the declared store bindings and wire tracing into app.yaml. The store bindings are
     # resolved into the dev-only manifest as env (below); tracing is on by default, so resolve/create

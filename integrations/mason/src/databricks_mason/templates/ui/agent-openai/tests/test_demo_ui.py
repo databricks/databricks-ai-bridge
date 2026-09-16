@@ -4,9 +4,6 @@ from databricks_mason.runtime.store import InMemoryRuntimeStore
 from fastapi.testclient import TestClient
 from runtime import ui
 
-from databricks_mason import AgentApp
-from databricks_mason.runtime.durability.store import InMemoryRuntimeStore
-
 
 class _FakeStateClient:
     def create_memory_entry(self, actor, request, session_id):

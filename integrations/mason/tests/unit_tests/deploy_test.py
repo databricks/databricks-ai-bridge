@@ -14,6 +14,7 @@ from click.testing import CliRunner
 from databricks_mason.agent_project import AgentProject, ToolSpec
 from databricks_mason.cli import deploy as deploy_mod
 from databricks_mason.errors import AgentCliError
+from databricks_mason.project_config import write_project_metadata
 
 # The autouse fixture below stubs `resolve_trace_experiment_id` for deploy-command tests; capture the
 # real function here so its own unit tests can exercise the actual logic.
@@ -212,17 +213,25 @@ def _write_agent_manifest(
     (source / "agent.toml").write_text(body)
 
 
-@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize(
+    ("framework", "template"),
+    [
+        ("langgraph", "custom-agent-langgraph"),
+        ("openai", "custom-agent-openai"),
+    ],
+)
 def test_deploy_rejects_custom_server_manifest_tools_before_mutation_or_network(
     tmp_path: pathlib.Path,
     framework: str,
+    template: str,
 ):
-    source = tmp_path / f"custom-agent-{framework}"
+    source = tmp_path / template
     source.mkdir()
     (source / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     project = AgentProject.create(source, framework=framework, server="custom")
     project.add_tool(ToolSpec.mcp("web", service="system.ai.web_search"))
     project.write()
+    write_project_metadata(source, framework=framework, template=template)
     manifest = source / "agent.toml"
     before = manifest.read_text(encoding="utf-8")
     ctx = _FakeCtx()
@@ -238,7 +247,7 @@ def test_deploy_rejects_custom_server_manifest_tools_before_mutation_or_network(
         )
 
     assert result.exit_code != 0
-    assert '[agent].server = "mason"' in " ".join(result.output.split())
+    assert "require a Mason server template" in " ".join(result.output.split())
     assert manifest.read_text(encoding="utf-8") == before
     client.assert_not_called()
     db.assert_not_called()

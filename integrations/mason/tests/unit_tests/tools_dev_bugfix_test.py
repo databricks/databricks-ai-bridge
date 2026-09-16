@@ -8,7 +8,6 @@ from click.testing import CliRunner
 
 from databricks_mason.agent_project import AgentProject
 from databricks_mason.cli.tools import tools
-from databricks_mason.project_config import write_project_metadata
 
 
 class _Ctx:

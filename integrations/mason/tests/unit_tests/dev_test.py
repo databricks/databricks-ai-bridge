@@ -13,6 +13,7 @@ from click.testing import CliRunner
 from databricks_mason.agent_project import AgentProject, ToolSpec
 from databricks_mason.cli import dev as dev_mod
 from databricks_mason.errors import AgentCliError
+from databricks_mason.project_config import write_project_metadata
 
 
 def _write_agent_manifest(
@@ -298,15 +299,23 @@ def test_dev_custom_server_recommends_wiring_tools_in_agent_code(
     assert "mason tools add" not in output
 
 
-@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize(
+    ("framework", "template"),
+    [
+        ("langgraph", "custom-agent-langgraph"),
+        ("openai", "custom-agent-openai"),
+    ],
+)
 def test_dev_rejects_custom_server_manifest_tools_before_starting(
     tmp_path: pathlib.Path,
     framework: str,
+    template: str,
 ):
     (tmp_path / "app.yaml").write_text("command: []\n")
     project = AgentProject.create(tmp_path, framework=framework, server="custom")
     project.add_tool(ToolSpec.mcp("web", service="system.ai.web_search"))
     project.write()
+    write_project_metadata(tmp_path, framework=framework, template=template)
     manifest = tmp_path / "agent.toml"
     before = manifest.read_text(encoding="utf-8")
     ctx = _Ctx()
@@ -318,7 +327,7 @@ def test_dev_rejects_custom_server_manifest_tools_before_starting(
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=ctx)
 
     assert result.exit_code != 0
-    assert '[agent].server = "mason"' in " ".join(result.output.split())
+    assert "require a Mason server template" in " ".join(result.output.split())
     assert manifest.read_text(encoding="utf-8") == before
     client.assert_not_called()
     db.assert_not_called()

@@ -310,9 +310,9 @@ command or `agent.toml` entry to keep in sync. Customer-managed MCP servers are 
 code in `agent/mcps.py` and are joined with the managed bindings by `mcp_tools(...)` or
 `mcp_servers(...)`.
 
-Projects with `[agent].server = "custom"` do not provision a Runtime Store, auto-discover
-`agent/tools/`, or load managed tool bindings from `agent.toml`, so `mason tools add` rejects those
-projects. Wire framework-native Python tools and MCP servers directly in `agent/agent.py` instead.
+Projects created with `--server custom` do not auto-discover `agent/tools/` or load managed tool
+bindings from `agent.toml`, so `mason tools add` rejects those projects. Wire framework-native Python
+tools and MCP servers directly in `agent/agent.py` instead.
 
 If an older Mason-server manifest contains `source = { kind = "python", ... }`, remove that
 `[[tools]]` entry; the decorated tool in `agent/tools/` remains active. `mason dev` and `mason deploy`

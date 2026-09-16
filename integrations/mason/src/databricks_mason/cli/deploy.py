@@ -529,7 +529,7 @@ def deploy(
     source_dir = pathlib.Path(source)
     project = _load_project(source_dir)
     if project is not None and project.tools:
-        require_managed_tool_support(project.server)
+        require_managed_tool_support(source_dir)
     base_name = _resolve_deployment_name(project, name)
     name = _prefixed_name(base_name)
     _validate_deployment_name(name)

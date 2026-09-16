@@ -73,7 +73,7 @@ def _add_spec(obj: Any, source: pathlib.Path, spec: ToolSpec) -> None:
     # MCP / UC-function / sandbox bindings are framework-neutral agent.toml entries. Both Mason
     # server runtime adapters read them; custom-server projects wire tools directly in agent code.
     project = AgentProject.load(source)
-    require_managed_tool_support(project.server)
+    require_managed_tool_support(project.root)
     changed = project.add_tool(spec)
     changed_files = [project.write()] if changed else []
     _emit_change(obj, project, spec, changed_files)
