@@ -98,8 +98,10 @@ id = "<resolved-store-id>"
 name = "agent-sessions"
 ```
 
-Memory and Session Stores are optional and explicit. `mason deploy` creates or reuses only the
-stores declared in `agent.toml`; use `mason memory bind` and `mason sessions bind` to add them.
+For Mason-server projects, `mason init` declares default `<directory>-memory` and
+`<directory>-session` bindings. Override them with `--memory-store` and `--session-store`, or later
+with `mason memory bind` and `mason sessions bind`. Custom-server projects declare stores only
+when explicitly requested. `mason deploy` creates or reuses the stores declared in `agent.toml`.
 
 ## Terminology
 

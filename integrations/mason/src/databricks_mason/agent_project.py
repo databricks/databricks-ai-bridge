@@ -26,19 +26,6 @@ from databricks_mason.runtime.tool_manifest import (
 TRACING_TABLE = "tracing"
 
 _SCHEMA_VERSION = 1
-# Commented-out store bindings written into a freshly scaffolded agent.toml (None = blank line).
-_STORE_EXAMPLE_LINES = (
-    None,
-    "Managed long-term memory (optional): declare a store for `mason deploy` to create it;",
-    "run `mason memory bind <name>`, or uncomment and set a store name here:",
-    "[memory_store]",
-    'name = "my-memory-store"',
-    None,
-    "Durable conversation history (optional): declare a store for `mason deploy` to create it;",
-    "run `mason sessions bind <name>`, or uncomment and set a store name here:",
-    "[session_store]",
-    'name = "my-session-store"',
-)
 _SUPPORTED_FRAMEWORKS = {"langgraph", "openai"}
 _SUPPORTED_SERVERS = {"custom", "mason"}
 _SUPPORTED_SCOPE_KINDS = {"table", "volume", "workspace"}
@@ -421,6 +408,8 @@ class AgentProject:
         *,
         framework: str,
         server: str,
+        memory_store: str | None = None,
+        session_store: str | None = None,
     ) -> "AgentProject":
         if framework not in _SUPPORTED_FRAMEWORKS:
             raise AgentCliError(f"Unsupported Mason framework {framework!r}.")
@@ -434,18 +423,18 @@ class AgentProject:
         agent.add("framework", framework)
         agent.add("server", server)
         document.add("agent", agent)
-        # Commented examples show how managed stores are declared. Uncomment them (or run
-        # `mason memory/sessions bind`) to make deploy reconcile those exact names. They're comments,
-        # so `load` treats the project as unbound until then.
-        for line in _STORE_EXAMPLE_LINES:
-            document.add(tomlkit.nl() if line is None else tomlkit.comment(line))
-        return cls(
+        project = cls(
             project_root,
             document,
             framework,
             server,
             [],
         )
+        if memory_store:
+            project.bind_memory_store(memory_store)
+        if session_store:
+            project.bind_session_store(session_store)
+        return project
 
     def set_deployment_name(self, name: str) -> bool:
         """Record the deployment's base name under [agent].deployment_name. True if it changed."""

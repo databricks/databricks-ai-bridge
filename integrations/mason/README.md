@@ -184,6 +184,7 @@ mason [-p <profile>] [-o text|json]
   logout
   init         [--framework openai|langgraph] [--server mason|custom]
                [--disable-chat-app]
+               [--memory-store NAME] [--session-store NAME]
                [--profile P] [directory]
   dev          [--source PATH] [--prepare-environment] [--app-port PORT]
                [--with-traces C.S]

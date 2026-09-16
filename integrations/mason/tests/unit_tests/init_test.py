@@ -111,6 +111,8 @@ def test_init_defaults_to_langgraph_with_chat_app(tmp_path: pathlib.Path):
     assert manifest == {
         "schema_version": 1,
         "agent": {"framework": "langgraph", "server": "mason"},
+        "memory_store": {"name": "proj-memory"},
+        "session_store": {"name": "proj-session"},
     }
 
 
@@ -149,6 +151,8 @@ def test_init_creates_canonical_agent_manifest(tmp_path: pathlib.Path):
     assert manifest == {
         "schema_version": 1,
         "agent": {"framework": "openai", "server": "mason"},
+        "memory_store": {"name": "proj-memory"},
+        "session_store": {"name": "proj-session"},
     }
 
 
@@ -273,3 +277,25 @@ def test_init_no_profile_writes_no_env(tmp_path: pathlib.Path):
         result = CliRunner().invoke(init_mod.init, [str(dest)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     assert not (dest / ".env").exists()  # no profile -> scaffold-only, no .env
+
+
+def test_init_store_name_overrides(tmp_path: pathlib.Path):
+    dest = tmp_path / "proj"
+    result = CliRunner().invoke(
+        init_mod.init,
+        [
+            "--framework",
+            "openai",
+            "--memory-store",
+            "mem-x",
+            "--session-store",
+            "sess-y",
+            str(dest),
+        ],
+        obj=_Ctx(),
+    )
+    assert result.exit_code == 0, result.output
+    with (dest / "agent.toml").open("rb") as manifest_file:
+        manifest = tomli.load(manifest_file)
+    assert manifest["memory_store"] == {"name": "mem-x"}
+    assert manifest["session_store"] == {"name": "sess-y"}

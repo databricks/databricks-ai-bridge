@@ -158,15 +158,21 @@ def test_bind_and_unbind_stores_round_trip(tmp_path: pathlib.Path):
     assert final.memory_store == "mem"
 
 
-def test_create_scaffolds_server_and_commented_store_examples(tmp_path: pathlib.Path):
-    AgentProject.create(tmp_path, framework="openai", server="custom").write()
-    text = (tmp_path / "agent.toml").read_text(encoding="utf-8")
-    # Commented example bindings show the shape without activating a store.
-    assert "# [memory_store]" in text
-    assert "# [session_store]" in text
-    assert "mason memory bind" in text and "mason sessions bind" in text
+def test_create_declares_given_store_names(tmp_path: pathlib.Path):
+    AgentProject.create(
+        tmp_path, framework="openai", server="mason", memory_store="mem-x", session_store="sess-y"
+    ).write()
+
     reloaded = AgentProject.load(tmp_path)
-    assert reloaded.server == "custom"
+    assert reloaded.memory_store == "mem-x"
+    assert reloaded.session_store == "sess-y"
+
+
+def test_create_without_store_names_declares_none(tmp_path: pathlib.Path):
+    # create() declares only the names it is given; init applies the dir-derived defaults.
+    AgentProject.create(tmp_path, framework="openai", server="mason").write()
+
+    reloaded = AgentProject.load(tmp_path)
     assert reloaded.memory_store is None
     assert reloaded.session_store is None
 
