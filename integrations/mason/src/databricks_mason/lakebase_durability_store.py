@@ -1,4 +1,4 @@
-"""Provision and locate the Lakebase database used by Mason durability."""
+"""Provision and locate the Lakebase database used by a Mason Runtime Store."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from databricks_mason.errors import AgentCliError
 _BRANCH = "production"
 _ENDPOINT = "primary"
 _DATABASE = "databricks-postgres"
-_RESOURCE_NAME = "postgres-durability"
+_RESOURCE_NAME = "postgres-runtime-store"
 
 
 def backend(app: str) -> LakebaseBackend:
@@ -31,7 +31,7 @@ def backend(app: str) -> LakebaseBackend:
 
 
 def get_or_create_backend(app: str, profile: Optional[str], *, create: bool) -> LakebaseBackend:
-    """Reuse the deployment's durability project or create it when allowed."""
+    """Reuse the deployment's Runtime Store project or create it when allowed."""
     selected = backend(app)
     project_path = f"projects/{selected.project}"
     existing = _databricks(
@@ -41,11 +41,11 @@ def get_or_create_backend(app: str, profile: Optional[str], *, create: bool) -> 
         return selected
     if not create:
         raise AgentCliError(
-            f"Durability store '{selected.project}' does not exist.",
+            f"Runtime Store '{selected.project}' does not exist.",
             hint="Bind a Session Store to reuse its Lakebase database.",
         )
 
-    payload = {"spec": {"display_name": f"Mason durability for {app}"}}
+    payload = {"spec": {"display_name": f"Mason Runtime Store for {app}"}}
     created = _databricks(
         ["postgres", "create-project", selected.project, "--json", json.dumps(payload)],
         profile,
@@ -61,7 +61,7 @@ def get_or_create_backend(app: str, profile: Optional[str], *, create: bool) -> 
     if resolved.returncode == 0:
         return selected
     detail = (created.stderr or created.stdout or "").strip() or "unknown error"
-    raise AgentCliError(f"Could not create durability store '{selected.project}'.", hint=detail)
+    raise AgentCliError(f"Could not create Runtime Store '{selected.project}'.", hint=detail)
 
 
 def _project_id(app: str) -> str:
@@ -69,10 +69,10 @@ def _project_id(app: str) -> str:
     normalized = normalized or "mason-app"
     if not normalized[0].isalpha():
         normalized = f"mason-{normalized}"
-    return f"{normalized}-durability"[:63].rstrip("-")
+    return f"{normalized}-runtime-store"[:63].rstrip("-")
 
 
 def get_lakebase_schema(app: str) -> str:
-    """Return the schema owned by one deployed app's durability runtime."""
+    """Return the schema owned by one deployed app's Runtime Store."""
     digest = hashlib.sha256(app.encode("utf-8")).hexdigest()[:12]
     return f"databricks_mason_runtime_{digest}"

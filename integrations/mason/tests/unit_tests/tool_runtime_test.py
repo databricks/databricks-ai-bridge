@@ -18,6 +18,7 @@ def _write_direct_manifest(project: pathlib.Path) -> None:
 
 [agent]
 framework = "langgraph"
+server = "mason"
 
 [[tools]]
 id = "sandbox"
@@ -164,7 +165,8 @@ def test_langgraph_runtime_loads_direct_manifest_and_protects_sandbox_meta(
 def test_manifest_reader_rejects_wrong_framework(tmp_path: pathlib.Path, monkeypatch):
     project = _project(tmp_path)
     (project / "agent.toml").write_text(
-        'schema_version = 1\n\n[agent]\nframework = "openai"\n', encoding="utf-8"
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n',
+        encoding="utf-8",
     )
     monkeypatch.setenv("MASON_PROJECT_ROOT", str(project))
     sys.modules.pop("databricks_mason.runtime.tool_manifest", None)
@@ -183,6 +185,7 @@ def test_manifest_reader_rejects_python_tool_entries_with_code_first_migration(
 
 [agent]
 framework = "langgraph"
+server = "mason"
 
 [[tools]]
 id = "lookup-ticket"
@@ -208,6 +211,7 @@ def test_openai_adapter_propagates_manifest_validation_errors(tmp_path: pathlib.
 
 [agent]
 framework = "openai"
+server = "mason"
 
 [[tools]]
 id = "lookup-ticket"

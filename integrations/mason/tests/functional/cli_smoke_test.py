@@ -75,7 +75,6 @@ def test_cli_and_every_command_help_load(run_mason) -> None:
         ["--framework", "langgraph"],
         ["--framework", "openai"],
         ["--framework", "langgraph", "--server", "custom"],
-        ["--framework", "langgraph", "--no-durable-runtime"],
     ],
 )
 def test_init_scaffolds(run_mason, tmp_path: pathlib.Path, extra) -> None:

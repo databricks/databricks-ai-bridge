@@ -144,7 +144,8 @@ def test_store_list_hints_next_page_when_not_interactive():
 def _bind_ctx(tmp_path):
     """A CLI context whose client records memory-store creation, over a scaffolded agent.toml."""
     (tmp_path / "agent.toml").write_text(
-        'schema_version = 1\n\n[agent]\nframework = "openai"\n', encoding="utf-8"
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n',
+        encoding="utf-8",
     )
 
     class _BindClient:
@@ -189,7 +190,7 @@ def test_memory_unbind_clears_agent_toml(tmp_path):
     from databricks_mason.cli.memory import memory as memory_group
 
     (tmp_path / "agent.toml").write_text(
-        'schema_version = 1\n\n[agent]\nframework = "openai"\n\n[memory_store]\nname = "m"\n',
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n\n[memory_store]\nname = "m"\n',
         encoding="utf-8",
     )
     result = CliRunner().invoke(

@@ -20,10 +20,16 @@ From source:
 pip install 'git+https://github.com/databricks/databricks-ai-bridge.git#subdirectory=integrations/mason'
 ```
 
-For the SDK-hosted durable agent application, install the runtime extra:
+The CLI installation intentionally excludes HTTP-server and agent-framework dependencies.
+Mason-generated projects declare the correct runtime extra automatically. To add Mason Runtime to
+an existing agent, install the extra for its framework:
 
 ```sh
+# LangGraph
 pip install 'databricks-mason[runtime]'
+
+# OpenAI Agents SDK
+pip install 'databricks-mason[runtime-openai]'
 ```
 
 ## Shell completion
@@ -113,6 +119,9 @@ polling, and event endpoints. By default its state is process-local. When Mason 
 Lakebase-backed Runtime Store during deployment, it persists invocation state, heartbeats, and
 recovery coordination:
 
+See [Mason Runtime](RUNTIME.md) for the invocation API, streaming and background modes, Runtime
+Store lifecycle, and recovery semantics.
+
 ```python
 from databricks_mason import AgentApp, InvocationContext
 
@@ -157,11 +166,15 @@ is disabled; register the same function for both decorators when replaying the i
 safe. Agent checkpoint restoration and idempotent external side effects remain the developer's
 responsibility.
 
-Bare `mason init`, `--framework langgraph`, and `--framework openai` scaffold `AgentApp` with its
-durable runtime enabled. Pass `--no-durable-runtime` for the same Mason HTTP contract with
-process-local state and no Lakebase provisioning. Pass `--server custom` for a minimal FastAPI
-server with one foreground `/invocations` route and no Mason `AgentApp`. Use `--disable-chat-app`
-independently for API-only Mason server output.
+Bare `mason init`, `--framework langgraph`, and `--framework openai` scaffold `AgentApp`. Pass
+`--server custom` for a minimal FastAPI server with one foreground `/invocations` route and no
+Mason Runtime. Use `--disable-chat-app` independently for API-only Mason server output. `AgentApp`
+is a FastAPI application, so developers can add their own endpoints alongside Mason's invocation
+API.
+
+`mason init` records that choice as `[agent].server = "mason"` or `"custom"` in `agent.toml`.
+`mason deploy` uses this field as the source of truth: Mason-server deployments create or reuse an
+isolated Runtime Store, while custom-server deployments do not provision one.
 
 ## Commands
 
@@ -170,8 +183,7 @@ mason [-p <profile>] [-o text|json]
   login        [--profile P]
   logout
   init         [--framework openai|langgraph] [--server mason|custom]
-               [--no-durable-runtime] [--disable-chat-app]
-               [--memory-store NAME] [--session-store NAME]
+               [--disable-chat-app]
                [--profile P] [directory]
   dev          [--source PATH] [--prepare-environment] [--app-port PORT]
                [--with-traces C.S]
@@ -219,13 +231,13 @@ mason endpoint invoke --url http://localhost:8000 \
   --json '{"id":"00000000-0000-4000-8000-000000000001","input":[{"role":"user","content":"Hello"}]}'
 ```
 
-The JSON body remains explicit even for Mason-generated agents. For example, durable agents require
+The JSON body remains explicit even for Mason-generated agents. For example, Mason Runtime agents require
 a client-generated invocation ID, and streaming servers require their own streaming field plus
 `--sse` so the CLI consumes the response as Server-Sent Events.
 
 ```sh
 INVOCATION_ID=$(uuidgen)
-mason --profile <profile> endpoint invoke mason-durable-agent \
+mason --profile <profile> endpoint invoke mason-my-agent \
   --path /api/invocations \
   --json "{\"id\":\"$INVOCATION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Run the report\"}]}"
 
@@ -263,11 +275,11 @@ mason deploy my-agent
 
 ## Agent tools
 
-For projects created with `mason init --server mason` (the default), `agent.toml` is the declarative
-source of truth for Databricks-managed infrastructure: sandbox, managed MCP, and Unity Catalog
-function bindings, plus memory, session, and durability resources. `mason tools add` updates only
-this file; direct TOML edits have the same behavior. Both Mason-server framework adapters read the
-managed bindings at runtime without generating or patching agent source:
+For projects with `[agent].server = "mason"` (the default from `mason init`), `agent.toml` is the
+declarative source of truth for Databricks-managed infrastructure: the Runtime Store, sandbox,
+managed MCP and Unity Catalog function bindings, plus memory and session resources. `mason tools
+add` updates only this file; direct TOML edits have the same behavior. Both Mason-server framework
+adapters read the managed bindings at runtime without generating or patching agent source:
 
 ```sh
 mason tools add sandbox --scope table:samples.nyctaxi.trips
@@ -343,7 +355,7 @@ via the `AGENT_MEMORY_STORE` env var, injected by `deploy` and `mason dev` — i
 in `agent.toml`.)
 
 The chat UI generates a stable application session UUID in browser local storage, places it inside
-the durable invocation's opaque `input`, and creates a fresh invocation UUID per turn. The
+the invocation's opaque `input`, and creates a fresh invocation UUID per turn. The
 `__Host-databricks-app-router` cookie remains independent: API clients may reuse it for sticky
 replica routing, but it is neither authentication nor the template's application session state.
 

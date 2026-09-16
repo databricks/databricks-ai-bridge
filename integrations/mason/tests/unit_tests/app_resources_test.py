@@ -7,11 +7,11 @@ import types
 from typing import Any
 
 from databricks_mason import app_resources as sa
-from databricks_mason import lakebase_durability_store
+from databricks_mason import lakebase_durability_store as lakebase_store
 
 
 def _backend(database: str, resource_name: str) -> sa.LakebaseBackend:
-    """Build a LakebaseBackend for resource-attach tests (durability supplies real ones)."""
+    """Build a LakebaseBackend for resource-attach tests."""
     return sa.LakebaseBackend(
         project="proj",
         branch="production",
@@ -41,7 +41,7 @@ def test_apply_postgres_resources_sends_all_backends_in_one_update(monkeypatch):
 def test_apply_postgres_resources_preserves_existing_and_updates_ours(monkeypatch):
     resources: list[dict[str, Any]] = [
         {"name": "user-owned", "secret": {}},
-        {"name": "postgres-durability", "old": True},
+        {"name": "postgres-runtime-store", "old": True},
     ]
 
     def fake_db(args, profile, **kw):
@@ -54,11 +54,11 @@ def test_apply_postgres_resources_preserves_existing_and_updates_ours(monkeypatc
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(sa, "_databricks", fake_db)
-    backend = _backend("db-new", "postgres-durability")
+    backend = _backend("db-new", "postgres-runtime-store")
     assert sa.apply_postgres_resources("myapp", [backend], "prof") is None
     # The user-owned resource is preserved; our managed resource is replaced (not duplicated).
-    assert [r["name"] for r in resources] == ["user-owned", "postgres-durability"]
-    ours = next(r for r in resources if r["name"] == "postgres-durability")
+    assert [r["name"] for r in resources] == ["user-owned", "postgres-runtime-store"]
+    ours = next(r for r in resources if r["name"] == "postgres-runtime-store")
     assert "old" not in ours and ours["postgres"]["permission"] == "CAN_CONNECT_AND_CREATE"
 
 
@@ -74,11 +74,32 @@ def test_apply_postgres_resources_reports_failure(monkeypatch):
             )
         ),
     )
-    err = sa.apply_postgres_resources("app", [_backend("db", "postgres-durability")], "prof")
+    err = sa.apply_postgres_resources("app", [_backend("db", "postgres-runtime-store")], "prof")
     assert err == "denied: needs MANAGE"
 
 
-def test_durability_resource_coexists_with_a_second_managed_resource(monkeypatch):
+def test_remove_app_resources_preserves_resources_mason_does_not_own(monkeypatch):
+    resources: list[dict[str, Any]] = [
+        {"name": "user-owned", "secret": {}},
+        {"name": "postgres-runtime-store", "postgres": {}},
+    ]
+
+    def fake_db(args, profile, **kw):
+        if args[:2] == ["apps", "get"]:
+            return types.SimpleNamespace(
+                returncode=0, stdout=json.dumps({"resources": resources}), stderr=""
+            )
+        payload = json.loads(args[args.index("--json") + 1])
+        resources[:] = payload["resources"]
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(sa, "_databricks", fake_db)
+
+    assert sa.remove_app_resources("app", {"postgres-runtime-store"}, "prof") is None
+    assert resources == [{"name": "user-owned", "secret": {}}]
+
+
+def test_runtime_store_resource_coexists_with_a_second_managed_resource(monkeypatch):
     resources: list[dict[str, Any]] = []
 
     def fake_db(args, profile, **kw):
@@ -91,13 +112,13 @@ def test_durability_resource_coexists_with_a_second_managed_resource(monkeypatch
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(sa, "_databricks", fake_db)
-    durability = lakebase_durability_store.backend("mason-app")
+    runtime_store = lakebase_store.backend("mason-app")
     other = _backend("other", "postgres-other")
 
-    assert sa.apply_postgres_resources("app", [durability], "prof") is None
+    assert sa.apply_postgres_resources("app", [runtime_store], "prof") is None
     assert sa.apply_postgres_resources("app", [other], "prof") is None
 
     assert {resource["name"] for resource in resources} == {
-        "postgres-durability",
+        "postgres-runtime-store",
         "postgres-other",
     }

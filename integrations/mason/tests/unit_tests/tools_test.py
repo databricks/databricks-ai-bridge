@@ -29,7 +29,8 @@ def _project(
     (project / "tests" / "tools").mkdir(parents=True)
     (project / "agent" / "mcps.py").write_text("ORIGINAL = True\n", encoding="utf-8")
     write_project_metadata(project, framework=framework, template=template or f"agent-{framework}")
-    AgentProject.create(project, framework=framework).write()
+    server = "custom" if (template or "").startswith("custom-agent-") else "mason"
+    AgentProject.create(project, framework=framework, server=server).write()
     return project
 
 

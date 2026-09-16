@@ -18,7 +18,7 @@ from databricks_mason.agent_project import AgentProject
 from databricks_mason.cli import tracing as tracing_mod
 from databricks_mason.errors import AgentCliError
 
-_AGENT_TOML = 'schema_version = 1\n\n[agent]\nframework = "openai"\n'
+_AGENT_TOML = 'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n'
 
 
 class _Ctx:
