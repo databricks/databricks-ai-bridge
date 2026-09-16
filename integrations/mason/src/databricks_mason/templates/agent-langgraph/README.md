@@ -16,9 +16,10 @@ client -> runtime/main.py -> runtime/adapter.py -> agent/agent.py:run_agent
   `invoke` and `recover`.
 - `runtime/main.py` constructs the server and registers those hooks.
 
-To bring an existing LangGraph agent, keep its normal execution code in `agent/agent.py`, expose a
-`run_agent` function that yields native LangGraph events, and make only the small payload/event
-mapping changes needed in `runtime/adapter.py`.
+To bring an existing LangGraph agent, run `mason init --framework langgraph --existing .` in its
+project and follow the generated Claude Code prompt. The migration skill and this template share
+[MASON_CONTRACT.md](MASON_CONTRACT.md), which owns integration requirements. This README owns
+configuration and client examples; [AGENTS.md](AGENTS.md) provides the development map.
 
 ## Run locally
 
@@ -92,15 +93,9 @@ mason sessions bind my-agent-sessions
 
 ## Crash recovery
 
-`runtime/main.py` always registers the adapter's `invoke` and `recover` hooks. Both call the same
-`agent.agent.run_agent` function. Recovery changes only the agent input: it passes `None` when the
-current invocation has a LangGraph checkpoint, or replays the original application input when no
-such checkpoint exists. When deployment attaches a Runtime Store, invocation state and emitted
-events survive process loss and Mason can call `recover` on a replacement worker. Without a Runtime
-Store, invocation state remains process-local and interrupted work is not automatically recovered.
-
-External side effects are still at-least-once. Make tools idempotent because work performed between
-the last checkpoint and a crash can run again.
+Deployment with a Runtime Store supports invocation recovery after worker loss. Graph checkpoint
+persistence requires a Session Store separately. Recovery can replay work, so tools must tolerate
+repeated side effects. See [Recovery and durability](MASON_CONTRACT.md#recovery-and-durability).
 
 ## Chat app
 
