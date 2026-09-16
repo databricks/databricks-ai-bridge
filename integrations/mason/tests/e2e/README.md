@@ -29,6 +29,13 @@ workspace profile uses a PAT, pass an OAuth profile for the same workspace with
 The template repo/ref flags make `mason init` read the exact checkout under test and avoid remote
 clone throttling; provide both or omit both to test the default upstream template.
 
+Omit `--profile` (and `--app-auth-profile`) to authenticate from ambient Databricks environment
+credentials instead of a CLI profile — e.g. a service principal via `DATABRICKS_HOST` /
+`DATABRICKS_CLIENT_ID` / `DATABRICKS_CLIENT_SECRET`. Because those are OAuth, one identity covers
+both deploys and the deployed App's `/api/*` calls. This is how the gated nightly integration test
+(`tests/integration_tests/test_tool_matrix.py`, enabled by `RUN_MASON_INTEGRATION_TESTS=1`) drives
+this suite.
+
 Direct authoring does not call `mason tools add`: it replaces `agent.toml` with
 `fixtures/direct_agent.toml`. CLI authoring invokes the three managed `mason tools add ...`
 commands. Both paths then create the same user-owned, framework-native Python tool file with no
