@@ -28,18 +28,20 @@ class _Ctx:
         self.profile = profile
 
 
-def _pop_default_stores(manifest: dict, slug: str = "proj") -> dict:
-    """Pop the scaffold's default store tables, asserting each is `<slug>-<token>-<kind>`.
+def _default_store_token(manifest: dict, slug: str = "proj") -> str:
+    """Validate the scaffold's default store names (`<slug>-<token>-<kind>`) and return the token.
 
     Default names carry a per-scaffold random token so fresh scaffolds don't collide, so they can't
-    be compared literally. Check the shape and that both stores share the one token, then return the
-    manifest without them for an exact-equality check on the rest.
+    be compared literally. Check the shape and that both stores share the one token, then return it
+    so callers can assert over the full manifest without mutating it.
     """
-    mem = re.fullmatch(rf"{slug}-([a-z]{{6}})-memory", manifest.pop("memory_store")["name"])
-    sess = re.fullmatch(rf"{slug}-([a-z]{{6}})-sessions", manifest.pop("session_store")["name"])
+    mem = re.fullmatch(rf"{re.escape(slug)}-([a-z]{{6}})-memory", manifest["memory_store"]["name"])
+    sess = re.fullmatch(
+        rf"{re.escape(slug)}-([a-z]{{6}})-sessions", manifest["session_store"]["name"]
+    )
     assert mem and sess, "default store names must be <slug>-<token>-<kind>"
     assert mem.group(1) == sess.group(1), "memory and session stores must share the scaffold token"
-    return manifest
+    return mem.group(1)
 
 
 def _copy_writing(files: dict[str, str] | None = None):
@@ -125,9 +127,12 @@ def test_init_defaults_to_langgraph_with_chat_app(tmp_path: pathlib.Path):
         }
     with (dest / "agent.toml").open("rb") as manifest_file:
         manifest = tomli.load(manifest_file)
-    assert _pop_default_stores(manifest) == {
+    token = _default_store_token(manifest)
+    assert manifest == {
         "schema_version": 1,
         "agent": {"framework": "langgraph", "server": "mason"},
+        "memory_store": {"name": f"proj-{token}-memory"},
+        "session_store": {"name": f"proj-{token}-sessions"},
     }
 
 
@@ -163,9 +168,12 @@ def test_init_creates_canonical_agent_manifest(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     with (dest / "agent.toml").open("rb") as manifest_file:
         manifest = tomli.load(manifest_file)
-    assert _pop_default_stores(manifest) == {
+    token = _default_store_token(manifest)
+    assert manifest == {
         "schema_version": 1,
         "agent": {"framework": "openai", "server": "mason"},
+        "memory_store": {"name": f"proj-{token}-memory"},
+        "session_store": {"name": f"proj-{token}-sessions"},
     }
 
 
