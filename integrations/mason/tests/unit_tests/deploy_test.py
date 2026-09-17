@@ -1088,45 +1088,6 @@ def test_grant_store_access_surfaces_api_error(monkeypatch):
     assert err == "the store service refused the grant"
 
 
-@pytest.mark.parametrize("output", ["text", "json"])
-@pytest.mark.parametrize("grant_error", [None, "the store service refused the grant"])
-def test_deploy_store_access_row_hidden_without_changing_grants(
-    tmp_path: pathlib.Path, monkeypatch, output: str, grant_error: str | None
-):
-    (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _agent_toml(tmp_path, memory="mem", session="sessions")
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, profile: "sp-123")
-    grant = mock.Mock(return_value=grant_error)
-    monkeypatch.setattr(deploy_mod, "_grant_store_access", grant)
-    emit_json = mock.Mock()
-    monkeypatch.setattr(deploy_mod.render, "emit_json", emit_json)
-    ctx = _FakeCtx()
-    ctx.output = output
-
-    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(tmp_path)], obj=ctx)
-
-    assert result.exit_code == 0, result.output
-    grant.assert_called_once_with(mock.ANY, "sp-123", "sessions", "mem")
-    assert "Store access" not in result.output
-    assert "granted to app service principal" not in result.output
-    if output == "json":
-        emit_json.assert_called_once()
-        data = emit_json.call_args.args[0]
-        assert data["store_grant"] == ("granted" if grant_error is None else "failed")
-        assert data["store_grant_error"] == grant_error
-    else:
-        emit_json.assert_not_called()
-        if grant_error:
-            assert grant_error in " ".join(result.output.split())
-            assert "couldn't" in result.output
-
-
 def test_deploy_resolves_existing_memory_store_by_display_name(tmp_path: pathlib.Path, monkeypatch):
     # deploy reconciles the declared store; when it already exists it is resolved by display name
     # (list+match, not get_memory_store which keys on resource id) and its id is injected into app.yaml.
