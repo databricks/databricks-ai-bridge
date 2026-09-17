@@ -444,8 +444,8 @@ mason [-p <profile>] [-o text|json]
     add sandbox      --scope SCOPE [--scope SCOPE ...] [--source PATH]
     add mcp          SERVICE [--name NAME] [--source PATH]
     add uc-function  FUNCTION [--name NAME] [--source PATH]
-    add genie-one    [--name NAME] [--source PATH]
-    add genie-agent  SPACE_ID [--name NAME] [--source PATH]
+    add genie-one    [--name NAME] [--auth user|app] [--source PATH]
+    add genie-agent  SPACE_ID [--name NAME] [--auth user|app] [--source PATH]
     list             [--kind sandbox|mcp|uc-function|genie-one|genie-agent]
                      [--schema CATALOG.SCHEMA]
     remove           TOOL_ID [MCP_SERVICE] [--source PATH]
@@ -559,7 +559,8 @@ mason tools list
 
 ### Managed tool identity and migration
 
-`mason tools add mcp` and `mason tools add sandbox` write explicit `auth = "user"` by default.
+`mason tools add mcp`, `mason tools add sandbox`, `mason tools add genie-one`, and
+`mason tools add genie-agent` write explicit `auth = "user"` by default.
 Use `--auth app` for the App service principal instead. This field is on the tool entry, not
 inside `source` or `policy`:
 
@@ -588,14 +589,34 @@ available; neither the invoke nor recovery handler runs for that attempt.
 
 Before deploying user-auth tools from an older project, migrate its request handler and framework
 adapter to the current request-auth-aware `DurableAgentServer` template, then explicitly choose `user` or
-`app` on **every** managed MCP/sandbox entry. Changing `agent.toml` alone does not upgrade copied
-Python adapter code. Outdated adapters fail closed rather than silently using App identity.
-App-only legacy projects and generic bring-your-own source directories keep the existing path.
+`app` on **every** managed MCP, sandbox, or Genie entry. Changing `agent.toml` alone does not
+upgrade copied Python adapter code. Outdated adapters fail closed rather than silently using App
+identity. App-only legacy projects and generic bring-your-own source directories keep the existing
+path.
 
-Any user-auth tool requires the Apps `ai-gateway` user scope. For a new App, deploy explicitly
-enables user-token forwarding and includes the scope in the initial typed SDK create request before
-uploading source. Updating an existing App that is missing a required scope needs one-time explicit
-permission:
+Deploy derives Apps user scopes from explicit `auth = "user"` bindings:
+
+| Binding | Requested Apps scopes |
+| --- | --- |
+| Managed MCP (governed ingress) | `ai-gateway` |
+| `system.ai.genie_one_mcp` | `ai-gateway`, `genie` |
+| First-class Genie One or Genie Agent | `genie` |
+
+For example, bind Genie tools in a current Mason-server project:
+
+```sh
+mason tools add mcp system.ai.genie_one_mcp --auth user
+mason tools add genie-agent SPACE_ID --auth user
+```
+
+Mixed bindings request the union. App-auth and legacy bindings add no user scopes. These are
+explicit service-consent scopes, not a claim that gateway access alone authorizes the downstream
+resource. OAuth consent does not grant Unity Catalog privileges: the user still needs access to
+the configured Genie Space and its underlying data.
+
+For a new App, deploy explicitly enables user-token forwarding and includes these scopes in the
+initial typed SDK create request before uploading source. An existing App that is missing a required
+scope needs one-time explicit permission:
 
 ```sh
 mason --profile my-workspace deploy my-agent --allow-user-scope-update
@@ -716,28 +737,32 @@ Installing Mason does not configure a Genie Space ID or enable a Genie binding. 
 capabilities your agent needs:
 
 ```sh
-mason tools add genie-one --name genie_one
-mason tools add genie-agent SPACE_ID --name genie_agent
+mason tools add genie-one --name genie_one --auth user
+mason tools add genie-agent SPACE_ID --name genie_agent --auth user
 mason tools list --kind genie-one
 mason tools list --kind genie-agent
 mason tools remove genie_one
 mason tools remove genie_agent
 ```
 
-`--name` is optional and defaults to `genie_one` or `genie_agent`, respectively. Both add commands
-and `remove` accept `--source PATH` to select a project instead of the current directory. Discovery
-needs no project; read that project's `agent.toml` to inspect configured bindings. For scripted
-output, put the global `-o json` option before `tools`, as in
+`--name` is optional and defaults to `genie_one` or `genie_agent`, respectively. `--auth` defaults
+to `user`; choose `--auth app` deliberately for App service-principal execution. Existing manifests
+without `auth` preserve App/default identity. Both add commands and `remove` accept `--source PATH`
+to select a project instead of the current directory. Discovery needs no project; read that
+project's `agent.toml` to inspect configured bindings. For scripted output, put the global
+`-o json` option before `tools`, as in
 `mason -o json tools add genie-one --source ./my-agent`. Adding a binding is offline: it updates
 `agent.toml` without contacting Genie or checking permissions. The corresponding sources are:
 
 ```toml
 [[tools]]
 id = "genie_one"
+auth = "user"
 source = { kind = "genie_one" }
 
 [[tools]]
 id = "genie_agent"
+auth = "user"
 source = { kind = "genie_agent", space_id = "<your-space-id>" }
 ```
 

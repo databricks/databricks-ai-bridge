@@ -48,7 +48,7 @@ def _tool_record(spec: ToolSpec) -> dict[str, str]:
         "kind": spec.source.kind,
         "source": _source_value(spec),
     }
-    if spec.source.kind in ("mcp", "sandbox", "uc_function"):
+    if spec.source.kind in ("mcp", "sandbox", "uc_function", "genie_one", "genie_agent"):
         record["auth"] = spec.auth or (
             "app/default" if spec.source.kind == "uc_function" else "unspecified"
         )
@@ -255,11 +255,14 @@ def add_uc_function(
 
 @add.command("genie-one", epilog=_example_epilog(("mason tools add genie-one",)))
 @click.option("--name", "tool_id", default="genie_one", show_default=True)
+@click.option("--auth", type=click.Choice(["user", "app"]), default="user", show_default=True)
 @_source_option
 @click.pass_obj
-def add_genie_one(obj: Any, tool_id: str, source: pathlib.Path) -> None:
+def add_genie_one(
+    obj: Any, tool_id: str, auth: Literal["user", "app"], source: pathlib.Path
+) -> None:
     """Add workspace-wide Genie One MCP tools."""
-    _add_spec(obj, source.resolve(), ToolSpec.genie_one(tool_id))
+    _add_spec(obj, source.resolve(), ToolSpec.genie_one(tool_id, auth=auth))
 
 
 @add.command(
@@ -270,11 +273,22 @@ def add_genie_one(obj: Any, tool_id: str, source: pathlib.Path) -> None:
 )
 @click.argument("space_id")
 @click.option("--name", "tool_id", default="genie_agent", show_default=True)
+@click.option("--auth", type=click.Choice(["user", "app"]), default="user", show_default=True)
 @_source_option
 @click.pass_obj
-def add_genie_agent(obj: Any, space_id: str, tool_id: str, source: pathlib.Path) -> None:
+def add_genie_agent(
+    obj: Any,
+    space_id: str,
+    tool_id: str,
+    auth: Literal["user", "app"],
+    source: pathlib.Path,
+) -> None:
     """Add native Genie conversation tools for a 32-character lowercase hexadecimal SPACE_ID."""
-    _add_spec(obj, source.resolve(), ToolSpec.genie_agent(tool_id, space_id=space_id))
+    _add_spec(
+        obj,
+        source.resolve(),
+        ToolSpec.genie_agent(tool_id, space_id=space_id, auth=auth),
+    )
 
 
 @tools.command("list")

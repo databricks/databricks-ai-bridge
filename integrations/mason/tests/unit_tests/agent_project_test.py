@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+from typing import Any, cast
 
 import pytest
 import tomli
@@ -21,7 +22,7 @@ from databricks_mason.project_types import AgentFramework, AgentServer
 from databricks_mason.runtime.tool_manifest import ToolManifestError, load_tools
 
 
-@pytest.mark.parametrize("kind", ["mcp", "sandbox", "uc_function"])
+@pytest.mark.parametrize("kind", ["mcp", "sandbox", "uc_function", "genie_one", "genie_agent"])
 @pytest.mark.parametrize("auth", [None, "app", "user"])
 def test_auth_round_trip_through_both_manifest_parsers(tmp_path, monkeypatch, kind, auth):
     _write_manifest(tmp_path)
@@ -34,6 +35,10 @@ def test_auth_round_trip_through_both_manifest_parsers(tmp_path, monkeypatch, ki
         spec = ToolSpec.sandbox("tool", scopes=[Scope.table("main.data.table")], auth=auth)
     elif kind == "mcp":
         spec = ToolSpec.mcp("tool", service="system.ai.web_search", auth=auth)
+    elif kind == "genie_one":
+        spec = ToolSpec.genie_one("tool", auth=auth)
+    elif kind == "genie_agent":
+        spec = ToolSpec.genie_agent("tool", space_id="0" * 32, auth=auth)
     else:
         spec = ToolSpec.uc_function("tool", function="main.tools.lookup", auth=auth)
     project.add_tool(spec)
@@ -59,6 +64,13 @@ def test_both_manifest_parsers_reject_invalid_auth(tmp_path, monkeypatch, auth):
         AgentProject.load(tmp_path)
     with pytest.raises(RuntimeError, match="auth"):
         load_tools(expected_framework="langgraph")
+
+
+@pytest.mark.parametrize("kind", ["genie_one", "genie_agent"])
+def test_genie_specs_reject_invalid_auth(kind):
+    source = ToolSource(kind=kind, space_id="0" * 32 if kind == "genie_agent" else None)
+    with pytest.raises(AgentCliError, match="auth"):
+        ToolSpec("tool", source, auth=cast(Any, "invalid"))
 
 
 def test_runtime_manifest_rejects_user_uc_function(tmp_path, monkeypatch):
