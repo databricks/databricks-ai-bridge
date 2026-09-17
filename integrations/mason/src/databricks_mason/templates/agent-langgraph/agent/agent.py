@@ -92,7 +92,12 @@ async def create_agent_graph(
     request to request.
     """
     mcp = await mcp_tools(build_mcp_servers(), workspace_client_for=workspace_client_for)
-    tools = [*all_tools(), *memory_tools(actor), *genie_tools(), *mcp]
+    tools = [
+        *all_tools(),
+        *memory_tools(actor),
+        *genie_tools(workspace_client_for=workspace_client_for),
+        *mcp,
+    ]
     middleware = (
         [HumanInTheLoopMiddleware(interrupt_on=REQUIRE_APPROVAL)] if REQUIRE_APPROVAL else []
     )

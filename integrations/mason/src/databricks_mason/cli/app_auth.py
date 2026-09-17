@@ -42,7 +42,11 @@ def requires_user_auth(project: AgentProject | None) -> bool:
     """Validate the local contract before any deployment or store mutation."""
     if project is None or not project.tools:
         return False
-    managed = [tool for tool in project.tools if tool.source.kind in ("mcp", "sandbox")]
+    managed = [
+        tool
+        for tool in project.tools
+        if tool.source.kind in ("mcp", "sandbox", "genie_one", "genie_agent")
+    ]
     user_auth = any(tool.auth == "user" for tool in managed)
     metadata = None
     if (project.root / ".mason/project.toml").is_file():
@@ -63,7 +67,7 @@ def requires_user_auth(project: AgentProject | None) -> bool:
         if unspecified:
             raise AgentCliError(
                 "Request-auth contract migration requires explicit auth on every managed "
-                f"MCP/sandbox binding: {', '.join(unspecified)}.",
+                f"tool binding: {', '.join(unspecified)}.",
                 hint="Choose auth = 'app' to preserve legacy identity, or explicitly choose 'user'.",
             )
     return user_auth
@@ -78,15 +82,21 @@ class AppAuthPlan:
 
 
 def required_user_scopes(project: AgentProject | None) -> set[str]:
-    """Return baseline Apps scopes for request-user managed tools."""
-    if project is None:
-        return set()
-    # TODO: Return the least-privilege Apps scope for each supported request-user tool kind/service.
-    return {
-        "ai-gateway"
-        for tool in project.tools
-        if tool.auth == "user" and tool.source.kind in ("mcp", "sandbox")
-    }
+    """Request explicit service consent in addition to governed MCP ingress access."""
+    scopes: set[str] = set()
+    # TODO: Extend this least-privilege mapping for each supported request-user tool kind/service.
+    for tool in project.tools if project else ():
+        if tool.auth != "user":
+            continue
+        if tool.source.kind in ("genie_one", "genie_agent"):
+            scopes.add("genie")
+            continue
+        if tool.source.kind not in ("mcp", "sandbox"):
+            continue
+        scopes.add("ai-gateway")
+        if tool.source.service == "system.ai.genie_one_mcp":
+            scopes.add("genie")
+    return scopes
 
 
 def prepare_app_auth(

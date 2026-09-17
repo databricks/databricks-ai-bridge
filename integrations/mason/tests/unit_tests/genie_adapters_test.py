@@ -41,9 +41,10 @@ def project(tmp_path, monkeypatch, framework):
     return write
 
 
-def _binding(name="sales", space_id=SPACE):
+def _binding(name="sales", space_id=SPACE, auth=None):
+    auth_line = f'auth = "{auth}"\n' if auth is not None else ""
     return (
-        f'\n[[tools]]\nid = "{name}"\n'
+        f'\n[[tools]]\nid = "{name}"\n{auth_line}'
         f'source = {{ kind = "genie_agent", space_id = "{space_id}" }}\n'
     )
 
@@ -170,6 +171,47 @@ async def test_real_native_ask_invokes_fixed_space(framework, project, sdk, conv
             sdk[0].genie.start_conversation.assert_called_with(space_id, "How many?")
         else:
             sdk[0].genie.create_message.assert_called_with(space_id, CONVERSATION, "How many?")
+
+
+@pytest.mark.asyncio
+async def test_native_genie_uses_binding_auth_with_request_resolver(framework, project, sdk):
+    project(_binding(auth="user"))
+    resolver = MagicMock(return_value=sdk[0])
+    tools = importlib.import_module(f"databricks_mason.{framework}").genie_tools(
+        workspace_client_for=resolver
+    )
+
+    result = await _invoke(tools[0], {"question": "How many?", "conversation_id": None}, framework)
+
+    assert result["status"] == "COMPLETED"
+    resolver.assert_called_with("user")
+    sdk[1].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_native_genie_without_request_resolver_keeps_app_default(framework, project, sdk):
+    project(_binding())
+
+    result = await _invoke(
+        _tools(framework)[0], {"question": "How many?", "conversation_id": None}, framework
+    )
+
+    assert result["status"] == "COMPLETED"
+    sdk[1].assert_called()
+
+
+def test_deployed_user_genie_never_falls_back_to_app_identity(framework, project, sdk, monkeypatch):
+    from databricks_mason.runtime.auth import AuthError
+
+    monkeypatch.setenv("DATABRICKS_APP_NAME", "genie-obo-test")
+    project(_binding(auth="user"))
+
+    with pytest.raises(AuthError) as error:
+        _tools(framework)
+
+    assert error.value.code == "MCP_USER_AUTHORIZATION_MISSING"
+    assert error.value.integration_id == "sales"
+    sdk[1].assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -322,6 +364,43 @@ async def test_template_includes_native_genie_tools(framework, project, monkeypa
         assert {"sales_ask", "sales_poll", "sales_query_result"} <= {
             native_tool.name for native_tool in agent.tools
         }
+    finally:
+        for name in list(sys.modules):
+            if name == "agent" or name.startswith("agent."):
+                del sys.modules[name]
+        sys.modules.update(saved_modules)
+
+
+@pytest.mark.asyncio
+async def test_template_routes_request_client_to_native_genie(framework, project, monkeypatch):
+    pytest.importorskip("databricks_langchain" if framework == "langgraph" else "databricks_openai")
+    if framework == "langgraph":
+        pytest.importorskip("langchain.agents")
+    project(_binding(auth="user"))
+    saved_modules = {
+        name: module
+        for name, module in sys.modules.items()
+        if name == "agent" or name.startswith("agent.")
+    }
+    for name in saved_modules:
+        del sys.modules[name]
+    monkeypatch.syspath_prepend(str(TEMPLATES / f"agent-{framework}"))
+    try:
+        module = importlib.import_module("agent.agent")
+        monkeypatch.setattr(module, "memory_tools", lambda actor: [])
+        native = MagicMock(return_value=[])
+        monkeypatch.setattr(module, "genie_tools", native)
+        resolver = MagicMock()
+        if framework == "langgraph":
+            monkeypatch.setattr(module, "mcp_tools", AsyncMock(return_value=[]))
+            monkeypatch.setattr(module, "_RoutedChatDatabricks", MagicMock())
+            monkeypatch.setattr(module, "workspace_client", MagicMock())
+            monkeypatch.setattr(module, "checkpointer", lambda: None)
+            monkeypatch.setattr(module, "create_agent", lambda **kwargs: SimpleNamespace(**kwargs))
+            await module.create_agent_graph("user", workspace_client_for=resolver)
+        else:
+            module.create_agent("user", workspace_client_for=resolver)
+        native.assert_called_once_with(workspace_client_for=resolver)
     finally:
         for name in list(sys.modules):
             if name == "agent" or name.startswith("agent."):
