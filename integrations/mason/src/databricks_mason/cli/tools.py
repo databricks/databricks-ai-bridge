@@ -314,7 +314,7 @@ def list_tools(obj: Any, kind: str | None, schema: str | None) -> None:
     discovery_error = None
     if mcp_schema is not None:
         try:
-            services = _list_services(obj.client(), mcp_schema, strict=True)
+            services = _list_services(obj.client(), mcp_schema)
         except AgentCliError as exc:
             discovery_error = exc
         else:

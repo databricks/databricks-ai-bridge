@@ -338,9 +338,9 @@ runtime execution permissions.
 Read `agent.toml` (its `[[tools]]` entries) to inspect configured bindings. Discovery JSON uses
 `schema_version: 2`, with `available_tools` (`name`, `kind`, `add_command`), `mcp_schema` (null for
 local-only recipes), `complete`, and `errors`. Replace old scripts that read configured-list JSON
-with TOML inspection. The deprecated, hidden `mason mcp list [--schema catalog.schema]` alias
-retains its MCP-only schema-version-1 JSON for compatibility. Use `mason tools list --help` for
-the new discovery contract.
+with TOML inspection. Replace `mason mcp list [--schema catalog.schema]` with
+`mason tools list --kind mcp [--schema catalog.schema]`; the former command is removed. Use
+`mason tools list --help` for the new discovery contract.
 
 Read-only live discovery can be checked against the installed wheel without creating a project
 or deploying an agent:

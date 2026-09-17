@@ -46,10 +46,9 @@ def live_mason(tmp_path):
     return run
 
 
-def test_live_default_discovery_matches_legacy_service_inventory(live_mason):
-    legacy = live_mason("mcp", "list")
+def test_live_default_discovery_includes_mcp_filter_inventory(live_mason):
     discovered = live_mason("tools", "list")
-    assert legacy["schema_version"] == 1
+    mcp_only = live_mason("tools", "list", "--kind", "mcp")
     assert discovered["schema_version"] == 2
     assert discovered["complete"] is True
     assert discovered["errors"] == []
@@ -60,26 +59,24 @@ def test_live_default_discovery_matches_legacy_service_inventory(live_mason):
         "genie-one",
         "genie-agent",
     }
-    expected = {service["name"] for service in legacy["mcp_services"]} - {"system.ai.sandbox"}
     actual = {tool["name"] for tool in discovered["available_tools"] if tool["kind"] == "mcp"}
-    assert actual == expected
+    assert actual == {tool["name"] for tool in mcp_only["available_tools"]}
     logging.getLogger(__name__).info(
         "Live default discovery: %s MCP services plus 4 built-in recipes", len(actual)
     )
 
 
 @pytest.mark.parametrize("explicit_schema", [False, True])
-def test_live_mcp_filter_matches_legacy_service_inventory(live_mason, explicit_schema):
+def test_live_mcp_filter_returns_valid_inventory(live_mason, explicit_schema):
     scope = ["--schema", os.environ.get("MASON_E2E_SCHEMA", "system.ai")] if explicit_schema else []
-    legacy = live_mason("mcp", "list", *scope)
     discovered = live_mason("tools", "list", "--kind", "mcp", *scope)
     assert discovered["complete"] is True
     assert discovered["errors"] == []
     assert discovered["mcp_schema"] == (scope[-1] if scope else "system.ai")
     assert all(tool["kind"] == "mcp" for tool in discovered["available_tools"])
-    assert [tool["name"] for tool in discovered["available_tools"]] == [
-        service["name"] for service in legacy["mcp_services"]
-    ]
+    assert [tool["name"] for tool in discovered["available_tools"]] == sorted(
+        tool["name"] for tool in discovered["available_tools"]
+    )
     for tool in discovered["available_tools"]:
         assert tool["add_command"] == (
             "mason tools add sandbox --scope table:catalog.schema.table"

@@ -188,8 +188,8 @@ def test_discovery_text_labels_scope_and_manifest(monkeypatch):
     assert "mason tools list --kind mcp --schema catalog.schema" in result.stdout
 
 
-def test_root_hides_legacy_mcp_and_has_no_nested_mcp_group():
-    assert cli.mason.commands["mcp"].hidden is True
+def test_command_tree_has_no_legacy_or_nested_mcp_group():
+    assert "mcp" not in cli.mason.commands
     assert "mcp" not in cli.tools.commands
 
 

@@ -39,9 +39,9 @@ def test_root_registers_supported_commands():
         "deploy",
         "deployments",
         "endpoint",
-        "mcp",
         "tools",
     } <= names
+    assert "mcp" not in names
     assert "durability" not in names
     assert "help" not in names
     assert "add-sandbox" not in names
@@ -179,7 +179,7 @@ def test_root_examples_render_inline_comments():
 
 def test_inline_comments_are_column_aligned():
     # Every inline comment in a group starts at the same column (the `#` lines up).
-    result = CliRunner().invoke(cli.mason, ["mcp", "--help"])
+    result = CliRunner().invoke(cli.mason, ["tools", "--help"])
 
     assert result.exit_code == 0, result.output
     hash_columns = {ln.index("#") for ln in result.output.splitlines() if "  # " in ln}

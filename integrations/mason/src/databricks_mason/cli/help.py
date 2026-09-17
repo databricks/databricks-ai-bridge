@@ -98,14 +98,6 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("memory", "entries", "delete"): (
         ("mason memory entries delete --store <store> <entry>", "delete an entry"),
     ),
-    ("mcp",): (
-        ("mason mcp list", "list workspace MCP services"),
-        ("mason mcp list --schema main.tools", "scope the list to one UC schema"),
-    ),
-    ("mcp", "list"): (
-        ("mason mcp list", "list workspace MCP services"),
-        ("mason mcp list --schema main.tools", "scope the list to one UC schema"),
-    ),
     ("sessions",): (
         ("mason sessions stores create --name agent-sessions", "create a session store"),
         ("mason sessions bind agent-sessions", "bind it to the agent (wired in on dev / deploy)"),
@@ -326,7 +318,6 @@ _SHORT_HELP: dict[CommandPath, str] = {
     ("deployments",): "Manage deployed agents",
     ("memory",): "Manage an agent's long-term memory",
     ("sessions",): "Manage an agent's conversation sessions",
-    ("mcp",): "Deprecated MCP discovery alias",
     ("tools",): "Discover integrations and manage tool bindings",
     ("tracing",): "Set up and inspect agent tracing",
 }

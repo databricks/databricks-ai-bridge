@@ -27,7 +27,6 @@ _COMMANDS = (
     "dev",
     "memory",
     "sessions",
-    "mcp",
     "tracing",
     "deploy",
     "deployments",
@@ -195,7 +194,7 @@ def test_tools_help_and_removed_configured_route(run_mason):
     assert "--source DIRECTORY" not in listing_help
     assert run_mason("tools", "list", "--source", ".", check=False).returncode != 0
     assert run_mason("tools", "mcp", "list", check=False).returncode != 0
-    assert "Deprecated" in run_mason("mcp", "--help").stdout
+    assert run_mason("mcp", "--help", check=False).returncode != 0
 
 
 def test_tracing_disable_and_reenable(run_mason, tmp_path: pathlib.Path) -> None:
