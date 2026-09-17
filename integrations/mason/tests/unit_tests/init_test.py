@@ -29,14 +29,14 @@ class _Ctx:
 
 
 def _pop_default_stores(manifest: dict, slug: str = "proj") -> dict:
-    """Pop the scaffold's default store tables, asserting each is `<slug>-<kind>-<token>`.
+    """Pop the scaffold's default store tables, asserting each is `<slug>-<token>-<kind>`.
 
     Default names carry a per-scaffold random token so fresh scaffolds don't collide, so they can't
     be compared literally. Check the shape and that both stores share the one token, then return the
     manifest without them for an exact-equality check on the rest.
     """
-    mem = re.fullmatch(rf"{slug}-memory-([a-z]{{6}})", manifest.pop("memory_store")["name"])
-    sess = re.fullmatch(rf"{slug}-session-([a-z]{{6}})", manifest.pop("session_store")["name"])
+    mem = re.fullmatch(rf"{slug}-([a-z]{{6}})-memory", manifest.pop("memory_store")["name"])
+    sess = re.fullmatch(rf"{slug}-([a-z]{{6}})-sessions", manifest.pop("session_store")["name"])
     assert mem and sess, "default store names must be <slug>-<kind>-<token>"
     assert mem.group(1) == sess.group(1), "memory and session stores must share the scaffold token"
     return manifest

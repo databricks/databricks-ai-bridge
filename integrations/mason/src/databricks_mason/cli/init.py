@@ -209,11 +209,11 @@ def init(
             # A fresh scaffold gets its own new stores. Store display names aren't unique, and many
             # projects share a directory name (my-agent), so a bare `<dir>-memory` collides across
             # users and re-scaffolds; a short random token per scaffold keeps them distinct. Both
-            # stores share the token so the pair reads as one agent's. `--memory/session-store` wins.
-            # Letters only: store names must not end with a digit.
+            # stores share the token so the pair reads as one agent's (`my-agent-<token>-memory` /
+            # `-sessions`), and the store kind stays the suffix. `--memory/session-store` wins.
             token = "".join(secrets.choice(string.ascii_lowercase) for _ in range(6))
-            memory_store = memory_store or f"{default_store_name(dest.name, 'memory')}-{token}"
-            session_store = session_store or f"{default_store_name(dest.name, 'session')}-{token}"
+            memory_store = memory_store or default_store_name(dest.name, "memory", token)
+            session_store = session_store or default_store_name(dest.name, "sessions", token)
         project = AgentProject.create(
             dest,
             framework=selected_framework,

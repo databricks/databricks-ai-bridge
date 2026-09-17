@@ -192,15 +192,18 @@ def _required_string(value: object, description: str) -> str:
     return value
 
 
-def default_store_name(project_name: str, suffix: str) -> str:
+def default_store_name(project_name: str, suffix: str, token: str | None = None) -> str:
     """A store display name derived from the project directory, e.g. ``my-agent`` -> ``my-agent-memory``.
 
     Sanitized to the store display-name charset (lower-case alphanumerics and hyphens). Store names
     must not start with a digit, so leading digits/hyphens are dropped; a name that reduces to
-    nothing (only punctuation, or all-numeric) falls back to ``agent``.
+    nothing (only punctuation, or all-numeric) falls back to ``agent``. An optional per-scaffold
+    ``token`` is inserted before the suffix (``my-agent-<token>-memory``) so fresh scaffolds get
+    distinct stores while the name still ends with the store kind.
     """
     slug = re.sub(r"[^a-z0-9-]+", "-", project_name.lower()).strip("-").lstrip("0123456789-")
-    return f"{slug or 'agent'}-{suffix}"
+    middle = f"{token}-" if token else ""
+    return f"{slug or 'agent'}-{middle}{suffix}"
 
 
 def _store_name_from_manifest(value: object, table: str) -> str | None:

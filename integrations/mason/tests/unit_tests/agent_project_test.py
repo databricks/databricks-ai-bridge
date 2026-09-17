@@ -256,6 +256,11 @@ def test_default_store_name_sanitizes(raw: str, expected: str):
     assert not name[0].isdigit()  # store names must not start with a digit
 
 
+def test_default_store_name_inserts_token_before_suffix():
+    # The token sits before the store kind so the name still ends with the kind (never a digit).
+    assert default_store_name("my-agent", "sessions", "abcxyz") == "my-agent-abcxyz-sessions"
+
+
 @pytest.mark.parametrize("server", ["", "other"])
 def test_load_rejects_missing_or_unsupported_server(tmp_path: pathlib.Path, server: str):
     server_line = f'server = "{server}"\n' if server else ""
