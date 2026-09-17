@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 from unittest import mock
 
 import pytest
@@ -25,6 +26,20 @@ class _Ctx:
     def __init__(self, output: str = "text", profile=None):
         self.output = output
         self.profile = profile
+
+
+def _pop_default_stores(manifest: dict, slug: str = "proj") -> dict:
+    """Pop the scaffold's default store tables, asserting each is `<slug>-<kind>-<token>`.
+
+    Default names carry a per-scaffold random token so fresh scaffolds don't collide, so they can't
+    be compared literally. Check the shape and that both stores share the one token, then return the
+    manifest without them for an exact-equality check on the rest.
+    """
+    mem = re.fullmatch(rf"{slug}-memory-([0-9a-f]{{6}})", manifest.pop("memory_store")["name"])
+    sess = re.fullmatch(rf"{slug}-session-([0-9a-f]{{6}})", manifest.pop("session_store")["name"])
+    assert mem and sess, "default store names must be <slug>-<kind>-<token>"
+    assert mem.group(1) == sess.group(1), "memory and session stores must share the scaffold token"
+    return manifest
 
 
 def _copy_writing(files: dict[str, str] | None = None):
@@ -110,11 +125,9 @@ def test_init_defaults_to_langgraph_with_chat_app(tmp_path: pathlib.Path):
         }
     with (dest / "agent.toml").open("rb") as manifest_file:
         manifest = tomli.load(manifest_file)
-    assert manifest == {
+    assert _pop_default_stores(manifest) == {
         "schema_version": 1,
         "agent": {"framework": "langgraph", "server": "mason"},
-        "memory_store": {"name": "proj-memory"},
-        "session_store": {"name": "proj-session"},
     }
 
 
@@ -150,11 +163,9 @@ def test_init_creates_canonical_agent_manifest(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     with (dest / "agent.toml").open("rb") as manifest_file:
         manifest = tomli.load(manifest_file)
-    assert manifest == {
+    assert _pop_default_stores(manifest) == {
         "schema_version": 1,
         "agent": {"framework": "openai", "server": "mason"},
-        "memory_store": {"name": "proj-memory"},
-        "session_store": {"name": "proj-session"},
     }
 
 

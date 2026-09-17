@@ -11,6 +11,7 @@ foreground-only FastAPI server.
 from __future__ import annotations
 
 import pathlib
+import secrets
 import shutil
 from dataclasses import dataclass
 from importlib import resources
@@ -204,8 +205,13 @@ def init(
         template_ref = _bundled_template_ref()
         write_project_metadata(dest, framework=selected_framework, template=template_name)
         if mason_server:
-            memory_store = memory_store or default_store_name(dest.name, "memory")
-            session_store = session_store or default_store_name(dest.name, "session")
+            # A fresh scaffold gets its own new stores. Store display names aren't unique, and many
+            # projects share a directory name (my-agent), so a bare `<dir>-memory` collides across
+            # users and re-scaffolds; a short random token per scaffold keeps them distinct. Both
+            # stores share the token so the pair reads as one agent's. `--memory/session-store` wins.
+            token = secrets.token_hex(3)
+            memory_store = memory_store or f"{default_store_name(dest.name, 'memory')}-{token}"
+            session_store = session_store or f"{default_store_name(dest.name, 'session')}-{token}"
         project = AgentProject.create(
             dest,
             framework=selected_framework,
