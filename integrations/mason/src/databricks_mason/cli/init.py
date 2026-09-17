@@ -10,8 +10,11 @@ foreground-only FastAPI server.
 
 from __future__ import annotations
 
+import json
 import pathlib
+import shlex
 import shutil
+import tempfile
 from dataclasses import dataclass
 from importlib import resources
 from importlib.metadata import PackageNotFoundError
@@ -109,8 +112,109 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
     return True
 
 
+def _prepare_migration(
+    obj,
+    dest: pathlib.Path,
+    *,
+    chat_app_enabled: bool,
+    durable_runtime: bool,
+    profile: Optional[str],
+    memory_store: Optional[str],
+    session_store: Optional[str],
+) -> None:
+    """Prepare a reference project and migration skill without changing the application."""
+    if not dest.is_dir():
+        raise AgentCliError(f"Existing project directory '{dest}' was not found.")
+    skill = dest / ".claude" / "skills" / "mason-migrate"
+    for parent in (dest / ".claude", skill.parent, skill):
+        if parent.is_symlink() or (parent.exists() and not parent.is_dir()):
+            raise AgentCliError(f"Cannot install migration skill at '{parent}'.")
+    if skill.exists():
+        raise AgentCliError(
+            f"Migration skill already exists at '{skill}'.",
+            hint="Use the existing PROMPT.md, or move the skill directory before regenerating.",
+        )
+
+    # Build the bundle before touching the project, so a failed copy leaves no partial skill.
+    with tempfile.TemporaryDirectory(prefix="mason-migrate-") as tmp:
+        staged = pathlib.Path(tmp) / "mason-migrate"
+        reference = staged / "references" / "template"
+        template = _TEMPLATES["langgraph"]
+        overlays = (template.chat_app,) if chat_app_enabled else ()
+        _copy_packaged_template(template.mason_server, reference, overlays)
+        project_name = dest.resolve().name
+        AgentProject.create(
+            reference,
+            framework="langgraph",
+            durability_enabled=durable_runtime,
+            memory_store=memory_store or default_store_name(project_name, "memory"),
+            session_store=session_store or default_store_name(project_name, "session"),
+        ).write()
+        write_project_metadata(reference, framework="langgraph", template=template.mason_server)
+        source = resources.files("databricks_mason").joinpath("templates").joinpath("mason-migrate")
+        (staged / "SKILL.md").write_text(
+            source.joinpath("SKILL.md").read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        template_ref = _bundled_template_ref()
+        (staged / "references" / "migration.json").write_text(
+            json.dumps(
+                {
+                    "framework": "langgraph",
+                    "template_ref": template_ref,
+                    "server": "mason",
+                    "chat_app_enabled": chat_app_enabled,
+                    "durable_runtime": durable_runtime,
+                    "profile": profile,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        prompt = (
+            "Use the mason-migrate skill at .claude/skills/mason-migrate/SKILL.md to adapt "
+            "my existing LangGraph agent in this project for Mason. Read its migration settings "
+            "and local template reference. Implement and verify the integration while preserving "
+            "my agent's behavior. Explicitly handle existing persistence, conversation history, "
+            "custom graph state, and client contracts; surface any unresolved migration choices. "
+            "Report which Mason commands are ready and any remaining limitations.\n"
+        )
+        (staged / "PROMPT.md").write_text(prompt, encoding="utf-8")
+        shutil.copytree(staged, skill)
+
+    if obj.output == "json":
+        render.emit_json(
+            {
+                "mode": "existing",
+                "framework": "langgraph",
+                "directory": str(dest),
+                "skill": str(skill / "SKILL.md"),
+                "prompt_file": str(skill / "PROMPT.md"),
+                "prompt": prompt.strip(),
+                "template_ref": template_ref,
+                "chat_app_enabled": chat_app_enabled,
+                "durable_runtime": durable_runtime,
+            }
+        )
+        return
+    render.success(
+        "Prepared migration instructions (agent conversion is still required)",
+        fields={"Directory": str(dest), "Skill": str(skill / "SKILL.md")},
+        next_steps=[
+            (f"cd {shlex.quote(str(dest))}", "Enter the existing project"),
+            "Open Claude Code and paste the prompt from .claude/skills/mason-migrate/PROMPT.md:",
+            prompt.strip(),
+        ],
+    )
+
+
 @click.command(name="init")
 @click.argument("directory", required=False)
+@click.option(
+    "--existing",
+    is_flag=True,
+    help="Prepare a Claude migration skill for an existing LangGraph project (defaults to .).",
+)
 @click.option(
     "--framework",
     type=click.Choice([framework.value for framework in AgentFramework]),
@@ -158,6 +262,7 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
 def init(
     obj,
     directory: Optional[str],
+    existing: bool,
     framework: Optional[str],
     server: str,
     profile: Optional[str],
@@ -169,7 +274,7 @@ def init(
     """Scaffold a local agent project from a mason template.
 
     DIRECTORY is the target path to create (defaults to the template's own name). The
-    directory must not already exist. Once scaffolded, deploy it with
+    directory must not already exist unless --existing is supplied. Once scaffolded, deploy it with
     `mason deploy <name> --source <directory>`.
 
     Pass --profile (or set a default via `mason login` / -p) to seed a local `.env` so the
@@ -181,6 +286,10 @@ def init(
     The default Mason server supports foreground, streaming, and background invocations through one
     HTTP contract and Runtime Store. Pass --server custom for a minimal foreground-only
     FastAPI server.
+
+    With --existing, prepare a skill, prompt, and bundled template reference under
+    .claude/skills/mason-migrate. Run the prompt in Claude Code to convert the agent;
+    init leaves existing application source, dependencies, and configuration intact.
     """
     selected_framework = parse_framework(framework or AgentFramework.LANGGRAPH)
     selected_server = parse_server(server)
@@ -188,12 +297,28 @@ def init(
     template = _TEMPLATES[selected_framework]
     template_name = template.mason_server if mason_server else template.custom_server
     chat_app_enabled = mason_server and not disable_chat_app
+    if existing:
+        if selected_framework != "langgraph" or not mason_server:
+            raise click.UsageError(
+                "--existing currently supports --framework langgraph --server mason"
+            )
+        _prepare_migration(
+            obj,
+            pathlib.Path(directory or "."),
+            chat_app_enabled=chat_app_enabled,
+            durable_runtime=durable_runtime,
+            profile=profile or obj.profile,
+            memory_store=memory_store,
+            session_store=session_store,
+        )
+        return
     dest = pathlib.Path(directory) if directory else pathlib.Path(template_name)
 
     if dest.exists():
         raise AgentCliError(
             f"Destination '{dest}' already exists.",
-            hint="Choose a new directory or remove the existing one.",
+            hint="Use --existing --framework langgraph to prepare a migration, "
+            "or choose a new directory to scaffold.",
         )
 
     overlay_names = (template.chat_app,) if chat_app_enabled else ()

@@ -205,7 +205,7 @@ mason [-p <profile>] [-o text|json]
   init         [--framework openai|langgraph] [--server mason|custom]
                [--disable-chat-app]
                [--memory-store NAME] [--session-store NAME]
-               [--profile P] [directory]
+               [--existing] [--profile P] [directory]
   dev          [--source PATH] [--prepare-environment] [--app-port PORT]
                [--with-traces C.S]
   memory
@@ -237,6 +237,31 @@ mason [-p <profile>] [-o text|json]
   endpoint
     invoke      [APP] --path PATH [--url URL] [--json JSON] [--sse]
 ```
+
+## Bring an existing LangGraph agent
+
+From the existing project, prepare a Claude Code migration:
+
+```sh
+mason init --framework langgraph --existing .
+```
+
+This writes `.claude/skills/mason-migrate/` containing a skill, a prompt to paste into Claude Code,
+and a reference project generated from the templates bundled with the installed CLI. Mason prepares
+the instructions; Claude performs and verifies the conversion. Init leaves application source,
+dependencies, `.env`, and existing Mason configuration intact and refuses to overwrite an existing
+migration skill.
+
+The skill follows the shared
+[Mason contract](src/databricks_mason/templates/agent-langgraph/MASON_CONTRACT.md) included in new
+projects and migration references. It explicitly handles existing history, custom state and output,
+recovery, and client/session contracts. Switching checkpointers does not migrate old conversations;
+unresolved transitions require a user decision.
+
+The reference honors `--disable-chat-app`, `--no-durable-runtime`, `--memory-store`,
+`--session-store`, and the selected profile. These are migration intent; init does not provision
+resources or change the existing application. Migration currently supports LangGraph with the
+Mason server.
 
 ## Invoke HTTP endpoints
 
