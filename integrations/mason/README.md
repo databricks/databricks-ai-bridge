@@ -6,6 +6,52 @@ authenticated command.
 
 > The underlying APIs are in preview and may need workspace enablement.
 
+## Overview
+
+A managed path from your custom agent code to a production-ready, scalable, durable agent hosted on
+Databricks in minutes - with no server framework to build, no infrastructure to provision, and no
+invocation protocol to design yourself. Bring your own agent, or start from a template.
+
+- **Deployment** - a guided lifecycle (scaffold, run locally, deploy) that turns an agent project
+  into a hosted endpoint. Databricks provisions the compute, the stores your agent binds (session,
+  memory), and the access grants, so you ship application code and get a running endpoint.
+- **Runtime** - a managed HTTP invocation contract (synchronous, streaming, background) plus optional
+  durable execution (persistence, heartbeats, crash recovery) backed by Databricks Lakebase, with no
+  database or job queue to operate. Use the opinionated `AgentApp` server to get it out of the box,
+  or bring your own server for full control.
+
+**Deployment**
+
+![Deployment: from a blank directory to a running service](docs/deployment.png)
+
+- **Agent project** - `mason init` scaffolds a deployable project from a framework template
+  (LangGraph or OpenAI Agents) with the runtime, tests, and an optional chat UI wired up; you edit
+  the application code (model, tools, prompts).
+- **`agent.toml`** - the declarative source of truth for the Databricks-managed infrastructure your
+  agent depends on: tool bindings (data sandbox, managed MCP services, Unity Catalog functions) and
+  memory, session, and durability resources. `mason deploy` reads it to provision and wire everything
+  up (detailed under [Agent tools](#agent-tools)).
+- **`mason deploy`** - provisions the bound stores, grants the app's service principal access to
+  them, provisions the durable-runtime database when durability is on, configures tracing, and rolls
+  out the app. `mason deployments` covers the lifecycle (list, get, logs, start, stop, delete).
+- **`mason dev`** - runs your agent from the same manifest the deployment uses, so local behavior
+  matches what ships.
+
+**Runtime**
+
+![Runtime: the opinionated AgentApp server, or bring your own](docs/runtime.png)
+
+There are two ways to run an agent, depending on how much you want handled for you:
+
+- **`AgentApp` - opinionated, batteries included.** Register one handler and get Mason's full
+  invocation contract (synchronous, streaming, background) with idempotent, UUID-keyed requests.
+  Enable the durable runtime for persistence, heartbeats, and automatic crash recovery on Lakebase,
+  so long-running and background work survives restarts, redeploys, and crashes. The framework
+  templates are thin layers over `AgentApp` (HTTP contract detailed under [Runtime](#runtime)).
+- **Custom server - generic, full control.** `mason init --server custom` scaffolds a minimal FastAPI
+  server with no `AgentApp`: you define your own endpoints, request/response shapes, and protocol.
+  `mason dev` and `mason deploy` run and ship it the same way.
+
 ## Prerequisites
 
 - **Python ≥3.10** — the mason CLI installs and runs on any Python 3.10+. The
@@ -197,6 +243,9 @@ See the [runtime guide](src/databricks_mason/runtime/README.md) for agent hooks,
 and recovery behavior.
 
 ## Commands
+
+For the full command reference - every command, subcommand, argument, and option, in table form -
+see [`cli.md`](cli.md). The tree below is a quick overview.
 
 ```text
 mason [-p <profile>] [-o text|json]
@@ -447,57 +496,8 @@ invocations, background submission and polling, session transcript loading, HITL
 entry operations. Capability colors are automatic from `/api/demo/config`; only the
 sync/streaming/background transport selector is manual.
 
-## Developing Mason
+## Contributing
 
-Templates ship **inside** the `databricks_mason` package (`src/databricks_mason/templates/`), so
-`mason init` copies the template that matches the installed CLI — the scaffold can't drift from the
-`databricks-mason` it runs against.
-
-For an **editable install** (`pip install -e integrations/mason`), two things run straight from your
-working tree with no rebuild or commit:
-
-- **CLI** — the `mason` command (`databricks_mason.cli` and the command modules) runs from the
-  checkout, since the editable install is the entrypoint.
-- **Templates** — `mason init` reads them via `importlib.resources`, which for an editable install
-  resolves to the source tree, so editing a template file changes the next scaffold immediately.
-
-```sh
-pip install -e integrations/mason     # editable install of the CLI
-mason init /tmp/scratch-agent         # scaffolds from your working-tree template
-cd /tmp/scratch-agent && mason dev
-```
-
-The editable install is one-and-done per venv and follows the working tree, so switching branches
-needs no reinstall — **except** a dependency change (a branch that adds or bumps a package in
-`integrations/mason/pyproject.toml`), which needs a reinstall to pick it up:
-
-```sh
-pip install -e integrations/mason     # only when dependencies changed
-```
-
-### Running a scaffold against unreleased Mason (SDK changes)
-
-A scaffold uses a normal `databricks-mason` PyPI dependency, so `mason dev` and `mason deploy`
-install the **released** SDK — editing `databricks_mason.runtime`/`.langgraph`/`.openai` in your
-checkout does **not** change what a scaffold runs. To exercise local or unreleased SDK changes in a
-scaffolded project, add a `[tool.uv.sources]` override to the scaffold's `pyproject.toml`. It's a
-dev-loop-only edit — don't ship it in a real deployment.
-
-**`mason dev` — your local checkout (editable, picks up uncommitted edits):**
-
-```toml
-[tool.uv.sources]
-databricks-mason = { path = "/abs/path/to/databricks-ai-bridge/integrations/mason", editable = true }
-```
-
-`mason dev` builds the scaffold's venv from this, so your working-tree SDK edits run live.
-
-**`mason deploy` — a pushed git ref (the Apps build can't reach a local path):**
-
-```toml
-[tool.uv.sources]
-databricks-mason = { git = "https://github.com/<you>/databricks-ai-bridge", rev = "<pushed-sha>", subdirectory = "integrations/mason" }
-```
-
-Commit and push first — the Apps build clones that commit. A `path` or `file://` pin won't resolve
-in the build sandbox, so use a git ref (or a released version) for deploys.
+Developing Mason itself - the CLI, SDK/runtime, and templates - plus the local dev loop and how to
+test unreleased changes on `mason dev` and `mason deploy`, is covered in
+[CONTRIBUTING.md](CONTRIBUTING.md).
