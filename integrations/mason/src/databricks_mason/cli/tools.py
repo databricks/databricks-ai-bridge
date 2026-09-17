@@ -10,6 +10,7 @@ import click
 
 from databricks_mason import render
 from databricks_mason.agent_project import AgentProject, Scope, ToolSpec
+from databricks_mason.cli.help import _example_epilog
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import require_managed_tool_support
 
@@ -37,7 +38,7 @@ def _source_value(spec: ToolSpec) -> str:
     # 'system.ai.sandbox' service name that duplicates the KIND column.
     if spec.source.kind == "sandbox" and spec.policy.downscope:
         return ", ".join(s.resource for s in spec.policy.downscope)
-    return spec.source.service or spec.source.function or spec.source.kind
+    return spec.source.service or spec.source.function or spec.source.space_id or spec.source.kind
 
 
 def _tool_record(spec: ToolSpec) -> dict[str, str]:
@@ -113,6 +114,8 @@ def tools() -> None:
       mcp           A Databricks-managed MCP service (see `mason mcp list`),
                     e.g. system.ai.python_exec.
       uc-function   An existing Unity Catalog function (catalog.schema.function).
+      genie-one     Workspace-wide Genie One MCP tools.
+      genie-agent   Native Genie conversation tools for a configured space ID.
 
     Add one with `mason tools add <type>`, see what's configured with `mason tools list`, and drop
     one with `mason tools remove`. Custom Python tools are code-first — write them directly in your
@@ -122,7 +125,7 @@ def tools() -> None:
 
 @tools.group("add")
 def add() -> None:
-    """Add a managed sandbox, MCP service, or UC function.
+    """Add a managed sandbox, MCP service, UC function, or Genie tool binding.
 
     Subcommands target the current directory by default.
 
@@ -209,6 +212,30 @@ def add_uc_function(
             function=function_name,
         ),
     )
+
+
+@add.command("genie-one", epilog=_example_epilog(("mason tools add genie-one",)))
+@click.option("--name", "tool_id", default="genie_one", show_default=True)
+@_source_option
+@click.pass_obj
+def add_genie_one(obj: Any, tool_id: str, source: pathlib.Path) -> None:
+    """Add workspace-wide Genie One MCP tools."""
+    _add_spec(obj, source.resolve(), ToolSpec.genie_one(tool_id))
+
+
+@add.command(
+    "genie-agent",
+    epilog=_example_epilog(
+        ("mason tools add genie-agent 0123456789abcdef0123456789abcdef --name sales",)
+    ),
+)
+@click.argument("space_id")
+@click.option("--name", "tool_id", default="genie_agent", show_default=True)
+@_source_option
+@click.pass_obj
+def add_genie_agent(obj: Any, space_id: str, tool_id: str, source: pathlib.Path) -> None:
+    """Add native Genie conversation tools for a 32-character lowercase hexadecimal SPACE_ID."""
+    _add_spec(obj, source.resolve(), ToolSpec.genie_agent(tool_id, space_id=space_id))
 
 
 @tools.command("list")

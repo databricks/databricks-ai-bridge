@@ -14,6 +14,7 @@ from databricks_mason import workspace_client, workspace_headers
 from databricks_mason.langgraph import (
     checkpointer,
     configure_tracing,
+    genie_tools,
     mcp_tools,
     memory_tools,
     start_trace,
@@ -81,7 +82,7 @@ async def create_agent_graph(actor: str, model: str | None = None):
     request to request.
     """
     mcp = await mcp_tools(build_mcp_servers())
-    tools = [*all_tools(), *memory_tools(actor), *mcp]
+    tools = [*all_tools(), *memory_tools(actor), *genie_tools(), *mcp]
     middleware = (
         [HumanInTheLoopMiddleware(interrupt_on=REQUIRE_APPROVAL)] if REQUIRE_APPROVAL else []
     )

@@ -28,12 +28,19 @@ logger = logging.getLogger(__name__)
 
 
 def _server_from_tool(tool: ToolRecord) -> DatabricksMCPServer | None:
+    if tool.kind not in {"sandbox", "mcp", "uc_function", "genie_one"}:
+        return None
     client = workspace_client()
     host = client.config.host.rstrip("/")
-    if tool.kind in {"sandbox", "mcp"}:
+    if tool.kind in {"sandbox", "mcp", "genie_one"}:
+        url = (
+            f"{host}/api/2.0/mcp/genie"
+            if tool.kind == "genie_one"
+            else f"{host}/ai-gateway/mcp-services/{tool.service}"
+        )
         return DatabricksMCPServer(
             name=tool.id,
-            url=f"{host}/ai-gateway/mcp-services/{tool.service}",
+            url=url,
             headers=workspace_headers() or None,
             workspace_client=client,
             timeout=120.0,

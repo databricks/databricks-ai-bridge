@@ -132,6 +132,7 @@ def test_langgraph_runtime_loads_direct_manifest_and_protects_sandbox_meta(
     mcp = _reload_mcp()
 
     # _declared_servers() builds one server per manifest tool, with the right URLs.
+    monkeypatch.setattr(mcp, "workspace_client", _FakeWorkspaceClient)
     servers = mcp._declared_servers()
     assert [s.url for s in servers] == [
         "https://df1.example.com/ai-gateway/mcp-services/system.ai.sandbox",
@@ -239,6 +240,7 @@ source = { kind = "mcp", service = "system.ai.gamma" }
     monkeypatch.setenv("MASON_PROJECT_ROOT", str(project))
 
     mcp = _reload_mcp()
+    monkeypatch.setattr(mcp, "workspace_client", _FakeWorkspaceClient)
 
     with caplog.at_level(logging.WARNING):
         tools = asyncio.run(mcp.mcp_tools())

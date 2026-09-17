@@ -228,7 +228,10 @@ mason [-p <profile>] [-o text|json]
     add sandbox      --scope SCOPE [--scope SCOPE ...] [--source PATH]
     add mcp          SERVICE [--name NAME] [--source PATH]
     add uc-function  FUNCTION [--name NAME] [--source PATH]
+    add genie-one    [--name NAME] [--source PATH]
+    add genie-agent  SPACE_ID [--name NAME] [--source PATH]
     list             [--source PATH]
+    remove           ID [--source PATH]
   deploy       <name> --source PATH [--with-traces C.S] [--instances N]
   deployments  list | get | logs | start | stop | delete
   endpoint
@@ -288,7 +291,7 @@ mason sessions items append --help
 
 For projects with `[agent].server = "mason"` (the default from `mason init`), `agent.toml` is the
 declarative source of truth for Databricks-managed infrastructure: the Runtime Store, sandbox,
-managed MCP and Unity Catalog function bindings, plus memory and session resources. `mason tools
+managed MCP, Genie and Unity Catalog function bindings, plus memory and session resources. `mason tools
 add` updates only this file; direct TOML edits have the same behavior. Both Mason-server framework
 adapters read the managed bindings at runtime without generating or patching agent source:
 
@@ -333,6 +336,75 @@ Sandbox scopes default to read-only access. Repeat `--scope` to allow more than 
 `volume:` or `workspace:` for those resource types, and use `--permission read_write` only when the
 agent needs writes. Every sandbox call carries this fixed downscope in MCP `_meta`, outside the tool
 arguments controlled by the model.
+
+### Genie tools
+
+Genie One and Genie Agent support ship with Mason, but bindings are opt-in, like sandbox tools.
+Installing Mason does not configure a Genie Space ID or enable a Genie binding. Add only the
+capabilities your agent needs:
+
+```sh
+mason tools add genie-one --name genie_one
+mason tools add genie-agent SPACE_ID --name genie_agent
+mason -o json tools list --source ./my-agent
+mason tools remove genie_one
+mason tools remove genie_agent
+```
+
+`--name` is optional and defaults to `genie_one` or `genie_agent`, respectively. Both add commands,
+`list`, and `remove` accept `--source PATH` to select a project instead of the current directory.
+For scripted output, put the global `-o json` option before `tools`, as in
+`mason -o json tools add genie-one --source ./my-agent`. Adding a binding is offline: it updates
+`agent.toml` without contacting Genie or checking permissions. The corresponding sources are:
+
+```toml
+[[tools]]
+id = "genie_one"
+source = { kind = "genie_one" }
+
+[[tools]]
+id = "genie_agent"
+source = { kind = "genie_agent", space_id = "<your-space-id>" }
+```
+
+Replace `SPACE_ID` or `<your-space-id>` with an existing space's 32-character lowercase hexadecimal
+ID. `genie-one` connects to the workspace-wide MCP endpoint
+`https://<workspace-hostname>/api/2.0/mcp/genie`, without a space suffix. `genie-agent` uses the
+native Genie **Chat-mode** conversation API through the Databricks SDK, not the streaming
+Agent-mode API or the per-space MCP endpoint.
+
+Each native binding exposes `{id}_ask`, `{id}_poll`, and `{id}_query_result`, where `{id}` is its
+binding name. Ask accepts an optional `conversation_id` for follow-ups. Ask and poll share a
+120-second budget per call, including client setup and submission. If the response is still
+running, they return `timed_out` with the conversation and message IDs so the caller can poll
+again. If submission times out before a message ID is received, ask returns
+`INDETERMINATE_SUBMISSION`: the request may still complete, so do not resubmit automatically.
+`NOT_SUBMITTED` means client setup timed out before sending the question. Query results include
+the first 100 rows, column schema, a truncation indicator, and a deep link to the conversation.
+
+Both framework modules, `databricks_mason.langgraph` and `databricks_mason.openai`, export
+`genie_tools()`. New Mason-server templates use it automatically for native Genie Agent bindings;
+Genie One uses the existing managed MCP helpers. In an existing Mason-server project, import
+`genie_tools` from your framework module and add `*genie_tools()` to the agent's existing tool list.
+The CLI does not patch existing Python code.
+
+Both paths use Mason's existing authentication and routed workspace. Genie One requires the
+Managed MCP Servers workspace preview; delegated access requires the `genie` OAuth scope.
+The effective caller needs access to the data, the SQL warehouse, and the selected Genie space
+where applicable. Mason does not grant permissions or promise a service-principal fallback when
+caller credentials lack access. An offline add succeeding does not establish runtime access.
+
+The opt-in live tests exercise both frameworks against the configured workspace and an existing
+Genie space. From `integrations/mason`, with both framework extras installed:
+
+```sh
+DATABRICKS_CONFIG_PROFILE=my-workspace RUN_MASON_GENIE_TESTS=1 \
+  MASON_GENIE_SPACE_ID=SPACE_ID \
+  uv run pytest tests/integration_tests/genie_tools_test.py
+```
+
+By default they ask for the row count of `samples.nyctaxi.trips`. Set `MASON_GENIE_QUESTION` for
+another dataset and `MASON_GENIE_EXPECTED_VALUE` to assert a known result cell.
 
 ## Initialize the chat app demo
 
