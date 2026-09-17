@@ -340,7 +340,7 @@ def test_add_missing_mcp_leaves_project_unchanged(tmp_path: pathlib.Path):
     assert result.exit_code == 1, result.output
     assert "NOT_FOUND" in result.output
     assert "system.ai.missing_service" in result.output
-    assert "mason mcp list" in result.output
+    assert "mason tools list --kind mcp" in result.output
     assert {path: path.read_bytes() for path in project.rglob("*") if path.is_file()} == before
 
 

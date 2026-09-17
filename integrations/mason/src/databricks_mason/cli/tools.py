@@ -88,8 +88,8 @@ def _add_spec(obj: Any, source: pathlib.Path, spec: ToolSpec) -> None:
                 f"Could not validate MCP service {service!r}: {exc.message}",
                 error_code=exc.error_code,
                 hint=exc.hint
-                or "Run `mason mcp list --schema catalog.schema` with the same --profile "
-                "to find available services.",
+                or "Run `mason tools list --kind mcp` with the same --profile to find "
+                "available services.",
             ) from exc
     changed_files = [project.write()] if changed else []
     _emit_change(obj, project, spec, changed_files)
