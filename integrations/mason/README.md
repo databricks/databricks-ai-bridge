@@ -82,9 +82,8 @@ deployments list` shows what you have deployed, and `mason deployments get my-ag
 URL and status.
 
 `mason init` declares default memory and session stores in `agent.toml`, so the deployed agent has
-long-term memory and durable conversation history. It creates `<name>-<token>-memory` and
-`<name>-<token>-sessions` (a short random token keeps fresh scaffolds from colliding), records both
-names in `agent.toml`, and prints them in the `mason init` output.
+long-term memory and durable conversation history. It creates `<name>-<6-letter-token>-memory` and
+`<name>-<6-letter-token>-sessions`, and records both names in `agent.toml`.
 `mason deploy` creates them if they don't exist yet. Point the agent at stores you already have with
 `mason memory bind <name>` / `mason sessions bind <name>`, or scaffold without stores using
 `mason init --server custom` (see [Initialize the chat app demo](#initialize-the-chat-app-demo)).
