@@ -33,6 +33,7 @@ from databricks_mason.app_resources import (
     apply_experiment_resource,
     apply_postgres_resources,
 )
+from databricks_mason.cli.endpoint_examples import print_agent_invoke_command
 from databricks_mason.cli.tracing import (
     TRACES_EXPERIMENT_ID_ENV,
     TRACES_TRACKING_URI_ENV,
@@ -573,7 +574,6 @@ def deploy(
     if runtime_backend is not None:
         env_updates[RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV] = runtime_backend.endpoint_path
         env_updates[RUNTIME_STORE_SCHEMA_ENV] = runtime_backend.schema
-        provisioned["Runtime Store"] = runtime_backend.database_path
     if pip_index_url:
         for env in _PIP_INDEX_ENVS:
             env_updates[env] = pip_index_url
@@ -726,6 +726,9 @@ def deploy(
         f"Deployed agent '{name}'",
         fields=fields,
         next_steps=steps,
+    )
+    print_agent_invoke_command(
+        name, uses_runtime_api=bool(project and project.server == AgentServer.MASON)
     )
 
 

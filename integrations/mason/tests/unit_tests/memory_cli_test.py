@@ -1,7 +1,7 @@
 """CLI-level unit tests for `mason memory` entries + stores commands.
 
 Backfills coverage for the memory command handlers/render paths in
-src/databricks_mason/memory.py using a fake low-level client.
+src/databricks_mason/cli/memory.py using a fake low-level client.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ import json
 
 from click.testing import CliRunner
 
-from databricks_mason.memory import entries, stores
+from databricks_mason.cli.memory import entries, stores
 
 STORE = "mem-uuid"
 ENTRY = f"memory-stores/{STORE}/entries/e1"

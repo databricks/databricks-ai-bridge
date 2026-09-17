@@ -294,6 +294,11 @@ def test_dev_announces_chat_ui_when_overlay_present(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     assert "Chat UI" in result.output
     assert "http://localhost:9000" in result.output
+    output = " ".join(result.output.split())
+    assert "mason endpoint invoke" in output
+    assert "--url http://localhost:9000" in output
+    assert "--path /api/invocations" in output
+    assert "$(uuidgen)" in output
 
 
 def test_dev_announces_api_endpoint_when_no_ui(tmp_path: pathlib.Path):
@@ -305,6 +310,41 @@ def test_dev_announces_api_endpoint_when_no_ui(tmp_path: pathlib.Path):
     assert "http://localhost:8000/invocations" in result.output
     # a copy-pasteable sample request, not just the bare endpoint
     assert "curl -X POST" in " ".join(result.output.split())
+    output = " ".join(result.output.split())
+    assert "mason endpoint invoke" in output
+    assert "--url http://localhost:8000" in output
+    assert "--path /invocations" in output
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("server,chat_ui", [("mason", True), ("mason", False), ("custom", False)])
+def test_dev_prints_standalone_invoke_for_each_template(tmp_path, framework, server, chat_ui):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    AgentProject.create(tmp_path, framework=framework, server=server).write()
+    if chat_ui:
+        (tmp_path / "runtime").mkdir()
+        (tmp_path / "runtime" / "ui.py").write_text("# chat UI\n")
+    with mock.patch.object(dev_mod, "_databricks"):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    commands = [line for line in result.output.splitlines() if line.startswith("mason endpoint")]
+    assert len(commands) == 1, result.output
+    command = commands[0]
+    path = "/api/invocations" if server == "mason" else "/invocations"
+    assert f"mason endpoint invoke --url http://localhost:8000 --path {path} --json " in command
+    assert "│" not in command
+    assert ("$(uuidgen)" in command) is (server == "mason")
+    panel, example = result.output.split("Invoke with Mason\n")
+    assert panel.splitlines()[-1].startswith("╰")
+    assert example.splitlines() == [command]
+    assert any(line.startswith("│") and "mason deploy" in line for line in panel.splitlines())
+    if server == "mason":
+        assert any(
+            line.startswith("│") and "mason tools add" in line for line in panel.splitlines()
+        )
+    if not chat_ui:
+        assert "curl -X POST" in panel  # preserve the existing API-only next step
 
 
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])

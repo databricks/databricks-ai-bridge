@@ -24,6 +24,7 @@ from databricks_mason.cli.deploy import (
     resolve_trace_experiment_id,
     store_bindings,
 )
+from databricks_mason.cli.endpoint_examples import print_agent_invoke_command
 from databricks_mason.cli.tracing import experiment_url
 from databricks_mason.databricks_cli import _databricks
 from databricks_mason.errors import AgentCliError
@@ -269,6 +270,12 @@ def _announce_local_url(
                 (f"mason deploy {deploy_name}", "Deploy it to Databricks"),
             ],
         )
+
+    print_agent_invoke_command(
+        f"--url {base}",
+        uses_runtime_api=(source_dir / "runtime" / "ui.py").is_file()
+        or server == AgentServer.MASON,
+    )
 
 
 def _dev_entry_point(
