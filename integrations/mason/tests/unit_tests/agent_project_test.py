@@ -245,15 +245,13 @@ def test_required_project_selections_name_agent_manifest(
     [
         ("My_Agent", "my-agent-memory"),
         ("a.b c", "a-b-c-memory"),
-        ("___", "agent-memory"),
-        ("2048-game", "game-memory"),  # leading digits dropped: names must not start with a digit
-        ("123", "agent-memory"),  # all-numeric reduces to the fallback
+        ("___", "agent-memory"),  # only punctuation reduces to the fallback
+        ("2048-game", "2048-game-memory"),  # digits are kept: the backend prefixes memory-/session-
+        ("123", "123-memory"),  # an all-numeric directory is a valid store name
     ],
 )
 def test_default_store_name_sanitizes(raw: str, expected: str):
-    name = default_store_name(raw, "memory")
-    assert name == expected
-    assert not name[0].isdigit()  # store names must not start with a digit
+    assert default_store_name(raw, "memory") == expected
 
 
 def test_default_store_name_inserts_token_before_suffix():

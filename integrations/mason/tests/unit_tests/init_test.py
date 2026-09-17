@@ -37,7 +37,7 @@ def _pop_default_stores(manifest: dict, slug: str = "proj") -> dict:
     """
     mem = re.fullmatch(rf"{slug}-([a-z]{{6}})-memory", manifest.pop("memory_store")["name"])
     sess = re.fullmatch(rf"{slug}-([a-z]{{6}})-sessions", manifest.pop("session_store")["name"])
-    assert mem and sess, "default store names must be <slug>-<kind>-<token>"
+    assert mem and sess, "default store names must be <slug>-<token>-<kind>"
     assert mem.group(1) == sess.group(1), "memory and session stores must share the scaffold token"
     return manifest
 
@@ -221,6 +221,9 @@ def test_init_json_output(tmp_path: pathlib.Path):
     assert payload["directory"] == str(dest)
     assert payload["server"] == "mason"
     assert payload["chat_app_enabled"] is True
+    # The scaffolded store names are reported (they carry a random token, so aren't inferable).
+    assert re.fullmatch(r"proj-[a-z]{6}-memory", payload["memory_store"])
+    assert re.fullmatch(r"proj-[a-z]{6}-sessions", payload["session_store"])
 
 
 def test_init_refuses_existing_destination(tmp_path: pathlib.Path):

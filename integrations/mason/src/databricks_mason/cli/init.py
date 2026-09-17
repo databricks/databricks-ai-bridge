@@ -147,14 +147,15 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
     "--memory-store",
     "memory_store",
     default=None,
-    help="Name for the declared memory store (default: derived from the directory, <dir>-memory). "
-    "Only --server mason declares stores by default.",
+    help="Name for the declared memory store (default: a unique name derived from the directory, "
+    "<dir>-<token>-memory). Only --server mason declares stores by default.",
 )
 @click.option(
     "--session-store",
     "session_store",
     default=None,
-    help="Name for the declared session store (default: derived from the directory, <dir>-session).",
+    help="Name for the declared session store (default: a unique name derived from the directory, "
+    "<dir>-<token>-sessions).",
 )
 @click.pass_obj
 def init(
@@ -238,6 +239,8 @@ def init(
                 "server": selected_server.value,
                 "chat_app_enabled": chat_app_enabled,
                 "env_profile": env_profile if wrote_env else None,
+                "memory_store": memory_store,
+                "session_store": session_store,
             }
         )
         return
@@ -250,6 +253,11 @@ def init(
     }
     if chat_app_enabled:
         fields["Chat app"] = "enabled"
+    # Surface the store names: with the random token they can't be inferred from the directory.
+    if memory_store:
+        fields["Memory store"] = memory_store
+    if session_store:
+        fields["Session store"] = session_store
     steps: list[str | tuple[str, str]] = [(f"cd {dest}", "Enter the project directory")]
     if wrote_env:
         fields["Profile (.env)"] = env_profile
