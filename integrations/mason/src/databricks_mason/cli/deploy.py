@@ -716,8 +716,6 @@ def deploy(
             "The app's service principal needs write access to its trace experiment; that grant "
             f"couldn't be applied automatically. Cause: {trace_grant_error}",
         )
-    if grants_stores and grant_error is None:
-        provisioned["Store access"] = "granted to app service principal"
     if trace_experiment_id and trace_grant_error is None:
         provisioned["Trace access"] = "granted to app service principal"
     fields = {"URL": app_url} if app_url else {}
