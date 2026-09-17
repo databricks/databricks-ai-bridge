@@ -9,11 +9,11 @@ authenticated command.
 ## Prerequisites
 
 - **Python ≥3.10** — the mason CLI installs and runs on any Python 3.10+. The
-  `memory`, `sessions`, `tracing`, and `mcp` commands need nothing else.
+  `memory`, `sessions`, `tracing`, and `tools` commands need nothing else.
 - **[`uv`](https://docs.astral.sh/uv/)** — needed to scaffold, run, and deploy an
   agent (`mason init` → `mason dev` → `mason deploy`): the scaffolded project builds
   its environment and launches with `uv run`, both locally and in the deployed Apps
-  runtime. Not needed for the store/session/tracing/mcp commands above.
+  runtime. Not needed for the store/session/tracing/tools commands above.
 - **[Databricks CLI](https://docs.databricks.com/dev-tools/cli/)** — needed for
   browser-based `mason login`. If a profile is already authenticated, Mason uses it
   directly and the Databricks CLI is optional.
@@ -59,7 +59,7 @@ Mason. `mason logout` forgets the saved selection without revoking the underlyin
 
 If Databricks SDK default authentication is already configured, you can skip `mason login`.
 You can also pass the global `--profile/-p` option before an individual command, for example
-`mason --profile <profile> mcp list`. Use `--output json` for scripting.
+`mason --profile <profile> tools list`. Use `--output json` for scripting.
 
 ## Quickstart
 
@@ -222,16 +222,15 @@ mason [-p <profile>] [-o text|json]
     configure  [--experiment E] [--source PATH]
     disable    [--source PATH]
     list | get
-  mcp
-    list             [--schema CATALOG.SCHEMA]
   tools
     add sandbox      --scope SCOPE [--scope SCOPE ...] [--source PATH]
     add mcp          SERVICE [--name NAME] [--source PATH]
     add uc-function  FUNCTION [--name NAME] [--source PATH]
     add genie-one    [--name NAME] [--source PATH]
     add genie-agent  SPACE_ID [--name NAME] [--source PATH]
-    list             [--source PATH]
-    remove           ID [--source PATH]
+    list             [--kind sandbox|mcp|uc-function|genie-one|genie-agent]
+                     [--schema CATALOG.SCHEMA]
+    remove           TOOL_ID [MCP_SERVICE] [--source PATH]
   deploy       <name> --source PATH [--with-traces C.S] [--instances N]
   deployments  list | get | logs | start | stop | delete
   endpoint
@@ -299,23 +298,60 @@ adapters read the managed bindings at runtime without generating or patching age
 mason tools add sandbox --scope table:samples.nyctaxi.trips
 mason tools add mcp system.ai.web_search
 mason tools add uc-function catalog.schema.lookup_ticket
+mason tools add genie-one
+mason tools add genie-agent SPACE_ID
 mason tools remove mcp system.ai.web_search
 mason tools list
 ```
 
 For MCP services, the remove command accepts the same service name as the add command. You can also
-remove any binding by the ID shown in `mason tools list`, for example `mason tools remove
-web_search`. `mason tools list` reports these managed bindings; it does not inventory custom code.
+remove any binding by its `id` in `agent.toml`, for example `mason tools remove web_search`.
+Every successful add (including an already-configured no-op) points you to the target project's
+`agent.toml` to review configured managed tools and MCP bindings. With `--source`, the message
+points to that project's file. JSON add output includes its path in `manifest`.
 
-Discover the MCP Services available to your user before adding one. By default Mason lists the
-Databricks-managed services in `system.ai`; pass `--schema catalog.schema` for another Unity Catalog
-schema. Text output includes a copyable add command, while `--output json` returns normalized service
-records for scripts:
+`mason tools list` discovers **available integrations to add**, not configured bindings. By default
+it shows built-in add recipes and caller-visible MCP Services in `system.ai`. A recipe may still
+need your resources: sandbox scopes, a concrete UC function name, or a Genie Space ID. Genie One
+needs no additional argument. `system.ai.sandbox` is represented by its scoped recipe rather than
+a second unscoped add command. The list does not enumerate every workspace schema, individual
+operations inside MCP services, or custom Python tools.
 
 ```sh
-mason mcp list
-mason mcp list --schema main.tools
+mason tools list
+mason tools list --kind mcp
+mason tools list --kind mcp --schema main.tools
+mason tools list --kind sandbox
+mason tools list --kind genie-one
+mason tools list --kind genie-agent
+mason --output json tools list
 ```
+
+No agent project is required for discovery. MCP discovery uses your Databricks profile; the
+`sandbox`, `uc-function`, `genie-one`, and `genie-agent` kind filters show local recipes without
+authentication. `--schema` requires `--kind mcp` and replaces the default `system.ai` scope. An
+API/authentication failure returns nonzero and marks discovery incomplete, while retaining local
+recipes; it is not reported as an empty successful discovery. Listing metadata does not verify
+runtime execution permissions.
+
+**Migration:** the former configured `tools list` view and its `--source` option are removed.
+Read `agent.toml` (its `[[tools]]` entries) to inspect configured bindings. Discovery JSON uses
+`schema_version: 2`, with `available_tools` (`name`, `kind`, `add_command`), `mcp_schema` (null for
+local-only recipes), `complete`, and `errors`. Replace old scripts that read configured-list JSON
+with TOML inspection. The deprecated, hidden `mason mcp list [--schema catalog.schema]` alias
+retains its MCP-only schema-version-1 JSON for compatibility. Use `mason tools list --help` for
+the new discovery contract.
+
+Read-only live discovery can be checked against the installed wheel without creating a project
+or deploying an agent:
+
+```sh
+MASON_E2E_PROFILE=<profile> .venv-functional/bin/pytest tests/e2e/tool_discovery_test.py -v
+```
+
+The live checks compare default and MCP-filtered discovery with the compatibility service list.
+Set `MASON_E2E_SCHEMA=catalog.schema` to exercise an additional schema. The installed CLI's local
+add/review/remove flows and all updated help pages are covered by `tests/functional/cli_smoke_test.py`.
 
 In Mason-server templates, custom Python tools are code-first. Write them with the framework's native
 decorator in `agent/tools/`: LangGraph uses `@tool`, while OpenAI Agents uses `@function_tool`. The
@@ -346,14 +382,16 @@ capabilities your agent needs:
 ```sh
 mason tools add genie-one --name genie_one
 mason tools add genie-agent SPACE_ID --name genie_agent
-mason -o json tools list --source ./my-agent
+mason tools list --kind genie-one
+mason tools list --kind genie-agent
 mason tools remove genie_one
 mason tools remove genie_agent
 ```
 
-`--name` is optional and defaults to `genie_one` or `genie_agent`, respectively. Both add commands,
-`list`, and `remove` accept `--source PATH` to select a project instead of the current directory.
-For scripted output, put the global `-o json` option before `tools`, as in
+`--name` is optional and defaults to `genie_one` or `genie_agent`, respectively. Both add commands
+and `remove` accept `--source PATH` to select a project instead of the current directory. Discovery
+needs no project; read that project's `agent.toml` to inspect configured bindings. For scripted
+output, put the global `-o json` option before `tools`, as in
 `mason -o json tools add genie-one --source ./my-agent`. Adding a binding is offline: it updates
 `agent.toml` without contacting Genie or checking permissions. The corresponding sources are:
 

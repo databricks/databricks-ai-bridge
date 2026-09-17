@@ -17,7 +17,7 @@ CommandPath = tuple[str, ...]
 # `_group.MasonGroup`).
 _COMMAND_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("SETUP", ("login", "logout", "init")),
-    ("DEVELOP", ("dev", "tools", "memory", "sessions", "mcp", "tracing")),
+    ("DEVELOP", ("dev", "tools", "memory", "sessions", "tracing")),
     ("SHIP", ("deploy", "deployments")),
 )
 
@@ -268,12 +268,14 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("mason tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
         ("mason tools add mcp system.ai.python_exec", "add a managed MCP tool"),
         ("mason tools remove mcp system.ai.python_exec", "remove a tool binding"),
-        ("mason tools list", "list configured tools"),
+        ("mason tools list", "browse available integrations to add"),
     ),
     ("tools", "add"): (
         ("mason tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
         ("mason tools add mcp system.ai.python_exec", "add a managed MCP tool"),
         ("mason tools add uc-function catalog.schema.lookup_ticket", "add a UC function tool"),
+        ("mason tools add genie-one", "add workspace-wide Genie One tools"),
+        ("mason tools add genie-agent SPACE_ID", "add tools for one Genie Space"),
     ),
     ("tools", "add", "sandbox"): (
         ("mason tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
@@ -288,7 +290,17 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("mason tools remove mcp system.ai.python_exec", "remove an MCP tool by service"),
         ("mason tools remove python_exec", "remove a tool by id"),
     ),
-    ("tools", "list"): (("mason tools list", "list configured tools"),),
+    ("tools", "list"): (
+        ("mason tools list", "browse built-in recipes and system.ai MCP Services"),
+        ("mason tools list --kind mcp", "discover MCP Services in system.ai"),
+        (
+            "mason tools list --kind mcp --schema main.tools",
+            "replace the default MCP schema",
+        ),
+        ("mason tools list --kind sandbox", "show the local recipe without authentication"),
+        ("mason tools list --kind genie-one", "show the Genie One add recipe"),
+        ("mason tools list --kind genie-agent", "show the Genie Agent add recipe"),
+    ),
 }
 
 # Longest command we align an inline `# comment` after. Past this, a group's comments would be
@@ -314,8 +326,8 @@ _SHORT_HELP: dict[CommandPath, str] = {
     ("deployments",): "Manage deployed agents",
     ("memory",): "Manage an agent's long-term memory",
     ("sessions",): "Manage an agent's conversation sessions",
-    ("mcp",): "Discover managed MCP services",
-    ("tools",): "Manage an agent's tools",
+    ("mcp",): "Deprecated MCP discovery alias",
+    ("tools",): "Discover integrations and manage tool bindings",
     ("tracing",): "Set up and inspect agent tracing",
 }
 

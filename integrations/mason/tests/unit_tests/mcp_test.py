@@ -95,3 +95,11 @@ def test_list_rejects_invalid_schema_before_api_call():
     assert result.exit_code != 0
     assert "catalog.schema" in result.output
     assert client.calls == []
+
+
+def test_legacy_text_uses_scoped_sandbox_add_command():
+    client = _Client([{"mcp_services": [{"name": "system.ai.sandbox"}]}])
+    result = CliRunner().invoke(mcp, ["list"], obj=_Ctx(client), env={"COLUMNS": "180"})
+    assert result.exit_code == 0, result.output
+    assert "mason tools add sandbox --scope table:catalog.schema.table" in result.output
+    assert "mason tools add mcp system.ai.sandbox" not in result.output
