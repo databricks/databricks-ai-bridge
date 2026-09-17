@@ -378,57 +378,8 @@ invocations, background submission and polling, session transcript loading, HITL
 entry operations. Capability colors are automatic from `/api/demo/config`; only the
 sync/streaming/background transport selector is manual.
 
-## Developing Mason
+## Contributing
 
-Templates ship **inside** the `databricks_mason` package (`src/databricks_mason/templates/`), so
-`mason init` copies the template that matches the installed CLI — the scaffold can't drift from the
-`databricks-mason` it runs against.
-
-For an **editable install** (`pip install -e integrations/mason`), two things run straight from your
-working tree with no rebuild or commit:
-
-- **CLI** — the `mason` command (`databricks_mason.cli` and the command modules) runs from the
-  checkout, since the editable install is the entrypoint.
-- **Templates** — `mason init` reads them via `importlib.resources`, which for an editable install
-  resolves to the source tree, so editing a template file changes the next scaffold immediately.
-
-```sh
-pip install -e integrations/mason     # editable install of the CLI
-mason init /tmp/scratch-agent         # scaffolds from your working-tree template
-cd /tmp/scratch-agent && mason dev
-```
-
-The editable install is one-and-done per venv and follows the working tree, so switching branches
-needs no reinstall — **except** a dependency change (a branch that adds or bumps a package in
-`integrations/mason/pyproject.toml`), which needs a reinstall to pick it up:
-
-```sh
-pip install -e integrations/mason     # only when dependencies changed
-```
-
-### Running a scaffold against unreleased Mason (SDK changes)
-
-A scaffold uses a normal `databricks-mason` PyPI dependency, so `mason dev` and `mason deploy`
-install the **released** SDK — editing `databricks_mason.runtime`/`.langgraph`/`.openai` in your
-checkout does **not** change what a scaffold runs. To exercise local or unreleased SDK changes in a
-scaffolded project, add a `[tool.uv.sources]` override to the scaffold's `pyproject.toml`. It's a
-dev-loop-only edit — don't ship it in a real deployment.
-
-**`mason dev` — your local checkout (editable, picks up uncommitted edits):**
-
-```toml
-[tool.uv.sources]
-databricks-mason = { path = "/abs/path/to/databricks-ai-bridge/integrations/mason", editable = true }
-```
-
-`mason dev` builds the scaffold's venv from this, so your working-tree SDK edits run live.
-
-**`mason deploy` — a pushed git ref (the Apps build can't reach a local path):**
-
-```toml
-[tool.uv.sources]
-databricks-mason = { git = "https://github.com/<you>/databricks-ai-bridge", rev = "<pushed-sha>", subdirectory = "integrations/mason" }
-```
-
-Commit and push first — the Apps build clones that commit. A `path` or `file://` pin won't resolve
-in the build sandbox, so use a git ref (or a released version) for deploys.
+Developing Mason itself - the CLI, SDK/runtime, and templates - plus the local dev loop and how to
+test unreleased changes on `mason dev` and `mason deploy`, is covered in
+[CONTRIBUTING.md](CONTRIBUTING.md).
