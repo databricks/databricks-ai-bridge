@@ -5,9 +5,13 @@ from __future__ import annotations
 import asyncio
 import re
 import time
-from typing import Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from databricks_mason.runtime.workspace import workspace_client
+
+if TYPE_CHECKING:
+    from databricks.sdk import WorkspaceClient
 
 _IDENTIFIER = re.compile(r"^[a-f0-9]{32}$")
 _TERMINAL = {"COMPLETED", "FAILED", "CANCELLED", "QUERY_RESULT_EXPIRED"}
@@ -22,11 +26,27 @@ def _identifier(value: str, name: str) -> str:
 class GenieAgent:
     """Call one configured space without allowing the model to choose credentials or scope."""
 
-    def __init__(self, space_id: str, *, wait_seconds: float = 120.0) -> None:
+    def __init__(
+        self,
+        space_id: str,
+        *,
+        wait_seconds: float = 120.0,
+        auth: str = "app",
+        workspace_client_for: Callable[[str], WorkspaceClient] | None = None,
+    ) -> None:
         self.space_id = _identifier(space_id, "space_id")
         if not 0 < wait_seconds <= 600:
             raise ValueError("wait_seconds must be greater than zero and at most 600.")
+        if auth not in ("user", "app"):
+            raise ValueError("auth must be 'user' or 'app'.")
         self.wait_seconds = wait_seconds
+        self.auth = auth
+        self.workspace_client_for = workspace_client_for
+
+    def _client(self) -> WorkspaceClient:
+        if self.workspace_client_for is not None:
+            return self.workspace_client_for(self.auth)
+        return workspace_client()
 
     async def ask(self, question: str, conversation_id: str | None = None) -> dict[str, Any]:
         """Ask the configured Genie Agent a data question, or continue a conversation.
@@ -46,7 +66,7 @@ class GenieAgent:
         deadline = time.monotonic() + self.wait_seconds
         try:
             client = await asyncio.wait_for(
-                asyncio.to_thread(workspace_client), timeout=deadline - time.monotonic()
+                asyncio.to_thread(self._client), timeout=deadline - time.monotonic()
             )
         except asyncio.TimeoutError:
             return self._submission_timeout(conversation_id, indeterminate=False)
@@ -98,7 +118,7 @@ class GenieAgent:
         deadline = time.monotonic() + self.wait_seconds
         try:
             client = await asyncio.wait_for(
-                asyncio.to_thread(workspace_client), timeout=deadline - time.monotonic()
+                asyncio.to_thread(self._client), timeout=deadline - time.monotonic()
             )
         except asyncio.TimeoutError:
             return {
@@ -158,7 +178,7 @@ class GenieAgent:
         _identifier(conversation_id, "conversation_id")
         _identifier(message_id, "message_id")
         _identifier(attachment_id, "attachment_id")
-        client = await asyncio.to_thread(workspace_client)
+        client = await asyncio.to_thread(self._client)
         response = await asyncio.to_thread(
             client.genie.get_message_attachment_query_result,
             self.space_id,
