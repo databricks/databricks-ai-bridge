@@ -1,4 +1,4 @@
-"""Manifest-backed ``mason tools`` commands."""
+"""Discover available integrations and manage manifest-backed tool bindings."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import click
 from databricks_mason import render
 from databricks_mason.agent_project import AgentProject, Scope, ToolSpec
 from databricks_mason.cli.help import _example_epilog
+from databricks_mason.cli.mcp import _add_command, _list_services, _validate_schema
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import require_managed_tool_support
 
@@ -56,6 +57,7 @@ def _emit_change(
         "schema_version": 1,
         "changed": bool(changed_files),
         "changed_files": [str(path) for path in changed_files],
+        "manifest": str(project.path),
         "tool": _tool_record(spec),
     }
     if getattr(obj, "output", "text") == "json":
@@ -68,11 +70,12 @@ def _emit_change(
         )
     else:
         click.echo(f"Tool {spec.id!r} is already configured in {project.path}")
+    click.echo(f"Review {project.path} to check configured managed tools and MCP bindings.")
 
 
 def _add_spec(obj: Any, source: pathlib.Path, spec: ToolSpec) -> None:
-    # MCP / UC-function / sandbox bindings are framework-neutral agent.toml entries. Both Mason
-    # server runtime adapters read them; custom-server projects wire tools directly in agent code.
+    # Managed bindings are framework-neutral agent.toml entries. Both Mason server runtime
+    # adapters read them; custom-server projects wire tools directly in agent code.
     project = AgentProject.load(source)
     require_managed_tool_support(project.root)
     changed = project.add_tool(spec)
@@ -102,7 +105,7 @@ def add_sandbox_to_manifest(
 
 @click.group()
 def tools() -> None:
-    """Manage the tools an agent can call, declared in the project's agent.toml.
+    """Discover available integrations and manage an agent's tool bindings.
 
     Tools are what let an agent act beyond the language model itself — query governed data, call a
     service, or run a function — and each one is recorded in agent.toml so `mason dev` / `mason
@@ -111,15 +114,17 @@ def tools() -> None:
     \b
       sandbox       Query Unity Catalog data via system.ai.sandbox, scoped
                     to the tables, volumes, or paths you choose.
-      mcp           A Databricks-managed MCP service (see `mason mcp list`),
-                    e.g. system.ai.python_exec.
+      mcp           A Databricks-managed MCP service (see `mason tools list --kind mcp`),
+                    e.g. system.ai.web_search.
       uc-function   An existing Unity Catalog function (catalog.schema.function).
       genie-one     Workspace-wide Genie One MCP tools.
       genie-agent   Native Genie conversation tools for a configured space ID.
 
-    Add one with `mason tools add <type>`, see what's configured with `mason tools list`, and drop
-    one with `mason tools remove`. Custom Python tools are code-first — write them directly in your
-    project's code rather than through the CLI.
+    Browse available integrations with `mason tools list`, add one with `mason tools add <type>`,
+    and drop a binding with `mason tools remove`. Review agent.toml for configured managed tools
+    and MCP bindings. The list shows addable integrations, not configured bindings or individual
+    operations inside an MCP service. Custom Python tools are code-first — write them directly
+    in your project's code rather than through the CLI.
     """
 
 
@@ -130,6 +135,8 @@ def add() -> None:
     Subcommands target the current directory by default.
 
     Pass --source PATH to target another project.
+
+    Review that project's agent.toml to check configured managed tools and MCP bindings.
     """
 
 
@@ -167,7 +174,10 @@ def add_sandbox(
     tool_id: str,
     source: pathlib.Path,
 ) -> None:
-    """Add a data sandbox tool (system.ai.sandbox), scoped to specific Unity Catalog resources."""
+    """Add a data sandbox tool (system.ai.sandbox), scoped to specific Unity Catalog resources.
+
+    Review the target project's agent.toml to check configured managed tools and MCP bindings.
+    """
     add_sandbox_to_manifest(obj, source.resolve(), scopes, permission, tool_id=tool_id)
 
 
@@ -182,8 +192,12 @@ def add_mcp(
     tool_id: str | None,
     source: pathlib.Path,
 ) -> None:
-    """Add a Databricks-managed MCP service as a tool (see `mason mcp list` for available services)."""
-    _require_arg(service, "managed MCP service name (e.g. system.ai.python_exec)")
+    """Add a Databricks-managed MCP service as a tool.
+
+    Use `mason tools list --kind mcp` for available services. Review the target project's
+    agent.toml to check configured managed tools and MCP bindings.
+    """
+    _require_arg(service, "managed MCP service name (e.g. system.ai.web_search)")
     _add_spec(
         obj,
         source.resolve(),
@@ -202,7 +216,10 @@ def add_uc_function(
     tool_id: str | None,
     source: pathlib.Path,
 ) -> None:
-    """Add an existing Unity Catalog function (catalog.schema.function) as a tool."""
+    """Add an existing Unity Catalog function (catalog.schema.function) as a tool.
+
+    Review the target project's agent.toml to check configured managed tools and MCP bindings.
+    """
     _require_arg(function_name, "Unity Catalog function name (catalog.schema.function)")
     _add_spec(
         obj,
@@ -239,20 +256,122 @@ def add_genie_agent(obj: Any, space_id: str, tool_id: str, source: pathlib.Path)
 
 
 @tools.command("list")
-@_source_option
+@click.option(
+    "--kind",
+    type=click.Choice(["sandbox", "mcp", "uc-function", "genie-one", "genie-agent"]),
+    help=(
+        "Show one integration kind. Sandbox, uc-function, genie-one, and genie-agent show local "
+        "add recipes only."
+    ),
+)
+@click.option(
+    "--schema",
+    help="Two-part UC schema: catalog.schema (default: system.ai). Requires --kind mcp.",
+)
 @click.pass_obj
-def list_tools(obj: Any, source: pathlib.Path) -> None:
-    """List managed tool bindings for this agent."""
-    project = AgentProject.load(source)
-    rows = [_tool_record(spec) for spec in project.tools]
-    if getattr(obj, "output", "text") == "json":
-        render.emit_json({"schema_version": 1, "tools": rows})
-        return
-    render.resource_table(
-        "Agent tools",
-        [("ID", "left"), ("KIND", "left"), ("SOURCE", "left")],
-        [(row["id"], row["kind"], row["source"]) for row in rows],
+def list_tools(obj: Any, kind: str | None, schema: str | None) -> None:
+    """List available integrations to add, not configured agent bindings.
+
+    By default, show built-in add recipes plus caller-visible MCP Services in system.ai.
+    --kind mcp limits discovery to MCP Services; --schema catalog.schema replaces system.ai.
+    Sandbox recipes require scopes; UC-function and Genie Agent recipes require concrete resource
+    identifiers. Genie One needs no additional argument.
+
+    No agent project is required. MCP discovery uses your Databricks profile; local recipes do
+    not authenticate. This does not scan every workspace schema or list individual MCP operations.
+    API failures return a nonzero exit status and mark discovery incomplete, not empty.
+
+    Review agent.toml to check configured managed tools and MCP bindings. The former configured
+    list and --source option are removed. JSON discovery uses schema_version 2 and available_tools.
+    """
+    if schema is not None and kind != "mcp":
+        raise AgentCliError("--schema requires --kind mcp.")
+    mcp_schema = (
+        _validate_schema("system.ai" if schema is None else schema)
+        if kind in (None, "mcp")
+        else None
     )
+    sandbox_command = _add_command("system.ai.sandbox")
+    recipes = [
+        {"name": "sandbox", "kind": "sandbox", "add_command": sandbox_command},
+        {
+            "name": "uc-function",
+            "kind": "uc-function",
+            "add_command": "mason tools add uc-function catalog.schema.function",
+        },
+        {
+            "name": "genie-one",
+            "kind": "genie-one",
+            "add_command": "mason tools add genie-one",
+        },
+        {
+            "name": "genie-agent",
+            "kind": "genie-agent",
+            "add_command": "mason tools add genie-agent SPACE_ID",
+        },
+    ]
+    rows = [recipe for recipe in recipes if kind is None or recipe["kind"] == kind]
+    discovery_error = None
+    if mcp_schema is not None:
+        try:
+            services = _list_services(obj.client(), mcp_schema)
+        except AgentCliError as exc:
+            discovery_error = exc
+        else:
+            for service in services:
+                name = service["name"]
+                if name == "system.ai.sandbox" and kind is None:
+                    continue
+                rows.append(
+                    {
+                        "name": name,
+                        "kind": "mcp",
+                        "add_command": _add_command(name),
+                    }
+                )
+    if getattr(obj, "output", "text") == "json":
+        errors = []
+        if discovery_error is not None:
+            error = {"message": discovery_error.message}
+            if discovery_error.error_code:
+                error["code"] = discovery_error.error_code
+            if discovery_error.hint:
+                error["hint"] = discovery_error.hint
+            errors.append(error)
+        render.emit_json(
+            {
+                "schema_version": 2,
+                "available_tools": rows,
+                "mcp_schema": mcp_schema,
+                "complete": discovery_error is None,
+                "errors": errors,
+            }
+        )
+    else:
+        if kind != "mcp":
+            render.resource_table(
+                "Built-in add recipes",
+                [("Kind", "left"), ("Add command (replace example resources)", "left")],
+                [(row["kind"], row["add_command"]) for row in rows if row["kind"] != "mcp"],
+            )
+        if mcp_schema is not None:
+            render.resource_table(
+                "Available MCP Services",
+                [("Service", "left"), ("Add command", "left")],
+                [(row["name"], row["add_command"]) for row in rows if row["kind"] == "mcp"],
+                subtitle=f"Caller-visible in {mcp_schema}"
+                + (" — discovery incomplete" if discovery_error is not None else ""),
+            )
+        click.echo("Tip: focus on MCP services with `mason tools list --kind mcp`.")
+        click.echo(
+            "Discover services in another UC schema with "
+            "`mason tools list --kind mcp --schema catalog.schema`."
+        )
+        click.echo("Review agent.toml to check configured managed tools and MCP bindings.")
+        if discovery_error is not None:
+            discovery_error.show()
+    if discovery_error is not None:
+        raise click.exceptions.Exit(1)
 
 
 @tools.command("remove")
@@ -280,7 +399,7 @@ def remove_tool(
         if len(matches) > 1:
             raise AgentCliError(
                 f"Multiple bindings use MCP service {mcp_service!r}.",
-                hint="Run `mason tools list`, then remove the intended binding by ID.",
+                hint=f"Review {project.path}, then remove the intended binding by ID.",
             )
         tool_id = matches[0].id if matches else _default_id(mcp_service)
     changed = project.remove_tool(tool_id)

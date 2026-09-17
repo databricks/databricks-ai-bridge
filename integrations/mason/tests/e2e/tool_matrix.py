@@ -23,6 +23,7 @@ import uuid
 from collections.abc import Callable, Sequence
 from typing import Any
 
+import tomli
 from databricks.sdk import WorkspaceClient
 
 FRAMEWORKS = ("langgraph",)
@@ -395,10 +396,8 @@ class Runner:
                 str(project),
             ]
         )
-        listed = self.run(
-            [str(self.mason), "--output", "json", "tools", "list", "--source", str(project)]
-        )
-        if any(tool["id"] == "broken_mcp" for tool in json.loads(listed.stdout)["tools"]):
+        manifest = tomli.loads((project / "agent.toml").read_text())
+        if any(tool["id"] == "broken_mcp" for tool in manifest.get("tools", [])):
             raise MatrixError("mason tools remove left the broken MCP binding in agent.toml")
         commands = [
             ["tools", "add", "sandbox", "--scope", "table:samples.nyctaxi.trips"],
@@ -414,14 +413,12 @@ class Runner:
         ]
         for args in commands:
             self.run([str(self.mason), *args, "--source", str(project)])
-        listed = self.run(
-            [str(self.mason), "--output", "json", "tools", "list", "--source", str(project)]
-        )
-        tool_ids = {tool["id"] for tool in json.loads(listed.stdout)["tools"]}
+        manifest = tomli.loads((project / "agent.toml").read_text())
+        tool_ids = {tool["id"] for tool in manifest.get("tools", [])}
         expected = {"sandbox", "web_search", "mason_uc_marker"}
         if tool_ids != expected:
             raise MatrixError(
-                f"managed tools list mismatch: expected {sorted(expected)}, got {sorted(tool_ids)}"
+                f"managed bindings mismatch: expected {sorted(expected)}, got {sorted(tool_ids)}"
             )
 
     def _author_direct(self, project: pathlib.Path, framework: str) -> None:

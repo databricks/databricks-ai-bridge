@@ -18,7 +18,6 @@ from databricks_mason.cli.dev import dev
 from databricks_mason.cli.endpoint import endpoint
 from databricks_mason.cli.help import configure_help
 from databricks_mason.cli.init import init
-from databricks_mason.cli.mcp import mcp
 from databricks_mason.cli.memory import memory
 from databricks_mason.cli.sessions import sessions
 from databricks_mason.cli.tools import tools
@@ -91,7 +90,6 @@ mason.add_command(logout)
 mason.add_command(init)
 mason.add_command(dev)
 mason.add_command(memory)
-mason.add_command(mcp)
 mason.add_command(sessions)
 mason.add_command(tracing)
 mason.add_command(deploy)

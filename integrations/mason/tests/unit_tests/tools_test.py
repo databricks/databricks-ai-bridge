@@ -215,7 +215,7 @@ def test_add_is_idempotent_and_json_reports_changed_files(tmp_path: pathlib.Path
         (["genie-agent", "0" * 32], "genie_agent", "0" * 32),
     ],
 )
-def test_genie_add_list_remove_is_manifest_only_and_idempotent(
+def test_genie_add_remove_is_manifest_only_and_idempotent(
     tmp_path, framework, name, command, kind, source_value
 ):
     project = _project(tmp_path, framework)
@@ -233,6 +233,7 @@ def test_genie_add_list_remove_is_manifest_only_and_idempotent(
         "schema_version": 1,
         "changed": True,
         "changed_files": [str(manifest)],
+        "manifest": str(manifest),
         "tool": record,
     }
     before = manifest.read_bytes()
@@ -241,12 +242,8 @@ def test_genie_add_list_remove_is_manifest_only_and_idempotent(
     assert json.loads(second.output)["changed_files"] == []
     assert json.loads(second.output)["changed"] is False
     assert manifest.read_bytes() == before
-    listed = runner.invoke(tools, ["list", "--source", str(project)], obj=_Ctx(output="json"))
-    assert listed.exit_code == 0, listed.output
-    assert json.loads(listed.output) == {"schema_version": 1, "tools": [record]}
-    text_list = runner.invoke(tools, ["list", "--source", str(project)], obj=_Ctx())
-    assert text_list.exit_code == 0, text_list.output
-    assert source_value in text_list.output
+    loaded = AgentProject.load(project).tools
+    assert [(tool.id, tool.source.kind) for tool in loaded] == [(tool_id, kind)]
     assert (project / "agent" / "mcps.py").read_bytes() == original_mcps
     assert list((project / "agent" / "tools").iterdir()) == []
     removed = runner.invoke(tools, ["remove", tool_id, "--source", str(project)], obj=_Ctx())
@@ -391,7 +388,7 @@ def test_remove_tool_is_idempotent_and_reports_json_changes(tmp_path: pathlib.Pa
     }
 
 
-def test_tools_list_emits_manifest_records_as_json(tmp_path: pathlib.Path):
+def test_configured_tools_are_inspected_in_manifest(tmp_path: pathlib.Path):
     project = _project(tmp_path)
     runner = CliRunner()
     added = runner.invoke(
@@ -401,17 +398,43 @@ def test_tools_list_emits_manifest_records_as_json(tmp_path: pathlib.Path):
     )
     assert added.exit_code == 0, added.output
 
-    result = runner.invoke(
-        tools,
-        ["list", "--source", str(project)],
-        obj=_Ctx(output="json"),
-    )
-
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.output)["tools"] == [
-        {
-            "id": "web_search",
-            "kind": "mcp",
-            "source": "system.ai.web_search",
-        }
+    bindings = AgentProject.load(project).tools
+    assert [(tool.id, tool.source.kind, tool.source.service) for tool in bindings] == [
+        ("web_search", "mcp", "system.ai.web_search")
     ]
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["mcp", "system.ai.web_search"],
+        ["sandbox", "--scope", "table:catalog.schema.table"],
+        ["uc-function", "catalog.schema.function"],
+    ],
+)
+@pytest.mark.parametrize("output", ["text", "json"])
+def test_add_points_to_resolved_manifest_on_change_and_noop(tmp_path, args, output):
+    project = _project(tmp_path)
+    command = ["add", *args, "--source", str(project)]
+    for changed in (True, False):
+        result = CliRunner().invoke(tools, command, obj=_Ctx(output=output))
+        assert result.exit_code == 0, result.output
+        if output == "json":
+            payload = json.loads(result.stdout)
+            assert payload["manifest"] == str(project / "agent.toml")
+            assert payload["changed"] is changed
+            assert result.stderr == ""
+        else:
+            assert f"Review {project / 'agent.toml'}" in result.stdout
+            assert "configured managed tools and MCP bindings" in result.stdout
+            if not changed:
+                assert "already configured" in result.stdout
+
+
+@pytest.mark.parametrize("path", [[], ["sandbox"], ["mcp"], ["uc-function"]])
+def test_add_help_explains_manifest_review(path):
+    result = CliRunner().invoke(tools, ["add", *path, "--help"])
+    assert result.exit_code == 0, result.output
+    text = " ".join(result.stdout.split())
+    assert "Review" in text
+    assert "agent.toml" in text
