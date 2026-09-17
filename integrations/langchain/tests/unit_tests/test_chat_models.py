@@ -1106,6 +1106,23 @@ def test_convert_responses_api_chunk_to_lc_chunk_skip_duplicate():
     assert result is None
 
 
+@pytest.mark.parametrize("prev_type", ["response.output_text.done", "response.content_part.done"])
+def test_convert_responses_api_chunk_to_lc_chunk_skip_duplicate_after_terminator(prev_type):
+    """Text terminators between the last delta and output_item.done still skip the repeat."""
+    previous_chunk = ResponseTextDeltaEvent.model_construct(type=prev_type, item_id="item_123")
+
+    chunk = ResponseOutputItemDoneEvent.model_construct(
+        type="response.output_item.done",
+        item=ResponseOutputMessage.model_construct(
+            type="message",
+            id="item_123",
+            content=[ResponseOutputText.model_construct(type="output_text", text="Hello")],
+        ),
+    )
+
+    assert _convert_responses_api_chunk_to_lc_chunk(chunk, previous_chunk) is None
+
+
 def test_convert_responses_api_chunk_to_lc_chunk_skip_duplicate_with_annotations():
     """Test _convert_responses_api_chunk_to_lc_chunk skips duplicate text."""
     previous_chunk = ResponseTextDeltaEvent.model_construct(

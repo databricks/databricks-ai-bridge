@@ -1747,11 +1747,20 @@ def _convert_responses_api_chunk_to_lc_chunk(
             )
         elif item.type == "message":
             id = item.id
-            # skip text outputs that have already been streamed, but keep the annotations
+            # skip text outputs that have already been streamed, but keep the annotations.
+            # Providers close a message with output_text.done and content_part.done before
+            # output_item.done, so those terminators count as "already streamed" too.
             prev_type = previous_chunk.type if previous_chunk else None
             prev_item_id = getattr(previous_chunk, "item_id", None) if previous_chunk else None
             skip_duplicate_text = (
-                previous_chunk and prev_type == "response.output_text.delta" and id == prev_item_id
+                previous_chunk
+                and prev_type
+                in (
+                    "response.output_text.delta",
+                    "response.output_text.done",
+                    "response.content_part.done",
+                )
+                and id == prev_item_id
             )
             if item.content is not None:  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
                 for content_item in item.content:  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
