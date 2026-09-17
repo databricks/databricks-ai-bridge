@@ -51,10 +51,16 @@ class _DownscopedMcpServer(McpServer):
 
 
 def _server_from_tool(tool: ToolRecord) -> McpServer | None:
+    if tool.kind not in {"sandbox", "mcp", "uc_function", "genie_one"}:
+        return None
     client = workspace_client()
     host = client.config.host.rstrip("/")
-    if tool.kind in {"sandbox", "mcp"}:
-        url = f"{host}/ai-gateway/mcp-services/{tool.service}"
+    if tool.kind in {"sandbox", "mcp", "genie_one"}:
+        url = (
+            f"{host}/api/2.0/mcp/genie"
+            if tool.kind == "genie_one"
+            else f"{host}/ai-gateway/mcp-services/{tool.service}"
+        )
         if tool.kind == "sandbox":
             return _DownscopedMcpServer(
                 url=url,

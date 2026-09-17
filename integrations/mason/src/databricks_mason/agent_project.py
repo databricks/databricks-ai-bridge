@@ -115,6 +115,7 @@ class ToolSource:
     kind: str
     service: str | None = None
     function: str | None = None
+    space_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -133,6 +134,19 @@ class ToolSpec:
     policy: ToolPolicy = field(default_factory=ToolPolicy)
 
     def __post_init__(self) -> None:
+        source_values = {"kind": self.source.kind}
+        for key in ("service", "function", "space_id"):
+            value = getattr(self.source, key)
+            if value is not None:
+                source_values[key] = value
+        try:
+            tool_manifest.validate_genie_source(
+                self.id, source_values, has_downscope=bool(self.policy.downscope)
+            )
+        except tool_manifest.ToolManifestError as exc:
+            raise AgentCliError(str(exc)) from exc
+        if self.source.kind in {"genie_one", "genie_agent"}:
+            return
         if not _TOOL_ID.fullmatch(self.id):
             raise AgentCliError(f"Invalid tool id {self.id!r}.")
         kind = self.source.kind
@@ -184,6 +198,14 @@ class ToolSpec:
             id=tool_id,
             source=ToolSource(kind="uc_function", function=function),
         )
+
+    @classmethod
+    def genie_one(cls, tool_id: str = "genie_one") -> "ToolSpec":
+        return cls(id=tool_id, source=ToolSource(kind="genie_one"))
+
+    @classmethod
+    def genie_agent(cls, tool_id: str, *, space_id: str) -> "ToolSpec":
+        return cls(id=tool_id, source=ToolSource(kind="genie_agent", space_id=space_id))
 
 
 def _required_string(value: object, description: str) -> str:
@@ -249,15 +271,23 @@ def _tool_from_manifest(value: object) -> ToolSpec:
     if not isinstance(policy_value, Mapping):
         raise AgentCliError("Tool policy must be a TOML table.")
     policy_value = cast(Mapping[str, Any], policy_value)
+    tool_id = _required_string(value.get("id"), "an id")
+    try:
+        tool_manifest.validate_genie_source(
+            tool_id, source, has_downscope="downscope" in policy_value
+        )
+    except tool_manifest.ToolManifestError as exc:
+        raise AgentCliError(str(exc)) from exc
     downscope_value = policy_value.get("downscope", [])
     if not isinstance(downscope_value, list):
         raise AgentCliError("Tool policy downscope must be an array.")
     return ToolSpec(
-        id=_required_string(value.get("id"), "an id"),
+        id=tool_id,
         source=ToolSource(
             kind=kind,
             service=source.get("service") if isinstance(source.get("service"), str) else None,
             function=source.get("function") if isinstance(source.get("function"), str) else None,
+            space_id=source.get("space_id") if isinstance(source.get("space_id"), str) else None,
         ),
         policy=ToolPolicy(tuple(_scope_from_manifest(item) for item in downscope_value)),
     )
@@ -274,7 +304,7 @@ def _tool_table(spec: ToolSpec) -> Any:
     table = tomlkit.table()
     table.add("id", spec.id)
     source_values = {"kind": spec.source.kind}
-    for key in ("service", "function"):
+    for key in ("service", "function", "space_id"):
         value = getattr(spec.source, key)
         if value is not None:
             source_values[key] = value
@@ -455,7 +485,7 @@ class AgentProject:
 
             def _summary(s: ToolSpec) -> str:
                 src = s.source
-                return src.service or src.function or src.kind
+                return src.service or src.function or src.space_id or src.kind
 
             raise AgentCliError(
                 f"Tool id {spec.id!r} already exists with a different configuration "

@@ -1,0 +1,159 @@
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
+
+from databricks_mason.runtime import genie
+
+SPACE = "a" * 32
+CONVERSATION = "b" * 32
+MESSAGE = "c" * 32
+ATTACHMENT = "d" * 32
+
+
+def _response(**values):
+    return SimpleNamespace(as_dict=lambda: values)
+
+
+@pytest.fixture
+def client(monkeypatch):
+    client = MagicMock()
+    client.config.host = "https://example.databricks.com/"
+    client.genie.start_conversation.return_value.response = SimpleNamespace(
+        conversation_id=CONVERSATION, message_id=MESSAGE
+    )
+    client.genie.create_message.return_value.response = SimpleNamespace(message_id=MESSAGE)
+    client.genie.get_message.return_value = _response(
+        status="COMPLETED", attachments=[{"text": {"content": "42"}}]
+    )
+    monkeypatch.setattr(genie, "workspace_client", lambda: client)
+    return client
+
+
+@pytest.mark.asyncio
+async def test_ask_starts_and_returns_grounded_answer(client):
+    answer = await genie.GenieAgent(SPACE).ask("How many?")
+    client.genie.start_conversation.assert_called_once_with(SPACE, "How many?")
+    client.genie.get_message.assert_called_once_with(SPACE, CONVERSATION, MESSAGE)
+    assert answer["status"] == "COMPLETED"
+    assert answer["attachments"][0]["text"]["content"] == "42"
+    assert answer["conversation_id"] == CONVERSATION
+    assert answer["message_id"] == MESSAGE
+    assert CONVERSATION in answer["deep_link"]
+
+
+@pytest.mark.asyncio
+async def test_followup_uses_existing_conversation(client):
+    answer = await genie.GenieAgent(SPACE).ask("And yesterday?", CONVERSATION)
+    client.genie.create_message.assert_called_once_with(SPACE, CONVERSATION, "And yesterday?")
+    client.genie.start_conversation.assert_not_called()
+    assert answer["conversation_id"] == CONVERSATION
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["FAILED", "CANCELLED", "QUERY_RESULT_EXPIRED"])
+async def test_terminal_errors_preserved_without_retry_or_reexecution(client, status):
+    client.genie.get_message.return_value = _response(status=status, error={"message": "detail"})
+    answer = await genie.GenieAgent(SPACE).poll(CONVERSATION, MESSAGE)
+    assert answer["status"] == status
+    assert answer["error"]["message"] == "detail"
+    client.genie.get_message.assert_called_once()
+    client.genie.start_conversation.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_timeout_preserves_resume_ids(client):
+    client.genie.get_message.return_value = _response(status="EXECUTING_QUERY")
+    answer = await genie.GenieAgent(SPACE, wait_seconds=0.01).poll(CONVERSATION, MESSAGE)
+    assert answer["timed_out"] is True
+    assert answer["status"] == "EXECUTING_QUERY"
+    assert answer["conversation_id"] == CONVERSATION
+    assert answer["message_id"] == MESSAGE
+    client.genie.create_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_inflight_get_timeout_preserves_resume_ids(client):
+    import time
+
+    def slow_get(*arguments):
+        time.sleep(0.05)
+        return _response(status="COMPLETED")
+
+    client.genie.get_message.side_effect = slow_get
+    answer = await genie.GenieAgent(SPACE, wait_seconds=0.01).poll(CONVERSATION, MESSAGE)
+    assert answer["timed_out"] is True
+    assert answer["status"] == "IN_PROGRESS"
+    assert answer["conversation_id"] == CONVERSATION
+    assert answer["message_id"] == MESSAGE
+
+
+@pytest.mark.asyncio
+async def test_polling_yields_and_completes(client, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    sleep = AsyncMock()
+    monkeypatch.setattr(genie.asyncio, "sleep", sleep)
+    client.genie.get_message.side_effect = [
+        _response(status="EXECUTING_QUERY"),
+        _response(status="COMPLETED"),
+    ]
+    answer = await genie.GenieAgent(SPACE).poll(CONVERSATION, MESSAGE)
+    assert answer["status"] == "COMPLETED"
+    sleep.assert_awaited_once()
+    assert 1 <= sleep.call_args.args[0] <= 5
+
+
+@pytest.mark.asyncio
+async def test_query_result_preserves_schema_and_bounds_rows(client):
+    columns = [{"name": "count", "type_name": "LONG"}]
+    client.genie.get_message_attachment_query_result.return_value = _response(
+        statement_response={
+            "status": {"state": "SUCCEEDED"},
+            "manifest": {"schema": {"columns": columns}, "total_row_count": 150},
+            "result": {"data_array": [[str(index)] for index in range(150)]},
+        }
+    )
+    answer = await genie.GenieAgent(SPACE).query_result(CONVERSATION, MESSAGE, ATTACHMENT)
+    assert answer["columns"] == columns
+    assert len(answer["rows"]) == 100
+    assert answer["total_row_count"] == 150
+    assert answer["truncated"] is True
+    assert answer["attachment_id"] == ATTACHMENT
+    client.genie.get_message_attachment_query_result.assert_called_once_with(
+        SPACE, CONVERSATION, MESSAGE, ATTACHMENT
+    )
+
+
+@pytest.mark.asyncio
+async def test_query_failure_does_not_look_like_empty_success(client):
+    client.genie.get_message_attachment_query_result.return_value = _response(
+        statement_response={"status": {"state": "FAILED", "error": {"message": "denied"}}}
+    )
+    answer = await genie.GenieAgent(SPACE).query_result(CONVERSATION, MESSAGE, ATTACHMENT)
+    assert answer["status"]["state"] == "FAILED"
+    assert answer["status"]["error"]["message"] == "denied"
+
+
+@pytest.mark.asyncio
+async def test_permission_errors_propagate_without_fallback(client):
+    client.genie.start_conversation.side_effect = PermissionError("denied")
+    with pytest.raises(PermissionError, match="denied"):
+        await genie.GenieAgent(SPACE).ask("hello")
+    client.genie.create_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identifier", ["", "../other", "a/b", "x?query=1"])
+async def test_reject_bad_conversation_before_api(client, identifier):
+    with pytest.raises(ValueError, match="conversation_id"):
+        await genie.GenieAgent(SPACE).ask("hello", identifier)
+    client.genie.start_conversation.assert_not_called()
+    client.genie.create_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_blank_question_rejected_before_api(client):
+    with pytest.raises(ValueError, match="question"):
+        await genie.GenieAgent(SPACE).ask("   ")
+    client.genie.start_conversation.assert_not_called()
