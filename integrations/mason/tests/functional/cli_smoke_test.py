@@ -99,7 +99,9 @@ def test_init_scaffolds(run_mason, tmp_path: pathlib.Path, extra) -> None:
         ["genie-agent", "0" * 32],
     ],
 )
-def test_tools_offline_add_review_manifest_remove(run_mason, tmp_path, framework, output, args) -> None:
+def test_tools_offline_add_review_manifest_remove(
+    run_mason, tmp_path, framework, output, args
+) -> None:
     project = tmp_path / "agent"
     run_mason("init", "--framework", framework, str(project))
     manifest = project / "agent.toml"
