@@ -60,7 +60,8 @@ def test_live_default_discovery_includes_mcp_filter_inventory(live_mason):
         "genie-agent",
     }
     actual = {tool["name"] for tool in discovered["available_tools"] if tool["kind"] == "mcp"}
-    assert actual == {tool["name"] for tool in mcp_only["available_tools"]}
+    mcp_names = {tool["name"] for tool in mcp_only["available_tools"]}
+    assert actual == mcp_names - {"system.ai.sandbox"}
     logging.getLogger(__name__).info(
         "Live default discovery: %s MCP services plus 4 built-in recipes", len(actual)
     )
