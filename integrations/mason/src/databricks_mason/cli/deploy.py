@@ -33,7 +33,7 @@ from databricks_mason.app_resources import (
     apply_experiment_resource,
     apply_postgres_resources,
 )
-from databricks_mason.cli.endpoint_examples import agent_invoke_command
+from databricks_mason.cli.endpoint_examples import print_agent_invoke_command
 from databricks_mason.cli.tracing import (
     TRACES_EXPERIMENT_ID_ENV,
     TRACES_TRACKING_URI_ENV,
@@ -691,12 +691,7 @@ def deploy(
         )
         return
 
-    uses_runtime_api = bool(project and project.server == AgentServer.MASON)
     steps: list[str | tuple[str, str]] = [
-        (
-            agent_invoke_command(name, uses_runtime_api=uses_runtime_api),
-            "Send a test request",
-        ),
         (f"mason deployments get {name}", "Check its status and URL"),
         (f"mason deployments logs {name}", "Tail its logs"),
     ]
@@ -731,6 +726,9 @@ def deploy(
         f"Deployed agent '{name}'",
         fields=fields,
         next_steps=steps,
+    )
+    print_agent_invoke_command(
+        name, uses_runtime_api=bool(project and project.server == AgentServer.MASON)
     )
 
 

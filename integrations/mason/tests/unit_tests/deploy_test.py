@@ -784,6 +784,11 @@ def test_deploy_recommends_invoking_deployed_agent(
     assert f"mason endpoint invoke agent-mason-myapp --path {path} --json " in command
     assert "│" not in command
     assert ("$(uuidgen)" in command) is (server == "mason")
+    panel, example = result.output.split("Invoke with Mason\n")
+    assert panel.splitlines()[-1].startswith("╰")
+    assert example.splitlines() == [command]
+    for existing_command in ("mason deployments get", "mason deployments logs"):
+        assert any(line.startswith("│") and existing_command in line for line in panel.splitlines())
     assert "Runtime Store" not in result.output
     assert selected.database_path not in result.output
     env = {

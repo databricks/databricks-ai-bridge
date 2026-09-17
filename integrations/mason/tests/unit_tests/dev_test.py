@@ -284,6 +284,7 @@ def test_dev_announces_api_endpoint_when_no_ui(tmp_path: pathlib.Path):
     assert "API-only" in result.output
     assert "http://localhost:8000/invocations" in result.output
     # a copy-pasteable sample request, not just the bare endpoint
+    assert "curl -X POST" in " ".join(result.output.split())
     output = " ".join(result.output.split())
     assert "mason endpoint invoke" in output
     assert "--url http://localhost:8000" in output
@@ -309,6 +310,16 @@ def test_dev_prints_standalone_invoke_for_each_template(tmp_path, framework, ser
     assert f"mason endpoint invoke --url http://localhost:8000 --path {path} --json " in command
     assert "│" not in command
     assert ("$(uuidgen)" in command) is (server == "mason")
+    panel, example = result.output.split("Invoke with Mason\n")
+    assert panel.splitlines()[-1].startswith("╰")
+    assert example.splitlines() == [command]
+    assert any(line.startswith("│") and "mason deploy" in line for line in panel.splitlines())
+    if server == "mason":
+        assert any(
+            line.startswith("│") and "mason tools add" in line for line in panel.splitlines()
+        )
+    if not chat_ui:
+        assert "curl -X POST" in panel  # preserve the existing API-only next step
 
 
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
