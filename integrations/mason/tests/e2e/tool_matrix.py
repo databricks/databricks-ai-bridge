@@ -372,7 +372,9 @@ class Runner:
         return cases
 
     def _author_cli(self, project: pathlib.Path) -> None:
-        self.run(
+        manifest = project / "agent.toml"
+        before = manifest.read_bytes()
+        rejected = self.run(
             [
                 str(self.mason),
                 "tools",
@@ -383,8 +385,15 @@ class Runner:
                 "broken_mcp",
                 "--source",
                 str(project),
-            ]
+            ],
+            check=False,
         )
+        if rejected.returncode == 0 or manifest.read_bytes() != before:
+            raise MatrixError(
+                "mason tools add accepted an unavailable MCP service or changed agent.toml"
+            )
+        if "Could not validate MCP service" not in rejected.stderr:
+            raise MatrixError(f"Unexpected MCP validation error: {rejected.stderr}")
         self.run(
             [
                 str(self.mason),

@@ -197,6 +197,29 @@ def test_tools_help_and_removed_configured_route(run_mason):
     assert run_mason("mcp", "--help", check=False).returncode != 0
 
 
+def test_mcp_add_without_auth_does_not_change_manifest(run_mason, tmp_path: pathlib.Path) -> None:
+    project = tmp_path / "agent"
+    run_mason("init", "--framework", "langgraph", str(project))
+    manifest = project / "agent.toml"
+    before = manifest.read_bytes()
+
+    result = run_mason(
+        "--output",
+        "json",
+        "tools",
+        "add",
+        "mcp",
+        "system.ai.web_search",
+        "--source",
+        str(project),
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "Could not initialize Databricks auth" in result.stderr
+    assert manifest.read_bytes() == before
+
+
 def test_tracing_disable_and_reenable(run_mason, tmp_path: pathlib.Path) -> None:
     project = tmp_path / "agent"
     run_mason("init", "--framework", "langgraph", str(project))

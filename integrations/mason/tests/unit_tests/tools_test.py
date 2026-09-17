@@ -8,14 +8,34 @@ import pathlib
 import pytest
 from click.testing import CliRunner
 
-from databricks_mason.agent_project import AgentProject
+from databricks_mason.agent_project import AgentProject, ToolSpec
 from databricks_mason.cli.tools import tools
+from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import write_project_metadata
 
 
 class _Ctx:
-    def __init__(self, output: str = "text"):
+    def __init__(self, output: str = "text", *, client=None):
         self.output = output
+        self._client = client or _Client()
+
+    def client(self):
+        return self._client
+
+
+class _Client:
+    def __init__(self, service="system.ai.web_search", error=None):
+        self.service = service
+        self.error = error
+        self.calls = []
+
+    def get_mcp_service(self, service):
+        self.calls.append(service)
+        if self.error:
+            raise self.error
+        if service != self.service:
+            raise AgentCliError("MCP service does not exist.", error_code="NOT_FOUND")
+        return {"name": f"mcp-services/{service}"}
 
 
 def _project(
@@ -307,15 +327,82 @@ def test_genie_command_help_has_examples(command):
     assert f"mason tools add {command}" in result.output
 
 
+def test_add_missing_mcp_leaves_project_unchanged(tmp_path: pathlib.Path):
+    project = _project(tmp_path)
+    before = {path: path.read_bytes() for path in project.rglob("*") if path.is_file()}
+
+    result = CliRunner().invoke(
+        tools,
+        ["add", "mcp", "system.ai.missing_service", "--source", str(project)],
+        obj=_Ctx(),
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "NOT_FOUND" in result.output
+    assert "system.ai.missing_service" in result.output
+    assert "mason mcp list" in result.output
+    assert {path: path.read_bytes() for path in project.rglob("*") if path.is_file()} == before
+
+
+@pytest.mark.parametrize("error_code", ["PERMISSION_DENIED", "UNAVAILABLE", "UNAUTHENTICATED"])
+def test_add_mcp_lookup_error_preserves_existing_manifest(tmp_path: pathlib.Path, error_code):
+    project = _project(tmp_path)
+    manifest = AgentProject.load(project)
+    manifest.add_tool(ToolSpec.uc_function("existing", function="main.tools.existing"))
+    manifest.write()
+    before = manifest.path.read_bytes()
+    client = _Client(error=AgentCliError("Lookup failed.", error_code=error_code))
+
+    result = CliRunner().invoke(
+        tools,
+        ["add", "mcp", "system.ai.web_search", "--source", str(project)],
+        obj=_Ctx(client=client),
+    )
+
+    assert result.exit_code == 1, result.output
+    assert error_code in result.output
+    assert "Lookup failed" in result.output
+    assert manifest.path.read_bytes() == before
+
+
+def test_add_mcp_looks_up_exact_service_in_custom_schema(tmp_path: pathlib.Path):
+    project = _project(tmp_path)
+    client = _Client(service="main.tools.ticket_search")
+
+    result = CliRunner().invoke(
+        tools,
+        ["add", "mcp", "main.tools.ticket_search", "--name", "tickets", "--source", str(project)],
+        obj=_Ctx(client=client),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert client.calls == ["main.tools.ticket_search"]
+    assert AgentProject.load(project).tools == [
+        ToolSpec.mcp("tickets", service="main.tools.ticket_search")
+    ]
+
+
+@pytest.mark.parametrize("service", ["web_search", "system.ai", "system..web_search"])
+def test_add_malformed_mcp_rejects_before_lookup(tmp_path: pathlib.Path, service):
+    project = _project(tmp_path)
+    client = _Client()
+    before = (project / "agent.toml").read_bytes()
+
+    result = CliRunner().invoke(
+        tools, ["add", "mcp", service, "--source", str(project)], obj=_Ctx(client=client)
+    )
+
+    assert result.exit_code == 1, result.output
+    assert client.calls == []
+    assert (project / "agent.toml").read_bytes() == before
+
+
 def test_remove_tool_updates_only_the_manifest(tmp_path: pathlib.Path):
     project = _project(tmp_path)
     runner = CliRunner()
-    added = runner.invoke(
-        tools,
-        ["add", "mcp", "system.ai.missing_service", "--name", "broken", "--source", str(project)],
-        obj=_Ctx(),
-    )
-    assert added.exit_code == 0, added.output
+    manifest = AgentProject.load(project)
+    manifest.add_tool(ToolSpec.mcp("broken", service="system.ai.missing_service"))
+    manifest.write()
 
     result = runner.invoke(
         tools,
