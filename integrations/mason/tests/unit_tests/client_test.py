@@ -40,13 +40,13 @@ def test_mason_client_wraps_workspace_client(api_client):
 
 
 @mock.patch("databricks.sdk.WorkspaceClient")
-def test_create_memory_store(workspace_client):
+def test_create_memory_store_uses_transitional_request(workspace_client):
     c, do = _client(workspace_client)
     c.create_memory_store("acme", "desc")
     do.assert_called_once_with(
         "POST",
         "/api/2.0/agents/memory-stores",
-        query=None,
+        query={"managed_memory_store_id": "acme"},
         body={"display_name": "acme", "description": "desc"},
     )
 
@@ -609,6 +609,20 @@ def test_update_session_store_no_fields_raises_without_calling_api(workspace_cli
     with pytest.raises(AgentCliError):
         client.update_session_store("s1")
     do.assert_not_called()
+
+
+@mock.patch("databricks.sdk.WorkspaceClient")
+def test_update_memory_entry_sends_update_mask(workspace_client):
+    client, do = _client(workspace_client)
+
+    client.update_memory_entry("s", "e", content="updated", description="")
+
+    do.assert_called_once_with(
+        "PATCH",
+        "/api/2.0/agents/memory-stores/s/entries/e",
+        query={"update_mask": "content,description"},
+        body={"content": "updated", "description": ""},
+    )
 
 
 @mock.patch("databricks.sdk.WorkspaceClient")

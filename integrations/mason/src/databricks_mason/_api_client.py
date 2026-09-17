@@ -218,6 +218,7 @@ class _MasonApiClient:
             self._do(
                 "POST",
                 f"{_BASE}/memory-stores",
+                query={"managed_memory_store_id": display_name},
                 body=body,
                 safe_to_retry=retry_transient,
             ),
@@ -361,9 +362,15 @@ class _MasonApiClient:
         body = _body(content=content, description=description)
         if not body:
             raise AgentCliError("No fields to update. Provide content and/or a description.")
+        mask = ",".join(body.keys())
         return _as(
             models.MemoryEntry,
-            self._do("PATCH", f"{_BASE}/{memory_entry_path(store, entry)}", body=body),
+            self._do(
+                "PATCH",
+                f"{_BASE}/{memory_entry_path(store, entry)}",
+                query=_query(update_mask=mask),
+                body=body,
+            ),
         )
 
     def delete_memory_entry(self, store: str, entry: str) -> dict:
