@@ -13,6 +13,7 @@ from __future__ import annotations
 import pathlib
 import secrets
 import shutil
+import string
 from dataclasses import dataclass
 from importlib import resources
 from importlib.metadata import PackageNotFoundError
@@ -209,7 +210,8 @@ def init(
             # projects share a directory name (my-agent), so a bare `<dir>-memory` collides across
             # users and re-scaffolds; a short random token per scaffold keeps them distinct. Both
             # stores share the token so the pair reads as one agent's. `--memory/session-store` wins.
-            token = secrets.token_hex(3)
+            # Letters only: store names must not end with a digit.
+            token = "".join(secrets.choice(string.ascii_lowercase) for _ in range(6))
             memory_store = memory_store or f"{default_store_name(dest.name, 'memory')}-{token}"
             session_store = session_store or f"{default_store_name(dest.name, 'session')}-{token}"
         project = AgentProject.create(

@@ -242,10 +242,18 @@ def test_required_project_selections_name_agent_manifest(
 
 @pytest.mark.parametrize(
     ("raw", "expected"),
-    [("My_Agent", "my-agent-memory"), ("a.b c", "a-b-c-memory"), ("___", "agent-memory")],
+    [
+        ("My_Agent", "my-agent-memory"),
+        ("a.b c", "a-b-c-memory"),
+        ("___", "agent-memory"),
+        ("2048-game", "game-memory"),  # leading digits dropped: names must not start with a digit
+        ("123", "agent-memory"),  # all-numeric reduces to the fallback
+    ],
 )
 def test_default_store_name_sanitizes(raw: str, expected: str):
-    assert default_store_name(raw, "memory") == expected
+    name = default_store_name(raw, "memory")
+    assert name == expected
+    assert not name[0].isdigit()  # store names must not start with a digit
 
 
 @pytest.mark.parametrize("server", ["", "other"])

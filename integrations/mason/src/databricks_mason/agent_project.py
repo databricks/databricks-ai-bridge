@@ -195,11 +195,12 @@ def _required_string(value: object, description: str) -> str:
 def default_store_name(project_name: str, suffix: str) -> str:
     """A store display name derived from the project directory, e.g. ``my-agent`` -> ``my-agent-memory``.
 
-    Sanitized to the store display-name charset (lower-case alphanumerics and hyphens); a name that
-    reduces to nothing (e.g. a directory of only punctuation) falls back to ``agent``.
+    Sanitized to the store display-name charset (lower-case alphanumerics and hyphens). Store names
+    must not start with a digit, so leading digits/hyphens are dropped; a name that reduces to
+    nothing (only punctuation, or all-numeric) falls back to ``agent``.
     """
-    slug = re.sub(r"[^a-z0-9-]+", "-", project_name.lower()).strip("-") or "agent"
-    return f"{slug}-{suffix}"
+    slug = re.sub(r"[^a-z0-9-]+", "-", project_name.lower()).strip("-").lstrip("0123456789-")
+    return f"{slug or 'agent'}-{suffix}"
 
 
 def _store_name_from_manifest(value: object, table: str) -> str | None:
