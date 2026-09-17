@@ -207,11 +207,9 @@ def init(
         template_ref = _bundled_template_ref()
         write_project_metadata(dest, framework=selected_framework, template=template_name)
         if mason_server:
-            # A fresh scaffold gets its own new stores. Store display names aren't unique, and many
-            # projects share a directory name (my-agent), so a bare `<dir>-memory` collides across
-            # users and re-scaffolds; a short random token per scaffold keeps them distinct. Both
-            # stores share the token so the pair reads as one agent's (`my-agent-<token>-memory` /
-            # `-sessions`), and the store kind stays the suffix. `--memory/session-store` wins.
+            # Store display names aren't unique and projects often share a directory name, so a
+            # per-scaffold token keeps default stores from colliding. Memory and session share the
+            # token; an explicit --memory/session-store wins.
             token = "".join(secrets.choice(string.ascii_lowercase) for _ in range(6))
             memory_store = memory_store or default_store_name(dest.name, "memory", token)
             session_store = session_store or default_store_name(dest.name, "sessions", token)
