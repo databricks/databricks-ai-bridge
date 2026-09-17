@@ -1,7 +1,7 @@
 """CLI-level unit tests for `mason sessions` commands (stores / sessions / items).
 
 Exercises each command's handler + render path with a fake low-level client, covering
-both text and JSON output modes. Backfills coverage for src/databricks_mason/sessions.py.
+both text and JSON output modes. Backfills coverage for src/databricks_mason/cli/sessions.py.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ import json
 
 from click.testing import CliRunner
 
-from databricks_mason.sessions import items, sessions, stores
+from databricks_mason.cli.sessions import items, sessions, stores
 
 STORE = "cli-store"
 SID = "11111111-1111-1111-1111-111111111111"
