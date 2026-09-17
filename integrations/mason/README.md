@@ -392,22 +392,6 @@ sync/streaming/background transport selector is manual.
 
 ## Developing Mason
 
-### Session-store API transition
-
-Session-store creation uses `/api/2.0/agents/session-stores` and sends the same caller-provided
-name in both the `session_store_name` and `session_store_id` query parameters. The former is
-required by the older backend; the latter is the canonical create ID for the newer backend.
-Description and metadata remain in the request body. Other session-store and session operations
-continue to use `/api/agents/v1`, and the public Python API is unchanged.
-
-Store responses accept both the legacy `session_store_name` field and the canonical
-`name: "session-stores/{id}"` field. `SessionStore.name` remains the unprefixed store name for
-subsequent operations. The optional `session_store_id` preserves the backend's legacy UUID when
-returned and is `None` when omitted; it is not inferred from the canonical resource name.
-
-Release this transitional client and upgrade affected consumers before rolling out the backend
-API changes. Retain both query parameters until older backends no longer need `session_store_name`.
-
 ### Local development
 
 Templates ship **inside** the `databricks_mason` package (`src/databricks_mason/templates/`), so
