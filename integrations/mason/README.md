@@ -6,6 +6,52 @@ authenticated command.
 
 > The underlying APIs are in preview and may need workspace enablement.
 
+## Overview
+
+A managed path from your custom agent code to a production-ready, scalable, durable agent hosted on
+Databricks in minutes - with no server framework to build, no infrastructure to provision, and no
+invocation protocol to design yourself. Bring your own agent, or start from a template.
+
+- **Deployment** - a guided lifecycle (scaffold, run locally, deploy) that turns an agent project
+  into a hosted endpoint. Databricks provisions the compute, the stores your agent binds (session,
+  memory), and the access grants, so you ship application code and get a running endpoint.
+- **Runtime** - a managed HTTP invocation contract (synchronous, streaming, background) plus optional
+  durable execution (persistence, heartbeats, crash recovery) backed by Databricks Lakebase, with no
+  database or job queue to operate. Use the opinionated `AgentApp` server to get it out of the box,
+  or bring your own server for full control.
+
+**Deployment**
+
+![Deployment: from a blank directory to a running service](docs/deployment.png)
+
+- **Agent project** - `mason init` scaffolds a deployable project from a framework template
+  (LangGraph or OpenAI Agents) with the runtime, tests, and an optional chat UI wired up; you edit
+  the application code (model, tools, prompts).
+- **`agent.toml`** - the declarative source of truth for the Databricks-managed infrastructure your
+  agent depends on: tool bindings (data sandbox, managed MCP services, Unity Catalog functions) and
+  memory, session, and durability resources. `mason deploy` reads it to provision and wire everything
+  up (detailed under [Agent tools](#agent-tools)).
+- **`mason deploy`** - provisions the bound stores, grants the app's service principal access to
+  them, provisions the durable-runtime database when durability is on, configures tracing, and rolls
+  out the app. `mason deployments` covers the lifecycle (list, get, logs, start, stop, delete).
+- **`mason dev`** - runs your agent from the same manifest the deployment uses, so local behavior
+  matches what ships.
+
+**Runtime**
+
+![Runtime: the opinionated AgentApp server, or bring your own](docs/runtime.png)
+
+There are two ways to run an agent, depending on how much you want handled for you:
+
+- **`AgentApp` - opinionated, batteries included.** Register one handler and get Mason's full
+  invocation contract (synchronous, streaming, background) with idempotent, UUID-keyed requests.
+  Enable the durable runtime for persistence, heartbeats, and automatic crash recovery on Lakebase,
+  so long-running and background work survives restarts, redeploys, and crashes. The framework
+  templates are thin layers over `AgentApp` (HTTP contract detailed under [Runtime](#runtime)).
+- **Custom server - generic, full control.** `mason init --server custom` scaffolds a minimal FastAPI
+  server with no `AgentApp`: you define your own endpoints, request/response shapes, and protocol.
+  `mason dev` and `mason deploy` run and ship it the same way.
+
 ## Prerequisites
 
 - **Python ≥3.10** — the mason CLI installs and runs on any Python 3.10+. The
