@@ -266,13 +266,13 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("tools",): (
         ("mason tools add --help", "see all tool types you can add"),
         ("mason tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
-        ("mason tools add mcp system.ai.python_exec", "add a managed MCP tool"),
-        ("mason tools remove mcp system.ai.python_exec", "remove a tool binding"),
+        ("mason tools add mcp system.ai.web_search", "add a managed MCP tool"),
+        ("mason tools remove mcp system.ai.web_search", "remove a tool binding"),
         ("mason tools list", "browse available integrations to add"),
     ),
     ("tools", "add"): (
         ("mason tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
-        ("mason tools add mcp system.ai.python_exec", "add a managed MCP tool"),
+        ("mason tools add mcp system.ai.web_search", "add a managed MCP tool"),
         ("mason tools add uc-function catalog.schema.lookup_ticket", "add a UC function tool"),
         ("mason tools add genie-one", "add workspace-wide Genie One tools"),
         ("mason tools add genie-agent SPACE_ID", "add tools for one Genie Space"),
@@ -281,14 +281,14 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("mason tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
     ),
     ("tools", "add", "mcp"): (
-        ("mason tools add mcp system.ai.python_exec", "add a managed MCP tool"),
+        ("mason tools add mcp system.ai.web_search", "add a managed MCP tool"),
     ),
     ("tools", "add", "uc-function"): (
         ("mason tools add uc-function catalog.schema.lookup_ticket", "add a UC function tool"),
     ),
     ("tools", "remove"): (
-        ("mason tools remove mcp system.ai.python_exec", "remove an MCP tool by service"),
-        ("mason tools remove python_exec", "remove a tool by id"),
+        ("mason tools remove mcp system.ai.web_search", "remove an MCP tool by service"),
+        ("mason tools remove web_search", "remove a tool by id"),
     ),
     ("tools", "list"): (
         ("mason tools list", "browse built-in recipes and system.ai MCP Services"),

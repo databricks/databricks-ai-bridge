@@ -92,8 +92,9 @@ def test_tools_help_explains_add_workflow():
     for tool_type in ("sandbox", "mcp", "uc-function"):
         assert tool_type in result.output
     assert "mason tools add --help" in result.output
-    assert "mason tools add mcp system.ai.python_exec" in result.output
-    assert "mason tools remove mcp system.ai.python_exec" in result.output
+    assert "mason tools add mcp system.ai.web_search" in result.output
+    assert "mason tools remove mcp system.ai.web_search" in result.output
+    assert "system.ai.python_exec" not in result.output
 
 
 def test_tools_remove_help_shows_id_and_project_targeting():
@@ -102,8 +103,9 @@ def test_tools_remove_help_shows_id_and_project_targeting():
     assert result.exit_code == 0, result.output
     assert "Usage: mason tools remove [OPTIONS] TOOL_ID [MCP_SERVICE]" in result.output
     assert "--source DIRECTORY" in result.output
-    assert "mason tools remove mcp system.ai.python_exec" in result.output
-    assert "mason tools remove python_exec" in result.output
+    assert "mason tools remove mcp system.ai.web_search" in result.output
+    assert "mason tools remove web_search" in result.output
+    assert "system.ai.python_exec" not in result.output
 
 
 def test_tools_add_help_explains_types_and_project_targeting():
@@ -114,13 +116,13 @@ def test_tools_add_help_explains_types_and_project_targeting():
     assert "Pass --source PATH to target another project." in result.output
     for example in (
         "mason tools add sandbox --scope table:samples.nyctaxi.trips",
-        "mason tools add mcp system.ai.python_exec",
+        "mason tools add mcp system.ai.web_search",
         "mason tools add uc-function catalog.schema.lookup_ticket",
     ):
         assert example in result.output
+    assert "system.ai.python_exec" not in result.output
     # `mason tools add python` was removed (Python tools are code-first); the subcommand must not be
-    # advertised. Checked as the command invocation, not a bare "python" substring, so the legitimate
-    # `system.ai.python_exec` MCP example above is still allowed.
+    # advertised. Checked as the command invocation, not a bare "python" substring.
     assert "mason tools add python" not in result.output
     assert "\n  python " not in result.output  # no `python` row in the add-group command list
 

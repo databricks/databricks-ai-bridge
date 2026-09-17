@@ -115,7 +115,7 @@ def tools() -> None:
       sandbox       Query Unity Catalog data via system.ai.sandbox, scoped
                     to the tables, volumes, or paths you choose.
       mcp           A Databricks-managed MCP service (see `mason tools list --kind mcp`),
-                    e.g. system.ai.python_exec.
+                    e.g. system.ai.web_search.
       uc-function   An existing Unity Catalog function (catalog.schema.function).
       genie-one     Workspace-wide Genie One MCP tools.
       genie-agent   Native Genie conversation tools for a configured space ID.
@@ -197,7 +197,7 @@ def add_mcp(
     Use `mason tools list --kind mcp` for available services. Review the target project's
     agent.toml to check configured managed tools and MCP bindings.
     """
-    _require_arg(service, "managed MCP service name (e.g. system.ai.python_exec)")
+    _require_arg(service, "managed MCP service name (e.g. system.ai.web_search)")
     _add_spec(
         obj,
         source.resolve(),
