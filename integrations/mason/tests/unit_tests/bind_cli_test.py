@@ -12,16 +12,19 @@ from unittest import mock
 from click.testing import CliRunner
 
 from databricks_mason.agent_project import AgentProject
-from databricks_mason.memory import memory
+from databricks_mason.cli.memory import memory
+from databricks_mason.cli.sessions import sessions
 from databricks_mason.project_config import write_project_metadata
-from databricks_mason.sessions import sessions
 
 
 class _Ctx:
-    def __init__(self, output="text"):
+    def __init__(self, output="text", fail_client=False):
         self.output = output
+        self._fail_client = fail_client
 
     def client(self):
+        if self._fail_client:
+            raise AssertionError("bind must not touch the client")
         return mock.Mock()
 
 
@@ -29,17 +32,14 @@ def _project(tmp_path: pathlib.Path) -> pathlib.Path:
     project = tmp_path / "agent-langgraph"
     (project / "agent").mkdir(parents=True)
     write_project_metadata(project, framework="langgraph", template="agent-langgraph")
-    AgentProject.create(project, framework="langgraph").write()
+    AgentProject.create(project, framework="langgraph", server="mason").write()
     return project
 
 
 def test_memory_bind_and_unbind(tmp_path):
     project = _project(tmp_path)
-    with mock.patch(
-        "databricks_mason.deploy._ensure_memory_store",
-        return_value=({"name": "memory-stores/abc123"}, True),
-    ):
-        r = CliRunner().invoke(memory, ["bind", "my-mem", "--source", str(project)], obj=_Ctx())
+    # `bind` only declares the store in agent.toml; it does not provision (that's `mason deploy`).
+    r = CliRunner().invoke(memory, ["bind", "my-mem", "--source", str(project)], obj=_Ctx())
     assert r.exit_code == 0, r.output
     reloaded = AgentProject.load(project)
     assert reloaded.memory_store == "my-mem"
@@ -49,22 +49,21 @@ def test_memory_bind_and_unbind(tmp_path):
     assert AgentProject.load(project).memory_store is None
 
 
-def test_memory_bind_no_create_missing_store_errors(tmp_path):
+def test_bind_does_not_require_the_store_to_exist(tmp_path):
+    # New contract (#586): bind only declares the store in agent.toml — deploy creates/validates it
+    # — so binding a not-yet-created store succeeds and never reaches the workspace client.
     project = _project(tmp_path)
-    with mock.patch("databricks_mason.deploy._resolve_memory_store", return_value=None):
-        r = CliRunner().invoke(
-            memory, ["bind", "ghost", "--no-create-stores", "--source", str(project)], obj=_Ctx()
-        )
-    assert r.exit_code != 0
-    assert "does not exist" in r.output
+    r = CliRunner().invoke(
+        memory, ["bind", "ghost", "--source", str(project)], obj=_Ctx(fail_client=True)
+    )
+    assert r.exit_code == 0, r.output
+    assert AgentProject.load(project).memory_store == "ghost"
 
 
 def test_sessions_bind_and_unbind(tmp_path):
     project = _project(tmp_path)
-    with mock.patch(
-        "databricks_mason.deploy._ensure_session_store", return_value=(mock.Mock(), True)
-    ):
-        r = CliRunner().invoke(sessions, ["bind", "my-sess", "--source", str(project)], obj=_Ctx())
+    # `bind` only declares the store in agent.toml; it does not provision (that's `mason deploy`).
+    r = CliRunner().invoke(sessions, ["bind", "my-sess", "--source", str(project)], obj=_Ctx())
     assert r.exit_code == 0, r.output
     assert AgentProject.load(project).session_store == "my-sess"
 

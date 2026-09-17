@@ -10,7 +10,7 @@ import json
 
 from click.testing import CliRunner
 
-from databricks_mason.memory import entries, stores
+from databricks_mason.cli.memory import entries, stores
 
 STORE = "mem-uuid"
 ENTRY = f"memory-stores/{STORE}/entries/e1"
