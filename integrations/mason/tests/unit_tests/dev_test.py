@@ -37,7 +37,7 @@ class _Ctx:
         self.profile = profile
 
     def client(self):
-        return mock.Mock(current_user="me@example.com")
+        return mock.Mock(current_user="me@example.com", host="https://my-workspace.databricks.com")
 
 
 @pytest.fixture(autouse=True)
@@ -205,6 +205,31 @@ def test_dev_wires_tracing_env_on_by_default(tmp_path: pathlib.Path, monkeypatch
     }
     assert env["MLFLOW_EXPERIMENT_ID"] == "exp-123"
     assert env["MLFLOW_TRACKING_URI"] == "databricks"
+
+
+def test_dev_shows_default_experiment_url_when_tracing_on(tmp_path: pathlib.Path, monkeypatch):
+    # Tracing is on by default: dev surfaces the default experiment's Traces URL (the same link
+    # `mason deploy` prints) so a dev run makes clear where its traces land.
+    (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    (tmp_path / ".venv").mkdir()
+    monkeypatch.setattr(dev_mod, "resolve_trace_experiment_id", lambda *a, **k: "exp-123")
+    with mock.patch.object(dev_mod, "_databricks"):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code == 0, result.output
+    output = " ".join(result.output.split())
+    assert "Traces" in output
+    assert "/ml/experiments/exp-123" in output
+
+
+def test_dev_omits_experiment_url_when_tracing_off(tmp_path: pathlib.Path, monkeypatch):
+    # Tracing disabled (resolve returns None) -> no Traces line in the startup panel.
+    (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    (tmp_path / ".venv").mkdir()
+    monkeypatch.setattr(dev_mod, "resolve_trace_experiment_id", lambda *a, **k: None)
+    with mock.patch.object(dev_mod, "_databricks"):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code == 0, result.output
+    assert "/ml/experiments/" not in result.output
 
 
 def test_dev_runs_offline_when_client_unavailable(tmp_path: pathlib.Path):

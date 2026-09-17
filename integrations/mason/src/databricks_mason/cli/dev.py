@@ -25,6 +25,7 @@ from databricks_mason.cli.deploy import (
     store_bindings,
 )
 from databricks_mason.cli.endpoint_examples import print_agent_invoke_command
+from databricks_mason.cli.tracing import experiment_url
 from databricks_mason.databricks_cli import _databricks
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import require_managed_tool_support
@@ -157,12 +158,17 @@ def dev(
     # Tracing is best-effort: build the client and provision inside the try so ANY failure (no auth /
     # offline, no mlflow, permission) degrades to running without traces rather than aborting a purely
     # local run.
+    trace_url: Optional[str] = None
     try:
+        client = obj.client()
         experiment_id = resolve_trace_experiment_id(
-            source_dir, source_dir.resolve().name, obj.client(), obj.profile
+            source_dir, source_dir.resolve().name, client, obj.profile
         )
         if experiment_id:
             env_updates.update(mlflow_tracing_config(experiment_id).env())
+            # Show the same default experiment URL `mason deploy` prints, so a dev run surfaces where
+            # its traces land. Falls back to the bare id when the host is unavailable (offline).
+            trace_url = experiment_url(client.host, experiment_id) or experiment_id
     except Exception as exc:  # noqa: BLE001 - tracing must never block a local run
         render.diagnostic(
             "warning",
@@ -193,7 +199,10 @@ def dev(
     # misleading for an API-only project, which serves no page there (404). Print an accurate line up
     # front, keyed on whether this project actually carries the chat-app overlay.
     _announce_local_url(
-        source_dir, app_port or _DEFAULT_APP_PORT, project.server if project else None
+        source_dir,
+        app_port or _DEFAULT_APP_PORT,
+        project.server if project else None,
+        trace_url,
     )
 
     # Run in the project dir so run-local finds the app; stream output (no capture). Remove the
@@ -209,8 +218,14 @@ def dev(
         entry_point.unlink(missing_ok=True)
 
 
-def _announce_local_url(source_dir: pathlib.Path, port: int, server: AgentServer | None) -> None:
-    """Print how to reach the running app: the chat UI if present, else a sample invoke request."""
+def _announce_local_url(
+    source_dir: pathlib.Path, port: int, server: AgentServer | None, trace_url: str | None = None
+) -> None:
+    """Print how to reach the running app: the chat UI if present, else a sample invoke request.
+
+    ``trace_url`` (when tracing is on) is shown alongside so a dev run surfaces where its traces land,
+    matching the ``Traces`` line ``mason deploy`` prints.
+    """
     base = f"http://localhost:{port}"
     deploy_name = source_dir.resolve().name
     tool_step: str | tuple[str, str] = (
@@ -219,9 +234,12 @@ def _announce_local_url(source_dir: pathlib.Path, port: int, server: AgentServer
         else ("mason tools add mcp <service>", "Give the agent a tool")
     )
     if (source_dir / "runtime" / "ui.py").is_file():
+        fields = {"Chat UI": base}
+        if trace_url:
+            fields["Traces"] = trace_url
         render.success(
             "Starting agent",
-            fields={"Chat UI": base},
+            fields=fields,
             next_steps=[
                 f"Open {base} to chat with your agent",
                 tool_step,
@@ -240,9 +258,12 @@ def _announce_local_url(source_dir: pathlib.Path, port: int, server: AgentServer
             else '{"input": [{"role": "user", "content": "hi"}]}'
         )
         sample = f"curl -X POST {endpoint} -H 'Content-Type: application/json' -d '{body}'"
+        fields = {"Invoke": f"POST {endpoint}"}
+        if trace_url:
+            fields["Traces"] = trace_url
         render.success(
             "Starting API-only agent (no chat UI — see `mason init --help`)",
-            fields={"Invoke": f"POST {endpoint}"},
+            fields=fields,
             next_steps=[
                 (sample, "Send a test request"),
                 tool_step,
