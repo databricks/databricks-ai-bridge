@@ -392,8 +392,6 @@ sync/streaming/background transport selector is manual.
 
 ## Developing Mason
 
-### Local development
-
 Templates ship **inside** the `databricks_mason` package (`src/databricks_mason/templates/`), so
 `mason init` copies the template that matches the installed CLI — the scaffold can't drift from the
 `databricks-mason` it runs against.
