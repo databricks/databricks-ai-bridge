@@ -6,6 +6,7 @@ Root Click group. Global `--profile` and `--output` flow to every subcommand via
 
 from __future__ import annotations
 
+import sys
 from typing import Optional
 
 import click
@@ -101,8 +102,37 @@ mason.add_command(tools)
 configure_help(mason)
 
 
+def _emit_trailing_spacer() -> None:
+    """Print one blank line after a command finishes, so its output is visually separated from the
+    next shell prompt.
+
+    Applies to every invocation — success or error — because it runs from the entry point that all
+    commands pass through, rather than from any single render path. Emitted only for human-facing
+    text output on an interactive terminal: skipped under `-o json` and when stdout is piped or
+    redirected, so captured output stays byte-clean and no stray blank line appears when a command's
+    own output went somewhere other than the terminal.
+    """
+    try:
+        # Suppress under `-o json` even on a (pseudo-)TTY — a machine may be parsing stdout under
+        # `docker run -t` / `script` / a CI PTY, where isatty() alone would wrongly allow the
+        # spacer. `errors._OUTPUT_MODE` is a process global (set by the root group, read the same
+        # way by render.py), so it's still available here after the Click context is torn down.
+        if errors._OUTPUT_MODE == "json" or not sys.stdout.isatty():
+            return
+        click.echo()
+    except Exception:
+        # This runs in main()'s `finally`, so nothing here may raise and mask the command's real
+        # exit path — swallow anything (a closed/detached stdout, a broken pipe, etc.).
+        pass
+
+
 def main() -> None:
-    mason(prog_name="mason")
+    # A `finally` keeps Click's `main()` untouched (exit codes, --help, broken-pipe/abort handling)
+    # while guaranteeing the spacer prints on every path, including when a command exits non-zero.
+    try:
+        mason(prog_name="mason")
+    finally:
+        _emit_trailing_spacer()
 
 
 if __name__ == "__main__":
