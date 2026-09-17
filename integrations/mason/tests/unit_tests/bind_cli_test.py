@@ -6,8 +6,10 @@ Uses a real temp AgentProject and rejects workspace calls: binding only edits ag
 
 from __future__ import annotations
 
+import json
 import pathlib
 
+import pytest
 from click.testing import CliRunner
 
 from databricks_mason.agent_project import AgentProject
@@ -32,12 +34,21 @@ def _project(tmp_path: pathlib.Path) -> pathlib.Path:
     return project
 
 
-def test_memory_bind_and_unbind(tmp_path):
+@pytest.mark.parametrize("output", ["text", "json"])
+def test_memory_bind_and_unbind(tmp_path, output):
     project = _project(tmp_path)
-    r = CliRunner().invoke(memory, ["bind", "my-mem", "--source", str(project)], obj=_Ctx())
-    assert r.exit_code == 0, r.output
+    result = CliRunner().invoke(
+        memory, ["bind", "my-mem", "--source", str(project)], obj=_Ctx(output)
+    )
+    assert result.exit_code == 0, result.output
+    if output == "json":
+        assert json.loads(result.output) == {
+            "memory_store": "my-mem",
+            "manifest": str(project / "agent.toml"),
+        }
     reloaded = AgentProject.load(project)
     assert reloaded.memory_store == "my-mem"
+    assert reloaded.memory_store_id is None
 
     r2 = CliRunner().invoke(memory, ["unbind", "--source", str(project)], obj=_Ctx())
     assert r2.exit_code == 0, r2.output
@@ -51,10 +62,28 @@ def test_memory_bind_does_not_require_existing_store(tmp_path):
     assert AgentProject.load(project).memory_store == "ghost"
 
 
-def test_sessions_bind_and_unbind(tmp_path):
+def test_memory_bind_rejects_obsolete_create_stores_option(tmp_path):
     project = _project(tmp_path)
-    r = CliRunner().invoke(sessions, ["bind", "my-sess", "--source", str(project)], obj=_Ctx())
-    assert r.exit_code == 0, r.output
+    result = CliRunner().invoke(
+        memory, ["bind", "ghost", "--no-create-stores", "--source", str(project)], obj=_Ctx()
+    )
+    assert result.exit_code == 2
+    assert "No such option '--no-create-stores'" in result.output
+    assert AgentProject.load(project).memory_store is None
+
+
+@pytest.mark.parametrize("output", ["text", "json"])
+def test_sessions_bind_and_unbind(tmp_path, output):
+    project = _project(tmp_path)
+    result = CliRunner().invoke(
+        sessions, ["bind", "my-sess", "--source", str(project)], obj=_Ctx(output)
+    )
+    assert result.exit_code == 0, result.output
+    if output == "json":
+        assert json.loads(result.output) == {
+            "session_store": "my-sess",
+            "manifest": str(project / "agent.toml"),
+        }
     assert AgentProject.load(project).session_store == "my-sess"
 
     r2 = CliRunner().invoke(sessions, ["unbind", "--source", str(project)], obj=_Ctx())
@@ -66,4 +95,5 @@ def test_unbind_when_nothing_bound_is_graceful(tmp_path):
     project = _project(tmp_path)
     r = CliRunner().invoke(memory, ["unbind", "--source", str(project)], obj=_Ctx())
     assert r.exit_code == 0
-    assert "No memory store binding" in r.output or "Removed" in r.output
+    assert "No memory store binding" in r.output
+    assert AgentProject.load(project).memory_store is None
