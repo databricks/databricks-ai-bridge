@@ -26,7 +26,7 @@ from databricks_mason.runtime.tool_manifest import (
     downscope_wire,
     load_tools,
 )
-from databricks_mason.runtime.workspace import workspace_client
+from databricks_mason.runtime.workspace import workspace_client, workspace_headers
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,13 @@ def _server_from_tool(tool: ToolRecord) -> McpServer | None:
                 workspace_client=client,
                 timeout=120.0,
                 downscope=downscope_wire(tool),
+            )
+        if tool.kind == "genie_one":
+            return McpServer(
+                name=tool.id,
+                workspace_client=client,
+                timeout=120.0,
+                params={"url": url, "headers": workspace_headers()},
             )
         return McpServer(url=url, name=tool.id, workspace_client=client, timeout=120.0)
     if tool.kind == "uc_function":

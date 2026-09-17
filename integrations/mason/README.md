@@ -374,10 +374,13 @@ native Genie **Chat-mode** conversation API through the Databricks SDK, not the 
 Agent-mode API or the per-space MCP endpoint.
 
 Each native binding exposes `{id}_ask`, `{id}_poll`, and `{id}_query_result`, where `{id}` is its
-binding name. Ask accepts an optional `conversation_id` for follow-ups. Poll waits at most 120
-seconds; if the response is still running, it returns `timed_out` with the conversation and
-message IDs so the caller can poll again. Query results include the first 100 rows, column schema,
-a truncation indicator, and a deep link to the conversation.
+binding name. Ask accepts an optional `conversation_id` for follow-ups. Ask and poll share a
+120-second budget per call, including client setup and submission. If the response is still
+running, they return `timed_out` with the conversation and message IDs so the caller can poll
+again. If submission times out before a message ID is received, ask returns
+`INDETERMINATE_SUBMISSION`: the request may still complete, so do not resubmit automatically.
+`NOT_SUBMITTED` means client setup timed out before sending the question. Query results include
+the first 100 rows, column schema, a truncation indicator, and a deep link to the conversation.
 
 Both framework modules, `databricks_mason.langgraph` and `databricks_mason.openai`, export
 `genie_tools()`. New Mason-server templates use it automatically for native Genie Agent bindings;
@@ -390,6 +393,18 @@ Managed MCP Servers workspace preview; delegated access requires the `genie` OAu
 The effective caller needs access to the data, the SQL warehouse, and the selected Genie space
 where applicable. Mason does not grant permissions or promise a service-principal fallback when
 caller credentials lack access. An offline add succeeding does not establish runtime access.
+
+The opt-in live tests exercise both frameworks against the configured workspace and an existing
+Genie space. From `integrations/mason`, with both framework extras installed:
+
+```sh
+DATABRICKS_CONFIG_PROFILE=my-workspace RUN_MASON_GENIE_TESTS=1 \
+  MASON_GENIE_SPACE_ID=SPACE_ID \
+  uv run pytest tests/integration_tests/genie_tools_test.py
+```
+
+By default they ask for the row count of `samples.nyctaxi.trips`. Set `MASON_GENIE_QUESTION` for
+another dataset and `MASON_GENIE_EXPECTED_VALUE` to assert a known result cell.
 
 ## Initialize the chat app demo
 

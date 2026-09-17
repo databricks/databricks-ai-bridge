@@ -1,3 +1,5 @@
+import asyncio
+import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -28,6 +30,38 @@ def client(monkeypatch):
     )
     monkeypatch.setattr(genie, "workspace_client", lambda: client)
     return client
+
+
+@pytest.fixture
+def deadline(monkeypatch):
+    """Control deadline expiry at a chosen wait boundary, preserving real worker-thread calls."""
+    clock = SimpleNamespace(now=0.0, expired_result=None, budgets=[])
+
+    async def wait_for(awaitable, timeout):
+        clock.budgets.append(timeout)
+        if timeout <= 0:
+            awaitable.close()
+            raise asyncio.TimeoutError
+        result = await awaitable
+        if result is clock.expired_result:
+            raise asyncio.TimeoutError
+        return result
+
+    async def sleep(delay):
+        clock.now += delay
+
+    monkeypatch.setattr(genie, "time", SimpleNamespace(monotonic=lambda: clock.now))
+    monkeypatch.setattr(
+        genie,
+        "asyncio",
+        SimpleNamespace(
+            to_thread=asyncio.to_thread,
+            wait_for=wait_for,
+            sleep=sleep,
+            TimeoutError=asyncio.TimeoutError,
+        ),
+    )
+    return clock
 
 
 @pytest.mark.asyncio
@@ -62,30 +96,133 @@ async def test_terminal_errors_preserved_without_retry_or_reexecution(client, st
 
 
 @pytest.mark.asyncio
-async def test_timeout_preserves_resume_ids(client):
+async def test_timeout_preserves_resume_ids(client, deadline):
     client.genie.get_message.return_value = _response(status="EXECUTING_QUERY")
     answer = await genie.GenieAgent(SPACE, wait_seconds=0.01).poll(CONVERSATION, MESSAGE)
     assert answer["timed_out"] is True
     assert answer["status"] == "EXECUTING_QUERY"
     assert answer["conversation_id"] == CONVERSATION
     assert answer["message_id"] == MESSAGE
+    assert deadline.budgets == [0.01, 0.01]
+    client.genie.get_message.assert_called_once()
     client.genie.create_message.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_inflight_get_timeout_preserves_resume_ids(client):
-    import time
-
-    def slow_get(*arguments):
-        time.sleep(0.05)
-        return _response(status="COMPLETED")
-
-    client.genie.get_message.side_effect = slow_get
+async def test_inflight_get_timeout_preserves_resume_ids(client, deadline):
+    deadline.expired_result = client.genie.get_message.return_value
     answer = await genie.GenieAgent(SPACE, wait_seconds=0.01).poll(CONVERSATION, MESSAGE)
     assert answer["timed_out"] is True
     assert answer["status"] == "IN_PROGRESS"
     assert answer["conversation_id"] == CONVERSATION
     assert answer["message_id"] == MESSAGE
+    assert deadline.budgets == [0.01, 0.01]
+    client.genie.get_message.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("conversation_id", [None, CONVERSATION])
+async def test_slow_submission_is_indeterminate_without_invented_ids(
+    client, deadline, conversation_id
+):
+    submit = (
+        client.genie.start_conversation if conversation_id is None else client.genie.create_message
+    )
+    deadline.expired_result = submit.return_value
+    answer = await genie.GenieAgent(SPACE, wait_seconds=0.01).ask("hello", conversation_id)
+
+    assert answer["timed_out"] is True
+    assert answer["status"] == "INDETERMINATE_SUBMISSION"
+    assert answer["indeterminate_submission"] is True
+    assert "do not resubmit automatically" in answer["warning"].lower()
+    assert "message_id" not in answer
+    assert answer.get("conversation_id") == conversation_id
+    assert "deep_link" not in answer
+    assert deadline.budgets == [0.01, 0.01]
+    submit.assert_called_once()
+    client.genie.get_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["ask", "poll"])
+async def test_slow_client_setup_is_bounded_without_submitting(
+    client, monkeypatch, deadline, method
+):
+    setup_threads = []
+
+    def setup():
+        setup_threads.append(threading.get_ident())
+        return client
+
+    monkeypatch.setattr(genie, "workspace_client", setup)
+    deadline.expired_result = client
+    agent = genie.GenieAgent(SPACE, wait_seconds=0.01)
+    answer = (
+        await agent.ask("hello") if method == "ask" else await agent.poll(CONVERSATION, MESSAGE)
+    )
+
+    assert len(setup_threads) == 1
+    assert setup_threads[0] != threading.get_ident()
+    assert answer["timed_out"] is True
+    assert deadline.budgets == [0.01]
+    if method == "ask":
+        assert answer["status"] == "NOT_SUBMITTED"
+        assert answer["indeterminate_submission"] is False
+        assert "conversation_id" not in answer
+        assert "message_id" not in answer
+    else:
+        assert answer["conversation_id"] == CONVERSATION
+        assert answer["message_id"] == MESSAGE
+    client.genie.start_conversation.assert_not_called()
+    client.genie.create_message.assert_not_called()
+    client.genie.get_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("conversation_id", [None, CONVERSATION])
+async def test_setup_and_submission_are_deducted_from_poll_budget(
+    client, monkeypatch, deadline, conversation_id
+):
+    def setup():
+        deadline.now += 0.04
+        return client
+
+    submit = (
+        client.genie.start_conversation if conversation_id is None else client.genie.create_message
+    )
+    operation = submit.return_value
+
+    def submitted(*arguments):
+        deadline.now += 0.04
+        return operation
+
+    monkeypatch.setattr(genie, "workspace_client", setup)
+    submit.side_effect = submitted
+    answer = await genie.GenieAgent(SPACE, wait_seconds=0.06).ask("hello", conversation_id)
+
+    assert answer["timed_out"] is True
+    assert answer["conversation_id"] == CONVERSATION
+    assert answer["message_id"] == MESSAGE
+    assert CONVERSATION in answer["deep_link"]
+    assert not answer.get("indeterminate_submission")
+    assert deadline.budgets == pytest.approx([0.06, 0.02])
+    submit.assert_called_once()
+    client.genie.get_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_query_result_client_setup_runs_off_loop(client, monkeypatch):
+    setup_threads = []
+
+    def setup():
+        setup_threads.append(threading.get_ident())
+        return client
+
+    monkeypatch.setattr(genie, "workspace_client", setup)
+    client.genie.get_message_attachment_query_result.return_value = _response()
+    await genie.GenieAgent(SPACE).query_result(CONVERSATION, MESSAGE, ATTACHMENT)
+    assert len(setup_threads) == 1
+    assert setup_threads[0] != threading.get_ident()
 
 
 @pytest.mark.asyncio

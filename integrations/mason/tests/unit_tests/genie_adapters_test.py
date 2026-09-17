@@ -247,6 +247,29 @@ def test_genie_one_uses_workspace_mcp_url_and_timeout(
     assert connection["url"] == "https://example.databricks.com/api/2.0/mcp/genie"
 
 
+@pytest.mark.parametrize("framework", ["openai"], indirect=True)
+@pytest.mark.parametrize("workspace_id", ["123", None])
+def test_openai_genie_one_forwards_workspace_routing_headers(
+    framework, mcp_adapter, project, sdk, monkeypatch, workspace_id
+):
+    project('\n[[tools]]\nid = "workspace_genie"\nsource = { kind = "genie_one" }\n')
+    sdk[0].config.host = "https://accounts.azuredatabricks.net/"
+    monkeypatch.setattr(mcp_adapter, "workspace_client", sdk[1])
+    if workspace_id is None:
+        monkeypatch.delenv("DATABRICKS_WORKSPACE_ID", raising=False)
+    else:
+        monkeypatch.setenv("DATABRICKS_WORKSPACE_ID", workspace_id)
+
+    server = mcp_adapter._declared_servers()[0]
+
+    assert server.params["url"] == "https://accounts.azuredatabricks.net/api/2.0/mcp/genie"
+    assert (server.params.get("headers") or {}) == (
+        {"X-Databricks-Org-Id": "123"} if workspace_id else {}
+    )
+    assert server.params["timeout"] == 120.0
+    assert server.workspace_client is sdk[0]
+
+
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
 def test_genie_export_is_lazy_without_optional_dependencies(framework):
     result = subprocess.run(

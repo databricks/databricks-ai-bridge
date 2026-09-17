@@ -32,8 +32,10 @@ class GenieAgent:
         """Ask the configured Genie Agent a data question, or continue a conversation.
 
         Waits up to two minutes for an answer. Preserve returned attachments, SQL and deep_link.
-        If timed_out is true, call the matching poll tool with the returned conversation_id and
-        message_id; do not resubmit the question. FAILED, CANCELLED and QUERY_RESULT_EXPIRED are
+        If timed_out is true and IDs are returned, call the matching poll tool; do not resubmit.
+        If indeterminate_submission is true, submission may still complete but no message ID was
+        received: do not resubmit automatically. NOT_SUBMITTED means setup timed out before sending
+        the question. FAILED, CANCELLED and QUERY_RESULT_EXPIRED are
         terminal, not successful answers. Use query_result with a query attachment's attachment_id
         to read its rows. No workspace or space selection is needed.
         """
@@ -41,17 +43,49 @@ class GenieAgent:
             raise ValueError("question must not be empty.")
         if conversation_id is not None:
             _identifier(conversation_id, "conversation_id")
-        client = workspace_client()
-        if conversation_id is None:
-            operation = await asyncio.to_thread(
-                client.genie.start_conversation, self.space_id, question
+        deadline = time.monotonic() + self.wait_seconds
+        try:
+            client = await asyncio.wait_for(
+                asyncio.to_thread(workspace_client), timeout=deadline - time.monotonic()
             )
-            conversation_id = operation.response.conversation_id
-        else:
-            operation = await asyncio.to_thread(
-                client.genie.create_message, self.space_id, conversation_id, question
-            )
-        return await self._wait(client, conversation_id, operation.response.message_id)
+        except asyncio.TimeoutError:
+            return self._submission_timeout(conversation_id, indeterminate=False)
+        try:
+            if conversation_id is None:
+                operation = await asyncio.wait_for(
+                    asyncio.to_thread(client.genie.start_conversation, self.space_id, question),
+                    timeout=deadline - time.monotonic(),
+                )
+                conversation_id = operation.response.conversation_id
+            else:
+                operation = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        client.genie.create_message, self.space_id, conversation_id, question
+                    ),
+                    timeout=deadline - time.monotonic(),
+                )
+        except asyncio.TimeoutError:
+            return self._submission_timeout(conversation_id, indeterminate=True)
+        return await self._wait(
+            client, conversation_id, operation.response.message_id, deadline=deadline
+        )
+
+    def _submission_timeout(
+        self, conversation_id: str | None, *, indeterminate: bool
+    ) -> dict[str, Any]:
+        return {
+            "space_id": self.space_id,
+            **({"conversation_id": conversation_id} if conversation_id is not None else {}),
+            "status": "INDETERMINATE_SUBMISSION" if indeterminate else "NOT_SUBMITTED",
+            "timed_out": True,
+            "indeterminate_submission": indeterminate,
+            "warning": (
+                "Submission may still complete, but no message ID was received. "
+                "Do not resubmit automatically."
+                if indeterminate
+                else "Client setup timed out before submission; the question was not submitted."
+            ),
+        }
 
     async def poll(self, conversation_id: str, message_id: str) -> dict[str, Any]:
         """Resume waiting for a previously submitted Genie Agent message without resubmitting it.
@@ -61,7 +95,20 @@ class GenieAgent:
         """
         _identifier(conversation_id, "conversation_id")
         _identifier(message_id, "message_id")
-        return await self._wait(workspace_client(), conversation_id, message_id)
+        deadline = time.monotonic() + self.wait_seconds
+        try:
+            client = await asyncio.wait_for(
+                asyncio.to_thread(workspace_client), timeout=deadline - time.monotonic()
+            )
+        except asyncio.TimeoutError:
+            return {
+                "space_id": self.space_id,
+                "conversation_id": conversation_id,
+                "message_id": message_id,
+                "status": "IN_PROGRESS",
+                "timed_out": True,
+            }
+        return await self._wait(client, conversation_id, message_id, deadline=deadline)
 
     def _reference(self, client: Any, conversation_id: str, message_id: str) -> dict[str, Any]:
         _identifier(conversation_id, "conversation_id")
@@ -74,9 +121,10 @@ class GenieAgent:
             f"/conversations/{conversation_id}",
         }
 
-    async def _wait(self, client: Any, conversation_id: str, message_id: str) -> dict[str, Any]:
+    async def _wait(
+        self, client: Any, conversation_id: str, message_id: str, *, deadline: float
+    ) -> dict[str, Any]:
         reference = self._reference(client, conversation_id, message_id)
-        deadline = time.monotonic() + self.wait_seconds
         delay = 2.0
         message: dict[str, Any] = {"status": "IN_PROGRESS"}
         while (remaining := deadline - time.monotonic()) > 0:
@@ -110,7 +158,7 @@ class GenieAgent:
         _identifier(conversation_id, "conversation_id")
         _identifier(message_id, "message_id")
         _identifier(attachment_id, "attachment_id")
-        client = workspace_client()
+        client = await asyncio.to_thread(workspace_client)
         response = await asyncio.to_thread(
             client.genie.get_message_attachment_query_result,
             self.space_id,
