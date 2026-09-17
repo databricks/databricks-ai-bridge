@@ -108,7 +108,7 @@ class Transcript:
 class Runner:
     def __init__(
         self,
-        profile: str,
+        profile: str | None,
         output: pathlib.Path,
         wheel: pathlib.Path,
         template_repo: str | None = None,
@@ -130,6 +130,18 @@ class Runner:
         self.warehouse_id: str | None = None
         self.host: str | None = None
         self.headers: dict[str, str] = {}
+
+    def _profile_args(self) -> list[str]:
+        """CLI `--profile` args, or nothing when auth comes from the ambient environment."""
+        return ["--profile", self.profile] if self.profile else []
+
+    def _auth_label(self) -> str:
+        return f"profile {self.profile!r}" if self.profile else "environment credentials"
+
+    def _app_auth_label(self) -> str:
+        if self.app_auth_profile:
+            return f"App auth profile {self.app_auth_profile!r}"
+        return "environment credentials"
 
     def run(
         self,
@@ -204,7 +216,7 @@ class Runner:
 
     def databricks(self, args: Sequence[str], *, timeout: float = 300) -> dict[str, Any]:
         result = self.run(
-            ["databricks", *args, "--profile", self.profile, "--output", "json"],
+            ["databricks", *args, *self._profile_args(), "--output", "json"],
             timeout=timeout,
         )
         try:
@@ -230,29 +242,22 @@ class Runner:
         workspace_client = WorkspaceClient(profile=self.profile)
         app_auth_client = WorkspaceClient(profile=self.app_auth_profile)
         if not workspace_client.config.host:
-            raise MatrixError(f"Could not resolve a host from profile {self.profile!r}.")
+            raise MatrixError(f"Could not resolve a host from {self._auth_label()}.")
         if not app_auth_client.config.host:
-            raise MatrixError(
-                f"Could not resolve a host from App auth profile {self.app_auth_profile!r}."
-            )
+            raise MatrixError(f"Could not resolve a host from {self._app_auth_label()}.")
         self.host = workspace_client.config.host.rstrip("/")
         app_auth_host = app_auth_client.config.host.rstrip("/")
         if app_auth_host != self.host:
-            raise MatrixError(
-                f"App auth profile {self.app_auth_profile!r} targets {app_auth_host}, "
-                f"not {self.host}."
-            )
+            raise MatrixError(f"{self._app_auth_label()} targets {app_auth_host}, not {self.host}.")
         if app_auth_client.config.auth_type == "pat":
             raise MatrixError(
-                f"App auth profile {self.app_auth_profile!r} uses a PAT. "
-                "Databricks Apps /api routes require OAuth; run `databricks auth login` "
-                "for a profile on the same workspace."
+                f"{self._app_auth_label()} uses a PAT. Databricks Apps /api routes require OAuth; "
+                "use an OAuth profile (`databricks auth login`) or service-principal env credentials "
+                "on the same workspace."
             )
         authorization = app_auth_client.config.authenticate().get("Authorization")
         if not authorization:
-            raise MatrixError(
-                f"Could not resolve credentials from App auth profile {self.app_auth_profile!r}."
-            )
+            raise MatrixError(f"Could not resolve credentials from {self._app_auth_label()}.")
         self.headers = {"Authorization": authorization}
 
     def select_warehouse(self, override: str | None) -> str:
@@ -261,7 +266,9 @@ class Runner:
         else:
             warehouses = self.databricks(["warehouses", "list"])
             if not isinstance(warehouses, list) or not warehouses:
-                raise MatrixError("df1 has no SQL warehouse available for UC function setup.")
+                raise MatrixError(
+                    "The workspace has no SQL warehouse available for UC function setup."
+                )
             running = next(
                 (item for item in warehouses if item.get("state") == "RUNNING"), warehouses[0]
             )
@@ -273,8 +280,7 @@ class Runner:
                 "warehouses",
                 "start",
                 self.warehouse_id,
-                "--profile",
-                self.profile,
+                *self._profile_args(),
                 "--timeout",
                 "20m",
             ],
@@ -343,13 +349,11 @@ class Runner:
                 project = projects_root / f"{framework}-{authoring}"
                 init_args = [
                     str(self.mason),
-                    "--profile",
-                    self.profile,
+                    *self._profile_args(),
                     "init",
                     "--framework",
                     framework,
-                    "--profile",
-                    self.profile,
+                    *self._profile_args(),
                 ]
                 if self.template_repo:
                     init_args.extend(["--repo", self.template_repo])
@@ -454,8 +458,7 @@ class Runner:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         argv = [
             str(self.mason),
-            "--profile",
-            self.profile,
+            *self._profile_args(),
             "dev",
             "--source",
             str(case.path),
@@ -529,8 +532,7 @@ class Runner:
                 label,
                 [
                     str(self.mason),
-                    "--profile",
-                    self.profile,
+                    *self._profile_args(),
                     "deploy",
                     case.app_name,
                     "--source",
@@ -716,7 +718,7 @@ class Runner:
     def cleanup(self) -> None:
         for app in self.apps:
             self.run(
-                ["databricks", "apps", "delete", app, "--profile", self.profile],
+                ["databricks", "apps", "delete", app, *self._profile_args()],
                 timeout=600,
                 check=False,
             )
@@ -853,7 +855,11 @@ def verify_evidence(path: pathlib.Path) -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", default="df1")
+    parser.add_argument(
+        "--profile",
+        help="Workspace CLI profile; omit to authenticate from ambient Databricks environment "
+        "credentials (e.g. a service principal in CI).",
+    )
     parser.add_argument("--wheel", type=pathlib.Path)
     parser.add_argument("--output", type=pathlib.Path)
     parser.add_argument("--warehouse-id")
