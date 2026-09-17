@@ -198,6 +198,9 @@ and recovery behavior.
 
 ## Commands
 
+For the full command reference - every command, subcommand, argument, and option, in table form -
+see [`cli.md`](cli.md). The tree below is a quick overview.
+
 ```text
 mason [-p <profile>] [-o text|json]
   login        [--profile P]
