@@ -17,6 +17,23 @@ _IDENTIFIER = re.compile(r"^[a-f0-9]{32}$")
 _TERMINAL = {"COMPLETED", "FAILED", "CANCELLED", "QUERY_RESULT_EXPIRED"}
 
 
+async def _run_in_thread(function: Callable[..., Any], *args: Any) -> Any:
+    task = asyncio.create_task(asyncio.to_thread(function, *args))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError as cancelled:
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not task.cancelled():
+            task.exception()
+        raise cancelled
+
+
 def _identifier(value: str, name: str) -> str:
     if not isinstance(value, str) or not _IDENTIFIER.fullmatch(value):
         raise ValueError(f"{name} must be a 32-character lowercase hexadecimal ID.")
@@ -66,20 +83,20 @@ class GenieAgent:
         deadline = time.monotonic() + self.wait_seconds
         try:
             client = await asyncio.wait_for(
-                asyncio.to_thread(self._client), timeout=deadline - time.monotonic()
+                _run_in_thread(self._client), timeout=deadline - time.monotonic()
             )
         except asyncio.TimeoutError:
             return self._submission_timeout(conversation_id, indeterminate=False)
         try:
             if conversation_id is None:
                 operation = await asyncio.wait_for(
-                    asyncio.to_thread(client.genie.start_conversation, self.space_id, question),
+                    _run_in_thread(client.genie.start_conversation, self.space_id, question),
                     timeout=deadline - time.monotonic(),
                 )
                 conversation_id = operation.response.conversation_id
             else:
                 operation = await asyncio.wait_for(
-                    asyncio.to_thread(
+                    _run_in_thread(
                         client.genie.create_message, self.space_id, conversation_id, question
                     ),
                     timeout=deadline - time.monotonic(),
@@ -118,7 +135,7 @@ class GenieAgent:
         deadline = time.monotonic() + self.wait_seconds
         try:
             client = await asyncio.wait_for(
-                asyncio.to_thread(self._client), timeout=deadline - time.monotonic()
+                _run_in_thread(self._client), timeout=deadline - time.monotonic()
             )
         except asyncio.TimeoutError:
             return {
@@ -150,7 +167,7 @@ class GenieAgent:
         while (remaining := deadline - time.monotonic()) > 0:
             try:
                 response = await asyncio.wait_for(
-                    asyncio.to_thread(
+                    _run_in_thread(
                         client.genie.get_message, self.space_id, conversation_id, message_id
                     ),
                     timeout=remaining,
@@ -178,8 +195,8 @@ class GenieAgent:
         _identifier(conversation_id, "conversation_id")
         _identifier(message_id, "message_id")
         _identifier(attachment_id, "attachment_id")
-        client = await asyncio.to_thread(self._client)
-        response = await asyncio.to_thread(
+        client = await _run_in_thread(self._client)
+        response = await _run_in_thread(
             client.genie.get_message_attachment_query_result,
             self.space_id,
             conversation_id,
