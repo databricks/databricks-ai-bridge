@@ -1,4 +1,0 @@
-./databricks_mason-0.1.6.dev0-py3-none-any.whl
-databricks-ai-bridge[memory]>=0.21.0
-fastapi>=0.129.0
-uvicorn>=0.20.0

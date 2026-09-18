@@ -244,8 +244,7 @@ rollout, this path is opt-in with `DATABRICKS_MASON_USE_MANAGED_RUNTIME_STORE=tr
 retains the legacy per-app Lakebase project. Redeploy reads the stored backend and verifies the app
 identity. `mason deployments delete` removes a managed store and its data before deleting the app;
 use the same rollout switch for managed cleanup. Cleanup errors retain the app for retry. Direct
-app deletion bypasses store cleanup. See
-[Runtime Store live checks](tests/e2e/RUNTIME_STORE.md).
+app deletion bypasses store cleanup.
 
 Use `server = "custom"` to deploy your own HTTP server without provisioning a Runtime Store.
 Changing the server type of an existing deployment is not supported. To use a different server,
