@@ -9,7 +9,7 @@ authors = [
 requires-python = ">=3.11"
 dependencies = [
     # Mason includes the HTTP runtime; this extra adds the langgraph framework adapter.
-    "databricks-mason[langgraph]>=0.1.6.dev0",
+    "databricks-mason[langgraph]==0.1.6.dev1",
     "uvicorn>=0.41.0",
     "python-dotenv>=1.2.1",
     "databricks-sdk>=0.79.0",
@@ -33,6 +33,9 @@ dev = [
 
 [tool.uv]
 default-groups = ["dev"]
+
+[tool.uv.sources]
+databricks-mason = { git = "https://github.com/databricks/databricks-ai-bridge", rev = "52fdb37ccb1eeba6c77890667beb0cc4310e9b5b", subdirectory = "integrations/mason" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
