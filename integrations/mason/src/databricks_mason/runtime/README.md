@@ -5,23 +5,23 @@ LangGraph or OpenAI Agents template, or bring an existing agent.
 
 - **Deployment:** Scaffold a project, run it locally, and deploy it to Databricks Apps. Mason
   provisions the stores declared in your project, grants the app access, and configures tracing.
-- **Runtime:** App-auth projects use `AgentApp` for synchronous, streaming, and background execution,
-  with persistent results and automatic crash recovery on deployment. Projects with a user-auth
-  tool use foreground synchronous or streaming execution that retains no invocation state.
+- **Runtime:** `AgentApp` provides synchronous, streaming, and background execution, with persistent
+  results and automatic crash recovery on deployment. Request-user authentication is attached only
+  to the active first attempt and is never persisted.
 
 ## Choose your server
 
 **Mason server (`server = "mason"`).** Register your agent with `AgentApp` to use Mason's invocation
-API. Deployed App-auth Mason servers receive a Lakebase-backed Runtime Store. Register a recovery
-handler so Mason can restart interrupted App-auth work. `AgentApp` is a FastAPI application: you can
-add custom endpoints alongside the invocation API.
+API. Deployed Mason servers receive a Lakebase-backed Runtime Store. Register a recovery handler so
+Mason can restart interrupted app-auth work and mark interrupted request-user work failed.
+`AgentApp` is a FastAPI application: you can add custom endpoints alongside the invocation API.
 
-If any configured tool uses `auth = "user"`, the trusted Databricks Apps ingress headers own the
-credential lifetime. Synchronous requests await the handler and discard emitted events. Streaming
-requests deliver those events as SSE while the response owns execution and credentials through
-completion or disconnect. Neither mode submits work to the Runtime queue/store or retains status,
-events, results, or invocation-ID replay state. Background execution, durable recovery, event
-replay, and approval/resume are unsupported.
+If any configured tool uses `auth = "user"`, trusted Databricks Apps ingress headers supply a
+process-local credential for the first execution attempt. Synchronous, streaming, and background
+requests continue through the normal Runtime queue and Runtime Store. The store contains token-free
+request state, events, and results; it never contains the forwarded credential. A replacement
+attempt after failure recovery stops before agent code runs because the original credential is no
+longer available.
 
 **Your own server (`server = "custom"`).** Keep your existing HTTP server, or scaffold a minimal
 FastAPI server with `mason init --server custom`. You own the endpoints, request and response
@@ -44,11 +44,11 @@ pass `--disable-chat-app` for an API-only project.
 1. **Initialize:** `mason init` generates the agent code and runtime adapter separately. It records
    the server choice and default `my-agent-memory` / `my-agent-session` bindings in `agent.toml`.
 2. **Develop:** Edit your model, prompts, and tools in `agent/`. `mason dev` runs the project locally.
-   App-auth projects support synchronous, streaming, and background requests; request-user projects
-   support synchronous and streaming foreground requests.
+   Synchronous, streaming, and background requests use the same Runtime for both authorization
+   policies.
 3. **Deploy:** `mason deploy` creates or reuses the declared Session and Memory Stores, grants the
    app's service principal access, configures tracing, and deploys the app. For a Mason server,
-   it also creates or reuses the deployment's Runtime Store and attaches it to App-auth projects.
+   it also creates or reuses the deployment's Runtime Store.
 
 The generated configuration starts with:
 
@@ -87,18 +87,16 @@ connect framework-native agent loops to Mason.
 
 - **`@app.invoke`:** Register an async handler that receives the request's `input` and an
   `InvocationContext`. Return a JSON-serializable result.
-- **`await context.emit(event)`:** Publish a JSON event from the handler or adapter. The App-auth
-  Runtime stores and delivers events through its streaming API. Request-user execution assigns a
-  request-local sequence number, sends the event on a live SSE response when requested, and never
-  retains it for replay. A synchronous request discards the event after assigning its sequence.
+- **`await context.emit(event)`:** Publish a JSON event from the handler or adapter. The Runtime
+  stores and delivers events through its streaming API.
 - **`@app.recover`:** Register the handler Mason calls for a replacement attempt after interrupted
   execution. It receives the original input and a recovery context. Restore a framework checkpoint
-  from the Session Store, or replay the input if that is safe for your agent.
+  from the Session Store, or replay the input if that is safe for your agent. Request-user recovery
+  stops with `MCP_USER_AUTH_RECOVERY_UNSUPPORTED` before this handler runs.
 
-For App-auth projects, the client chooses `background` and `stream` on each request; separate agent
-handlers are not needed. Registering a recovery hook enables automatic recovery when the Runtime
-uses a persistent store. Request-user clients may choose synchronous execution or set `stream: true`,
-but must omit `background` because the HTTP response owns execution and credentials.
+The client chooses `background` and `stream` on each request; separate agent handlers are not
+needed. Registering a recovery hook enables automatic recovery when the Runtime uses a persistent
+store.
 
 For an existing agent, retain its framework code and add the runtime adapter and `AgentApp`
 entrypoint. Set `[agent].server = "mason"` and have `app.yaml` start that entrypoint. Changing the
@@ -106,13 +104,9 @@ configuration field alone does not convert a custom HTTP server into `AgentApp`.
 
 ## Invoke, stream, and reconnect
 
-The synchronous and foreground-streaming POST examples apply to both authorization policies. For
-request-user projects, `background: true` returns `400`, and status or event lookups return `404`
-because no request-user record exists. Request-user SSE cannot reconnect or replay prior events.
-
-An App-auth **invocation** is one managed agent run. The client-supplied UUID `id` acts as an
-idempotency key while its Runtime record is retained. A request-user invocation does not retain that
-record, so reusing its ID executes a new request.
+An **invocation** is one managed agent run. The client-supplied UUID `id` acts as an idempotency key
+while its Runtime record is retained. Request-user invocation IDs are internally namespaced by the
+forwarded principal so users cannot collide with each other.
 
 - **Synchronous:** Wait for the result in the POST response.
 - **Streaming (`stream: true`):** Receive progress events as Server-Sent Events (SSE).
@@ -134,9 +128,9 @@ output, and application event payloads are defined by your agent or framework ad
 
 ## Execution state and agent state
 
-The state diagram below applies to App-auth execution. Request-user work bypasses the Runtime Store;
-its request-local authentication closes when the synchronous response returns or the SSE response
-completes or disconnects. Framework session and memory behavior is unchanged.
+The state diagram below applies to both authorization policies. Request-user authentication is a
+process-local input to the active first attempt; it is not part of the Runtime Store, Session Store,
+or Memory Store.
 
 ```mermaid
 flowchart LR
@@ -159,12 +153,16 @@ flowchart LR
 events, and results are lost when the serving process exits. Interrupted work is not automatically
 restarted. Session and Memory Store persistence is separate from this local execution state.
 
-### Deployed App-auth execution
+### Deployed execution
 
 `mason deploy` provisions a dedicated PostgreSQL database for each Mason-server deployment and
 reuses it on redeployment. Results and events survive worker restarts, and any replica can serve
 polling and stream-reconnection requests. With a recovery handler registered, Mason detects stale
 heartbeats and starts a replacement attempt on an available worker.
+
+App-auth replacement attempts call the registered recovery handler. Request-user replacement
+attempts fail with `MCP_USER_AUTH_RECOVERY_UNSUPPORTED` before agent code runs because the original
+forwarded credential was intentionally not persisted.
 
 Recovery is **at-least-once**: an interrupted attempt may already have performed external side
 effects before its replacement starts. Make those operations idempotent. Request deduplication

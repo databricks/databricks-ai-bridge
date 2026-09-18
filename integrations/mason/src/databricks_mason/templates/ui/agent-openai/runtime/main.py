@@ -19,8 +19,7 @@ configure()
 
 app = AgentApp(auth_policy=InvocationAuthPolicy.from_manifest())
 app.invoke(invoke)
-if not app.auth_policy.requires_user:
-    app.recover(recover)
+app.recover(recover)
 install_ui(app)
 
 

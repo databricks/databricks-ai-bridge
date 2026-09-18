@@ -576,12 +576,12 @@ never silently upgraded to user identity.
 
 New Mason-server projects record `request_auth_contract_version = 1` in `.mason/project.toml`.
 
-Request-user invocations execute directly in the incoming HTTP request without a Runtime Store.
-Callers must omit `background`; they may set `stream: true` for live SSE. Synchronous calls discard
-emitted application events, while streaming calls sequence and deliver them without retention.
-Status and event lookups return `404`, and reusing an invocation ID executes a new request rather
-than replaying a retained result. Completing or cancelling the request or stream closes its
-request-user credentials.
+Request-user invocations use the same synchronous, streaming, background, status, event-replay,
+and idempotency APIs as app-auth invocations. The Runtime Store records only token-free request
+state, events, and results. The forwarded credential stays process-local for the active first
+attempt and closes when that attempt completes, fails, or is cancelled. A replacement attempt after
+failure recovery stops with `MCP_USER_AUTH_RECOVERY_UNSUPPORTED` because no user credential is
+available; neither the invoke nor recovery handler runs for that attempt.
 
 Before deploying user-auth tools from an older project, migrate its request handler to the
 current request-auth-aware `AgentApp` template, explicitly choose `user` or `app` on **every**
