@@ -92,6 +92,9 @@ def test_delete_aborts_without_confirmation(monkeypatch):
 
 
 def test_delete_proceeds_with_yes(monkeypatch):
+    # This regression test covers the direct App deletion path; managed Runtime Store cleanup
+    # has dedicated coverage in runtime_store_deploy_test.py.
+    monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", False)
     called = []
     monkeypatch.setattr(
         deploy_mod,
