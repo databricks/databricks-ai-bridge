@@ -167,7 +167,7 @@ class AgentApp(FastAPI):
             if body.background:
                 raise AuthError(
                     "MCP_USER_AUTH_BACKGROUND_UNSUPPORTED",
-                    "Request-user tools require synchronous execution",
+                    "Request-user tools require foreground execution",
                     400,
                 )
             if self._invoke_hook is None:
