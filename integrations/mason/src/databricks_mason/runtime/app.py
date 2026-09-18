@@ -15,8 +15,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic import JsonValue as PydanticJsonValue
 
-from databricks_mason.runtime.auth import AuthError, InvocationAuthPolicy
-from databricks_mason.runtime.request_execution import RequestExecution
+from databricks_mason.runtime.auth import AuthError, InvocationAuthPolicy, RequestAuthContext
 from databricks_mason.runtime.runtime import Runtime
 from databricks_mason.runtime.store import InMemoryRuntimeStore, RuntimeStore
 from databricks_mason.runtime.types import (
@@ -61,7 +60,6 @@ class AgentApp(FastAPI):
         auth_policy: InvocationAuthPolicy | None = None,
     ) -> None:
         self.auth_policy = auth_policy or InvocationAuthPolicy()
-        self._request_execution = RequestExecution()
         self._invoke_hook: InvocationHook | None = None
         self._recovery_hook: InvocationHook | None = None
         if self.auth_policy.requires_user:
@@ -160,6 +158,49 @@ class AgentApp(FastAPI):
             raise RuntimeError(f"no {handler} handler is registered")
         return await function(copy.deepcopy(invocation_request["input"]), context)
 
+    async def _invoke_request_user(
+        self, request: Request, body: _InvocationRequest, invocation_id: str
+    ) -> JSONResponse:
+        auth = RequestAuthContext.from_headers(request.headers)
+        try:
+            if body.background:
+                raise AuthError(
+                    "MCP_USER_AUTH_BACKGROUND_UNSUPPORTED",
+                    "Request-user tools require synchronous execution",
+                    400,
+                )
+            if body.stream:
+                raise AuthError(
+                    "MCP_USER_AUTH_STREAMING_UNSUPPORTED",
+                    "Request-user tools do not support streaming execution",
+                    400,
+                )
+            if self._invoke_hook is None:
+                raise RuntimeError("no @app.invoke handler is registered")
+
+            sequence = 0
+
+            async def discard_event(event: JsonObject) -> int:
+                nonlocal sequence
+                sequence += 1
+                return sequence
+
+            context = InvocationContext(
+                invocation_id=invocation_id,
+                session_id=auth.namespace("session", request.state.session_id or invocation_id),
+                attempt=1,
+                _attempt_context=InvocationAttemptContext(invocation_id, 1, discard_event),
+                request_auth=auth,
+            )
+            output = await self._invoke_hook(copy.deepcopy(body.input), context)
+            return JSONResponse({"id": invocation_id, "status": "completed", "output": output})
+        except AuthError:
+            raise
+        except Exception as exc:
+            raise HTTPException(500, "agent invocation failed") from exc
+        finally:
+            auth.close()
+
     async def _invoke_request(self, request: Request, body: _InvocationRequest) -> Response:
         invocation_id = str(body.id)
         invocation_request: JsonObject = {
@@ -168,14 +209,7 @@ class AgentApp(FastAPI):
         }
         try:
             if self.auth_policy.requires_user:
-                return await self._request_execution.invoke(
-                    request,
-                    invocation_id,
-                    invocation_request,
-                    self._invoke_hook,
-                    background=body.background,
-                    stream=body.stream,
-                )
+                return await self._invoke_request_user(request, body, invocation_id)
             if body.background:
                 state = await self._runtime.submit(invocation_id, invocation_request)
                 return JSONResponse(
@@ -201,9 +235,8 @@ class AgentApp(FastAPI):
 
     async def _get_request(self, request: Request, invocation_id: UUID) -> JSONResponse:
         if self.auth_policy.requires_user:
-            _, state = await self._request_execution.lookup(request, str(invocation_id))
-        else:
-            state = await self._runtime.get_invocation(str(invocation_id))
+            raise HTTPException(404, "invocation not found")
+        state = await self._runtime.get_invocation(str(invocation_id))
         if state is None:
             raise HTTPException(404, "invocation not found")
         return JSONResponse(self._state_payload(state))
@@ -213,9 +246,7 @@ class AgentApp(FastAPI):
     ) -> StreamingResponse:
         normalized_invocation_id = str(invocation_id)
         if self.auth_policy.requires_user:
-            return await self._request_execution.event_stream(
-                request, normalized_invocation_id, after
-            )
+            raise HTTPException(404, "invocation not found")
         if await self._runtime.get_invocation(normalized_invocation_id) is None:
             raise HTTPException(404, "invocation not found")
         return StreamingResponse(
