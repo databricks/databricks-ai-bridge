@@ -119,6 +119,7 @@ Deployment provisions or reuses the app's dedicated Runtime Store. Only the app-
 
 The `__Host-databricks-app-router` cookie may be supplied independently for sticky replica routing.
 It is not authentication and is not used as the template's application session ID.
+
 # Request-user authorization
 
 Declared tools in `agent.toml` select `auth = "user"` or `auth = "app"`; legacy missing auth
@@ -130,8 +131,10 @@ MCP server credentials are unchanged.
 public session IDs and actor values for the request owner, then passes only `workspace_client_for`
 to the framework-native agent. Internal session keys are never returned to clients.
 
-Phase 1 user-policy invocations support foreground sync and streaming only. Background execution,
-recovery, and approval/resume are disabled; approval interruptions fail with
-`MCP_USER_AUTH_HITL_UNSUPPORTED`. The optional UI disables background mode and its unscoped
-managed-state demo controls for user policy; the agent's namespaced memory and conversation stores
-remain available. App-only background, recovery, and approval behavior is unchanged.
+User-policy invocations support foreground synchronous requests and request-owned SSE. Callers must
+omit `background`; `stream: true` sequences and delivers live events without retaining them for
+status lookup or replay. Background execution, durable recovery, status/event replay, and
+approval/resume are disabled. Approval interruptions fail with `MCP_USER_AUTH_HITL_UNSUPPORTED`.
+The agent's existing namespaced memory, conversation store, and checkpointer behavior is unchanged;
+OBO does not add another saver. App-only background, streaming, recovery, and approval behavior is
+unchanged.
