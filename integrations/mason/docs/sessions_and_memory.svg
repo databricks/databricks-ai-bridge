@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 380" font-family="system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif" role="img" aria-label="An agent reads and appends to a session store, which holds one conversation's transcript, and recalls and saves to a memory store, which holds durable facts across conversations. Durable facts from a session are distilled into memory over time.">
+  <style>
+    .title{font-size:16px;font-weight:600;fill:#0f2942}
+    .sub{font-size:12px;fill:#8a6f66}
+    .agent{font-size:15px;font-weight:600;fill:#0f2942}
+    .v{font-size:11.5px;fill:#0f2942;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    .lbl{font-size:11px;fill:#64748b}
+    .rel{font-size:11px;font-weight:600;fill:#ff5f46}
+    .cap{font-size:12px;fill:#64748b}
+  </style>
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#94a3b8"/>
+    </marker>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#ff5f46"/>
+    </marker>
+  </defs>
+
+  <!-- Agent -->
+  <rect x="290" y="22" width="140" height="48" rx="10" fill="#fff9f7" stroke="#ff5f46" stroke-width="2"/>
+  <text x="360" y="52" text-anchor="middle" class="agent">Agent</text>
+
+  <!-- Agent <-> Session store -->
+  <line x1="312" y1="70" x2="195" y2="150" stroke="#94a3b8" stroke-width="2" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <text x="178" y="104" text-anchor="middle" class="lbl">read &amp; append</text>
+  <text x="178" y="120" text-anchor="middle" class="lbl">each turn</text>
+
+  <!-- Agent <-> Memory store -->
+  <line x1="408" y1="70" x2="525" y2="150" stroke="#94a3b8" stroke-width="2" marker-start="url(#ar)" marker-end="url(#ar)"/>
+  <text x="542" y="104" text-anchor="middle" class="lbl">recall &amp; save</text>
+  <text x="542" y="120" text-anchor="middle" class="lbl">durable facts</text>
+
+  <!-- Session store -->
+  <rect x="40" y="150" width="290" height="150" rx="12" fill="#fff9f7" stroke="#ff5f46" stroke-width="2"/>
+  <text x="60" y="182" class="title">Session store</text>
+  <text x="60" y="202" class="sub">One conversation — the live transcript</text>
+  <rect x="60" y="216" width="250" height="66" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="74" y="240" class="v">user: "My cluster won't start."</text>
+  <text x="74" y="264" class="v">assistant: "Let's take a look."</text>
+
+  <!-- Memory store -->
+  <rect x="390" y="150" width="290" height="150" rx="12" fill="#fff9f7" stroke="#ff5f46" stroke-width="2"/>
+  <text x="410" y="182" class="title">Memory store</text>
+  <text x="410" y="202" class="sub">Across conversations — durable facts</text>
+  <rect x="410" y="216" width="250" height="66" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="424" y="240" class="v">/preferences/contact.md</text>
+  <text x="424" y="264" class="v">"Prefers email. TZ: PST."</text>
+
+  <!-- Relationship: session distilled into memory -->
+  <line x1="332" y1="232" x2="388" y2="232" stroke="#ff5f46" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="360" y="222" text-anchor="middle" class="rel">distill</text>
+
+  <!-- caption -->
+  <text x="40" y="332" class="cap">A session holds one interaction; memory outlives any single conversation.</text>
+  <text x="40" y="352" class="cap">Use either or both — they're independent, and deleting a session never deletes memory.</text>
+</svg>
