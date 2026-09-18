@@ -117,12 +117,20 @@ def _sdk(monkeypatch, existing=None):
     return app_auth, apps, workspace
 
 
-@pytest.mark.parametrize("auth,expected", [("user", {"ai-gateway"}), ("app", set()), (None, set())])
-def test_required_user_scopes_follow_managed_auth(tmp_path, auth, expected):
+@pytest.mark.parametrize(
+    "service,auth,expected",
+    [
+        ("system.ai.web_search", "user", {"ai-gateway"}),
+        ("system.ai.dbsql", "user", {"ai-gateway", "sql"}),
+        ("system.ai.dbsql", "app", set()),
+        ("system.ai.dbsql", None, set()),
+    ],
+)
+def test_required_user_scopes_follow_managed_auth(tmp_path, service, auth, expected):
     from databricks_mason.cli.app_auth import required_user_scopes
 
     project = AgentProject.create(tmp_path, framework="langgraph", server="mason")
-    project.add_tool(ToolSpec.mcp("search", service="system.ai.web_search", auth=auth))
+    project.add_tool(ToolSpec.mcp("service", service=service, auth=auth))
     assert required_user_scopes(project) == expected
     assert required_user_scopes(None) == set()
 

@@ -76,13 +76,14 @@ class AppAuthPlan:
 
 def required_user_scopes(project: AgentProject | None) -> set[str]:
     """Return baseline Apps scopes for request-user managed tools."""
-    if project is None:
-        return set()
-    return {
-        "ai-gateway"
-        for tool in project.tools
-        if tool.auth == "user" and tool.source.kind in ("mcp", "sandbox")
-    }
+    scopes: set[str] = set()
+    for tool in project.tools if project else ():
+        if tool.auth != "user" or tool.source.kind not in ("mcp", "sandbox"):
+            continue
+        scopes.add("ai-gateway")
+        if tool.source.service == "system.ai.dbsql":
+            scopes.add("sql")
+    return scopes
 
 
 def prepare_app_auth(

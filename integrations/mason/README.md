@@ -410,6 +410,10 @@ explicit adoption on each user-auth deploy:
 mason --profile my-workspace deploy my-agent --adopt-user-auth
 ```
 
+The `system.ai.dbsql` managed MCP additionally requests the Apps `sql` user scope. This is full SQL
+API consent, not `sql:restricted-query`; read-only enforcement remains the service policy plus the
+requesting user's Unity Catalog grants. DBSQL does not use Databricks Connect.
+
 Review the target App's scopes and coordinate with its other owners before adopting. Mason
 preserves unrelated configured scopes, updates only user scopes and any explicitly requested
 instance counts, and checks requested **and effective** scopes before source rollout. It checks
