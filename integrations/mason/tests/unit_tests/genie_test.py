@@ -55,6 +55,9 @@ def deadline(monkeypatch):
         genie,
         "asyncio",
         SimpleNamespace(
+            CancelledError=asyncio.CancelledError,
+            create_task=asyncio.create_task,
+            shield=asyncio.shield,
             to_thread=asyncio.to_thread,
             wait_for=wait_for,
             sleep=sleep,

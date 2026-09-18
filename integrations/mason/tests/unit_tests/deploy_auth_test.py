@@ -117,12 +117,24 @@ def _sdk(monkeypatch, existing=None):
     return app_auth, apps, workspace
 
 
-@pytest.mark.parametrize("auth,expected", [("user", {"ai-gateway"}), ("app", set()), (None, set())])
-def test_required_user_scopes_follow_managed_auth(tmp_path, auth, expected):
+@pytest.mark.parametrize(
+    ("binding", "expected"),
+    [
+        (
+            ToolSpec.mcp("genie", service="system.ai.genie_one_mcp", auth="user"),
+            {"ai-gateway", "genie"},
+        ),
+        (ToolSpec.genie_one(auth="user"), {"genie"}),
+        (ToolSpec.genie_agent("space", space_id="0" * 32, auth="user"), {"genie"}),
+        (ToolSpec.mcp("genie", service="system.ai.genie_one_mcp", auth="app"), set()),
+        (ToolSpec.mcp("genie", service="system.ai.genie_one_mcp"), set()),
+    ],
+)
+def test_required_user_scopes_follow_binding(tmp_path, binding, expected):
     from databricks_mason.cli.app_auth import required_user_scopes
 
     project = AgentProject.create(tmp_path, framework="langgraph", server="mason")
-    project.add_tool(ToolSpec.mcp("search", service="system.ai.web_search", auth=auth))
+    project.add_tool(binding)
     assert required_user_scopes(project) == expected
     assert required_user_scopes(None) == set()
 
@@ -133,6 +145,59 @@ def test_prepare_app_auth_uses_exact_required_scopes(monkeypatch):
     plan = app_auth.prepare_app_auth("app", "selected", adopt=False, required_scopes={"genie"})
 
     assert plan.scopes == ("genie",)
+
+
+def test_required_user_scopes_union_only_user_bindings(tmp_path):
+    from databricks_mason.cli.app_auth import required_user_scopes
+
+    project = _project(tmp_path)
+    project.add_tool(ToolSpec.mcp("genie", service="system.ai.genie_one_mcp", auth="user"))
+    project.add_tool(ToolSpec.genie_one("first_class", auth="user"))
+    assert required_user_scopes(project) == {"ai-gateway", "genie"}
+
+
+@pytest.mark.parametrize(
+    "binding",
+    [
+        ToolSpec.genie_one(auth="user"),
+        ToolSpec.genie_agent("space", space_id="0" * 32, auth="user"),
+    ],
+)
+def test_first_class_genie_requires_request_auth_contract(tmp_path, binding):
+    from databricks_mason.cli.app_auth import requires_user_auth
+
+    project = AgentProject.create(tmp_path, framework="langgraph", server="mason")
+    project.add_tool(binding)
+    with pytest.raises(AgentCliError, match="request_auth_contract_version"):
+        requires_user_auth(project)
+
+
+def test_service_scopes_preserve_existing_scopes_and_verify_effective(monkeypatch):
+    app_auth, apps, _ = _sdk(monkeypatch, App(name="app", user_api_scopes=["model-serving"]))
+    plan = app_auth.prepare_app_auth(
+        "app", "selected", adopt=True, required_scopes={"ai-gateway", "genie"}
+    )
+    assert plan.scopes == ("ai-gateway", "genie", "model-serving")
+    ready = App(
+        name="app", user_api_scopes=list(plan.scopes), effective_user_api_scopes=list(plan.scopes)
+    )
+    apps.get.side_effect = [App(name="app", user_api_scopes=["model-serving"]), ready]
+    app_auth.apply_app_auth(plan, attempts=1)
+    assert apps.create_update.call_args.kwargs["app"].user_api_scopes == list(plan.scopes)
+
+
+def test_genie_scope_not_effective_stops_rollout(monkeypatch):
+    required = {"ai-gateway", "genie"}
+    app_auth, apps, _ = _sdk(monkeypatch)
+    plan = app_auth.prepare_app_auth("app", "selected", adopt=False, required_scopes=required)
+    apps.get.side_effect = None
+    apps.get.return_value = App(
+        name="app",
+        user_api_scopes=sorted(required),
+        effective_user_api_scopes=["ai-gateway"],
+    )
+    with pytest.raises(AgentCliError, match="did not converge"):
+        app_auth.apply_app_auth(plan, attempts=1)
 
 
 def test_existing_app_requires_explicit_adoption(tmp_path, monkeypatch):
