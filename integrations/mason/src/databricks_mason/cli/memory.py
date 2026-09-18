@@ -153,7 +153,7 @@ def _store_starter_code(obj, store: dict) -> list[tuple[str, str, str]]:
             "curl",
             "bash",
             f"""
-curl -X POST "{obj.client().host}/api/agents/v1/{name}/entries" \\
+curl -X POST "{obj.client().host}/api/2.0/agents/{name}/entries" \\
   -H "Authorization: Bearer $DATABRICKS_TOKEN" -H "Content-Type: application/json" \\
   -d '{{"actor_id": "alice", "path": "/preferences/style.md", "content": "Terse, code first."}}'
 """,

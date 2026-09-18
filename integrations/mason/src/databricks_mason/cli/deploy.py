@@ -32,6 +32,7 @@ from databricks_mason.app_resources import (
     LakebaseBackend,
     apply_experiment_resource,
 )
+from databricks_mason.cli.endpoint_examples import print_agent_invoke_command
 from databricks_mason.cli.tracing import (
     TRACES_EXPERIMENT_ID_ENV,
     TRACES_TRACKING_URI_ENV,
@@ -661,7 +662,6 @@ def deploy(
         env_updates[RUNTIME_STORE_DATABASE_ENV] = runtime_backend.database
         env_updates[RUNTIME_STORE_USERNAME_ENV] = app_service_principal_id
         env_updates[RUNTIME_STORE_SCHEMA_ENV] = runtime_backend.schema
-        provisioned["Runtime Store"] = runtime_backend.database_path
 
     # 4. Patch the manifest with the resolved store, trace, and index env vars.
     scaffolded = False
@@ -761,6 +761,9 @@ def deploy(
         f"Deployed agent '{name}'",
         fields=fields,
         next_steps=steps,
+    )
+    print_agent_invoke_command(
+        name, uses_runtime_api=bool(project and project.server == AgentServer.MASON)
     )
 
 

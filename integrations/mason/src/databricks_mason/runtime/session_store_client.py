@@ -1,6 +1,6 @@
 """Minimal Databricks Session Store REST client (vendored).
 
-Wraps the managed Session Store API (``/api/agents/v1/session-stores``) — the SDK-agnostic durable
+Wraps the managed Session Store API (``/api/2.0/agents/session-stores``) — the SDK-agnostic durable
 store for agent session history — with just the calls the LangGraph saver needs: resolve a store,
 get-or-create a session, and append / list / clear its ordered items. Auth/host come from a
 ``databricks.sdk.WorkspaceClient`` (default credentials).
@@ -19,7 +19,7 @@ from databricks.sdk import WorkspaceClient
 
 from databricks_mason.runtime.workspace import workspace_client as default_workspace_client
 
-_API_ROOT = "/api/agents/v1"
+_API_ROOT = "/api/2.0/agents"
 
 
 @dataclass(frozen=True)

@@ -675,6 +675,63 @@ def test_deploy_reports_app_url(tmp_path: pathlib.Path, monkeypatch):
     assert captured["url"] == "https://myapp-123.databricksapps.com"
 
 
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("server,chat_ui", [("mason", True), ("mason", False), ("custom", False)])
+def test_deploy_recommends_invoking_deployed_agent(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+    framework: str,
+    server: str,
+    chat_ui: bool,
+):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _write_agent_manifest(src, framework=framework, server=server)
+    if chat_ui:
+        (src / "runtime").mkdir()
+        (src / "runtime" / "ui.py").write_text("# chat UI\n")
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "sp-123")
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src)],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    commands = [line for line in result.output.splitlines() if line.startswith("mason endpoint")]
+    assert len(commands) == 1, result.output
+    command = commands[0]
+    path = "/api/invocations" if server == "mason" else "/invocations"
+    assert f"mason endpoint invoke agent-mason-myapp --path {path} --json " in command
+    assert "│" not in command
+    assert ("$(uuidgen)" in command) is (server == "mason")
+    panel, example = result.output.split("Invoke with Mason\n")
+    assert panel.splitlines()[-1].startswith("╰")
+    assert example.splitlines() == [command]
+    for existing_command in ("mason deployments get", "mason deployments logs"):
+        assert any(line.startswith("│") and existing_command in line for line in panel.splitlines())
+    assert "Runtime Store" not in result.output
+    assert "runtime-agent-mason-myapp-550e8400-e29b-41d4-a716-446655440000" not in result.output
+    env = {
+        entry["name"]: entry["value"]
+        for entry in yaml.safe_load((src / "app.yaml").read_text()).get("env", [])
+    }
+    if server == "mason":
+        # Hiding the display field must not disable the deployed runtime's backend.
+        assert env["DATABRICKS_MASON_RUNTIME_STORE_LAKEBASE_ENDPOINT"] == (
+            "projects/databricks-internal-custom-agents/branches/production/endpoints/primary"
+        )
+
+
 def test_deploy_sync_keeps_directly_edited_agent_manifest(tmp_path: pathlib.Path, monkeypatch):
     src = tmp_path / "app"
     src.mkdir()

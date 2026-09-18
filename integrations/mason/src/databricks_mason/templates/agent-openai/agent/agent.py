@@ -16,6 +16,7 @@ from agent.tools import all_tools
 from databricks_mason import workspace_client, workspace_headers
 from databricks_mason.openai import (
     configure_tracing,
+    genie_tools,
     mcp_servers,
     memory_tools,
     session_store,
@@ -81,7 +82,7 @@ def create_agent(actor: str, mcp=None, model: str | None = None) -> Agent:
         name="Agent",
         instructions="You are a helpful assistant.",
         model=model or MODEL,
-        tools=[*all_tools(), *memory_tools(actor)],
+        tools=[*all_tools(), *memory_tools(actor), *genie_tools()],
         mcp_servers=mcp or [],
     )
 

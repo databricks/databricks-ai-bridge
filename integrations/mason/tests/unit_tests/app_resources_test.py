@@ -33,7 +33,7 @@ def test_apply_postgres_resources_sends_all_backends_in_one_update(monkeypatch):
     backends = [_backend("s", "postgres"), _backend("memory-x", "postgres-memory")]
     assert sa.apply_postgres_resources("app", backends, "prof") is None
     payload = json.loads(captured["args"][captured["args"].index("--json") + 1])
-    names = {r["name"] for r in payload["resources"]}
+    names = {r["name"] for r in payload["app"]["resources"]}
     assert names == {"postgres", "postgres-memory"}  # one update carries both
 
 
@@ -49,7 +49,7 @@ def test_apply_postgres_resources_preserves_existing_and_updates_ours(monkeypatc
                 returncode=0, stdout=json.dumps({"resources": resources}), stderr=""
             )
         payload = json.loads(args[args.index("--json") + 1])
-        resources[:] = payload["resources"]
+        resources[:] = payload["app"]["resources"]
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(sa, "_databricks", fake_db)
@@ -61,13 +61,41 @@ def test_apply_postgres_resources_preserves_existing_and_updates_ours(monkeypatc
     assert "old" not in ours and ours["postgres"]["permission"] == "CAN_CONNECT_AND_CREATE"
 
 
+def test_resource_update_is_masked_to_resources(monkeypatch):
+    # Regression (ML-69759): the resource grant must scope its write to `resources` via update_mask
+    # and touch no other app field — a bare `apps update` reset user_api_scopes and broke OBO on
+    # every deploy.
+    captured = {}
+
+    def fake_db(args, profile, **kw):
+        if args[:2] == ["apps", "get"]:
+            return types.SimpleNamespace(
+                returncode=0, stdout=json.dumps({"resources": []}), stderr=""
+            )
+        captured["args"] = args
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(sa, "_databricks", fake_db)
+    assert (
+        sa.apply_postgres_resources("app", [_backend("db", "postgres-runtime-store")], "prof")
+        is None
+    )
+    assert captured["args"][:2] == [
+        "apps",
+        "create-update",
+    ]  # masked upsert, not a full-spec update
+    payload = json.loads(captured["args"][captured["args"].index("--json") + 1])
+    assert payload["update_mask"] == "resources"
+    assert set(payload["app"]) == {"resources"}  # only resources written; user_api_scopes untouched
+
+
 def test_apply_postgres_resources_reports_failure(monkeypatch):
     monkeypatch.setattr(
         sa,
         "_databricks",
         lambda args, profile, **kw: (
             types.SimpleNamespace(returncode=1, stdout="", stderr="denied: needs MANAGE")
-            if args[:2] == ["apps", "update"]
+            if args[:2] == ["apps", "create-update"]
             else types.SimpleNamespace(
                 returncode=0, stdout=json.dumps({"resources": []}), stderr=""
             )
@@ -86,7 +114,7 @@ def test_runtime_store_resource_coexists_with_a_second_managed_resource(monkeypa
                 returncode=0, stdout=json.dumps({"resources": resources}), stderr=""
             )
         payload = json.loads(args[args.index("--json") + 1])
-        resources[:] = payload["resources"]
+        resources[:] = payload["app"]["resources"]
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(sa, "_databricks", fake_db)

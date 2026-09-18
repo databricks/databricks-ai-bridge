@@ -6,7 +6,7 @@ import json
 
 from databricks_mason import models
 
-# Shapes captured from a live agents/v1 workspace.
+# Shapes captured from a live agents workspace.
 STORE = {
     "name": "memory-stores/abc",
     "display_name": "my-store",

@@ -1,6 +1,6 @@
 """Timestamp parsing and humanization for the Mason CLI.
 
-The agents/v1 APIs return timestamps as `google.protobuf.Timestamp`, which
+The 2.0 agents APIs return timestamps as `google.protobuf.Timestamp`, which
 serializes to an RFC 3339 string (`2026-08-15T01:29:00Z`) under the fields
 `create_time`/`update_time`. Older memory-store responses used epoch-millis
 int64 (`created_at`/`updated_at`); `parse_timestamp` accepts either form.

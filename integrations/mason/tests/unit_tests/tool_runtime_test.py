@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import logging
 import pathlib
 import sys
 import types
@@ -93,7 +94,9 @@ def test_langgraph_runtime_loads_direct_manifest_and_protects_sandbox_meta(
             self.kwargs = kwargs
             FakeMultiServerClient.last = self
 
-        async def get_tools(self):
+        async def get_tools(self, server_name=None):
+            if server_name is not None:
+                return [server_name]
             return [server.name for server in self.servers]
 
     class FakeSession:
@@ -129,6 +132,7 @@ def test_langgraph_runtime_loads_direct_manifest_and_protects_sandbox_meta(
     mcp = _reload_mcp()
 
     # _declared_servers() builds one server per manifest tool, with the right URLs.
+    monkeypatch.setattr(mcp, "workspace_client", _FakeWorkspaceClient)
     servers = mcp._declared_servers()
     assert [s.url for s in servers] == [
         "https://df1.example.com/ai-gateway/mcp-services/system.ai.sandbox",
@@ -160,6 +164,99 @@ def test_langgraph_runtime_loads_direct_manifest_and_protects_sandbox_meta(
     assert kwargs["meta"] == {
         "downscope": {"tables": [{"name": "samples.nyctaxi.trips", "permission": "read_only"}]}
     }
+
+
+def test_mcp_tools_isolates_a_failing_server(tmp_path: pathlib.Path, monkeypatch, caplog):
+    # Three declared MCP servers where the middle one fails to fetch (e.g. 401): mcp_tools() must
+    # still return the other two servers' tools (not []), fetch them concurrently, and log the
+    # failing server by name with a traceback.
+    project = tmp_path / "langgraph"
+    project.mkdir(parents=True)
+    (project / "agent.toml").write_text(
+        """schema_version = 1
+
+[agent]
+framework = "langgraph"
+server = "mason"
+
+[[tools]]
+id = "alpha"
+source = { kind = "mcp", service = "system.ai.alpha" }
+
+[[tools]]
+id = "bad"
+source = { kind = "mcp", service = "system.ai.bad" }
+
+[[tools]]
+id = "gamma"
+source = { kind = "mcp", service = "system.ai.gamma" }
+""",
+        encoding="utf-8",
+    )
+
+    class FakeDatabricksMCPServer:
+        def __init__(self, name, url, workspace_client=None, **kwargs):
+            self.name = name
+            self.url = url
+
+        def to_connection_dict(self):
+            return {"transport": "streamable_http", "url": self.url}
+
+    class FakeMultiServerClient:
+        inflight = 0
+        max_inflight = 0
+
+        def __init__(self, servers, **kwargs):
+            self.servers = servers
+            self.kwargs = kwargs
+
+        async def get_tools(self, server_name=None):
+            FakeMultiServerClient.inflight += 1
+            FakeMultiServerClient.max_inflight = max(
+                FakeMultiServerClient.max_inflight, FakeMultiServerClient.inflight
+            )
+            try:
+                await asyncio.sleep(0)  # yield so peers start -> proves concurrent fetch
+                if server_name == "bad":
+                    raise RuntimeError("401 Unauthorized")
+                return [f"{server_name}-tool"]
+            finally:
+                FakeMultiServerClient.inflight -= 1
+
+    databricks = types.ModuleType("databricks")
+    databricks_sdk = types.ModuleType("databricks.sdk")
+    databricks_sdk.__dict__["WorkspaceClient"] = _FakeWorkspaceClient
+    databricks_langchain = types.ModuleType("databricks_langchain")
+    databricks_langchain.__dict__["DatabricksMCPServer"] = FakeDatabricksMCPServer
+    databricks_langchain.__dict__["DatabricksMultiServerMCPClient"] = FakeMultiServerClient
+    adapters = types.ModuleType("langchain_mcp_adapters")
+    sessions = types.ModuleType("langchain_mcp_adapters.sessions")
+    sessions.__dict__["create_session"] = lambda connection: None
+    monkeypatch.setitem(sys.modules, "databricks", databricks)
+    monkeypatch.setitem(sys.modules, "databricks.sdk", databricks_sdk)
+    monkeypatch.setitem(sys.modules, "databricks_langchain", databricks_langchain)
+    monkeypatch.setitem(sys.modules, "langchain_mcp_adapters", adapters)
+    monkeypatch.setitem(sys.modules, "langchain_mcp_adapters.sessions", sessions)
+    monkeypatch.setenv("MASON_PROJECT_ROOT", str(project))
+
+    mcp = _reload_mcp()
+    monkeypatch.setattr(mcp, "workspace_client", _FakeWorkspaceClient)
+
+    with caplog.at_level(logging.WARNING):
+        tools = asyncio.run(mcp.mcp_tools())
+
+    # the failing server drops only its own tools; the other two survive, order preserved.
+    assert tools == ["alpha-tool", "gamma-tool"]
+    # all three servers were fetched concurrently rather than serially.
+    assert FakeMultiServerClient.max_inflight == 3
+    # the failing server is named in a warning, with the traceback attached.
+    failures = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "server 'bad'" in r.getMessage()
+    ]
+    assert len(failures) == 1
+    assert failures[0].exc_info is not None
 
 
 def test_manifest_reader_rejects_wrong_framework(tmp_path: pathlib.Path, monkeypatch):

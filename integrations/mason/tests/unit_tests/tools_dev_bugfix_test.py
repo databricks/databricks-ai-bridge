@@ -36,19 +36,19 @@ def test_add_mcp_empty_service_is_rejected_clearly(tmp_path):
     assert "Could not derive a Python identifier" not in result.output
 
 
-# --- ML-69258: tools list shows sandbox scopes in SOURCE ---------------------
+# --- ML-69258: sandbox bindings retain their configured scopes --------------
 
 
-def test_tools_list_shows_sandbox_scopes_not_service(tmp_path):
+def test_sandbox_manifest_retains_scopes(tmp_path):
     project = _project(tmp_path)
-    CliRunner().invoke(
+    result = CliRunner().invoke(
         tools,
         ["add", "sandbox", "--scope", "table:samples.nyctaxi.trips", "--source", str(project)],
         obj=_Ctx(),
     )
-    result = CliRunner().invoke(tools, ["list", "--source", str(project)], obj=_Ctx())
     assert result.exit_code == 0, result.output
-    assert "table:samples.nyctaxi.trips" in result.output
+    binding = AgentProject.load(project).tools[0]
+    assert [scope.resource for scope in binding.policy.downscope] == ["table:samples.nyctaxi.trips"]
 
 
 # --- ML-69256: outside-project hint ------------------------------------------

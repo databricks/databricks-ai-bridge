@@ -2,14 +2,23 @@
 
 from __future__ import annotations
 
+import json
 import pathlib
 
 import pytest
 import tomli
 
-from databricks_mason.agent_project import AgentProject, Scope, ToolSpec, default_store_name
+from databricks_mason.agent_project import (
+    AgentProject,
+    Scope,
+    ToolPolicy,
+    ToolSource,
+    ToolSpec,
+    default_store_name,
+)
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_types import AgentFramework, AgentServer
+from databricks_mason.runtime.tool_manifest import ToolManifestError, load_tools
 
 
 def _write_manifest(root: pathlib.Path, body: str | None = None) -> pathlib.Path:
@@ -52,6 +61,153 @@ def test_add_same_tool_is_idempotent(tmp_path: pathlib.Path):
 
     assert project.add_tool(spec) is True
     assert project.add_tool(spec) is False
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+def test_genie_bindings_round_trip_through_both_readers(tmp_path, monkeypatch, framework):
+    manifest = _write_manifest(
+        tmp_path,
+        f'schema_version = 1\n# keep me\n[agent]\nframework = "{framework}"\nserver = "mason"\n',
+    )
+    project = AgentProject.load(tmp_path)
+    specs = [ToolSpec.genie_one(), ToolSpec.genie_agent("_Sales", space_id="0" * 32)]
+    for spec in specs:
+        assert project.add_tool(spec) is True
+        assert project.add_tool(spec) is False
+    project.write()
+
+    assert "# keep me" in manifest.read_text()
+    assert AgentProject.load(tmp_path).tools == specs
+    document = tomli.loads(manifest.read_text())
+    assert document["tools"] == [
+        {"id": "genie_one", "source": {"kind": "genie_one"}},
+        {"id": "_Sales", "source": {"kind": "genie_agent", "space_id": "0" * 32}},
+    ]
+    monkeypatch.setenv("MASON_PROJECT_ROOT", str(tmp_path))
+    records = load_tools(expected_framework=framework)
+    assert [(record.id, record.kind, record.space_id) for record in records] == [
+        ("genie_one", "genie_one", None),
+        ("_Sales", "genie_agent", "0" * 32),
+    ]
+
+
+@pytest.mark.parametrize("kind", ["genie_one", "genie_agent"])
+@pytest.mark.parametrize("tool_id", ["_", "_Sales42", "a" * 48])
+def test_genie_binding_accepts_function_prefixes(kind, tool_id):
+    spec = (
+        ToolSpec.genie_one(tool_id)
+        if kind == "genie_one"
+        else ToolSpec.genie_agent(tool_id, space_id="0123456789abcdef" * 2)
+    )
+    assert spec.id == tool_id
+    assert len(spec.id + "_query_result") < 64
+
+
+@pytest.mark.parametrize("kind", ["genie_one", "genie_agent"])
+@pytest.mark.parametrize(
+    "tool_id", ["", "1sales", "sales-agent", "sales.agent", "a" * 49, "café", "sales\n"]
+)
+def test_genie_binding_rejects_invalid_function_prefixes(kind, tool_id):
+    with pytest.raises(AgentCliError, match="tool id"):
+        if kind == "genie_one":
+            ToolSpec.genie_one(tool_id)
+        else:
+            ToolSpec.genie_agent(tool_id, space_id="a" * 32)
+
+
+@pytest.mark.parametrize(
+    "space_id",
+    ["", "a" * 31, "a" * 33, "A" * 32, "g" * 32, "a" * 32 + "\n", " " + "a" * 32, None, 123],
+)
+def test_genie_agent_rejects_invalid_space_ids(space_id):
+    with pytest.raises(AgentCliError, match="space_id"):
+        ToolSpec.genie_agent("sales", space_id=space_id)
+
+
+@pytest.mark.parametrize("kind", ["genie_one", "genie_agent"])
+@pytest.mark.parametrize("field", ["service", "function"])
+def test_genie_specs_reject_unrelated_sources(kind, field):
+    values = {"space_id": "a" * 32} if kind == "genie_agent" else {}
+    values[field] = ""
+    with pytest.raises(AgentCliError, match=field):
+        ToolSpec("sales", ToolSource(kind=kind, **values))
+
+
+@pytest.mark.parametrize("kind", ["genie_one", "genie_agent"])
+def test_genie_specs_reject_downscope(kind):
+    values = {"space_id": "a" * 32} if kind == "genie_agent" else {}
+    with pytest.raises(AgentCliError, match="downscope"):
+        ToolSpec("sales", ToolSource(kind=kind, **values), ToolPolicy((Scope.table("c.s.t"),)))
+
+
+@pytest.mark.parametrize("kind", ["genie_one", "mcp", "uc_function", "sandbox"])
+def test_other_specs_reject_space_id(kind):
+    with pytest.raises(AgentCliError, match="space_id"):
+        ToolSpec("binding", ToolSource(kind=kind, space_id="a" * 32))
+
+
+@pytest.mark.parametrize("reader", ["project", "runtime"])
+@pytest.mark.parametrize(
+    ("tool_id", "source", "policy", "message"),
+    [
+        ("sales", 'kind = "genie_agent"', "", "space_id"),
+        *[
+            ("sales", f'kind = "genie_agent", space_id = {json.dumps(value)}', "", "space_id")
+            for value in ["", "a" * 31, "a" * 33, "A" * 32, "g" * 32, "a" * 32 + "\n", 123, False]
+        ],
+        *[
+            ("sales", f'kind = "{kind}", space_id = "{"a" * 32}"', "", "space_id")
+            for kind in ["genie_one", "mcp", "uc_function", "sandbox"]
+        ],
+        *[
+            (tool_id, 'kind = "genie_one"', "", "tool id")
+            for tool_id in ["1sales", "sales-agent", "sales.agent", "a" * 49, "café", "sales\n"]
+        ],
+        *[
+            ("sales", source + f", {field} = {value}", "", field)
+            for source in ['kind = "genie_one"', f'kind = "genie_agent", space_id = "{"a" * 32}"']
+            for field, value in [
+                ("service", '""'),
+                ("function", "false"),
+                ("url", '"https://example.com"'),
+                ("entrypoint", '"agent.tools:f"'),
+            ]
+        ],
+        *[
+            ("sales", source, "policy = { downscope = [] }", "downscope")
+            for source in ['kind = "genie_one"', f'kind = "genie_agent", space_id = "{"a" * 32}"']
+        ],
+        ("sales", 'kind = "mcp", service = "c.s.m", space_id = false', "", "space_id"),
+    ],
+)
+def test_genie_manifest_validation_matches_runtime(
+    tmp_path, monkeypatch, reader, tool_id, source, policy, message
+):
+    manifest = _write_manifest(tmp_path)
+    manifest.write_text(
+        manifest.read_text()
+        + f"\n[[tools]]\nid = {json.dumps(tool_id)}\nsource = {{ {source} }}\n{policy}\n"
+    )
+    before = manifest.read_bytes()
+    monkeypatch.setenv("MASON_PROJECT_ROOT", str(tmp_path))
+    error_type = AgentCliError if reader == "project" else ToolManifestError
+    with pytest.raises(error_type, match=message):
+        if reader == "project":
+            AgentProject.load(tmp_path)
+        else:
+            load_tools(expected_framework="langgraph")
+    assert manifest.read_bytes() == before
+
+
+def test_genie_agent_space_conflict_does_not_write(tmp_path):
+    manifest = _write_manifest(tmp_path)
+    project = AgentProject.load(tmp_path)
+    project.add_tool(ToolSpec.genie_agent("sales", space_id="a" * 32))
+    project.write()
+    before = manifest.read_bytes()
+    with pytest.raises(AgentCliError, match="already exists"):
+        project.add_tool(ToolSpec.genie_agent("sales", space_id="b" * 32))
+    assert manifest.read_bytes() == before
 
 
 def test_add_conflicting_tool_id_fails_without_writing(tmp_path: pathlib.Path):
@@ -242,10 +398,21 @@ def test_required_project_selections_name_agent_manifest(
 
 @pytest.mark.parametrize(
     ("raw", "expected"),
-    [("My_Agent", "my-agent-memory"), ("a.b c", "a-b-c-memory"), ("___", "agent-memory")],
+    [
+        ("My_Agent", "my-agent-memory"),
+        ("a.b c", "a-b-c-memory"),
+        ("___", "agent-memory"),  # only punctuation reduces to the fallback
+        ("2048-game", "2048-game-memory"),  # digits are kept: the backend prefixes memory-/session-
+        ("123", "123-memory"),  # an all-numeric directory is a valid store name
+    ],
 )
 def test_default_store_name_sanitizes(raw: str, expected: str):
     assert default_store_name(raw, "memory") == expected
+
+
+def test_default_store_name_inserts_token_before_suffix():
+    # The token sits before the store kind so the name still ends with the kind (never a digit).
+    assert default_store_name("my-agent", "sessions", "abcxyz") == "my-agent-abcxyz-sessions"
 
 
 @pytest.mark.parametrize("server", ["", "other"])

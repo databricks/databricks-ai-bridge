@@ -5,6 +5,7 @@ from __future__ import annotations
 import pathlib
 import subprocess
 import types
+from datetime import datetime, timezone
 from unittest import mock
 
 import pytest
@@ -40,13 +41,13 @@ def test_mason_client_wraps_workspace_client(api_client):
 
 
 @mock.patch("databricks.sdk.WorkspaceClient")
-def test_create_memory_store(workspace_client):
+def test_create_memory_store_uses_transitional_request(workspace_client):
     c, do = _client(workspace_client)
     c.create_memory_store("acme", "desc")
     do.assert_called_once_with(
         "POST",
-        "/api/agents/v1/memory-stores",
-        query=None,
+        "/api/2.0/agents/memory-stores",
+        query={"managed_memory_store_id": "acme"},
         body={"display_name": "acme", "description": "desc"},
     )
 
@@ -88,11 +89,112 @@ def test_runtime_store_path_rejects_invalid_ids(name):
 
 
 @mock.patch("databricks.sdk.WorkspaceClient")
+@pytest.mark.parametrize(
+    ("description", "metadata", "expected_body"),
+    [
+        (None, None, {}),
+        (
+            "Support history",
+            {"environment": "poc"},
+            {"description": "Support history", "metadata": {"environment": "poc"}},
+        ),
+        ("", {}, {"description": "", "metadata": {}}),
+    ],
+)
+def test_create_session_store_uses_transitional_request(
+    workspace_client, description, metadata, expected_body
+):
+    client, do = _client(workspace_client)
+    do.return_value = {"session_store_name": "support-history", "session_store_id": "store-uuid"}
+
+    store = client.create_session_store("support-history", description, metadata)
+
+    do.assert_called_once_with(
+        "POST",
+        "/api/2.0/agents/session-stores",
+        query={"session_store_name": "support-history", "session_store_id": "support-history"},
+        body=expected_body,
+    )
+    assert store.session_store_name == "support-history"
+    assert store.session_store_id == "store-uuid"
+
+
+@pytest.mark.parametrize(
+    ("identity", "expected_id"),
+    [
+        pytest.param(
+            {"session_store_name": "support-history", "session_store_id": "store-uuid"},
+            "store-uuid",
+            id="legacy",
+        ),
+        pytest.param({"name": "session-stores/support-history"}, None, id="canonical"),
+        pytest.param(
+            {
+                "name": "session-stores/support-history",
+                "session_store_name": "support-history",
+                "session_store_id": "store-uuid",
+            },
+            "store-uuid",
+            id="both",
+        ),
+    ],
+)
+def test_session_store_response_compatibility(identity, expected_id):
+    """Mock workspace HTTP responses to exercise the real transport and resource parsers."""
+    workspace = mock.Mock()
+    client = MasonClient(workspace)
+    payload = {
+        **identity,
+        "description": "Support history",
+        "metadata": {"environment": "poc"},
+        "creator_user_id": "123",
+        "create_time": "2026-08-14T01:02:03Z",
+        "update_time": "2026-08-14T02:03:04.500Z",
+    }
+    updated_payload = {**payload, "metadata": {"environment": "prod"}}
+    workspace.api_client.do.side_effect = [
+        payload,
+        payload,
+        {"session_stores": [payload]},
+        updated_payload,
+        {"session_id": "case-456", "actor_id": "customer-123"},
+        {},
+    ]
+
+    created = client.session_stores.create("support-history")
+    fetched = client.session_stores.get(created.name)
+    listed = list(client.session_stores.list())
+    updated = created.update(metadata={"environment": "prod"})
+    session = created.add(actor_id="customer-123", session_id="case-456")
+    updated.delete()
+
+    for store in [created, fetched, *listed, updated]:
+        assert store.name == "support-history"
+        assert store.session_store_id == expected_id
+        assert store.description == "Support history"
+        assert store.creator_user_id == "123"
+        assert store.create_time == datetime(2026, 8, 14, 1, 2, 3, tzinfo=timezone.utc)
+        assert store.update_time == datetime(2026, 8, 14, 2, 3, 4, 500000, tzinfo=timezone.utc)
+    assert len(listed) == 1
+    assert created.metadata == {"environment": "poc"}
+    assert updated.metadata == {"environment": "prod"}
+    assert session.store_name == "support-history"
+    assert [call.args for call in workspace.api_client.do.call_args_list] == [
+        ("POST", "/api/2.0/agents/session-stores"),
+        ("GET", "/api/2.0/agents/session-stores/support-history"),
+        ("GET", "/api/2.0/agents/session-stores"),
+        ("PATCH", "/api/2.0/agents/session-stores/support-history"),
+        ("POST", "/api/2.0/agents/session-stores/support-history/sessions"),
+        ("DELETE", "/api/2.0/agents/session-stores/support-history"),
+    ]
+
+
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_list_memory_stores_query(workspace_client):
     c, do = _client(workspace_client)
     c.list_memory_stores(page_size=10)
     do.assert_called_once_with(
-        "GET", "/api/agents/v1/memory-stores", query={"page_size": 10}, body=None
+        "GET", "/api/2.0/agents/memory-stores", query={"page_size": 10}, body=None
     )
 
 
@@ -114,7 +216,7 @@ def test_list_mcp_services_query(workspace_client):
 def test_get_memory_store_normalizes_id(workspace_client):
     c, do = _client(workspace_client)
     c.get_memory_store("abc123")
-    do.assert_called_once_with("GET", "/api/agents/v1/memory-stores/abc123", query=None, body=None)
+    do.assert_called_once_with("GET", "/api/2.0/agents/memory-stores/abc123", query=None, body=None)
 
 
 @mock.patch("databricks.sdk.WorkspaceClient")
@@ -125,7 +227,7 @@ def test_update_memory_store_retains_empty_description(workspace_client):
 
     do.assert_called_once_with(
         "PATCH",
-        "/api/agents/v1/memory-stores/abc123",
+        "/api/2.0/agents/memory-stores/abc123",
         query={"update_mask": "description"},
         body={"description": ""},
     )
@@ -139,7 +241,7 @@ def test_get_memory_entry_passes_read_mask(workspace_client):
 
     do.assert_called_once_with(
         "GET",
-        "/api/agents/v1/memory-stores/abc123/entries/entry1",
+        "/api/2.0/agents/memory-stores/abc123/entries/entry1",
         query={"read_mask": "name,content"},
         body=None,
     )
@@ -151,7 +253,7 @@ def test_search_memory_entries(workspace_client):
     c.search_memory_entries("s1", "alice", "style", limit=5)
     do.assert_called_once_with(
         "POST",
-        "/api/agents/v1/memory-stores/s1/entries:search",
+        "/api/2.0/agents/memory-stores/s1/entries:search",
         query=None,
         body={"actor_id": "alice", "query": "style", "limit": 5},
     )
@@ -173,7 +275,7 @@ def test_search_memory_entries_with_resource_filters(workspace_client):
 
     do.assert_called_once_with(
         "POST",
-        "/api/agents/v1/memory-stores/s1/entries:search",
+        "/api/2.0/agents/memory-stores/s1/entries:search",
         query=None,
         body={
             "actor_id": "alice",
@@ -192,19 +294,17 @@ def test_create_session_puts_session_id_in_query(workspace_client):
     c.create_session("store1", "alice", session_id="sid")
     do.assert_called_once_with(
         "POST",
-        "/api/agents/v1/session-stores/store1/sessions",
+        "/api/2.0/agents/session-stores/store1/sessions",
         query={"session_id": "sid"},
         body={"actor_id": "alice"},
     )
 
 
 @mock.patch("databricks.sdk.WorkspaceClient")
-def test_get_session_scoped_vs_unscoped(workspace_client):
+def test_get_session_uses_store_scoped_path(workspace_client):
     c, do = _client(workspace_client)
     c.get_session("sid", store="store1")
-    c.get_session("sid")
-    assert do.call_args_list[0].args[1] == "/api/agents/v1/session-stores/store1/sessions/sid"
-    assert do.call_args_list[1].args[1] == "/api/agents/v1/sessions/sid"
+    assert do.call_args.args[1] == "/api/2.0/agents/session-stores/store1/sessions/sid"
 
 
 @mock.patch("databricks.sdk.WorkspaceClient")
@@ -213,7 +313,7 @@ def test_append_wraps_items_in_data(workspace_client):
     c.append_session_items("store1", "sid", [{"role": "user", "content": "hi"}])
     do.assert_called_once_with(
         "POST",
-        "/api/agents/v1/session-stores/store1/sessions/sid/items:append",
+        "/api/2.0/agents/session-stores/store1/sessions/sid/items:append",
         query=None,
         body={"items": [{"data": {"role": "user", "content": "hi"}}]},
     )
@@ -262,7 +362,7 @@ def test_delete_session_without_force(workspace_client):
     c.delete_session("store1", "sid")
     do.assert_called_once_with(
         "DELETE",
-        "/api/agents/v1/session-stores/store1/sessions/sid",
+        "/api/2.0/agents/session-stores/store1/sessions/sid",
         query=None,
         body=None,
     )
@@ -274,7 +374,7 @@ def test_delete_session_with_force(workspace_client):
     c.delete_session("store1", "sid", force=True)
     do.assert_called_once_with(
         "DELETE",
-        "/api/agents/v1/session-stores/store1/sessions/sid",
+        "/api/2.0/agents/session-stores/store1/sessions/sid",
         query={"force": True},
         body=None,
     )
@@ -286,7 +386,7 @@ def test_grant_session_store_permission(workspace_client):
     c.grant_session_store_permission("sess-1", "sp-abc")
     do.assert_called_once_with(
         "POST",
-        "/api/agents/v1/session-stores/sess-1/permissions:grant",
+        "/api/2.0/agents/session-stores/sess-1/permissions:grant",
         query=None,
         body={"principal": {"type": "SERVICE_PRINCIPAL", "name": "sp-abc"}, "permission": "WRITE"},
     )
@@ -298,7 +398,7 @@ def test_grant_memory_store_permission_takes_resource_id_and_level(workspace_cli
     c.grant_memory_store_permission("memory-stores/uuid-x", "sp-abc", permission="READ")
     do.assert_called_once_with(
         "POST",
-        "/api/agents/v1/memory-stores/uuid-x/permissions:grant",
+        "/api/2.0/agents/memory-stores/uuid-x/permissions:grant",
         query=None,
         body={"principal": {"type": "SERVICE_PRINCIPAL", "name": "sp-abc"}, "permission": "READ"},
     )
@@ -560,6 +660,20 @@ def test_update_session_store_no_fields_raises_without_calling_api(workspace_cli
 
 
 @mock.patch("databricks.sdk.WorkspaceClient")
+def test_update_memory_entry_sends_update_mask(workspace_client):
+    client, do = _client(workspace_client)
+
+    client.update_memory_entry("s", "e", content="updated", description="")
+
+    do.assert_called_once_with(
+        "PATCH",
+        "/api/2.0/agents/memory-stores/s/entries/e",
+        query={"update_mask": "content,description"},
+        body={"content": "updated", "description": ""},
+    )
+
+
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_update_memory_entry_no_fields_raises_without_calling_api(workspace_client):
     client, do = _client(workspace_client)
     with pytest.raises(AgentCliError):
@@ -571,4 +685,4 @@ def test_update_memory_entry_no_fields_raises_without_calling_api(workspace_clie
 def test_delete_session_store_normalizes_path(workspace_client):
     client, do = _client(workspace_client)
     client.delete_session_store("session-stores/s1")
-    do.assert_called_once_with("DELETE", "/api/agents/v1/session-stores/s1", query=None, body=None)
+    do.assert_called_once_with("DELETE", "/api/2.0/agents/session-stores/s1", query=None, body=None)

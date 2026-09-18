@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -38,6 +40,37 @@ class ToolRecord:
     service: str | None = None
     function: str | None = None
     downscope: tuple[ScopeRecord, ...] = ()
+    space_id: str | None = None
+
+
+def validate_genie_source(
+    tool_id: str, source: Mapping[str, Any], *, has_downscope: bool = False
+) -> None:
+    """Validate Genie bindings consistently for CLI models and direct manifest reads."""
+    kind = source.get("kind")
+    if kind not in {"genie_one", "genie_agent"}:
+        if "space_id" in source:
+            raise ToolManifestError("Only genie_agent bindings accept source.space_id.")
+        return
+    if not isinstance(tool_id, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,47}", tool_id):
+        raise ToolManifestError(
+            f"Invalid Genie tool id {tool_id!r}: use a function-name prefix of at most 48 "
+            "ASCII letters, digits, or underscores, starting with a letter or underscore."
+        )
+    allowed_fields = {"kind", "space_id"} if kind == "genie_agent" else {"kind"}
+    unexpected = source.keys() - allowed_fields
+    if unexpected:
+        raise ToolManifestError(
+            f"{kind} bindings do not accept source fields: {', '.join(sorted(unexpected))}."
+        )
+    if has_downscope:
+        raise ToolManifestError("Genie bindings do not accept policy.downscope.")
+    if kind == "genie_agent":
+        space_id = source.get("space_id")
+        if not isinstance(space_id, str) or not re.fullmatch(r"[0-9a-f]{32}", space_id):
+            raise ToolManifestError(
+                "Genie Agent space_id must be 32 lowercase hexadecimal characters."
+            )
 
 
 def project_root() -> pathlib.Path:
@@ -97,16 +130,19 @@ def _tool(value: object) -> ToolRecord:
     if not isinstance(raw_downscope, list):
         raise RuntimeError("agent.toml policy.downscope must be an array.")
     kind = _required_string(source.get("kind"), "a tool source kind")
+    tool_id = _required_string(value.get("id"), "a tool id")
+    validate_genie_source(tool_id, source, has_downscope="downscope" in policy)
     if kind == "python":
         raise ToolManifestError(
             "Python tools are code-first and cannot be declared in agent.toml. "
             "Remove this entry; decorated tools in agent/tools remain active."
         )
     record = ToolRecord(
-        id=_required_string(value.get("id"), "a tool id"),
+        id=tool_id,
         kind=kind,
         service=source.get("service") if isinstance(source.get("service"), str) else None,
         function=source.get("function") if isinstance(source.get("function"), str) else None,
+        space_id=source.get("space_id") if isinstance(source.get("space_id"), str) else None,
         downscope=tuple(_scope(item) for item in raw_downscope),
     )
     if record.kind == "sandbox" and (record.service != "system.ai.sandbox" or not record.downscope):
@@ -115,7 +151,7 @@ def _tool(value: object) -> ToolRecord:
         raise RuntimeError("MCP bindings require source.service.")
     if record.kind == "uc_function" and not record.function:
         raise RuntimeError("UC function bindings require source.function.")
-    if record.kind not in {"sandbox", "mcp", "uc_function"}:
+    if record.kind not in {"sandbox", "mcp", "uc_function", "genie_one", "genie_agent"}:
         raise RuntimeError(f"Unsupported agent.toml tool kind: {record.kind!r}.")
     if record.kind != "sandbox" and record.downscope:
         raise RuntimeError("Only sandbox bindings accept policy.downscope.")

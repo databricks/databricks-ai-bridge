@@ -1,4 +1,4 @@
-"""Typed, forward-compatible views over agents/v1 JSON responses.
+"""Typed, forward-compatible views over 2.0 agents JSON responses.
 
 Every model subclasses `dict` and holds the complete raw response, so mapping
 access (`store["name"]`), `json.dumps`, and any new/unknown server fields keep

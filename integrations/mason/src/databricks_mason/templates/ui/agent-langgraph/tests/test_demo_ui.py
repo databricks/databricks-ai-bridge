@@ -291,7 +291,7 @@ def test_managed_session_list_is_actor_scoped(monkeypatch):
     assert calls == [
         (
             "GET",
-            "/api/agents/v1/session-stores/sessions/sessions",
+            "/api/2.0/agents/session-stores/sessions/sessions",
             {
                 "query": {
                     "filter": 'actor_id = "alice \\"demo\\""',

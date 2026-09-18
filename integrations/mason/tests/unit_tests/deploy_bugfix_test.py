@@ -141,8 +141,8 @@ def test_apply_postgres_resources_preserves_existing_and_updates_ours(monkeypatc
     assert sa.apply_postgres_resources("myapp", [backend], "prof") is None
 
     payload = json.loads(calls["update"][calls["update"].index("--json") + 1])
-    names = [r["name"] for r in payload["resources"]]
+    names = [r["name"] for r in payload["app"]["resources"]]
     assert "sql-warehouse" in names  # preserved
     assert names.count("postgres") == 1  # not duplicated
-    pg = next(r for r in payload["resources"] if r["name"] == "postgres")
+    pg = next(r for r in payload["app"]["resources"] if r["name"] == "postgres")
     assert "db-new" in pg["postgres"]["database"]  # updated to ours
