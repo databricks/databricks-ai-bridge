@@ -72,14 +72,15 @@ class AppUserScopeUpdatePlan:
 
 def required_user_api_scopes(project: AgentProject | None) -> set[str]:
     """Return Databricks Apps user API scopes required by request-user tools."""
-    if project is None:
-        return set()
-    # TODO: Return the least-privilege Apps scope for each supported request-user tool kind/service.
-    return {
-        "ai-gateway"
-        for tool in project.tools
-        if tool.auth == "user" and tool.source.kind in ("mcp", "sandbox")
-    }
+    scopes: set[str] = set()
+    # TODO: Extend this least-privilege mapping for each supported request-user tool kind/service.
+    for tool in project.tools if project else ():
+        if tool.auth != "user" or tool.source.kind not in ("mcp", "sandbox"):
+            continue
+        scopes.add("ai-gateway")
+        if tool.source.service == "system.ai.dbsql":
+            scopes.add("sql")
+    return scopes
 
 
 def plan_app_user_scope_update(
