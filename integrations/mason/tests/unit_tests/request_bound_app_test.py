@@ -3,8 +3,10 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from fastapi import Request
 
 from databricks_mason import AgentApp
+from databricks_mason.runtime.app import _InvocationRequest
 from databricks_mason.runtime.auth import AuthError, InvocationAuthPolicy
 
 
@@ -88,29 +90,165 @@ async def test_missing_request_user_auth_never_executes(deployed):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("option", "code"),
-    [
-        ("background", "MCP_USER_AUTH_BACKGROUND_UNSUPPORTED"),
-        ("stream", "MCP_USER_AUTH_STREAMING_UNSUPPORTED"),
-    ],
-)
-async def test_request_user_rejects_non_sync_modes(deployed, option, code):
+async def test_request_user_rejects_background_execution(deployed):
     seen = []
 
     async def handler(value, context):
         seen.append(value)
 
     app = make_app(handler)
-    body = {"id": str(uuid4()), option: True}
+    body = {"id": str(uuid4()), "background": True}
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app), base_url="https://test"
     ) as client:
         response = await client.post("/api/invocations", json=body, headers=headers())
 
     assert response.status_code == 400
-    assert response.json()["error"]["code"] == code
+    assert response.json()["error"]["code"] == "MCP_USER_AUTH_BACKGROUND_UNSUPPORTED"
     assert not seen
+
+
+@pytest.mark.asyncio
+async def test_request_user_streams_ordered_events_without_retaining_state(deployed):
+    contexts = []
+
+    async def handler(value, context):
+        contexts.append(context)
+        assert await context.emit({"type": "delta", "content": value}) == 2
+        return {"ignored": "stream output"}
+
+    app = make_app(handler)
+    invocation_id = str(uuid4())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app), base_url="https://test"
+    ) as client:
+        client.cookies.set("__Host-databricks-app-router", "routing-session")
+        response = await client.post(
+            "/api/invocations",
+            json={"id": invocation_id, "input": "hello", "stream": True},
+            headers=headers(),
+        )
+        status = await client.get(f"/api/invocations/{invocation_id}", headers=headers())
+        events = await client.get(f"/api/invocations/{invocation_id}/events", headers=headers())
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.text == (
+        'id: 1\nevent: run.started\ndata: {"type": "run.started"}\n\n'
+        'id: 2\nevent: delta\ndata: {"type": "delta", "content": "hello"}\n\n'
+        'id: 3\nevent: run.completed\ndata: {"type": "run.completed"}\n\n'
+    )
+    assert status.status_code == events.status_code == 404
+    assert not app._runtime.runtime_store.states
+    assert not app._runtime.runtime_store.persisted_events
+    assert contexts[0].session_id == contexts[0].request_auth.namespace(
+        "session", "routing-session"
+    )
+    with pytest.raises(AuthError):
+        contexts[0].request_auth.client_for("user")
+
+
+@pytest.mark.asyncio
+async def test_missing_request_user_auth_fails_before_stream_starts(deployed):
+    app = make_app(lambda value, context: value)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app), base_url="https://test"
+    ) as client:
+        response = await client.post(
+            "/api/invocations",
+            json={"id": str(uuid4()), "stream": True},
+        )
+
+    assert response.status_code == 401
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json()["error"]["code"] == "MCP_USER_AUTH_REQUIRED"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (
+            AuthError("MCP_PERMISSION_DENIED", "Permission denied", 403, "sandbox"),
+            {
+                "type": "run.failed",
+                "error": "Permission denied",
+                "code": "MCP_PERMISSION_DENIED",
+                "integration_id": "sandbox",
+            },
+        ),
+        (
+            RuntimeError("token-sentinel"),
+            {"type": "run.failed", "error": "agent invocation failed"},
+        ),
+    ],
+)
+async def test_request_user_stream_failure_is_credential_free(deployed, failure, expected):
+    contexts = []
+
+    async def handler(value, context):
+        contexts.append(context)
+        raise failure
+
+    app = make_app(handler)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app), base_url="https://test"
+    ) as client:
+        response = await client.post(
+            "/api/invocations",
+            json={"id": str(uuid4()), "stream": True},
+            headers=headers(),
+        )
+
+    frames = [frame for frame in response.text.split("\n\n") if frame]
+    assert response.status_code == 200
+    assert len(frames) == 2
+    assert frames[0].endswith('data: {"type": "run.started"}')
+    assert frames[1].endswith(f"data: {__import__('json').dumps(expected)}")
+    assert "token-sentinel" not in response.text
+    with pytest.raises(AuthError):
+        contexts[0].request_auth.client_for("user")
+
+
+@pytest.mark.asyncio
+async def test_closing_request_user_stream_cancels_handler_before_auth_closes(deployed):
+    entered = asyncio.Event()
+    cleaned = asyncio.Event()
+    contexts = []
+
+    async def handler(value, context):
+        contexts.append(context)
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            assert repr(context.request_auth) == "RequestAuthContext(closed=False)"
+            cleaned.set()
+
+    app = make_app(handler)
+    invocation_id = uuid4()
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/invocations",
+        "headers": [(name.encode(), value.encode()) for name, value in headers().items()],
+    }
+    request = Request(scope)
+    request.state.session_id = None
+    response = await app._invoke_request_user(
+        request,
+        _InvocationRequest(id=invocation_id, stream=True),
+        str(invocation_id),
+    )
+
+    first = await anext(response.body_iterator)
+    await asyncio.wait_for(entered.wait(), 2)
+    await response.body_iterator.aclose()
+
+    assert first == 'id: 1\nevent: run.started\ndata: {"type": "run.started"}\n\n'
+    assert cleaned.is_set()
+    with pytest.raises(AuthError):
+        contexts[0].request_auth.client_for("user")
 
 
 @pytest.mark.asyncio
