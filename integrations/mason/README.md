@@ -237,6 +237,15 @@ status, events, and results. Register `@app.recover` to restart interrupted work
 failures. Recovery is at-least-once, so external side effects must be idempotent. Session and
 Memory Stores separately preserve the state used by your agent.
 
+The managed path uses the internal Runtime Store API to create a dedicated database in the
+workspace's shared Lakebase project and give the app SP ownership. Mason initializes its schema and
+tables; no manual Lakebase grant or Postgres app-resource attachment is needed. Backend selection
+is an internal rollout detail, not a user-facing setting; Mason currently retains the legacy
+per-app Lakebase project by default. Once enabled, redeploy reads the stored backend and verifies
+the app identity, and `mason deployments delete` removes the managed store before deleting the app.
+The switch does not migrate existing deployments between backends. Managed cleanup errors retain
+the app for retry. Direct app deletion bypasses managed store cleanup.
+
 Use `server = "custom"` to deploy your own HTTP server without provisioning a Runtime Store.
 Changing the server type of an existing deployment is not supported. To use a different server,
 scaffold a new project with the desired `mason init --server` option and deploy it under a new name.

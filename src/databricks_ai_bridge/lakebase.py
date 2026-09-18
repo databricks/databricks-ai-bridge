@@ -116,6 +116,8 @@ class _LakebaseBase:
         autoscaling_endpoint: str | None = None,
         project: str | None = None,
         branch: str | None = None,
+        database: str = DEFAULT_DATABASE,
+        username: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         schema: str | None = None,
@@ -174,9 +176,15 @@ class _LakebaseBase:
 
         self._is_autoscaling: bool = is_autoscaling
 
+        if not database:
+            raise ValueError("'database' must not be empty.")
+        if username == "":
+            raise ValueError("'username' must not be empty.")
+
         self.instance_name: str | None = instance_name
         self.project: str | None = project
         self.branch: str | None = branch
+        self.database: str = database
 
         if autoscaling_endpoint is not None:
             self._endpoint_name: str | None = autoscaling_endpoint
@@ -188,7 +196,7 @@ class _LakebaseBase:
             self._endpoint_name = None
             self.host = self._resolve_provisioned_host()
 
-        self.username: str = self._infer_username()
+        self.username = username if username is not None else self._infer_username()
 
         self._cached_token: str | None = None
         self._cache_ts: float | None = None
@@ -366,7 +374,7 @@ class _LakebaseBase:
     def _conninfo(self) -> str:
         """Build the connection info string."""
         return (
-            f"dbname={DEFAULT_DATABASE} user={self.username} "
+            f"dbname={self.database} user={self.username} "
             f"host={self.host} port={DEFAULT_PORT} sslmode={DEFAULT_SSLMODE}"
         )
 
@@ -478,7 +486,7 @@ class LakebasePool(_LakebaseBase):
         logger.info(
             "lakebase pool ready: host=%s db=%s min=%s max=%s timeout=%s cache=%ss",
             self.host,
-            DEFAULT_DATABASE,
+            self.database,
             min_size,
             max_size,
             timeout,
@@ -606,7 +614,7 @@ class AsyncLakebasePool(_LakebaseBase):
         logger.info(
             "async lakebase pool created: host=%s db=%s min=%s max=%s timeout=%s cache=%ss",
             self.host,
-            DEFAULT_DATABASE,
+            self.database,
             min_size,
             max_size,
             timeout,
@@ -1244,6 +1252,8 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
         autoscaling_endpoint: str | None = None,
         project: str | None = None,
         branch: str | None = None,
+        database: str = DEFAULT_DATABASE,
+        username: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         pool_recycle: int = DEFAULT_POOL_RECYCLE_SECONDS,
@@ -1259,6 +1269,8 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
                 See https://databricks-sdk-py.readthedocs.io/en/latest/dbdataclasses/postgres.html#databricks.sdk.service.postgres.Endpoint
             project: Lakebase autoscaling project name. Also requires ``branch``.
             branch: Lakebase autoscaling branch name. Also requires ``project``.
+            database: PostgreSQL database name. Defaults to ``databricks_postgres``.
+            username: PostgreSQL username. Defaults to the authenticated workspace identity.
             workspace_client: Optional WorkspaceClient for authentication.
                 If not provided, a default client will be created.
             token_cache_duration_seconds: How long to cache OAuth tokens.
@@ -1275,6 +1287,8 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
             autoscaling_endpoint=autoscaling_endpoint,
             project=project,
             branch=branch,
+            database=database,
+            username=username,
             workspace_client=workspace_client,
             token_cache_duration_seconds=token_cache_duration_seconds,
             schema=schema,
@@ -1332,7 +1346,7 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
             username=self.username,
             host=self.host,
             port=DEFAULT_PORT,
-            database=DEFAULT_DATABASE,
+            database=self.database,
         )
 
     def _create_engine(self, **engine_kwargs) -> "AsyncEngine":

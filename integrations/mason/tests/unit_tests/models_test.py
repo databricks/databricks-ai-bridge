@@ -27,6 +27,31 @@ ENTRY = {
 }
 
 
+def test_runtime_store_wraps_nested_owner_and_backend_without_dropping_fields():
+    raw = {
+        "name": "runtime-stores/logical-id",
+        "owner": {"app": {"name": "mason-app", "service_principal_id": "sp-123"}},
+        "storage_backend": {
+            "lakebase": {
+                "project_id": "shared",
+                "branch": "projects/shared/branches/production",
+                "database_id": "physical-id",
+            }
+        },
+        "new_field": "retained",
+    }
+    store = models.RuntimeStore(raw)
+    assert store.name == "runtime-stores/logical-id"
+    assert store.owner is not None and store.owner.app is not None
+    assert store.owner.app.name == "mason-app"
+    assert store.owner.app.service_principal_id == "sp-123"
+    assert store.storage_backend is not None and store.storage_backend.lakebase is not None
+    assert store.storage_backend.lakebase.database_id == "physical-id"
+    assert store.storage_backend.lakebase.branch == "projects/shared/branches/production"
+    assert store.storage_backend.lakebase.project_id == "shared"
+    assert json.loads(json.dumps(store)) == raw
+
+
 def test_typed_and_dict_access_coexist():
     s = models.MemoryStore(STORE)
     assert s.name == "memory-stores/abc"

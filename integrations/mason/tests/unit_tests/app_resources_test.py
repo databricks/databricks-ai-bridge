@@ -7,7 +7,6 @@ import types
 from typing import Any
 
 from databricks_mason import app_resources as sa
-from databricks_mason import lakebase_runtime_store as lakebase_store
 
 
 def _backend(database: str, resource_name: str) -> sa.LakebaseBackend:
@@ -119,7 +118,7 @@ def test_runtime_store_resource_coexists_with_a_second_managed_resource(monkeypa
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(sa, "_databricks", fake_db)
-    runtime_store = lakebase_store.backend("mason-app")
+    runtime_store = _backend("runtime-db", "postgres-runtime-store")
     other = _backend("other", "postgres-other")
 
     assert sa.apply_postgres_resources("app", [runtime_store], "prof") is None

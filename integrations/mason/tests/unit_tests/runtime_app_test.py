@@ -10,9 +10,12 @@ from fastapi import FastAPI
 
 from databricks_mason import AgentApp
 from databricks_mason.runtime.store import (
+    RUNTIME_STORE_DATABASE_ENV,
+    RUNTIME_STORE_LAKEBASE_BRANCH_ENV,
     RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV,
     RUNTIME_STORE_LOCAL_ENV,
     RUNTIME_STORE_SCHEMA_ENV,
+    RUNTIME_STORE_USERNAME_ENV,
     InMemoryRuntimeStore,
 )
 from databricks_mason.runtime.types import (
@@ -370,6 +373,9 @@ def test_app_allows_custom_routes_alongside_invocation_routes() -> None:
 
 def test_agent_app_defaults_to_process_local_state_outside_apps(monkeypatch) -> None:
     monkeypatch.delenv(RUNTIME_STORE_LOCAL_ENV, raising=False)
+    monkeypatch.delenv(RUNTIME_STORE_LAKEBASE_BRANCH_ENV, raising=False)
+    monkeypatch.delenv(RUNTIME_STORE_DATABASE_ENV, raising=False)
+    monkeypatch.delenv(RUNTIME_STORE_USERNAME_ENV, raising=False)
     monkeypatch.delenv(RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV, raising=False)
     monkeypatch.delenv(RUNTIME_STORE_SCHEMA_ENV, raising=False)
 

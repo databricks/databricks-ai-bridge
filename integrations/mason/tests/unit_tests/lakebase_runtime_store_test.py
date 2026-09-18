@@ -1,7 +1,4 @@
-"""Tests for Runtime Store Lakebase selection and fallback provisioning."""
-
-import json
-import types
+"""Tests for managed Runtime Store backend resolution."""
 
 import pytest
 
@@ -9,62 +6,64 @@ from databricks_mason import lakebase_runtime_store as runtime_store
 from databricks_mason.errors import AgentCliError
 
 
-def test_backend_uses_one_deterministic_autoscaling_project() -> None:
-    backend = runtime_store.backend("mason-My_App")
-
-    assert backend.project == "mason-my-app-runtime-store"
-    assert backend.branch == "production"
-    assert backend.endpoint_id == "primary"
-    assert backend.database == "databricks-postgres"
-    assert backend.resource_name == "postgres-runtime-store"
-    assert backend.schema == runtime_store.get_lakebase_schema("mason-My_App")
-    assert backend.schema.startswith("databricks_mason_runtime_")
-    assert backend.schema != runtime_store.get_lakebase_schema("mason-other-app")
-
-
-def test_get_or_create_backend_reuses_existing_project(monkeypatch) -> None:
-    calls = []
-
-    def fake_databricks(args, profile, **kwargs):
-        calls.append(args)
-        return types.SimpleNamespace(returncode=0, stdout="{}", stderr="")
-
-    monkeypatch.setattr(runtime_store, "_databricks", fake_databricks)
-
-    selected = runtime_store.get_or_create_backend("mason-app", "prof", create=True)
-
-    assert selected.project == "mason-app-runtime-store"
-    assert calls == [["postgres", "get-project", "projects/mason-app-runtime-store"]]
+@pytest.fixture
+def response():
+    return {
+        "name": "runtime-stores/mason-app",
+        "owner": {"app": {"name": "mason-app", "service_principal_id": "sp-123"}},
+        "storage_backend": {
+            "lakebase": {
+                "project_id": "databricks-internal-custom-agents",
+                "branch": "projects/databricks-internal-custom-agents/branches/runtime-branch",
+                "database_id": "service-generated-database",
+            }
+        },
+    }
 
 
-def test_get_or_create_backend_creates_missing_project(monkeypatch) -> None:
-    calls = []
+def test_backend_uses_api_returned_coordinates(response) -> None:
+    backend = runtime_store.backend_from_api("mason-app", "sp-123", response)
 
-    def fake_databricks(args, profile, **kwargs):
-        calls.append(args)
-        return types.SimpleNamespace(
-            returncode=0 if args[:2] == ["postgres", "create-project"] else 1,
-            stdout="",
-            stderr="not found",
-        )
-
-    monkeypatch.setattr(runtime_store, "_databricks", fake_databricks)
-
-    selected = runtime_store.get_or_create_backend("mason-app", "prof", create=True)
-
-    assert selected.project == "mason-app-runtime-store"
-    create = calls[1]
-    assert create[:3] == ["postgres", "create-project", "mason-app-runtime-store"]
-    payload = json.loads(create[create.index("--json") + 1])
-    assert payload["spec"]["display_name"] == "Mason Runtime Store for mason-app"
+    assert backend.branch == ("projects/databricks-internal-custom-agents/branches/runtime-branch")
+    assert backend.database_id == "service-generated-database"
 
 
-def test_get_or_create_backend_respects_no_create_stores(monkeypatch) -> None:
-    monkeypatch.setattr(
-        runtime_store,
-        "_databricks",
-        lambda *args, **kwargs: types.SimpleNamespace(returncode=1, stdout="", stderr="not found"),
-    )
+@pytest.mark.parametrize(
+    "owner",
+    [
+        None,
+        {},
+        {"app": {}},
+        {"app": {"name": "mason-app"}},
+        {"app": {"name": "other-app", "service_principal_id": "sp-123"}},
+        {"app": {"name": "mason-app", "service_principal_id": "other-sp"}},
+    ],
+)
+def test_backend_rejects_missing_or_mismatched_owner(response, owner):
+    response["owner"] = owner
 
-    with pytest.raises(AgentCliError, match="does not exist"):
-        runtime_store.get_or_create_backend("mason-app", "prof", create=False)
+    with pytest.raises(AgentCliError, match="does not belong to this app identity"):
+        runtime_store.backend_from_api("mason-app", "sp-123", response)
+
+
+@pytest.mark.parametrize("storage_backend", [None, {}, {"lakebase": None}, {"lakebase": {}}])
+def test_backend_rejects_missing_coordinates(response, storage_backend):
+    response["storage_backend"] = storage_backend
+
+    with pytest.raises(AgentCliError, match="incomplete Lakebase backend"):
+        runtime_store.backend_from_api("mason-app", "sp-123", response)
+
+
+@pytest.mark.parametrize(("field", "value"), [("branch", ""), ("database_id", None)])
+def test_backend_rejects_empty_coordinates(response, field, value):
+    response["storage_backend"]["lakebase"][field] = value
+
+    with pytest.raises(AgentCliError, match="incomplete Lakebase backend"):
+        runtime_store.backend_from_api("mason-app", "sp-123", response)
+
+
+def test_backend_rejects_unexpected_resource_name(response):
+    response["name"] = "runtime-stores/a-server-selected-name"
+
+    with pytest.raises(AgentCliError, match="unexpected resource name"):
+        runtime_store.backend_from_api("mason-app", "sp-123", response)

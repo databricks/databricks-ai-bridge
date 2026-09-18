@@ -1,78 +1,107 @@
-"""Provision and locate the Lakebase database for a Mason Runtime Store."""
+"""Resolve service-managed Runtime Store backends from the API response."""
 
 from __future__ import annotations
 
-import hashlib
-import json
-import re
-from typing import Optional
+from dataclasses import dataclass
+from typing import Any
 
-from databricks_mason.app_resources import LakebaseBackend, _databricks
+from databricks_mason import models
 from databricks_mason.errors import AgentCliError
 
-_BRANCH = "production"
-_ENDPOINT = "primary"
-_DATABASE = "databricks-postgres"
-_RESOURCE_NAME = "postgres-runtime-store"
+
+@dataclass(frozen=True)
+class RuntimeStoreBackend:
+    """Connection coordinates returned by the Runtime Store API."""
+
+    branch: str
+    database_id: str
+    username: str
 
 
-def backend(app: str) -> LakebaseBackend:
-    """Return the dedicated fallback backend for a Mason deployment."""
-    project = _project_id(app)
-    return LakebaseBackend(
-        project=project,
-        branch=_BRANCH,
-        endpoint_id=_ENDPOINT,
-        database=_DATABASE,
-        schema=get_lakebase_schema(app),
-        tables=(),
-        resource_name=_RESOURCE_NAME,
-    )
-
-
-def get_or_create_backend(app: str, profile: Optional[str], *, create: bool) -> LakebaseBackend:
-    """Reuse the deployment's Runtime Store project or create it when allowed."""
-    selected = backend(app)
-    project_path = f"projects/{selected.project}"
-    existing = _databricks(
-        ["postgres", "get-project", project_path], profile, capture=True, check=False
-    )
-    if existing.returncode == 0:
-        return selected
-    if not create:
-        raise AgentCliError(
-            f"Runtime Store '{selected.project}' does not exist.",
-            hint="Bind a Session Store to reuse its Lakebase database.",
+def get_or_create_backend(
+    client: Any, app: str, app_service_principal_id: str | None
+) -> RuntimeStoreBackend:
+    """Create or reuse the Runtime Store owned by a Databricks App."""
+    if not app_service_principal_id:
+        raise AgentCliError("Could not resolve the app's service principal for its Runtime Store.")
+    try:
+        store = client.create_runtime_store(
+            app,
+            app_service_principal_id,
+            app_name=app,
+            retry_transient=True,
         )
+    except AgentCliError as exc:
+        if exc.error_code != "ALREADY_EXISTS":
+            raise
+        store = client.get_runtime_store(app)
+    return backend_from_api(app, app_service_principal_id, store)
 
-    payload = {"spec": {"display_name": f"Mason Runtime Store for {app}"}}
-    created = _databricks(
-        ["postgres", "create-project", selected.project, "--json", json.dumps(payload)],
-        profile,
-        capture=True,
-        check=False,
+
+def delete(client: Any, app: str, app_service_principal_id: str) -> None:
+    """Delete the managed store while preserving the app when cleanup needs a retry."""
+    try:
+        store = client.get_runtime_store(app)
+        validate_owner(app, app_service_principal_id, store)
+        client.delete_runtime_store(app)
+    except AgentCliError as exc:
+        if exc.error_code == "NOT_FOUND":
+            return
+        raise AgentCliError(
+            f"Could not delete Runtime Store '{app}': {exc.message}",
+            error_code=exc.error_code,
+            hint=f"The deployment was retained. Retry `mason deployments delete {app}` "
+            "after resolving the Runtime Store error.",
+        ) from exc
+
+
+def _model(runtime_store: Any) -> models.RuntimeStore:
+    if not isinstance(runtime_store, dict):
+        raise AgentCliError("Runtime Store API returned an invalid resource.")
+    return models.RuntimeStore(runtime_store)
+
+
+def validate_owner(
+    app: str, app_service_principal_id: str, runtime_store: Any
+) -> models.RuntimeStore:
+    """Refuse to reuse or delete a Runtime Store owned by another app identity."""
+    store = _model(runtime_store)
+    if store.name != f"runtime-stores/{app}":
+        raise AgentCliError("Runtime Store API returned an unexpected resource name.")
+    owner = store.owner
+    app_owner = owner.app if owner is not None else None
+    if (
+        app_owner is None
+        or app_owner.name != app
+        or app_owner.service_principal_id != app_service_principal_id
+    ):
+        raise AgentCliError(f"Runtime Store '{app}' does not belong to this app identity.")
+    return store
+
+
+def backend_from_api(
+    app: str, app_service_principal_id: str, runtime_store: Any
+) -> RuntimeStoreBackend:
+    """Return only the connection coordinates supplied by the Runtime Store API."""
+    store = validate_owner(app, app_service_principal_id, runtime_store)
+    storage_backend = store.storage_backend
+    lakebase = storage_backend.lakebase if storage_backend is not None else None
+    branch = lakebase.branch if lakebase is not None else None
+    database_id = lakebase.database_id if lakebase is not None else None
+    owner = store.owner
+    app_owner = owner.app if owner is not None else None
+    username = app_owner.service_principal_id if app_owner is not None else None
+    if (
+        not isinstance(branch, str)
+        or not branch
+        or not isinstance(database_id, str)
+        or not database_id
+        or not isinstance(username, str)
+        or not username
+    ):
+        raise AgentCliError("Runtime Store API returned an incomplete Lakebase backend.")
+    return RuntimeStoreBackend(
+        branch=branch,
+        database_id=database_id,
+        username=username,
     )
-    if created.returncode == 0:
-        return selected
-
-    resolved = _databricks(
-        ["postgres", "get-project", project_path], profile, capture=True, check=False
-    )
-    if resolved.returncode == 0:
-        return selected
-    detail = (created.stderr or created.stdout or "").strip() or "unknown error"
-    raise AgentCliError(f"Could not create Runtime Store '{selected.project}'.", hint=detail)
-
-
-def _project_id(app: str) -> str:
-    normalized = re.sub(r"[^a-z0-9-]+", "-", app.lower()).strip("-")
-    normalized = normalized or "mason-app"
-    if not normalized[0].isalpha():
-        normalized = f"mason-{normalized}"
-    return f"{normalized}-runtime-store"[:63].rstrip("-")
-
-
-def get_lakebase_schema(app: str) -> str:
-    """Return the schema owned by one deployed app's Runtime Store."""
-    digest = hashlib.sha256(app.encode("utf-8")).hexdigest()[:12]
-    return f"databricks_mason_runtime_{digest}"

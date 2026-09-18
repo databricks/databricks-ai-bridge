@@ -1,8 +1,8 @@
 """Lakebase/Apps resource plumbing for a deployed app.
 
-Binds Databricks Apps resources onto an app so its service principal gets the platform-managed
-grant: a `postgres` `database` resource for Mason Runtime's Lakebase store (see
-`lakebase_store`) and the tracing `experiment` resource.
+Binds Databricks Apps resources onto an app so its service principal gets platform-managed grants:
+a `postgres` resource for the legacy per-app Runtime Store and the tracing `experiment` resource.
+The service-managed Runtime Store path grants database access through Conversation Store instead.
 
 Managed-store (session/memory) table access is NOT granted here. The deployed app reaches those
 stores over the conversation-store REST API, which grants the app's service principal read/write

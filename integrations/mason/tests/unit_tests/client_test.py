@@ -52,6 +52,38 @@ def test_create_memory_store_uses_transitional_request(workspace_client):
 
 
 @mock.patch("databricks.sdk.WorkspaceClient")
+def test_create_runtime_store_uses_v2_api_and_app_owner(workspace_client):
+    client, do = _client(workspace_client)
+
+    client.create_runtime_store(
+        "mason-app-abc123", "sp-123", app_name="mason-app", retry_transient=True
+    )
+
+    do.assert_called_once_with(
+        "POST",
+        "/api/2.0/agents/runtime-stores",
+        query={"runtime_store_id": "mason-app-abc123"},
+        body={"owner": {"app": {"name": "mason-app", "service_principal_id": "sp-123"}}},
+    )
+
+
+@mock.patch("databricks.sdk.WorkspaceClient")
+def test_get_and_delete_runtime_store_use_v2_resource_names(workspace_client):
+    client, do = _client(workspace_client)
+    client.get_runtime_store("mason-app")
+    client.delete_runtime_store("mason-app")
+    assert do.call_args_list == [
+        mock.call("GET", "/api/2.0/agents/runtime-stores/mason-app", query=None, body=None),
+        mock.call(
+            "DELETE",
+            "/api/2.0/agents/runtime-stores/mason-app",
+            query=None,
+            body=None,
+        ),
+    ]
+
+
+@mock.patch("databricks.sdk.WorkspaceClient")
 @pytest.mark.parametrize(
     ("description", "metadata", "expected_body"),
     [
@@ -481,6 +513,17 @@ def test_profile_auth_is_forwarded_when_multiple_profiles_share_a_host(
 
 class _TransientError(RuntimeError):
     error_code = "CANCELLED"
+
+
+@mock.patch("databricks_mason._api_client.time.sleep")
+@mock.patch("databricks.sdk.WorkspaceClient")
+def test_delete_runtime_store_retries_transient_errors(workspace_client, sleep):
+    client, do = _client(workspace_client)
+    do.side_effect = [_TransientError("interrupted"), {}]
+
+    assert client.delete_runtime_store("mason-app") == {}
+    assert do.call_count == 2
+    sleep.assert_called_once()
 
 
 @mock.patch("databricks_mason._api_client.time.sleep")

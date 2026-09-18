@@ -1,4 +1,4 @@
-"""Private transport for the 2.0 agents memory and session APIs.
+"""Private transport for the managed agent store APIs.
 
 The public SDK is the resource-oriented :class:`databricks_mason.MasonClient`.
 This module temporarily owns the one-method-per-endpoint transport used by that
@@ -168,6 +168,48 @@ class _MasonApiClient:
         path, so callers make the parent dir first.
         """
         self._w.workspace.mkdirs(path)
+
+    def create_runtime_store(
+        self,
+        runtime_store_id: str,
+        app_service_principal_id: str,
+        *,
+        app_name: str,
+        retry_transient: bool = False,
+    ) -> models.RuntimeStore:
+        """Create the deployment's Runtime Store through Conversation Store."""
+        return _as(
+            models.RuntimeStore,
+            self._do(
+                "POST",
+                f"{_BASE}/runtime-stores",
+                query={"runtime_store_id": runtime_store_id},
+                body={
+                    "owner": {
+                        "app": {
+                            "name": app_name,
+                            "service_principal_id": app_service_principal_id,
+                        }
+                    }
+                },
+                safe_to_retry=retry_transient,
+            ),
+        )
+
+    def get_runtime_store(self, runtime_store_id: str) -> models.RuntimeStore:
+        """Resolve the service-managed backend and app owner before reusing a store."""
+        return _as(
+            models.RuntimeStore,
+            self._do("GET", f"{_BASE}/runtime-stores/{quote(runtime_store_id, safe='')}"),
+        )
+
+    def delete_runtime_store(self, runtime_store_id: str) -> dict:
+        """Delete a deployment's Runtime Store and its dedicated database."""
+        return self._do(
+            "DELETE",
+            f"{_BASE}/runtime-stores/{quote(runtime_store_id, safe='')}",
+            safe_to_retry=True,
+        )
 
     def _do(
         self,
