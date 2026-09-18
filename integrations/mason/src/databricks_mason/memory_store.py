@@ -99,6 +99,7 @@ class MemoryStore:
         session_id: Optional[str] = None,
         description: Optional[str] = None,
         source_type: Optional[str] = None,
+        write_mode: Optional[str] = None,
     ) -> Memory:
         return self._client._add_memory(
             self,
@@ -108,6 +109,7 @@ class MemoryStore:
             session_id=session_id,
             description=description,
             source_type=source_type,
+            write_mode=write_mode,
         )
 
     def list(
@@ -227,6 +229,7 @@ class MemoryStores:
         session_id: Optional[str] = None,
         description: Optional[str] = None,
         source_type: Optional[str] = None,
+        write_mode: Optional[str] = None,
     ) -> Memory:
         response = self._api.create_memory_entry(
             store.id,
@@ -236,6 +239,7 @@ class MemoryStores:
             description=description,
             session_id=session_id,
             source_type=source_type,
+            write_mode=write_mode,
         )
         return self._memory_from_response(response, store)
 

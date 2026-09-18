@@ -317,6 +317,7 @@ class _MasonApiClient:
         description: Optional[str] = None,
         session_id: Optional[str] = None,
         source_type: Optional[str] = None,
+        write_mode: Optional[str] = None,
     ) -> models.MemoryEntry:
         body = _body(
             actor_id=actor_id,
@@ -325,6 +326,7 @@ class _MasonApiClient:
             description=description,
             session_id=session_id,
             source_type=source_type,
+            write_mode=write_mode,
         )
         return _as(
             models.MemoryEntry,
