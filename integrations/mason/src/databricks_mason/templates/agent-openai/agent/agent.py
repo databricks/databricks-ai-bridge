@@ -1,19 +1,21 @@
 import asyncio
 import logging
 import os
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager, suppress
 from typing import Any
 
 from agents import Agent, Runner, RunResultStreaming, RunState
 from agents.mcp import MCPServerManager
 from databricks_openai import AsyncDatabricksOpenAI
+from databricks.sdk import WorkspaceClient
 
 from agent.mcps import build_mcp_servers
 
 # Importing the tools package auto-registers every tool module.
 from agent.tools import all_tools
 from databricks_mason import workspace_client, workspace_headers
+from databricks_mason.runtime.auth import AuthError
 from databricks_mason.openai import (
     configure_tracing,
     genie_tools,
@@ -111,6 +113,7 @@ async def run_agent(
     session_id: str,
     actor: str | None = None,
     model: str | None = None,
+    workspace_client_for: Callable[[str], WorkspaceClient] | None = None,
 ) -> AsyncIterator[RunResultStreaming]:
     """Run the agent and expose its native streaming result.
 
@@ -118,8 +121,12 @@ async def run_agent(
     so it can be called from another server, a notebook, or a test harness.
     """
     actor = actor or session_id
-    servers = await mcp_servers(build_mcp_servers())
+    auth_kwargs = {"workspace_client_for": workspace_client_for} if workspace_client_for else {}
+    servers = await mcp_servers(build_mcp_servers(), **auth_kwargs)
     async with MCPServerManager(servers) as manager:
+        for server, error in manager.errors.items():
+            if getattr(server, "_mason_configured", False) is True or isinstance(error, AuthError):
+                raise error
         active_servers = []
         for server in manager.active_servers:
             tool_filter = server.tool_filter
@@ -128,7 +135,11 @@ async def run_agent(
                 server.cache_tools_list = True
                 async with asyncio.timeout(manager.connect_timeout_seconds):
                     await server.list_tools()
-            except Exception:
+            except Exception as error:
+                if getattr(server, "_mason_configured", False) is True or isinstance(
+                    error, AuthError
+                ):
+                    raise
                 logger.warning(
                     "Failed to list tools from MCP server %r; continuing without it.",
                     server.name,
@@ -150,9 +161,22 @@ async def run_agent(
                     session=session_store(session_id, actor),
                 )
 
-            yield result
+            try:
+                yield result
+            finally:
+                if workspace_client_for is not None and not result.is_complete:
+                    result.cancel()
+                    with suppress(asyncio.CancelledError, Exception):
+                        async for _ in result.stream_events():
+                            pass
 
             if result.interruptions:
+                if workspace_client_for is not None:
+                    raise AuthError(
+                        "MCP_USER_AUTH_HITL_UNSUPPORTED",
+                        "Request-user invocations do not support paused approvals.",
+                        400,
+                    )
                 _pending_runs[session_id] = result.to_state()
             if span is not None:
                 span.set_outputs({"output": result.final_output})

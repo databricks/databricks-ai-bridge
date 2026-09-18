@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pathlib
 import re
-from typing import Any
+from typing import Any, Literal
 
 import click
 
@@ -43,11 +43,16 @@ def _source_value(spec: ToolSpec) -> str:
 
 
 def _tool_record(spec: ToolSpec) -> dict[str, str]:
-    return {
+    record = {
         "id": spec.id,
         "kind": spec.source.kind,
         "source": _source_value(spec),
     }
+    if spec.source.kind in ("mcp", "sandbox", "uc_function"):
+        record["auth"] = spec.auth or (
+            "app/default" if spec.source.kind == "uc_function" else "unspecified"
+        )
+    return record
 
 
 def _emit_change(
@@ -102,6 +107,7 @@ def add_sandbox_to_manifest(
     permission: str,
     *,
     tool_id: str = "sandbox",
+    auth: Literal["user", "app"] = "user",
 ) -> None:
     """Shared implementation for the nested command and compatibility alias."""
     parsed: list[Scope] = []
@@ -112,7 +118,7 @@ def add_sandbox_to_manifest(
         if identity not in seen:
             parsed.append(scope)
             seen.add(identity)
-    _add_spec(obj, source, ToolSpec.sandbox(tool_id, scopes=parsed))
+    _add_spec(obj, source, ToolSpec.sandbox(tool_id, scopes=parsed, auth=auth))
 
 
 @click.group()
@@ -177,6 +183,7 @@ def _source_option(function):
     show_default=True,
 )
 @click.option("--name", "tool_id", default="sandbox", show_default=True)
+@click.option("--auth", type=click.Choice(["user", "app"]), default="user", show_default=True)
 @_source_option
 @click.pass_obj
 def add_sandbox(
@@ -185,17 +192,19 @@ def add_sandbox(
     permission: str,
     tool_id: str,
     source: pathlib.Path,
+    auth: Literal["user", "app"],
 ) -> None:
     """Add a data sandbox tool (system.ai.sandbox), scoped to specific Unity Catalog resources.
 
     Review the target project's agent.toml to check configured managed tools and MCP bindings.
     """
-    add_sandbox_to_manifest(obj, source.resolve(), scopes, permission, tool_id=tool_id)
+    add_sandbox_to_manifest(obj, source.resolve(), scopes, permission, tool_id=tool_id, auth=auth)
 
 
 @add.command("mcp")
 @click.argument("service")
 @click.option("--name", "tool_id", default=None)
+@click.option("--auth", type=click.Choice(["user", "app"]), default="user", show_default=True)
 @_source_option
 @click.pass_obj
 def add_mcp(
@@ -203,6 +212,7 @@ def add_mcp(
     service: str,
     tool_id: str | None,
     source: pathlib.Path,
+    auth: Literal["user", "app"],
 ) -> None:
     """Validate and add a Databricks-managed MCP service as a tool.
 
@@ -213,7 +223,7 @@ def add_mcp(
     _add_spec(
         obj,
         source.resolve(),
-        ToolSpec.mcp(tool_id or _default_id(service), service=service),
+        ToolSpec.mcp(tool_id or _default_id(service), service=service, auth=auth),
     )
 
 

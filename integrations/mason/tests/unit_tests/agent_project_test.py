@@ -21,6 +21,58 @@ from databricks_mason.project_types import AgentFramework, AgentServer
 from databricks_mason.runtime.tool_manifest import ToolManifestError, load_tools
 
 
+@pytest.mark.parametrize("kind", ["mcp", "sandbox", "uc_function"])
+@pytest.mark.parametrize("auth", [None, "app", "user"])
+def test_auth_round_trip_through_both_manifest_parsers(tmp_path, monkeypatch, kind, auth):
+    _write_manifest(tmp_path)
+    project = AgentProject.load(tmp_path)
+    if kind == "uc_function" and auth == "user":
+        with pytest.raises(AgentCliError, match="auth"):
+            ToolSpec.uc_function("tool", function="main.tools.lookup", auth=auth)
+        return
+    if kind == "sandbox":
+        spec = ToolSpec.sandbox("tool", scopes=[Scope.table("main.data.table")], auth=auth)
+    elif kind == "mcp":
+        spec = ToolSpec.mcp("tool", service="system.ai.web_search", auth=auth)
+    else:
+        spec = ToolSpec.uc_function("tool", function="main.tools.lookup", auth=auth)
+    project.add_tool(spec)
+    project.write()
+    monkeypatch.setenv("MASON_PROJECT_ROOT", str(tmp_path))
+    assert AgentProject.load(tmp_path).tools[0].auth == auth
+    assert load_tools(expected_framework="langgraph")[0].auth == auth
+    serialized = tomli.loads(project.path.read_text())["tools"][0]
+    assert serialized.get("auth") == auth
+    assert "# keep me" in project.path.read_text()
+
+
+@pytest.mark.parametrize("auth", ['"invalid"', '""', "true", "1", "[]"])
+def test_both_manifest_parsers_reject_invalid_auth(tmp_path, monkeypatch, auth):
+    path = _write_manifest(tmp_path)
+    with path.open("a") as output:
+        output.write(
+            f'\n[[tools]]\nid = "tool"\nauth = {auth}\n'
+            'source = {kind = "mcp", service = "system.ai.web_search"}\n'
+        )
+    monkeypatch.setenv("MASON_PROJECT_ROOT", str(tmp_path))
+    with pytest.raises(AgentCliError, match="auth"):
+        AgentProject.load(tmp_path)
+    with pytest.raises(RuntimeError, match="auth"):
+        load_tools(expected_framework="langgraph")
+
+
+def test_runtime_manifest_rejects_user_uc_function(tmp_path, monkeypatch):
+    path = _write_manifest(tmp_path)
+    with path.open("a") as output:
+        output.write(
+            '\n[[tools]]\nid = "lookup"\nauth = "user"\n'
+            'source = {kind = "uc_function", function = "main.tools.lookup"}\n'
+        )
+    monkeypatch.setenv("MASON_PROJECT_ROOT", str(tmp_path))
+    with pytest.raises(RuntimeError, match="auth"):
+        load_tools(expected_framework="langgraph")
+
+
 def _write_manifest(root: pathlib.Path, body: str | None = None) -> pathlib.Path:
     path = root / "agent.toml"
     path.write_text(
