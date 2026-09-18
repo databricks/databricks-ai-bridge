@@ -95,9 +95,11 @@ def test_langgraph_runtime_loads_direct_manifest_and_protects_sandbox_meta(
             FakeMultiServerClient.last = self
 
         async def get_tools(self, server_name=None):
-            if server_name is not None:
-                return [server_name]
-            return [server.name for server in self.servers]
+            return [
+                server.name
+                for server in self.servers
+                if server_name is None or server.name == server_name
+            ]
 
     class FakeSession:
         async def initialize(self):
@@ -130,6 +132,7 @@ def test_langgraph_runtime_loads_direct_manifest_and_protects_sandbox_meta(
     monkeypatch.setenv("MASON_PROJECT_ROOT", str(project))
 
     mcp = _reload_mcp()
+    monkeypatch.setattr(mcp, "workspace_client", _FakeWorkspaceClient)
 
     # _declared_servers() builds one server per manifest tool, with the right URLs.
     monkeypatch.setattr(mcp, "workspace_client", _FakeWorkspaceClient)
@@ -166,10 +169,8 @@ def test_langgraph_runtime_loads_direct_manifest_and_protects_sandbox_meta(
     }
 
 
-def test_mcp_tools_isolates_a_failing_server(tmp_path: pathlib.Path, monkeypatch, caplog):
-    # Three declared MCP servers where the middle one fails to fetch (e.g. 401): mcp_tools() must
-    # still return the other two servers' tools (not []), fetch them concurrently, and log the
-    # failing server by name with a traceback.
+@pytest.fixture
+def mcp_discovery(tmp_path: pathlib.Path, monkeypatch):
     project = tmp_path / "langgraph"
     project.mkdir(parents=True)
     (project / "agent.toml").write_text(
@@ -198,6 +199,7 @@ source = { kind = "mcp", service = "system.ai.gamma" }
         def __init__(self, name, url, workspace_client=None, **kwargs):
             self.name = name
             self.url = url
+            self.workspace_client = workspace_client
 
         def to_connection_dict(self):
             return {"transport": "streamable_http", "url": self.url}
@@ -218,22 +220,17 @@ source = { kind = "mcp", service = "system.ai.gamma" }
             try:
                 await asyncio.sleep(0)  # yield so peers start -> proves concurrent fetch
                 if server_name == "bad":
-                    raise RuntimeError("401 Unauthorized")
+                    raise RuntimeError("401 Unauthorized Bearer must-not-be-logged")
                 return [f"{server_name}-tool"]
             finally:
                 FakeMultiServerClient.inflight -= 1
 
-    databricks = types.ModuleType("databricks")
-    databricks_sdk = types.ModuleType("databricks.sdk")
-    databricks_sdk.__dict__["WorkspaceClient"] = _FakeWorkspaceClient
     databricks_langchain = types.ModuleType("databricks_langchain")
     databricks_langchain.__dict__["DatabricksMCPServer"] = FakeDatabricksMCPServer
     databricks_langchain.__dict__["DatabricksMultiServerMCPClient"] = FakeMultiServerClient
     adapters = types.ModuleType("langchain_mcp_adapters")
     sessions = types.ModuleType("langchain_mcp_adapters.sessions")
     sessions.__dict__["create_session"] = lambda connection: None
-    monkeypatch.setitem(sys.modules, "databricks", databricks)
-    monkeypatch.setitem(sys.modules, "databricks.sdk", databricks_sdk)
     monkeypatch.setitem(sys.modules, "databricks_langchain", databricks_langchain)
     monkeypatch.setitem(sys.modules, "langchain_mcp_adapters", adapters)
     monkeypatch.setitem(sys.modules, "langchain_mcp_adapters.sessions", sessions)
@@ -241,22 +238,240 @@ source = { kind = "mcp", service = "system.ai.gamma" }
 
     mcp = _reload_mcp()
     monkeypatch.setattr(mcp, "workspace_client", _FakeWorkspaceClient)
+    return project, mcp, FakeDatabricksMCPServer, FakeMultiServerClient
+
+
+@pytest.mark.parametrize(
+    "auth,optional,strict",
+    [(None, False, False), ("user", False, True), ("app", False, False), (None, True, False)],
+)
+def test_mcp_tools_isolates_legacy_and_app_but_rejects_user_auth_failures(
+    mcp_discovery, monkeypatch, caplog, auth, optional, strict
+):
+    project, mcp, FakeDatabricksMCPServer, FakeMultiServerClient = mcp_discovery
+    if auth is not None:
+        manifest = project / "agent.toml"
+        manifest.write_text(
+            manifest.read_text().replace('id = "bad"', f'id = "bad"\nauth = "{auth}"')
+        )
+
+    extra_servers = None
+    if optional:
+        monkeypatch.setattr(mcp, "load_tools", lambda **kwargs: [])
+        extra_servers = [
+            FakeDatabricksMCPServer(name, "https://workspace") for name in ("alpha", "bad", "gamma")
+        ]
 
     with caplog.at_level(logging.WARNING):
-        tools = asyncio.run(mcp.mcp_tools())
+        if strict:
+            from databricks_mason.runtime.auth import AuthError
+
+            with pytest.raises(AuthError):
+                asyncio.run(mcp.mcp_tools(workspace_client_for=lambda mode: _FakeWorkspaceClient()))
+            assert FakeMultiServerClient.inflight == 0
+            assert "must-not-be-logged" not in caplog.text
+            return
+        tools = asyncio.run(
+            mcp.mcp_tools(
+                extra_servers,
+                **(
+                    {"workspace_client_for": lambda mode: _FakeWorkspaceClient()}
+                    if auth is not None
+                    else {}
+                ),
+            )
+        )
 
     # the failing server drops only its own tools; the other two survive, order preserved.
     assert tools == ["alpha-tool", "gamma-tool"]
     # all three servers were fetched concurrently rather than serially.
     assert FakeMultiServerClient.max_inflight == 3
-    # the failing server is named in a warning, with the traceback attached.
     failures = [
         r
         for r in caplog.records
         if r.levelno == logging.WARNING and "server 'bad'" in r.getMessage()
     ]
     assert len(failures) == 1
-    assert failures[0].exc_info is not None
+    assert failures[0].exc_info is None
+    assert "must-not-be-logged" not in caplog.text
+
+
+def test_mcp_tools_waits_for_blocked_sibling_before_user_auth_failure(mcp_discovery, monkeypatch):
+    from databricks_mason.runtime.auth import AuthError
+
+    project, mcp, _, client_type = mcp_discovery
+    manifest = project / "agent.toml"
+    manifest.write_text(manifest.read_text().replace('id = "bad"', 'id = "bad"\nauth = "user"'))
+
+    async def exercise():
+        sibling_started = asyncio.Event()
+        failure_raised = asyncio.Event()
+        release_sibling = asyncio.Event()
+        completed = set()
+
+        async def get_tools(self, server_name=None):
+            if server_name == "bad":
+                await sibling_started.wait()
+                failure_raised.set()
+                raise PermissionError("Bearer must-not-be-exposed")
+            if server_name == "gamma":
+                sibling_started.set()
+                await release_sibling.wait()
+            completed.add(server_name)
+            return [f"{server_name}-tool"]
+
+        monkeypatch.setattr(client_type, "get_tools", get_tools)
+        discovery = asyncio.create_task(
+            mcp.mcp_tools(workspace_client_for=lambda mode: _FakeWorkspaceClient())
+        )
+        try:
+            await failure_raised.wait()
+            done, _ = await asyncio.wait({discovery}, timeout=0.01)
+            assert not done
+            assert "gamma" not in completed
+            release_sibling.set()
+            with pytest.raises(AuthError) as raised:
+                await discovery
+            assert completed == {"alpha", "gamma"}
+            assert raised.value.integration_id == "bad"
+            assert raised.value.code == "MCP_PERMISSION_DENIED"
+            assert "must-not-be-exposed" not in str(raised.value)
+        finally:
+            release_sibling.set()
+            discovery.cancel()
+            await asyncio.gather(discovery, return_exceptions=True)
+
+    asyncio.run(asyncio.wait_for(exercise(), timeout=5))
+
+
+def test_mcp_tools_isolates_mixed_declared_and_optional_servers(mcp_discovery, monkeypatch, caplog):
+    project, mcp, server_type, client_type = mcp_discovery
+    manifest = project / "agent.toml"
+    manifest.write_text(
+        manifest.read_text()
+        .replace('id = "alpha"', 'id = "alpha"\nauth = "user"')
+        .replace('id = "gamma"', 'id = "gamma"\nauth = "app"')
+    )
+    user_client = _FakeWorkspaceClient()
+    app_client = _FakeWorkspaceClient()
+    customer_client = object()
+    resolved_modes = []
+    discovered_clients = {}
+    extra_servers = [
+        server_type(name, "https://customer.example/mcp", workspace_client=customer_client)
+        for name in ("alpha", "bad", "gamma")
+    ]
+
+    def resolve(mode):
+        resolved_modes.append(mode)
+        return user_client if mode == "user" else app_client
+
+    async def exercise():
+        started = {"declared": set(), "optional": set()}
+        ready = {kind: asyncio.Event() for kind in started}
+
+        async def get_tools(self, server_name=None):
+            server = next(server for server in self.servers if server.name == server_name)
+            kind = "optional" if server.workspace_client is customer_client else "declared"
+            discovered_clients[kind, server_name] = server.workspace_client
+            started[kind].add(server_name)
+            if len(started[kind]) == 3:
+                ready[kind].set()
+            await ready[kind].wait()
+            if server_name == "bad":
+                raise RuntimeError("Bearer must-not-be-logged")
+            return [f"{kind}-{server_name}-tool"]
+
+        monkeypatch.setattr(client_type, "get_tools", get_tools)
+        tools = await mcp.mcp_tools(extra_servers, workspace_client_for=resolve)
+        assert tools == [
+            "declared-alpha-tool",
+            "declared-gamma-tool",
+            "optional-alpha-tool",
+            "optional-gamma-tool",
+        ]
+
+    with caplog.at_level(logging.WARNING):
+        asyncio.run(asyncio.wait_for(exercise(), timeout=5))
+    assert resolved_modes == ["user", "app", "app"]
+    assert discovered_clients == {
+        ("declared", "alpha"): user_client,
+        ("declared", "bad"): app_client,
+        ("declared", "gamma"): app_client,
+        ("optional", "alpha"): customer_client,
+        ("optional", "bad"): customer_client,
+        ("optional", "gamma"): customer_client,
+    }
+    assert all(server.workspace_client is customer_client for server in extra_servers)
+    assert all(server.url == "https://customer.example/mcp" for server in extra_servers)
+    failures = [record for record in caplog.records if "server 'bad'" in record.getMessage()]
+    assert len(failures) == 2
+    assert all(record.exc_info is None for record in failures)
+    assert "must-not-be-logged" not in caplog.text
+
+
+@pytest.mark.parametrize("phase", ["declared", "optional"])
+def test_mcp_tools_caller_cancellation_drains_discovery_tasks(mcp_discovery, monkeypatch, phase):
+    project, mcp, server_type, client_type = mcp_discovery
+    manifest = project / "agent.toml"
+    manifest.write_text(manifest.read_text().replace("source =", 'auth = "user"\nsource ='))
+    extra_servers = [
+        server_type(name, "https://customer.example/mcp")
+        for name in ("optional-alpha", "optional-beta")
+    ]
+    expected = (
+        {"alpha", "bad", "gamma"} if phase == "declared" else {"optional-alpha", "optional-beta"}
+    )
+
+    async def exercise():
+        all_started = asyncio.Event()
+        all_cleaning = asyncio.Event()
+        release_cleanup = asyncio.Event()
+        blocked = asyncio.Event()
+        tasks = {}
+        cleaning = set()
+        finished = set()
+
+        async def get_tools(self, server_name=None):
+            if server_name not in expected:
+                assert phase == "optional"
+                return [f"{server_name}-tool"]
+            tasks[server_name] = asyncio.current_task()
+            if tasks.keys() == expected:
+                all_started.set()
+            try:
+                await blocked.wait()
+            finally:
+                cleaning.add(server_name)
+                if cleaning == expected:
+                    all_cleaning.set()
+                await release_cleanup.wait()
+                finished.add(server_name)
+
+        monkeypatch.setattr(client_type, "get_tools", get_tools)
+        discovery = asyncio.create_task(
+            mcp.mcp_tools(extra_servers, workspace_client_for=lambda mode: _FakeWorkspaceClient())
+        )
+        try:
+            await all_started.wait()
+            discovery.cancel()
+            await all_cleaning.wait()
+            done, _ = await asyncio.wait({discovery}, timeout=0.01)
+            assert not done
+            assert not finished
+            release_cleanup.set()
+            with pytest.raises(asyncio.CancelledError):
+                await discovery
+            assert finished == expected
+            assert all(task.done() and task.cancelled() for task in tasks.values())
+        finally:
+            release_cleanup.set()
+            discovery.cancel()
+            for task in tasks.values():
+                task.cancel()
+            await asyncio.gather(discovery, *tasks.values(), return_exceptions=True)
+
+    asyncio.run(asyncio.wait_for(exercise(), timeout=5))
 
 
 def test_manifest_reader_rejects_wrong_framework(tmp_path: pathlib.Path, monkeypatch):

@@ -130,6 +130,34 @@ async def test_agent_events_omit_unavailable_mcp_servers(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_agent_events_propagate_request_user_mcp_failure(monkeypatch):
+    import agent.agent as agent_module
+
+    server = MagicMock(name="request-user")
+    server.name = "request-user"
+    server._mason_request_user = True
+    server.connect = AsyncMock(side_effect=PermissionError("request-user denied"))
+    server.cleanup = AsyncMock()
+
+    async def mcp_servers(_extra):
+        return [server]
+
+    monkeypatch.setattr(agent_module, "mcp_servers", mcp_servers)
+    monkeypatch.setattr(agent_module, "build_mcp_servers", lambda: [])
+    monkeypatch.setattr(agent_module, "create_agent", MagicMock(return_value=object()))
+    monkeypatch.setattr(agent_module, "session_store", lambda _session_id, _actor: None)
+    monkeypatch.setattr(
+        agent_module.Runner,
+        "run_streamed",
+        lambda *_args, **_kwargs: _FakeStreamResult([], [], None),
+    )
+
+    with pytest.raises(PermissionError, match="request-user denied"):
+        async with agent_module.run_agent([], session_id="s", actor="actor"):
+            pass
+
+
+@pytest.mark.asyncio
 async def test_serialize_events_relays_interrupt_as_native_event():
     approval = _FakeToolApproval("send_message", '{"recipient": "x", "body": "y"}', "call-1")
     sentinel_state = object()

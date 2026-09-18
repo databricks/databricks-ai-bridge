@@ -5,16 +5,23 @@ LangGraph or OpenAI Agents template, or bring an existing agent.
 
 - **Deployment:** Scaffold a project, run it locally, and deploy it to Databricks Apps. Mason
   provisions the stores declared in your project, grants the app access, and configures tracing.
-- **Runtime:** Use `AgentApp` for synchronous, streaming, and background execution, with persistent
-  results and automatic crash recovery on deployment. You write the agent logic; Mason handles the
-  HTTP invocation protocol and execution state.
+- **Runtime:** `AgentApp` provides synchronous, streaming, and background execution, with persistent
+  results and automatic crash recovery on deployment. Request-user authentication is attached only
+  to the active first attempt and is never persisted.
 
 ## Choose your server
 
 **Mason server (`server = "mason"`).** Register your agent with `AgentApp` to use Mason's invocation
-API. Deployed Mason servers receive a Lakebase-backed Runtime Store. Register a recovery handler
-so Mason can restart interrupted work. `AgentApp` is a FastAPI application: you can add custom
-endpoints alongside the invocation API.
+API. Deployed Mason servers receive a Lakebase-backed Runtime Store. Register a recovery handler so
+Mason can restart interrupted app-auth work and mark interrupted request-user work failed.
+`AgentApp` is a FastAPI application: you can add custom endpoints alongside the invocation API.
+
+If any configured tool uses `auth = "user"`, trusted Databricks Apps ingress headers supply a
+process-local credential for the first execution attempt. Synchronous, streaming, and background
+requests continue through the normal Runtime queue and Runtime Store. The store contains token-free
+request state, events, and results; it never contains the forwarded credential. A replacement
+attempt after failure recovery stops before agent code runs because the original credential is no
+longer available.
 
 **Your own server (`server = "custom"`).** Keep your existing HTTP server, or scaffold a minimal
 FastAPI server with `mason init --server custom`. You own the endpoints, request and response
@@ -36,11 +43,12 @@ pass `--disable-chat-app` for an API-only project.
 
 1. **Initialize:** `mason init` generates the agent code and runtime adapter separately. It records
    the server choice and default `my-agent-memory` / `my-agent-session` bindings in `agent.toml`.
-2. **Develop:** Edit your model, prompts, and tools in `agent/`. `mason dev` runs the project locally
-   so you can exercise synchronous, streaming, and background requests.
+2. **Develop:** Edit your model, prompts, and tools in `agent/`. `mason dev` runs the project locally.
+   Synchronous, streaming, and background requests use the same Runtime for both authorization
+   policies.
 3. **Deploy:** `mason deploy` creates or reuses the declared Session and Memory Stores, grants the
    app's service principal access, configures tracing, and deploys the app. For a Mason server,
-   it also creates or reuses the deployment's Runtime Store and attaches it to the app.
+   it also creates or reuses the deployment's Runtime Store.
 
 The generated configuration starts with:
 
@@ -74,16 +82,16 @@ connect framework-native agent loops to Mason.
 
 - **`@app.invoke`:** Register an async handler that receives the request's `input` and an
   `InvocationContext`. Return a JSON-serializable result.
-- **`await context.emit(event)`:** Publish a JSON event from the handler or adapter. Mason stores
-  and delivers these events through its streaming API.
+- **`await context.emit(event)`:** Publish a JSON event from the handler or adapter. The Runtime
+  stores and delivers events through its streaming API.
 - **`@app.recover`:** Register the handler Mason calls for a replacement attempt after interrupted
   execution. It receives the original input and a recovery context. Restore a framework checkpoint
-  from the Session Store, or replay the input if that is safe for your agent.
+  from the Session Store, or replay the input if that is safe for your agent. Request-user recovery
+  stops with `MCP_USER_AUTH_RECOVERY_UNSUPPORTED` before this handler runs.
 
 The client chooses `background` and `stream` on each request; separate agent handlers are not
-needed for those modes. Registering a recovery hook enables automatic recovery when the runtime
-uses a persistent store. Without that hook, results are still persisted on deployment, but
-interrupted execution is not automatically recovered.
+needed. Registering a recovery hook enables automatic recovery when the Runtime uses a persistent
+store.
 
 For an existing agent, retain its framework code and add the runtime adapter and `AgentApp`
 entrypoint. Set `[agent].server = "mason"` and have `app.yaml` start that entrypoint. Changing the
@@ -91,9 +99,9 @@ configuration field alone does not convert a custom HTTP server into `AgentApp`.
 
 ## Invoke, stream, and reconnect
 
-An **invocation** is one managed agent run. The client supplies a UUID `id` that also acts as an
-idempotency key: retrying the same request with the same ID reuses the existing invocation while
-its record is retained. Reusing an ID for a different request returns `409`.
+An **invocation** is one managed agent run. The client-supplied UUID `id` acts as an idempotency key
+while its Runtime record is retained. Request-user invocation IDs are internally namespaced by the
+forwarded principal so users cannot collide with each other.
 
 - **Synchronous:** Wait for the result in the POST response.
 - **Streaming (`stream: true`):** Receive progress events as Server-Sent Events (SSE).
@@ -114,6 +122,10 @@ output, and application event payloads are defined by your agent or framework ad
 | `GET /api/invocations/550e8400-e29b-41d4-a716-446655440000/events?after=1` | — | `200 text/event-stream`<br>`id: 2`<br>`event: delta`<br>`data: {"type":"delta","content":"Hello"}`<br><br>`id: 3`<br>`event: run.completed`<br>`data: {"type":"run.completed"}` |
 
 ## Execution state and agent state
+
+The state diagram below applies to both authorization policies. Request-user authentication is a
+process-local input to the active first attempt; it is not part of the Runtime Store, Session Store,
+or Memory Store.
 
 ```mermaid
 flowchart LR
@@ -142,6 +154,10 @@ restarted. Session and Memory Store persistence is separate from this local exec
 reuses it on redeployment. Results and events survive worker restarts, and any replica can serve
 polling and stream-reconnection requests. With a recovery handler registered, Mason detects stale
 heartbeats and starts a replacement attempt on an available worker.
+
+App-auth replacement attempts call the registered recovery handler. Request-user replacement
+attempts fail with `MCP_USER_AUTH_RECOVERY_UNSUPPORTED` before agent code runs because the original
+forwarded credential was intentionally not persisted.
 
 Recovery is **at-least-once**: an interrupted attempt may already have performed external side
 effects before its replacement starts. Make those operations idempotent. Request deduplication

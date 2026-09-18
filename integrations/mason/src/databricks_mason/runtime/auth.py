@@ -41,6 +41,15 @@ class InvocationAuthPolicy:
     def requires_user(self) -> bool:
         return bool(self.user_tools)
 
+    @classmethod
+    def from_manifest(cls) -> InvocationAuthPolicy:
+        from databricks_mason.runtime.tool_manifest import load_tools, project_root, tomllib
+
+        with (project_root() / "agent.toml").open("rb") as source:
+            document = tomllib.load(source)
+        tools = load_tools(expected_framework=document.get("agent", {}).get("framework", ""))
+        return cls(tuple(tool.id for tool in tools if tool.auth == "user"))
+
 
 class RequestAuthContext:
     """Private request credentials, never part of a persisted invocation payload.

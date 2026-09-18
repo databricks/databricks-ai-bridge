@@ -1,8 +1,9 @@
 import os
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from typing import Any
 
 from databricks_langchain import ChatDatabricks
+from databricks.sdk import WorkspaceClient
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 
@@ -11,6 +12,7 @@ from agent.mcps import build_mcp_servers
 # Importing the tools package auto-registers every tool module.
 from agent.tools import all_tools
 from databricks_mason import workspace_client, workspace_headers
+from databricks_mason.runtime.auth import AuthError
 from databricks_mason.langgraph import (
     checkpointer,
     configure_tracing,
@@ -71,7 +73,12 @@ def _check_databricks_auth() -> None:
         ) from e
 
 
-async def create_agent_graph(actor: str, model: str | None = None):
+async def create_agent_graph(
+    actor: str,
+    model: str | None = None,
+    *,
+    workspace_client_for: Callable[[str], WorkspaceClient] | None = None,
+):
     """Build the LangGraph agent: local tools + long-term-memory tools + any MCP tools.
 
     ``actor`` is the identity whose long-term memory the agent reads/writes; it's captured in the
@@ -81,7 +88,7 @@ async def create_agent_graph(actor: str, model: str | None = None):
     everything else falls back to ``MODEL``. The agent is rebuilt per turn, so the endpoint can vary
     request to request.
     """
-    mcp = await mcp_tools(build_mcp_servers())
+    mcp = await mcp_tools(build_mcp_servers(), workspace_client_for=workspace_client_for)
     tools = [*all_tools(), *memory_tools(actor), *genie_tools(), *mcp]
     middleware = (
         [HumanInTheLoopMiddleware(interrupt_on=REQUIRE_APPROVAL)] if REQUIRE_APPROVAL else []
@@ -121,6 +128,7 @@ async def run_agent(
     actor: str | None = None,
     model: str | None = None,
     invocation_id: str | None = None,
+    workspace_client_for: Callable[[str], WorkspaceClient] | None = None,
 ) -> AsyncGenerator[Any, None]:
     """Run the agent and yield native LangGraph stream events.
 
@@ -128,7 +136,7 @@ async def run_agent(
     so it can be called from another server, a notebook, or a test harness.
     """
     actor = actor or session_id
-    graph = await create_agent_graph(actor, model)
+    graph = await create_agent_graph(actor, model, workspace_client_for=workspace_client_for)
     config = thread_config(session_id, actor)
     if invocation_id:
         config["metadata"] = {_INVOCATION_METADATA_KEY: invocation_id}
@@ -143,6 +151,12 @@ async def run_agent(
         ):
             if event[0] == "updates":
                 last_update = event[1]
+                if workspace_client_for is not None and last_update.get("__interrupt__"):
+                    raise AuthError(
+                        "MCP_USER_AUTH_HITL_UNSUPPORTED",
+                        "Request-user invocations do not support paused approvals.",
+                        400,
+                    )
             yield event
         if span is not None and last_update is not None:
             span.set_outputs(last_update)

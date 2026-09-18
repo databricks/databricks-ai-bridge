@@ -1011,6 +1011,7 @@ function parseSseFrame(frame) {
 }
 
 async function invokeStreaming(payload) {
+  if (state.config?.streaming.enabled === false) return invokeSync(payload);
   const response = await fetch("/api/invocations", {
     method: "POST",
     credentials: "same-origin",
@@ -1063,6 +1064,7 @@ async function pollBackground(invocationId) {
 }
 
 async function invokeBackground(payload) {
+  if (state.config?.background.enabled === false) return invokeSync(payload);
   const response = await fetch("/api/invocations", {
     method: "POST",
     credentials: "same-origin",
@@ -1236,6 +1238,21 @@ function sizeModelSelect() {
   select.style.width = `${Math.ceil(width) + 34}px`;
 }
 
+function configureInvocationModes(config) {
+  if (
+    (state.mode === "streaming" && !config.streaming.enabled) ||
+    (state.mode === "background" && !config.background.enabled)
+  ) {
+    state.mode = "sync";
+  }
+  document.querySelectorAll(".mode-button").forEach((button) => {
+    const enabled =
+      button.dataset.mode === "sync" || Boolean(config[button.dataset.mode]?.enabled);
+    button.disabled = !enabled;
+    button.classList.toggle("active", button.dataset.mode === state.mode);
+  });
+}
+
 async function loadModels() {
   const response = await fetch(demoUrl("/api/demo/models"), { cache: "no-store" });
   renderModels(await jsonResponse(response));
@@ -1246,6 +1263,7 @@ async function loadConfig() {
     const response = await fetch(demoUrl("/api/ui/config"), { cache: "no-store" });
     const config = await jsonResponse(response);
     state.config = config;
+    configureInvocationModes(config);
     state.instanceId = config.instance_id;
     setSessionId(config.session_id);
     renderModels(config.models);
