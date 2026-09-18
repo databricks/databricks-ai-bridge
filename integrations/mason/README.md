@@ -243,6 +243,102 @@ scaffold a new project with the desired `mason init --server` option and deploy 
 See the [runtime guide](src/databricks_mason/runtime/README.md) for agent hooks, full API examples,
 and recovery behavior.
 
+## Memory and sessions
+
+A Mason agent has two kinds of durable, framework-agnostic state, both fully managed and backed by
+Databricks Lakebase — you provision and operate no database. **Memory** is long-term and persists
+_across_ conversations; **sessions** hold the short-term state _within_ one conversation. `mason
+init` declares one store of each in `agent.toml`, `mason deploy` provisions them, and the running
+agent reads and writes them through the framework adapters (below). Manage store contents directly
+with the [Python SDK](#python-sdk) or the `mason memory` / `mason sessions` commands.
+
+### Memory: long-term, across conversations
+
+A **memory store** is a workspace-scoped container, addressed by name, whose backing storage is
+provisioned on creation. It holds **memory entries** — each a free-form `content` string plus a short
+`description` used for retrieval — organized by three fields:
+
+- `actor_id` (required) — whose memory it is (an end user, or another agent).
+- `path` (required) — a filesystem-like key within an actor, e.g. `/preferences/response-style.md`.
+- `session_id` (optional) — records which session an entry came from, for provenance.
+
+An entry is uniquely identified by `(actor_id, session_id, path)`. Retrieve entries two ways:
+**list** them for an actor (optionally by `path` prefix or `session_id`) to browse what an agent
+knows, or **search** them for an actor with a natural-language query, which returns the most relevant
+entries ranked by full-text (BM25) relevance — a top-N result set of up to 100, without pagination or
+vector similarity. Use memory to recall a user's preferences and past decisions across conversations,
+or to share accumulated knowledge across agents.
+
+### Sessions: short-term, within one conversation
+
+A **session store** contains **sessions**, and each session contains ordered **session items**:
+
+- A **session** is one interaction — typically a conversation thread — identified by `actor_id`
+  (required; groups a subject's sessions) and a caller-chosen `session_id` (optional; the service
+  generates one otherwise). `parent_session_id` links a forked branch to the session it came from.
+- A **session item** is one entry in the session's ordered, immutable history: an opaque,
+  JSON-compatible `data` value — a message, tool call, result, or reasoning block — that Databricks
+  stores and returns verbatim without inspecting it.
+
+This maps directly onto how agent frameworks handle conversation history — read at the start of a
+turn, append at the end:
+
+| Framework operation | Session store call |
+| --- | --- |
+| Read history | `list_items` in chronological order |
+| Add turn | `append` the new items |
+| Undo last item | `pop` the most recent item |
+| Clear the thread | `clear` the session's items |
+
+`session.fork(...)` branches a conversation into an independent copy; deleting a session that has
+descendants requires `session.delete(force=True)` to cascade.
+
+### Using stores from your agent
+
+The framework adapters wire both into an existing agent — each maps onto a slot the framework already
+has, so a Mason-server template picks them up from `agent.toml` with no store-specific code. For
+LangGraph (`databricks-mason[langgraph]`):
+
+```python
+from databricks_mason.langgraph import memory_tools, checkpointer, thread_config
+
+agent = create_agent(
+    model=...,
+    tools=[*your_tools, *memory_tools(actor)],
+    checkpointer=checkpointer(),  # durable when a session store is bound
+)
+result = await agent.ainvoke(inputs, config=thread_config(session_id))
+```
+
+- **Memory** — `memory_tools(actor)` exposes `remember` and `recall` to the model, resolving the
+  store from the `[memory_store]` binding (carried to the runtime by the `AGENT_MEMORY_STORE` env var
+  that `deploy` and `mason dev` inject). With no store bound it returns no tools, so the agent runs
+  unchanged.
+- **Sessions** — `checkpointer()` persists conversation state to the bound session store, and
+  `thread_config(session_id)` scopes a run to one session.
+
+The OpenAI Agents adapter (`databricks-mason[openai]`) offers the same as `memory_tools()` and
+`session_store(session_id)`: `Runner.run(agent, messages, session=session_store(session_id))`.
+
+Set `actor_id` in trusted application code from the verified caller identity — never from a model- or
+user-supplied value.
+
+> **`actor_id` partitions data; it is not access control.** Stores are workspace-scoped and
+> authorized at the store level, so any principal that can reach a store can read and write every
+> actor's entries. For strict isolation between tenants or users, use a separate store per boundary.
+> Grant another principal — such as your app's service principal — access with
+> `memory_store.grant_permission(principal_id)` or `session_store.grant_permission(principal_id)`;
+> `mason deploy` does this for the deployed app automatically.
+
+### Declaring and provisioning stores
+
+`mason init` declares a default memory and session store in `agent.toml`, derived from the project
+name and overridable with `--memory-store` / `--session-store`. Point an agent at stores you already
+have with `mason memory bind <name>` and `mason sessions bind <name>` — these edit `agent.toml` only
+and create nothing. `mason deploy` then creates any declared-but-missing store and grants the deployed
+app's service principal access. Memory and session stores are independent: deleting one never affects
+the other.
+
 ## Commands
 
 For the full command reference - every command, subcommand, argument, and option, in table form -
