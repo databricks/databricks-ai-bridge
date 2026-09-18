@@ -128,6 +128,109 @@ class _AppsPostgresLakebase:
             return token
 
 
+def _managed_lakebase_connection(
+    *,
+    endpoint: str,
+    host: str | None,
+    port: int | None,
+    database: str | None,
+    username: str | None,
+    sslmode: str | None,
+    workspace_client: WorkspaceClient | None,
+    schema: str,
+) -> _AppsPostgresLakebase:
+    """Resolve coordinates supplied by the managed Runtime Store API."""
+    database = database or os.getenv(RUNTIME_STORE_DATABASE_ENV)
+    username = username or os.getenv(RUNTIME_STORE_USERNAME_ENV)
+    if port is None:
+        port = 5432
+    missing = [
+        name
+        for name, value in {
+            "PGPORT": port,
+            RUNTIME_STORE_DATABASE_ENV: database,
+            RUNTIME_STORE_USERNAME_ENV: username,
+        }.items()
+        if not value
+    ]
+    if missing:
+        raise RuntimeError(
+            "Runtime Store connection configuration is missing: " + ", ".join(missing)
+        )
+    if not host:
+        if workspace_client is None:
+            from databricks.sdk import WorkspaceClient
+
+            workspace_client = WorkspaceClient()
+        resolved = workspace_client.postgres.get_endpoint(name=endpoint)
+        host = getattr(getattr(getattr(resolved, "status", None), "hosts", None), "host", None)
+        if not host:
+            raise RuntimeError(f"Lakebase endpoint {endpoint!r} has no host")
+    assert database is not None
+    assert username is not None
+    return _AppsPostgresLakebase(
+        endpoint=endpoint,
+        host=host,
+        port=port,
+        database=database,
+        username=username,
+        sslmode=sslmode or "require",
+        workspace_client=workspace_client,
+        schema=schema,
+    )
+
+
+def _legacy_app_resource_connection(
+    *,
+    endpoint: str,
+    host: str | None,
+    port: int | None,
+    database: str | None,
+    username: str | None,
+    sslmode: str | None,
+    workspace_client: WorkspaceClient | None,
+    schema: str,
+) -> _AppsPostgresLakebase:
+    """Resolve coordinates injected by the legacy Apps Postgres resource."""
+    host = host or os.getenv("PGHOST")
+    database = database or os.getenv("PGDATABASE")
+    username = username or os.getenv("PGUSER")
+    if port is None:
+        raw_port = os.getenv("PGPORT")
+        try:
+            port = int(raw_port or "")
+        except ValueError as exc:
+            raise RuntimeError("PGPORT must be an integer") from exc
+    missing = [
+        name
+        for name, value in {
+            "PGHOST": host,
+            "PGPORT": port,
+            "PGDATABASE": database,
+            "PGUSER": username,
+        }.items()
+        if not value
+    ]
+    if missing:
+        raise RuntimeError(
+            "Runtime Store connection configuration is missing: " + ", ".join(missing)
+        )
+    assert host is not None
+    assert port is not None
+    assert database is not None
+    assert username is not None
+    return _AppsPostgresLakebase(
+        endpoint=endpoint,
+        host=host,
+        port=port,
+        database=database,
+        username=username,
+        sslmode=sslmode or os.getenv("PGSSLMODE", "require"),
+        workspace_client=workspace_client,
+        schema=schema,
+    )
+
+
 class LakebaseDurableRuntimeStore(DurableRuntimeStore):
     """Persist invocation state, attempt leases, and ordered events in Lakebase.
 
@@ -194,56 +297,21 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
         """Use a managed Runtime Store, or the coordinates of an existing Apps resource."""
         if not _SCHEMA_NAME.fullmatch(schema):
             raise ValueError(f"invalid Runtime Store schema name: {schema!r}")
-        managed = bool(
+        use_managed_api = bool(
             os.getenv(RUNTIME_STORE_DATABASE_ENV) or os.getenv(RUNTIME_STORE_USERNAME_ENV)
         )
         # Another Apps resource may inject PG* for a different database/project. Managed Runtime
         # Store coordinates must take precedence as a complete set, never mix the two backends.
-        database_env = RUNTIME_STORE_DATABASE_ENV if managed else "PGDATABASE"
-        username_env = RUNTIME_STORE_USERNAME_ENV if managed else "PGUSER"
-        host = host or (None if managed else os.getenv("PGHOST"))
-        database = database or os.getenv(database_env)
-        username = username or os.getenv(username_env)
-        if port is None:
-            raw_port = "5432" if managed else os.getenv("PGPORT")
-            try:
-                port = int(raw_port or "")
-            except ValueError as exc:
-                raise RuntimeError("PGPORT must be an integer") from exc
-        missing = [
-            name
-            for name, value in {
-                **({} if managed else {"PGHOST": host}),
-                "PGPORT": port,
-                database_env: database,
-                username_env: username,
-            }.items()
-            if not value
-        ]
-        if missing:
-            raise RuntimeError(
-                "Runtime Store connection configuration is missing: " + ", ".join(missing)
-            )
-        if not host:
-            if workspace_client is None:
-                from databricks.sdk import WorkspaceClient
-
-                workspace_client = WorkspaceClient()
-            resolved = workspace_client.postgres.get_endpoint(name=endpoint)
-            host = getattr(getattr(getattr(resolved, "status", None), "hosts", None), "host", None)
-            if not host:
-                raise RuntimeError(f"Lakebase endpoint {endpoint!r} has no host")
-        assert host is not None
-        assert port is not None
-        assert database is not None
-        assert username is not None
-        lakebase = _AppsPostgresLakebase(
+        connection_factory = (
+            _managed_lakebase_connection if use_managed_api else _legacy_app_resource_connection
+        )
+        lakebase = connection_factory(
             endpoint=endpoint,
             host=host,
             port=port,
             database=database,
             username=username,
-            sslmode=sslmode or ("require" if managed else os.getenv("PGSSLMODE", "require")),
+            sslmode=sslmode,
             workspace_client=workspace_client,
             schema=schema,
         )

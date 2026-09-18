@@ -512,13 +512,6 @@ def test_deploy_help_exposes_instances_and_sticky_routing():
     assert "Databricks Apps instances" not in result.output
 
 
-@pytest.mark.parametrize("project", [None, types.SimpleNamespace(server="custom")])
-def test_reconcile_runtime_store_skips_non_mason_server(project):
-    client = mock.Mock()
-    assert deploy_mod._reconcile_runtime_store(project, "agent-mason-myapp", client, None) is None
-    client.create_runtime_store.assert_not_called()
-
-
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
 def test_deploy_custom_server_skips_runtime_store_provisioning_and_binding(
     tmp_path: pathlib.Path, monkeypatch, framework: str
@@ -621,14 +614,14 @@ def test_deploy_defaults_to_legacy_runtime_store(tmp_path: pathlib.Path, monkeyp
     _write_agent_manifest(src)
     monkeypatch.delenv(deploy_mod._MANAGED_RUNTIME_STORE_ENV, raising=False)
 
-    backend = deploy_mod.lakebase_store.legacy_backend("agent-mason-myapp")
+    backend = deploy_mod.legacy_runtime_store.backend("agent-mason-myapp")
     provision = mock.Mock(return_value=backend)
     attach = mock.Mock(return_value=None)
     detach = mock.Mock(return_value=None)
     client = _FakeClient()
     create_managed = mock.Mock(side_effect=AssertionError("managed API must remain opt-in"))
     monkeypatch.setattr(client, "create_runtime_store", create_managed)
-    monkeypatch.setattr(deploy_mod.lakebase_store, "get_or_create_legacy_backend", provision)
+    monkeypatch.setattr(deploy_mod.legacy_runtime_store, "get_or_create_backend", provision)
     monkeypatch.setattr(deploy_mod, "apply_postgres_resources", attach)
     monkeypatch.setattr(deploy_mod, "remove_app_resources", detach)
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda *args: True)
@@ -704,7 +697,7 @@ def test_deploy_runtime_store_uses_dedicated_backend_with_managed_store(
             )
             assert env[
                 deploy_mod.RUNTIME_STORE_SCHEMA_ENV
-            ] == deploy_mod.lakebase_store.get_lakebase_schema("agent-mason-myapp")
+            ] == deploy_mod.managed_runtime_store.get_lakebase_schema("agent-mason-myapp")
             events.append("app-deployed")
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 

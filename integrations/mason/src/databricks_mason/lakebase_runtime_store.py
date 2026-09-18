@@ -1,70 +1,17 @@
-"""Provision legacy or resolve service-managed Lakebase Runtime Store backends."""
+"""Resolve service-managed Lakebase Runtime Store backends."""
 
 from __future__ import annotations
 
 import hashlib
-import json
 import re
-from typing import Any, Optional
+from typing import Any
 
-from databricks_mason.app_resources import LakebaseBackend, _databricks
+from databricks_mason.app_resources import LakebaseBackend
 from databricks_mason.errors import AgentCliError
 
-_LEGACY_BRANCH = "production"
 _ENDPOINT = "primary"
-_LEGACY_DATABASE = "databricks-postgres"
 _RESOURCE_NAME = "postgres-runtime-store"
 _RESOURCE_ID = re.compile(r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?")
-
-
-def legacy_backend(app: str) -> LakebaseBackend:
-    """Return the dedicated per-app backend used before the managed API rollout."""
-    return LakebaseBackend(
-        project=_legacy_project_id(app),
-        branch=_LEGACY_BRANCH,
-        endpoint_id=_ENDPOINT,
-        database=_LEGACY_DATABASE,
-        schema=get_lakebase_schema(app),
-        tables=(),
-        resource_name=_RESOURCE_NAME,
-    )
-
-
-def get_or_create_legacy_backend(app: str, profile: Optional[str]) -> LakebaseBackend:
-    """Reuse or create the dedicated per-app project used by the legacy path."""
-    selected = legacy_backend(app)
-    project_path = f"projects/{selected.project}"
-    existing = _databricks(
-        ["postgres", "get-project", project_path], profile, capture=True, check=False
-    )
-    if existing.returncode == 0:
-        return selected
-
-    payload = {"spec": {"display_name": f"Mason Runtime Store for {app}"}}
-    created = _databricks(
-        ["postgres", "create-project", selected.project, "--json", json.dumps(payload)],
-        profile,
-        capture=True,
-        check=False,
-    )
-    if created.returncode == 0:
-        return selected
-
-    # A concurrent deploy can win the create race. Resolve the project before surfacing failure.
-    resolved = _databricks(
-        ["postgres", "get-project", project_path], profile, capture=True, check=False
-    )
-    if resolved.returncode == 0:
-        return selected
-    detail = (created.stderr or created.stdout or "").strip() or "unknown error"
-    raise AgentCliError(f"Could not create Runtime Store '{selected.project}'.", hint=detail)
-
-
-def _legacy_project_id(app: str) -> str:
-    normalized = re.sub(r"[^a-z0-9-]+", "-", app.lower()).strip("-") or "mason-app"
-    if not normalized[0].isalpha():
-        normalized = f"mason-{normalized}"
-    return f"{normalized}-runtime-store"[:63].rstrip("-")
 
 
 def runtime_store_id(app: str, app_service_principal_id: str) -> str:
@@ -74,6 +21,45 @@ def runtime_store_id(app: str, app_service_principal_id: str) -> str:
         normalized = f"mason-{normalized}"
     suffix = hashlib.sha256(app_service_principal_id.encode("utf-8")).hexdigest()[:12]
     return f"{normalized[: 62 - len(suffix)].rstrip('-')}-{suffix}"
+
+
+def get_or_create_backend(
+    client: Any, app: str, app_service_principal_id: str | None
+) -> LakebaseBackend:
+    """Create or reuse a Runtime Store through Conversation Store."""
+    if not app_service_principal_id:
+        raise AgentCliError("Could not resolve the app's service principal for its Runtime Store.")
+    store_id = runtime_store_id(app, app_service_principal_id)
+    try:
+        store = client.create_runtime_store(
+            store_id,
+            app_service_principal_id,
+            app_name=app,
+            retry_transient=True,
+        )
+    except AgentCliError as exc:
+        if exc.error_code != "ALREADY_EXISTS":
+            raise
+        store = client.get_runtime_store(store_id)
+    return backend_from_api(app, store_id, app_service_principal_id, store)
+
+
+def delete(client: Any, app: str, app_service_principal_id: str) -> None:
+    """Delete the managed store while preserving the app when cleanup needs a retry."""
+    store_id = runtime_store_id(app, app_service_principal_id)
+    try:
+        store = client.get_runtime_store(store_id)
+        validate_owner(app, store_id, app_service_principal_id, store)
+        client.delete_runtime_store(store_id)
+    except AgentCliError as exc:
+        if exc.error_code == "NOT_FOUND":
+            return
+        raise AgentCliError(
+            f"Could not delete Runtime Store '{store_id}': {exc.message}",
+            error_code=exc.error_code,
+            hint=f"The deployment was retained. Retry `mason deployments delete {app}` "
+            "after resolving the Runtime Store error.",
+        ) from exc
 
 
 def validate_owner(

@@ -95,7 +95,7 @@ def test_delete_aborts_without_confirmation(monkeypatch):
 def test_delete_proceeds_with_yes(monkeypatch):
     monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "sp-123")
     delete_runtime_store = mock.Mock()
-    monkeypatch.setattr(deploy_mod, "_delete_runtime_store", delete_runtime_store)
+    monkeypatch.setattr(deploy_mod.managed_runtime_store, "delete", delete_runtime_store)
     monkeypatch.setattr(_Ctx, "client", lambda self: object(), raising=False)
     called = []
     monkeypatch.setattr(

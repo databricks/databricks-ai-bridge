@@ -31,34 +31,12 @@ def _runtime_store_response(store_id, app_name="mason-myapp", sp="sp-123"):
     }
 
 
-def test_reconcile_runtime_store_uses_legacy_project_when_flag_is_off(monkeypatch) -> None:
-    client = mock.Mock()
-    expected = deploy_mod.lakebase_store.legacy_backend("mason-myapp")
-    provision = mock.Mock(return_value=expected)
-    monkeypatch.setattr(deploy_mod.lakebase_store, "get_or_create_legacy_backend", provision)
-
-    result = deploy_mod._reconcile_runtime_store(
-        types.SimpleNamespace(server="mason"),
-        "mason-myapp",
-        client,
-        None,
-        profile="prof",
-        use_managed_api=False,
-    )
-
-    assert result == expected
-    provision.assert_called_once_with("mason-myapp", "prof")
-    client.create_runtime_store.assert_not_called()
-
-
 def test_reconcile_runtime_store_creates_with_app_service_principal() -> None:
     client = mock.Mock()
-    store_id = deploy_mod.lakebase_store.runtime_store_id("mason-myapp", "sp-123")
+    store_id = deploy_mod.managed_runtime_store.runtime_store_id("mason-myapp", "sp-123")
     client.create_runtime_store.return_value = _runtime_store_response(store_id)
 
-    result = deploy_mod._reconcile_runtime_store(
-        types.SimpleNamespace(server="mason"), "mason-myapp", client, "sp-123"
-    )
+    result = deploy_mod.managed_runtime_store.get_or_create_backend(client, "mason-myapp", "sp-123")
 
     assert result is not None
     assert result.database == "runtime-mason-myapp-550e8400-e29b-41d4-a716-446655440000"
@@ -71,12 +49,10 @@ def test_reconcile_runtime_store_creates_with_app_service_principal() -> None:
 def test_reconcile_runtime_store_reuses_on_already_exists() -> None:
     client = mock.Mock()
     client.create_runtime_store.side_effect = AgentCliError("exists", error_code="ALREADY_EXISTS")
-    store_id = deploy_mod.lakebase_store.runtime_store_id("mason-myapp", "sp-123")
+    store_id = deploy_mod.managed_runtime_store.runtime_store_id("mason-myapp", "sp-123")
     client.get_runtime_store.return_value = _runtime_store_response(store_id)
 
-    result = deploy_mod._reconcile_runtime_store(
-        types.SimpleNamespace(server="mason"), "mason-myapp", client, "sp-123"
-    )
+    result = deploy_mod.managed_runtime_store.get_or_create_backend(client, "mason-myapp", "sp-123")
 
     assert result is not None
     assert result.project == "databricks-internal-custom-agents"
@@ -91,13 +67,11 @@ def test_reconcile_runtime_store_reuses_on_already_exists() -> None:
 def test_reconcile_runtime_store_rejects_existing_store_owned_by_another_app(app_name, sp):
     client = mock.Mock()
     client.create_runtime_store.side_effect = AgentCliError("exists", error_code="ALREADY_EXISTS")
-    store_id = deploy_mod.lakebase_store.runtime_store_id("mason-myapp", "sp-123")
+    store_id = deploy_mod.managed_runtime_store.runtime_store_id("mason-myapp", "sp-123")
     client.get_runtime_store.return_value = _runtime_store_response(store_id, app_name, sp)
 
     with pytest.raises(AgentCliError, match="does not belong to this app identity"):
-        deploy_mod._reconcile_runtime_store(
-            types.SimpleNamespace(server="mason"), "mason-myapp", client, "sp-123"
-        )
+        deploy_mod.managed_runtime_store.get_or_create_backend(client, "mason-myapp", "sp-123")
 
 
 @pytest.mark.parametrize("operation", ["create", "get"])
@@ -113,24 +87,20 @@ def test_reconcile_runtime_store_propagates_api_failure(operation):
         client.create_runtime_store.side_effect = error
 
     with pytest.raises(AgentCliError) as exc:
-        deploy_mod._reconcile_runtime_store(
-            types.SimpleNamespace(server="mason"), "mason-myapp", client, "sp-123"
-        )
+        deploy_mod.managed_runtime_store.get_or_create_backend(client, "mason-myapp", "sp-123")
     assert exc.value is error
 
 
 def test_reconcile_runtime_store_requires_app_service_principal() -> None:
     with pytest.raises(AgentCliError, match="app's service principal"):
-        deploy_mod._reconcile_runtime_store(
-            types.SimpleNamespace(server="mason"), "mason-myapp", mock.Mock(), None
-        )
+        deploy_mod.managed_runtime_store.get_or_create_backend(mock.Mock(), "mason-myapp", None)
 
 
 @pytest.mark.parametrize("legacy_name", [None, ""])
 def test_reconcile_and_delete_legacy_store_require_the_same_sp(legacy_name):
     client = mock.Mock()
     client.create_runtime_store.side_effect = AgentCliError("exists", error_code="ALREADY_EXISTS")
-    store_id = deploy_mod.lakebase_store.runtime_store_id("mason-myapp", "sp-123")
+    store_id = deploy_mod.managed_runtime_store.runtime_store_id("mason-myapp", "sp-123")
     resource = _runtime_store_response(store_id)
     if legacy_name is None:
         del resource["owner"]["app"]["name"]
@@ -138,28 +108,26 @@ def test_reconcile_and_delete_legacy_store_require_the_same_sp(legacy_name):
         resource["owner"]["app"]["name"] = legacy_name
     client.get_runtime_store.return_value = resource
 
-    backend = deploy_mod._reconcile_runtime_store(
-        types.SimpleNamespace(server="mason"), "mason-myapp", client, "sp-123"
+    backend = deploy_mod.managed_runtime_store.get_or_create_backend(
+        client, "mason-myapp", "sp-123"
     )
     assert backend is not None
     assert backend.database == resource["storage_backend"]["lakebase"]["database_id"]
-    deploy_mod._delete_runtime_store(client, "mason-myapp", "sp-123")
+    deploy_mod.managed_runtime_store.delete(client, "mason-myapp", "sp-123")
     client.delete_runtime_store.assert_called_once_with(store_id)
 
     client.delete_runtime_store.reset_mock()
     resource["owner"]["app"]["service_principal_id"] = "different-sp"
     with pytest.raises(AgentCliError, match="does not belong to this app identity"):
-        deploy_mod._reconcile_runtime_store(
-            types.SimpleNamespace(server="mason"), "mason-myapp", client, "sp-123"
-        )
+        deploy_mod.managed_runtime_store.get_or_create_backend(client, "mason-myapp", "sp-123")
     with pytest.raises(AgentCliError, match="does not belong to this app identity"):
-        deploy_mod._delete_runtime_store(client, "mason-myapp", "sp-123")
+        deploy_mod.managed_runtime_store.delete(client, "mason-myapp", "sp-123")
     client.delete_runtime_store.assert_not_called()
 
 
 def test_delete_runtime_store_finishes_before_deleting_app(monkeypatch):
     client = mock.Mock()
-    store_id = deploy_mod.lakebase_store.runtime_store_id("mason-myapp", "sp-123")
+    store_id = deploy_mod.managed_runtime_store.runtime_store_id("mason-myapp", "sp-123")
     client.get_runtime_store.return_value = _runtime_store_response(store_id)
     cli = mock.Mock()
     calls = mock.Mock()
@@ -187,7 +155,7 @@ def test_delete_runtime_store_finishes_before_deleting_app(monkeypatch):
 @pytest.mark.parametrize("error_code", ["PERMISSION_DENIED", "UNAVAILABLE", "FEATURE_DISABLED"])
 def test_delete_runtime_store_errors_retain_the_app(monkeypatch, operation, error_code):
     client = mock.Mock()
-    store_id = deploy_mod.lakebase_store.runtime_store_id("mason-myapp", "sp-123")
+    store_id = deploy_mod.managed_runtime_store.runtime_store_id("mason-myapp", "sp-123")
     client.get_runtime_store.return_value = _runtime_store_response(store_id)
     getattr(client, operation).side_effect = AgentCliError("cleanup failed", error_code=error_code)
     cli = mock.Mock()
@@ -205,7 +173,7 @@ def test_delete_runtime_store_errors_retain_the_app(monkeypatch, operation, erro
 @pytest.mark.parametrize("operation", ["get_runtime_store", "delete_runtime_store"])
 def test_delete_runtime_store_already_absent_allows_app_deletion(monkeypatch, operation):
     client = mock.Mock()
-    store_id = deploy_mod.lakebase_store.runtime_store_id("mason-myapp", "sp-123")
+    store_id = deploy_mod.managed_runtime_store.runtime_store_id("mason-myapp", "sp-123")
     client.get_runtime_store.return_value = _runtime_store_response(store_id)
     getattr(client, operation).side_effect = AgentCliError("absent", error_code="NOT_FOUND")
     cli = mock.Mock()
@@ -223,7 +191,7 @@ def test_delete_runtime_store_already_absent_allows_app_deletion(monkeypatch, op
 )
 def test_delete_does_not_remove_store_or_app_for_a_different_owner(monkeypatch, app_name, sp):
     client = mock.Mock()
-    store_id = deploy_mod.lakebase_store.runtime_store_id("mason-myapp", "sp-123")
+    store_id = deploy_mod.managed_runtime_store.runtime_store_id("mason-myapp", "sp-123")
     client.get_runtime_store.return_value = _runtime_store_response(store_id, app_name, sp)
     cli = mock.Mock()
     monkeypatch.setattr(deploy_mod, "_databricks", cli)
@@ -238,7 +206,7 @@ def test_delete_does_not_remove_store_or_app_for_a_different_owner(monkeypatch, 
 
 def test_delete_retries_after_store_deleted_but_app_deletion_failed(monkeypatch):
     client = mock.Mock()
-    store_id = deploy_mod.lakebase_store.runtime_store_id("mason-myapp", "sp-123")
+    store_id = deploy_mod.managed_runtime_store.runtime_store_id("mason-myapp", "sp-123")
     client.get_runtime_store.side_effect = [
         _runtime_store_response(store_id),
         AgentCliError("absent", error_code="NOT_FOUND"),

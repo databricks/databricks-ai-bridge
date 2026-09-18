@@ -25,13 +25,13 @@ from typing import Any, Optional
 import click
 import yaml
 
-import databricks_mason.lakebase_runtime_store as lakebase_store
+import databricks_mason.lakebase_runtime_store as managed_runtime_store
+import databricks_mason.legacy_lakebase_runtime_store as legacy_runtime_store
 from databricks_mason import (
     render,
     timefmt,
 )
 from databricks_mason.app_resources import (
-    LakebaseBackend,
     apply_experiment_resource,
     apply_postgres_resources,
     remove_app_resources,
@@ -472,61 +472,6 @@ def _grant_store_access(
     return None
 
 
-def _reconcile_runtime_store(
-    project,
-    deployment_name: str,
-    client,
-    app_service_principal_id: Optional[str],
-    *,
-    profile: Optional[str] = None,
-    use_managed_api: bool = True,
-) -> Optional[LakebaseBackend]:
-    """Create or reuse the implicit Runtime Store for a Mason Runtime deployment."""
-    if project is None or project.server != AgentServer.MASON:
-        return None
-
-    if not use_managed_api:
-        with render.status("Reconciling Runtime Store…"):
-            return lakebase_store.get_or_create_legacy_backend(deployment_name, profile)
-
-    if not app_service_principal_id:
-        raise AgentCliError("Could not resolve the app's service principal for its Runtime Store.")
-    store_id = lakebase_store.runtime_store_id(deployment_name, app_service_principal_id)
-    with render.status("Reconciling Runtime Store…"):
-        try:
-            store = client.create_runtime_store(
-                store_id,
-                app_service_principal_id,
-                app_name=deployment_name,
-                retry_transient=True,
-            )
-        except AgentCliError as exc:
-            if exc.error_code != "ALREADY_EXISTS":
-                raise
-            store = client.get_runtime_store(store_id)
-    return lakebase_store.backend_from_api(
-        deployment_name, store_id, app_service_principal_id, store
-    )
-
-
-def _delete_runtime_store(client, deployment_name: str, app_service_principal_id: str) -> None:
-    """Keep the app available for cleanup retries until its Runtime Store is gone."""
-    store_id = lakebase_store.runtime_store_id(deployment_name, app_service_principal_id)
-    try:
-        store = client.get_runtime_store(store_id)
-        lakebase_store.validate_owner(deployment_name, store_id, app_service_principal_id, store)
-        client.delete_runtime_store(store_id)
-    except AgentCliError as exc:
-        if exc.error_code == "NOT_FOUND":
-            return
-        raise AgentCliError(
-            f"Could not delete Runtime Store '{store_id}': {exc.message}",
-            error_code=exc.error_code,
-            hint=f"The deployment was retained. Retry `mason deployments delete {deployment_name}` "
-            "after resolving the Runtime Store error.",
-        ) from exc
-
-
 # --- mason deploy -----------------------------------------------------------
 
 
@@ -683,26 +628,15 @@ def deploy(
     with render.progress("Waiting for agent compute to start (this can take a few minutes)…"):
         _wait_for_running(name, obj.profile)
 
-    app_service_principal_id = (
-        _app_service_principal(name, obj.profile)
-        if use_managed_runtime_store and project is not None and project.server == AgentServer.MASON
-        else None
-    )
-    runtime_backend = _reconcile_runtime_store(
-        project,
-        name,
-        client,
-        app_service_principal_id,
-        profile=obj.profile,
-        use_managed_api=use_managed_runtime_store,
-    )
-    if runtime_backend is not None:
-        env_updates[RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV] = runtime_backend.endpoint_path
-        env_updates[RUNTIME_STORE_SCHEMA_ENV] = runtime_backend.schema
+    runtime_manifest: dict[str, Optional[str]] = {}
+    if project is not None and project.server == AgentServer.MASON:
         if use_managed_runtime_store:
+            app_service_principal_id = _app_service_principal(name, obj.profile)
+            with render.status("Reconciling Runtime Store…"):
+                runtime_backend = managed_runtime_store.get_or_create_backend(
+                    client, name, app_service_principal_id
+                )
             assert app_service_principal_id is not None
-            env_updates[RUNTIME_STORE_DATABASE_ENV] = runtime_backend.database
-            env_updates[RUNTIME_STORE_USERNAME_ENV] = app_service_principal_id
             resource_error = remove_app_resources(
                 name, {runtime_backend.resource_name}, obj.profile
             )
@@ -711,20 +645,32 @@ def deploy(
                     "Could not detach the legacy Lakebase resource for the Runtime Store.",
                     hint=resource_error,
                 )
+            runtime_manifest = {
+                RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV: runtime_backend.endpoint_path,
+                RUNTIME_STORE_DATABASE_ENV: runtime_backend.database,
+                RUNTIME_STORE_USERNAME_ENV: app_service_principal_id,
+                RUNTIME_STORE_SCHEMA_ENV: runtime_backend.schema,
+            }
         else:
+            with render.status("Reconciling Runtime Store…"):
+                runtime_backend = legacy_runtime_store.get_or_create_backend(name, obj.profile)
             resource_error = apply_postgres_resources(name, [runtime_backend], obj.profile)
             if resource_error:
                 raise AgentCliError(
                     "Could not attach the Lakebase resource required for the Runtime Store.",
                     hint=resource_error,
                 )
+            runtime_manifest = {
+                RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV: runtime_backend.endpoint_path,
+                RUNTIME_STORE_DATABASE_ENV: None,
+                RUNTIME_STORE_USERNAME_ENV: None,
+                RUNTIME_STORE_SCHEMA_ENV: runtime_backend.schema,
+            }
 
     # 4. Patch the manifest with the resolved store, trace, and index env vars.
     scaffolded = False
     manifest_updates: dict[str, Optional[str]] = dict(env_updates)
-    if runtime_backend is not None and not use_managed_runtime_store:
-        manifest_updates[RUNTIME_STORE_DATABASE_ENV] = None
-        manifest_updates[RUNTIME_STORE_USERNAME_ENV] = None
+    manifest_updates.update(runtime_manifest)
     if manifest_updates:
         scaffolded = _upsert_manifest_env(source_dir, manifest_updates)
 
@@ -966,7 +912,7 @@ def deployments_delete(obj, name, yes) -> None:
                 hint="The deployment was retained. Check access to the app and retry deletion.",
             )
         with render.status("Deleting Runtime Store…"):
-            _delete_runtime_store(obj.client(), name, app_service_principal_id)
+            managed_runtime_store.delete(obj.client(), name, app_service_principal_id)
     _databricks(
         ["apps", "delete", name], obj.profile, action=f"Could not delete deployment '{name}'."
     )
