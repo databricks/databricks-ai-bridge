@@ -14,10 +14,13 @@ intentionally not a post-generation mutation command.
 ## Behavior
 
 The capability indicators are automatic. Streaming and background reflect the runtime contract;
-Session reflects checkpoint history; Memory requires `AGENT_MEMORY_STORE`. The transport selector is
-the only manual capability choice.
+Session reflects checkpoint history; Memory requires `AGENT_MEMORY_STORE`; Traces reflects the MLflow
+tracing config (destination + experiment). Selecting Memory opens a pane for browsing the store's
+entries (searchable, filterable by actor, with a modal for each entry); the other indicators expand
+in place, and Traces links out to the MLflow experiment. The transport selector is the only manual
+capability choice.
 
-The chat header's model picker lists the workspace's ready chat serving endpoints
+The composer's model picker lists the workspace's ready chat serving endpoints
 (`GET /api/ui/config` → `models`, discovered from `serving_endpoints.list()` and filtered to the
 `llm/v1/chat` task), with `agent.agent.MODEL` pinned as the default. Each request sends the selected
 endpoint as `model` in the invocation body; the agent is rebuilt per turn, so the picker changes the

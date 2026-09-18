@@ -14,6 +14,7 @@ import pathlib
 import re
 import time
 from typing import TYPE_CHECKING, Any, Optional
+from urllib.parse import quote
 
 from databricks_mason import models
 from databricks_mason.errors import TRANSIENT_ERROR_CODES, AgentCliError, wrap_api_error
@@ -239,6 +240,10 @@ class _MasonApiClient:
                 delay *= 2
 
     # --- Unity Catalog MCP Services -----------------------------------------
+
+    def get_mcp_service(self, service: str) -> dict:
+        """Look up a managed MCP service visible to the authenticated user."""
+        return self._do("GET", f"{_MCP_SERVICES_PATH}/{quote(service, safe='')}")
 
     def list_mcp_services(
         self, schema: str = "system.ai", page_token: Optional[str] = None

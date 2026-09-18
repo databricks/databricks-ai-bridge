@@ -31,10 +31,18 @@ class _FakeStateClient:
         }
 
     def list_memory_entries(self, actor, path_prefix=None):
-        return {"managed_memory_entries": [{"path": f"{path_prefix or ''}/profile.md"}]}
+        return {
+            "managed_memory_entries": [
+                {"path": f"{path_prefix or ''}/profile.md", "actor_id": actor}
+            ]
+        }
 
     def search_memory_entries(self, actor, request):
-        return {"managed_memory_entries": [{"path": "/profile.md", "content": request.query}]}
+        return {
+            "managed_memory_entries": [
+                {"path": "/profile.md", "content": request.query, "actor_id": actor}
+            ]
+        }
 
     def ensure_session(self, actor, session_id):
         return {"session_id": session_id, "actor_id": actor}
@@ -473,6 +481,26 @@ def test_managed_memory_and_session_routes(monkeypatch):
     assert client.get("/api/demo/memory/entries", params={"path_prefix": "/"}).status_code == 200
     search = client.post("/api/demo/memory/search", json={"query": "Databricks"})
     assert search.json()["managed_memory_entries"][0]["content"] == "Databricks"
+
+    # The UI can browse another actor's memories via ?actor= (list) or payload.actor (search);
+    # both default to the viewer when omitted.
+    listed_default = client.get("/api/demo/memory/entries").json()
+    assert listed_default["managed_memory_entries"][0]["actor_id"] == "alice"
+    listed_bob = client.get("/api/demo/memory/entries", params={"actor": "bob"}).json()
+    assert listed_bob["managed_memory_entries"][0]["actor_id"] == "bob"
+    search_bob = client.post("/api/demo/memory/search", json={"query": "x", "actor": "bob"})
+    assert search_bob.json()["managed_memory_entries"][0]["actor_id"] == "bob"
+
+    # Tracing surfaces in config when a destination + experiment are set, with an experiment link.
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "databricks")
+    monkeypatch.setenv("MLFLOW_EXPERIMENT_ID", "123456")
+    monkeypatch.setattr(ui, "_workspace_host", lambda: "https://example.databricks.com")
+    tracing = client.get("/api/ui/config").json()["tracing"]
+    assert tracing["enabled"] is True
+    assert tracing["url"] == "https://example.databricks.com/ml/experiments/123456"
+    monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
+    monkeypatch.delenv("MLFLOW_EXPERIMENT_ID", raising=False)
+    assert client.get("/api/ui/config").json()["tracing"]["enabled"] is False
 
     assert (
         client.post("/api/demo/sessions", json={"session_id": "ignored"}).json()["session_id"]
