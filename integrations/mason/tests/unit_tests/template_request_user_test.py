@@ -103,7 +103,8 @@ def test_main_derives_auth_policy_after_configure(framework, overlay):
     assert source.index("configure()", source.index("load_dotenv(")) < source.index(
         "app = AgentApp"
     )
-    assert "if not app.auth_policy.requires_user:\n    app.recover(recover)" in source
+    assert "\napp.recover(recover)\n" in source
+    assert "if not app.auth_policy.requires_user" not in source
 
 
 @pytest.mark.asyncio
@@ -138,7 +139,7 @@ async def test_context_session_is_already_private(template, monkeypatch):
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
 @pytest.mark.parametrize("user_auth", [False, True])
 @pytest.mark.asyncio
-async def test_ui_background_capability_follows_policy(framework, user_auth, monkeypatch):
+async def test_ui_runtime_capabilities_ignore_tool_auth_policy(framework, user_auth, monkeypatch):
     import httpx
     from fastapi import FastAPI
 
@@ -150,6 +151,7 @@ async def test_ui_background_capability_follows_policy(framework, user_auth, mon
     monkeypatch.setattr(ui, "_default_model", lambda: "model")
     monkeypatch.setattr(ui, "_memory_store", lambda: "memory")
     monkeypatch.setattr(ui, "_session_store", lambda: "sessions")
+    monkeypatch.setattr(ui, "runtime_store_is_persistent_environment", lambda: True)
     app = FastAPI()
     monkeypatch.setattr(app, "auth_policy", SimpleNamespace(requires_user=user_auth), raising=False)
     ui.install_ui(app)
@@ -157,17 +159,16 @@ async def test_ui_background_capability_follows_policy(framework, user_auth, mon
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
         config = (await client.get("/api/ui/config?session_id=public")).json()
-        if user_auth:
-            assert (
-                await client.get("/api/demo/session/items?session_id=guessed")
-            ).status_code == 403
-    assert config["background"]["enabled"] is (not user_auth)
+    assert config["background"] == {
+        "enabled": True,
+        "persistent": True,
+        "mode": "Runtime Store",
+    }
     assert config["streaming"]["enabled"] is True
-    if user_auth:
-        assert config["streaming"]["persistent"] is False
-        assert config["streaming"]["mode"] == "Request-owned execution"
-        assert config["session"]["history"] is False
-        assert config["memory"]["enabled"] is False
+    assert config["streaming"]["persistent"] is True
+    assert config["streaming"]["mode"] == "Runtime Store"
+    assert config["session"]["history"] is True
+    assert config["memory"]["enabled"] is True
     source = (path.parents[1] / "ui/app.js").read_text()
     assert "state.config?.background.enabled === false" in source
     assert "button.disabled = !enabled" in source

@@ -17,11 +17,17 @@ from databricks_mason.project_config import write_project_metadata
 @pytest.fixture(autouse=True)
 def _no_remote_provisioning(monkeypatch):
     monkeypatch.setattr(deploy_mod, "resolve_trace_experiment_id", lambda *args: None)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_reconcile_runtime_store",
-        Mock(side_effect=AssertionError("unexpected Runtime Store provisioning")),
+    monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", True)
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "app-sp")
+    runtime_store = Mock(
+        return_value=SimpleNamespace(
+            branch="projects/shared/branches/production",
+            database_id="runtime-database",
+            username="app-sp",
+        )
     )
+    monkeypatch.setattr(deploy_mod.managed_runtime_store, "get_or_create_backend", runtime_store)
+    return runtime_store
 
 
 def _project(root, *, marker=1, auth="user", legacy=False):
@@ -370,12 +376,12 @@ def test_disabled_forwarding_during_verification_stops_deploy(monkeypatch):
 
 
 @pytest.mark.parametrize("auth", [None, "app"])
-def test_app_only_contract_keeps_legacy_deployment_path(tmp_path, monkeypatch, auth):
+def test_app_only_contract_keeps_deployment_path(
+    tmp_path, monkeypatch, auth, _no_remote_provisioning
+):
     _project(tmp_path, marker=None, auth=auth)
     app_auth, apps, workspace = _sdk(monkeypatch)
-    runtime_store = Mock(return_value=None)
     calls = []
-    monkeypatch.setattr(deploy_mod, "_reconcile_runtime_store", runtime_store)
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda *args: False)
     monkeypatch.setattr(deploy_mod, "_wait_for_running", lambda *args: None)
 
@@ -392,11 +398,13 @@ def test_app_only_contract_keeps_legacy_deployment_path(tmp_path, monkeypatch, a
     )
     assert result.exit_code == 0, result.output
     workspace.assert_not_called()
-    runtime_store.assert_called_once()
+    _no_remote_provisioning.assert_called_once()
     assert ["apps", "create", "agent-mason-test"] in calls
 
 
-def test_user_deploy_creates_scoped_app_before_source_without_runtime_store(tmp_path, monkeypatch):
+def test_user_deploy_creates_scoped_app_and_runtime_store_before_source(
+    tmp_path, monkeypatch, _no_remote_provisioning
+):
     _project(tmp_path)
     app_auth, apps, workspace = _sdk(monkeypatch)
     calls = []
@@ -417,11 +425,14 @@ def test_user_deploy_creates_scoped_app_before_source_without_runtime_store(tmp_
         assert profile == "selected"
         return SimpleNamespace(returncode=0, stdout="{}", stderr="")
 
-    runtime_store = Mock()
     monkeypatch.setattr(deploy_mod, "_databricks", databricks)
     monkeypatch.setattr(deploy_mod, "_wait_for_running", lambda *args: None)
-    monkeypatch.setattr(deploy_mod, "_reconcile_runtime_store", runtime_store)
     monkeypatch.setattr(deploy_mod, "resolve_trace_experiment_id", lambda *args: None)
+    runtime_backend = _no_remote_provisioning.return_value
+    _no_remote_provisioning.side_effect = lambda *args: (
+        calls.append(("runtime-store", args)),
+        runtime_backend,
+    )[1]
     client = SimpleNamespace(host="https://workspace", current_user="user@example.com")
     result = CliRunner().invoke(
         deploy_mod.deploy,
@@ -441,5 +452,8 @@ def test_user_deploy_creates_scoped_app_before_source_without_runtime_store(tmp_
     )
     assert any(kind == "sync" for kind, _ in calls)
     assert any(arguments[:2] == ["apps", "deploy"] for _, arguments in calls[1:])
-    runtime_store.assert_not_called()
+    _no_remote_provisioning.assert_called_once()
+    assert [kind for kind, _ in calls].index("runtime-store") < [kind for kind, _ in calls].index(
+        "sync"
+    )
     assert "re-consent" in result.output

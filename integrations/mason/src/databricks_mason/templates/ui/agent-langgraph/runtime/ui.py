@@ -365,18 +365,10 @@ def _chat_session_items(result: dict[str, Any]) -> dict[str, Any]:
 
 def install_ui(app: FastAPI) -> None:
     """Mount the Mason UI and its runtime control endpoints."""
-    user_auth = bool(getattr(getattr(app, "auth_policy", None), "requires_user", False))
     app.mount("/ui-assets", StaticFiles(directory=_UI_ROOT), name="mason-demo-ui-assets")
 
     @app.middleware("http")
     async def disable_ui_caching(request: Request, call_next):
-        if user_auth and request.url.path.startswith(("/api/demo/memory", "/api/demo/session")):
-            return JSONResponse(
-                status_code=403,
-                content={
-                    "detail": "Managed-state demo controls are unavailable with request-user authorization."
-                },
-            )
         response = await call_next(request)
         if request.url.path == "/" or request.url.path.startswith("/ui-assets/"):
             response.headers["Cache-Control"] = "no-store"
@@ -389,8 +381,8 @@ def install_ui(app: FastAPI) -> None:
     @app.get("/api/ui/config", include_in_schema=False)
     async def ui_config(request: Request) -> dict:
         actor = _request_actor(request)
-        memory_store = "" if user_auth else _memory_store()
-        session_store = "" if user_auth else _session_store()
+        memory_store = _memory_store()
+        session_store = _session_store()
         default_model = _default_model()
         runtime_store_persistent = runtime_store_is_persistent_environment()
         runtime_store_mode = (
@@ -405,20 +397,18 @@ def install_ui(app: FastAPI) -> None:
             "streaming": {
                 "enabled": True,
                 "transport": "Server-sent events",
-                "persistent": False if user_auth else runtime_store_persistent,
-                "mode": "Request-owned execution" if user_auth else runtime_store_mode,
+                "persistent": runtime_store_persistent,
+                "mode": runtime_store_mode,
             },
             "background": {
-                "enabled": not user_auth,
+                "enabled": True,
                 "persistent": runtime_store_persistent,
-                "mode": "Unavailable with request-user authorization"
-                if user_auth
-                else runtime_store_mode,
+                "mode": runtime_store_mode,
             },
             "session": {
                 "durable": bool(session_store),
                 "managed": bool(session_store),
-                "history": not user_auth,
+                "history": True,
                 "mode": "Managed Session Store" if session_store else "In-process checkpointer",
                 "store": session_store or None,
                 "actor": actor,

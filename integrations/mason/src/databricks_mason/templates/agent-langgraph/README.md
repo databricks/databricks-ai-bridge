@@ -131,10 +131,10 @@ MCP server credentials are unchanged.
 public session IDs and actor values for the request owner, then passes only `workspace_client_for`
 to the framework-native agent. Internal session keys are never returned to clients.
 
-User-policy invocations support foreground synchronous requests and request-owned SSE. Callers must
-omit `background`; `stream: true` sequences and delivers live events without retaining them for
-status lookup or replay. Background execution, durable recovery, status/event replay, and
-approval/resume are disabled. Approval interruptions fail with `MCP_USER_AUTH_HITL_UNSUPPORTED`.
-The agent's existing namespaced memory, conversation store, and checkpointer behavior is unchanged;
-OBO does not add another saver. App-only background, streaming, recovery, and approval behavior is
-unchanged.
+User-policy invocations use the existing Runtime for synchronous, streaming, and background calls,
+including status polling, event replay, and invocation-ID idempotency. The Runtime Store persists no
+credential; request-user authentication remains process-local for the active first attempt. A
+replacement attempt fails with `MCP_USER_AUTH_RECOVERY_UNSUPPORTED` before agent code runs. Approval
+interruptions remain unsupported and fail with `MCP_USER_AUTH_HITL_UNSUPPORTED`. The agent's
+existing namespaced memory, conversation store, and checkpointer behavior is unchanged; OBO does not
+add another saver.
