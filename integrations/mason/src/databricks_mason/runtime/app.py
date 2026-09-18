@@ -160,8 +160,9 @@ class AgentApp(FastAPI):
 
     async def _invoke_request_user(
         self, request: Request, body: _InvocationRequest, invocation_id: str
-    ) -> JSONResponse:
+    ) -> Response:
         auth = RequestAuthContext.from_headers(request.headers)
+        stream_owns_auth = False
         try:
             if body.background:
                 raise AuthError(
@@ -169,14 +170,16 @@ class AgentApp(FastAPI):
                     "Request-user tools require synchronous execution",
                     400,
                 )
-            if body.stream:
-                raise AuthError(
-                    "MCP_USER_AUTH_STREAMING_UNSUPPORTED",
-                    "Request-user tools do not support streaming execution",
-                    400,
-                )
             if self._invoke_hook is None:
                 raise RuntimeError("no @app.invoke handler is registered")
+            session_id = auth.namespace("session", request.state.session_id or invocation_id)
+            if body.stream:
+                response = StreamingResponse(
+                    self._request_user_event_stream(body, invocation_id, session_id, auth),
+                    media_type="text/event-stream",
+                )
+                stream_owns_auth = True
+                return response
 
             sequence = 0
 
@@ -187,7 +190,7 @@ class AgentApp(FastAPI):
 
             context = InvocationContext(
                 invocation_id=invocation_id,
-                session_id=auth.namespace("session", request.state.session_id or invocation_id),
+                session_id=session_id,
                 attempt=1,
                 _attempt_context=InvocationAttemptContext(invocation_id, 1, discard_event),
                 request_auth=auth,
@@ -199,6 +202,68 @@ class AgentApp(FastAPI):
         except Exception as exc:
             raise HTTPException(500, "agent invocation failed") from exc
         finally:
+            if not stream_owns_auth:
+                auth.close()
+
+    async def _request_user_event_stream(
+        self,
+        body: _InvocationRequest,
+        invocation_id: str,
+        session_id: str,
+        auth: RequestAuthContext,
+    ) -> AsyncIterator[str]:
+        events: asyncio.Queue[tuple[int, JsonObject]] = asyncio.Queue(maxsize=1)
+        sequence = 0
+
+        async def emit(event: JsonObject) -> int:
+            nonlocal sequence
+            sequence += 1
+            await events.put((sequence, copy.deepcopy(event)))
+            return sequence
+
+        context = InvocationContext(
+            invocation_id=invocation_id,
+            session_id=session_id,
+            attempt=1,
+            _attempt_context=InvocationAttemptContext(invocation_id, 1, emit),
+            request_auth=auth,
+        )
+
+        async def execute() -> None:
+            await emit({"type": "run.started"})
+            try:
+                assert self._invoke_hook is not None
+                await self._invoke_hook(copy.deepcopy(body.input), context)
+            except asyncio.CancelledError:
+                raise
+            except AuthError as exc:
+                failure: JsonObject = {
+                    "type": "run.failed",
+                    "error": str(exc),
+                    "code": exc.code,
+                }
+                if exc.integration_id is not None:
+                    failure["integration_id"] = exc.integration_id
+                await emit(failure)
+            except Exception:
+                logger.error("Request-user streaming invocation failed: %s", invocation_id)
+                await emit({"type": "run.failed", "error": "agent invocation failed"})
+            else:
+                await emit({"type": "run.completed"})
+
+        task = asyncio.create_task(execute(), name=f"request-user-{invocation_id}")
+        try:
+            while True:
+                sequence_number, event = await events.get()
+                event_type = event.get("type", "message")
+                yield (f"id: {sequence_number}\nevent: {event_type}\ndata: {json.dumps(event)}\n\n")
+                if event_type in ("run.completed", "run.failed"):
+                    await task
+                    return
+        finally:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
             auth.close()
 
     async def _invoke_request(self, request: Request, body: _InvocationRequest) -> Response:
