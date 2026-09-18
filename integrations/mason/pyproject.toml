@@ -11,7 +11,7 @@ dependencies = [
     # >=8.4: the --help graying styles the description column with ANSI, and 8.4+ measures column
     # widths / wraps with ANSI-aware `term_len`, so the styling doesn't break table alignment.
     "click>=8.4",
-    "databricks-ai-bridge[memory]==0.22.0",
+    "databricks-ai-bridge[memory]>=0.22.0",
     "fastapi>=0.129.0",
     "sqlalchemy[asyncio]>=2.0",
     "uvicorn>=0.20.0",
@@ -58,7 +58,7 @@ dev = [
     { include-group = "tests" },
 ]
 tests = [
-    "databricks-ai-bridge[memory]==0.22.0",
+    "databricks-ai-bridge[memory]>=0.22.0",
     "fastapi>=0.129.0",
     "httpx>=0.28.1",
     "pytest==9.0.2",
