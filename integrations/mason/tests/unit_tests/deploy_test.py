@@ -35,6 +35,13 @@ def _no_tracing_by_default(monkeypatch):
     monkeypatch.setattr(deploy_mod, "resolve_trace_experiment_id", lambda *a, **k: None)
 
 
+@pytest.fixture(autouse=True)
+def _no_app_resource_updates_by_default(monkeypatch):
+    # Resource helpers bind their own Databricks CLI wrapper, independently of deploy._databricks.
+    # Keep deploy-command tests hermetic; app_resources_test.py exercises the real helper behavior.
+    monkeypatch.setattr(deploy_mod, "remove_app_resources", lambda *a, **k: None)
+
+
 def test_upsert_manifest_env_scaffolds_when_missing(tmp_path: pathlib.Path):
     scaffolded = deploy_mod._upsert_manifest_env(
         tmp_path, {"AGENT_MEMORY_STORE": "memory-stores/x"}
@@ -569,6 +576,8 @@ def test_deploy_mason_server_provisions_runtime_store(tmp_path: pathlib.Path, mo
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "sp-123")
+    detach_legacy_resource = mock.Mock(return_value=None)
+    monkeypatch.setattr(deploy_mod, "remove_app_resources", detach_legacy_resource)
     deployed_env = None
 
     def fake_databricks(args, profile, **kwargs):
@@ -595,6 +604,9 @@ def test_deploy_mason_server_provisions_runtime_store(tmp_path: pathlib.Path, mo
     assert deployed_env is not None
     assert "DATABRICKS_MASON_RUNTIME_STORE_LAKEBASE_ENDPOINT" in deployed_env
     assert "DATABRICKS_MASON_RUNTIME_STORE_SCHEMA" in deployed_env
+    detach_legacy_resource.assert_called_once_with(
+        "agent-mason-myapp", {"postgres-runtime-store"}, "prof"
+    )
 
 
 def test_deploy_defaults_to_legacy_runtime_store(tmp_path: pathlib.Path, monkeypatch) -> None:
