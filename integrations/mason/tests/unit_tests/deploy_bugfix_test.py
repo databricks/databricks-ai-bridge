@@ -93,6 +93,7 @@ def test_delete_aborts_without_confirmation(monkeypatch):
 
 def test_delete_proceeds_with_yes(monkeypatch):
     called = []
+    monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", False)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",

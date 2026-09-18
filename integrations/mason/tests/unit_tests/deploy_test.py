@@ -87,8 +87,8 @@ def test_upsert_manifest_env_preserves_unrelated_entries_and_replaces_value_from
     assert doc["env"] == [unrelated, {"name": "AGENT_MEMORY_STORE", "value": "new"}]
 
 
-def test_managed_runtime_store_is_an_internal_disabled_rollout_switch():
-    assert deploy_mod._USE_MANAGED_RUNTIME_STORE is False
+def test_managed_runtime_store_is_the_internal_default():
+    assert deploy_mod._USE_MANAGED_RUNTIME_STORE is True
 
 
 def test_ensure_session_store_reuses_on_already_exists():
