@@ -410,6 +410,11 @@ explicit adoption on each user-auth deploy:
 mason --profile my-workspace deploy my-agent --adopt-user-auth
 ```
 
+A sandbox binding with a Volume downscope additionally requests the Apps `files` user scope.
+OAuth consent does not grant Volume access: the requesting user still needs the corresponding
+Unity Catalog privileges, and the sandbox downscope remains authoritative. Table-only sandbox
+bindings request `ai-gateway` but do not request `files`.
+
 Review the target App's scopes and coordinate with its other owners before adopting. Mason
 preserves unrelated configured scopes, updates only user scopes and any explicitly requested
 instance counts, and checks requested **and effective** scopes before source rollout. It checks
