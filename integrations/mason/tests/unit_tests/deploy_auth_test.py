@@ -108,6 +108,14 @@ def test_required_user_scopes_follow_managed_auth(tmp_path, auth, expected):
     assert required_user_scopes(None) == set()
 
 
+def test_prepare_app_auth_uses_exact_required_scopes(monkeypatch):
+    app_auth, _, _ = _sdk(monkeypatch)
+
+    plan = app_auth.prepare_app_auth("app", "selected", adopt=False, required_scopes={"genie"})
+
+    assert plan.scopes == ("genie",)
+
+
 def test_existing_app_requires_explicit_adoption(tmp_path, monkeypatch):
     _project(tmp_path)
     _, apps, workspace = _sdk(monkeypatch, App(name="agent-mason-test", user_api_scopes=["sql"]))

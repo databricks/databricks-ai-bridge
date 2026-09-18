@@ -99,12 +99,13 @@ def _tool_error(result: Any, integration_id: str) -> AuthError | None:
 
 
 class _ConfiguredMcpServer(McpServer):
-    """Keep configured auth failures out of SDK best-effort discovery and tool results."""
+    """Keep request-user failures out of SDK best-effort discovery and tool results."""
 
-    _mason_configured = True
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, failure_error_function=self._raise_tool_error, **kwargs)
+    def __init__(self, *args: Any, request_user: bool, **kwargs: Any) -> None:
+        self._mason_request_user = request_user
+        if request_user:
+            kwargs["failure_error_function"] = self._raise_tool_error
+        super().__init__(*args, **kwargs)
 
     def _raise_tool_error(self, context: Any, error: Exception) -> str:
         raise _auth_error(error, self.name) or AuthError(
@@ -112,6 +113,8 @@ class _ConfiguredMcpServer(McpServer):
         ) from None
 
     async def connect(self):
+        if not self._mason_request_user:
+            return await super().connect()
         try:
             return await super().connect()
         except Exception as error:
@@ -123,6 +126,8 @@ class _ConfiguredMcpServer(McpServer):
             ) from None
 
     async def list_tools(self, *args, **kwargs):
+        if not self._mason_request_user:
+            return await super().list_tools(*args, **kwargs)
         try:
             return await super().list_tools(*args, **kwargs)
         except Exception as error:
@@ -131,6 +136,8 @@ class _ConfiguredMcpServer(McpServer):
             ) from None
 
     async def call_tool(self, tool_name, arguments, **kwargs):
+        if not self._mason_request_user:
+            return await super().call_tool(tool_name, arguments, **kwargs)
         try:
             call = getattr(McpServer.call_tool, "__wrapped__", McpServer.call_tool)
             result = await call(self, tool_name, arguments, **kwargs)
@@ -194,6 +201,7 @@ def _server_from_tool(
                 workspace_client=client,
                 timeout=120.0,
                 downscope=downscope_wire(tool),
+                request_user=mode == "user",
             )
         if tool.kind == "genie_one":
             return _ConfiguredMcpServer(
@@ -201,8 +209,15 @@ def _server_from_tool(
                 workspace_client=client,
                 timeout=120.0,
                 params={"url": url, "headers": workspace_headers()},
+                request_user=mode == "user",
             )
-        return _ConfiguredMcpServer(url=url, name=tool.id, workspace_client=client, timeout=120.0)
+        return _ConfiguredMcpServer(
+            url=url,
+            name=tool.id,
+            workspace_client=client,
+            timeout=120.0,
+            request_user=mode == "user",
+        )
     if tool.kind == "uc_function":
         catalog, schema, function_name = (tool.function or "").split(".")
         return _ConfiguredMcpServer.from_uc_function(
@@ -212,6 +227,7 @@ def _server_from_tool(
             name=tool.id,
             workspace_client=client,
             timeout=120.0,
+            request_user=mode == "user",
         )
     return None
 
@@ -238,8 +254,8 @@ async def mcp_servers(
     """Build the agent's configured servers with request identity and sandbox downscoping.
 
     Includes the MCP servers declared in ``agent.toml``; pass ``extra_servers`` to add servers the
-    agent builds itself. Configured failures propagate. Extra servers keep their original identity;
-    the request resolver is never forwarded to them.
+    agent builds itself. Request-user failures propagate. App and extra servers retain the SDK's
+    best-effort behavior; the request resolver is never forwarded to extra servers.
     """
     return [
         *_declared_servers(workspace_client_for=workspace_client_for),
