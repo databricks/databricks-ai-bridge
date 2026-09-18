@@ -242,10 +242,11 @@ source = { kind = "mcp", service = "system.ai.gamma" }
 
 
 @pytest.mark.parametrize(
-    "auth,optional", [(None, False), ("user", False), ("app", False), (None, True)]
+    "auth,optional,strict",
+    [(None, False, False), ("user", False, True), ("app", False, False), (None, True, False)],
 )
-def test_mcp_tools_isolates_legacy_but_rejects_explicit_auth_failures(
-    mcp_discovery, monkeypatch, caplog, auth, optional
+def test_mcp_tools_isolates_legacy_and_app_but_rejects_user_auth_failures(
+    mcp_discovery, monkeypatch, caplog, auth, optional, strict
 ):
     project, mcp, FakeDatabricksMCPServer, FakeMultiServerClient = mcp_discovery
     if auth is not None:
@@ -262,9 +263,7 @@ def test_mcp_tools_isolates_legacy_but_rejects_explicit_auth_failures(
         ]
 
     with caplog.at_level(logging.WARNING):
-        if auth is None:
-            tools = asyncio.run(mcp.mcp_tools(extra_servers))
-        else:
+        if strict:
             from databricks_mason.runtime.auth import AuthError
 
             with pytest.raises(AuthError):
@@ -272,6 +271,16 @@ def test_mcp_tools_isolates_legacy_but_rejects_explicit_auth_failures(
             assert FakeMultiServerClient.inflight == 0
             assert "must-not-be-logged" not in caplog.text
             return
+        tools = asyncio.run(
+            mcp.mcp_tools(
+                extra_servers,
+                **(
+                    {"workspace_client_for": lambda mode: _FakeWorkspaceClient()}
+                    if auth is not None
+                    else {}
+                ),
+            )
+        )
 
     # the failing server drops only its own tools; the other two survive, order preserved.
     assert tools == ["alpha-tool", "gamma-tool"]
@@ -287,15 +296,12 @@ def test_mcp_tools_isolates_legacy_but_rejects_explicit_auth_failures(
     assert "must-not-be-logged" not in caplog.text
 
 
-@pytest.mark.parametrize("auth", ["user", "app"])
-def test_mcp_tools_waits_for_blocked_sibling_before_explicit_auth_failure(
-    mcp_discovery, monkeypatch, auth
-):
+def test_mcp_tools_waits_for_blocked_sibling_before_user_auth_failure(mcp_discovery, monkeypatch):
     from databricks_mason.runtime.auth import AuthError
 
     project, mcp, _, client_type = mcp_discovery
     manifest = project / "agent.toml"
-    manifest.write_text(manifest.read_text().replace('id = "bad"', f'id = "bad"\nauth = "{auth}"'))
+    manifest.write_text(manifest.read_text().replace('id = "bad"', 'id = "bad"\nauth = "user"'))
 
     async def exercise():
         sibling_started = asyncio.Event()
