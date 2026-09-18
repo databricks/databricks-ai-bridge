@@ -398,10 +398,21 @@ def test_required_project_selections_name_agent_manifest(
 
 @pytest.mark.parametrize(
     ("raw", "expected"),
-    [("My_Agent", "my-agent-memory"), ("a.b c", "a-b-c-memory"), ("___", "agent-memory")],
+    [
+        ("My_Agent", "my-agent-memory"),
+        ("a.b c", "a-b-c-memory"),
+        ("___", "agent-memory"),  # only punctuation reduces to the fallback
+        ("2048-game", "2048-game-memory"),  # digits are kept: the backend prefixes memory-/session-
+        ("123", "123-memory"),  # an all-numeric directory is a valid store name
+    ],
 )
 def test_default_store_name_sanitizes(raw: str, expected: str):
     assert default_store_name(raw, "memory") == expected
+
+
+def test_default_store_name_inserts_token_before_suffix():
+    # The token sits before the store kind so the name still ends with the kind (never a digit).
+    assert default_store_name("my-agent", "sessions", "abcxyz") == "my-agent-abcxyz-sessions"
 
 
 @pytest.mark.parametrize("server", ["", "other"])
