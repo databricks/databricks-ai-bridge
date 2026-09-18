@@ -41,12 +41,11 @@ invocation protocol to design yourself. Bring your own agent, or start from a te
 
 ![Runtime: the opinionated AgentApp server, or bring your own](docs/runtime.png)
 
-There are two ways to run an agent, depending on how much you want handled for you:
+The two ways to run an agent:
 
 - **`AgentApp` - opinionated, batteries included.** Register one handler and get Mason's full
-  invocation contract (synchronous, streaming, background) with idempotent, UUID-keyed requests.
-  Enable the durable runtime for persistence, heartbeats, and automatic crash recovery on Lakebase,
-  so long-running and background work survives restarts, redeploys, and crashes. The framework
+  invocation contract (synchronous, streaming, background). Enable the durable runtime so
+  long-running and background work survives restarts, redeploys, and crashes. The framework
   templates are thin layers over `AgentApp` (HTTP contract detailed under [Runtime](#runtime)).
 - **Custom server - generic, full control.** `mason init --server custom` scaffolds a minimal FastAPI
   server with no `AgentApp`: you define your own endpoints, request/response shapes, and protocol.
