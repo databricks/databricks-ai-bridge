@@ -17,7 +17,7 @@ from pydantic import JsonValue as PydanticJsonValue
 
 from databricks_mason.runtime.auth import AuthError, InvocationAuthPolicy, RequestAuthContext
 from databricks_mason.runtime.runtime import Runtime
-from databricks_mason.runtime.store import InMemoryRuntimeStore, RuntimeStore
+from databricks_mason.runtime.store import RuntimeStore
 from databricks_mason.runtime.types import (
     Invocation,
     InvocationAttemptContext,
@@ -62,11 +62,12 @@ class AgentApp(FastAPI):
         self.auth_policy = auth_policy or InvocationAuthPolicy()
         self._invoke_hook: InvocationHook | None = None
         self._recovery_hook: InvocationHook | None = None
+        self._runtime: Runtime | None
         if self.auth_policy.requires_user:
             if runtime_store is not None:
                 raise ValueError("Request-user execution cannot use an explicit Runtime Store")
-            runtime_store = InMemoryRuntimeStore()
-        if runtime_store is None:
+            self._runtime = None
+        elif runtime_store is None:
             self._runtime = Runtime.from_environment(
                 self._execute,
                 recovery_enabled=lambda: self._recovery_hook is not None,
@@ -85,6 +86,7 @@ class AgentApp(FastAPI):
             if self.auth_policy.requires_user:
                 yield
                 return
+            assert self._runtime is not None
             if self._runtime.is_durable and self._recovery_hook is None:
                 logger.warning(
                     "No @app.recover handler is registered; automatic crash recovery is disabled."
@@ -161,15 +163,15 @@ class AgentApp(FastAPI):
     async def _invoke_request_user(
         self, request: Request, body: _InvocationRequest, invocation_id: str
     ) -> Response:
+        if body.background:
+            raise AuthError(
+                "MCP_USER_AUTH_BACKGROUND_UNSUPPORTED",
+                "Request-user tools require foreground execution",
+                400,
+            )
         auth = RequestAuthContext.from_headers(request.headers)
         stream_owns_auth = False
         try:
-            if body.background:
-                raise AuthError(
-                    "MCP_USER_AUTH_BACKGROUND_UNSUPPORTED",
-                    "Request-user tools require foreground execution",
-                    400,
-                )
             if self._invoke_hook is None:
                 raise RuntimeError("no @app.invoke handler is registered")
             session_id = auth.namespace("session", request.state.session_id or invocation_id)
@@ -212,7 +214,7 @@ class AgentApp(FastAPI):
         session_id: str,
         auth: RequestAuthContext,
     ) -> AsyncIterator[str]:
-        events: asyncio.Queue[tuple[int, JsonObject]] = asyncio.Queue(maxsize=1)
+        events: asyncio.Queue[tuple[int, JsonObject] | None] = asyncio.Queue(maxsize=1)
         sequence = 0
 
         async def emit(event: JsonObject) -> int:
@@ -250,16 +252,18 @@ class AgentApp(FastAPI):
                 await emit({"type": "run.failed", "error": "agent invocation failed"})
             else:
                 await emit({"type": "run.completed"})
+            await events.put(None)
 
         task = asyncio.create_task(execute(), name=f"request-user-{invocation_id}")
         try:
             while True:
-                sequence_number, event = await events.get()
-                event_type = event.get("type", "message")
-                yield (f"id: {sequence_number}\nevent: {event_type}\ndata: {json.dumps(event)}\n\n")
-                if event_type in ("run.completed", "run.failed"):
+                item = await events.get()
+                if item is None:
                     await task
                     return
+                sequence_number, event = item
+                event_type = event.get("type", "message")
+                yield (f"id: {sequence_number}\nevent: {event_type}\ndata: {json.dumps(event)}\n\n")
         finally:
             if not task.done():
                 task.cancel()
@@ -275,6 +279,7 @@ class AgentApp(FastAPI):
         try:
             if self.auth_policy.requires_user:
                 return await self._invoke_request_user(request, body, invocation_id)
+            assert self._runtime is not None
             if body.background:
                 state = await self._runtime.submit(invocation_id, invocation_request)
                 return JSONResponse(
@@ -301,6 +306,7 @@ class AgentApp(FastAPI):
     async def _get_request(self, request: Request, invocation_id: UUID) -> JSONResponse:
         if self.auth_policy.requires_user:
             raise HTTPException(404, "invocation not found")
+        assert self._runtime is not None
         state = await self._runtime.get_invocation(str(invocation_id))
         if state is None:
             raise HTTPException(404, "invocation not found")
@@ -312,6 +318,7 @@ class AgentApp(FastAPI):
         normalized_invocation_id = str(invocation_id)
         if self.auth_policy.requires_user:
             raise HTTPException(404, "invocation not found")
+        assert self._runtime is not None
         if await self._runtime.get_invocation(normalized_invocation_id) is None:
             raise HTTPException(404, "invocation not found")
         return StreamingResponse(
@@ -320,6 +327,7 @@ class AgentApp(FastAPI):
         )
 
     async def _event_stream(self, invocation_id: str, after: int = 0) -> AsyncIterator[str]:
+        assert self._runtime is not None
         cursor = after
         while True:
             for event in await self._runtime.get_events(invocation_id, after_sequence=cursor):
