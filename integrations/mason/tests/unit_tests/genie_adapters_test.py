@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import json
 import pathlib
 import subprocess
 import sys
+import threading
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -186,6 +188,34 @@ async def test_native_genie_uses_binding_auth_with_request_resolver(framework, p
     assert result["status"] == "COMPLETED"
     resolver.assert_called_with("user")
     sdk[1].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_native_genie_cancellation_waits_for_inflight_sdk_call(sdk):
+    from databricks_mason.runtime.genie import GenieAgent
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def start_conversation(space_id, question):
+        started.set()
+        assert release.wait(5)
+        return sdk[0].genie.start_conversation.return_value
+
+    sdk[0].genie.start_conversation.side_effect = start_conversation
+    agent = GenieAgent(SPACE, workspace_client_for=lambda _mode: sdk[0])
+    task = asyncio.create_task(agent.ask("How many?"))
+    assert await asyncio.to_thread(started.wait, 2)
+
+    task.cancel()
+    await asyncio.sleep(0)
+    try:
+        assert not task.done()
+    finally:
+        release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 2)
 
 
 @pytest.mark.asyncio
