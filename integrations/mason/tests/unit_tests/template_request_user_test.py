@@ -162,12 +162,15 @@ async def test_ui_background_capability_follows_policy(framework, user_auth, mon
                 await client.get("/api/demo/session/items?session_id=guessed")
             ).status_code == 403
     assert config["background"]["enabled"] is (not user_auth)
+    assert config["streaming"]["enabled"] is True
     if user_auth:
         assert config["streaming"]["persistent"] is False
+        assert config["streaming"]["mode"] == "Request-owned execution"
         assert config["session"]["history"] is False
         assert config["memory"]["enabled"] is False
     source = (path.parents[1] / "ui/app.js").read_text()
     assert "state.config?.background.enabled === false" in source
+    assert "button.disabled = !enabled" in source
 
 
 @pytest.mark.asyncio

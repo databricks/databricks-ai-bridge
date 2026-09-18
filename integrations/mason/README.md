@@ -576,12 +576,13 @@ never silently upgraded to user identity.
 
 New Mason-server projects record `request_auth_contract_version = 1` in `.mason/project.toml`.
 
-Request-user invocation outcomes and events are process-local, not durable. Idempotency/status
-retention lasts at most one hour and may end earlier under capacity pressure (256 retained
-invocations). Active requests and open invocation streams are not evicted; admission returns 429
-when capacity is occupied. Each invocation may emit up to 2,048 application events and runs for at
-most one hour. Reusing an ID after eviction or a process restart starts a new invocation; callers
-must not treat this as durable exactly-once execution. Streaming disconnects cancel execution.
+Request-user invocations execute directly in the incoming HTTP request without a Runtime Store.
+Callers must omit `background`; they may set `stream: true` for live SSE. Synchronous calls discard
+emitted application events, while streaming calls sequence and deliver them without retention.
+Status and event lookups return `404`, and reusing an invocation ID executes a new request rather
+than replaying a retained result. Completing or cancelling the request or stream closes its
+request-user credentials.
+
 Before deploying user-auth tools from an older project, migrate its request handler to the
 current request-auth-aware `AgentApp` template, explicitly choose `user` or `app` on **every**
 managed MCP/sandbox entry, then set that metadata marker. Merely adding the marker does not
