@@ -239,12 +239,12 @@ Memory Stores separately preserve the state used by your agent.
 
 The managed path uses the internal Runtime Store API to create a dedicated database in the
 workspace's shared Lakebase project and give the app SP ownership. Mason initializes its schema and
-tables; no manual Lakebase grant or Postgres app-resource attachment is needed. During the backend
-rollout, this path is opt-in with `DATABRICKS_MASON_USE_MANAGED_RUNTIME_STORE=true`; unset/false
-retains the legacy per-app Lakebase project. Redeploy reads the stored backend and verifies the app
-identity. `mason deployments delete` removes a managed store and its data before deleting the app;
-use the same rollout switch for managed cleanup. Cleanup errors retain the app for retry. Direct
-app deletion bypasses store cleanup.
+tables; no manual Lakebase grant or Postgres app-resource attachment is needed. Backend selection
+is an internal rollout detail, not a user-facing setting; Mason currently retains the legacy
+per-app Lakebase project by default. Once enabled, redeploy reads the stored backend and verifies
+the app identity, and `mason deployments delete` removes the managed store before deleting the app.
+The switch does not migrate existing deployments between backends. Managed cleanup errors retain
+the app for retry. Direct app deletion bypasses managed store cleanup.
 
 Use `server = "custom"` to deploy your own HTTP server without provisioning a Runtime Store.
 Changing the server type of an existing deployment is not supported. To use a different server,

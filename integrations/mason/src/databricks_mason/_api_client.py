@@ -11,7 +11,6 @@ from __future__ import annotations
 import configparser
 import os
 import pathlib
-import re
 import time
 from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import quote
@@ -77,14 +76,6 @@ def session_store_path(name: str) -> str:
     if not raw:
         raise AgentCliError("A session store name is required.")
     return f"session-stores/{raw}"
-
-
-def runtime_store_path(name: str) -> str:
-    """Normalize a logical ID or resource name for the internal Runtime Store API."""
-    raw = name.removeprefix("runtime-stores/")
-    if not re.fullmatch(r"[a-z][a-z0-9-]{1,61}[a-z0-9]", raw):
-        raise AgentCliError(f"Invalid runtime store id or resource name: {name!r}")
-    return f"runtime-stores/{raw}"
 
 
 def memory_entry_path(store: str, entry: str) -> str:
@@ -205,16 +196,20 @@ class _MasonApiClient:
             ),
         )
 
-    def get_runtime_store(self, name: str) -> models.RuntimeStore:
+    def get_runtime_store(self, runtime_store_id: str) -> models.RuntimeStore:
         """Resolve the service-managed backend and app owner before reusing a store."""
         return _as(
             models.RuntimeStore,
-            self._do("GET", f"{_BASE}/{runtime_store_path(name)}"),
+            self._do("GET", f"{_BASE}/runtime-stores/{quote(runtime_store_id, safe='')}"),
         )
 
-    def delete_runtime_store(self, name: str) -> dict:
+    def delete_runtime_store(self, runtime_store_id: str) -> dict:
         """Delete a deployment's Runtime Store and its dedicated database."""
-        return self._do("DELETE", f"{_BASE}/{runtime_store_path(name)}", safe_to_retry=True)
+        return self._do(
+            "DELETE",
+            f"{_BASE}/runtime-stores/{quote(runtime_store_id, safe='')}",
+            safe_to_retry=True,
+        )
 
     def _do(
         self,

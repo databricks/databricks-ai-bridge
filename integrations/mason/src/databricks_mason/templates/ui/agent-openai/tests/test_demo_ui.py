@@ -4,9 +4,12 @@ from runtime import ui
 
 from databricks_mason import AgentApp
 from databricks_mason.runtime.store import (
+    RUNTIME_STORE_DATABASE_ENV,
+    RUNTIME_STORE_LAKEBASE_BRANCH_ENV,
     RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV,
     RUNTIME_STORE_LOCAL_ENV,
     RUNTIME_STORE_SCHEMA_ENV,
+    RUNTIME_STORE_USERNAME_ENV,
     InMemoryRuntimeStore,
 )
 
@@ -15,6 +18,9 @@ from databricks_mason.runtime.store import (
 def _clear_runtime_store_env(monkeypatch):
     for name in (
         RUNTIME_STORE_LOCAL_ENV,
+        RUNTIME_STORE_LAKEBASE_BRANCH_ENV,
+        RUNTIME_STORE_DATABASE_ENV,
+        RUNTIME_STORE_USERNAME_ENV,
         RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV,
         RUNTIME_STORE_SCHEMA_ENV,
     ):
@@ -237,6 +243,16 @@ def test_demo_config_reports_runtime_store_configuration(
         assert config[capability]["mode"] == (
             "Runtime Store" if persistent else "In-process Runtime Store"
         )
+
+
+def test_demo_config_reports_managed_runtime_store(monkeypatch):
+    monkeypatch.setenv(RUNTIME_STORE_LAKEBASE_BRANCH_ENV, "projects/p/branches/b")
+    monkeypatch.setenv(RUNTIME_STORE_DATABASE_ENV, "runtime-db")
+    monkeypatch.setenv(RUNTIME_STORE_USERNAME_ENV, "app-sp")
+
+    config = _client(monkeypatch).get("/api/ui/config").json()
+
+    assert config["background"]["persistent"] is True
 
 
 def test_demo_config_distinguishes_run_local_from_a_deployed_app(monkeypatch):

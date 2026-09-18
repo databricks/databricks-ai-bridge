@@ -15,11 +15,7 @@ from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from databricks_mason.runtime.durability.store import DurableRuntimeStore
-from databricks_mason.runtime.store import (
-    DEFAULT_RUNTIME_STORE_SCHEMA,
-    RUNTIME_STORE_DATABASE_ENV,
-    RUNTIME_STORE_USERNAME_ENV,
-)
+from databricks_mason.runtime.store import DEFAULT_RUNTIME_STORE_SCHEMA
 from databricks_mason.runtime.types import (
     Invocation,
     InvocationConflictError,
@@ -54,10 +50,11 @@ def _validate_invocation_id(invocation_id: str) -> None:
 
 
 class _AppsPostgresLakebase:
-    """SQLAlchemy connection to the app's Runtime Store database.
+    """SQLAlchemy connection for a Databricks Apps Postgres resource.
 
-    Coordinates come from the managed Runtime Store or an existing Apps Postgres resource.
-    OAuth credentials are refreshed as the app SP through the Databricks Postgres API.
+    Apps injects the selected resource's connection coordinates through the standard ``PG*``
+    variables. The endpoint resource path is kept separately because OAuth credentials must be
+    refreshed through the Databricks Postgres API.
     """
 
     def __init__(
@@ -128,109 +125,6 @@ class _AppsPostgresLakebase:
             return token
 
 
-def _managed_lakebase_connection(
-    *,
-    endpoint: str,
-    host: str | None,
-    port: int | None,
-    database: str | None,
-    username: str | None,
-    sslmode: str | None,
-    workspace_client: WorkspaceClient | None,
-    schema: str,
-) -> _AppsPostgresLakebase:
-    """Resolve coordinates supplied by the managed Runtime Store API."""
-    database = database or os.getenv(RUNTIME_STORE_DATABASE_ENV)
-    username = username or os.getenv(RUNTIME_STORE_USERNAME_ENV)
-    if port is None:
-        port = 5432
-    missing = [
-        name
-        for name, value in {
-            "PGPORT": port,
-            RUNTIME_STORE_DATABASE_ENV: database,
-            RUNTIME_STORE_USERNAME_ENV: username,
-        }.items()
-        if not value
-    ]
-    if missing:
-        raise RuntimeError(
-            "Runtime Store connection configuration is missing: " + ", ".join(missing)
-        )
-    if not host:
-        if workspace_client is None:
-            from databricks.sdk import WorkspaceClient
-
-            workspace_client = WorkspaceClient()
-        resolved = workspace_client.postgres.get_endpoint(name=endpoint)
-        host = getattr(getattr(getattr(resolved, "status", None), "hosts", None), "host", None)
-        if not host:
-            raise RuntimeError(f"Lakebase endpoint {endpoint!r} has no host")
-    assert database is not None
-    assert username is not None
-    return _AppsPostgresLakebase(
-        endpoint=endpoint,
-        host=host,
-        port=port,
-        database=database,
-        username=username,
-        sslmode=sslmode or "require",
-        workspace_client=workspace_client,
-        schema=schema,
-    )
-
-
-def _legacy_app_resource_connection(
-    *,
-    endpoint: str,
-    host: str | None,
-    port: int | None,
-    database: str | None,
-    username: str | None,
-    sslmode: str | None,
-    workspace_client: WorkspaceClient | None,
-    schema: str,
-) -> _AppsPostgresLakebase:
-    """Resolve coordinates injected by the legacy Apps Postgres resource."""
-    host = host or os.getenv("PGHOST")
-    database = database or os.getenv("PGDATABASE")
-    username = username or os.getenv("PGUSER")
-    if port is None:
-        raw_port = os.getenv("PGPORT")
-        try:
-            port = int(raw_port or "")
-        except ValueError as exc:
-            raise RuntimeError("PGPORT must be an integer") from exc
-    missing = [
-        name
-        for name, value in {
-            "PGHOST": host,
-            "PGPORT": port,
-            "PGDATABASE": database,
-            "PGUSER": username,
-        }.items()
-        if not value
-    ]
-    if missing:
-        raise RuntimeError(
-            "Runtime Store connection configuration is missing: " + ", ".join(missing)
-        )
-    assert host is not None
-    assert port is not None
-    assert database is not None
-    assert username is not None
-    return _AppsPostgresLakebase(
-        endpoint=endpoint,
-        host=host,
-        port=port,
-        database=database,
-        username=username,
-        sslmode=sslmode or os.getenv("PGSSLMODE", "require"),
-        workspace_client=workspace_client,
-        schema=schema,
-    )
-
-
 class LakebaseDurableRuntimeStore(DurableRuntimeStore):
     """Persist invocation state, attempt leases, and ordered events in Lakebase.
 
@@ -251,6 +145,8 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
         autoscaling_endpoint: str | None = None,
         project: str | None = None,
         branch: str | None = None,
+        database: str | None = None,
+        username: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         schema: str = DEFAULT_RUNTIME_STORE_SCHEMA,
         lakebase: _AsyncLakebase | None = None,
@@ -259,7 +155,7 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
             raise ValueError(f"invalid Runtime Store schema name: {schema!r}")
 
         if lakebase is None:
-            from databricks_ai_bridge.lakebase import AsyncLakebaseSQLAlchemy
+            from databricks_ai_bridge.lakebase import DEFAULT_DATABASE, AsyncLakebaseSQLAlchemy
 
             autoscaling_endpoint = autoscaling_endpoint or os.getenv(
                 "LAKEBASE_AUTOSCALING_ENDPOINT"
@@ -271,6 +167,8 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                 autoscaling_endpoint=autoscaling_endpoint,
                 project=project,
                 branch=branch,
+                database=database or DEFAULT_DATABASE,
+                username=username,
                 workspace_client=workspace_client,
                 schema=schema,
                 pool_pre_ping=True,
@@ -294,28 +192,64 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
         workspace_client: WorkspaceClient | None = None,
         schema: str = DEFAULT_RUNTIME_STORE_SCHEMA,
     ) -> "LakebaseDurableRuntimeStore":
-        """Use a managed Runtime Store, or the coordinates of an existing Apps resource."""
+        """Use connection coordinates injected for a Databricks Apps Postgres resource."""
         if not _SCHEMA_NAME.fullmatch(schema):
             raise ValueError(f"invalid Runtime Store schema name: {schema!r}")
-        use_managed_api = bool(
-            os.getenv(RUNTIME_STORE_DATABASE_ENV) or os.getenv(RUNTIME_STORE_USERNAME_ENV)
-        )
-        # Another Apps resource may inject PG* for a different database/project. Managed Runtime
-        # Store coordinates must take precedence as a complete set, never mix the two backends.
-        connection_factory = (
-            _managed_lakebase_connection if use_managed_api else _legacy_app_resource_connection
-        )
-        lakebase = connection_factory(
+        host = host or os.getenv("PGHOST")
+        database = database or os.getenv("PGDATABASE")
+        username = username or os.getenv("PGUSER")
+        if port is None:
+            raw_port = os.getenv("PGPORT")
+            try:
+                port = int(raw_port or "")
+            except ValueError as exc:
+                raise RuntimeError("PGPORT must be an integer") from exc
+        missing = [
+            name
+            for name, value in {
+                "PGHOST": host,
+                "PGPORT": port,
+                "PGDATABASE": database,
+                "PGUSER": username,
+            }.items()
+            if not value
+        ]
+        if missing:
+            raise RuntimeError(
+                "Databricks Apps Postgres resource is missing: " + ", ".join(missing)
+            )
+        assert host is not None
+        assert port is not None
+        assert database is not None
+        assert username is not None
+        lakebase = _AppsPostgresLakebase(
             endpoint=endpoint,
             host=host,
             port=port,
             database=database,
             username=username,
-            sslmode=sslmode,
+            sslmode=sslmode or os.getenv("PGSSLMODE", "require"),
             workspace_client=workspace_client,
             schema=schema,
         )
         return cls(schema=schema, lakebase=lakebase)
+
+    @classmethod
+    def from_managed_runtime_store(
+        cls,
+        *,
+        branch: str,
+        database: str,
+        username: str,
+        workspace_client: WorkspaceClient | None = None,
+    ) -> "LakebaseDurableRuntimeStore":
+        """Connect using the backend coordinates returned by the Runtime Store API."""
+        return cls(
+            branch=branch,
+            database=database,
+            username=username,
+            workspace_client=workspace_client,
+        )
 
     async def initialize(self) -> None:
         await self._lakebase.create_schema()

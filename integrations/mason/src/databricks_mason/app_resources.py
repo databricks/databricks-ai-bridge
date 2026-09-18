@@ -2,8 +2,7 @@
 
 Binds Databricks Apps resources onto an app so its service principal gets platform-managed grants:
 a `postgres` resource for the legacy per-app Runtime Store and the tracing `experiment` resource.
-The service-managed Runtime Store path grants database access through Conversation Store instead
-and removes the legacy `postgres` resource during migration.
+The service-managed Runtime Store path grants database access through Conversation Store instead.
 
 Managed-store (session/memory) table access is NOT granted here. The deployed app reaches those
 stores over the conversation-store REST API, which grants the app's service principal read/write
@@ -116,24 +115,6 @@ def apply_postgres_resources(
         if isinstance(r, dict) and r.get("name") not in our_names
     ]
     result = _update_app_resources(app, preserved + ours, profile)
-    if result.returncode == 0:
-        return None
-    return (result.stderr or result.stdout or "").strip() or "unknown error"
-
-
-def remove_app_resources(
-    app: str, resource_names: set[str], profile: Optional[str]
-) -> Optional[str]:
-    """Remove named app resources while preserving every resource Mason does not own."""
-    current = _current_app_resources(app, profile)
-    preserved = [
-        resource
-        for resource in current
-        if not isinstance(resource, dict) or resource.get("name") not in resource_names
-    ]
-    if len(preserved) == len(current):
-        return None
-    result = _update_app_resources(app, preserved, profile)
     if result.returncode == 0:
         return None
     return (result.stderr or result.stdout or "").strip() or "unknown error"

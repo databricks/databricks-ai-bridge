@@ -16,10 +16,8 @@ Deployments run on the Databricks Apps runtime, which this module drives via the
 from __future__ import annotations
 
 import json
-import os
 import pathlib
 import time
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -35,7 +33,6 @@ from databricks_mason import (
 from databricks_mason.app_resources import (
     apply_experiment_resource,
     apply_postgres_resources,
-    remove_app_resources,
 )
 from databricks_mason.cli.endpoint_examples import print_agent_invoke_command
 from databricks_mason.cli.tracing import (
@@ -54,6 +51,7 @@ from databricks_mason.project_types import AgentServer
 from databricks_mason.render import field
 from databricks_mason.runtime.store import (
     RUNTIME_STORE_DATABASE_ENV,
+    RUNTIME_STORE_LAKEBASE_BRANCH_ENV,
     RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV,
     RUNTIME_STORE_SCHEMA_ENV,
     RUNTIME_STORE_USERNAME_ENV,
@@ -67,7 +65,9 @@ from databricks_mason.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STO
 _DEFAULT_PIP_INDEX_URL = "https://pypi.org/simple/"
 _PIP_INDEX_ENVS = ("PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDEX")
 _AGENT_COMPUTE_OUTPUT = ("App compute", "Agent compute")
-_MANAGED_RUNTIME_STORE_ENV = "DATABRICKS_MASON_USE_MANAGED_RUNTIME_STORE"
+# Internal rollout switch. Backend selection is intentionally not part of the user-facing CLI or
+# process environment; flip this only in a Mason release after the managed API is fully deployed.
+_USE_MANAGED_RUNTIME_STORE = False
 
 # Mason names every deployment `agent-mason-<name>` so `deployments list` can filter to its own apps.
 # The `agent-` prefix is what the Databricks agent registry keys on to surface these apps; the
@@ -185,7 +185,7 @@ def _wait_for_running(name: str, profile: Optional[str], timeout_s: int = 300) -
 
 def _upsert_manifest_env(
     source: pathlib.Path,
-    updates: Mapping[str, Optional[str]],
+    updates: dict[str, str],
 ) -> bool:
     """Reconcile env entries in <source>/app.yaml. Returns True if it scaffolded a new file."""
     app_yaml = source / "app.yaml"
@@ -199,16 +199,9 @@ def _upsert_manifest_env(
 
     raw_env = doc.get("env")
     candidates = raw_env if isinstance(raw_env, list) else []
-    removals = {name for name, value in updates.items() if value is None}
-    env: list[dict[str, Any]] = [
-        entry
-        for entry in candidates
-        if isinstance(entry, dict) and entry.get("name") not in removals
-    ]
+    env: list[dict[str, Any]] = [entry for entry in candidates if isinstance(entry, dict)]
     by_name = {e.get("name"): e for e in env if isinstance(e, dict)}
     for name, value in updates.items():
-        if value is None:
-            continue
         if name in by_name:
             by_name[name]["value"] = value
             by_name[name].pop("valueFrom", None)
@@ -223,19 +216,6 @@ def _upsert_manifest_env(
 
 
 _MEMORY_STORE_PAGE_SIZE = 100  # the memory-stores list API caps page_size at 100
-
-
-def _managed_runtime_store_enabled() -> bool:
-    """Whether deploy should use Conversation Store instead of a per-app Lakebase project."""
-    value = os.getenv(_MANAGED_RUNTIME_STORE_ENV, "").strip().lower()
-    if value in ("", "0", "false", "no", "off"):
-        return False
-    if value in ("1", "true", "yes", "on"):
-        return True
-    raise AgentCliError(
-        f"Invalid {_MANAGED_RUNTIME_STORE_ENV} value {value!r}.",
-        hint="Use true to enable the managed Runtime Store API, or false for the legacy path.",
-    )
 
 
 def _resolve_memory_store(client, display_name: str) -> Optional[dict]:
@@ -545,7 +525,7 @@ def deploy(
         project.write()
     instance_args = _instance_args(instances)
     client = obj.client()
-    use_managed_runtime_store = _managed_runtime_store_enabled()
+    use_managed_runtime_store = _USE_MANAGED_RUNTIME_STORE
 
     # 1. Reconcile the stores DECLARED in agent.toml: create any that don't exist yet. `mason deploy`
     #    is the only reconcile-to-cloud verb; agent.toml is the source of truth and is never rewritten.
@@ -583,6 +563,17 @@ def deploy(
     if session_store:
         env_updates[SESSION_STORE_ENV] = session_store
 
+    legacy_runtime_backend = None
+    if (
+        project is not None
+        and project.server == AgentServer.MASON
+        and not use_managed_runtime_store
+    ):
+        with render.status("Reconciling Runtime Store…"):
+            legacy_runtime_backend = legacy_runtime_store.get_or_create_backend(name, obj.profile)
+        env_updates[RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV] = legacy_runtime_backend.endpoint_path
+        env_updates[RUNTIME_STORE_SCHEMA_ENV] = legacy_runtime_backend.schema
+
     if pip_index_url:
         for env in _PIP_INDEX_ENVS:
             env_updates[env] = pip_index_url
@@ -590,8 +581,14 @@ def deploy(
     if instances is not None:
         provisioned["Instances"] = str(instances)
 
-    # 3. Ensure the app exists before provisioning its Runtime Store, which needs the app SP.
-    #    Create only when new; the compute wait runs every deploy.
+    # 3. Patch app.yaml before creating the app. The managed Runtime Store fields are added after
+    #    app creation because that API requires the app's service principal.
+    scaffolded = False
+    if env_updates:
+        scaffolded = _upsert_manifest_env(source_dir, env_updates)
+
+    # 4. Ensure the app exists and its compute is active. Create only when new; the compute wait
+    #    runs every deploy.
     #
     #    `apps create` itself blocks for minutes (it provisions and waits for compute) and we capture
     #    its output to relabel "App compute" → "Agent compute", so nothing streams meanwhile. Wrap it
@@ -629,51 +626,26 @@ def deploy(
     with render.progress("Waiting for agent compute to start (this can take a few minutes)…"):
         _wait_for_running(name, obj.profile)
 
-    runtime_manifest: dict[str, Optional[str]] = {}
-    if project is not None and project.server == AgentServer.MASON:
-        if use_managed_runtime_store:
-            app_service_principal_id = _app_service_principal(name, obj.profile)
-            with render.status("Reconciling Runtime Store…"):
-                runtime_backend = managed_runtime_store.get_or_create_backend(
-                    client, name, app_service_principal_id
-                )
-            assert app_service_principal_id is not None
-            resource_error = remove_app_resources(
-                name, {runtime_backend.resource_name}, obj.profile
+    if legacy_runtime_backend is not None:
+        resource_error = apply_postgres_resources(name, [legacy_runtime_backend], obj.profile)
+        if resource_error:
+            raise AgentCliError(
+                "Could not attach the Lakebase resource required for the Runtime Store.",
+                hint=resource_error,
             )
-            if resource_error:
-                raise AgentCliError(
-                    "Could not detach the legacy Lakebase resource for the Runtime Store.",
-                    hint=resource_error,
-                )
-            runtime_manifest = {
-                RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV: runtime_backend.endpoint_path,
-                RUNTIME_STORE_DATABASE_ENV: runtime_backend.database,
-                RUNTIME_STORE_USERNAME_ENV: app_service_principal_id,
-                RUNTIME_STORE_SCHEMA_ENV: runtime_backend.schema,
-            }
-        else:
-            with render.status("Reconciling Runtime Store…"):
-                runtime_backend = legacy_runtime_store.get_or_create_backend(name, obj.profile)
-            resource_error = apply_postgres_resources(name, [runtime_backend], obj.profile)
-            if resource_error:
-                raise AgentCliError(
-                    "Could not attach the Lakebase resource required for the Runtime Store.",
-                    hint=resource_error,
-                )
-            runtime_manifest = {
-                RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV: runtime_backend.endpoint_path,
-                RUNTIME_STORE_DATABASE_ENV: None,
-                RUNTIME_STORE_USERNAME_ENV: None,
-                RUNTIME_STORE_SCHEMA_ENV: runtime_backend.schema,
-            }
-
-    # 4. Patch the manifest with the resolved store, trace, and index env vars.
-    scaffolded = False
-    manifest_updates: dict[str, Optional[str]] = dict(env_updates)
-    manifest_updates.update(runtime_manifest)
-    if manifest_updates:
-        scaffolded = _upsert_manifest_env(source_dir, manifest_updates)
+    elif project is not None and project.server == AgentServer.MASON:
+        app_service_principal_id = _app_service_principal(name, obj.profile)
+        with render.status("Reconciling Runtime Store…"):
+            runtime_backend = managed_runtime_store.get_or_create_backend(
+                client, name, app_service_principal_id
+            )
+        managed_env = {
+            RUNTIME_STORE_LAKEBASE_BRANCH_ENV: runtime_backend.branch,
+            RUNTIME_STORE_DATABASE_ENV: runtime_backend.database_id,
+            RUNTIME_STORE_USERNAME_ENV: runtime_backend.username,
+        }
+        scaffolded = _upsert_manifest_env(source_dir, managed_env) or scaffolded
+        env_updates.update(managed_env)
 
     # 5. Upload the source and roll out the deployment.
     ws_path = workspace_path or f"/Workspace/Users/{client.current_user}/mason_deployments/{name}"
@@ -898,7 +870,7 @@ def deployments_stop(obj, name, yes) -> None:
 def deployments_delete(obj, name, yes) -> None:
     """Delete a deployment and, when managed provisioning is enabled, its Runtime Store."""
     _validate_deployment_name(name)
-    use_managed_runtime_store = _managed_runtime_store_enabled()
+    use_managed_runtime_store = _USE_MANAGED_RUNTIME_STORE
     target = (
         f"Delete deployment '{name}' and its Runtime Store data"
         if use_managed_runtime_store

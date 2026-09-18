@@ -134,9 +134,17 @@ def _terminate(proc: subprocess.Popen) -> None:
             pass
 
 
-def _pin_mason_source(pyproject: pathlib.Path, source: dict) -> None:
-    """Set `[tool.uv.sources] databricks-mason = source` in the scaffold's pyproject.toml."""
+def _pin_package_source(
+    pyproject: pathlib.Path,
+    package: str,
+    source: dict,
+    *,
+    direct_requirement: str | None = None,
+) -> None:
+    """Pin one package source in the scaffold's ``pyproject.toml``."""
     document = tomlkit.parse(pyproject.read_text())
+    if direct_requirement is not None:
+        document["project"]["dependencies"].append(direct_requirement)
     if "tool" not in document:
         document["tool"] = tomlkit.table()
     if "uv" not in document["tool"]:
@@ -145,7 +153,7 @@ def _pin_mason_source(pyproject: pathlib.Path, source: dict) -> None:
         document["tool"]["uv"]["sources"] = tomlkit.table()
     table = tomlkit.inline_table()
     table.update(source)
-    document["tool"]["uv"]["sources"]["databricks-mason"] = table
+    document["tool"]["uv"]["sources"][package] = table
     pyproject.write_text(tomlkit.dumps(document))
 
 
@@ -186,17 +194,27 @@ def test_scaffolded_agent_boots_and_answers_locally(
     )
     # Neutralize the profile mason init seeds into .env so the agent can't reach a real workspace.
     (project / ".env").write_text("")
-    # Point the scaffold at the databricks-mason under test — `mason init` takes it from PyPI, so
-    # without this the venv would build a *released* SDK, not the code being tested. CI sets
-    # MASON_WHEEL to the built wheel it also put on PATH, so both run the same artifact; a local run
-    # has no wheel and falls back to the editable working-tree checkout.
-    wheel = os.environ.get("MASON_WHEEL")
-    source = (
-        {"path": wheel}
-        if wheel
+    # Point the scaffold at both packages under test. CI supplies their built wheels; a local run
+    # falls back to the corresponding editable working-tree checkout.
+    mason_wheel = os.environ.get("MASON_WHEEL")
+    mason_source = (
+        {"path": mason_wheel}
+        if mason_wheel
         else {"path": str(pathlib.Path(__file__).resolve().parents[2]), "editable": True}
     )
-    _pin_mason_source(project / "pyproject.toml", source)
+    bridge_wheel = os.environ.get("AI_BRIDGE_WHEEL")
+    bridge_source = (
+        {"path": bridge_wheel}
+        if bridge_wheel
+        else {"path": str(pathlib.Path(__file__).resolve().parents[4]), "editable": True}
+    )
+    _pin_package_source(project / "pyproject.toml", "databricks-mason", mason_source)
+    _pin_package_source(
+        project / "pyproject.toml",
+        "databricks-ai-bridge",
+        bridge_source,
+        direct_requirement="databricks-ai-bridge[memory]",
+    )
 
     # 2. Build the agent's venv (installs the databricks-mason pinned above + its runtime deps).
     subprocess.run(

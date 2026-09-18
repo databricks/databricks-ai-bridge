@@ -350,9 +350,15 @@ jobs:
       - name: Build and install the mason wheel
         working-directory: integrations/mason
         run: |
+          uv build --wheel --out-dir dist ../..
           uv build --wheel --out-dir dist
           uv venv .venv-functional
-          uv pip install --python .venv-functional/bin/python "$(ls dist/*.whl)" --group tests
+          uv pip install --python .venv-functional/bin/python --no-sources \
+            "$(ls dist/databricks_ai_bridge-*.whl)" \
+            "$(ls dist/databricks_mason-*.whl)" --group tests
       - name: Run mason functional tests against the wheel
         working-directory: integrations/mason
-        run: MASON_WHEEL="$(ls "$PWD"/dist/*.whl)" .venv-functional/bin/pytest tests/functional/
+        run: |
+          AI_BRIDGE_WHEEL="$(ls "$PWD"/dist/databricks_ai_bridge-*.whl)" \
+          MASON_WHEEL="$(ls "$PWD"/dist/databricks_mason-*.whl)" \
+            .venv-functional/bin/pytest tests/functional/

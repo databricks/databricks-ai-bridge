@@ -16,11 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from databricks_mason import workspace_client
-from databricks_mason.runtime.store import (
-    RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV,
-    RUNTIME_STORE_LOCAL_ENV,
-    RUNTIME_STORE_SCHEMA_ENV,
-)
+from databricks_mason.runtime.store import runtime_store_is_persistent_environment
 
 _UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
 _INSTANCE_ID = uuid.uuid4().hex[:12]  # identifies this process in the UI
@@ -418,12 +414,7 @@ def install_ui(app: FastAPI) -> None:
         memory_store = _memory_store()
         session_store = _session_store()
         default_model = _default_model()
-        # Match runtime store selection: mason dev's local marker overrides deployment settings.
-        runtime_store_persistent = (
-            os.getenv(RUNTIME_STORE_LOCAL_ENV, "").lower() != "true"
-            and bool(os.getenv(RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV))
-            and bool(os.getenv(RUNTIME_STORE_SCHEMA_ENV))
-        )
+        runtime_store_persistent = runtime_store_is_persistent_environment()
         runtime_store_mode = (
             "Runtime Store" if runtime_store_persistent else "In-process Runtime Store"
         )

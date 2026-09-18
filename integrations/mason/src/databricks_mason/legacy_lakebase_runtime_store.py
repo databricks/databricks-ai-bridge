@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from typing import Optional
@@ -9,7 +10,6 @@ from typing import Optional
 from databricks_mason.app_resources import LakebaseBackend
 from databricks_mason.databricks_cli import _databricks
 from databricks_mason.errors import AgentCliError
-from databricks_mason.lakebase_runtime_store import get_lakebase_schema
 
 _BRANCH = "production"
 _DATABASE = "databricks-postgres"
@@ -65,3 +65,9 @@ def _project_id(app: str) -> str:
     if not normalized[0].isalpha():
         normalized = f"mason-{normalized}"
     return f"{normalized}-runtime-store"[:63].rstrip("-")
+
+
+def get_lakebase_schema(app: str) -> str:
+    """Return the legacy per-app Runtime Store schema name."""
+    digest = hashlib.sha256(app.encode("utf-8")).hexdigest()[:12]
+    return f"databricks_mason_runtime_{digest}"

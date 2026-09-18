@@ -35,13 +35,6 @@ def _no_tracing_by_default(monkeypatch):
     monkeypatch.setattr(deploy_mod, "resolve_trace_experiment_id", lambda *a, **k: None)
 
 
-@pytest.fixture(autouse=True)
-def _no_app_resource_updates_by_default(monkeypatch):
-    # Resource helpers bind their own Databricks CLI wrapper, independently of deploy._databricks.
-    # Keep deploy-command tests hermetic; app_resources_test.py exercises the real helper behavior.
-    monkeypatch.setattr(deploy_mod, "remove_app_resources", lambda *a, **k: None)
-
-
 def test_upsert_manifest_env_scaffolds_when_missing(tmp_path: pathlib.Path):
     scaffolded = deploy_mod._upsert_manifest_env(
         tmp_path, {"AGENT_MEMORY_STORE": "memory-stores/x"}
@@ -94,51 +87,8 @@ def test_upsert_manifest_env_preserves_unrelated_entries_and_replaces_value_from
     assert doc["env"] == [unrelated, {"name": "AGENT_MEMORY_STORE", "value": "new"}]
 
 
-def test_upsert_manifest_env_removes_selected_entries(tmp_path: pathlib.Path):
-    (tmp_path / "app.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "command": ["x"],
-                "env": [
-                    {"name": "KEEP", "value": "yes"},
-                    {"name": deploy_mod.RUNTIME_STORE_DATABASE_ENV, "value": "managed-db"},
-                    {"name": deploy_mod.RUNTIME_STORE_USERNAME_ENV, "value": "managed-sp"},
-                ],
-            }
-        )
-    )
-
-    deploy_mod._upsert_manifest_env(
-        tmp_path,
-        {
-            deploy_mod.RUNTIME_STORE_DATABASE_ENV: None,
-            deploy_mod.RUNTIME_STORE_USERNAME_ENV: None,
-        },
-    )
-
-    doc = yaml.safe_load((tmp_path / "app.yaml").read_text())
-    assert doc["env"] == [{"name": "KEEP", "value": "yes"}]
-
-
-@pytest.mark.parametrize("value", [None, "", "0", "false", "NO", "off"])
-def test_managed_runtime_store_flag_defaults_to_legacy(monkeypatch, value):
-    if value is None:
-        monkeypatch.delenv(deploy_mod._MANAGED_RUNTIME_STORE_ENV, raising=False)
-    else:
-        monkeypatch.setenv(deploy_mod._MANAGED_RUNTIME_STORE_ENV, value)
-    assert not deploy_mod._managed_runtime_store_enabled()
-
-
-@pytest.mark.parametrize("value", ["1", "true", "YES", "on"])
-def test_managed_runtime_store_flag_enables_conversation_store(monkeypatch, value):
-    monkeypatch.setenv(deploy_mod._MANAGED_RUNTIME_STORE_ENV, value)
-    assert deploy_mod._managed_runtime_store_enabled()
-
-
-def test_managed_runtime_store_flag_rejects_invalid_value(monkeypatch):
-    monkeypatch.setenv(deploy_mod._MANAGED_RUNTIME_STORE_ENV, "sometimes")
-    with pytest.raises(AgentCliError, match="Invalid DATABRICKS_MASON_USE_MANAGED_RUNTIME_STORE"):
-        deploy_mod._managed_runtime_store_enabled()
+def test_managed_runtime_store_is_an_internal_disabled_rollout_switch():
+    assert deploy_mod._USE_MANAGED_RUNTIME_STORE is False
 
 
 def test_ensure_session_store_reuses_on_already_exists():
@@ -572,12 +522,10 @@ def test_deploy_mason_server_provisions_runtime_store(tmp_path: pathlib.Path, mo
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     _write_agent_manifest(src)
-    monkeypatch.setenv(deploy_mod._MANAGED_RUNTIME_STORE_ENV, "true")
+    monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", True)
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "sp-123")
-    detach_legacy_resource = mock.Mock(return_value=None)
-    monkeypatch.setattr(deploy_mod, "remove_app_resources", detach_legacy_resource)
     deployed_env = None
 
     def fake_databricks(args, profile, **kwargs):
@@ -600,13 +548,17 @@ def test_deploy_mason_server_provisions_runtime_store(tmp_path: pathlib.Path, mo
         entry["name"]: entry["value"]
         for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
     }
-    assert "DATABRICKS_MASON_RUNTIME_STORE_LAKEBASE_ENDPOINT" in env
-    assert deployed_env is not None
-    assert "DATABRICKS_MASON_RUNTIME_STORE_LAKEBASE_ENDPOINT" in deployed_env
-    assert "DATABRICKS_MASON_RUNTIME_STORE_SCHEMA" in deployed_env
-    detach_legacy_resource.assert_called_once_with(
-        "agent-mason-myapp", {"postgres-runtime-store"}, "prof"
+    assert env[deploy_mod.RUNTIME_STORE_LAKEBASE_BRANCH_ENV] == (
+        "projects/databricks-internal-custom-agents/branches/production"
     )
+    assert env[deploy_mod.RUNTIME_STORE_DATABASE_ENV].startswith("runtime-agent-mason-myapp-")
+    assert env[deploy_mod.RUNTIME_STORE_USERNAME_ENV] == "sp-123"
+    assert deployed_env is not None
+    assert deployed_env[deploy_mod.RUNTIME_STORE_LAKEBASE_BRANCH_ENV] == (
+        "projects/databricks-internal-custom-agents/branches/production"
+    )
+    assert deploy_mod.RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV not in deployed_env
+    assert deploy_mod.RUNTIME_STORE_SCHEMA_ENV not in deployed_env
 
 
 def test_deploy_defaults_to_legacy_runtime_store(tmp_path: pathlib.Path, monkeypatch) -> None:
@@ -616,27 +568,27 @@ def test_deploy_defaults_to_legacy_runtime_store(tmp_path: pathlib.Path, monkeyp
         yaml.safe_dump(
             {
                 "command": ["x"],
-                "env": [
-                    {"name": deploy_mod.RUNTIME_STORE_DATABASE_ENV, "value": "stale-managed-db"},
-                    {"name": deploy_mod.RUNTIME_STORE_USERNAME_ENV, "value": "stale-managed-sp"},
-                ],
+                "env": [{"name": "USER_ENV", "value": "keep"}],
             }
         )
     )
     _write_agent_manifest(src)
-    monkeypatch.delenv(deploy_mod._MANAGED_RUNTIME_STORE_ENV, raising=False)
+    monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", False)
 
     backend = deploy_mod.legacy_runtime_store.backend("agent-mason-myapp")
-    provision = mock.Mock(return_value=backend)
-    attach = mock.Mock(return_value=None)
-    detach = mock.Mock(return_value=None)
+    events = []
+    provision = mock.Mock(side_effect=lambda *args: (events.append("legacy-project"), backend)[1])
+    attach = mock.Mock(side_effect=lambda *args: events.append("legacy-resource"))
     client = _FakeClient()
     create_managed = mock.Mock(side_effect=AssertionError("managed API must remain opt-in"))
     monkeypatch.setattr(client, "create_runtime_store", create_managed)
     monkeypatch.setattr(deploy_mod.legacy_runtime_store, "get_or_create_backend", provision)
     monkeypatch.setattr(deploy_mod, "apply_postgres_resources", attach)
-    monkeypatch.setattr(deploy_mod, "remove_app_resources", detach)
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda *args: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_deployment_exists",
+        lambda *args: (events.append("app-exists"), True)[1],
+    )
     monkeypatch.setattr(
         deploy_mod,
         "_app_service_principal",
@@ -645,7 +597,9 @@ def test_deploy_defaults_to_legacy_runtime_store(tmp_path: pathlib.Path, monkeyp
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
-        lambda *args, **kwargs: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+        lambda args, *rest, **kwargs: (
+            events.append(args[0]) or types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        ),
     )
     ctx = types.SimpleNamespace(profile="prof", output="text", client=lambda: client)
 
@@ -654,14 +608,16 @@ def test_deploy_defaults_to_legacy_runtime_store(tmp_path: pathlib.Path, monkeyp
     assert result.exit_code == 0, result.output
     provision.assert_called_once_with("agent-mason-myapp", "prof")
     attach.assert_called_once_with("agent-mason-myapp", [backend], "prof")
-    detach.assert_not_called()
     create_managed.assert_not_called()
+    assert events[:4] == ["legacy-project", "app-exists", "legacy-resource", "sync"]
     env = {
         entry["name"]: entry["value"]
         for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
     }
     assert env[deploy_mod.RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV] == backend.endpoint_path
     assert env[deploy_mod.RUNTIME_STORE_SCHEMA_ENV] == backend.schema
+    assert env["USER_ENV"] == "keep"
+    assert deploy_mod.RUNTIME_STORE_LAKEBASE_BRANCH_ENV not in env
     assert deploy_mod.RUNTIME_STORE_DATABASE_ENV not in env
     assert deploy_mod.RUNTIME_STORE_USERNAME_ENV not in env
 
@@ -675,7 +631,7 @@ def test_deploy_runtime_store_uses_dedicated_backend_with_managed_store(
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     _write_agent_manifest(src, **{store_kind: "other-store"})
     events = []
-    monkeypatch.setenv(deploy_mod._MANAGED_RUNTIME_STORE_ENV, "true")
+    monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", True)
     client = _FakeClient()
     create = client.create_runtime_store
 
@@ -704,12 +660,11 @@ def test_deploy_runtime_store_uses_dedicated_backend_with_managed_store(
             assert env[deploy_mod.RUNTIME_STORE_DATABASE_ENV] != "other-store"
             assert env[deploy_mod.RUNTIME_STORE_USERNAME_ENV] == "sp-123"
             assert (
-                env[deploy_mod.RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV]
-                == "projects/databricks-internal-custom-agents/branches/production/endpoints/primary"
+                env[deploy_mod.RUNTIME_STORE_LAKEBASE_BRANCH_ENV]
+                == "projects/databricks-internal-custom-agents/branches/production"
             )
-            assert env[
-                deploy_mod.RUNTIME_STORE_SCHEMA_ENV
-            ] == deploy_mod.managed_runtime_store.get_lakebase_schema("agent-mason-myapp")
+            assert deploy_mod.RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV not in env
+            assert deploy_mod.RUNTIME_STORE_SCHEMA_ENV not in env
             events.append("app-deployed")
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
@@ -802,7 +757,7 @@ def test_deploy_recommends_invoking_deployed_agent(
     if chat_ui:
         (src / "runtime").mkdir()
         (src / "runtime" / "ui.py").write_text("# chat UI\n")
-    monkeypatch.setenv(deploy_mod._MANAGED_RUNTIME_STORE_ENV, "true")
+    monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", True)
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "sp-123")
@@ -839,8 +794,8 @@ def test_deploy_recommends_invoking_deployed_agent(
     }
     if server == "mason":
         # Hiding the display field must not disable the deployed runtime's backend.
-        assert env["DATABRICKS_MASON_RUNTIME_STORE_LAKEBASE_ENDPOINT"] == (
-            "projects/databricks-internal-custom-agents/branches/production/endpoints/primary"
+        assert env["DATABRICKS_MASON_RUNTIME_STORE_LAKEBASE_BRANCH"] == (
+            "projects/databricks-internal-custom-agents/branches/production"
         )
 
 
@@ -957,7 +912,7 @@ def test_deploy_injects_store_env(tmp_path: pathlib.Path, monkeypatch):
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     _write_agent_manifest(src, memory="mem", session="sessions")
-    monkeypatch.setenv(deploy_mod._MANAGED_RUNTIME_STORE_ENV, "true")
+    monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", True)
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(
