@@ -2,7 +2,7 @@
 
 Unlike the session store (short-term transcript for one conversation), long-term memory is exposed
 to the model as two tools — ``remember`` and ``recall`` — over the Databricks managed memory store's
-``agents/v1`` entries API. Facts persist across conversations.
+``2.0/agents`` entries API. Facts persist across conversations.
 
 ``memory_tools(actor)`` returns the tools when ``AGENT_MEMORY_STORE`` is set, else an empty list, so
 the model never sees them when memory is unconfigured. ``create_agent_graph`` composes them into its
@@ -20,7 +20,7 @@ from langchain_core.tools import BaseTool, tool
 
 from databricks_mason.runtime.workspace import workspace_client
 
-_AGENTS_V1 = "/api/agents/v1"
+_AGENTS_API = "/api/2.0/agents"
 
 
 def _api():
@@ -41,7 +41,7 @@ def memory_tools(actor: str, store: str | None = None) -> list[BaseTool]:
     store = resolve_memory_store(store)
     if not store:
         return []
-    store_path = f"{_AGENTS_V1}/memory-stores/{store}"
+    store_path = f"{_AGENTS_API}/memory-stores/{store}"
 
     @tool
     def remember(fact: str, topic: str) -> str:

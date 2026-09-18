@@ -24,7 +24,7 @@ from databricks_mason.runtime.store import (
 
 _UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
 _INSTANCE_ID = uuid.uuid4().hex[:12]  # identifies this process in the UI
-_AGENTS_API = "/api/agents/v1"
+_AGENTS_API = "/api/2.0/agents"
 _MESSAGE_ROLES = {
     "ai",
     "assistant",

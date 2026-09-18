@@ -55,7 +55,7 @@ def test_root_help_describes_the_product_and_links_out():
     assert result.exit_code == 0, result.output
     assert "building and deploying custom AI agents on Databricks" in result.output
     # No internal API path in the user-facing description.
-    assert "agents/v1" not in result.output
+    assert "2.0/agents" not in result.output
     # Docs and issues links appear (root only).
     assert help_mod._DOCS_URL in result.output
     assert help_mod._ISSUES_URL in result.output
@@ -69,7 +69,7 @@ def test_group_help_has_no_raw_api_paths():
         assert result.exit_code == 0, (path, result.output)
         # The Docs/Issues footer legitimately carries the repo URL on the root page; the offending
         # pattern we guard against is the raw API path that used to lead group descriptions.
-        assert "/api/agents/v1" not in result.output, path
+        assert "/api/2.0/agents" not in result.output, path
 
 
 def test_nested_command_help_shows_usage_options_and_examples():

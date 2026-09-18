@@ -1,4 +1,4 @@
-"""Private transport for the agents/v1 memory and session APIs.
+"""Private transport for the 2.0 agents memory and session APIs.
 
 The public SDK is the resource-oriented :class:`databricks_mason.MasonClient`.
 This module temporarily owns the one-method-per-endpoint transport used by that
@@ -20,9 +20,7 @@ from databricks_mason.errors import TRANSIENT_ERROR_CODES, AgentCliError, wrap_a
 if TYPE_CHECKING:
     from databricks.sdk import WorkspaceClient
 
-_BASE = "/api/agents/v1"
-# ExtractMemories only binds the 2.0 path (no /agents/v1 alias), so it needs its own base.
-_BASE_2_0 = "/api/2.0/agents"
+_BASE = "/api/2.0/agents"
 _MCP_SERVICES_PATH = "/api/2.1/unity-catalog/mcp-services"
 
 # Transient backend failures (e.g. a CANCELLED RPC) usually clear on a retry, so retry safe
@@ -134,7 +132,7 @@ def _workspace_client(profile: Optional[str]) -> WorkspaceClient:
 
 
 class _MasonApiClient:
-    """Private transport for the agents/v1 API until the generated SDK is available."""
+    """Private transport for the 2.0 agents API until the generated SDK is available."""
 
     def __init__(
         self,
@@ -220,6 +218,7 @@ class _MasonApiClient:
             self._do(
                 "POST",
                 f"{_BASE}/memory-stores",
+                query={"managed_memory_store_id": display_name},
                 body=body,
                 safe_to_retry=retry_transient,
             ),
@@ -363,9 +362,15 @@ class _MasonApiClient:
         body = _body(content=content, description=description)
         if not body:
             raise AgentCliError("No fields to update. Provide content and/or a description.")
+        mask = ",".join(body.keys())
         return _as(
             models.MemoryEntry,
-            self._do("PATCH", f"{_BASE}/{memory_entry_path(store, entry)}", body=body),
+            self._do(
+                "PATCH",
+                f"{_BASE}/{memory_entry_path(store, entry)}",
+                query=_query(update_mask=mask),
+                body=body,
+            ),
         )
 
     def delete_memory_entry(self, store: str, entry: str) -> dict:
@@ -387,7 +392,7 @@ class _MasonApiClient:
             self._do(
                 "POST",
                 f"{_BASE}/session-stores",
-                query={"session_store_name": name},
+                query={"session_store_name": name, "session_store_id": name},
                 body=body,
                 safe_to_retry=retry_transient,
             ),
@@ -502,11 +507,8 @@ class _MasonApiClient:
             ),
         )
 
-    def get_session(self, session_id: str, store: Optional[str] = None) -> models.Session:
-        if store:
-            path = f"{_BASE}/session-stores/{store}/sessions/{session_id}"
-        else:
-            path = f"{_BASE}/sessions/{session_id}"
+    def get_session(self, session_id: str, store: str) -> models.Session:
+        path = f"{_BASE}/session-stores/{store}/sessions/{session_id}"
         return _as(models.Session, self._do("GET", path))
 
     def update_session(self, store: str, session_id: str, metadata: dict) -> models.Session:
@@ -616,7 +618,7 @@ class _MasonApiClient:
             models.ExtractMemoriesResponse,
             self._do(
                 "POST",
-                f"{_BASE_2_0}/session-stores/{store}/sessions/{session_id}/extractions",
+                f"{_BASE}/session-stores/{store}/sessions/{session_id}/extractions",
                 body=body,
             ),
         )
