@@ -64,6 +64,19 @@ def test_invalid_contract_fails_before_any_deploy_side_effect(tmp_path, monkeypa
     assert not (tmp_path / "app.yaml").exists()
 
 
+def test_missing_contract_hint_describes_request_auth_recovery_boundary(tmp_path):
+    _project(tmp_path, marker="missing")
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["test", "--source", str(tmp_path)],
+        obj=SimpleNamespace(profile="selected", output="text", client=Mock()),
+    )
+
+    assert result.exit_code != 0
+    assert "Failure recovery is unsupported for request-user attempts" in result.output
+    assert "background execution is unsupported" not in result.output
+
+
 @pytest.mark.parametrize("auth", ["user", "app"])
 def test_contract_requires_explicit_auth_on_every_managed_binding(tmp_path, monkeypatch, auth):
     _project(tmp_path, legacy=True, auth=auth)
