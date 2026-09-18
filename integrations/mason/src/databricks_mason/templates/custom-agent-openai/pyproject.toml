@@ -32,12 +32,7 @@ dev = [
 default-groups = ["dev"]
 
 [tool.uv.sources]
-databricks-mason = { index = "testpypi" }
-
-[[tool.uv.index]]
-name = "testpypi"
-url = "https://test.pypi.org/simple"
-explicit = true
+databricks-mason = { git = "https://github.com/databricks/databricks-ai-bridge", rev = "52fdb37ccb1eeba6c77890667beb0cc4310e9b5b", subdirectory = "integrations/mason" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
