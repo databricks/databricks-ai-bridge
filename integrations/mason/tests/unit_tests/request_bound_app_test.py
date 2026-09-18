@@ -105,6 +105,7 @@ async def test_request_user_rejects_background_execution(deployed):
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "MCP_USER_AUTH_BACKGROUND_UNSUPPORTED"
+    assert response.json()["error"]["message"] == "Request-user tools require foreground execution"
     assert not seen
 
 
