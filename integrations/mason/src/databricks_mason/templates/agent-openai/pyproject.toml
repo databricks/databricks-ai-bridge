@@ -9,7 +9,7 @@ authors = [
 requires-python = ">=3.11"
 dependencies = [
     # Mason includes the HTTP runtime; this extra adds the openai framework adapter.
-    "databricks-mason[openai]>=0.1.6.dev0",
+    "databricks-mason[openai]==0.1.6.dev1",
     "uvicorn>=0.41.0",
     "python-dotenv>=1.2.1",
     "databricks-sdk>=0.79.0",
@@ -33,6 +33,14 @@ dev = [
 
 [tool.uv]
 default-groups = ["dev"]
+
+[tool.uv.sources]
+databricks-mason = { index = "testpypi" }
+
+[[tool.uv.index]]
+name = "testpypi"
+url = "https://test.pypi.org/simple"
+explicit = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
