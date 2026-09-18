@@ -65,7 +65,7 @@ async def test_request_user_sync_executes_directly_without_retaining_state(deplo
     assert len(contexts) == 2
     assert contexts[0].request_auth is not contexts[1].request_auth
     assert not hasattr(app, "_request_execution")
-    assert not app._runtime.runtime_store.states
+    assert app._runtime is None
     for context in contexts:
         with pytest.raises(AuthError):
             context.request_auth.client_for("user")
@@ -101,7 +101,7 @@ async def test_request_user_rejects_background_execution(deployed):
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app), base_url="https://test"
     ) as client:
-        response = await client.post("/api/invocations", json=body, headers=headers())
+        response = await client.post("/api/invocations", json=body)
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "MCP_USER_AUTH_BACKGROUND_UNSUPPORTED"
@@ -140,13 +140,40 @@ async def test_request_user_streams_ordered_events_without_retaining_state(deplo
         'id: 3\nevent: run.completed\ndata: {"type": "run.completed"}\n\n'
     )
     assert status.status_code == events.status_code == 404
-    assert not app._runtime.runtime_store.states
-    assert not app._runtime.runtime_store.persisted_events
+    assert app._runtime is None
     assert contexts[0].session_id == contexts[0].request_auth.namespace(
         "session", "routing-session"
     )
     with pytest.raises(AuthError):
         contexts[0].request_auth.client_for("user")
+
+
+@pytest.mark.asyncio
+async def test_request_user_stream_does_not_treat_handler_event_as_terminal(deployed):
+    async def handler(value, context):
+        assert await context.emit({"type": "run.completed", "source": "handler"}) == 2
+        assert await context.emit({"type": "delta", "content": "after-terminal-looking-event"}) == 3
+
+    app = make_app(handler)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app), base_url="https://test"
+    ) as client:
+        response = await asyncio.wait_for(
+            client.post(
+                "/api/invocations",
+                json={"id": str(uuid4()), "stream": True},
+                headers=headers(),
+            ),
+            timeout=2,
+        )
+
+    assert response.text == (
+        'id: 1\nevent: run.started\ndata: {"type": "run.started"}\n\n'
+        'id: 2\nevent: run.completed\ndata: {"type": "run.completed", "source": "handler"}\n\n'
+        'id: 3\nevent: delta\ndata: {"type": "delta", '
+        '"content": "after-terminal-looking-event"}\n\n'
+        'id: 4\nevent: run.completed\ndata: {"type": "run.completed"}\n\n'
+    )
 
 
 @pytest.mark.asyncio
