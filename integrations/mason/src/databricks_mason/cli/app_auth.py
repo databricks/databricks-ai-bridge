@@ -52,7 +52,8 @@ def requires_user_auth(project: AgentProject | None) -> bool:
         raise AgentCliError(
             "User auth requires request_auth_contract_version = 1 in .mason/project.toml.",
             hint="Migrate to the request-auth-aware Mason AgentApp template before setting the "
-            "marker. User work is request-bound; durable/background execution is unsupported.",
+            "marker. Failure recovery is unsupported for request-user attempts because the "
+            "credential is transient.",
         )
     if user_auth or contract == 1:
         unspecified = [tool.id for tool in managed if tool.auth is None]
