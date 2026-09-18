@@ -108,6 +108,32 @@ def test_bound_store_add_memory() -> None:
         description="desc",
         session_id="s1",
         source_type=None,
+        write_mode=None,
+    )
+
+
+def test_bound_store_add_memory_forwards_write_mode() -> None:
+    client, api = resource_client()
+    api.get_memory_store.return_value = mem_store_payload()
+    api.create_memory_entry.return_value = memory_payload()
+    store = client.memory_stores.get(STORE_ID)
+
+    store.add(
+        actor_id="alice",
+        path="/m/p.md",
+        content="more",
+        write_mode="MANAGED_MEMORY_ENTRY_WRITE_MODE_APPEND",
+    )
+
+    api.create_memory_entry.assert_called_once_with(
+        STORE_ID,
+        "alice",
+        "/m/p.md",
+        content="more",
+        description=None,
+        session_id=None,
+        source_type=None,
+        write_mode="MANAGED_MEMORY_ENTRY_WRITE_MODE_APPEND",
     )
 
 

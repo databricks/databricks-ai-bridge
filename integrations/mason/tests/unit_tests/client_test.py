@@ -264,6 +264,31 @@ def test_get_memory_entry_passes_read_mask(workspace_client):
 
 
 @mock.patch("databricks.sdk.WorkspaceClient")
+def test_create_memory_entry_serializes_write_mode(workspace_client):
+    client, do = _client(workspace_client)
+
+    client.create_memory_entry(
+        "s1",
+        "alice",
+        "/preferences/style.md",
+        content="more",
+        write_mode="MANAGED_MEMORY_ENTRY_WRITE_MODE_APPEND",
+    )
+
+    do.assert_called_once_with(
+        "POST",
+        "/api/2.0/agents/memory-stores/s1/entries",
+        query=None,
+        body={
+            "actor_id": "alice",
+            "path": "/preferences/style.md",
+            "content": "more",
+            "write_mode": "MANAGED_MEMORY_ENTRY_WRITE_MODE_APPEND",
+        },
+    )
+
+
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_search_memory_entries(workspace_client):
     c, do = _client(workspace_client)
     c.search_memory_entries("s1", "alice", "style", limit=5)
