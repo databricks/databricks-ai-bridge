@@ -33,7 +33,7 @@ class AuthError(RuntimeError):
 
 @dataclass(frozen=True)
 class InvocationAuthPolicy:
-    """Whether an invocation needs credentials whose lifetime is the HTTP request."""
+    """Whether an invocation needs credentials scoped to its active execution attempt."""
 
     user_tools: tuple[str, ...] = ()
 
