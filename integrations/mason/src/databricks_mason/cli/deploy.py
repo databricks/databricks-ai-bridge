@@ -19,6 +19,7 @@ import json
 import os
 import pathlib
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -184,7 +185,7 @@ def _wait_for_running(name: str, profile: Optional[str], timeout_s: int = 300) -
 
 def _upsert_manifest_env(
     source: pathlib.Path,
-    updates: dict[str, Optional[str]],
+    updates: Mapping[str, Optional[str]],
 ) -> bool:
     """Reconcile env entries in <source>/app.yaml. Returns True if it scaffolded a new file."""
     app_yaml = source / "app.yaml"
