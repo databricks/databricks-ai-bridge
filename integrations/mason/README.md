@@ -22,7 +22,7 @@ invocation protocol to design yourself. Bring your own agent, or start from a te
 
 **Deployment**
 
-![Deployment: from a blank directory to a running service](docs/deployment.png)
+![Deployment: from a blank directory to a running service](docs/deployment.svg)
 
 - **Agent project** - `mason init` scaffolds a deployable project from a framework template
   (LangGraph or OpenAI Agents) with the runtime, tests, and an optional chat UI wired up; you edit
@@ -39,7 +39,7 @@ invocation protocol to design yourself. Bring your own agent, or start from a te
 
 **Runtime**
 
-![Runtime: the opinionated AgentApp server, or bring your own](docs/runtime.png)
+![Runtime: one FastAPI server, run as AgentApp or your own implementation](docs/runtime.svg)
 
 The two ways to run an agent:
 
