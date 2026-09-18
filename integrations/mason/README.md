@@ -605,6 +605,11 @@ The `system.ai.dbsql` managed MCP additionally requests the Apps `sql` user scop
 API consent, not `sql:restricted-query`; read-only enforcement remains the service policy plus the
 requesting user's Unity Catalog grants. DBSQL does not use Databricks Connect.
 
+A sandbox binding with a Volume downscope additionally requests the Apps `files` user scope.
+OAuth consent does not grant Volume access: the requesting user still needs the corresponding
+Unity Catalog privileges, and the sandbox downscope remains authoritative. Table-only sandbox
+bindings request `ai-gateway` but do not request `files`.
+
 Review the target App's scopes and coordinate with its other owners before allowing the update. Once
 those scopes are present, later deploys do not need the flag. Mason preserves unrelated scopes,
 updates only user scopes and any explicitly requested instance counts, and checks requested **and
