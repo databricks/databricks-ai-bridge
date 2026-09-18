@@ -9,6 +9,7 @@ from agents.items import ToolApprovalItem
 from openai.types.responses import ResponseTextDeltaEvent
 
 from databricks_mason import InvocationContext
+from databricks_mason.runtime.auth import AuthError
 
 _RECOVERY_INSTRUCTION = (
     "This is a recovery attempt after a previous worker stopped before completing this invocation. "
@@ -74,15 +75,43 @@ async def _invoke_agent(
 ) -> dict:
     session_id = _session_id(payload, context)
     actor = _actor(payload, session_id)
+    auth = getattr(context, "request_auth", None)
+    user_auth = auth is not None
+    if user_auth and any(
+        payload.get(key) is not None for key in ("resume", "approval", "approvals")
+    ):
+        raise AuthError(
+            "MCP_USER_AUTH_HITL_UNSUPPORTED",
+            "Request-user invocations do not support approval or resume input.",
+            400,
+        )
+    if user_auth and recovery:
+        raise AuthError(
+            "MCP_USER_AUTH_BACKGROUND_UNSUPPORTED",
+            "Request-user invocations cannot be recovered in the background.",
+            400,
+        )
+    internal_session_id = (
+        auth.namespace("session", session_id) if auth and payload.get("session_id") else session_id
+    )
+    actor = auth.namespace("actor", actor) if auth else actor
+    auth_kwargs = {"workspace_client_for": auth.client_for} if user_auth else {}
     model = payload.get("model")
     outputs = []
     async with run_agent(
-        _agent_input(payload, session_id, recovery=recovery),
-        session_id=session_id,
+        _agent_input(payload, internal_session_id, recovery=recovery),
+        session_id=internal_session_id,
         actor=actor,
         model=model if isinstance(model, str) else None,
+        **auth_kwargs,
     ) as result:
         async for event in _serialize_events(result):
+            if user_auth and event.get("type") == "interrupt":
+                raise AuthError(
+                    "MCP_USER_AUTH_HITL_UNSUPPORTED",
+                    "Request-user invocations do not support paused approvals.",
+                    400,
+                )
             await context.emit(event)
             if event.get("type") in ("message", "interrupt"):
                 outputs.append(event)
@@ -90,7 +119,7 @@ async def _invoke_agent(
     interrupted = bool(outputs and outputs[-1].get("type") == "interrupt")
     return {
         "output": [event["message"] if event["type"] == "message" else event for event in outputs],
-        "session_id": session_id,
+        **({"session_id": session_id} if not user_auth or payload.get("session_id") else {}),
         "status": "interrupted" if interrupted else "completed",
     }
 

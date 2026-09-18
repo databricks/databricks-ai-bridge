@@ -119,3 +119,19 @@ Deployment provisions or reuses the app's dedicated Runtime Store. Only the app-
 
 The `__Host-databricks-app-router` cookie may be supplied independently for sticky replica routing.
 It is not authentication and is not used as the template's application session ID.
+# Request-user authorization
+
+Declared tools in `agent.toml` select `auth = "user"` or `auth = "app"`; legacy missing auth
+continues to use the application/default identity. Deployed user tools require the request resolver
+and never fall back to application credentials. Model, memory-service, session-service, and custom
+MCP server credentials are unchanged.
+
+`runtime/main.py` derives the invocation policy after `configure()`. The runtime adapter namespaces
+public session IDs and actor values for the request owner, then passes only `workspace_client_for`
+to the framework-native agent. Internal session keys are never returned to clients.
+
+Phase 1 user-policy invocations support foreground sync and streaming only. Background execution,
+recovery, and approval/resume are disabled; approval interruptions fail with
+`MCP_USER_AUTH_HITL_UNSUPPORTED`. The optional UI disables background mode and its unscoped
+managed-state demo controls for user policy; the agent's namespaced memory and conversation stores
+remain available. App-only background, recovery, and approval behavior is unchanged.

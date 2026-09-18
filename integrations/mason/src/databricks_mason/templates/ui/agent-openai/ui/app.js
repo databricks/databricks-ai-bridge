@@ -1045,6 +1045,7 @@ async function pollBackground(invocationId) {
 }
 
 async function invokeBackground(payload) {
+  if (state.config?.background.enabled === false) return invokeSync(payload);
   const response = await fetch("/api/invocations", {
     method: "POST",
     credentials: "same-origin",
