@@ -34,6 +34,12 @@ from databricks_mason.app_resources import (
     apply_experiment_resource,
     apply_postgres_resources,
 )
+from databricks_mason.cli.app_auth import (
+    apply_app_auth,
+    prepare_app_auth,
+    required_user_scopes,
+    requires_user_auth,
+)
 from databricks_mason.cli.endpoint_examples import print_agent_invoke_command
 from databricks_mason.cli.tracing import (
     TRACES_EXPERIMENT_ID_ENV,
@@ -471,6 +477,11 @@ def _grant_store_access(
     default=None,
     help="Number of deployment instances.",
 )
+@click.option(
+    "--adopt-user-auth",
+    is_flag=True,
+    help="Explicitly adopt an existing App for user-auth scopes, preserving unrelated scopes.",
+)
 @click.pass_obj
 def deploy(
     obj,
@@ -479,6 +490,7 @@ def deploy(
     pip_index_url,
     workspace_path,
     instances,
+    adopt_user_auth,
 ) -> None:
     """Deploy your agent to Databricks Apps and get back a hosted URL to try it.
 
@@ -506,9 +518,27 @@ def deploy(
     project = _load_project(source_dir)
     if project is not None and project.tools:
         require_managed_tool_support(source_dir)
+    user_auth = requires_user_auth(project)
     base_name = _resolve_deployment_name(project, name)
     name = _prefixed_name(base_name)
     _validate_deployment_name(name)
+    if adopt_user_auth and not user_auth:
+        raise AgentCliError("--adopt-user-auth requires explicit user-auth tools in agent.toml.")
+    auth_plan = (
+        prepare_app_auth(
+            name, obj.profile, adopt=adopt_user_auth, required_scopes=required_user_scopes(project)
+        )
+        if user_auth
+        else None
+    )
+    if auth_plan is not None:
+        click.echo(
+            "User auth: scope updates are not atomic; coordinate with other App owners. "
+            "Users may need to sign out and re-consent after scope changes. "
+            "Scopes are never removed automatically when tools change.",
+            err=True,
+        )
+        apply_app_auth(auth_plan, instances=instances)
     # Persist the base name so a later `mason deploy` (no NAME) resolves to the same app.
     if project is not None and project.set_deployment_name(base_name):
         project.write()
@@ -562,7 +592,6 @@ def deploy(
             legacy_runtime_backend = legacy_runtime_store.get_or_create_backend(name, obj.profile)
         env_updates[RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV] = legacy_runtime_backend.endpoint_path
         env_updates[RUNTIME_STORE_SCHEMA_ENV] = legacy_runtime_backend.schema
-
     if pip_index_url:
         for env in _PIP_INDEX_ENVS:
             env_updates[env] = pip_index_url
@@ -582,7 +611,7 @@ def deploy(
     #    `apps create` itself blocks for minutes (it provisions and waits for compute) and we capture
     #    its output to relabel "App compute" → "Agent compute", so nothing streams meanwhile. Wrap it
     #    in progress (persistent line + spinner) so the CLI isn't silent for the whole provision.
-    if not _deployment_exists(name, obj.profile):
+    if auth_plan is None and not _deployment_exists(name, obj.profile):
         with render.progress(
             "Creating the agent and starting its compute (this can take a few minutes)…"
         ):
@@ -594,7 +623,7 @@ def deploy(
             )
         old, new = _AGENT_COMPUTE_OUTPUT
         click.echo((result.stdout or "").replace(old, new), nl=False)
-    elif instance_args:
+    elif auth_plan is None and instance_args:
         update = {
             "app": {
                 "compute_min_instances": instances,

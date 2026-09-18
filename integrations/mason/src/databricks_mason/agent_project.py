@@ -8,7 +8,7 @@ import re
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import tomlkit
 from tomlkit import TOMLDocument
@@ -132,6 +132,7 @@ class ToolSpec:
     id: str
     source: ToolSource
     policy: ToolPolicy = field(default_factory=ToolPolicy)
+    auth: Literal["user", "app"] | None = None
 
     def __post_init__(self) -> None:
         source_values = {"kind": self.source.kind}
@@ -150,6 +151,10 @@ class ToolSpec:
         if not _TOOL_ID.fullmatch(self.id):
             raise AgentCliError(f"Invalid tool id {self.id!r}.")
         kind = self.source.kind
+        if self.auth is not None and self.auth not in ("user", "app"):
+            raise AgentCliError("Tool auth must be 'user' or 'app'.")
+        if kind == "uc_function" and self.auth == "user":
+            raise AgentCliError("UC function auth supports only app/default identity.")
         if kind == "sandbox":
             if self.source.service != "system.ai.sandbox":
                 raise AgentCliError("Sandbox tools must bind system.ai.sandbox.")
@@ -181,22 +186,29 @@ class ToolSpec:
         tool_id: str,
         *,
         scopes: Sequence[Scope],
+        auth: Literal["user", "app"] | None = None,
     ) -> "ToolSpec":
         return cls(
             id=tool_id,
             source=ToolSource(kind="sandbox", service="system.ai.sandbox"),
             policy=ToolPolicy(tuple(scopes)),
+            auth=auth,
         )
 
     @classmethod
-    def mcp(cls, tool_id: str, *, service: str) -> "ToolSpec":
-        return cls(id=tool_id, source=ToolSource(kind="mcp", service=service))
+    def mcp(
+        cls, tool_id: str, *, service: str, auth: Literal["user", "app"] | None = None
+    ) -> "ToolSpec":
+        return cls(id=tool_id, source=ToolSource(kind="mcp", service=service), auth=auth)
 
     @classmethod
-    def uc_function(cls, tool_id: str, *, function: str) -> "ToolSpec":
+    def uc_function(
+        cls, tool_id: str, *, function: str, auth: Literal["app"] | None = None
+    ) -> "ToolSpec":
         return cls(
             id=tool_id,
             source=ToolSource(kind="uc_function", function=function),
+            auth=auth,
         )
 
     @classmethod
@@ -293,6 +305,7 @@ def _tool_from_manifest(value: object) -> ToolSpec:
             space_id=source.get("space_id") if isinstance(source.get("space_id"), str) else None,
         ),
         policy=ToolPolicy(tuple(_scope_from_manifest(item) for item in downscope_value)),
+        auth=value.get("auth"),
     )
 
 
@@ -306,6 +319,8 @@ def _inline_table(values: Mapping[str, str]) -> Any:
 def _tool_table(spec: ToolSpec) -> Any:
     table = tomlkit.table()
     table.add("id", spec.id)
+    if spec.auth is not None:
+        table.add("auth", spec.auth)
     source_values = {"kind": spec.source.kind}
     for key in ("service", "function", "space_id"):
         value = getattr(spec.source, key)

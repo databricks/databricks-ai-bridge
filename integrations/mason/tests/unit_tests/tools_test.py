@@ -38,6 +38,32 @@ class _Client:
         return {"name": f"mcp-services/{service}"}
 
 
+@pytest.mark.parametrize("auth", [None, "app", "user"])
+@pytest.mark.parametrize(
+    "arguments", [["mcp", "system.ai.web_search"], ["sandbox", "--scope", "table:main.data.table"]]
+)
+def test_add_managed_tool_writes_explicit_auth(tmp_path, arguments, auth):
+    project = _project(tmp_path)
+    options = ["--auth", auth] if auth else []
+    result = CliRunner().invoke(
+        tools, ["add", *arguments, *options, "--source", str(project)], obj=_Ctx()
+    )
+    assert result.exit_code == 0, result.output
+    assert AgentProject.load(project).tools[0].auth == (auth or "user")
+    assert f'auth = "{auth or "user"}"' in (project / "agent.toml").read_text()
+
+
+def test_uc_function_does_not_accept_user_auth(tmp_path):
+    project = _project(tmp_path)
+    result = CliRunner().invoke(
+        tools,
+        ["add", "uc-function", "main.tools.lookup", "--auth", "user", "--source", str(project)],
+        obj=_Ctx(),
+    )
+    assert result.exit_code != 0
+    assert AgentProject.load(project).tools == []
+
+
 def _project(
     tmp_path: pathlib.Path,
     framework: str = "langgraph",
@@ -378,7 +404,7 @@ def test_add_mcp_looks_up_exact_service_in_custom_schema(tmp_path: pathlib.Path)
     assert result.exit_code == 0, result.output
     assert client.calls == ["main.tools.ticket_search"]
     assert AgentProject.load(project).tools == [
-        ToolSpec.mcp("tickets", service="main.tools.ticket_search")
+        ToolSpec.mcp("tickets", service="main.tools.ticket_search", auth="user")
     ]
 
 
