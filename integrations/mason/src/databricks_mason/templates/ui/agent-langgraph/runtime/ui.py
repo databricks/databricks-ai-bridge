@@ -442,8 +442,8 @@ def install_ui(app: FastAPI) -> None:
             "streaming": {
                 "enabled": True,
                 "transport": "Server-sent events",
-                "persistent": runtime_store_persistent,
-                "mode": runtime_store_mode,
+                "persistent": False if user_auth else runtime_store_persistent,
+                "mode": "Request-owned execution" if user_auth else runtime_store_mode,
             },
             "background": {
                 "enabled": not user_auth,
