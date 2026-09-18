@@ -176,6 +176,27 @@ def test_list_mcp_services_query(workspace_client):
 
 
 @mock.patch("databricks.sdk.WorkspaceClient")
+def test_get_mcp_service_uses_encoded_resource_path(workspace_client):
+    client, do = _client(workspace_client)
+    do.return_value = {"name": "mcp-services/main.tools.search"}
+
+    result = client.get_mcp_service("main.tools.search")
+
+    assert result == {"name": "mcp-services/main.tools.search"}
+    do.assert_called_once_with(
+        "GET", "/api/2.1/unity-catalog/mcp-services/main.tools.search", query=None, body=None
+    )
+    do.reset_mock()
+    client.get_mcp_service("main.tools.search/extra?query=value")
+    do.assert_called_once_with(
+        "GET",
+        "/api/2.1/unity-catalog/mcp-services/main.tools.search%2Fextra%3Fquery%3Dvalue",
+        query=None,
+        body=None,
+    )
+
+
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_get_memory_store_normalizes_id(workspace_client):
     c, do = _client(workspace_client)
     c.get_memory_store("abc123")

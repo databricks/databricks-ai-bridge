@@ -93,14 +93,15 @@ def test_init_scaffolds(run_mason, tmp_path: pathlib.Path, extra) -> None:
 @pytest.mark.parametrize(
     "args",
     [
-        ["mcp", "system.ai.web_search"],
         ["sandbox", "--scope", "table:catalog.schema.table"],
         ["uc-function", "catalog.schema.function"],
         ["genie-one"],
         ["genie-agent", "0" * 32],
     ],
 )
-def test_tools_add_review_manifest_remove(run_mason, tmp_path, framework, output, args) -> None:
+def test_tools_offline_add_review_manifest_remove(
+    run_mason, tmp_path, framework, output, args
+) -> None:
     project = tmp_path / "agent"
     run_mason("init", "--framework", framework, str(project))
     manifest = project / "agent.toml"
@@ -195,6 +196,29 @@ def test_tools_help_and_removed_configured_route(run_mason):
     assert run_mason("tools", "list", "--source", ".", check=False).returncode != 0
     assert run_mason("tools", "mcp", "list", check=False).returncode != 0
     assert run_mason("mcp", "--help", check=False).returncode != 0
+
+
+def test_mcp_add_without_auth_does_not_change_manifest(run_mason, tmp_path: pathlib.Path) -> None:
+    project = tmp_path / "agent"
+    run_mason("init", "--framework", "langgraph", str(project))
+    manifest = project / "agent.toml"
+    before = manifest.read_bytes()
+
+    result = run_mason(
+        "--output",
+        "json",
+        "tools",
+        "add",
+        "mcp",
+        "system.ai.web_search",
+        "--source",
+        str(project),
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "Could not initialize Databricks auth" in result.stderr
+    assert manifest.read_bytes() == before
 
 
 def test_tracing_disable_and_reenable(run_mason, tmp_path: pathlib.Path) -> None:

@@ -367,6 +367,12 @@ needs no additional argument. `system.ai.sandbox` is represented by its scoped r
 a second unscoped add command. The list does not enumerate every workspace schema, individual
 operations inside MCP services, or custom Python tools.
 
+`mason tools add mcp` looks up the service in the selected workspace before writing `agent.toml`.
+Use `mason --profile <profile> tools add mcp <service>` to select a workspace. A missing service or
+failed lookup (including authentication or permission errors) leaves the project unchanged. This
+checks service metadata access, not whether every tool can be executed at runtime. Removing local
+bindings does not require workspace access.
+
 ```sh
 mason tools list
 mason tools list --kind mcp

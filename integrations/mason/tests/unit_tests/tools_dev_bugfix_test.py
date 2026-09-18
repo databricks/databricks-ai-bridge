@@ -6,7 +6,7 @@ import pathlib
 
 from click.testing import CliRunner
 
-from databricks_mason.agent_project import AgentProject
+from databricks_mason.agent_project import AgentProject, ToolSpec
 from databricks_mason.cli.tools import tools
 
 
@@ -70,11 +70,9 @@ def test_tools_add_outside_project_gives_clear_hint(tmp_path):
 
 def test_conflicting_tool_id_reports_what_differs(tmp_path):
     project = _project(tmp_path)
-    CliRunner().invoke(
-        tools,
-        ["add", "mcp", "system.ai.web_search", "--name", "dup", "--source", str(project)],
-        obj=_Ctx(),
-    )
+    manifest = AgentProject.load(project)
+    manifest.add_tool(ToolSpec.mcp("dup", service="system.ai.web_search"))
+    manifest.write()
     result = CliRunner().invoke(
         tools,
         ["add", "mcp", "system.ai.github", "--name", "dup", "--source", str(project)],
