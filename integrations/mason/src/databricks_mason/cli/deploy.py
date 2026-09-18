@@ -2,10 +2,11 @@
 
 `mason deploy` is the integrated entry point: it provisions the memory/session stores
 bound in `agent.toml`, grants the app's service principal access to them, then rolls out
-the deployment. Mason Runtime deployments receive a service-managed Runtime Store. `agent.toml` is the
-CLI's authoring source, resolved here into the `AGENT_MEMORY_STORE` / `AGENT_SESSION_STORE` env
-vars written into `app.yaml` — the runtime reads those, never `agent.toml`. `mason deployments`
-covers the lifecycle verbs
+the deployment. Mason Runtime deployments receive a persistent Runtime Store; a temporary rollout
+switch chooses between the legacy per-app Lakebase project and the service-managed database.
+`agent.toml` is the CLI's authoring source, resolved here into the `AGENT_MEMORY_STORE` /
+`AGENT_SESSION_STORE` env vars written into `app.yaml` — the runtime reads those, never
+`agent.toml`. `mason deployments` covers the lifecycle verbs
 (`list`/`get`/`logs`/`start`/`stop`/`delete`).
 
 Deployments run on the Databricks Apps runtime, which this module drives via the
@@ -15,6 +16,7 @@ Deployments run on the Databricks Apps runtime, which this module drives via the
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import time
 from dataclasses import dataclass
@@ -31,6 +33,8 @@ from databricks_mason import (
 from databricks_mason.app_resources import (
     LakebaseBackend,
     apply_experiment_resource,
+    apply_postgres_resources,
+    remove_app_resources,
 )
 from databricks_mason.cli.endpoint_examples import print_agent_invoke_command
 from databricks_mason.cli.tracing import (
@@ -62,6 +66,7 @@ from databricks_mason.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STO
 _DEFAULT_PIP_INDEX_URL = "https://pypi.org/simple/"
 _PIP_INDEX_ENVS = ("PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDEX")
 _AGENT_COMPUTE_OUTPUT = ("App compute", "Agent compute")
+_MANAGED_RUNTIME_STORE_ENV = "DATABRICKS_MASON_USE_MANAGED_RUNTIME_STORE"
 
 # Mason names every deployment `agent-mason-<name>` so `deployments list` can filter to its own apps.
 # The `agent-` prefix is what the Databricks agent registry keys on to surface these apps; the
@@ -179,7 +184,7 @@ def _wait_for_running(name: str, profile: Optional[str], timeout_s: int = 300) -
 
 def _upsert_manifest_env(
     source: pathlib.Path,
-    updates: dict[str, str],
+    updates: dict[str, Optional[str]],
 ) -> bool:
     """Reconcile env entries in <source>/app.yaml. Returns True if it scaffolded a new file."""
     app_yaml = source / "app.yaml"
@@ -193,9 +198,16 @@ def _upsert_manifest_env(
 
     raw_env = doc.get("env")
     candidates = raw_env if isinstance(raw_env, list) else []
-    env: list[dict[str, Any]] = [entry for entry in candidates if isinstance(entry, dict)]
+    removals = {name for name, value in updates.items() if value is None}
+    env: list[dict[str, Any]] = [
+        entry
+        for entry in candidates
+        if isinstance(entry, dict) and entry.get("name") not in removals
+    ]
     by_name = {e.get("name"): e for e in env if isinstance(e, dict)}
     for name, value in updates.items():
+        if value is None:
+            continue
         if name in by_name:
             by_name[name]["value"] = value
             by_name[name].pop("valueFrom", None)
@@ -210,6 +222,19 @@ def _upsert_manifest_env(
 
 
 _MEMORY_STORE_PAGE_SIZE = 100  # the memory-stores list API caps page_size at 100
+
+
+def _managed_runtime_store_enabled() -> bool:
+    """Whether deploy should use Conversation Store instead of a per-app Lakebase project."""
+    value = os.getenv(_MANAGED_RUNTIME_STORE_ENV, "").strip().lower()
+    if value in ("", "0", "false", "no", "off"):
+        return False
+    if value in ("1", "true", "yes", "on"):
+        return True
+    raise AgentCliError(
+        f"Invalid {_MANAGED_RUNTIME_STORE_ENV} value {value!r}.",
+        hint="Use true to enable the managed Runtime Store API, or false for the legacy path.",
+    )
 
 
 def _resolve_memory_store(client, display_name: str) -> Optional[dict]:
@@ -452,10 +477,17 @@ def _reconcile_runtime_store(
     deployment_name: str,
     client,
     app_service_principal_id: Optional[str],
+    *,
+    profile: Optional[str] = None,
+    use_managed_api: bool = True,
 ) -> Optional[LakebaseBackend]:
     """Create or reuse the implicit Runtime Store for a Mason Runtime deployment."""
     if project is None or project.server != AgentServer.MASON:
         return None
+
+    if not use_managed_api:
+        with render.status("Reconciling Runtime Store…"):
+            return lakebase_store.get_or_create_legacy_backend(deployment_name, profile)
 
     if not app_service_principal_id:
         raise AgentCliError("Could not resolve the app's service principal for its Runtime Store.")
@@ -567,6 +599,7 @@ def deploy(
         project.write()
     instance_args = _instance_args(instances)
     client = obj.client()
+    use_managed_runtime_store = _managed_runtime_store_enabled()
 
     # 1. Reconcile the stores DECLARED in agent.toml: create any that don't exist yet. `mason deploy`
     #    is the only reconcile-to-cloud verb; agent.toml is the source of truth and is never rewritten.
@@ -652,21 +685,48 @@ def deploy(
 
     app_service_principal_id = (
         _app_service_principal(name, obj.profile)
-        if project is not None and project.server == AgentServer.MASON
+        if use_managed_runtime_store and project is not None and project.server == AgentServer.MASON
         else None
     )
-    runtime_backend = _reconcile_runtime_store(project, name, client, app_service_principal_id)
+    runtime_backend = _reconcile_runtime_store(
+        project,
+        name,
+        client,
+        app_service_principal_id,
+        profile=obj.profile,
+        use_managed_api=use_managed_runtime_store,
+    )
     if runtime_backend is not None:
-        assert app_service_principal_id is not None
         env_updates[RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV] = runtime_backend.endpoint_path
-        env_updates[RUNTIME_STORE_DATABASE_ENV] = runtime_backend.database
-        env_updates[RUNTIME_STORE_USERNAME_ENV] = app_service_principal_id
         env_updates[RUNTIME_STORE_SCHEMA_ENV] = runtime_backend.schema
+        if use_managed_runtime_store:
+            assert app_service_principal_id is not None
+            env_updates[RUNTIME_STORE_DATABASE_ENV] = runtime_backend.database
+            env_updates[RUNTIME_STORE_USERNAME_ENV] = app_service_principal_id
+            resource_error = remove_app_resources(
+                name, {runtime_backend.resource_name}, obj.profile
+            )
+            if resource_error:
+                raise AgentCliError(
+                    "Could not detach the legacy Lakebase resource for the Runtime Store.",
+                    hint=resource_error,
+                )
+        else:
+            resource_error = apply_postgres_resources(name, [runtime_backend], obj.profile)
+            if resource_error:
+                raise AgentCliError(
+                    "Could not attach the Lakebase resource required for the Runtime Store.",
+                    hint=resource_error,
+                )
 
     # 4. Patch the manifest with the resolved store, trace, and index env vars.
     scaffolded = False
-    if env_updates:
-        scaffolded = _upsert_manifest_env(source_dir, env_updates)
+    manifest_updates: dict[str, Optional[str]] = dict(env_updates)
+    if runtime_backend is not None and not use_managed_runtime_store:
+        manifest_updates[RUNTIME_STORE_DATABASE_ENV] = None
+        manifest_updates[RUNTIME_STORE_USERNAME_ENV] = None
+    if manifest_updates:
+        scaffolded = _upsert_manifest_env(source_dir, manifest_updates)
 
     # 5. Upload the source and roll out the deployment.
     ws_path = workspace_path or f"/Workspace/Users/{client.current_user}/mason_deployments/{name}"
@@ -889,17 +949,24 @@ def deployments_stop(obj, name, yes) -> None:
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
 @click.pass_obj
 def deployments_delete(obj, name, yes) -> None:
-    """Delete a deployment and its Runtime Store, including persisted invocation state."""
+    """Delete a deployment and, when managed provisioning is enabled, its Runtime Store."""
     _validate_deployment_name(name)
-    _confirm_destroy(f"Delete deployment '{name}' and its Runtime Store data", assume_yes=yes)
-    app_service_principal_id = _app_service_principal(name, obj.profile)
-    if not app_service_principal_id:
-        raise AgentCliError(
-            "Could not resolve the app's service principal for Runtime Store cleanup.",
-            hint="The deployment was retained. Check access to the app and retry deletion.",
-        )
-    with render.status("Deleting Runtime Store…"):
-        _delete_runtime_store(obj.client(), name, app_service_principal_id)
+    use_managed_runtime_store = _managed_runtime_store_enabled()
+    target = (
+        f"Delete deployment '{name}' and its Runtime Store data"
+        if use_managed_runtime_store
+        else f"Delete deployment '{name}'"
+    )
+    _confirm_destroy(target, assume_yes=yes)
+    if use_managed_runtime_store:
+        app_service_principal_id = _app_service_principal(name, obj.profile)
+        if not app_service_principal_id:
+            raise AgentCliError(
+                "Could not resolve the app's service principal for Runtime Store cleanup.",
+                hint="The deployment was retained. Check access to the app and retry deletion.",
+            )
+        with render.status("Deleting Runtime Store…"):
+            _delete_runtime_store(obj.client(), name, app_service_principal_id)
     _databricks(
         ["apps", "delete", name], obj.profile, action=f"Could not delete deployment '{name}'."
     )

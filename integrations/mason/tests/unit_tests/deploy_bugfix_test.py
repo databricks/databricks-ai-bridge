@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import types
+from unittest import mock
 
 import pytest
 from click.testing import CliRunner
@@ -93,7 +94,8 @@ def test_delete_aborts_without_confirmation(monkeypatch):
 
 def test_delete_proceeds_with_yes(monkeypatch):
     monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "sp-123")
-    monkeypatch.setattr(deploy_mod, "_delete_runtime_store", lambda *args: None)
+    delete_runtime_store = mock.Mock()
+    monkeypatch.setattr(deploy_mod, "_delete_runtime_store", delete_runtime_store)
     monkeypatch.setattr(_Ctx, "client", lambda self: object(), raising=False)
     called = []
     monkeypatch.setattr(
@@ -106,6 +108,7 @@ def test_delete_proceeds_with_yes(monkeypatch):
     result = CliRunner().invoke(deploy_mod.deployments_delete, ["myapp", "--yes"], obj=_Ctx())
     assert result.exit_code == 0, result.output
     assert called and called[0][:3] == ["apps", "delete", "myapp"]
+    delete_runtime_store.assert_not_called()
 
 
 # --- ML-69245: postgres resources are MERGED, not replaced -------------------

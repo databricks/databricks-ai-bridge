@@ -1,16 +1,70 @@
-"""Resolve the Lakebase database provisioned by the Runtime Store API."""
+"""Provision legacy or resolve service-managed Lakebase Runtime Store backends."""
 
 from __future__ import annotations
 
 import hashlib
+import json
 import re
-from typing import Any
+from typing import Any, Optional
 
-from databricks_mason.app_resources import LakebaseBackend
+from databricks_mason.app_resources import LakebaseBackend, _databricks
 from databricks_mason.errors import AgentCliError
 
+_LEGACY_BRANCH = "production"
 _ENDPOINT = "primary"
+_LEGACY_DATABASE = "databricks-postgres"
+_RESOURCE_NAME = "postgres-runtime-store"
 _RESOURCE_ID = re.compile(r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?")
+
+
+def legacy_backend(app: str) -> LakebaseBackend:
+    """Return the dedicated per-app backend used before the managed API rollout."""
+    return LakebaseBackend(
+        project=_legacy_project_id(app),
+        branch=_LEGACY_BRANCH,
+        endpoint_id=_ENDPOINT,
+        database=_LEGACY_DATABASE,
+        schema=get_lakebase_schema(app),
+        tables=(),
+        resource_name=_RESOURCE_NAME,
+    )
+
+
+def get_or_create_legacy_backend(app: str, profile: Optional[str]) -> LakebaseBackend:
+    """Reuse or create the dedicated per-app project used by the legacy path."""
+    selected = legacy_backend(app)
+    project_path = f"projects/{selected.project}"
+    existing = _databricks(
+        ["postgres", "get-project", project_path], profile, capture=True, check=False
+    )
+    if existing.returncode == 0:
+        return selected
+
+    payload = {"spec": {"display_name": f"Mason Runtime Store for {app}"}}
+    created = _databricks(
+        ["postgres", "create-project", selected.project, "--json", json.dumps(payload)],
+        profile,
+        capture=True,
+        check=False,
+    )
+    if created.returncode == 0:
+        return selected
+
+    # A concurrent deploy can win the create race. Resolve the project before surfacing failure.
+    resolved = _databricks(
+        ["postgres", "get-project", project_path], profile, capture=True, check=False
+    )
+    if resolved.returncode == 0:
+        return selected
+    detail = (created.stderr or created.stdout or "").strip() or "unknown error"
+    raise AgentCliError(f"Could not create Runtime Store '{selected.project}'.", hint=detail)
+
+
+def _legacy_project_id(app: str) -> str:
+    normalized = re.sub(r"[^a-z0-9-]+", "-", app.lower()).strip("-") or "mason-app"
+    if not normalized[0].isalpha():
+        normalized = f"mason-{normalized}"
+    return f"{normalized}-runtime-store"[:63].rstrip("-")
 
 
 def runtime_store_id(app: str, app_service_principal_id: str) -> str:
@@ -71,7 +125,7 @@ def backend_from_api(
         database=database,
         schema=get_lakebase_schema(app),
         tables=(),
-        resource_name="postgres-runtime-store",
+        resource_name=_RESOURCE_NAME,
     )
 
 

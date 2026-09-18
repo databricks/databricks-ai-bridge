@@ -105,6 +105,44 @@ def test_apply_postgres_resources_reports_failure(monkeypatch):
     assert err == "denied: needs MANAGE"
 
 
+def test_remove_app_resources_preserves_unrelated_resources(monkeypatch):
+    resources = [
+        {"name": "keep", "secret": {"scope": "scope"}},
+        {"name": "postgres-runtime-store", "postgres": {"database": "legacy"}},
+    ]
+    updates = []
+
+    def fake_db(args, profile, **kw):
+        if args[:2] == ["apps", "get"]:
+            return types.SimpleNamespace(
+                returncode=0, stdout=json.dumps({"resources": resources}), stderr=""
+            )
+        updates.append(json.loads(args[args.index("--json") + 1]))
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(sa, "_databricks", fake_db)
+
+    assert sa.remove_app_resources("app", {"postgres-runtime-store"}, "prof") is None
+    assert updates[0]["app"]["resources"] == [resources[0]]
+
+
+def test_remove_app_resources_skips_update_when_resource_is_absent(monkeypatch):
+    calls = []
+
+    def fake_db(args, profile, **kw):
+        calls.append(args)
+        return types.SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"resources": [{"name": "keep", "secret": {}}]}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(sa, "_databricks", fake_db)
+
+    assert sa.remove_app_resources("app", {"postgres-runtime-store"}, "prof") is None
+    assert [args[:2] for args in calls] == [["apps", "get"]]
+
+
 def test_runtime_store_resource_coexists_with_a_second_managed_resource(monkeypatch):
     resources: list[dict[str, Any]] = []
 

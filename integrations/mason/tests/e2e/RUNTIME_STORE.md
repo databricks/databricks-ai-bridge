@@ -32,11 +32,12 @@ locally as a user, since it must create its schema as the deployed app SP.
 
 Set `MASON_TEST_PROFILE` explicitly to the profile selected for the workspace under test. Ensure
 the internal package proxy below is reachable by the Apps build, or pass the approved index for
-that build environment.
+that build environment. The managed path is temporarily opt-in while its service dependencies roll
+out; without the switch Mason deliberately provisions the legacy per-app Lakebase project.
 
 ```bash
 MASON_TEST_PROFILE='<selected-profile>'
-.venv/bin/mason --profile "$MASON_TEST_PROFILE" deploy runtime-probe-a --source /tmp/mason-runtime-store-app --pip-index-url https://pypi-proxy.cloud.databricks.com/simple
+DATABRICKS_MASON_USE_MANAGED_RUNTIME_STORE=true .venv/bin/mason --profile "$MASON_TEST_PROFILE" deploy runtime-probe-a --source /tmp/mason-runtime-store-app --pip-index-url https://pypi-proxy.cloud.databricks.com/simple
 .venv/bin/python tests/e2e/runtime_store_check.py --profile "$MASON_TEST_PROFILE" --app agent-mason-runtime-probe-a --invocation-id 4f1f0e53-71f1-4f90-8900-85fb2aa29231 --output /tmp/runtime-store-before.json
 ```
 
@@ -67,7 +68,7 @@ an unsupported-environment result, not a successful permission check.
 ## Cleanup
 
 ```bash
-.venv/bin/mason --profile "$MASON_TEST_PROFILE" deployments delete agent-mason-runtime-probe-a --yes
+DATABRICKS_MASON_USE_MANAGED_RUNTIME_STORE=true .venv/bin/mason --profile "$MASON_TEST_PROFILE" deployments delete agent-mason-runtime-probe-a --yes
 ```
 
 The command resolves the app SP, reads and verifies the associated Runtime Store's owner, deletes

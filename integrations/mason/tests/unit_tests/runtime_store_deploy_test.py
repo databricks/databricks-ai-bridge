@@ -14,6 +14,7 @@ from databricks_mason.errors import AgentCliError
 @pytest.fixture(autouse=True)
 def _app_identity(monkeypatch):
     monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "sp-123")
+    monkeypatch.setenv(deploy_mod._MANAGED_RUNTIME_STORE_ENV, "true")
 
 
 def _runtime_store_response(store_id, app_name="mason-myapp", sp="sp-123"):
@@ -28,6 +29,26 @@ def _runtime_store_response(store_id, app_name="mason-myapp", sp="sp-123"):
             }
         },
     }
+
+
+def test_reconcile_runtime_store_uses_legacy_project_when_flag_is_off(monkeypatch) -> None:
+    client = mock.Mock()
+    expected = deploy_mod.lakebase_store.legacy_backend("mason-myapp")
+    provision = mock.Mock(return_value=expected)
+    monkeypatch.setattr(deploy_mod.lakebase_store, "get_or_create_legacy_backend", provision)
+
+    result = deploy_mod._reconcile_runtime_store(
+        types.SimpleNamespace(server="mason"),
+        "mason-myapp",
+        client,
+        None,
+        profile="prof",
+        use_managed_api=False,
+    )
+
+    assert result == expected
+    provision.assert_called_once_with("mason-myapp", "prof")
+    client.create_runtime_store.assert_not_called()
 
 
 def test_reconcile_runtime_store_creates_with_app_service_principal() -> None:
