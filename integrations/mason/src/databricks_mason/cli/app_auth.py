@@ -111,7 +111,8 @@ def prepare_app_auth(
     if existing is not None:
         _validate_implicit_identity_scopes(existing)
     configured = tuple(sorted(set(existing.user_api_scopes or []))) if existing else None
-    scopes = tuple(sorted({*(configured or ()), "ai-gateway", *(required_scopes or ())}))
+    requested = {"ai-gateway"} if required_scopes is None else required_scopes
+    scopes = tuple(sorted({*(configured or ()), *requested}))
     return AppAuthPlan(apps=apps, name=name, existing_scopes=configured, scopes=scopes)
 
 

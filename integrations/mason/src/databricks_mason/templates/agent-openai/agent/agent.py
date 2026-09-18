@@ -7,15 +7,14 @@ from typing import Any
 
 from agents import Agent, Runner, RunResultStreaming, RunState
 from agents.mcp import MCPServerManager
-from databricks_openai import AsyncDatabricksOpenAI
 from databricks.sdk import WorkspaceClient
+from databricks_openai import AsyncDatabricksOpenAI
 
 from agent.mcps import build_mcp_servers
 
 # Importing the tools package auto-registers every tool module.
 from agent.tools import all_tools
 from databricks_mason import workspace_client, workspace_headers
-from databricks_mason.runtime.auth import AuthError
 from databricks_mason.openai import (
     configure_tracing,
     genie_tools,
@@ -24,6 +23,7 @@ from databricks_mason.openai import (
     session_store,
     start_trace,
 )
+from databricks_mason.runtime.auth import AuthError
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +131,9 @@ async def run_agent(
     servers = await mcp_servers(build_mcp_servers(), **auth_kwargs)
     async with MCPServerManager(servers) as manager:
         for server, error in manager.errors.items():
-            if getattr(server, "_mason_configured", False) is True or isinstance(error, AuthError):
+            if getattr(server, "_mason_request_user", False) is True or isinstance(
+                error, AuthError
+            ):
                 raise error
         active_servers = []
         for server in manager.active_servers:
@@ -142,7 +144,7 @@ async def run_agent(
                 async with asyncio.timeout(manager.connect_timeout_seconds):
                     await server.list_tools()
             except Exception as error:
-                if getattr(server, "_mason_configured", False) is True or isinstance(
+                if getattr(server, "_mason_request_user", False) is True or isinstance(
                     error, AuthError
                 ):
                     raise

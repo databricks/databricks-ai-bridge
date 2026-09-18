@@ -174,7 +174,8 @@ def test_sandbox_reconnect_captures_resolver_and_manifest(adapter, monkeypatch):
 
 
 @pytest.mark.parametrize("operation", ["connect", "list_tools", "call_tool"])
-def test_openai_configured_permission_errors_propagate(adapter, monkeypatch, operation):
+@pytest.mark.parametrize("auth", ["user", "app"])
+def test_openai_only_user_permission_errors_are_typed(adapter, monkeypatch, operation, auth):
     if not adapter.__name__.endswith("openai.mcp"):
         pytest.skip("OpenAI connection lifecycle")
     from databricks_mason.runtime.auth import AuthError
@@ -182,13 +183,17 @@ def test_openai_configured_permission_errors_propagate(adapter, monkeypatch, ope
     monkeypatch.setattr(
         FakeServer, operation, AsyncMock(side_effect=PermissionError("secret upstream body"))
     )
-    server = adapter._server_from_tool(tool("app"))
+    server = adapter._server_from_tool(tool(auth))
     args = ("search", {}) if operation == "call_tool" else ()
-    with pytest.raises(AuthError) as raised:
-        asyncio.run(getattr(server, operation)(*args))
-    assert raised.value.code == "MCP_PERMISSION_DENIED"
-    assert raised.value.integration_id == "search"
-    assert "secret" not in str(raised.value)
+    if auth == "app":
+        with pytest.raises(PermissionError, match="secret upstream body"):
+            asyncio.run(getattr(server, operation)(*args))
+    else:
+        with pytest.raises(AuthError) as raised:
+            asyncio.run(getattr(server, operation)(*args))
+        assert raised.value.code == "MCP_PERMISSION_DENIED"
+        assert raised.value.integration_id == "search"
+        assert "secret" not in str(raised.value)
 
 
 @pytest.mark.parametrize("status", [401, 403])
@@ -225,9 +230,9 @@ def test_tool_result_permission_errors_are_not_model_results(adapter, monkeypatc
     )
     if adapter.__name__.endswith("openai.mcp"):
         monkeypatch.setattr(FakeServer, "call_tool", AsyncMock(return_value=result))
-        invoke = adapter._server_from_tool(tool("app")).call_tool("search", {})
+        invoke = adapter._server_from_tool(tool("user")).call_tool("search", {})
     else:
-        interceptor = adapter._sandbox_interceptor((tool("app"),))
+        interceptor = adapter._sandbox_interceptor((tool("user"),))
         request = SimpleNamespace(server_name="search", name="search", args={})
         invoke = interceptor(request, AsyncMock(return_value=result))
     with pytest.raises(AuthError) as raised:
@@ -236,12 +241,28 @@ def test_tool_result_permission_errors_are_not_model_results(adapter, monkeypatc
     assert "secret" not in str(raised.value)
 
 
+def test_app_tool_result_permission_errors_remain_model_results(adapter, monkeypatch):
+    result = SimpleNamespace(
+        isError=True,
+        structuredContent={"error": {"code": "PERMISSION_DENIED", "message": "model-visible"}},
+    )
+    if adapter.__name__.endswith("openai.mcp"):
+        monkeypatch.setattr(FakeServer, "call_tool", AsyncMock(return_value=result))
+        invoke = adapter._server_from_tool(tool("app")).call_tool("search", {})
+    else:
+        interceptor = adapter._sandbox_interceptor((tool("app"),))
+        request = SimpleNamespace(server_name="search", name="search", args={})
+        invoke = interceptor(request, AsyncMock(return_value=result))
+
+    assert asyncio.run(invoke) is result
+
+
 def test_configured_discovery_permission_errors_are_not_hidden(adapter, monkeypatch):
     if not adapter.__name__.endswith("langgraph.mcp"):
         pytest.skip("LangGraph discovery")
     from databricks_mason.runtime.auth import AuthError
 
-    adapter.load_tools.return_value = [tool("app")]
+    adapter.load_tools.return_value = [tool("user")]
     monkeypatch.setattr(
         adapter.DatabricksMultiServerMCPClient,
         "get_tools",
@@ -261,7 +282,7 @@ def test_openai_sdk_failure_handler_preserves_typed_auth_error(adapter):
     error = AuthError("MCP_PERMISSION_DENIED", "Denied", 403, "search")
     wrapper = RuntimeError("SDK wrapper")
     wrapper.__cause__ = error
-    server = adapter._server_from_tool(tool("app"))
+    server = adapter._server_from_tool(tool("user"))
     with pytest.raises(AuthError) as raised:
         server.kwargs["failure_error_function"](None, wrapper)
     assert raised.value is error

@@ -167,6 +167,7 @@ def _sandbox_interceptor(
         tool = declared.get(request.server_name)
         if tool is None:
             return await handler(request)
+        request_user = tool.auth == "user"
         try:
             if tool.kind == "sandbox":
                 server = _server_from_tool(tool, workspace_client_for=workspace_client_for)
@@ -182,10 +183,16 @@ def _sandbox_interceptor(
             else:
                 result = await handler(request)
         except Exception as error:
-            raise _auth_error(error, tool.id) or AuthError(
-                "MCP_TOOL_FAILED", "The configured MCP tool failed.", 502, tool.id
-            ) from None
-        if getattr(result, "isError", False) and (error := _tool_error(result, tool.id)):
+            if request_user:
+                raise _auth_error(error, tool.id) or AuthError(
+                    "MCP_TOOL_FAILED", "The configured MCP tool failed.", 502, tool.id
+                ) from None
+            raise
+        if (
+            request_user
+            and getattr(result, "isError", False)
+            and (error := _tool_error(result, tool.id))
+        ):
             raise error
         return result
 
@@ -225,8 +232,8 @@ async def mcp_tools(
     """Fetch declared tools with request identity and protected sandbox downscoping.
 
     Includes the MCP servers declared in ``agent.toml``; pass ``extra_servers`` to add servers the
-    agent builds itself. Explicit-auth failures propagate; legacy and optional customer servers
-    retain their existing identity and per-server best-effort discovery behavior.
+    agent builds itself. Request-user failures propagate; App, legacy, and optional customer
+    servers retain their existing identity and per-server best-effort discovery behavior.
     """
     snapshot = tuple(load_tools(expected_framework="langgraph"))
     servers = [
@@ -238,13 +245,13 @@ async def mcp_tools(
     result = []
     if servers:
         client = mcp_client(servers, workspace_client_for=workspace_client_for, tools=snapshot)
-        explicit = {tool.id for tool in snapshot if tool.auth is not None}
+        request_user = {tool.id for tool in snapshot if tool.auth == "user"}
 
         async def fetch_declared(server: DatabricksMCPServer) -> list:
             try:
                 return await client.get_tools(server_name=server.name)
             except Exception as error:
-                if server.name in explicit:
+                if server.name in request_user:
                     raise _auth_error(error, server.name) or AuthError(
                         "MCP_TOOL_FAILED",
                         "Could not discover configured MCP tools.",
