@@ -260,7 +260,7 @@ fully managed store for each, both backed by Lakebase and usable from agents bui
 The examples below use the [`MasonClient` Python SDK](#python-sdk); the same operations are available
 as `mason sessions` / `mason memory` CLI commands.
 
-![Sessions and memory: the agent reads and appends one conversation's transcript in the session store, and recalls and saves durable facts in the memory store, which outlive any single conversation.](docs/sessions_and_memory.svg)
+![Sessions and memory: the agent reads and appends one conversation's transcript in the session store, and recalls and saves durable facts in the memory store, which outlive any single conversation.](docs/sessions_and_memory.png)
 
 ### Sessions
 
