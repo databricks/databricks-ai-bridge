@@ -47,6 +47,7 @@ class MemoryEntryRequest(BaseModel):
 class MemorySearchRequest(BaseModel):
     query: str = Field(min_length=1)
     limit: int = Field(default=10, ge=1, le=100)
+    actor: str | None = None
 
 
 class SessionItemsRequest(BaseModel):
@@ -97,6 +98,47 @@ def _is_deployed() -> bool:
     app_url = os.getenv("DATABRICKS_APP_URL", "")
     is_local = app_url.startswith(("http://localhost", "http://127.0.0.1"))
     return bool(os.getenv("DATABRICKS_APP_NAME")) and not is_local
+
+
+# Tracing turns on only with both a destination and an experiment, mirroring
+# databricks_mason.runtime.tracing so the UI card matches what the agent actually does.
+_TRACING_DESTINATION_VARS = ("MLFLOW_TRACKING_URI", "MLFLOW_TRACING_DESTINATION")
+
+
+def _workspace_host() -> str:
+    """Best-effort workspace host for building MLflow links; never raises."""
+    try:
+        host = workspace_client().config.host or ""
+    except Exception:  # noqa: BLE001 - host is best-effort; a failure must not break the config route
+        host = os.getenv("DATABRICKS_HOST", "")
+    return host.rstrip("/")
+
+
+def _tracing() -> dict:
+    """Whether MLflow tracing is configured, plus a best-effort link to its experiment."""
+    destination = ""
+    for var in _TRACING_DESTINATION_VARS:
+        if value := os.getenv(var):
+            destination = value
+            break
+    experiment_id = os.getenv("MLFLOW_EXPERIMENT_ID", "").strip()
+    experiment_name = os.getenv("MLFLOW_EXPERIMENT_NAME", "").strip()
+    enabled = bool(destination) and bool(experiment_id or experiment_name)
+    url: str | None = None
+    if enabled:
+        if destination.startswith(("http://", "https://")) and "databricks" not in destination:
+            # A local OSS MLflow server: link into its own UI.
+            base = destination.rstrip("/")
+            url = f"{base}/#/experiments/{experiment_id}" if experiment_id else base
+        else:
+            host = _workspace_host()
+            if host:
+                url = (
+                    f"{host}/ml/experiments/{experiment_id}"
+                    if experiment_id
+                    else f"{host}/ml/experiments"
+                )
+    return {"enabled": enabled, "experiment_id": experiment_id or None, "url": url}
 
 
 # The task string the Model Serving API reports for chat/completions endpoints; only these can back
@@ -382,7 +424,9 @@ def install_ui(app: FastAPI) -> None:
             and bool(os.getenv(RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV))
             and bool(os.getenv(RUNTIME_STORE_SCHEMA_ENV))
         )
-        runtime_store_mode = "Runtime Store" if runtime_store_persistent else "In-process Runtime Store"
+        runtime_store_mode = (
+            "Runtime Store" if runtime_store_persistent else "In-process Runtime Store"
+        )
         return {
             "session_id": _request_session_id(request),
             "instance_id": _INSTANCE_ID,
@@ -413,6 +457,7 @@ def install_ui(app: FastAPI) -> None:
                 "store": f"memory-stores/{memory_store}" if memory_store else None,
                 "actor": actor,
             },
+            "tracing": _tracing(),
         }
 
     @app.get("/api/demo/models", include_in_schema=False)
@@ -436,17 +481,20 @@ def install_ui(app: FastAPI) -> None:
     async def list_memory_entries(
         request: Request,
         path_prefix: str | None = Query(default=None),
+        actor: str | None = Query(default=None),
     ) -> dict:
+        # The UI can browse another actor's memories by passing ?actor=; default to the viewer.
         _require_memory()
         return await _managed_call(
-            _state_client().list_memory_entries, _request_actor(request), path_prefix
+            _state_client().list_memory_entries, actor or _request_actor(request), path_prefix
         )
 
     @app.post("/api/demo/memory/search", include_in_schema=False)
     async def search_memory_entries(request: Request, payload: MemorySearchRequest) -> dict:
+        # payload.actor lets the UI search another actor's memories; default to the viewer.
         _require_memory()
         return await _managed_call(
-            _state_client().search_memory_entries, _request_actor(request), payload
+            _state_client().search_memory_entries, payload.actor or _request_actor(request), payload
         )
 
     @app.post("/api/demo/sessions", include_in_schema=False)
