@@ -445,6 +445,25 @@ def test_deployment_name_round_trips(tmp_path: pathlib.Path):
     assert AgentProject.load(tmp_path).deployment_name == "renamed"
 
 
+def test_legacy_manifest_derives_runtime_store_from_server(tmp_path: pathlib.Path):
+    _write_manifest(tmp_path)
+
+    project = AgentProject.load(tmp_path)
+
+    assert project.runtime_store_enabled is True
+
+
+def test_runtime_store_declaration_must_match_server(tmp_path: pathlib.Path):
+    _write_manifest(
+        tmp_path,
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n\n'
+        "[runtime_store]\nenabled = false\n",
+    )
+
+    with pytest.raises(AgentCliError, match="runtime_store"):
+        AgentProject.load(tmp_path)
+
+
 def test_load_rejects_empty_deployment_name(tmp_path: pathlib.Path):
     _write_manifest(
         tmp_path,

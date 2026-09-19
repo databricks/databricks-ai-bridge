@@ -30,6 +30,7 @@ from databricks_mason.runtime.tool_manifest import (
 # The tracing binding (`mason tracing configure` / `disable`). Tracing is on by default (a per-project
 # MLflow experiment); this table only records an explicit experiment override or a disable.
 TRACING_TABLE = "tracing"
+RUNTIME_STORE_TABLE = "runtime_store"
 
 _SCHEMA_VERSION = 1
 _SUPPORTED_SCOPE_KINDS = {"table", "volume", "workspace"}
@@ -340,6 +341,7 @@ class AgentProject:
         deployment_name: str | None = None,
         trace_experiment_id: str | None = None,
         trace_disabled: bool = False,
+        runtime_store_enabled: bool | None = None,
     ) -> None:
         self.root = root
         self.path = root / "agent.toml"
@@ -348,6 +350,9 @@ class AgentProject:
         # Server selection is deployment behavior, so agent.toml—not hidden template metadata—is
         # the source of truth for whether Mason provisions and wires a Runtime Store.
         self.server = server
+        self.runtime_store_enabled = (
+            server == AgentServer.MASON if runtime_store_enabled is None else runtime_store_enabled
+        )
         self.tools = tools
         # Managed store bindings declared in agent.toml; None = unbound. memory_store_id is the bare
         # store id the runtime needs for the entries API (the display name can't be used there).
@@ -392,6 +397,21 @@ class AgentProject:
             raise AgentCliError("agent.toml must declare an [agent] table.")
         framework = parse_framework(_required_string(agent.get("framework"), "agent.framework"))
         server = parse_server(_required_string(agent.get("server"), "agent.server"))
+        expected_runtime_store = server == AgentServer.MASON
+        runtime_store_table = document.get(RUNTIME_STORE_TABLE)
+        runtime_store_enabled = expected_runtime_store
+        if runtime_store_table is not None:
+            if not isinstance(runtime_store_table, Mapping) or not isinstance(
+                runtime_store_table.get("enabled"), bool
+            ):
+                raise AgentCliError("agent.toml [runtime_store] must declare enabled = true/false.")
+            runtime_store_enabled = runtime_store_table["enabled"]
+            if runtime_store_enabled != expected_runtime_store:
+                raise AgentCliError(
+                    "agent.toml [runtime_store] conflicts with agent.server.",
+                    hint="Mason server projects require enabled = true; custom server projects "
+                    "require enabled = false.",
+                )
         deployment_name = agent.get("deployment_name")
         if deployment_name is not None and not (
             isinstance(deployment_name, str) and deployment_name
@@ -432,6 +452,7 @@ class AgentProject:
             str(deployment_name) if deployment_name is not None else None,
             trace_experiment_id,
             trace_disabled,
+            runtime_store_enabled,
         )
 
     @classmethod
@@ -454,6 +475,10 @@ class AgentProject:
         agent.add("framework", selected_framework.value)
         agent.add("server", selected_server.value)
         document.add("agent", agent)
+        document.add(tomlkit.nl())
+        runtime_store = tomlkit.table()
+        runtime_store.add("enabled", selected_server == AgentServer.MASON)
+        document.add(RUNTIME_STORE_TABLE, runtime_store)
         project = cls(
             project_root,
             document,
