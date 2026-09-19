@@ -5,6 +5,7 @@ from typing import Any
 from databricks_langchain import ChatDatabricks
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langchain_core.messages import BaseMessage, ToolMessage
 
 from agent.mcps import build_mcp_servers
 
@@ -33,6 +34,25 @@ REQUIRE_APPROVAL = {"send_message": True}
 
 class _RoutedChatDatabricks(ChatDatabricks):
     """Forward account-host workspace routing to the underlying OpenAI clients."""
+
+    def _prepare_inputs(
+        self, messages: list[BaseMessage], *args: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        sanitized_messages: list[BaseMessage] = []
+        for message in messages:
+            content = message.content
+            if isinstance(message, ToolMessage) and isinstance(content, list):
+                content = [
+                    {"type": "text", "text": block["text"]}
+                    if isinstance(block, dict)
+                    and block.get("type") == "text"
+                    and isinstance(block.get("text"), str)
+                    else block
+                    for block in content
+                ]
+                message = message.model_copy(update={"content": content})
+            sanitized_messages.append(message)
+        return super()._prepare_inputs(sanitized_messages, *args, **kwargs)
 
     def _get_client_kwargs(self) -> dict[str, Any]:
         kwargs = super()._get_client_kwargs()
