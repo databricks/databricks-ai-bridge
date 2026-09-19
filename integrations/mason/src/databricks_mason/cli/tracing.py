@@ -36,6 +36,13 @@ TRACES_TRACKING_URI_ENV = "MLFLOW_TRACKING_URI"
 TRACES_EXPERIMENT_ID_ENV = "MLFLOW_EXPERIMENT_ID"
 
 
+def normalize_workspace_host(host: Optional[str]) -> Optional[str]:
+    """Return a stable workspace identity for comparing persisted trace bindings."""
+    if not host or host == "unknown":
+        return None
+    return host.rstrip("/").lower()
+
+
 def default_experiment_name(user: str, project: Optional[str]) -> str:
     """The per-project experiment path under the user's workspace home (shared by dev and deploy).
 
@@ -110,9 +117,12 @@ def _project_experiment_id(obj, source: str, mlflow) -> Optional[str]:
         project = AgentProject.load(source)
     except AgentCliError:
         project = None
-    if project is not None and project.trace_experiment_id:
-        return project.trace_experiment_id
     client = obj.client()
+    if project is not None and project.trace_experiment_id:
+        pinned_host = normalize_workspace_host(project.trace_workspace_host)
+        current_host = normalize_workspace_host(client.host)
+        if pinned_host is None or pinned_host == current_host:
+            return project.trace_experiment_id
     name = default_experiment_name(client.current_user, pathlib.Path(source).resolve().name)
     experiment = mlflow.get_experiment_by_name(name)
     return experiment.experiment_id if experiment else None
@@ -202,7 +212,8 @@ def tracing_configure(obj, experiment_id, source) -> None:
             )
 
     project = AgentProject.load(pathlib.Path(source))
-    project.configure_tracing(experiment_id)
+    workspace_host = normalize_workspace_host(obj.client().host) if experiment_id else None
+    project.configure_tracing(experiment_id, workspace_host)
     project.write()
 
     target = f"experiment {experiment_id}" if experiment_id else "a per-project experiment"
