@@ -47,6 +47,10 @@ def test_prefixed_name_is_idempotent():
     assert deploy_mod._prefixed_name("agent-mason-foo") == "agent-mason-foo"
 
 
+def test_prefixed_name_preserves_legacy_physical_name():
+    assert deploy_mod._prefixed_name("mason-foo") == "mason-foo"
+
+
 def test_deployments_list_shows_only_agent_apps(monkeypatch):
     apps = {
         "apps": [
@@ -102,7 +106,7 @@ def test_delete_proceeds_with_yes(monkeypatch):
     )
     result = CliRunner().invoke(deploy_mod.deployments_delete, ["myapp", "--yes"], obj=_Ctx())
     assert result.exit_code == 0, result.output
-    assert called and called[0][:3] == ["apps", "delete", "myapp"]
+    assert called and called[0][:3] == ["apps", "delete", "agent-mason-myapp"]
 
 
 # --- ML-69245: postgres resources are MERGED, not replaced -------------------

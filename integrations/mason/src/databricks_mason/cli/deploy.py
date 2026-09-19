@@ -151,8 +151,11 @@ def _instance_args(instances: Optional[int]) -> list[str]:
 
 
 def _prefixed_name(name: str) -> str:
-    """Mason deployments carry an `agent-mason-` prefix so `deployments list` finds only its own apps."""
-    return name if name.startswith(_DEPLOYMENT_PREFIX) else f"{_DEPLOYMENT_PREFIX}{name}"
+    """Resolve a base name to its App resource name while preserving legacy physical names."""
+    _validate_deployment_name(name)
+    if name.startswith((_DEPLOYMENT_PREFIX, "mason-")):
+        return name
+    return f"{_DEPLOYMENT_PREFIX}{name}"
 
 
 def _base_name(name: str) -> str:
