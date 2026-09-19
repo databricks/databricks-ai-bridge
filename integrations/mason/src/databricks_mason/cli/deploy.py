@@ -23,6 +23,7 @@ from typing import Any, Optional
 
 import click
 import yaml
+from databricks.sdk.service.apps import App
 
 import databricks_mason.lakebase_runtime_store as managed_runtime_store
 import databricks_mason.legacy_lakebase_runtime_store as legacy_runtime_store
@@ -30,6 +31,7 @@ from databricks_mason import (
     render,
     timefmt,
 )
+from databricks_mason._api_client import _workspace_client
 from databricks_mason.app_resources import (
     apply_experiment_resource,
     apply_postgres_resources,
@@ -138,16 +140,39 @@ def _validate_deployment_name(name: str) -> str:
     return name
 
 
-def _instance_args(instances: Optional[int]) -> list[str]:
-    """Build runtime instance arguments from Mason's fixed-count option."""
-    if instances is None:
-        return []
-    return [
-        "--compute-min-instances",
-        str(instances),
-        "--compute-max-instances",
-        str(instances),
-    ]
+def _set_instance_count(name: str, instances: int, profile: Optional[str]) -> None:
+    """Set an App's fixed instance count through the supported asynchronous update API.
+
+    The generated Databricks CLI no longer exposes the old create flags. Apps created without
+    explicit scaling are also legacy single-instance Apps: the platform requires a one-time 1/1
+    update before accepting another count. The SDK waiter keeps both transitions synchronous from
+    Mason's perspective and surfaces platform failures before source deployment starts.
+    """
+    try:
+        client = _workspace_client(profile)
+        app = client.apps.get(name)
+        current = (app.compute_min_instances, app.compute_max_instances)
+        targets: list[int] = []
+        if None in current:
+            targets.append(1)
+            current = (1, 1)
+        if current != (instances, instances):
+            targets.append(instances)
+        for target in targets:
+            client.apps.create_update_and_wait(
+                app_name=name,
+                update_mask="compute_min_instances,compute_max_instances",
+                app=App(
+                    name=name,
+                    compute_min_instances=target,
+                    compute_max_instances=target,
+                ),
+            )
+    except Exception as exc:  # noqa: BLE001 - render SDK/platform failures without a traceback
+        raise AgentCliError(
+            f"Could not set deployment '{name}' to {instances} instance(s).",
+            hint=str(exc),
+        ) from exc
 
 
 def _prefixed_name(name: str) -> str:
@@ -523,7 +548,6 @@ def deploy(
     # Persist the base name so a later `mason deploy` (no NAME) resolves to the same app.
     if project is not None and project.set_deployment_name(base_name):
         project.write()
-    instance_args = _instance_args(instances)
     client = obj.client()
     use_managed_runtime_store = _USE_MANAGED_RUNTIME_STORE
 
@@ -598,29 +622,16 @@ def deploy(
             "Creating the agent and starting its compute (this can take a few minutes)…"
         ):
             result = _databricks(
-                ["apps", "create", name, *instance_args],
+                ["apps", "create", name],
                 obj.profile,
                 capture=True,
                 action=f"Could not create deployment '{name}'.",
             )
         old, new = _AGENT_COMPUTE_OUTPUT
         click.echo((result.stdout or "").replace(old, new), nl=False)
-    elif instance_args:
-        update = {
-            "app": {
-                "compute_min_instances": instances,
-                "compute_max_instances": instances,
-            },
-            "update_mask": "compute_min_instances,compute_max_instances",
-        }
-        result = _databricks(
-            ["apps", "create-update", name, "--json", json.dumps(update)],
-            obj.profile,
-            capture=True,
-            action=f"Could not update deployment '{name}'.",
-        )
-        old, new = _AGENT_COMPUTE_OUTPUT
-        click.echo((result.stdout or "").replace(old, new), nl=False)
+    if instances is not None:
+        with render.progress(f"Setting agent compute to {instances} instance(s)…"):
+            _set_instance_count(name, instances, obj.profile)
     # `apps deploy` requires the app's compute to be ACTIVE — a just-created app may still be
     # starting, and an existing one may be STOPPED — so wait either way. Returns immediately when
     with render.progress("Waiting for agent compute to start (this can take a few minutes)…"):
