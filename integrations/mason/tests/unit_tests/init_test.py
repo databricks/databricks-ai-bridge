@@ -131,6 +131,7 @@ def test_init_defaults_to_langgraph_with_chat_app(tmp_path: pathlib.Path):
     assert manifest == {
         "schema_version": 1,
         "agent": {"framework": "langgraph", "server": "mason"},
+        "runtime_store": {"enabled": True},
         "memory_store": {"name": f"proj-{token}-memory"},
         "session_store": {"name": f"proj-{token}-sessions"},
     }
@@ -153,6 +154,7 @@ def test_init_custom_server_uses_minimal_template(tmp_path: pathlib.Path, framew
     assert manifest == {
         "schema_version": 1,
         "agent": {"framework": framework, "server": "custom"},
+        "runtime_store": {"enabled": False},
     }
     assert "memory_store" not in manifest
     assert "session_store" not in manifest
@@ -172,6 +174,7 @@ def test_init_creates_canonical_agent_manifest(tmp_path: pathlib.Path):
     assert manifest == {
         "schema_version": 1,
         "agent": {"framework": "openai", "server": "mason"},
+        "runtime_store": {"enabled": True},
         "memory_store": {"name": f"proj-{token}-memory"},
         "session_store": {"name": f"proj-{token}-sessions"},
     }
