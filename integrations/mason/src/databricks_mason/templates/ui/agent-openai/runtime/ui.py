@@ -9,6 +9,7 @@ import uuid
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -108,6 +109,16 @@ def _workspace_host() -> str:
     except Exception:  # noqa: BLE001 - host is best-effort; a failure must not break the config route
         host = os.getenv("DATABRICKS_HOST", "")
     return host.rstrip("/")
+
+
+def _app_links() -> dict[str, str | None]:
+    """Workspace management pages for the deployed App, hidden for local development."""
+    name = os.getenv("DATABRICKS_APP_NAME", "").strip()
+    host = _workspace_host()
+    if not _is_deployed() or not name or not host:
+        return {"name": name or None, "settings_url": None, "logs_url": None}
+    app_path = f"{host}/apps-v2/app/{quote(name, safe='')}"
+    return {"name": name, "settings_url": app_path, "logs_url": f"{app_path}/logs"}
 
 
 def _tracing() -> dict:
@@ -423,6 +434,7 @@ def install_ui(app: FastAPI) -> None:
             "instance_id": _INSTANCE_ID,
             "viewer": actor if actor != "agent" else "Local developer",
             "deployed": _is_deployed(),
+            "app": _app_links(),
             "models": {"default": default_model, "available": [default_model]},
             "streaming": {
                 "enabled": True,

@@ -153,6 +153,8 @@ def test_demo_ui_routes(monkeypatch):
     assert 'id="new-session"' in index.text
     assert 'id="session-list"' in index.text
     assert 'id="model-select"' in index.text
+    assert 'id="app-settings-link"' in index.text
+    assert 'id="app-logs-link"' in index.text
     app_script = client.get("/ui-assets/app.js")
     assert app_script.status_code == 200
     assert app_script.headers["cache-control"] == "no-store"
@@ -267,6 +269,18 @@ def test_demo_config_distinguishes_run_local_from_a_deployed_app(monkeypatch):
 
     monkeypatch.setenv("DATABRICKS_APP_URL", "https://agent.example.databricksapps.com")
     assert _client(monkeypatch).get("/api/ui/config").json()["deployed"] is True
+
+
+def test_deployed_app_management_links_target_workspace_pages(monkeypatch):
+    monkeypatch.setenv("DATABRICKS_APP_NAME", "agent-mason-demo")
+    monkeypatch.setenv("DATABRICKS_APP_URL", "https://demo.databricksapps.com")
+    monkeypatch.setattr(ui, "_workspace_host", lambda: "https://example.databricks.com")
+
+    assert ui._app_links() == {
+        "name": "agent-mason-demo",
+        "settings_url": "https://example.databricks.com/apps-v2/app/agent-mason-demo",
+        "logs_url": "https://example.databricks.com/apps-v2/app/agent-mason-demo/logs",
+    }
 
 
 def test_demo_config_does_not_wait_for_model_discovery(monkeypatch):

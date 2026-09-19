@@ -165,6 +165,24 @@ code {
   gap: 10px;
 }
 
+.app-links {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.header-link {
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.header-link:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
 .viewer-chip {
   min-width: 0;
   display: flex;
