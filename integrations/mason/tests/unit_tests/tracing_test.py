@@ -114,7 +114,9 @@ def test_configure_pins_experiment_id(tmp_path: pathlib.Path):
         )
     assert result.exit_code == 0, result.output
     assert json.loads(result.output) == {"experiment_id": "123", "disabled": False}
-    assert AgentProject.load(tmp_path).trace_experiment_id == "123"
+    project = AgentProject.load(tmp_path)
+    assert project.trace_experiment_id == "123"
+    assert project.trace_workspace_host == "https://ws"
 
 
 def test_configure_rejects_unknown_experiment_id(tmp_path: pathlib.Path):
@@ -225,6 +227,26 @@ def test_list_defaults_to_projects_pinned_experiment(tmp_path: pathlib.Path):
         )
     assert result.exit_code == 0, result.output
     assert mlflow.search_traces.call_args.kwargs["locations"] == ["p1"]
+
+
+def test_list_ignores_project_pin_from_another_workspace(tmp_path: pathlib.Path):
+    manifest = _project(tmp_path, experiment_id="dogfood-id") / "agent.toml"
+    manifest.write_text(
+        manifest.read_text() + 'workspace_host = "https://dogfood.databricks.com"\n'
+    )
+    mlflow = mock.Mock()
+    mlflow.get_experiment_by_name.return_value = mock.Mock(experiment_id="tilefood-id")
+    mlflow.search_traces.return_value = []
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
+        mock.patch.object(tracing_mod, "_set_tracking_uri"),
+    ):
+        result = CliRunner().invoke(
+            tracing_mod.tracing_list, ["--source", str(tmp_path)], obj=_Ctx(output="json")
+        )
+
+    assert result.exit_code == 0, result.output
+    assert mlflow.search_traces.call_args.kwargs["locations"] == ["tilefood-id"]
 
 
 def test_list_empty_when_no_experiment_exists(tmp_path: pathlib.Path):
