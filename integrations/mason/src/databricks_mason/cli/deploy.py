@@ -151,8 +151,16 @@ def _instance_args(instances: Optional[int]) -> list[str]:
 
 
 def _prefixed_name(name: str) -> str:
-    """Mason deployments carry an `agent-mason-` prefix so `deployments list` finds only its own apps."""
-    return name if name.startswith(_DEPLOYMENT_PREFIX) else f"{_DEPLOYMENT_PREFIX}{name}"
+    """Resolve a base name to its App resource name while preserving legacy physical names."""
+    _validate_deployment_name(name)
+    if name.startswith((_DEPLOYMENT_PREFIX, "mason-")):
+        return name
+    return f"{_DEPLOYMENT_PREFIX}{name}"
+
+
+def _base_name(name: str) -> str:
+    """Return the user-facing deployment name without Mason's physical resource prefix."""
+    return name.removeprefix(_DEPLOYMENT_PREFIX)
 
 
 def _confirm_destroy(target: str, *, assume_yes: bool) -> None:
@@ -500,8 +508,8 @@ def deploy(
 
     NAME is recorded in agent.toml on the first deploy, so a later `mason deploy` from the project
     directory can omit it (passing NAME again updates the recorded name). The deployed app is named
-    `agent-mason-<name>` (Mason adds the prefix if absent); use that full name with the `mason
-    deployments` commands. `deployments list` shows only apps carrying this prefix.
+    `agent-mason-<name>` internally. Keep using NAME with `mason endpoint` and `mason deployments`;
+    Mason resolves the physical app name for you.
 
     Any memory/session store declared in agent.toml (for example, by `mason memory/sessions bind`)
     is created if it doesn't exist yet; agent.toml itself is never modified for stores.
@@ -517,7 +525,7 @@ def deploy(
     project = _load_project(source_dir)
     if project is not None and project.tools:
         require_managed_tool_support(source_dir)
-    base_name = _resolve_deployment_name(project, name)
+    base_name = _base_name(_resolve_deployment_name(project, name))
     name = _prefixed_name(base_name)
     _validate_deployment_name(name)
     # Persist the base name so a later `mason deploy` (no NAME) resolves to the same app.
@@ -687,7 +695,7 @@ def deploy(
     if obj.output == "json":
         render.emit_json(
             {
-                "deployment": name,
+                "deployment": base_name,
                 "url": app_url,
                 "workspace_path": ws_path,
                 "env": env_updates,
@@ -706,8 +714,8 @@ def deploy(
         return
 
     steps: list[str | tuple[str, str]] = [
-        (f"mason deployments get {name}", "Check its status and URL"),
-        (f"mason deployments logs {name}", "Tail its logs"),
+        (f"mason deployments get {base_name}", "Check its status and URL"),
+        (f"mason deployments logs {base_name}", "Tail its logs"),
     ]
     if app_url:
         steps.insert(0, f"Open the deployed agent: {app_url}")
@@ -737,12 +745,12 @@ def deploy(
     fields = {"URL": app_url} if app_url else {}
     fields.update({"Workspace path": ws_path, **provisioned})
     render.success(
-        f"Deployed agent '{name}'",
+        f"Deployed agent '{base_name}'",
         fields=fields,
         next_steps=steps,
     )
     print_agent_invoke_command(
-        name, uses_runtime_api=bool(project and project.server == AgentServer.MASON)
+        base_name, uses_runtime_api=bool(project and project.server == AgentServer.MASON)
     )
 
 
@@ -780,7 +788,7 @@ def deployments_list(obj) -> None:
         return
     rows = [
         [
-            render.hyperlink(field(a, "name"), field(a, "url")),
+            render.hyperlink(_base_name(str(field(a, "name") or "")), field(a, "url")),
             render.status_pill(_deployment_status(a)),
             timefmt.relative(field(a, "update_time")),
         ]
@@ -798,12 +806,13 @@ def deployments_list(obj) -> None:
 @click.pass_obj
 def deployments_get(obj, name) -> None:
     """Get an agent deployment's details."""
-    _validate_deployment_name(name)
+    base_name = _base_name(name)
+    resource_name = _validate_deployment_name(_prefixed_name(base_name))
     result = _databricks(
-        ["apps", "get", name, "-o", "json"],
+        ["apps", "get", resource_name, "-o", "json"],
         obj.profile,
         capture=True,
-        action=f"Could not read deployment '{name}'.",
+        action=f"Could not read deployment '{base_name}'.",
     )
     data = json.loads(result.stdout or "{}")
     if obj.output == "json":
@@ -812,7 +821,7 @@ def deployments_get(obj, name) -> None:
     url = field(data, "url")
     render.detail(
         "Agent Deployment",
-        field(data, "name") or name,
+        base_name,
         {
             "URL": render.hyperlink(url, url) if url else None,
             "Description": field(data, "description"),
@@ -829,8 +838,13 @@ def deployments_get(obj, name) -> None:
 @click.pass_obj
 def deployments_logs(obj, name) -> None:
     """Stream a deployment's logs."""
-    _validate_deployment_name(name)
-    _databricks(["apps", "logs", name], obj.profile, action=f"Could not read logs for '{name}'.")
+    base_name = _base_name(name)
+    resource_name = _validate_deployment_name(_prefixed_name(base_name))
+    _databricks(
+        ["apps", "logs", resource_name],
+        obj.profile,
+        action=f"Could not read logs for '{base_name}'.",
+    )
 
 
 @deployments.command("start")
@@ -838,14 +852,17 @@ def deployments_logs(obj, name) -> None:
 @click.pass_obj
 def deployments_start(obj, name) -> None:
     """Start a deployment."""
-    _validate_deployment_name(name)
+    base_name = _base_name(name)
+    resource_name = _validate_deployment_name(_prefixed_name(base_name))
     _databricks(
-        ["apps", "start", name], obj.profile, action=f"Could not start deployment '{name}'."
+        ["apps", "start", resource_name],
+        obj.profile,
+        action=f"Could not start deployment '{base_name}'.",
     )
     if obj.output == "json":
-        render.emit_json({"started": name})
+        render.emit_json({"started": base_name})
         return
-    render.success(f"Started deployment '{name}'")
+    render.success(f"Started deployment '{base_name}'")
 
 
 @deployments.command("stop")
@@ -854,13 +871,18 @@ def deployments_start(obj, name) -> None:
 @click.pass_obj
 def deployments_stop(obj, name, yes) -> None:
     """Stop a deployment."""
-    _validate_deployment_name(name)
-    _confirm_destroy(f"Stop deployment '{name}'", assume_yes=yes)
-    _databricks(["apps", "stop", name], obj.profile, action=f"Could not stop deployment '{name}'.")
+    base_name = _base_name(name)
+    resource_name = _validate_deployment_name(_prefixed_name(base_name))
+    _confirm_destroy(f"Stop deployment '{base_name}'", assume_yes=yes)
+    _databricks(
+        ["apps", "stop", resource_name],
+        obj.profile,
+        action=f"Could not stop deployment '{base_name}'.",
+    )
     if obj.output == "json":
-        render.emit_json({"stopped": name})
+        render.emit_json({"stopped": base_name})
         return
-    render.success(f"Stopped deployment '{name}'")
+    render.success(f"Stopped deployment '{base_name}'")
 
 
 @deployments.command("delete")
@@ -869,27 +891,30 @@ def deployments_stop(obj, name, yes) -> None:
 @click.pass_obj
 def deployments_delete(obj, name, yes) -> None:
     """Delete a deployment and, when managed provisioning is enabled, its Runtime Store."""
-    _validate_deployment_name(name)
+    base_name = _base_name(name)
+    resource_name = _validate_deployment_name(_prefixed_name(base_name))
     use_managed_runtime_store = _USE_MANAGED_RUNTIME_STORE
     target = (
-        f"Delete deployment '{name}' and its Runtime Store data"
+        f"Delete deployment '{base_name}' and its Runtime Store data"
         if use_managed_runtime_store
-        else f"Delete deployment '{name}'"
+        else f"Delete deployment '{base_name}'"
     )
     _confirm_destroy(target, assume_yes=yes)
     if use_managed_runtime_store:
-        app_service_principal_id = _app_service_principal(name, obj.profile)
+        app_service_principal_id = _app_service_principal(resource_name, obj.profile)
         if not app_service_principal_id:
             raise AgentCliError(
                 "Could not resolve the app's service principal for Runtime Store cleanup.",
                 hint="The deployment was retained. Check access to the app and retry deletion.",
             )
         with render.status("Deleting Runtime Store…"):
-            managed_runtime_store.delete(obj.client(), name, app_service_principal_id)
+            managed_runtime_store.delete(obj.client(), resource_name, app_service_principal_id)
     _databricks(
-        ["apps", "delete", name], obj.profile, action=f"Could not delete deployment '{name}'."
+        ["apps", "delete", resource_name],
+        obj.profile,
+        action=f"Could not delete deployment '{base_name}'.",
     )
     if obj.output == "json":
-        render.emit_json({"deleted": name})
+        render.emit_json({"deleted": base_name})
         return
-    render.success(f"Deleted deployment '{name}'")
+    render.success(f"Deleted deployment '{base_name}'")
