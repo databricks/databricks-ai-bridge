@@ -19,11 +19,10 @@ import json
 import pathlib
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 import click
 import yaml
-from databricks.sdk.service.apps import App
 
 import databricks_mason.lakebase_runtime_store as managed_runtime_store
 import databricks_mason.legacy_lakebase_runtime_store as legacy_runtime_store
@@ -150,8 +149,15 @@ def _set_instance_count(name: str, instances: int, profile: Optional[str]) -> No
     """
     try:
         client = _workspace_client(profile)
-        app = client.apps.get(name)
-        current = (app.compute_min_instances, app.compute_max_instances)
+        app = cast(
+            dict[str, Any],
+            client.api_client.do(
+                "GET",
+                f"/api/2.0/apps/{name}",
+                headers={"Accept": "application/json"},
+            ),
+        )
+        current = (app.get("compute_min_instances"), app.get("compute_max_instances"))
         targets: list[int] = []
         if None in current:
             targets.append(1)
@@ -159,15 +165,20 @@ def _set_instance_count(name: str, instances: int, profile: Optional[str]) -> No
         if current != (instances, instances):
             targets.append(instances)
         for target in targets:
-            client.apps.create_update_and_wait(
-                app_name=name,
-                update_mask="compute_min_instances,compute_max_instances",
-                app=App(
-                    name=name,
-                    compute_min_instances=target,
-                    compute_max_instances=target,
-                ),
+            client.api_client.do(
+                "POST",
+                f"/api/2.0/apps/{name}/update",
+                body={
+                    "app": {
+                        "name": name,
+                        "compute_min_instances": target,
+                        "compute_max_instances": target,
+                    },
+                    "update_mask": "compute_min_instances,compute_max_instances",
+                },
+                headers={"Accept": "application/json", "Content-Type": "application/json"},
             )
+            client.apps.wait_get_update_app_succeeded(app_name=name)
     except Exception as exc:  # noqa: BLE001 - render SDK/platform failures without a traceback
         raise AgentCliError(
             f"Could not set deployment '{name}' to {instances} instance(s).",

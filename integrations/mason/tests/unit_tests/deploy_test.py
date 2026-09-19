@@ -441,40 +441,62 @@ def test_deploy_updates_existing_instance_count(tmp_path: pathlib.Path, monkeypa
     assert not any(args[:2] == ["apps", "create-update"] for args, _ in calls)
 
 
-def test_set_instance_count_migrates_legacy_app_before_scaling(monkeypatch):
-    updates = []
+def test_set_instance_count_uses_raw_scaling_fields_for_old_sdk(monkeypatch):
+    requests = []
+    waits = []
+
+    class ApiClient:
+        def do(self, method, path, *, body=None, headers):
+            requests.append((method, path, body, headers))
+            return {}
 
     class Apps:
-        def get(self, name):
-            return types.SimpleNamespace(compute_min_instances=None, compute_max_instances=None)
-
-        def create_update_and_wait(self, *, app_name, update_mask, app):
-            updates.append(
-                (app_name, update_mask, app.compute_min_instances, app.compute_max_instances)
-            )
+        def wait_get_update_app_succeeded(self, *, app_name):
+            waits.append(app_name)
 
     monkeypatch.setattr(
         deploy_mod,
         "_workspace_client",
-        lambda profile: types.SimpleNamespace(apps=Apps()),
+        lambda profile: types.SimpleNamespace(apps=Apps(), api_client=ApiClient()),
     )
 
     deploy_mod._set_instance_count("agent-mason-myapp", 2, "prof")
 
-    assert updates == [
+    assert requests == [
         (
-            "agent-mason-myapp",
-            "compute_min_instances,compute_max_instances",
-            1,
-            1,
+            "GET",
+            "/api/2.0/apps/agent-mason-myapp",
+            None,
+            {"Accept": "application/json"},
         ),
         (
-            "agent-mason-myapp",
-            "compute_min_instances,compute_max_instances",
-            2,
-            2,
+            "POST",
+            "/api/2.0/apps/agent-mason-myapp/update",
+            {
+                "app": {
+                    "name": "agent-mason-myapp",
+                    "compute_min_instances": 1,
+                    "compute_max_instances": 1,
+                },
+                "update_mask": "compute_min_instances,compute_max_instances",
+            },
+            {"Accept": "application/json", "Content-Type": "application/json"},
+        ),
+        (
+            "POST",
+            "/api/2.0/apps/agent-mason-myapp/update",
+            {
+                "app": {
+                    "name": "agent-mason-myapp",
+                    "compute_min_instances": 2,
+                    "compute_max_instances": 2,
+                },
+                "update_mask": "compute_min_instances,compute_max_instances",
+            },
+            {"Accept": "application/json", "Content-Type": "application/json"},
         ),
     ]
+    assert waits == ["agent-mason-myapp", "agent-mason-myapp"]
 
 
 def test_deploy_rejects_instance_count_above_platform_limit():
