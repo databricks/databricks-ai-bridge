@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from agent.tools import all_tools
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
 from runtime.adapter import _serialize_events
 
@@ -68,6 +69,25 @@ def test_chat_model_forwards_account_routing_header(monkeypatch):
     model = _RoutedChatDatabricks(endpoint="test-endpoint")
 
     assert model._get_client_kwargs()["default_headers"] == {"X-Databricks-Org-Id": "123456"}
+
+
+def test_chat_model_strips_provider_metadata_from_tool_result_text():
+    from agent.agent import _RoutedChatDatabricks
+
+    content = [
+        {
+            "type": "text",
+            "text": "2026-09-19T01:11:00Z",
+            "id": "content-block-1",
+            "annotations": [{"source": "provider"}],
+        }
+    ]
+    message = ToolMessage(content=content, tool_call_id="toolu_repro_1")
+
+    payload = _RoutedChatDatabricks(endpoint="test-endpoint")._prepare_inputs([message])
+
+    assert payload["messages"][0]["content"] == [{"type": "text", "text": "2026-09-19T01:11:00Z"}]
+    assert message.content == content
 
 
 def test_thread_config_from_session_id():
