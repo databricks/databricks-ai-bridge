@@ -25,9 +25,9 @@ from databricks_mason.openai import (
 
 logger = logging.getLogger(__name__)
 
-# A Unity Catalog AI Gateway model, served from the `system.ai` schema and queried through the
-# gateway (see `use_ai_gateway=True` in configure()). Swap for any `system.ai.*` model your
-# workspace exposes — the demo chat app's picker lists what's available.
+# A Unity Catalog AI Gateway model service, served from the `system.ai` schema and queried through
+# the gateway (see `use_ai_gateway=True` in configure()). Swap for any `system.ai.*` model service
+# your workspace exposes — the demo chat app's picker lists what's available.
 MODEL = "system.ai.claude-sonnet-4-5"
 
 # Tools that require human approval before they run. Add a tool's name here and the agent pauses when

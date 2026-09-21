@@ -21,9 +21,9 @@ from databricks_mason.langgraph import (
     thread_config,
 )
 
-# A Unity Catalog AI Gateway model, served from the `system.ai` schema and queried through the
-# gateway (see `use_ai_gateway=True` below). Swap for any `system.ai.*` model your workspace
-# exposes — the demo chat app's picker lists what's available.
+# A Unity Catalog AI Gateway model service, served from the `system.ai` schema and queried through
+# the gateway (see `use_ai_gateway=True` below). Swap for any `system.ai.*` model service your
+# workspace exposes — the demo chat app's picker lists what's available.
 MODEL = "system.ai.claude-sonnet-4-5"
 _INVOCATION_METADATA_KEY = "databricks_mason.invocation_id"
 

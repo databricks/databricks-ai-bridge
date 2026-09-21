@@ -20,7 +20,7 @@ entries (searchable, filterable by actor, with a modal for each entry); the othe
 in place, and Traces links out to the MLflow experiment. The transport selector is the only manual
 capability choice.
 
-The composer's model picker lists the workspace's Unity Catalog AI Gateway chat models — the
+The composer's model picker lists the workspace's Unity Catalog AI Gateway chat model services — the
 `system.ai.*` model services from `GET /api/2.1/unity-catalog/model-services?parent=schemas/system.ai`
 (embeddings-only services filtered out), exposed as `GET /api/demo/models` and pinned to
 `agent.agent.MODEL` as the default. Each request sends the selected model as `model` in the
@@ -29,7 +29,7 @@ without a restart. Discovery is best-effort: if listing is unavailable (e.g. `sy
 readable), the picker falls back to just the default. Omitting `model` uses `MODEL`.
 
 The agent calls the chosen model through the gateway (`<host>/ai-gateway/mlflow/v1`) rather than
-`/serving-endpoints`, so `MODEL` is a `system.ai.*` model name. The picker is capped
+`/serving-endpoints`, so `MODEL` is a `system.ai.*` model service name. The picker is capped
 (`_MODEL_LIMIT`, 20) with the default pinned first and the rest alphabetical, so truncation never
 drops the configured default. Transient list failures are retried in
 `databricks_mason.runtime.model_services` before the fallback applies.
