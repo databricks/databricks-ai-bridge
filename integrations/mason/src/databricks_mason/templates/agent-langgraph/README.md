@@ -16,7 +16,7 @@ client -> runtime/main.py -> runtime/adapter.py -> agent/agent.py:run_agent
 - `runtime/main.py` constructs the server and registers those hooks.
 
 To bring an existing LangGraph agent, run `mason init --framework langgraph --existing .` in its
-project and follow the generated Claude Code prompt. The migration skill and this template share
+project and follow the generated prompt in your coding agent. The migration skill and this template share
 [MASON_CONTRACT.md](MASON_CONTRACT.md), which owns integration requirements. This README owns
 configuration and client examples; [AGENTS.md](AGENTS.md) provides the development map.
 

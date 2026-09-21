@@ -59,6 +59,11 @@ _TEMPLATES = {
     AgentFramework.OPENAI: _AgentTemplate("agent-openai", "custom-agent-openai", "ui/agent-openai"),
 }
 
+_MIGRATION_DIR = "mason-migrate"
+# Each coding agent discovers skills in its own configuration directory, so the bundle lives in one
+# tool-neutral directory and every agent gets a pointer to it rather than a copy of the reference.
+_POINTER_ROOTS = (".claude", ".agent")
+
 
 def _copy_packaged_template(
     name: str,
@@ -114,6 +119,49 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
     return True
 
 
+def _migration_paths(dest: pathlib.Path, target: pathlib.Path) -> tuple[pathlib.Path, ...]:
+    """`target` plus every directory under `dest` that Mason would have to create to reach it."""
+    parts = target.relative_to(dest).parts
+    return tuple(dest.joinpath(*parts[:index]) for index in range(1, len(parts) + 1))
+
+
+def _pointer_skill(skill: pathlib.Path) -> str:
+    """A skill file forwarding an agent to the one bundle, so the reference is never duplicated."""
+    _, frontmatter, _ = skill.read_text(encoding="utf-8").split("---", 2)
+    target = f"../../../{_MIGRATION_DIR}/SKILL.md"
+    return (
+        f"---{frontmatter}---\n\n"
+        f"The migration bundle lives at [{target}]({target}), outside any single agent's "
+        "configuration directory.\n\nRead that file and follow it. Its `references/` directory "
+        "holds the migration settings and the candidate project generated from the templates "
+        "bundled with the installed CLI.\n"
+    )
+
+
+def _install_migration(
+    staged: pathlib.Path, bundle: pathlib.Path, pointers: tuple[pathlib.Path, ...]
+) -> None:
+    """Install the staged bundle, removing anything created here if a later write fails."""
+    pointer_skill = _pointer_skill(staged / "SKILL.md")
+    created: list[pathlib.Path] = []
+    try:
+        shutil.copytree(staged, bundle)
+        created.append(bundle)
+        for pointer in pointers:
+            # Remember the outermost directory Mason creates so cleanup never removes a
+            # pre-existing agent configuration directory.
+            outermost = pointer
+            while not outermost.parent.exists():
+                outermost = outermost.parent
+            pointer.mkdir(parents=True)
+            created.append(outermost)
+            (pointer / "SKILL.md").write_text(pointer_skill, encoding="utf-8")
+    except Exception:
+        for path in created:
+            shutil.rmtree(path, ignore_errors=True)
+        raise
+
+
 def _prepare_migration(
     obj,
     dest: pathlib.Path,
@@ -123,22 +171,25 @@ def _prepare_migration(
     memory_store: Optional[str],
     session_store: Optional[str],
 ) -> None:
-    """Prepare a reference project and migration skill without changing the application."""
+    """Prepare a reference project and migration instructions without changing the application."""
     if not dest.is_dir():
         raise AgentCliError(f"Existing project directory '{dest}' was not found.")
-    skill = dest / ".claude" / "skills" / "mason-migrate"
-    for parent in (dest / ".claude", skill.parent, skill):
-        if parent.is_symlink() or (parent.exists() and not parent.is_dir()):
-            raise AgentCliError(f"Cannot install migration skill at '{parent}'.")
-    if skill.exists():
-        raise AgentCliError(
-            f"Migration skill already exists at '{skill}'.",
-            hint="Use the existing PROMPT.md, or move the skill directory before regenerating.",
-        )
+    bundle = dest / _MIGRATION_DIR
+    pointers = tuple(dest / root / "skills" / _MIGRATION_DIR for root in _POINTER_ROOTS)
+    for target in (bundle, *pointers):
+        for path in _migration_paths(dest, target):
+            if path.is_symlink() or (path.exists() and not path.is_dir()):
+                raise AgentCliError(f"Cannot write migration files at '{path}'.")
+        if target.exists():
+            raise AgentCliError(
+                f"Migration files already exist at '{target}'.",
+                hint=f"Use the existing {_MIGRATION_DIR}/PROMPT.md, or move that directory "
+                "before regenerating.",
+            )
 
     # Build the bundle before touching the project, so a failed copy leaves no partial skill.
     with tempfile.TemporaryDirectory(prefix="mason-migrate-") as tmp:
-        staged = pathlib.Path(tmp) / "mason-migrate"
+        staged = pathlib.Path(tmp) / _MIGRATION_DIR
         reference = staged / "references" / "template"
         template = _TEMPLATES[AgentFramework.LANGGRAPH]
         overlays = (template.chat_app,) if chat_app_enabled else ()
@@ -155,7 +206,7 @@ def _prepare_migration(
         write_project_metadata(
             reference, framework=AgentFramework.LANGGRAPH, template=template.mason_server
         )
-        source = resources.files("databricks_mason").joinpath("templates").joinpath("mason-migrate")
+        source = resources.files("databricks_mason").joinpath("templates").joinpath(_MIGRATION_DIR)
         (staged / "SKILL.md").write_text(
             source.joinpath("SKILL.md").read_text(encoding="utf-8"), encoding="utf-8"
         )
@@ -175,7 +226,7 @@ def _prepare_migration(
             encoding="utf-8",
         )
         prompt = (
-            "Use the mason-migrate skill at .claude/skills/mason-migrate/SKILL.md to adapt "
+            f"Use the mason-migrate skill at {_MIGRATION_DIR}/SKILL.md to adapt "
             "my existing LangGraph agent in this project for Mason. Read its migration settings "
             "and local template reference. Implement and verify the integration while preserving "
             "my agent's behavior. Explicitly handle existing persistence, conversation history, "
@@ -183,7 +234,7 @@ def _prepare_migration(
             "Report which Mason commands are ready and any remaining limitations.\n"
         )
         (staged / "PROMPT.md").write_text(prompt, encoding="utf-8")
-        shutil.copytree(staged, skill)
+        _install_migration(staged, bundle, pointers)
 
     if obj.output == "json":
         render.emit_json(
@@ -191,9 +242,11 @@ def _prepare_migration(
                 "mode": "existing",
                 "framework": "langgraph",
                 "directory": str(dest),
-                "skill": str(skill / "SKILL.md"),
-                "prompt_file": str(skill / "PROMPT.md"),
+                "bundle": str(bundle),
+                "skill": str(bundle / "SKILL.md"),
+                "prompt_file": str(bundle / "PROMPT.md"),
                 "prompt": prompt.strip(),
+                "pointers": [str(pointer / "SKILL.md") for pointer in pointers],
                 "template_ref": template_ref,
                 "chat_app_enabled": chat_app_enabled,
             }
@@ -201,10 +254,10 @@ def _prepare_migration(
         return
     render.success(
         "Prepared migration instructions (agent conversion is still required)",
-        fields={"Directory": str(dest), "Skill": str(skill / "SKILL.md")},
+        fields={"Directory": str(dest), "Skill": str(bundle / "SKILL.md")},
         next_steps=[
             (f"cd {shlex.quote(str(dest))}", "Enter the existing project"),
-            "Open Claude Code and paste the prompt from .claude/skills/mason-migrate/PROMPT.md:",
+            f"Open your coding agent and paste the prompt from {_MIGRATION_DIR}/PROMPT.md:",
             prompt.strip(),
         ],
     )
@@ -215,7 +268,8 @@ def _prepare_migration(
 @click.option(
     "--existing",
     is_flag=True,
-    help="Prepare a Claude migration skill for an existing LangGraph project (defaults to .).",
+    help="Prepare a coding-agent migration bundle for an existing LangGraph project "
+    "(defaults to .).",
 )
 @click.option(
     "--framework",
@@ -291,8 +345,9 @@ def init(
     FastAPI server.
 
     With --existing, prepare a skill, prompt, and bundled template reference under
-    .claude/skills/mason-migrate. Run the prompt in Claude Code to convert the agent;
-    init leaves existing application source, dependencies, and configuration intact.
+    mason-migrate/, and point each supported coding agent's skills directory at it. Run the
+    prompt in your coding agent to convert the agent; init leaves existing application source,
+    dependencies, and configuration intact.
     """
     selected_framework = parse_framework(framework or AgentFramework.LANGGRAPH)
     selected_server = parse_server(server)

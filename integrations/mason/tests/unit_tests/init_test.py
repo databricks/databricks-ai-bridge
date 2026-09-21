@@ -386,7 +386,7 @@ def test_existing_prepares_migration_without_changing_application(
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    skill = tmp_path / ".claude/skills/mason-migrate"
+    skill = tmp_path / "mason-migrate"
     assert pathlib.Path(payload["skill"]).is_file()
     assert pathlib.Path(payload["prompt_file"]).read_text().strip() == payload["prompt"]
     assert payload["mode"] == "existing"
@@ -400,6 +400,16 @@ def test_existing_prepares_migration_without_changing_application(
     assert manifest["memory_store"] == {"name": "chosen-memory"}
     assert manifest["session_store"] == {"name": "chosen-session"}
     assert manifest["agent"]["server"] == "mason"
+
+    # Every supported agent finds the one bundle through a pointer, rather than its own copy.
+    pointers = [tmp_path / root / "skills/mason-migrate/SKILL.md" for root in (".claude", ".agent")]
+    assert payload["pointers"] == [str(pointer) for pointer in pointers]
+    for pointer in pointers:
+        body = pointer.read_text()
+        assert "name: mason-migrate" in body
+        assert "../../../mason-migrate/SKILL.md" in body
+        assert not (pointer.parent / "references").exists()
+
     for name, data in original.items():
         assert (tmp_path / name).read_bytes() == data
 
@@ -408,19 +418,25 @@ def test_existing_defaults_to_current_directory(tmp_path: pathlib.Path, monkeypa
     monkeypatch.chdir(tmp_path)
     result = CliRunner().invoke(init_mod.init, ["--existing"], obj=_Ctx(profile="saved"))
     assert result.exit_code == 0, result.output
-    settings = json.loads(
-        (tmp_path / ".claude/skills/mason-migrate/references/migration.json").read_text()
-    )
+    settings = json.loads((tmp_path / "mason-migrate/references/migration.json").read_text())
     assert settings["profile"] == "saved"
     assert not (tmp_path / ".env").exists()
     assert not (tmp_path / "agent.toml").exists()
 
 
-@pytest.mark.parametrize("conflict", ["skill", "file", "symlink"])
+@pytest.mark.parametrize("conflict", ["bundle", "claude-skill", "agent-skill", "file", "symlink"])
 def test_existing_refuses_migration_path_conflicts(tmp_path: pathlib.Path, conflict: str):
     claude = tmp_path / ".claude"
-    if conflict == "skill":
+    if conflict == "bundle":
+        bundle = tmp_path / "mason-migrate"
+        bundle.mkdir()
+        (bundle / "SKILL.md").write_text("user instructions")
+    elif conflict == "claude-skill":
         skill = claude / "skills/mason-migrate"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("user instructions")
+    elif conflict == "agent-skill":
+        skill = tmp_path / ".agent/skills/mason-migrate"
         skill.mkdir(parents=True)
         (skill / "SKILL.md").write_text("user instructions")
     elif conflict == "file":
@@ -447,7 +463,7 @@ def test_existing_refuses_migration_path_conflicts(tmp_path: pathlib.Path, confl
 def test_existing_rejects_unsupported_modes(tmp_path: pathlib.Path, args: list[str]):
     result = CliRunner().invoke(init_mod.init, [*args, str(tmp_path)], obj=_Ctx())
     assert result.exit_code != 0
-    assert not (tmp_path / ".claude").exists()
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_existing_missing_directory_is_rejected(tmp_path: pathlib.Path):
@@ -464,6 +480,20 @@ def test_existing_failed_copy_leaves_no_artifacts(tmp_path: pathlib.Path, monkey
         raise AgentCliError("copy failed")
 
     monkeypatch.setattr(init_mod, "_copy_packaged_template", failed_copy)
+    result = CliRunner().invoke(init_mod.init, ["--existing", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code != 0
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_existing_failed_pointer_removes_the_bundle(tmp_path: pathlib.Path, monkeypatch):
+    real_mkdir = pathlib.Path.mkdir
+
+    def failing_mkdir(self: pathlib.Path, *args, **kwargs):
+        if ".claude" in self.parts:
+            raise OSError("cannot create agent configuration directory")
+        return real_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "mkdir", failing_mkdir)
     result = CliRunner().invoke(init_mod.init, ["--existing", str(tmp_path)], obj=_Ctx())
     assert result.exit_code != 0
     assert list(tmp_path.iterdir()) == []

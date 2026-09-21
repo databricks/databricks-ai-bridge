@@ -40,7 +40,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("mason init my-agent", "scaffold a new agent project"),
         (
             "mason init --framework langgraph --existing .",
-            "prepare a Claude migration skill for an existing agent",
+            "prepare a coding-agent migration bundle for an existing agent",
         ),
     ),
     ("dev",): (("mason dev", "run the agent locally with a chat UI"),),

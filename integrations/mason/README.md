@@ -447,17 +447,22 @@ mason [-p <profile>] [-o text|json]
 
 ## Bring an existing LangGraph agent
 
-From the existing project, prepare a Claude Code migration:
+From the existing project, prepare a migration for your coding agent:
 
 ```sh
 mason init --framework langgraph --existing .
 ```
 
-This writes `.claude/skills/mason-migrate/` containing a skill, a prompt to paste into Claude Code,
-and a reference project generated from the templates bundled with the installed CLI. Mason prepares
-the instructions; Claude performs and verifies the conversion. Init leaves application source,
-dependencies, `.env`, and existing Mason configuration intact and refuses to overwrite an existing
-migration skill.
+This writes `mason-migrate/` containing a skill, a prompt to paste into your coding agent, and a
+reference project generated from the templates bundled with the installed CLI. The bundle sits
+outside any single agent's configuration directory; `.claude/skills/` and `.agent/skills/` each
+receive a small skill that points at it, so Claude Code, Codex, and similar tools discover the same
+instructions without duplicating the reference. Mason prepares the instructions; the coding agent
+performs and verifies the conversion. Init leaves application source, dependencies, `.env`, and
+existing Mason configuration intact and refuses to overwrite existing migration files.
+
+The bundle is scaffolding for the migration, not part of the application: delete `mason-migrate/`
+and the two pointer skills once the conversion is done, and keep them out of commits meanwhile.
 
 The skill follows the shared
 [Mason contract](src/databricks_mason/templates/agent-langgraph/MASON_CONTRACT.md) included in new
