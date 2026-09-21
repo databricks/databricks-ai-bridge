@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from databricks_mason.runtime.auth import AuthError, RequestAuthContext
+from databricks_mason.runtime.store import RUNTIME_STORE_LOCAL_ENV
 
 
 @pytest.fixture
@@ -81,3 +82,16 @@ def test_local_mode_ignores_forwarded_identity(monkeypatch):
     assert context(subject="spoofed").namespace("actor", "actor") == context(
         subject="different"
     ).namespace("actor", "actor")
+
+
+def test_mason_dev_uses_local_credentials_when_apps_cli_sets_app_name(monkeypatch):
+    monkeypatch.setenv("DATABRICKS_APP_NAME", "mason-dev-local")
+    monkeypatch.setenv(RUNTIME_STORE_LOCAL_ENV, "true")
+    local_client = MagicMock()
+    local_factory = MagicMock(return_value=local_client)
+    monkeypatch.setattr("databricks_mason.runtime.workspace.workspace_client", local_factory)
+
+    auth = RequestAuthContext.from_headers({})
+
+    assert auth.client_for("user") is local_client
+    local_factory.assert_called_once_with()

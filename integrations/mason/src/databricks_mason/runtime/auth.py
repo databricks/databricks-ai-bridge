@@ -9,6 +9,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NoReturn, SupportsIndex
 
+from databricks_mason.runtime.store import RUNTIME_STORE_LOCAL_ENV
+
 if TYPE_CHECKING:
     from databricks.sdk import WorkspaceClient
 
@@ -72,7 +74,8 @@ class RequestAuthContext:
 
     @classmethod
     def from_headers(cls, headers: Mapping[str, str]) -> RequestAuthContext:
-        if not os.getenv("DATABRICKS_APP_NAME"):
+        local_runtime = os.getenv(RUNTIME_STORE_LOCAL_ENV, "").lower() == "true"
+        if local_runtime or not os.getenv("DATABRICKS_APP_NAME"):
             return cls(token=None, principal="local-developer", local=True)
         normalized = {name.lower(): value for name, value in headers.items()}
         token = normalized.get("x-forwarded-access-token", "").strip()
