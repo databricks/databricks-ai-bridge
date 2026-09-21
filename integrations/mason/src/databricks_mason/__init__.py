@@ -16,6 +16,7 @@ if TYPE_CHECKING:
         AgentApp,
         InvocationContext,
         configure_tracing,
+        list_ai_gateway_model_services,
         start_trace,
         workspace_client,
         workspace_headers,
@@ -36,6 +37,7 @@ __all__ = [
     "start_trace",
     "workspace_client",
     "workspace_headers",
+    "list_ai_gateway_model_services",
 ]
 
 _RUNTIME_REEXPORTS = frozenset(
@@ -46,6 +48,7 @@ _RUNTIME_REEXPORTS = frozenset(
         "start_trace",
         "workspace_client",
         "workspace_headers",
+        "list_ai_gateway_model_services",
     }
 )
 

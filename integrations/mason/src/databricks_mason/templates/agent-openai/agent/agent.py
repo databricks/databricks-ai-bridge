@@ -25,7 +25,10 @@ from databricks_mason.openai import (
 
 logger = logging.getLogger(__name__)
 
-MODEL = "databricks-gpt-5-2"
+# A Unity Catalog AI Gateway model service, served from the `system.ai` schema and queried through
+# the gateway (see `use_ai_gateway=True` in configure()). Swap for any `system.ai.*` model service
+# your workspace exposes — the demo chat app's picker lists what's available.
+MODEL = "system.ai.claude-sonnet-4-5"
 
 # Tools that require human approval before they run. Add a tool's name here and the agent pauses when
 # the model calls it, emitting an `interrupt` event; the client resumes by sending `resume` with the
@@ -42,10 +45,13 @@ def configure() -> None:
     _check_databricks_auth()
     from agents import set_default_openai_api, set_default_openai_client
 
+    # use_ai_gateway routes to the Unity Catalog AI Gateway (`<host>/ai-gateway/mlflow/v1`), so
+    # `MODEL` is a `system.ai.*` model name rather than a serving-endpoint name.
     set_default_openai_client(
         AsyncDatabricksOpenAI(
             workspace_client=workspace_client(),
             default_headers=workspace_headers() or None,
+            use_ai_gateway=True,
         )
     )
     set_default_openai_api("chat_completions")

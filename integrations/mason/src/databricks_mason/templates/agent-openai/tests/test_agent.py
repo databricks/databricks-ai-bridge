@@ -213,6 +213,7 @@ def test_configure_routes_openai_client_to_workspace(monkeypatch):
     client.assert_called_once_with(
         workspace_client=workspace,
         default_headers={"X-Databricks-Org-Id": "123"},
+        use_ai_gateway=True,
     )
     set_client.assert_called_once_with(created)
     set_api.assert_called_once_with("chat_completions")
