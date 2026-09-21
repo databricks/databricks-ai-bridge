@@ -260,23 +260,57 @@ def tracing() -> None:
     "deploy. Omit to (re)enable the default /Shared experiment.",
 )
 @click.option(
+    "--experiment-id",
+    "experiment_id",
+    default=None,
+    help="MLflow experiment id (e.g. copied from the experiment's workspace URL) to trace to. "
+    "Resolved to the experiment's name and stored as a name — mason persists names, not ids, so the "
+    "binding stays valid across workspaces. Mutually exclusive with --experiment-name.",
+)
+@click.option(
     "--source",
     default=".",
     type=click.Path(exists=True, file_okay=False),
     help="Project directory containing agent.toml. Defaults to the current directory.",
 )
 @click.pass_obj
-def tracing_configure(obj, experiment_name, source) -> None:
-    """Configure tracing: set the experiment (by name) to trace to, or re-enable after `disable`.
+def tracing_configure(obj, experiment_name, experiment_id, source) -> None:
+    """Configure tracing: set the experiment to trace to (by name or id), or re-enable after `disable`.
 
-    Stored as a NAME, not an id, so the binding stays valid across workspaces/profiles — mason
-    get-or-creates it in the active workspace at deploy. Point this at a writable path if the default
-    /Shared experiment isn't writable in your workspace. Omit ``--experiment-name`` to (re)enable the
-    default /Shared experiment.
+    The experiment is stored as a NAME, not an id, so the binding stays valid across
+    workspaces/profiles — mason get-or-creates it in the active workspace at deploy. ``--experiment-id``
+    (e.g. from the experiment's URL) is a convenience: it's resolved to the experiment's name and
+    stored as a name, never as an id. Point this at a writable path if the default /Shared experiment
+    isn't writable in your workspace. Omit both to (re)enable the default /Shared experiment.
     """
     from databricks_mason.agent_project import AgentProject  # noqa: PLC0415
 
-    if experiment_name:
+    if experiment_name and experiment_id:
+        raise AgentCliError(
+            "Pass --experiment-name or --experiment-id, not both.",
+            hint="They set the same binding; use whichever identifier you have.",
+        )
+
+    # The name to store. --experiment-id is resolved to the experiment's name (mason persists names,
+    # not ids). Either way, a UC-backed experiment is rejected up front — mason supports managed
+    # tracing only (UC traces need a SQL warehouse to read and UC grants for the app's SP).
+    name = experiment_name
+    if experiment_id:
+        mlflow = _mlflow()
+        _set_tracking_uri(mlflow, obj.profile)
+        experiment = mlflow.get_experiment(experiment_id)
+        if experiment is None:
+            raise AgentCliError(
+                f"No MLflow experiment found with id {experiment_id!r}.",
+                hint="Pass an existing experiment id, or use --experiment-name.",
+            )
+        if _is_uc_backed(experiment):
+            raise AgentCliError(
+                "UC-backed MLflow tracing is not supported by mason.",
+                hint="Pass a managed (non-UC) experiment.",
+            )
+        name = experiment.name
+    elif experiment_name:
         if not experiment_name.startswith("/"):
             raise AgentCliError(
                 f"Experiment name must be an absolute workspace path, got {experiment_name!r}.",
@@ -284,8 +318,7 @@ def tracing_configure(obj, experiment_name, source) -> None:
                 "/Users/<you>/mason_traces/<agent>.",
             )
         # A not-yet-created name is fine (deploy creates it); only reject a name that already resolves
-        # to a UC-backed experiment (mason supports managed tracing only — UC traces need a SQL
-        # warehouse to read and UC grants for the app's SP, neither of which mason sets up yet).
+        # to a UC-backed experiment.
         mlflow = _mlflow()
         _set_tracking_uri(mlflow, obj.profile)
         existing = mlflow.get_experiment_by_name(experiment_name)
@@ -297,18 +330,16 @@ def tracing_configure(obj, experiment_name, source) -> None:
             )
 
     project = AgentProject.load(pathlib.Path(source))
-    project.configure_tracing(experiment_name)
+    project.configure_tracing(name)
     project.write()
 
-    target = (
-        f"experiment {experiment_name}" if experiment_name else "the default /Shared experiment"
-    )
+    target = f"experiment {name}" if name else "the default /Shared experiment"
     if obj.output == "json":
-        render.emit_json({"experiment_name": experiment_name, "disabled": False})
+        render.emit_json({"experiment_name": name, "disabled": False})
         return
     render.success(
         f"Tracing on: {target}",
-        fields={"Experiment": experiment_name} if experiment_name else None,
+        fields={"Experiment": name} if name else None,
         next_steps=[
             ("mason dev", "Run locally with tracing on"),
             ("mason tracing list", "List traces once you have some"),

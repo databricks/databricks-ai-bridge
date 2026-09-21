@@ -172,6 +172,63 @@ def test_configure_default_enables_per_project_offline(tmp_path: pathlib.Path):
     assert project.trace_disabled is False  # re-enabled
 
 
+def test_configure_by_experiment_id_stores_resolved_name(tmp_path: pathlib.Path):
+    # --experiment-id is a convenience: resolve the id to the experiment's name and store the NAME.
+    _project(tmp_path)
+    mlflow = mock.Mock()
+    experiment = mock.Mock(tags={})
+    experiment.name = (
+        "/Shared/mason_traces/from-id"  # set explicitly (Mock(name=) is special-cased)
+    )
+    mlflow.get_experiment.return_value = experiment
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
+        mock.patch.object(tracing_mod, "_set_tracking_uri"),
+    ):
+        result = CliRunner().invoke(
+            tracing_mod.tracing_configure,
+            ["--experiment-id", "123", "--source", str(tmp_path)],
+            obj=_Ctx(output="json"),
+        )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == {
+        "experiment_name": "/Shared/mason_traces/from-id",
+        "disabled": False,
+    }
+    # stored as the resolved NAME, never the id
+    assert AgentProject.load(tmp_path).trace_experiment_name == "/Shared/mason_traces/from-id"
+
+
+def test_configure_rejects_unknown_experiment_id(tmp_path: pathlib.Path):
+    _project(tmp_path)
+    mlflow = mock.Mock()
+    mlflow.get_experiment.return_value = None  # no such experiment
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
+        mock.patch.object(tracing_mod, "_set_tracking_uri"),
+    ):
+        result = CliRunner().invoke(
+            tracing_mod.tracing_configure,
+            ["--experiment-id", "nope", "--source", str(tmp_path)],
+            obj=_Ctx(),
+        )
+    assert result.exit_code != 0
+    assert "No MLflow experiment" in result.output
+    assert AgentProject.load(tmp_path).trace_experiment_name is None
+
+
+def test_configure_rejects_both_name_and_id(tmp_path: pathlib.Path):
+    _project(tmp_path)
+    result = CliRunner().invoke(
+        tracing_mod.tracing_configure,
+        ["--experiment-name", "/Shared/x", "--experiment-id", "1", "--source", str(tmp_path)],
+        obj=_Ctx(),
+    )
+    assert result.exit_code != 0
+    assert "not both" in result.output
+    assert AgentProject.load(tmp_path).trace_experiment_name is None
+
+
 def test_disable_writes_disabled(tmp_path: pathlib.Path):
     _project(tmp_path, experiment_name="/Shared/mason_traces/x")
     result = CliRunner().invoke(
