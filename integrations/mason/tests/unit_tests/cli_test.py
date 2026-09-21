@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import click
+import pytest
 from click.testing import CliRunner
 
 import databricks_mason.cli.app as cli
@@ -276,6 +277,68 @@ def test_unknown_command_without_close_match_points_to_help():
     assert result.exit_code != 0
     assert "unknown command `zzzzz`" in result.output
     assert "mason --help" in result.output
+
+
+def test_trailing_spacer_prints_one_blank_line_on_a_tty(monkeypatch):
+    # On an interactive terminal (text output), a command's output gets one blank line after it so
+    # it doesn't butt up against the next shell prompt.
+    import sys
+    import types
+
+    calls: list[tuple[tuple, dict]] = []
+    monkeypatch.setattr(cli.click, "echo", lambda *a, **k: calls.append((a, k)))
+    monkeypatch.setattr(sys, "stdout", types.SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr(cli.errors, "_OUTPUT_MODE", "text")
+
+    cli._emit_trailing_spacer()
+
+    # Exactly one blank line, on stdout — the stream the command's own output uses.
+    assert calls == [((), {})]
+
+
+def test_trailing_spacer_is_silent_when_output_is_not_a_tty(monkeypatch):
+    # Piped or redirected output (e.g. `mason ... > file`) must stay byte-clean: no spacer, and no
+    # stray blank line when output went to a file rather than the terminal.
+    import sys
+    import types
+
+    calls: list[tuple[tuple, dict]] = []
+    monkeypatch.setattr(cli.click, "echo", lambda *a, **k: calls.append((a, k)))
+    monkeypatch.setattr(sys, "stdout", types.SimpleNamespace(isatty=lambda: False))
+
+    cli._emit_trailing_spacer()
+
+    assert calls == []
+
+
+def test_trailing_spacer_is_suppressed_in_json_mode(monkeypatch):
+    # Under `-o json`, stdout must stay byte-clean even on a (pseudo-)TTY (`docker -t`, `script`, a
+    # CI PTY) where a machine may be parsing it — so no spacer, isatty notwithstanding.
+    import sys
+    import types
+
+    calls: list[tuple[tuple, dict]] = []
+    monkeypatch.setattr(cli.click, "echo", lambda *a, **k: calls.append((a, k)))
+    monkeypatch.setattr(sys, "stdout", types.SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr(cli.errors, "_OUTPUT_MODE", "json")
+
+    cli._emit_trailing_spacer()
+
+    assert calls == []
+
+
+def test_main_emits_spacer_even_when_command_exits_nonzero(monkeypatch):
+    # The spacer must fire on every path main() takes, including the non-zero exit an unknown command
+    # produces (Click's standalone mode raises SystemExit) — this guards the `finally` wiring itself.
+    emitted: list[bool] = []
+    monkeypatch.setattr(cli, "_emit_trailing_spacer", lambda: emitted.append(True))
+    monkeypatch.setattr("sys.argv", ["mason", "definitely-not-a-command"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main()
+
+    assert exc_info.value.code != 0  # the unknown command failed
+    assert emitted == [True]  # ...and the finally still ran the spacer
 
 
 def test_root_help_shows_numbered_getting_started_path():
