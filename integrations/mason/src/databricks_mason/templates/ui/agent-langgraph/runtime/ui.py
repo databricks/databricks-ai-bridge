@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from databricks_mason import workspace_client
-from databricks_mason.runtime.models import list_ai_gateway_models
+from databricks_mason.runtime.model_services import list_ai_gateway_model_services
 from databricks_mason.runtime.store import runtime_store_is_persistent_environment
 
 _UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
@@ -171,7 +171,7 @@ def _discover_chat_models() -> list[str]:
     """
     default = _default_model()
     try:
-        names = list_ai_gateway_models(workspace_client())
+        names = list_ai_gateway_model_services(workspace_client())
     except Exception:  # noqa: BLE001 - a broken listing must not break the whole config endpoint
         names = []
     return _rank_models(default, names)[:_MODEL_LIMIT]

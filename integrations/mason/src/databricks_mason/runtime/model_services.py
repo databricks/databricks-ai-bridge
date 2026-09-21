@@ -1,4 +1,4 @@
-"""Discover the Unity Catalog AI Gateway chat models available in a workspace.
+"""Discover the Unity Catalog AI Gateway chat model services available in a workspace.
 
 The AI Gateway exposes Databricks-managed models as Unity Catalog *model services* in the
 ``system.ai`` schema (e.g. ``system.ai.claude-sonnet-4-5``), queryable through an OpenAI-compatible
@@ -55,8 +55,8 @@ def _list_page(client: WorkspaceClient, query: dict[str, Any]) -> Any:
     raise last_error if last_error else RuntimeError("model-services list returned nothing")
 
 
-def list_ai_gateway_models(client: WorkspaceClient) -> list[str]:
-    """Return the fully-qualified names of chat-capable ``system.ai`` AI Gateway models, sorted.
+def list_ai_gateway_model_services(client: WorkspaceClient) -> list[str]:
+    """Return the names of chat-capable ``system.ai`` AI Gateway model services, sorted.
 
     Each name is a Unity Catalog model-service path like ``system.ai.claude-sonnet-4-5`` — exactly
     the string the OpenAI-compatible gateway (``use_ai_gateway=True``) expects as its ``model``.

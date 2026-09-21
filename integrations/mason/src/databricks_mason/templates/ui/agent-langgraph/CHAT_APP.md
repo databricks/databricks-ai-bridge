@@ -32,7 +32,7 @@ The agent calls the chosen model through the gateway (`<host>/ai-gateway/mlflow/
 `/serving-endpoints`, so `MODEL` is a `system.ai.*` model name. The picker is capped
 (`_MODEL_LIMIT`, 20) with the default pinned first and the rest alphabetical, so truncation never
 drops the configured default. Transient list failures are retried in
-`databricks_mason.runtime.models` before the fallback applies.
+`databricks_mason.runtime.model_services` before the fallback applies.
 
 The UI reads local history from the LangGraph checkpoint and managed history from Session Store
 items. It keeps a stable application session UUID in browser local storage and includes it inside

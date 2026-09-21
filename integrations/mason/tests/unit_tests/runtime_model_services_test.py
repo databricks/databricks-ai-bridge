@@ -1,4 +1,4 @@
-"""Unit tests for `databricks_mason.runtime.models.list_ai_gateway_models`."""
+"""Unit tests for `databricks_mason.runtime.model_services.list_ai_gateway_model_services`."""
 
 from __future__ import annotations
 
@@ -6,14 +6,14 @@ from typing import Any, cast
 
 import pytest
 
-from databricks_mason.runtime import models as models_mod
-from databricks_mason.runtime.models import list_ai_gateway_models
+from databricks_mason.runtime import model_services as model_services_mod
+from databricks_mason.runtime.model_services import list_ai_gateway_model_services
 
 
 @pytest.fixture(autouse=True)
 def _no_retry_delay(monkeypatch):
     # Keep retry-exercising tests instant.
-    monkeypatch.setattr(models_mod, "_RETRY_DELAY_S", 0)
+    monkeypatch.setattr(model_services_mod, "_RETRY_DELAY_S", 0)
 
 
 def _svc(name: str, api_types=("openai/v1/chat/completions",)) -> dict:
@@ -43,7 +43,7 @@ class _Client:
 
 def _list(pages: list[dict]) -> list[str]:
     # cast: the fake stands in for a WorkspaceClient (only .api_client.do is used).
-    return list_ai_gateway_models(cast(Any, _Client(pages)))
+    return list_ai_gateway_model_services(cast(Any, _Client(pages)))
 
 
 def test_returns_system_ai_names_sorted_without_prefix():
@@ -51,13 +51,13 @@ def test_returns_system_ai_names_sorted_without_prefix():
         [
             {
                 "model_services": [
-                    _svc("system.ai.zeta-chat"),
-                    _svc("system.ai.alpha-chat"),
+                    _svc("system.ai.llama-4-maverick"),
+                    _svc("system.ai.claude-opus-4-8"),
                 ]
             }
         ]
     )
-    assert result == ["system.ai.alpha-chat", "system.ai.zeta-chat"]
+    assert result == ["system.ai.claude-opus-4-8", "system.ai.llama-4-maverick"]
 
 
 def test_drops_embeddings_only_services():
@@ -67,22 +67,22 @@ def test_drops_embeddings_only_services():
                 "model_services": [
                     _svc("system.ai.claude-sonnet-4-5"),
                     _svc("system.ai.gte-large", api_types=["openai/v1/embeddings"]),
-                    _svc("system.ai.no-types", api_types=[]),  # lenient: kept when unknown
+                    _svc("system.ai.llama-4-maverick", api_types=[]),  # lenient: kept when unknown
                 ]
             }
         ]
     )
-    assert result == ["system.ai.claude-sonnet-4-5", "system.ai.no-types"]
+    assert result == ["system.ai.claude-sonnet-4-5", "system.ai.llama-4-maverick"]
 
 
 def test_pages_through_next_page_token():
     pages = [
-        {"model_services": [_svc("system.ai.a")], "next_page_token": "1"},
-        {"model_services": [_svc("system.ai.b")], "next_page_token": ""},
+        {"model_services": [_svc("system.ai.claude-opus-4-8")], "next_page_token": "1"},
+        {"model_services": [_svc("system.ai.llama-4-maverick")], "next_page_token": ""},
     ]
     client = _Client(pages)
-    result = list_ai_gateway_models(cast(Any, client))
-    assert result == ["system.ai.a", "system.ai.b"]
+    result = list_ai_gateway_model_services(cast(Any, client))
+    assert result == ["system.ai.claude-opus-4-8", "system.ai.llama-4-maverick"]
     # First call has no page_token; the second carries the token from page one.
     assert client.api_client.calls[0].get("parent") == "schemas/system.ai"
     assert "page_token" not in client.api_client.calls[0]
@@ -100,7 +100,7 @@ def test_propagates_errors_after_retries():
             raise PermissionError("no access")
 
     with pytest.raises(PermissionError):
-        list_ai_gateway_models(cast(Any, _Boom()))
+        list_ai_gateway_model_services(cast(Any, _Boom()))
 
 
 def test_retries_transient_list_error():
@@ -111,11 +111,13 @@ def test_retries_transient_list_error():
             calls["n"] += 1
             if calls["n"] == 1:
                 raise RuntimeError("transient 500")
-            return {"model_services": [_svc("system.ai.a")]}
+            return {"model_services": [_svc("system.ai.claude-opus-4-8")]}
 
     class _FlakyClient:
         api_client = _FlakyApiClient()
 
     # First attempt fails, retry succeeds -> the model is discovered, not lost.
-    assert list_ai_gateway_models(cast(Any, _FlakyClient())) == ["system.ai.a"]
+    assert list_ai_gateway_model_services(cast(Any, _FlakyClient())) == [
+        "system.ai.claude-opus-4-8"
+    ]
     assert calls["n"] == 2
