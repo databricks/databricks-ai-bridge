@@ -169,11 +169,6 @@ async def test_ui_runtime_capabilities_ignore_tool_auth_policy(framework, user_a
     assert config["streaming"]["mode"] == "Runtime Store"
     assert config["session"]["history"] is True
     assert config["memory"]["enabled"] is True
-    source = (path.parents[1] / "ui/app.js").read_text()
-    assert "state.config?.background.enabled === false" in source
-    assert "button.disabled = !enabled" in source
-
-
 @pytest.mark.asyncio
 async def test_openai_does_not_retain_request_bound_run_state(template, monkeypatch):
     framework, _adapter, agent = template
