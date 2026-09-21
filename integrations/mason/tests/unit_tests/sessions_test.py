@@ -113,7 +113,8 @@ def test_sessions_bind_only_edits_agent_toml(tmp_path):
     from databricks_mason.agent_project import AgentProject
 
     (tmp_path / "agent.toml").write_text(
-        'schema_version = 1\n\n[agent]\nframework = "openai"\n', encoding="utf-8"
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "custom"\n',
+        encoding="utf-8",
     )
 
     class _NoRemote:

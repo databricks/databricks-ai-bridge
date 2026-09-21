@@ -6,9 +6,8 @@ import pathlib
 
 from click.testing import CliRunner
 
-from databricks_mason.agent_project import AgentProject
+from databricks_mason.agent_project import AgentProject, ToolSpec
 from databricks_mason.cli.tools import tools
-from databricks_mason.project_config import write_project_metadata
 
 
 class _Ctx:
@@ -21,8 +20,7 @@ def _project(tmp_path: pathlib.Path, framework: str = "langgraph") -> pathlib.Pa
     (project / "agent" / "tools").mkdir(parents=True)
     (project / "tests" / "tools").mkdir(parents=True)
     (project / "agent" / "mcps.py").write_text("ORIGINAL = True\n", encoding="utf-8")
-    write_project_metadata(project, framework=framework, template=f"agent-{framework}")
-    AgentProject.create(project, framework=framework).write()
+    AgentProject.create(project, framework=framework, server="mason").write()
     return project
 
 
@@ -38,19 +36,19 @@ def test_add_mcp_empty_service_is_rejected_clearly(tmp_path):
     assert "Could not derive a Python identifier" not in result.output
 
 
-# --- ML-69258: tools list shows sandbox scopes in SOURCE ---------------------
+# --- ML-69258: sandbox bindings retain their configured scopes --------------
 
 
-def test_tools_list_shows_sandbox_scopes_not_service(tmp_path):
+def test_sandbox_manifest_retains_scopes(tmp_path):
     project = _project(tmp_path)
-    CliRunner().invoke(
+    result = CliRunner().invoke(
         tools,
         ["add", "sandbox", "--scope", "table:samples.nyctaxi.trips", "--source", str(project)],
         obj=_Ctx(),
     )
-    result = CliRunner().invoke(tools, ["list", "--source", str(project)], obj=_Ctx())
     assert result.exit_code == 0, result.output
-    assert "table:samples.nyctaxi.trips" in result.output
+    binding = AgentProject.load(project).tools[0]
+    assert [scope.resource for scope in binding.policy.downscope] == ["table:samples.nyctaxi.trips"]
 
 
 # --- ML-69256: outside-project hint ------------------------------------------
@@ -72,11 +70,9 @@ def test_tools_add_outside_project_gives_clear_hint(tmp_path):
 
 def test_conflicting_tool_id_reports_what_differs(tmp_path):
     project = _project(tmp_path)
-    CliRunner().invoke(
-        tools,
-        ["add", "mcp", "system.ai.web_search", "--name", "dup", "--source", str(project)],
-        obj=_Ctx(),
-    )
+    manifest = AgentProject.load(project)
+    manifest.add_tool(ToolSpec.mcp("dup", service="system.ai.web_search"))
+    manifest.write()
     result = CliRunner().invoke(
         tools,
         ["add", "mcp", "system.ai.github", "--name", "dup", "--source", str(project)],

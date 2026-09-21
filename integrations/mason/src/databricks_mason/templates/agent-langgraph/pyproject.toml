@@ -8,10 +8,8 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    # The agent-side runtime helpers (databricks_mason.runtime) plus the agent stack they need
-    # (langgraph, langchain, fastapi, mlflow, …) come from this extra — see the package's
-    # [project.optional-dependencies] runtime.
-    "databricks-mason[runtime]>=0.1.5.dev0",
+    # Mason includes the HTTP runtime; this extra adds the langgraph framework adapter.
+    "databricks-mason[langgraph]>=0.2.0",
     "uvicorn>=0.41.0",
     "python-dotenv>=1.2.1",
     "databricks-sdk>=0.79.0",

@@ -7,11 +7,10 @@ import types
 from typing import Any
 
 from databricks_mason import app_resources as sa
-from databricks_mason import lakebase_durability_store
 
 
 def _backend(database: str, resource_name: str) -> sa.LakebaseBackend:
-    """Build a LakebaseBackend for resource-attach tests (durability supplies real ones)."""
+    """Build a LakebaseBackend for resource-attach tests."""
     return sa.LakebaseBackend(
         project="proj",
         branch="production",
@@ -34,14 +33,14 @@ def test_apply_postgres_resources_sends_all_backends_in_one_update(monkeypatch):
     backends = [_backend("s", "postgres"), _backend("memory-x", "postgres-memory")]
     assert sa.apply_postgres_resources("app", backends, "prof") is None
     payload = json.loads(captured["args"][captured["args"].index("--json") + 1])
-    names = {r["name"] for r in payload["resources"]}
+    names = {r["name"] for r in payload["app"]["resources"]}
     assert names == {"postgres", "postgres-memory"}  # one update carries both
 
 
 def test_apply_postgres_resources_preserves_existing_and_updates_ours(monkeypatch):
     resources: list[dict[str, Any]] = [
         {"name": "user-owned", "secret": {}},
-        {"name": "postgres-durability", "old": True},
+        {"name": "postgres-runtime-store", "old": True},
     ]
 
     def fake_db(args, profile, **kw):
@@ -50,16 +49,44 @@ def test_apply_postgres_resources_preserves_existing_and_updates_ours(monkeypatc
                 returncode=0, stdout=json.dumps({"resources": resources}), stderr=""
             )
         payload = json.loads(args[args.index("--json") + 1])
-        resources[:] = payload["resources"]
+        resources[:] = payload["app"]["resources"]
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(sa, "_databricks", fake_db)
-    backend = _backend("db-new", "postgres-durability")
+    backend = _backend("db-new", "postgres-runtime-store")
     assert sa.apply_postgres_resources("myapp", [backend], "prof") is None
     # The user-owned resource is preserved; our managed resource is replaced (not duplicated).
-    assert [r["name"] for r in resources] == ["user-owned", "postgres-durability"]
-    ours = next(r for r in resources if r["name"] == "postgres-durability")
+    assert [r["name"] for r in resources] == ["user-owned", "postgres-runtime-store"]
+    ours = next(r for r in resources if r["name"] == "postgres-runtime-store")
     assert "old" not in ours and ours["postgres"]["permission"] == "CAN_CONNECT_AND_CREATE"
+
+
+def test_resource_update_is_masked_to_resources(monkeypatch):
+    # Regression (ML-69759): the resource grant must scope its write to `resources` via update_mask
+    # and touch no other app field — a bare `apps update` reset user_api_scopes and broke OBO on
+    # every deploy.
+    captured = {}
+
+    def fake_db(args, profile, **kw):
+        if args[:2] == ["apps", "get"]:
+            return types.SimpleNamespace(
+                returncode=0, stdout=json.dumps({"resources": []}), stderr=""
+            )
+        captured["args"] = args
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(sa, "_databricks", fake_db)
+    assert (
+        sa.apply_postgres_resources("app", [_backend("db", "postgres-runtime-store")], "prof")
+        is None
+    )
+    assert captured["args"][:2] == [
+        "apps",
+        "create-update",
+    ]  # masked upsert, not a full-spec update
+    payload = json.loads(captured["args"][captured["args"].index("--json") + 1])
+    assert payload["update_mask"] == "resources"
+    assert set(payload["app"]) == {"resources"}  # only resources written; user_api_scopes untouched
 
 
 def test_apply_postgres_resources_reports_failure(monkeypatch):
@@ -68,17 +95,17 @@ def test_apply_postgres_resources_reports_failure(monkeypatch):
         "_databricks",
         lambda args, profile, **kw: (
             types.SimpleNamespace(returncode=1, stdout="", stderr="denied: needs MANAGE")
-            if args[:2] == ["apps", "update"]
+            if args[:2] == ["apps", "create-update"]
             else types.SimpleNamespace(
                 returncode=0, stdout=json.dumps({"resources": []}), stderr=""
             )
         ),
     )
-    err = sa.apply_postgres_resources("app", [_backend("db", "postgres-durability")], "prof")
+    err = sa.apply_postgres_resources("app", [_backend("db", "postgres-runtime-store")], "prof")
     assert err == "denied: needs MANAGE"
 
 
-def test_durability_resource_coexists_with_a_second_managed_resource(monkeypatch):
+def test_runtime_store_resource_coexists_with_a_second_managed_resource(monkeypatch):
     resources: list[dict[str, Any]] = []
 
     def fake_db(args, profile, **kw):
@@ -87,17 +114,17 @@ def test_durability_resource_coexists_with_a_second_managed_resource(monkeypatch
                 returncode=0, stdout=json.dumps({"resources": resources}), stderr=""
             )
         payload = json.loads(args[args.index("--json") + 1])
-        resources[:] = payload["resources"]
+        resources[:] = payload["app"]["resources"]
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(sa, "_databricks", fake_db)
-    durability = lakebase_durability_store.backend("mason-app")
+    runtime_store = _backend("runtime-db", "postgres-runtime-store")
     other = _backend("other", "postgres-other")
 
-    assert sa.apply_postgres_resources("app", [durability], "prof") is None
+    assert sa.apply_postgres_resources("app", [runtime_store], "prof") is None
     assert sa.apply_postgres_resources("app", [other], "prof") is None
 
     assert {resource["name"] for resource in resources} == {
-        "postgres-durability",
+        "postgres-runtime-store",
         "postgres-other",
     }

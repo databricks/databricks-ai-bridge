@@ -19,10 +19,11 @@ from databricks_mason.project_config import write_project_metadata
 def _write_agent_manifest(
     source: pathlib.Path,
     *,
+    server: str = "mason",
     memory: str | None = None,
     session: str | None = None,
 ) -> None:
-    body = 'schema_version = 1\n\n[agent]\nframework = "openai"\n'
+    body = f'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "{server}"\n'
     if memory:
         body += f'\n[memory_store]\nname = "{memory}"\n'
     if session:
@@ -36,7 +37,7 @@ class _Ctx:
         self.profile = profile
 
     def client(self):
-        return mock.Mock(current_user="me@example.com")
+        return mock.Mock(current_user="me@example.com", host="https://my-workspace.databricks.com")
 
 
 @pytest.fixture(autouse=True)
@@ -206,6 +207,31 @@ def test_dev_wires_tracing_env_on_by_default(tmp_path: pathlib.Path, monkeypatch
     assert env["MLFLOW_TRACKING_URI"] == "databricks"
 
 
+def test_dev_shows_default_experiment_url_when_tracing_on(tmp_path: pathlib.Path, monkeypatch):
+    # Tracing is on by default: dev surfaces the default experiment's Traces URL (the same link
+    # `mason deploy` prints) so a dev run makes clear where its traces land.
+    (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    (tmp_path / ".venv").mkdir()
+    monkeypatch.setattr(dev_mod, "resolve_trace_experiment_id", lambda *a, **k: "exp-123")
+    with mock.patch.object(dev_mod, "_databricks"):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code == 0, result.output
+    output = " ".join(result.output.split())
+    assert "Traces" in output
+    assert "/ml/experiments/exp-123" in output
+
+
+def test_dev_omits_experiment_url_when_tracing_off(tmp_path: pathlib.Path, monkeypatch):
+    # Tracing disabled (resolve returns None) -> no Traces line in the startup panel.
+    (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    (tmp_path / ".venv").mkdir()
+    monkeypatch.setattr(dev_mod, "resolve_trace_experiment_id", lambda *a, **k: None)
+    with mock.patch.object(dev_mod, "_databricks"):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code == 0, result.output
+    assert "/ml/experiments/" not in result.output
+
+
 def test_dev_runs_offline_when_client_unavailable(tmp_path: pathlib.Path):
     # No stores + no auth: obj.client() raises, but tracing is best-effort, so dev still runs the
     # agent locally (it doesn't regress the offline path).
@@ -268,6 +294,11 @@ def test_dev_announces_chat_ui_when_overlay_present(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     assert "Chat UI" in result.output
     assert "http://localhost:9000" in result.output
+    output = " ".join(result.output.split())
+    assert "mason endpoint invoke" in output
+    assert "--url http://localhost:9000" in output
+    assert "--path /api/invocations" in output
+    assert "$(uuidgen)" in output
 
 
 def test_dev_announces_api_endpoint_when_no_ui(tmp_path: pathlib.Path):
@@ -279,23 +310,50 @@ def test_dev_announces_api_endpoint_when_no_ui(tmp_path: pathlib.Path):
     assert "http://localhost:8000/invocations" in result.output
     # a copy-pasteable sample request, not just the bare endpoint
     assert "curl -X POST" in " ".join(result.output.split())
+    output = " ".join(result.output.split())
+    assert "mason endpoint invoke" in output
+    assert "--url http://localhost:8000" in output
+    assert "--path /invocations" in output
 
 
-@pytest.mark.parametrize(
-    ("framework", "template"),
-    [
-        ("langgraph", "custom-agent-langgraph"),
-        ("openai", "custom-agent-openai"),
-    ],
-)
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("server,chat_ui", [("mason", True), ("mason", False), ("custom", False)])
+def test_dev_prints_standalone_invoke_for_each_template(tmp_path, framework, server, chat_ui):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    AgentProject.create(tmp_path, framework=framework, server=server).write()
+    if chat_ui:
+        (tmp_path / "runtime").mkdir()
+        (tmp_path / "runtime" / "ui.py").write_text("# chat UI\n")
+    with mock.patch.object(dev_mod, "_databricks"):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    commands = [line for line in result.output.splitlines() if line.startswith("mason endpoint")]
+    assert len(commands) == 1, result.output
+    command = commands[0]
+    path = "/api/invocations" if server == "mason" else "/invocations"
+    assert f"mason endpoint invoke --url http://localhost:8000 --path {path} --json " in command
+    assert "│" not in command
+    assert ("$(uuidgen)" in command) is (server == "mason")
+    panel, example = result.output.split("Invoke with Mason\n")
+    assert panel.splitlines()[-1].startswith("╰")
+    assert example.splitlines() == [command]
+    assert any(line.startswith("│") and "mason deploy" in line for line in panel.splitlines())
+    if server == "mason":
+        assert any(
+            line.startswith("│") and "mason tools add" in line for line in panel.splitlines()
+        )
+    if not chat_ui:
+        assert "curl -X POST" in panel  # preserve the existing API-only next step
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
 def test_dev_custom_server_recommends_wiring_tools_in_agent_code(
     tmp_path: pathlib.Path,
     framework: str,
-    template: str,
 ):
     (tmp_path / "app.yaml").write_text("command: []\n")
-    AgentProject.create(tmp_path, framework=framework).write()
-    write_project_metadata(tmp_path, framework=framework, template=template)
+    AgentProject.create(tmp_path, framework=framework, server="custom").write()
 
     with mock.patch.object(dev_mod, "_databricks"):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
@@ -319,7 +377,7 @@ def test_dev_rejects_custom_server_manifest_tools_before_starting(
     template: str,
 ):
     (tmp_path / "app.yaml").write_text("command: []\n")
-    project = AgentProject.create(tmp_path, framework=framework)
+    project = AgentProject.create(tmp_path, framework=framework, server="custom")
     project.add_tool(ToolSpec.mcp("web", service="system.ai.web_search"))
     project.write()
     write_project_metadata(tmp_path, framework=framework, template=template)
@@ -340,26 +398,18 @@ def test_dev_rejects_custom_server_manifest_tools_before_starting(
     db.assert_not_called()
 
 
-@pytest.mark.parametrize(
-    ("framework", "template"),
-    [
-        ("langgraph", "custom-agent-langgraph"),
-        ("openai", "custom-agent-openai"),
-    ],
-)
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
 def test_dev_surfaces_invalid_custom_server_manifest_before_starting(
     tmp_path: pathlib.Path,
     framework: str,
-    template: str,
 ):
     (tmp_path / "app.yaml").write_text("command: []\n")
     (tmp_path / "agent.toml").write_text(
-        f'schema_version = 1\n\n[agent]\nframework = "{framework}"\n'
+        f'schema_version = 1\n\n[agent]\nframework = "{framework}"\nserver = "custom"\n'
         '\n[[tools]]\nid = "legacy"\nsource = { kind = "python", '
         'entrypoint = "agent.tools:legacy" }\n',
         encoding="utf-8",
     )
-    write_project_metadata(tmp_path, framework=framework, template=template)
     ctx = _Ctx()
 
     with (
@@ -377,34 +427,13 @@ def test_dev_surfaces_invalid_custom_server_manifest_before_starting(
     db.assert_not_called()
 
 
-def test_dev_announces_durable_api_endpoint(tmp_path: pathlib.Path):
+def test_dev_standard_template_uses_runtime_api(tmp_path: pathlib.Path):
     (tmp_path / "app.yaml").write_text("command: []\n")
     AgentProject.create(
         tmp_path,
         framework="langgraph",
-        durability_enabled=True,
+        server="mason",
     ).write()
-
-    with mock.patch.object(dev_mod, "_databricks"):
-        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
-
-    assert result.exit_code == 0, result.output
-    assert "http://localhost:8000/api/invocations" in result.output
-    assert "00000000-0000-4000-8000-000000000000" in result.output
-
-
-def test_dev_standard_template_uses_runtime_api_without_durable_runtime(tmp_path: pathlib.Path):
-    (tmp_path / "app.yaml").write_text("command: []\n")
-    AgentProject.create(
-        tmp_path,
-        framework="langgraph",
-        durability_enabled=False,
-    ).write()
-    (tmp_path / ".mason").mkdir()
-    (tmp_path / ".mason" / "project.toml").write_text(
-        'schema_version = 1\nframework = "langgraph"\ntemplate = "agent-langgraph"\n'
-    )
-
     with mock.patch.object(dev_mod, "_databricks") as db:
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
 
@@ -417,14 +446,18 @@ def test_dev_runs_from_project_containing_directly_edited_agent_manifest(
 ):
     (tmp_path / "app.yaml").write_text("command: []\n")
     manifest = tmp_path / "agent.toml"
-    manifest.write_text('schema_version = 1\n\n[agent]\nframework = "langgraph"\n')
+    manifest.write_text(
+        'schema_version = 1\n\n[agent]\nframework = "langgraph"\nserver = "mason"\n'
+    )
 
     with mock.patch.object(dev_mod, "_databricks") as db:
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
 
     assert result.exit_code == 0, result.output
     assert db.call_args.kwargs["cwd"] == str(tmp_path)
-    assert manifest.read_text() == 'schema_version = 1\n\n[agent]\nframework = "langgraph"\n'
+    assert manifest.read_text() == (
+        'schema_version = 1\n\n[agent]\nframework = "langgraph"\nserver = "mason"\n'
+    )
 
 
 def test_dev_warns_when_stores_unbound(tmp_path: pathlib.Path):

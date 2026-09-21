@@ -2,10 +2,11 @@
 
 `mason deploy` is the integrated entry point: it provisions the memory/session stores
 bound in `agent.toml`, grants the app's service principal access to them, then rolls out
-the deployment. Durable agents use a dedicated, app-owned Lakebase project. `agent.toml` is the
-CLI's authoring source, resolved here into the `AGENT_MEMORY_STORE` / `AGENT_SESSION_STORE` env
-vars written into `app.yaml` — the runtime reads those, never `agent.toml`. `mason deployments`
-covers the lifecycle verbs
+the deployment. Mason Runtime deployments receive a persistent Runtime Store; a temporary rollout
+switch chooses between the legacy per-app Lakebase project and the service-managed database.
+`agent.toml` is the CLI's authoring source, resolved here into the `AGENT_MEMORY_STORE` /
+`AGENT_SESSION_STORE` env vars written into `app.yaml` — the runtime reads those, never
+`agent.toml`. `mason deployments` covers the lifecycle verbs
 (`list`/`get`/`logs`/`start`/`stop`/`delete`).
 
 Deployments run on the Databricks Apps runtime, which this module drives via the
@@ -23,8 +24,9 @@ from typing import Any, Optional
 import click
 import yaml
 
+import databricks_mason.lakebase_runtime_store as managed_runtime_store
+import databricks_mason.legacy_lakebase_runtime_store as legacy_runtime_store
 from databricks_mason import (
-    lakebase_durability_store,
     render,
     timefmt,
 )
@@ -32,6 +34,7 @@ from databricks_mason.app_resources import (
     apply_experiment_resource,
     apply_postgres_resources,
 )
+from databricks_mason.cli.endpoint_examples import print_agent_invoke_command
 from databricks_mason.cli.tracing import (
     TRACES_EXPERIMENT_ID_ENV,
     TRACES_TRACKING_URI_ENV,
@@ -41,11 +44,17 @@ from databricks_mason.cli.tracing import (
 )
 from databricks_mason.databricks_cli import _databricks
 from databricks_mason.errors import AgentCliError
-from databricks_mason.project_config import require_managed_tool_support
+from databricks_mason.project_config import (
+    require_managed_tool_support,
+)
+from databricks_mason.project_types import AgentServer
 from databricks_mason.render import field
 from databricks_mason.runtime.store import (
+    RUNTIME_STORE_DATABASE_ENV,
+    RUNTIME_STORE_LAKEBASE_BRANCH_ENV,
     RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV,
     RUNTIME_STORE_SCHEMA_ENV,
+    RUNTIME_STORE_USERNAME_ENV,
 )
 from databricks_mason.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
 
@@ -56,6 +65,9 @@ from databricks_mason.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STO
 _DEFAULT_PIP_INDEX_URL = "https://pypi.org/simple/"
 _PIP_INDEX_ENVS = ("PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDEX")
 _AGENT_COMPUTE_OUTPUT = ("App compute", "Agent compute")
+# Internal rollout switch. Backend selection is intentionally not part of the user-facing CLI or
+# process environment; flip this only in a Mason release after the managed API is fully deployed.
+_USE_MANAGED_RUNTIME_STORE = False
 
 # Mason names every deployment `agent-mason-<name>` so `deployments list` can filter to its own apps.
 # The `agent-` prefix is what the Databricks agent registry keys on to surface these apps; the
@@ -171,8 +183,11 @@ def _wait_for_running(name: str, profile: Optional[str], timeout_s: int = 300) -
 # --- app.yaml manifest handling ---------------------------------------------
 
 
-def _upsert_manifest_env(source: pathlib.Path, updates: dict[str, str]) -> bool:
-    """Inject/overwrite env entries in <source>/app.yaml. Returns True if it scaffolded a new file."""
+def _upsert_manifest_env(
+    source: pathlib.Path,
+    updates: dict[str, str],
+) -> bool:
+    """Reconcile env entries in <source>/app.yaml. Returns True if it scaffolded a new file."""
     app_yaml = source / "app.yaml"
     if app_yaml.exists():
         loaded = yaml.safe_load(app_yaml.read_text())
@@ -183,9 +198,8 @@ def _upsert_manifest_env(source: pathlib.Path, updates: dict[str, str]) -> bool:
         scaffolded = True
 
     raw_env = doc.get("env")
-    env: list[dict[str, Any]] = (
-        [entry for entry in raw_env if isinstance(entry, dict)] if isinstance(raw_env, list) else []
-    )
+    candidates = raw_env if isinstance(raw_env, list) else []
+    env: list[dict[str, Any]] = [entry for entry in candidates if isinstance(entry, dict)]
     by_name = {e.get("name"): e for e in env if isinstance(e, dict)}
     for name, value in updates.items():
         if name in by_name:
@@ -489,8 +503,8 @@ def deploy(
     `agent-mason-<name>` (Mason adds the prefix if absent); use that full name with the `mason
     deployments` commands. `deployments list` shows only apps carrying this prefix.
 
-    Any memory/session store declared in agent.toml (by `mason init` or `mason memory/sessions
-    bind`) is created if it doesn't exist yet; agent.toml itself is never modified for stores.
+    Any memory/session store declared in agent.toml (for example, by `mason memory/sessions bind`)
+    is created if it doesn't exist yet; agent.toml itself is never modified for stores.
 
     Scaling to multiple instances (--instances) uses best-effort sticky routing, so a browser
     session automatically stays on one instance.
@@ -511,6 +525,7 @@ def deploy(
         project.write()
     instance_args = _instance_args(instances)
     client = obj.client()
+    use_managed_runtime_store = _USE_MANAGED_RUNTIME_STORE
 
     # 1. Reconcile the stores DECLARED in agent.toml: create any that don't exist yet. `mason deploy`
     #    is the only reconcile-to-cloud verb; agent.toml is the source of truth and is never rewritten.
@@ -548,16 +563,17 @@ def deploy(
     if session_store:
         env_updates[SESSION_STORE_ENV] = session_store
 
-    durability_backend = None
-    durability_enabled = bool(project and project.durability_enabled)
-    if durability_enabled:
-        durability_schema = lakebase_durability_store.get_lakebase_schema(name)
-        durability_backend = lakebase_durability_store.get_or_create_backend(
-            name, obj.profile, create=True
-        )
-        env_updates[RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV] = durability_backend.endpoint_path
-        env_updates[RUNTIME_STORE_SCHEMA_ENV] = durability_schema
-        provisioned["Agent durability store"] = durability_backend.database_path
+    legacy_runtime_backend = None
+    if (
+        project is not None
+        and project.server == AgentServer.MASON
+        and not use_managed_runtime_store
+    ):
+        with render.status("Reconciling Runtime Store…"):
+            legacy_runtime_backend = legacy_runtime_store.get_or_create_backend(name, obj.profile)
+        env_updates[RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV] = legacy_runtime_backend.endpoint_path
+        env_updates[RUNTIME_STORE_SCHEMA_ENV] = legacy_runtime_backend.schema
+
     if pip_index_url:
         for env in _PIP_INDEX_ENVS:
             env_updates[env] = pip_index_url
@@ -565,13 +581,14 @@ def deploy(
     if instances is not None:
         provisioned["Instances"] = str(instances)
 
-    # 3. Patch the app.yaml manifest with the resolved store, trace, and index env vars.
+    # 3. Patch app.yaml before creating the app. The managed Runtime Store fields are added after
+    #    app creation because that API requires the app's service principal.
     scaffolded = False
     if env_updates:
         scaffolded = _upsert_manifest_env(source_dir, env_updates)
 
-    # 4. Ensure the Databricks App exists and its compute is active. Create only when the app is new
-    #    (`apps create` errors on an existing app); the compute wait runs every deploy.
+    # 4. Ensure the app exists and its compute is active. Create only when new; the compute wait
+    #    runs every deploy.
     #
     #    `apps create` itself blocks for minutes (it provisions and waits for compute) and we capture
     #    its output to relabel "App compute" → "Agent compute", so nothing streams meanwhile. Wrap it
@@ -606,17 +623,29 @@ def deploy(
         click.echo((result.stdout or "").replace(old, new), nl=False)
     # `apps deploy` requires the app's compute to be ACTIVE — a just-created app may still be
     # starting, and an existing one may be STOPPED — so wait either way. Returns immediately when
-    # compute is already ACTIVE.
     with render.progress("Waiting for agent compute to start (this can take a few minutes)…"):
         _wait_for_running(name, obj.profile)
 
-    if durability_backend is not None:
-        resource_error = apply_postgres_resources(name, [durability_backend], obj.profile)
+    if legacy_runtime_backend is not None:
+        resource_error = apply_postgres_resources(name, [legacy_runtime_backend], obj.profile)
         if resource_error:
             raise AgentCliError(
-                "Could not attach the Lakebase resource required for durable execution.",
+                "Could not attach the Lakebase resource required for the Runtime Store.",
                 hint=resource_error,
             )
+    elif project is not None and project.server == AgentServer.MASON:
+        app_service_principal_id = _app_service_principal(name, obj.profile)
+        with render.status("Reconciling Runtime Store…"):
+            runtime_backend = managed_runtime_store.get_or_create_backend(
+                client, name, app_service_principal_id
+            )
+        managed_env = {
+            RUNTIME_STORE_LAKEBASE_BRANCH_ENV: runtime_backend.branch,
+            RUNTIME_STORE_DATABASE_ENV: runtime_backend.database_id,
+            RUNTIME_STORE_USERNAME_ENV: runtime_backend.username,
+        }
+        scaffolded = _upsert_manifest_env(source_dir, managed_env) or scaffolded
+        env_updates.update(managed_env)
 
     # 5. Upload the source and roll out the deployment.
     ws_path = workspace_path or f"/Workspace/Users/{client.current_user}/mason_deployments/{name}"
@@ -711,6 +740,9 @@ def deploy(
         f"Deployed agent '{name}'",
         fields=fields,
         next_steps=steps,
+    )
+    print_agent_invoke_command(
+        name, uses_runtime_api=bool(project and project.server == AgentServer.MASON)
     )
 
 
@@ -836,9 +868,24 @@ def deployments_stop(obj, name, yes) -> None:
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
 @click.pass_obj
 def deployments_delete(obj, name, yes) -> None:
-    """Delete a deployment."""
+    """Delete a deployment and, when managed provisioning is enabled, its Runtime Store."""
     _validate_deployment_name(name)
-    _confirm_destroy(f"Delete deployment '{name}'", assume_yes=yes)
+    use_managed_runtime_store = _USE_MANAGED_RUNTIME_STORE
+    target = (
+        f"Delete deployment '{name}' and its Runtime Store data"
+        if use_managed_runtime_store
+        else f"Delete deployment '{name}'"
+    )
+    _confirm_destroy(target, assume_yes=yes)
+    if use_managed_runtime_store:
+        app_service_principal_id = _app_service_principal(name, obj.profile)
+        if not app_service_principal_id:
+            raise AgentCliError(
+                "Could not resolve the app's service principal for Runtime Store cleanup.",
+                hint="The deployment was retained. Check access to the app and retry deletion.",
+            )
+        with render.status("Deleting Runtime Store…"):
+            managed_runtime_store.delete(obj.client(), name, app_service_principal_id)
     _databricks(
         ["apps", "delete", name], obj.profile, action=f"Could not delete deployment '{name}'."
     )

@@ -1,8 +1,8 @@
 """Lakebase/Apps resource plumbing for a deployed app.
 
-Binds Databricks Apps resources onto an app so its service principal gets the platform-managed
-grant: a `postgres` `database` resource for the durable runtime's Lakebase (see
-`lakebase_durability_store`) and the tracing `experiment` resource.
+Binds Databricks Apps resources onto an app so its service principal gets platform-managed grants:
+a `postgres` resource for the legacy per-app Runtime Store and the tracing `experiment` resource.
+The service-managed Runtime Store path grants database access through Conversation Store instead.
 
 Managed-store (session/memory) table access is NOT granted here. The deployed app reaches those
 stores over the conversation-store REST API, which grants the app's service principal read/write
@@ -12,6 +12,7 @@ server-side (see `deploy._grant_store_access`), so no direct Lakebase grant is n
 from __future__ import annotations
 
 import json
+import subprocess
 from dataclasses import dataclass
 from typing import Optional
 
@@ -20,7 +21,7 @@ from databricks_mason.databricks_cli import _databricks
 
 @dataclass(frozen=True)
 class LakebaseBackend:
-    """A Lakebase database + endpoint bound as a `postgres` app resource (the durable runtime's store)."""
+    """A Lakebase database and endpoint bound as a `postgres` app resource."""
 
     project: str
     branch: str
@@ -76,10 +77,10 @@ def apply_experiment_resource(
     """Bind the trace experiment as an `experiment` app resource so the SP can write traces.
 
     This is the platform-managed grant: declaring the experiment as a `CAN_EDIT` resource lets the
-    app's service principal log traces to it (no manual SQL grant). Uses the same read-modify-write as
-    `apply_postgres_resources` — `apps update` replaces the whole resource array, so preserve every
-    resource we don't own (including the store `postgres` resources) and re-apply ours by name.
-    Returns None on success or a human-readable reason on failure.
+    app's service principal log traces to it (no manual SQL grant). Uses the same masked
+    read-modify-write as `apply_postgres_resources`: replace the whole resource array (preserving
+    every resource we don't own) while `update_mask` keeps the write from touching any other app
+    field. Returns None on success or a human-readable reason on failure.
     """
     ours = {
         "name": _TRACE_EXPERIMENT_RESOURCE,
@@ -90,10 +91,7 @@ def apply_experiment_resource(
         for r in _current_app_resources(app, profile)
         if isinstance(r, dict) and r.get("name") != _TRACE_EXPERIMENT_RESOURCE
     ]
-    payload = {"resources": preserved + [ours]}
-    result = _databricks(
-        ["apps", "update", app, "--json", json.dumps(payload)], profile, capture=True, check=False
-    )
+    result = _update_app_resources(app, preserved + [ours], profile)
     if result.returncode == 0:
         return None
     return (result.stderr or result.stdout or "").strip() or "unknown error"
@@ -104,7 +102,7 @@ def apply_postgres_resources(
 ) -> Optional[str]:
     """Bind each backend's database as a `postgres` app resource in one update.
 
-    `apps update --json` REPLACES the whole resources array, so we must send the complete set:
+    Writing the resources field REPLACES the whole array, so we must send the complete set:
     read the app's current resources, drop the ones we manage (matched by name) so re-deploys
     update rather than duplicate them, keep every other (user-owned) resource, and append ours.
     Returns None on success or a human-readable reason on failure.
@@ -116,10 +114,26 @@ def apply_postgres_resources(
         for r in _current_app_resources(app, profile)
         if isinstance(r, dict) and r.get("name") not in our_names
     ]
-    payload = {"resources": preserved + ours}
-    result = _databricks(
-        ["apps", "update", app, "--json", json.dumps(payload)], profile, capture=True, check=False
-    )
+    result = _update_app_resources(app, preserved + ours, profile)
     if result.returncode == 0:
         return None
     return (result.stderr or result.stdout or "").strip() or "unknown error"
+
+
+def _update_app_resources(
+    app: str, resources: list[dict], profile: Optional[str]
+) -> subprocess.CompletedProcess:
+    """Set the app's resources array without disturbing any other app field.
+
+    `update_mask` scopes the write to `resources` only. A bare `apps update` replaces the whole app
+    spec, so fields we don't send — notably `user_api_scopes` — would reset to their defaults every
+    deploy, silently breaking OBO. The masked `create-update` still replaces the resources array
+    (callers pass the complete desired set), but leaves everything else untouched.
+    """
+    payload = {"app": {"resources": resources}, "update_mask": "resources"}
+    return _databricks(
+        ["apps", "create-update", app, "--json", json.dumps(payload)],
+        profile,
+        capture=True,
+        check=False,
+    )

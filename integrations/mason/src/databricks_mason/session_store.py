@@ -393,8 +393,11 @@ class SessionStores:
         )
 
     def _store_from_response(self, response: dict[str, Any]) -> SessionStore:
+        name = response.get("session_store_name")
+        if name is None:
+            name = response["name"].removeprefix("session-stores/")
         return SessionStore(
-            name=response["session_store_name"],
+            name=name,
             session_store_id=response.get("session_store_id"),
             creator_user_id=response.get("creator_user_id"),
             create_time=parse_timestamp(response.get("create_time")),

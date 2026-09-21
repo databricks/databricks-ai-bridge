@@ -11,6 +11,7 @@ returns them. An agent with its own hand-built servers passes them as ``extra_se
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -27,12 +28,19 @@ logger = logging.getLogger(__name__)
 
 
 def _server_from_tool(tool: ToolRecord) -> DatabricksMCPServer | None:
+    if tool.kind not in {"sandbox", "mcp", "uc_function", "genie_one"}:
+        return None
     client = workspace_client()
     host = client.config.host.rstrip("/")
-    if tool.kind in {"sandbox", "mcp"}:
+    if tool.kind in {"sandbox", "mcp", "genie_one"}:
+        url = (
+            f"{host}/api/2.0/mcp/genie"
+            if tool.kind == "genie_one"
+            else f"{host}/ai-gateway/mcp-services/{tool.service}"
+        )
         return DatabricksMCPServer(
             name=tool.id,
-            url=f"{host}/ai-gateway/mcp-services/{tool.service}",
+            url=url,
             headers=workspace_headers() or None,
             workspace_client=client,
             timeout=120.0,
@@ -96,17 +104,31 @@ def mcp_client(servers: list[DatabricksMCPServer]) -> DatabricksMultiServerMCPCl
 
 
 async def mcp_tools(extra_servers: list[DatabricksMCPServer] | None = None) -> list:
-    """Fetch LangChain MCP tools for the agent (with sandbox downscoping). Fail-open to ``[]``.
+    """Fetch LangChain MCP tools for the agent (with sandbox downscoping). Fail-open per server.
 
     Includes the MCP servers declared in ``agent.toml``; pass ``extra_servers`` to add servers the
-    agent builds itself. Returns an empty list when there are no servers or the fetch fails, so it is
-    safe to spread straight into an agent's tool list.
+    agent builds itself. Each server is fetched independently and concurrently, so one unreachable or
+    unauthorized server drops only its own tools instead of the whole toolset; returns ``[]`` when
+    there are no servers. Safe to spread straight into an agent's tool list.
     """
     servers = [*_declared_servers(), *(extra_servers or [])]
     if not servers:
         return []
-    try:
-        return await mcp_client(servers).get_tools()
-    except Exception:
-        logger.warning("Failed to fetch MCP tools; continuing without them.", exc_info=True)
-        return []
+
+    # One client keeps the sandbox interceptor wired once; fetch per server so a single failing
+    # server (401/403, unreachable, timeout) can't take down the whole toolset.
+    client = mcp_client(servers)
+
+    async def _fetch_one(server: DatabricksMCPServer) -> list:
+        try:
+            return await client.get_tools(server_name=server.name)
+        except Exception:
+            logger.warning(
+                "Failed to fetch MCP tools from server %r; continuing without it.",
+                server.name,
+                exc_info=True,
+            )
+            return []
+
+    groups = await asyncio.gather(*(_fetch_one(server) for server in servers))
+    return [tool for group in groups for tool in group]

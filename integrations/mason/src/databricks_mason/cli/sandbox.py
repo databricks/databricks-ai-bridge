@@ -17,6 +17,7 @@ import click
 from databricks_mason import render
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import load_project_metadata
+from databricks_mason.project_types import AgentFramework
 
 _BEGIN_MARKER = "# BEGIN: mason add-sandbox"
 _END_MARKER = "# END: mason add-sandbox"
@@ -739,9 +740,9 @@ class _LangGraphSandboxAdapter:
         return target, effective_policy, True
 
 
-_SANDBOX_ADAPTERS: dict[str, _SandboxAdapter] = {
-    "langgraph": _LangGraphSandboxAdapter(),
-    "openai": _OpenAISandboxAdapter(),
+_SANDBOX_ADAPTERS: dict[AgentFramework, _SandboxAdapter] = {
+    AgentFramework.LANGGRAPH: _LangGraphSandboxAdapter(),
+    AgentFramework.OPENAI: _OpenAISandboxAdapter(),
 }
 
 
@@ -771,7 +772,7 @@ _SANDBOX_ADAPTERS: dict[str, _SandboxAdapter] = {
 )
 @click.option(
     "--framework",
-    type=click.Choice(sorted(_SANDBOX_ADAPTERS)),
+    type=click.Choice([framework.value for framework in AgentFramework]),
     default=None,
     help="Override framework detection for projects created before Mason metadata existed.",
 )

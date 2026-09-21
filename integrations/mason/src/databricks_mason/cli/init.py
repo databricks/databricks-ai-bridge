@@ -4,14 +4,19 @@ Copies one template bundled in the databricks_mason package into a local target 
 for `mason deploy --source <dir>`. Because the template ships with the package, the scaffold always
 matches the installed CLI; to try a fork or branch, install that mason and re-run init.
 
-The Mason server is durable by default. Pass `--no-durable-runtime` for process-local background
-state, or `--server custom` for a minimal foreground-only FastAPI server.
+The Mason server provisions its Runtime Store at deployment. Use `--server custom` for a minimal
+foreground-only FastAPI server.
 """
 
 from __future__ import annotations
 
+import json
 import pathlib
+import secrets
+import shlex
 import shutil
+import string
+import tempfile
 from dataclasses import dataclass
 from importlib import resources
 from importlib.metadata import PackageNotFoundError
@@ -24,6 +29,12 @@ from databricks_mason import render
 from databricks_mason.agent_project import AgentProject, default_store_name
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import write_project_metadata
+from databricks_mason.project_types import (
+    AgentFramework,
+    AgentServer,
+    parse_framework,
+    parse_server,
+)
 
 # Templates ship inside this package (databricks_mason/templates/), so `mason init` always copies
 # the one for the installed CLI — the scaffold can't drift from the databricks-mason it runs
@@ -42,9 +53,16 @@ class _AgentTemplate:
 
 # Framework -> its bundled templates.
 _TEMPLATES = {
-    "langgraph": _AgentTemplate("agent-langgraph", "custom-agent-langgraph", "ui/agent-langgraph"),
-    "openai": _AgentTemplate("agent-openai", "custom-agent-openai", "ui/agent-openai"),
+    AgentFramework.LANGGRAPH: _AgentTemplate(
+        "agent-langgraph", "custom-agent-langgraph", "ui/agent-langgraph"
+    ),
+    AgentFramework.OPENAI: _AgentTemplate("agent-openai", "custom-agent-openai", "ui/agent-openai"),
 }
+
+_MIGRATION_DIR = "mason-migrate"
+# Each coding agent discovers skills in its own configuration directory, so the bundle lives in one
+# tool-neutral directory and every agent gets a pointer to it rather than a copy of the reference.
+_POINTER_ROOTS = (".claude", ".agent")
 
 
 def _copy_packaged_template(
@@ -101,26 +119,170 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
     return True
 
 
+def _migration_paths(dest: pathlib.Path, target: pathlib.Path) -> tuple[pathlib.Path, ...]:
+    """`target` plus every directory under `dest` that Mason would have to create to reach it."""
+    parts = target.relative_to(dest).parts
+    return tuple(dest.joinpath(*parts[:index]) for index in range(1, len(parts) + 1))
+
+
+def _pointer_skill(skill: pathlib.Path) -> str:
+    """A skill file forwarding an agent to the one bundle, so the reference is never duplicated."""
+    _, frontmatter, _ = skill.read_text(encoding="utf-8").split("---", 2)
+    target = f"../../../{_MIGRATION_DIR}/SKILL.md"
+    return (
+        f"---{frontmatter}---\n\n"
+        f"The migration bundle lives at [{target}]({target}), outside any single agent's "
+        "configuration directory.\n\nRead that file and follow it. Its `references/` directory "
+        "holds the migration settings and the candidate project generated from the templates "
+        "bundled with the installed CLI.\n"
+    )
+
+
+def _install_migration(
+    staged: pathlib.Path, bundle: pathlib.Path, pointers: tuple[pathlib.Path, ...]
+) -> None:
+    """Install the staged bundle, removing anything created here if a later write fails."""
+    pointer_skill = _pointer_skill(staged / "SKILL.md")
+    created: list[pathlib.Path] = []
+    try:
+        shutil.copytree(staged, bundle)
+        created.append(bundle)
+        for pointer in pointers:
+            # Remember the outermost directory Mason creates so cleanup never removes a
+            # pre-existing agent configuration directory.
+            outermost = pointer
+            while not outermost.parent.exists():
+                outermost = outermost.parent
+            pointer.mkdir(parents=True)
+            created.append(outermost)
+            (pointer / "SKILL.md").write_text(pointer_skill, encoding="utf-8")
+    except Exception:
+        for path in created:
+            shutil.rmtree(path, ignore_errors=True)
+        raise
+
+
+def _prepare_migration(
+    obj,
+    dest: pathlib.Path,
+    *,
+    chat_app_enabled: bool,
+    profile: Optional[str],
+    memory_store: Optional[str],
+    session_store: Optional[str],
+) -> None:
+    """Prepare a reference project and migration instructions without changing the application."""
+    if not dest.is_dir():
+        raise AgentCliError(f"Existing project directory '{dest}' was not found.")
+    bundle = dest / _MIGRATION_DIR
+    pointers = tuple(dest / root / "skills" / _MIGRATION_DIR for root in _POINTER_ROOTS)
+    for target in (bundle, *pointers):
+        for path in _migration_paths(dest, target):
+            if path.is_symlink() or (path.exists() and not path.is_dir()):
+                raise AgentCliError(f"Cannot write migration files at '{path}'.")
+        if target.exists():
+            raise AgentCliError(
+                f"Migration files already exist at '{target}'.",
+                hint=f"Use the existing {_MIGRATION_DIR}/PROMPT.md, or move that directory "
+                "before regenerating.",
+            )
+
+    # Build the bundle before touching the project, so a failed copy leaves no partial skill.
+    with tempfile.TemporaryDirectory(prefix="mason-migrate-") as tmp:
+        staged = pathlib.Path(tmp) / _MIGRATION_DIR
+        reference = staged / "references" / "template"
+        template = _TEMPLATES[AgentFramework.LANGGRAPH]
+        overlays = (template.chat_app,) if chat_app_enabled else ()
+        _copy_packaged_template(template.mason_server, reference, overlays)
+        project_name = dest.resolve().name
+        token = "".join(secrets.choice(string.ascii_lowercase) for _ in range(6))
+        AgentProject.create(
+            reference,
+            framework=AgentFramework.LANGGRAPH,
+            server=AgentServer.MASON,
+            memory_store=memory_store or default_store_name(project_name, "memory", token),
+            session_store=session_store or default_store_name(project_name, "sessions", token),
+        ).write()
+        write_project_metadata(
+            reference, framework=AgentFramework.LANGGRAPH, template=template.mason_server
+        )
+        source = resources.files("databricks_mason").joinpath("templates").joinpath(_MIGRATION_DIR)
+        (staged / "SKILL.md").write_text(
+            source.joinpath("SKILL.md").read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        template_ref = _bundled_template_ref()
+        (staged / "references" / "migration.json").write_text(
+            json.dumps(
+                {
+                    "framework": "langgraph",
+                    "template_ref": template_ref,
+                    "server": "mason",
+                    "chat_app_enabled": chat_app_enabled,
+                    "profile": profile,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        prompt = (
+            f"Use the mason-migrate skill at {_MIGRATION_DIR}/SKILL.md to adapt "
+            "my existing LangGraph agent in this project for Mason. Read its migration settings "
+            "and local template reference. Implement and verify the integration while preserving "
+            "my agent's behavior. Explicitly handle existing persistence, conversation history, "
+            "custom graph state, and client contracts; surface any unresolved migration choices. "
+            "Report which Mason commands are ready and any remaining limitations.\n"
+        )
+        (staged / "PROMPT.md").write_text(prompt, encoding="utf-8")
+        _install_migration(staged, bundle, pointers)
+
+    if obj.output == "json":
+        render.emit_json(
+            {
+                "mode": "existing",
+                "framework": "langgraph",
+                "directory": str(dest),
+                "bundle": str(bundle),
+                "skill": str(bundle / "SKILL.md"),
+                "prompt_file": str(bundle / "PROMPT.md"),
+                "prompt": prompt.strip(),
+                "pointers": [str(pointer / "SKILL.md") for pointer in pointers],
+                "template_ref": template_ref,
+                "chat_app_enabled": chat_app_enabled,
+            }
+        )
+        return
+    render.success(
+        "Prepared migration instructions (agent conversion is still required)",
+        fields={"Directory": str(dest), "Skill": str(bundle / "SKILL.md")},
+        next_steps=[
+            (f"cd {shlex.quote(str(dest))}", "Enter the existing project"),
+            f"Open your coding agent and paste the prompt from {_MIGRATION_DIR}/PROMPT.md:",
+            prompt.strip(),
+        ],
+    )
+
+
 @click.command(name="init")
 @click.argument("directory", required=False)
 @click.option(
+    "--existing",
+    is_flag=True,
+    help="Prepare a coding-agent migration bundle for an existing LangGraph project "
+    "(defaults to .).",
+)
+@click.option(
     "--framework",
-    type=click.Choice(sorted(_TEMPLATES)),
+    type=click.Choice([framework.value for framework in AgentFramework]),
     default=None,
     help="Agent framework to scaffold (defaults to langgraph).",
 )
 @click.option(
     "--server",
-    type=click.Choice(["mason", "custom"]),
-    default="mason",
+    type=click.Choice([server.value for server in AgentServer]),
+    default=AgentServer.MASON.value,
     show_default=True,
     help="Use Mason's invocation server or a minimal custom FastAPI server.",
-)
-@click.option(
-    "--no-durable-runtime",
-    is_flag=True,
-    hidden=True,
-    help="Keep Mason server background state in-process instead of provisioning Lakebase.",
 )
 @click.option(
     "--profile",
@@ -143,22 +305,23 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
     "--memory-store",
     "memory_store",
     default=None,
-    help="Name for the declared memory store (default: derived from the directory, <dir>-memory). "
-    "Only --server mason declares stores by default.",
+    help="Name for the declared memory store (default: a unique name derived from the directory, "
+    "<dir>-<token>-memory). Only --server mason declares stores by default.",
 )
 @click.option(
     "--session-store",
     "session_store",
     default=None,
-    help="Name for the declared session store (default: derived from the directory, <dir>-session).",
+    help="Name for the declared session store (default: a unique name derived from the directory, "
+    "<dir>-<token>-sessions).",
 )
 @click.pass_obj
 def init(
     obj,
     directory: Optional[str],
+    existing: bool,
     framework: Optional[str],
     server: str,
-    no_durable_runtime: bool,
     profile: Optional[str],
     disable_chat_app: bool,
     enable_chat_app: bool,
@@ -168,7 +331,7 @@ def init(
     """Scaffold a local agent project from a mason template.
 
     DIRECTORY is the target path to create (defaults to the template's own name). The
-    directory must not already exist. Once scaffolded, deploy it with
+    directory must not already exist unless --existing is supplied. Once scaffolded, deploy it with
     `mason deploy <name> --source <directory>`.
 
     Pass --profile (or set a default via `mason login` / -p) to seed a local `.env` so the
@@ -178,23 +341,41 @@ def init(
     that profile, so it can talk to a model with no separate endpoint or API key to set up.
 
     The default Mason server supports foreground, streaming, and background invocations through one
-    HTTP contract with a durable runtime. Pass --server custom for a minimal foreground-only
+    HTTP contract and Runtime Store. Pass --server custom for a minimal foreground-only
     FastAPI server.
+
+    With --existing, prepare a skill, prompt, and bundled template reference under
+    mason-migrate/, and point each supported coding agent's skills directory at it. Run the
+    prompt in your coding agent to convert the agent; init leaves existing application source,
+    dependencies, and configuration intact.
     """
-    selected_framework = framework or "langgraph"
-    mason_server = server == "mason"
-    if not mason_server and no_durable_runtime:
-        raise click.UsageError("--no-durable-runtime only applies to --server mason")
-    durable_runtime = mason_server and not no_durable_runtime
+    selected_framework = parse_framework(framework or AgentFramework.LANGGRAPH)
+    selected_server = parse_server(server)
+    mason_server = selected_server == AgentServer.MASON
     template = _TEMPLATES[selected_framework]
     template_name = template.mason_server if mason_server else template.custom_server
     chat_app_enabled = mason_server and not disable_chat_app
+    if existing:
+        if selected_framework != "langgraph" or not mason_server:
+            raise click.UsageError(
+                "--existing currently supports --framework langgraph --server mason"
+            )
+        _prepare_migration(
+            obj,
+            pathlib.Path(directory or "."),
+            chat_app_enabled=chat_app_enabled,
+            profile=profile or obj.profile,
+            memory_store=memory_store,
+            session_store=session_store,
+        )
+        return
     dest = pathlib.Path(directory) if directory else pathlib.Path(template_name)
 
     if dest.exists():
         raise AgentCliError(
             f"Destination '{dest}' already exists.",
-            hint="Choose a new directory or remove the existing one.",
+            hint="Use --existing --framework langgraph to prepare a migration, "
+            "or choose a new directory to scaffold.",
         )
 
     overlay_names = (template.chat_app,) if chat_app_enabled else ()
@@ -205,12 +386,16 @@ def init(
         template_ref = _bundled_template_ref()
         write_project_metadata(dest, framework=selected_framework, template=template_name)
         if mason_server:
-            memory_store = memory_store or default_store_name(dest.name, "memory")
-            session_store = session_store or default_store_name(dest.name, "session")
+            # Store display names aren't unique and projects often share a directory name, so a
+            # per-scaffold token keeps default stores from colliding. Memory and session share the
+            # token; an explicit --memory/session-store wins.
+            token = "".join(secrets.choice(string.ascii_lowercase) for _ in range(6))
+            memory_store = memory_store or default_store_name(dest.name, "memory", token)
+            session_store = session_store or default_store_name(dest.name, "sessions", token)
         project = AgentProject.create(
             dest,
             framework=selected_framework,
-            durability_enabled=durable_runtime,
+            server=selected_server,
             memory_store=memory_store,
             session_store=session_store,
         )
@@ -224,27 +409,32 @@ def init(
     if obj.output == "json":
         render.emit_json(
             {
-                "framework": selected_framework,
+                "framework": selected_framework.value,
                 "template": template_name,
                 "template_ref": template_ref,
                 "directory": str(dest),
-                "server": server,
+                "server": selected_server.value,
                 "chat_app_enabled": chat_app_enabled,
-                "durable_runtime": durable_runtime,
                 "env_profile": env_profile if wrote_env else None,
+                "memory_store": memory_store,
+                "session_store": session_store,
             }
         )
         return
 
     fields = {
-        "Framework": selected_framework,
+        "Framework": selected_framework.value,
         "Server": "Mason AgentApp" if mason_server else "Custom FastAPI",
         "Template ref": template_ref,
-        "Durable runtime": "enabled" if durable_runtime else "disabled",
         "Directory": str(dest),
     }
     if chat_app_enabled:
         fields["Chat app"] = "enabled"
+    # Surface the store names: with the random token they can't be inferred from the directory.
+    if memory_store:
+        fields["Memory store"] = memory_store
+    if session_store:
+        fields["Session store"] = session_store
     steps: list[str | tuple[str, str]] = [(f"cd {dest}", "Enter the project directory")]
     if wrote_env:
         fields["Profile (.env)"] = env_profile

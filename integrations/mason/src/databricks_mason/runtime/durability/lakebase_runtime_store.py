@@ -145,6 +145,8 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
         autoscaling_endpoint: str | None = None,
         project: str | None = None,
         branch: str | None = None,
+        database: str | None = None,
+        username: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         schema: str = DEFAULT_RUNTIME_STORE_SCHEMA,
         lakebase: _AsyncLakebase | None = None,
@@ -153,7 +155,7 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
             raise ValueError(f"invalid Runtime Store schema name: {schema!r}")
 
         if lakebase is None:
-            from databricks_ai_bridge.lakebase import AsyncLakebaseSQLAlchemy
+            from databricks_ai_bridge.lakebase import DEFAULT_DATABASE, AsyncLakebaseSQLAlchemy
 
             autoscaling_endpoint = autoscaling_endpoint or os.getenv(
                 "LAKEBASE_AUTOSCALING_ENDPOINT"
@@ -165,6 +167,8 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                 autoscaling_endpoint=autoscaling_endpoint,
                 project=project,
                 branch=branch,
+                database=database or DEFAULT_DATABASE,
+                username=username,
                 workspace_client=workspace_client,
                 schema=schema,
                 pool_pre_ping=True,
@@ -229,6 +233,23 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
             schema=schema,
         )
         return cls(schema=schema, lakebase=lakebase)
+
+    @classmethod
+    def from_managed_runtime_store(
+        cls,
+        *,
+        branch: str,
+        database: str,
+        username: str,
+        workspace_client: WorkspaceClient | None = None,
+    ) -> "LakebaseDurableRuntimeStore":
+        """Connect using the backend coordinates returned by the Runtime Store API."""
+        return cls(
+            branch=branch,
+            database=database,
+            username=username,
+            workspace_client=workspace_client,
+        )
 
     async def initialize(self) -> None:
         await self._lakebase.create_schema()

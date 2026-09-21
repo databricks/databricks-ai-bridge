@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="940" height="580" viewBox="0 0 940 580" font-family="Liberation Sans, Arial, sans-serif">
+  <defs>
+    <filter id="soft2" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#1F2A44" flood-opacity="0.10"/>
+    </filter>
+    <marker id="arw2" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#E9664F"/>
+    </marker>
+    <marker id="arwg" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#B89A90"/>
+    </marker>
+  </defs>
+
+  <rect x="8" y="8" width="924" height="564" rx="14" fill="#FBF1EC" stroke="#E9664F" stroke-width="2"/>
+  <text x="30" y="48" font-size="21" font-weight="bold" fill="#1F2A44">Runtime</text>
+
+  <!-- ===== Shared request path (centered): Client -> FastAPI server ===== -->
+  <rect x="400" y="70" width="140" height="52" rx="9" fill="#F7FAFD" stroke="#D3DCE6" stroke-width="1.3"/>
+  <text x="470" y="101" text-anchor="middle" font-size="13.5" font-weight="bold" fill="#1F2A44">Client</text>
+
+  <line x1="470" y1="122" x2="470" y2="145" stroke="#E9664F" stroke-width="2" marker-end="url(#arw2)"/>
+  <text x="482" y="139" font-size="9" font-family="Liberation Mono, monospace" fill="#8A94A6">POST</text>
+
+  <rect x="340" y="148" width="260" height="54" rx="10" fill="#FFFFFF" stroke="#E9A08C" stroke-width="1.4" filter="url(#soft2)"/>
+  <text x="470" y="172" text-anchor="middle" font-size="14" font-weight="bold" fill="#1F2A44">FastAPI server</text>
+  <text x="470" y="190" text-anchor="middle" font-size="10" fill="#8A94A6">deployed as a Databricks App</text>
+
+  <!-- ===== Fork from center: the server is one of two implementations ===== -->
+  <line x1="470" y1="202" x2="470" y2="236" stroke="#B89A90" stroke-width="1.4" stroke-dasharray="4 4"/>
+  <line x1="241" y1="236" x2="699" y2="236" stroke="#B89A90" stroke-width="1.4" stroke-dasharray="4 4"/>
+  <line x1="241" y1="236" x2="241" y2="270" stroke="#B89A90" stroke-width="1.4" stroke-dasharray="4 4" marker-end="url(#arwg)"/>
+  <line x1="699" y1="236" x2="699" y2="270" stroke="#B89A90" stroke-width="1.4" stroke-dasharray="4 4" marker-end="url(#arwg)"/>
+  <rect x="448" y="210" width="44" height="22" rx="11" fill="#FBF1EC" stroke="#E3C6BC" stroke-width="1.1"/>
+  <text x="470" y="225" text-anchor="middle" font-size="11" font-weight="bold" fill="#C64A33">or</text>
+
+  <!-- ===== Implementation A: AgentApp (managed) ===== -->
+  <rect x="26" y="272" width="430" height="282" rx="12" fill="#FFFFFF" stroke="#E9A08C" stroke-width="1.3"/>
+  <text x="46" y="300" font-size="15" font-weight="bold" fill="#1F2A44">AgentApp</text>
+  <rect x="344" y="286" width="96" height="24" rx="12" fill="#E7F4EE" stroke="#B7DFC9" stroke-width="1"/>
+  <text x="392" y="302" text-anchor="middle" font-size="11" font-weight="bold" fill="#2E8B63">managed</text>
+
+  <rect x="44" y="322" width="132" height="52" rx="9" fill="#FFFFFF" stroke="#E9A08C" stroke-width="1.4" filter="url(#soft2)"/>
+  <text x="110" y="345" text-anchor="middle" font-size="10.5" font-family="Liberation Mono, monospace" fill="#4A5568">@app.invoke</text>
+  <text x="110" y="361" text-anchor="middle" font-size="9.5" fill="#8A94A6">one handler</text>
+
+  <line x1="176" y1="348" x2="202" y2="348" stroke="#E9664F" stroke-width="2" marker-end="url(#arw2)"/>
+
+  <text x="311" y="316" text-anchor="middle" font-size="10.5" font-weight="bold" fill="#8A94A6">invocation modes</text>
+  <rect x="206" y="322" width="210" height="26" rx="6" fill="#F7FAFD" stroke="#DCE4EE" stroke-width="1"/>
+  <text x="218" y="339" font-size="11" font-weight="bold" fill="#1F2A44">sync</text>
+  <text x="404" y="339" text-anchor="end" font-size="9.5" font-family="Liberation Mono, monospace" fill="#5B76A0">200 {output}</text>
+  <rect x="206" y="352" width="210" height="26" rx="6" fill="#F7FAFD" stroke="#DCE4EE" stroke-width="1"/>
+  <text x="218" y="369" font-size="11" font-weight="bold" fill="#1F2A44">background</text>
+  <text x="404" y="369" text-anchor="end" font-size="9.5" font-family="Liberation Mono, monospace" fill="#5B76A0">202 status_url</text>
+  <rect x="206" y="382" width="210" height="26" rx="6" fill="#F7FAFD" stroke="#DCE4EE" stroke-width="1"/>
+  <text x="218" y="399" font-size="11" font-weight="bold" fill="#1F2A44">streaming (SSE)</text>
+  <text x="404" y="399" text-anchor="end" font-size="9.5" font-family="Liberation Mono, monospace" fill="#5B76A0">event stream</text>
+
+  <text x="241" y="438" text-anchor="middle" font-size="10.5" font-weight="bold" fill="#8A94A6">capabilities</text>
+  <rect x="44" y="446" width="368" height="40" rx="8" fill="#E9F1FC" stroke="#B9CBE4" stroke-width="1.2"/>
+  <text x="228" y="464" text-anchor="middle" font-size="12" font-weight="bold" fill="#24467D">Durable runtime (Lakebase)</text>
+  <text x="228" y="479" text-anchor="middle" font-size="9" font-family="Liberation Mono, monospace" fill="#4A6699">input &#183; status &#183; heartbeat &#183; events &#183; output</text>
+  <rect x="44" y="492" width="368" height="40" rx="8" fill="#FFF4F0" stroke="#E3C6BC" stroke-width="1.2"/>
+  <text x="228" y="510" text-anchor="middle" font-size="12" font-weight="bold" fill="#C64A33">Automatic crash recovery</text>
+  <text x="228" y="525" text-anchor="middle" font-size="9" fill="#4A5568">interrupted runs resume automatically</text>
+
+  <!-- ===== Implementation B: Custom (full control) ===== -->
+  <rect x="484" y="272" width="430" height="282" rx="12" fill="#FFFFFF" stroke="#E9A08C" stroke-width="1.3"/>
+  <text x="504" y="300" font-size="15" font-weight="bold" fill="#1F2A44">Custom</text>
+  <rect x="802" y="286" width="104" height="24" rx="12" fill="#EEF0FA" stroke="#C7CDEB" stroke-width="1"/>
+  <text x="854" y="302" text-anchor="middle" font-size="11" font-weight="bold" fill="#4A4F9E">full control</text>
+  <text x="504" y="326" font-size="10" font-family="Liberation Mono, monospace" fill="#8A94A6">mason init --server custom</text>
+
+  <rect x="504" y="344" width="390" height="72" rx="9" fill="#FBFCFE" stroke="#CBD6E4" stroke-width="1.3" stroke-dasharray="5 3"/>
+  <text x="699" y="376" text-anchor="middle" font-size="13" font-weight="bold" fill="#1F2A44">your own endpoints &amp; protocol</text>
+  <text x="699" y="398" text-anchor="middle" font-size="10.5" font-family="Liberation Mono, monospace" fill="#5B76A0">/your-route &#183; your request/response shapes</text>
+
+  <text x="699" y="450" text-anchor="middle" font-size="10.5" fill="#8A94A6">no AgentApp - you define the invocation contract</text>
+  <text x="699" y="472" text-anchor="middle" font-size="10.5" fill="#8A94A6">durability and crash recovery are yours to build</text>
+</svg>

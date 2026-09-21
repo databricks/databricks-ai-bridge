@@ -2,18 +2,30 @@
 
 from __future__ import annotations
 
+import json
 import pathlib
 
 import pytest
+import tomli
 
-from databricks_mason.agent_project import AgentProject, Scope, ToolSpec, default_store_name
+from databricks_mason.agent_project import (
+    AgentProject,
+    Scope,
+    ToolPolicy,
+    ToolSource,
+    ToolSpec,
+    default_store_name,
+)
 from databricks_mason.errors import AgentCliError
+from databricks_mason.project_types import AgentFramework, AgentServer
+from databricks_mason.runtime.tool_manifest import ToolManifestError, load_tools
 
 
 def _write_manifest(root: pathlib.Path, body: str | None = None) -> pathlib.Path:
     path = root / "agent.toml"
     path.write_text(
-        body or 'schema_version = 1\n# keep me\n\n[agent]\nframework = "langgraph"\n',
+        body
+        or 'schema_version = 1\n# keep me\n\n[agent]\nframework = "langgraph"\nserver = "mason"\n',
         encoding="utf-8",
     )
     return path
@@ -32,6 +44,7 @@ def test_agent_project_round_trips_tool_specs_without_losing_comments(tmp_path: 
     assert "# keep me" in path.read_text(encoding="utf-8")
     loaded = AgentProject.load(tmp_path)
     assert loaded.framework == "langgraph"
+    assert loaded.server == "mason"
     assert loaded.tools[0].source.kind == "sandbox"
     assert loaded.tools[0].policy.downscope == (
         Scope(kind="table", value="samples.nyctaxi.trips", permission="read_only"),
@@ -39,12 +52,162 @@ def test_agent_project_round_trips_tool_specs_without_losing_comments(tmp_path: 
 
 
 def test_add_same_tool_is_idempotent(tmp_path: pathlib.Path):
-    _write_manifest(tmp_path, 'schema_version = 1\n\n[agent]\nframework = "openai"\n')
+    _write_manifest(
+        tmp_path,
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n',
+    )
     project = AgentProject.load(tmp_path)
     spec = ToolSpec.mcp("web", service="system.ai.web_search")
 
     assert project.add_tool(spec) is True
     assert project.add_tool(spec) is False
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+def test_genie_bindings_round_trip_through_both_readers(tmp_path, monkeypatch, framework):
+    manifest = _write_manifest(
+        tmp_path,
+        f'schema_version = 1\n# keep me\n[agent]\nframework = "{framework}"\nserver = "mason"\n',
+    )
+    project = AgentProject.load(tmp_path)
+    specs = [ToolSpec.genie_one(), ToolSpec.genie_agent("_Sales", space_id="0" * 32)]
+    for spec in specs:
+        assert project.add_tool(spec) is True
+        assert project.add_tool(spec) is False
+    project.write()
+
+    assert "# keep me" in manifest.read_text()
+    assert AgentProject.load(tmp_path).tools == specs
+    document = tomli.loads(manifest.read_text())
+    assert document["tools"] == [
+        {"id": "genie_one", "source": {"kind": "genie_one"}},
+        {"id": "_Sales", "source": {"kind": "genie_agent", "space_id": "0" * 32}},
+    ]
+    monkeypatch.setenv("MASON_PROJECT_ROOT", str(tmp_path))
+    records = load_tools(expected_framework=framework)
+    assert [(record.id, record.kind, record.space_id) for record in records] == [
+        ("genie_one", "genie_one", None),
+        ("_Sales", "genie_agent", "0" * 32),
+    ]
+
+
+@pytest.mark.parametrize("kind", ["genie_one", "genie_agent"])
+@pytest.mark.parametrize("tool_id", ["_", "_Sales42", "a" * 48])
+def test_genie_binding_accepts_function_prefixes(kind, tool_id):
+    spec = (
+        ToolSpec.genie_one(tool_id)
+        if kind == "genie_one"
+        else ToolSpec.genie_agent(tool_id, space_id="0123456789abcdef" * 2)
+    )
+    assert spec.id == tool_id
+    assert len(spec.id + "_query_result") < 64
+
+
+@pytest.mark.parametrize("kind", ["genie_one", "genie_agent"])
+@pytest.mark.parametrize(
+    "tool_id", ["", "1sales", "sales-agent", "sales.agent", "a" * 49, "café", "sales\n"]
+)
+def test_genie_binding_rejects_invalid_function_prefixes(kind, tool_id):
+    with pytest.raises(AgentCliError, match="tool id"):
+        if kind == "genie_one":
+            ToolSpec.genie_one(tool_id)
+        else:
+            ToolSpec.genie_agent(tool_id, space_id="a" * 32)
+
+
+@pytest.mark.parametrize(
+    "space_id",
+    ["", "a" * 31, "a" * 33, "A" * 32, "g" * 32, "a" * 32 + "\n", " " + "a" * 32, None, 123],
+)
+def test_genie_agent_rejects_invalid_space_ids(space_id):
+    with pytest.raises(AgentCliError, match="space_id"):
+        ToolSpec.genie_agent("sales", space_id=space_id)
+
+
+@pytest.mark.parametrize("kind", ["genie_one", "genie_agent"])
+@pytest.mark.parametrize("field", ["service", "function"])
+def test_genie_specs_reject_unrelated_sources(kind, field):
+    values = {"space_id": "a" * 32} if kind == "genie_agent" else {}
+    values[field] = ""
+    with pytest.raises(AgentCliError, match=field):
+        ToolSpec("sales", ToolSource(kind=kind, **values))
+
+
+@pytest.mark.parametrize("kind", ["genie_one", "genie_agent"])
+def test_genie_specs_reject_downscope(kind):
+    values = {"space_id": "a" * 32} if kind == "genie_agent" else {}
+    with pytest.raises(AgentCliError, match="downscope"):
+        ToolSpec("sales", ToolSource(kind=kind, **values), ToolPolicy((Scope.table("c.s.t"),)))
+
+
+@pytest.mark.parametrize("kind", ["genie_one", "mcp", "uc_function", "sandbox"])
+def test_other_specs_reject_space_id(kind):
+    with pytest.raises(AgentCliError, match="space_id"):
+        ToolSpec("binding", ToolSource(kind=kind, space_id="a" * 32))
+
+
+@pytest.mark.parametrize("reader", ["project", "runtime"])
+@pytest.mark.parametrize(
+    ("tool_id", "source", "policy", "message"),
+    [
+        ("sales", 'kind = "genie_agent"', "", "space_id"),
+        *[
+            ("sales", f'kind = "genie_agent", space_id = {json.dumps(value)}', "", "space_id")
+            for value in ["", "a" * 31, "a" * 33, "A" * 32, "g" * 32, "a" * 32 + "\n", 123, False]
+        ],
+        *[
+            ("sales", f'kind = "{kind}", space_id = "{"a" * 32}"', "", "space_id")
+            for kind in ["genie_one", "mcp", "uc_function", "sandbox"]
+        ],
+        *[
+            (tool_id, 'kind = "genie_one"', "", "tool id")
+            for tool_id in ["1sales", "sales-agent", "sales.agent", "a" * 49, "café", "sales\n"]
+        ],
+        *[
+            ("sales", source + f", {field} = {value}", "", field)
+            for source in ['kind = "genie_one"', f'kind = "genie_agent", space_id = "{"a" * 32}"']
+            for field, value in [
+                ("service", '""'),
+                ("function", "false"),
+                ("url", '"https://example.com"'),
+                ("entrypoint", '"agent.tools:f"'),
+            ]
+        ],
+        *[
+            ("sales", source, "policy = { downscope = [] }", "downscope")
+            for source in ['kind = "genie_one"', f'kind = "genie_agent", space_id = "{"a" * 32}"']
+        ],
+        ("sales", 'kind = "mcp", service = "c.s.m", space_id = false', "", "space_id"),
+    ],
+)
+def test_genie_manifest_validation_matches_runtime(
+    tmp_path, monkeypatch, reader, tool_id, source, policy, message
+):
+    manifest = _write_manifest(tmp_path)
+    manifest.write_text(
+        manifest.read_text()
+        + f"\n[[tools]]\nid = {json.dumps(tool_id)}\nsource = {{ {source} }}\n{policy}\n"
+    )
+    before = manifest.read_bytes()
+    monkeypatch.setenv("MASON_PROJECT_ROOT", str(tmp_path))
+    error_type = AgentCliError if reader == "project" else ToolManifestError
+    with pytest.raises(error_type, match=message):
+        if reader == "project":
+            AgentProject.load(tmp_path)
+        else:
+            load_tools(expected_framework="langgraph")
+    assert manifest.read_bytes() == before
+
+
+def test_genie_agent_space_conflict_does_not_write(tmp_path):
+    manifest = _write_manifest(tmp_path)
+    project = AgentProject.load(tmp_path)
+    project.add_tool(ToolSpec.genie_agent("sales", space_id="a" * 32))
+    project.write()
+    before = manifest.read_bytes()
+    with pytest.raises(AgentCliError, match="already exists"):
+        project.add_tool(ToolSpec.genie_agent("sales", space_id="b" * 32))
+    assert manifest.read_bytes() == before
 
 
 def test_add_conflicting_tool_id_fails_without_writing(tmp_path: pathlib.Path):
@@ -94,6 +257,7 @@ def test_load_rejects_python_tool_entries_with_code_first_migration(tmp_path: pa
 
 [agent]
 framework = "langgraph"
+server = "mason"
 
 [[tools]]
 id = "lookup-ticket"
@@ -154,7 +318,7 @@ def test_bind_and_unbind_stores_round_trip(tmp_path: pathlib.Path):
 
 def test_create_declares_given_store_names(tmp_path: pathlib.Path):
     AgentProject.create(
-        tmp_path, framework="openai", memory_store="mem-x", session_store="sess-y"
+        tmp_path, framework="openai", server="mason", memory_store="mem-x", session_store="sess-y"
     ).write()
 
     reloaded = AgentProject.load(tmp_path)
@@ -164,19 +328,103 @@ def test_create_declares_given_store_names(tmp_path: pathlib.Path):
 
 def test_create_without_store_names_declares_none(tmp_path: pathlib.Path):
     # create() declares only the names it is given; init applies the dir-derived defaults.
-    AgentProject.create(tmp_path, framework="openai").write()
+    AgentProject.create(tmp_path, framework="openai", server="mason").write()
 
     reloaded = AgentProject.load(tmp_path)
     assert reloaded.memory_store is None
     assert reloaded.session_store is None
 
 
+@pytest.mark.parametrize("framework", list(AgentFramework))
+@pytest.mark.parametrize("server", list(AgentServer))
+def test_project_selections_round_trip_as_enums_and_serialize_as_values(
+    tmp_path: pathlib.Path, framework: AgentFramework, server: AgentServer
+):
+    project = AgentProject.create(tmp_path, framework=framework, server=server)
+    assert project.framework is framework
+    assert project.server is server
+    project.write()
+
+    manifest = tomli.loads((tmp_path / "agent.toml").read_text())
+    assert manifest["agent"] == {"framework": framework.value, "server": server.value}
+    reloaded = AgentProject.load(tmp_path)
+    assert reloaded.framework is framework
+    assert reloaded.server is server
+
+
+@pytest.mark.parametrize("selection", ["framework", "server"])
+def test_load_and_create_share_unsupported_selection_validation(
+    tmp_path: pathlib.Path, selection: str
+):
+    values = {"framework": "langgraph", "server": "mason", selection: "unsupported"}
+    with pytest.raises(AgentCliError) as created:
+        AgentProject.create(tmp_path, **values)
+    assert not (tmp_path / "agent.toml").exists()
+
+    path = _write_manifest(
+        tmp_path,
+        "schema_version = 1\n\n[agent]\n"
+        f'framework = "{values["framework"]}"\nserver = "{values["server"]}"\n',
+    )
+    before = path.read_text()
+    with pytest.raises(AgentCliError) as loaded:
+        AgentProject.load(tmp_path)
+
+    assert (
+        loaded.value.message
+        == created.value.message
+        == (f"Unsupported Mason {selection} 'unsupported'.")
+    )
+    assert loaded.value.hint == created.value.hint
+    assert path.read_text() == before
+
+
+@pytest.mark.parametrize("selection", ["framework", "server"])
+@pytest.mark.parametrize("raw", [None, '""', "42"])
+def test_required_project_selections_name_agent_manifest(
+    tmp_path: pathlib.Path, selection: str, raw: str | None
+):
+    values = {"framework": '"langgraph"', "server": '"mason"', selection: raw}
+    _write_manifest(
+        tmp_path,
+        "schema_version = 1\n\n[agent]\n"
+        + "".join(f"{key} = {value}\n" for key, value in values.items() if value is not None),
+    )
+
+    with pytest.raises(AgentCliError) as error:
+        AgentProject.load(tmp_path)
+    assert error.value.message == f"agent.toml must declare agent.{selection}."
+
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
-    [("My_Agent", "my-agent-memory"), ("a.b c", "a-b-c-memory"), ("___", "agent-memory")],
+    [
+        ("My_Agent", "my-agent-memory"),
+        ("a.b c", "a-b-c-memory"),
+        ("___", "agent-memory"),  # only punctuation reduces to the fallback
+        ("2048-game", "2048-game-memory"),  # digits are kept: the backend prefixes memory-/session-
+        ("123", "123-memory"),  # an all-numeric directory is a valid store name
+    ],
 )
 def test_default_store_name_sanitizes(raw: str, expected: str):
     assert default_store_name(raw, "memory") == expected
+
+
+def test_default_store_name_inserts_token_before_suffix():
+    # The token sits before the store kind so the name still ends with the kind (never a digit).
+    assert default_store_name("my-agent", "sessions", "abcxyz") == "my-agent-abcxyz-sessions"
+
+
+@pytest.mark.parametrize("server", ["", "other"])
+def test_load_rejects_missing_or_unsupported_server(tmp_path: pathlib.Path, server: str):
+    server_line = f'server = "{server}"\n' if server else ""
+    _write_manifest(
+        tmp_path,
+        f'schema_version = 1\n\n[agent]\nframework = "openai"\n{server_line}',
+    )
+
+    with pytest.raises(AgentCliError, match="server"):
+        AgentProject.load(tmp_path)
 
 
 def test_deployment_name_round_trips(tmp_path: pathlib.Path):
@@ -199,7 +447,8 @@ def test_deployment_name_round_trips(tmp_path: pathlib.Path):
 
 def test_load_rejects_empty_deployment_name(tmp_path: pathlib.Path):
     _write_manifest(
-        tmp_path, 'schema_version = 1\n\n[agent]\nframework = "openai"\ndeployment_name = ""\n'
+        tmp_path,
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\ndeployment_name = ""\n',
     )
     with pytest.raises(AgentCliError, match="deployment_name"):
         AgentProject.load(tmp_path)
@@ -238,18 +487,10 @@ def test_bind_memory_store_records_id(tmp_path: pathlib.Path):
 def test_load_rejects_store_table_without_name(tmp_path: pathlib.Path):
     _write_manifest(
         tmp_path,
-        'schema_version = 1\n\n[agent]\nframework = "openai"\n\n[session_store]\ndescription = "x"\n',
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n\n[session_store]\ndescription = "x"\n',
     )
     with pytest.raises(AgentCliError, match="session_store"):
         AgentProject.load(tmp_path)
-
-
-def test_load_accepts_disabled_durability_table(tmp_path: pathlib.Path):
-    _write_manifest(
-        tmp_path,
-        'schema_version = 1\n\n[agent]\nframework = "openai"\n\n[durability]\nenabled = false\n',
-    )
-    assert AgentProject.load(tmp_path).durability_enabled is False
 
 
 def test_load_without_root_finds_project_from_working_directory(
@@ -257,13 +498,13 @@ def test_load_without_root_finds_project_from_working_directory(
 ) -> None:
     _write_manifest(
         tmp_path,
-        'schema_version = 1\n\n[agent]\nframework = "openai"\n\n[durability]\nenabled = true\n',
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n',
     )
     nested = tmp_path / "runtime"
     nested.mkdir()
     monkeypatch.chdir(nested)
 
-    assert AgentProject.load().durability_enabled is True
+    assert AgentProject.load().framework == "openai"
 
 
 def test_load_without_discoverable_project_uses_cli_error(
@@ -273,12 +514,3 @@ def test_load_without_discoverable_project_uses_cli_error(
 
     with pytest.raises(AgentCliError, match="Could not locate agent.toml"):
         AgentProject.load()
-
-
-def test_load_rejects_non_boolean_durability_setting(tmp_path: pathlib.Path):
-    _write_manifest(
-        tmp_path,
-        'schema_version = 1\n\n[agent]\nframework = "openai"\n\n[durability]\nenabled = "no"\n',
-    )
-    with pytest.raises(AgentCliError, match="enabled = true or false"):
-        AgentProject.load(tmp_path)

@@ -26,7 +26,7 @@ from databricks_mason.runtime.tool_manifest import (
     downscope_wire,
     load_tools,
 )
-from databricks_mason.runtime.workspace import workspace_client
+from databricks_mason.runtime.workspace import workspace_client, workspace_headers
 
 logger = logging.getLogger(__name__)
 
@@ -51,10 +51,16 @@ class _DownscopedMcpServer(McpServer):
 
 
 def _server_from_tool(tool: ToolRecord) -> McpServer | None:
+    if tool.kind not in {"sandbox", "mcp", "uc_function", "genie_one"}:
+        return None
     client = workspace_client()
     host = client.config.host.rstrip("/")
-    if tool.kind in {"sandbox", "mcp"}:
-        url = f"{host}/ai-gateway/mcp-services/{tool.service}"
+    if tool.kind in {"sandbox", "mcp", "genie_one"}:
+        url = (
+            f"{host}/api/2.0/mcp/genie"
+            if tool.kind == "genie_one"
+            else f"{host}/ai-gateway/mcp-services/{tool.service}"
+        )
         if tool.kind == "sandbox":
             return _DownscopedMcpServer(
                 url=url,
@@ -62,6 +68,13 @@ def _server_from_tool(tool: ToolRecord) -> McpServer | None:
                 workspace_client=client,
                 timeout=120.0,
                 downscope=downscope_wire(tool),
+            )
+        if tool.kind == "genie_one":
+            return McpServer(
+                name=tool.id,
+                workspace_client=client,
+                timeout=120.0,
+                params={"url": url, "headers": workspace_headers()},
             )
         return McpServer(url=url, name=tool.id, workspace_client=client, timeout=120.0)
     if tool.kind == "uc_function":

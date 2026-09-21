@@ -1,4 +1,4 @@
-"""OpenAI Agents SDK adapter for running an agent on Databricks (installed via ``databricks-mason[runtime-openai]``).
+"""OpenAI Agents SDK adapter for running an agent on Databricks (installed via ``databricks-mason[openai]``).
 
 Composable pieces you drop into an existing OpenAI Agents SDK agent — a session store, MCP servers
 declared in ``agent.toml``, long-term memory tools, and MLflow tracing. Each maps onto a slot the
@@ -21,7 +21,7 @@ Agents SDK already has, so migrating an existing agent is a graft, not a rewrite
     result = await Runner.run(agent, messages, session=session_store(session_id))
 
 These need the agent stack (openai-agents, databricks-openai, mlflow), so they sit behind the
-``[runtime-openai]`` extra to keep a plain ``databricks-mason`` CLI install light.
+``[openai]`` extra to keep a plain ``databricks-mason`` installation independent of agent frameworks.
 
 ``__all__`` is the curated surface. Other entry points (``DatabricksSessionStore``) are reachable by
 their submodule paths but not re-exported here.
@@ -30,6 +30,7 @@ their submodule paths but not re-exported here.
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from databricks_mason.openai.genie import genie_tools
     from databricks_mason.openai.mcp import mcp_servers
     from databricks_mason.openai.memory import memory_tools
     from databricks_mason.openai.sessions import session_store
@@ -54,6 +55,7 @@ def configure_tracing() -> None:
 
 
 __all__ = [
+    "genie_tools",
     # MCP servers from agent.toml (plus any you pass) — hand them to Agent(mcp_servers=...).
     "mcp_servers",
     # Long-term memory tools (opt-in via AGENT_MEMORY_STORE) — add to your tool list.
@@ -72,6 +74,7 @@ __all__ = [
 # Re-exports resolved lazily (PEP 562) so importing one submodule (e.g. ``.mcp``) does not eagerly
 # pull in the others' dependencies. ``configure_tracing`` is defined above (binds OpenAI autolog).
 _MODULE_BY_NAME = {
+    "genie_tools": "databricks_mason.openai.genie",
     "mcp_servers": "databricks_mason.openai.mcp",
     "memory_tools": "databricks_mason.openai.memory",
     "session_store": "databricks_mason.openai.sessions",

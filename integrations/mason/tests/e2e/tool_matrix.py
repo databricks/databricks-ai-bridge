@@ -23,6 +23,7 @@ import uuid
 from collections.abc import Callable, Sequence
 from typing import Any
 
+import tomli
 from databricks.sdk import WorkspaceClient
 
 FRAMEWORKS = ("langgraph",)
@@ -384,9 +385,15 @@ class Runner:
         return cases
 
     def _author_cli(self, project: pathlib.Path) -> None:
-        self.run(
+        manifest = project / "agent.toml"
+        before = manifest.read_bytes()
+        rejected = self.run(
             [
                 str(self.mason),
+                "--profile",
+                self.profile,
+                "--output",
+                "json",
                 "tools",
                 "add",
                 "mcp",
@@ -395,8 +402,18 @@ class Runner:
                 "broken_mcp",
                 "--source",
                 str(project),
-            ]
+            ],
+            check=False,
         )
+        if rejected.returncode == 0 or manifest.read_bytes() != before:
+            raise MatrixError(
+                "mason tools add accepted an unavailable MCP service or changed agent.toml"
+            )
+        if json.loads(rejected.stderr).get("error", {}).get("code") not in {
+            "NOT_FOUND",
+            "RESOURCE_DOES_NOT_EXIST",
+        }:
+            raise MatrixError(f"Unexpected MCP validation error: {rejected.stderr}")
         self.run(
             [
                 str(self.mason),
@@ -408,10 +425,8 @@ class Runner:
                 str(project),
             ]
         )
-        listed = self.run(
-            [str(self.mason), "--output", "json", "tools", "list", "--source", str(project)]
-        )
-        if any(tool["id"] == "broken_mcp" for tool in json.loads(listed.stdout)["tools"]):
+        manifest = tomli.loads((project / "agent.toml").read_text())
+        if any(tool["id"] == "broken_mcp" for tool in manifest.get("tools", [])):
             raise MatrixError("mason tools remove left the broken MCP binding in agent.toml")
         commands = [
             ["tools", "add", "sandbox", "--scope", "table:samples.nyctaxi.trips"],
@@ -426,15 +441,22 @@ class Runner:
             ],
         ]
         for args in commands:
-            self.run([str(self.mason), *args, "--source", str(project)])
-        listed = self.run(
-            [str(self.mason), "--output", "json", "tools", "list", "--source", str(project)]
-        )
-        tool_ids = {tool["id"] for tool in json.loads(listed.stdout)["tools"]}
+            self.run(
+                [
+                    str(self.mason),
+                    "--profile",
+                    self.profile,
+                    *args,
+                    "--source",
+                    str(project),
+                ]
+            )
+        manifest = tomli.loads((project / "agent.toml").read_text())
+        tool_ids = {tool["id"] for tool in manifest.get("tools", [])}
         expected = {"sandbox", "web_search", "mason_uc_marker"}
         if tool_ids != expected:
             raise MatrixError(
-                f"managed tools list mismatch: expected {sorted(expected)}, got {sorted(tool_ids)}"
+                f"managed bindings mismatch: expected {sorted(expected)}, got {sorted(tool_ids)}"
             )
 
     def _author_direct(self, project: pathlib.Path, framework: str) -> None:

@@ -11,11 +11,15 @@ from databricks_mason.runtime.durability.lakebase_runtime_store import (
 )
 from databricks_mason.runtime.durability.store import DurableRuntimeStore
 from databricks_mason.runtime.store import (
+    RUNTIME_STORE_DATABASE_ENV,
+    RUNTIME_STORE_LAKEBASE_BRANCH_ENV,
     RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV,
     RUNTIME_STORE_LOCAL_ENV,
     RUNTIME_STORE_SCHEMA_ENV,
+    RUNTIME_STORE_USERNAME_ENV,
     InMemoryRuntimeStore,
     runtime_store_from_environment,
+    runtime_store_is_persistent_environment,
 )
 from databricks_mason.runtime.types import (
     InvocationConflictError,
@@ -53,6 +57,9 @@ def mapping_result(value):
 
 def test_environment_store_is_local_without_an_attached_resource(monkeypatch):
     monkeypatch.delenv(RUNTIME_STORE_LOCAL_ENV, raising=False)
+    monkeypatch.delenv(RUNTIME_STORE_LAKEBASE_BRANCH_ENV, raising=False)
+    monkeypatch.delenv(RUNTIME_STORE_DATABASE_ENV, raising=False)
+    monkeypatch.delenv(RUNTIME_STORE_USERNAME_ENV, raising=False)
     monkeypatch.delenv(RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV, raising=False)
     monkeypatch.delenv(RUNTIME_STORE_SCHEMA_ENV, raising=False)
 
@@ -66,9 +73,119 @@ def test_only_lakebase_store_has_durable_runtime_capabilities():
     assert isinstance(LakebaseDurableRuntimeStore(lakebase=lakebase), DurableRuntimeStore)
 
 
+def test_managed_connection_uses_the_shared_lakebase_connector(monkeypatch):
+    from databricks_ai_bridge import lakebase as lakebase_module
+
+    lakebase, _ = mock_lakebase()
+    factory = MagicMock(return_value=lakebase)
+    monkeypatch.setattr(lakebase_module, "AsyncLakebaseSQLAlchemy", factory)
+    client = MagicMock()
+
+    LakebaseDurableRuntimeStore.from_managed_runtime_store(
+        branch="projects/project/branches/runtime-branch",
+        database="runtime-db",
+        username="app-sp",
+        workspace_client=client,
+    )
+
+    factory.assert_called_once_with(
+        autoscaling_endpoint=None,
+        project=None,
+        branch="projects/project/branches/runtime-branch",
+        database="runtime-db",
+        username="app-sp",
+        workspace_client=client,
+        schema="databricks_mason_runtime",
+        pool_pre_ping=True,
+    )
+
+
+def test_app_resource_connection_uses_injected_coordinates(monkeypatch):
+    endpoint = "projects/project/branches/production/endpoints/primary"
+    client = MagicMock()
+    client.postgres.generate_database_credential.return_value.token = "test-oauth-token"
+    monkeypatch.setenv("PGHOST", "attached.example.com")
+    monkeypatch.setenv("PGPORT", "6543")
+    monkeypatch.setenv("PGDATABASE", "attached-db")
+    monkeypatch.setenv("PGUSER", "attached-user")
+    monkeypatch.setenv("PGSSLMODE", "verify-full")
+    from databricks_mason.runtime.durability import lakebase_runtime_store as module
+
+    create_engine = MagicMock()
+    hooks = []
+    monkeypatch.setattr(module, "create_async_engine", create_engine)
+    monkeypatch.setattr(module.event, "listens_for", lambda *args: lambda fn: hooks.append(fn))
+
+    LakebaseDurableRuntimeStore.from_app_resource(endpoint=endpoint, workspace_client=client)
+
+    url = create_engine.call_args.args[0]
+    assert (url.host, url.port, url.database, url.username) == (
+        "attached.example.com",
+        6543,
+        "attached-db",
+        "attached-user",
+    )
+    assert create_engine.call_args.kwargs["connect_args"] == {"sslmode": "verify-full"}
+    params = {}
+    hooks[0](None, None, None, params)
+    assert params["password"] == "test-oauth-token"
+    client.postgres.generate_database_credential.assert_called_once_with(endpoint=endpoint)
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        RUNTIME_STORE_DATABASE_ENV,
+        RUNTIME_STORE_LAKEBASE_BRANCH_ENV,
+        RUNTIME_STORE_USERNAME_ENV,
+    ],
+)
+def test_partial_managed_configuration_does_not_fall_back_to_apps_resource(monkeypatch, missing):
+    monkeypatch.setenv(RUNTIME_STORE_DATABASE_ENV, "runtime-db-id")
+    monkeypatch.setenv(
+        RUNTIME_STORE_LAKEBASE_BRANCH_ENV,
+        "projects/project/branches/production",
+    )
+    monkeypatch.setenv(RUNTIME_STORE_USERNAME_ENV, "app-sp")
+    monkeypatch.setenv(
+        RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV,
+        "projects/other/branches/production/endpoints/primary",
+    )
+    monkeypatch.setenv(RUNTIME_STORE_SCHEMA_ENV, "legacy_schema")
+    monkeypatch.delenv(missing)
+
+    assert not runtime_store_is_persistent_environment()
+    with pytest.raises(RuntimeError, match=missing):
+        runtime_store_from_environment()
+
+
+def test_environment_store_uses_managed_api_coordinates(monkeypatch):
+    expected = MagicMock()
+    monkeypatch.delenv(RUNTIME_STORE_LOCAL_ENV, raising=False)
+    monkeypatch.setenv(
+        RUNTIME_STORE_LAKEBASE_BRANCH_ENV,
+        "projects/project/branches/runtime-branch",
+    )
+    monkeypatch.setenv(RUNTIME_STORE_DATABASE_ENV, "runtime-db-id")
+    monkeypatch.setenv(RUNTIME_STORE_USERNAME_ENV, "app-sp")
+    factory = MagicMock(return_value=expected)
+    monkeypatch.setattr(LakebaseDurableRuntimeStore, "from_managed_runtime_store", factory)
+
+    assert runtime_store_from_environment() is expected
+    factory.assert_called_once_with(
+        branch="projects/project/branches/runtime-branch",
+        database="runtime-db-id",
+        username="app-sp",
+    )
+    assert runtime_store_is_persistent_environment()
+
+
 def test_environment_store_uses_the_attached_lakebase_resource(monkeypatch):
     expected = MagicMock()
     monkeypatch.delenv(RUNTIME_STORE_LOCAL_ENV, raising=False)
+    monkeypatch.delenv(RUNTIME_STORE_LAKEBASE_BRANCH_ENV, raising=False)
+    monkeypatch.delenv(RUNTIME_STORE_DATABASE_ENV, raising=False)
+    monkeypatch.delenv(RUNTIME_STORE_USERNAME_ENV, raising=False)
     monkeypatch.setenv(
         RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV,
         "projects/project/branches/production/endpoints/primary",

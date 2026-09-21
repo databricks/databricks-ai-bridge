@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 from unittest import mock
 
 import pytest
@@ -16,6 +17,7 @@ from click.testing import CliRunner
 
 from databricks_mason.cli import init as init_mod
 from databricks_mason.errors import AgentCliError
+from databricks_mason.project_types import AgentFramework, AgentServer
 
 
 class _Ctx:
@@ -24,6 +26,22 @@ class _Ctx:
     def __init__(self, output: str = "text", profile=None):
         self.output = output
         self.profile = profile
+
+
+def _default_store_token(manifest: dict, slug: str = "proj") -> str:
+    """Validate the scaffold's default store names (`<slug>-<token>-<kind>`) and return the token.
+
+    Default names carry a per-scaffold random token so fresh scaffolds don't collide, so they can't
+    be compared literally. Check the shape and that both stores share the one token, then return it
+    so callers can assert over the full manifest without mutating it.
+    """
+    mem = re.fullmatch(rf"{re.escape(slug)}-([a-z]{{6}})-memory", manifest["memory_store"]["name"])
+    sess = re.fullmatch(
+        rf"{re.escape(slug)}-([a-z]{{6}})-sessions", manifest["session_store"]["name"]
+    )
+    assert mem and sess, "default store names must be <slug>-<token>-<kind>"
+    assert mem.group(1) == sess.group(1), "memory and session stores must share the scaffold token"
+    return mem.group(1)
 
 
 def _copy_writing(files: dict[str, str] | None = None):
@@ -47,13 +65,14 @@ def _hermetic_install(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_framework_templates_map_to_names():
-    langgraph = init_mod._TEMPLATES["langgraph"]
+    assert set(init_mod._TEMPLATES) == set(AgentFramework)
+    langgraph = init_mod._TEMPLATES[AgentFramework.LANGGRAPH]
     assert (langgraph.mason_server, langgraph.custom_server, langgraph.chat_app) == (
         "agent-langgraph",
         "custom-agent-langgraph",
         "ui/agent-langgraph",
     )
-    openai = init_mod._TEMPLATES["openai"]
+    openai = init_mod._TEMPLATES[AgentFramework.OPENAI]
     assert (openai.mason_server, openai.custom_server, openai.chat_app) == (
         "agent-openai",
         "custom-agent-openai",
@@ -107,29 +126,14 @@ def test_init_defaults_to_langgraph_with_chat_app(tmp_path: pathlib.Path):
             "template": "agent-langgraph",
         }
     with (dest / "agent.toml").open("rb") as manifest_file:
-        assert tomli.load(manifest_file)["durability"] == {"enabled": True}
-
-
-@pytest.mark.parametrize("framework", ["langgraph", "openai"])
-def test_init_no_durable_runtime_keeps_mason_server_without_binding(
-    tmp_path: pathlib.Path, framework: str
-):
-    dest = tmp_path / "proj"
-    result = CliRunner().invoke(
-        init_mod.init, ["--framework", framework, "--no-durable-runtime", str(dest)], obj=_Ctx()
-    )
-    assert result.exit_code == 0, result.output
-    with (dest / "agent.toml").open("rb") as manifest_file:
-        assert tomli.load(manifest_file)["durability"] == {"enabled": False}
-    assert "Mason AgentApp" in result.output
-    assert "Durable runtime" in result.output
-    assert "disabled" in result.output
-
-
-def test_init_help_hides_no_durable_runtime():
-    result = CliRunner().invoke(init_mod.init, ["--help"], obj=_Ctx())
-    assert result.exit_code == 0, result.output
-    assert "--no-durable-runtime" not in result.output
+        manifest = tomli.load(manifest_file)
+    token = _default_store_token(manifest)
+    assert manifest == {
+        "schema_version": 1,
+        "agent": {"framework": "langgraph", "server": "mason"},
+        "memory_store": {"name": f"proj-{token}-memory"},
+        "session_store": {"name": f"proj-{token}-sessions"},
+    }
 
 
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
@@ -146,7 +150,10 @@ def test_init_custom_server_uses_minimal_template(tmp_path: pathlib.Path, framew
     assert copied.call_args.args[2] == ()  # no chat-app overlay for the custom server
     with (dest / "agent.toml").open("rb") as manifest_file:
         manifest = tomli.load(manifest_file)
-    assert manifest["durability"] == {"enabled": False}
+    assert manifest == {
+        "schema_version": 1,
+        "agent": {"framework": framework, "server": "custom"},
+    }
     assert "memory_store" not in manifest
     assert "session_store" not in manifest
     with (dest / ".mason" / "project.toml").open("rb") as config_file:
@@ -155,28 +162,18 @@ def test_init_custom_server_uses_minimal_template(tmp_path: pathlib.Path, framew
     assert "Chat app" not in result.output
 
 
-def test_init_rejects_no_durable_runtime_for_custom_server(tmp_path: pathlib.Path):
-    result = CliRunner().invoke(
-        init_mod.init,
-        ["--server", "custom", "--no-durable-runtime", str(tmp_path / "proj")],
-        obj=_Ctx(),
-    )
-    assert result.exit_code != 0
-    assert "only applies to --server mason" in result.output
-
-
 def test_init_creates_canonical_agent_manifest(tmp_path: pathlib.Path):
     dest = tmp_path / "proj"
     result = CliRunner().invoke(init_mod.init, ["--framework", "openai", str(dest)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     with (dest / "agent.toml").open("rb") as manifest_file:
         manifest = tomli.load(manifest_file)
+    token = _default_store_token(manifest)
     assert manifest == {
         "schema_version": 1,
-        "agent": {"framework": "openai"},
-        "durability": {"enabled": True},
-        "memory_store": {"name": "proj-memory"},
-        "session_store": {"name": "proj-session"},
+        "agent": {"framework": "openai", "server": "mason"},
+        "memory_store": {"name": f"proj-{token}-memory"},
+        "session_store": {"name": f"proj-{token}-sessions"},
     }
 
 
@@ -232,7 +229,9 @@ def test_init_json_output(tmp_path: pathlib.Path):
     assert payload["directory"] == str(dest)
     assert payload["server"] == "mason"
     assert payload["chat_app_enabled"] is True
-    assert payload["durable_runtime"] is True
+    # The scaffolded store names are reported (they carry a random token, so aren't inferable).
+    assert re.fullmatch(r"proj-[a-z]{6}-memory", payload["memory_store"])
+    assert re.fullmatch(r"proj-[a-z]{6}-sessions", payload["session_store"])
 
 
 def test_init_refuses_existing_destination(tmp_path: pathlib.Path):
@@ -250,6 +249,31 @@ def test_init_rejects_unknown_framework(tmp_path: pathlib.Path):
         init_mod.init, ["--framework", "nope", str(tmp_path / "x")], obj=_Ctx()
     )
     assert result.exit_code != 0  # click.Choice rejects it
+
+
+def test_init_help_keeps_lowercase_selection_values():
+    result = CliRunner().invoke(init_mod.init, ["--help"], obj=_Ctx())
+    assert result.exit_code == 0, result.output
+    assert "[langgraph|openai]" in result.output
+    assert "[mason|custom]" in result.output
+    assert "AgentFramework" not in result.output
+    assert "AgentServer" not in result.output
+
+
+@pytest.mark.parametrize("framework", list(AgentFramework))
+@pytest.mark.parametrize("server", list(AgentServer))
+def test_init_json_keeps_lowercase_framework_and_server(
+    tmp_path: pathlib.Path, framework: AgentFramework, server: AgentServer
+):
+    result = CliRunner().invoke(
+        init_mod.init,
+        ["--framework", framework.value, "--server", server.value, str(tmp_path / "proj")],
+        obj=_Ctx(output="json"),
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["framework"] == framework.value
+    assert payload["server"] == server.value
 
 
 def test_write_env_seeds_profile_from_example(tmp_path: pathlib.Path):
@@ -324,3 +348,152 @@ def test_init_store_name_overrides(tmp_path: pathlib.Path):
         manifest = tomli.load(manifest_file)
     assert manifest["memory_store"] == {"name": "mem-x"}
     assert manifest["session_store"] == {"name": "sess-y"}
+
+
+@pytest.mark.parametrize("chat_app", [True, False])
+def test_existing_prepares_migration_without_changing_application(
+    tmp_path: pathlib.Path, chat_app: bool
+):
+    original = {
+        "agent.py": b"# existing graph\n",
+        "pyproject.toml": b"[project]\nname = 'existing'\n",
+        "agent.toml": b"# existing bindings\n",
+        "app.yaml": b"command: [existing-server]\n",
+        ".env": b"DATABRICKS_CONFIG_PROFILE=keep\n",
+        ".mason/project.toml": b"# existing metadata\n",
+        ".claude/skills/other/SKILL.md": b"# another skill\n",
+    }
+    for name, data in original.items():
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+
+    args = [
+        "--existing",
+        "--framework",
+        "langgraph",
+        "--profile",
+        "selected",
+        "--memory-store",
+        "chosen-memory",
+        "--session-store",
+        "chosen-session",
+        str(tmp_path),
+    ]
+    if not chat_app:
+        args.append("--disable-chat-app")
+    result = CliRunner().invoke(init_mod.init, args, obj=_Ctx(output="json"))
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    skill = tmp_path / "mason-migrate"
+    assert pathlib.Path(payload["skill"]).is_file()
+    assert pathlib.Path(payload["prompt_file"]).read_text().strip() == payload["prompt"]
+    assert payload["mode"] == "existing"
+    assert payload["chat_app_enabled"] is chat_app
+    settings = json.loads((skill / "references/migration.json").read_text())
+    assert settings["profile"] == "selected"
+    assert settings["chat_app_enabled"] is chat_app
+    reference = skill / "references/template"
+    with (reference / "agent.toml").open("rb") as manifest_file:
+        manifest = tomli.load(manifest_file)
+    assert manifest["memory_store"] == {"name": "chosen-memory"}
+    assert manifest["session_store"] == {"name": "chosen-session"}
+    assert manifest["agent"]["server"] == "mason"
+
+    # Every supported agent finds the one bundle through a pointer, rather than its own copy.
+    pointers = [tmp_path / root / "skills/mason-migrate/SKILL.md" for root in (".claude", ".agent")]
+    assert payload["pointers"] == [str(pointer) for pointer in pointers]
+    for pointer in pointers:
+        body = pointer.read_text()
+        assert "name: mason-migrate" in body
+        assert "../../../mason-migrate/SKILL.md" in body
+        assert not (pointer.parent / "references").exists()
+
+    for name, data in original.items():
+        assert (tmp_path / name).read_bytes() == data
+
+
+def test_existing_defaults_to_current_directory(tmp_path: pathlib.Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(init_mod.init, ["--existing"], obj=_Ctx(profile="saved"))
+    assert result.exit_code == 0, result.output
+    settings = json.loads((tmp_path / "mason-migrate/references/migration.json").read_text())
+    assert settings["profile"] == "saved"
+    assert not (tmp_path / ".env").exists()
+    assert not (tmp_path / "agent.toml").exists()
+
+
+@pytest.mark.parametrize("conflict", ["bundle", "claude-skill", "agent-skill", "file", "symlink"])
+def test_existing_refuses_migration_path_conflicts(tmp_path: pathlib.Path, conflict: str):
+    claude = tmp_path / ".claude"
+    if conflict == "bundle":
+        bundle = tmp_path / "mason-migrate"
+        bundle.mkdir()
+        (bundle / "SKILL.md").write_text("user instructions")
+    elif conflict == "claude-skill":
+        skill = claude / "skills/mason-migrate"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("user instructions")
+    elif conflict == "agent-skill":
+        skill = tmp_path / ".agent/skills/mason-migrate"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("user instructions")
+    elif conflict == "file":
+        claude.write_text("user file")
+    else:
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        claude.symlink_to(elsewhere, target_is_directory=True)
+    before = {str(path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+    result = CliRunner().invoke(init_mod.init, ["--existing", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code != 0
+    assert {
+        str(path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()
+    } == before
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--existing", "--framework", "openai"],
+        ["--existing", "--server", "custom"],
+    ],
+)
+def test_existing_rejects_unsupported_modes(tmp_path: pathlib.Path, args: list[str]):
+    result = CliRunner().invoke(init_mod.init, [*args, str(tmp_path)], obj=_Ctx())
+    assert result.exit_code != 0
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_existing_missing_directory_is_rejected(tmp_path: pathlib.Path):
+    dest = tmp_path / "missing"
+    result = CliRunner().invoke(init_mod.init, ["--existing", str(dest)], obj=_Ctx())
+    assert result.exit_code != 0
+    assert not dest.exists()
+
+
+def test_existing_failed_copy_leaves_no_artifacts(tmp_path: pathlib.Path, monkeypatch):
+    def failed_copy(name, dest, overlay_names=()):
+        dest.mkdir(parents=True)
+        (dest / "partial.txt").write_text("partial")
+        raise AgentCliError("copy failed")
+
+    monkeypatch.setattr(init_mod, "_copy_packaged_template", failed_copy)
+    result = CliRunner().invoke(init_mod.init, ["--existing", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code != 0
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_existing_failed_pointer_removes_the_bundle(tmp_path: pathlib.Path, monkeypatch):
+    real_mkdir = pathlib.Path.mkdir
+
+    def failing_mkdir(self: pathlib.Path, *args, **kwargs):
+        if ".claude" in self.parts:
+            raise OSError("cannot create agent configuration directory")
+        return real_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "mkdir", failing_mkdir)
+    result = CliRunner().invoke(init_mod.init, ["--existing", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code != 0
+    assert list(tmp_path.iterdir()) == []

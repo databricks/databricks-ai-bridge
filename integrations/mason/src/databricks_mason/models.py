@@ -1,4 +1,4 @@
-"""Typed, forward-compatible views over agents/v1 JSON responses.
+"""Typed, forward-compatible views over 2.0 agents JSON responses.
 
 Every model subclasses `dict` and holds the complete raw response, so mapping
 access (`store["name"]`), `json.dumps`, and any new/unknown server fields keep
@@ -38,6 +38,56 @@ class StorageBackend(_Model):
     @property
     def backend_id(self) -> Optional[str]:
         return self.get("backend_id")
+
+
+class RuntimeStoreLakebaseBackend(_Model):
+    @property
+    def project_id(self) -> Optional[str]:
+        return self.get("project_id")
+
+    @property
+    def branch(self) -> Optional[str]:
+        return self.get("branch")
+
+    @property
+    def database_id(self) -> Optional[str]:
+        return self.get("database_id")
+
+
+class RuntimeStoreAppOwner(_Model):
+    @property
+    def name(self) -> Optional[str]:
+        return self.get("name")
+
+    @property
+    def service_principal_id(self) -> Optional[str]:
+        return self.get("service_principal_id")
+
+
+class RuntimeStoreOwner(_Model):
+    @property
+    def app(self) -> Optional[RuntimeStoreAppOwner]:
+        return _wrap(self.get("app"), RuntimeStoreAppOwner)
+
+
+class RuntimeStoreStorageBackend(_Model):
+    @property
+    def lakebase(self) -> Optional[RuntimeStoreLakebaseBackend]:
+        return _wrap(self.get("lakebase"), RuntimeStoreLakebaseBackend)
+
+
+class RuntimeStore(_Model):
+    @property
+    def name(self) -> Optional[str]:
+        return self.get("name")
+
+    @property
+    def owner(self) -> Optional[RuntimeStoreOwner]:
+        return _wrap(self.get("owner"), RuntimeStoreOwner)
+
+    @property
+    def storage_backend(self) -> Optional[RuntimeStoreStorageBackend]:
+        return _wrap(self.get("storage_backend"), RuntimeStoreStorageBackend)
 
 
 class MemoryStore(_Model):

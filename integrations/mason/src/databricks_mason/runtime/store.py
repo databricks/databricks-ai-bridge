@@ -17,7 +17,10 @@ from databricks_mason.runtime.types import (
 )
 
 DEFAULT_RUNTIME_STORE_SCHEMA = "databricks_mason_runtime"
+RUNTIME_STORE_LAKEBASE_BRANCH_ENV = "DATABRICKS_MASON_RUNTIME_STORE_LAKEBASE_BRANCH"
 RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV = "DATABRICKS_MASON_RUNTIME_STORE_LAKEBASE_ENDPOINT"
+RUNTIME_STORE_DATABASE_ENV = "DATABRICKS_MASON_RUNTIME_STORE_DATABASE"
+RUNTIME_STORE_USERNAME_ENV = "DATABRICKS_MASON_RUNTIME_STORE_USERNAME"
 RUNTIME_STORE_SCHEMA_ENV = "DATABRICKS_MASON_RUNTIME_STORE_SCHEMA"
 RUNTIME_STORE_LOCAL_ENV = "DATABRICKS_MASON_RUNTIME_STORE_LOCAL"
 
@@ -211,14 +214,61 @@ class InMemoryRuntimeStore(RuntimeStore):
         return persisted
 
 
+def runtime_store_is_persistent_environment() -> bool:
+    """Whether the process environment selects a complete durable Runtime Store."""
+    if os.getenv(RUNTIME_STORE_LOCAL_ENV, "").lower() == "true":
+        return False
+    managed = (
+        os.getenv(RUNTIME_STORE_LAKEBASE_BRANCH_ENV),
+        os.getenv(RUNTIME_STORE_DATABASE_ENV),
+        os.getenv(RUNTIME_STORE_USERNAME_ENV),
+    )
+    if any(managed):
+        return all(managed)
+    legacy = (
+        os.getenv(RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV),
+        os.getenv(RUNTIME_STORE_SCHEMA_ENV),
+    )
+    return all(legacy)
+
+
 def runtime_store_from_environment() -> RuntimeStore:
     """Construct the Runtime Store selected by the process environment.
 
-    The local marker overrides any inherited Lakebase variables. When both Lakebase variables are
-    set, the runtime uses durable storage. Otherwise, it intentionally uses process-local state.
+    The local marker overrides any inherited Lakebase variables. Managed Runtime Stores provide a
+    branch, database, and username; legacy Apps resources provide an endpoint plus ``PG*`` values.
+    An incomplete durable configuration is rejected rather than mixed with another resource.
     """
     if os.getenv(RUNTIME_STORE_LOCAL_ENV, "").lower() == "true":
         return InMemoryRuntimeStore()
+
+    branch = os.getenv(RUNTIME_STORE_LAKEBASE_BRANCH_ENV)
+    database = os.getenv(RUNTIME_STORE_DATABASE_ENV)
+    username = os.getenv(RUNTIME_STORE_USERNAME_ENV)
+    managed = {
+        RUNTIME_STORE_LAKEBASE_BRANCH_ENV: branch,
+        RUNTIME_STORE_DATABASE_ENV: database,
+        RUNTIME_STORE_USERNAME_ENV: username,
+    }
+    if any(managed.values()):
+        missing = [name for name, value in managed.items() if not value]
+        if missing:
+            raise RuntimeError(
+                "Managed Runtime Store configuration is missing: " + ", ".join(missing)
+            )
+        from databricks_mason.runtime.durability.lakebase_runtime_store import (
+            LakebaseDurableRuntimeStore,
+        )
+
+        assert branch is not None
+        assert database is not None
+        assert username is not None
+        return LakebaseDurableRuntimeStore.from_managed_runtime_store(
+            branch=branch,
+            database=database,
+            username=username,
+        )
+
     endpoint = os.getenv(RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV)
     schema = os.getenv(RUNTIME_STORE_SCHEMA_ENV)
     if endpoint and schema:

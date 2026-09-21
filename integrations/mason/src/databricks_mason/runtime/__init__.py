@@ -1,4 +1,4 @@
-"""Framework-neutral runtime helpers for an agent deployed on Databricks (via ``databricks-mason[runtime]``).
+"""Framework-neutral runtime helpers for an agent deployed on Databricks (via ``databricks-mason``).
 
 These have no agent-framework dependency — MLflow tracing setup and workspace-routed SDK client
 construction — so they work regardless of which framework an agent is built with. Framework-specific

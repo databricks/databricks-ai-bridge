@@ -8,14 +8,34 @@ import pathlib
 import pytest
 from click.testing import CliRunner
 
-from databricks_mason.agent_project import AgentProject
+from databricks_mason.agent_project import AgentProject, ToolSpec
 from databricks_mason.cli.tools import tools
+from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import write_project_metadata
 
 
 class _Ctx:
-    def __init__(self, output: str = "text"):
+    def __init__(self, output: str = "text", *, client=None):
         self.output = output
+        self._client = client or _Client()
+
+    def client(self):
+        return self._client
+
+
+class _Client:
+    def __init__(self, service="system.ai.web_search", error=None):
+        self.service = service
+        self.error = error
+        self.calls = []
+
+    def get_mcp_service(self, service):
+        self.calls.append(service)
+        if self.error:
+            raise self.error
+        if service != self.service:
+            raise AgentCliError("MCP service does not exist.", error_code="NOT_FOUND")
+        return {"name": f"mcp-services/{service}"}
 
 
 def _project(
@@ -29,7 +49,8 @@ def _project(
     (project / "tests" / "tools").mkdir(parents=True)
     (project / "agent" / "mcps.py").write_text("ORIGINAL = True\n", encoding="utf-8")
     write_project_metadata(project, framework=framework, template=template or f"agent-{framework}")
-    AgentProject.create(project, framework=framework).write()
+    server = "custom" if (template or "").startswith("custom-agent-") else "mason"
+    AgentProject.create(project, framework=framework, server=server).write()
     return project
 
 
@@ -108,6 +129,8 @@ def test_add_mcp_and_uc_function_write_typed_manifest_records(tmp_path: pathlib.
         ["add", "sandbox", "--scope", "table:samples.nyctaxi.trips"],
         ["add", "mcp", "system.ai.web_search"],
         ["add", "uc-function", "main.tools.lookup_ticket"],
+        ["add", "genie-one"],
+        ["add", "genie-agent", "a" * 32],
     ],
 )
 def test_add_manifest_tool_works_for_any_framework(tmp_path: pathlib.Path, command: list[str]):
@@ -138,6 +161,8 @@ def test_add_manifest_tool_works_for_any_framework(tmp_path: pathlib.Path, comma
         ["add", "sandbox", "--scope", "table:samples.nyctaxi.trips"],
         ["add", "mcp", "system.ai.web_search"],
         ["add", "uc-function", "main.tools.lookup_ticket"],
+        ["add", "genie-one"],
+        ["add", "genie-agent", "a" * 32],
     ],
 )
 def test_add_managed_tool_rejects_custom_server_template_without_manifest_change(
@@ -201,15 +226,183 @@ def test_add_is_idempotent_and_json_reports_changed_files(tmp_path: pathlib.Path
     assert len(AgentProject.load(project).tools) == 1
 
 
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("name", [None, "_Sales"])
+@pytest.mark.parametrize(
+    ("command", "kind", "source_value"),
+    [
+        (["genie-one"], "genie_one", "genie_one"),
+        (["genie-agent", "0" * 32], "genie_agent", "0" * 32),
+    ],
+)
+def test_genie_add_remove_is_manifest_only_and_idempotent(
+    tmp_path, framework, name, command, kind, source_value
+):
+    project = _project(tmp_path, framework)
+    manifest = project / "agent.toml"
+    original_mcps = (project / "agent" / "mcps.py").read_bytes()
+    runner = CliRunner()
+    args = ["add", *command, "--source", str(project)]
+    if name is not None:
+        args.extend(["--name", name])
+    tool_id = name or kind
+    record = {"id": tool_id, "kind": kind, "source": source_value}
+    first = runner.invoke(tools, args, obj=_Ctx(output="json"))
+    assert first.exit_code == 0, first.output
+    assert json.loads(first.output) == {
+        "schema_version": 1,
+        "changed": True,
+        "changed_files": [str(manifest)],
+        "manifest": str(manifest),
+        "tool": record,
+    }
+    before = manifest.read_bytes()
+    second = runner.invoke(tools, args, obj=_Ctx(output="json"))
+    assert second.exit_code == 0, second.output
+    assert json.loads(second.output)["changed_files"] == []
+    assert json.loads(second.output)["changed"] is False
+    assert manifest.read_bytes() == before
+    loaded = AgentProject.load(project).tools
+    assert [(tool.id, tool.source.kind) for tool in loaded] == [(tool_id, kind)]
+    assert (project / "agent" / "mcps.py").read_bytes() == original_mcps
+    assert list((project / "agent" / "tools").iterdir()) == []
+    removed = runner.invoke(tools, ["remove", tool_id, "--source", str(project)], obj=_Ctx())
+    assert removed.exit_code == 0, removed.output
+    assert AgentProject.load(project).tools == []
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        *[["genie-agent", value] for value in ["", "A" * 32, "a" * 31, "g" * 32]],
+        ["genie-agent"],
+        ["genie-one", "a" * 32],
+        *[
+            [kind, *(["a" * 32] if kind == "genie-agent" else []), "--name", name]
+            for kind in ["genie-one", "genie-agent"]
+            for name in ["1sales", "sales-agent", "a" * 49]
+        ],
+    ],
+)
+def test_genie_cli_rejects_invalid_args_without_writing(tmp_path, command):
+    project = _project(tmp_path)
+    manifest = project / "agent.toml"
+    before = manifest.read_bytes()
+    result = CliRunner().invoke(tools, ["add", *command, "--source", str(project)], obj=_Ctx())
+    assert result.exit_code != 0
+    assert manifest.read_bytes() == before
+
+
+@pytest.mark.parametrize("replacement", [["genie-one"], ["genie-agent", "b" * 32]])
+def test_genie_cli_conflicts_without_writing(tmp_path, replacement):
+    project = _project(tmp_path)
+    runner = CliRunner()
+    first = runner.invoke(
+        tools,
+        ["add", "genie-agent", "a" * 32, "--name", "sales", "--source", str(project)],
+        obj=_Ctx(),
+    )
+    assert first.exit_code == 0, first.output
+    before = (project / "agent.toml").read_bytes()
+    result = runner.invoke(
+        tools, ["add", *replacement, "--name", "sales", "--source", str(project)], obj=_Ctx()
+    )
+    assert result.exit_code != 0
+    assert "already exists" in result.output
+    assert (project / "agent.toml").read_bytes() == before
+
+
+def test_genie_commands_are_in_add_help():
+    result = CliRunner().invoke(tools, ["add", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "genie-one" in result.output
+    assert "genie-agent" in result.output
+
+
+@pytest.mark.parametrize("command", ["genie-one", "genie-agent"])
+def test_genie_command_help_has_examples(command):
+    result = CliRunner().invoke(tools, ["add", command, "--help"])
+    assert result.exit_code == 0, result.output
+    assert "EXAMPLES" in result.output
+    assert f"mason tools add {command}" in result.output
+
+
+def test_add_missing_mcp_leaves_project_unchanged(tmp_path: pathlib.Path):
+    project = _project(tmp_path)
+    before = {path: path.read_bytes() for path in project.rglob("*") if path.is_file()}
+
+    result = CliRunner().invoke(
+        tools,
+        ["add", "mcp", "system.ai.missing_service", "--source", str(project)],
+        obj=_Ctx(),
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "NOT_FOUND" in result.output
+    assert "system.ai.missing_service" in result.output
+    assert "mason tools list --kind mcp" in result.output
+    assert {path: path.read_bytes() for path in project.rglob("*") if path.is_file()} == before
+
+
+@pytest.mark.parametrize("error_code", ["PERMISSION_DENIED", "UNAVAILABLE", "UNAUTHENTICATED"])
+def test_add_mcp_lookup_error_preserves_existing_manifest(tmp_path: pathlib.Path, error_code):
+    project = _project(tmp_path)
+    manifest = AgentProject.load(project)
+    manifest.add_tool(ToolSpec.uc_function("existing", function="main.tools.existing"))
+    manifest.write()
+    before = manifest.path.read_bytes()
+    client = _Client(error=AgentCliError("Lookup failed.", error_code=error_code))
+
+    result = CliRunner().invoke(
+        tools,
+        ["add", "mcp", "system.ai.web_search", "--source", str(project)],
+        obj=_Ctx(client=client),
+    )
+
+    assert result.exit_code == 1, result.output
+    assert error_code in result.output
+    assert "Lookup failed" in result.output
+    assert manifest.path.read_bytes() == before
+
+
+def test_add_mcp_looks_up_exact_service_in_custom_schema(tmp_path: pathlib.Path):
+    project = _project(tmp_path)
+    client = _Client(service="main.tools.ticket_search")
+
+    result = CliRunner().invoke(
+        tools,
+        ["add", "mcp", "main.tools.ticket_search", "--name", "tickets", "--source", str(project)],
+        obj=_Ctx(client=client),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert client.calls == ["main.tools.ticket_search"]
+    assert AgentProject.load(project).tools == [
+        ToolSpec.mcp("tickets", service="main.tools.ticket_search")
+    ]
+
+
+@pytest.mark.parametrize("service", ["web_search", "system.ai", "system..web_search"])
+def test_add_malformed_mcp_rejects_before_lookup(tmp_path: pathlib.Path, service):
+    project = _project(tmp_path)
+    client = _Client()
+    before = (project / "agent.toml").read_bytes()
+
+    result = CliRunner().invoke(
+        tools, ["add", "mcp", service, "--source", str(project)], obj=_Ctx(client=client)
+    )
+
+    assert result.exit_code == 1, result.output
+    assert client.calls == []
+    assert (project / "agent.toml").read_bytes() == before
+
+
 def test_remove_tool_updates_only_the_manifest(tmp_path: pathlib.Path):
     project = _project(tmp_path)
     runner = CliRunner()
-    added = runner.invoke(
-        tools,
-        ["add", "mcp", "system.ai.missing_service", "--name", "broken", "--source", str(project)],
-        obj=_Ctx(),
-    )
-    assert added.exit_code == 0, added.output
+    manifest = AgentProject.load(project)
+    manifest.add_tool(ToolSpec.mcp("broken", service="system.ai.missing_service"))
+    manifest.write()
 
     result = runner.invoke(
         tools,
@@ -282,7 +475,7 @@ def test_remove_tool_is_idempotent_and_reports_json_changes(tmp_path: pathlib.Pa
     }
 
 
-def test_tools_list_emits_manifest_records_as_json(tmp_path: pathlib.Path):
+def test_configured_tools_are_inspected_in_manifest(tmp_path: pathlib.Path):
     project = _project(tmp_path)
     runner = CliRunner()
     added = runner.invoke(
@@ -292,17 +485,43 @@ def test_tools_list_emits_manifest_records_as_json(tmp_path: pathlib.Path):
     )
     assert added.exit_code == 0, added.output
 
-    result = runner.invoke(
-        tools,
-        ["list", "--source", str(project)],
-        obj=_Ctx(output="json"),
-    )
-
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.output)["tools"] == [
-        {
-            "id": "web_search",
-            "kind": "mcp",
-            "source": "system.ai.web_search",
-        }
+    bindings = AgentProject.load(project).tools
+    assert [(tool.id, tool.source.kind, tool.source.service) for tool in bindings] == [
+        ("web_search", "mcp", "system.ai.web_search")
     ]
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["mcp", "system.ai.web_search"],
+        ["sandbox", "--scope", "table:catalog.schema.table"],
+        ["uc-function", "catalog.schema.function"],
+    ],
+)
+@pytest.mark.parametrize("output", ["text", "json"])
+def test_add_points_to_resolved_manifest_on_change_and_noop(tmp_path, args, output):
+    project = _project(tmp_path)
+    command = ["add", *args, "--source", str(project)]
+    for changed in (True, False):
+        result = CliRunner().invoke(tools, command, obj=_Ctx(output=output))
+        assert result.exit_code == 0, result.output
+        if output == "json":
+            payload = json.loads(result.stdout)
+            assert payload["manifest"] == str(project / "agent.toml")
+            assert payload["changed"] is changed
+            assert result.stderr == ""
+        else:
+            assert f"Review {project / 'agent.toml'}" in result.stdout
+            assert "configured managed tools and MCP bindings" in result.stdout
+            if not changed:
+                assert "already configured" in result.stdout
+
+
+@pytest.mark.parametrize("path", [[], ["sandbox"], ["mcp"], ["uc-function"]])
+def test_add_help_explains_manifest_review(path):
+    result = CliRunner().invoke(tools, ["add", *path, "--help"])
+    assert result.exit_code == 0, result.output
+    text = " ".join(result.stdout.split())
+    assert "Review" in text
+    assert "agent.toml" in text

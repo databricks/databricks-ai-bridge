@@ -10,15 +10,17 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from databricks_mason import workspace_client
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from databricks_mason import workspace_client
+from databricks_mason.runtime.store import runtime_store_is_persistent_environment
+
 _UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
 _INSTANCE_ID = uuid.uuid4().hex[:12]  # identifies this process in the UI
-_AGENTS_API = "/api/agents/v1"
+_AGENTS_API = "/api/2.0/agents"
 _MESSAGE_ROLES = {
     "ai",
     "assistant",
@@ -41,6 +43,7 @@ class MemoryEntryRequest(BaseModel):
 class MemorySearchRequest(BaseModel):
     query: str = Field(min_length=1)
     limit: int = Field(default=10, ge=1, le=100)
+    actor: str | None = None
 
 
 class SessionItemsRequest(BaseModel):
@@ -91,6 +94,47 @@ def _is_deployed() -> bool:
     app_url = os.getenv("DATABRICKS_APP_URL", "")
     is_local = app_url.startswith(("http://localhost", "http://127.0.0.1"))
     return bool(os.getenv("DATABRICKS_APP_NAME")) and not is_local
+
+
+# Tracing turns on only with both a destination and an experiment, mirroring
+# databricks_mason.runtime.tracing so the UI card matches what the agent actually does.
+_TRACING_DESTINATION_VARS = ("MLFLOW_TRACKING_URI", "MLFLOW_TRACING_DESTINATION")
+
+
+def _workspace_host() -> str:
+    """Best-effort workspace host for building MLflow links; never raises."""
+    try:
+        host = workspace_client().config.host or ""
+    except Exception:  # noqa: BLE001 - host is best-effort; a failure must not break the config route
+        host = os.getenv("DATABRICKS_HOST", "")
+    return host.rstrip("/")
+
+
+def _tracing() -> dict:
+    """Whether MLflow tracing is configured, plus a best-effort link to its experiment."""
+    destination = ""
+    for var in _TRACING_DESTINATION_VARS:
+        if value := os.getenv(var):
+            destination = value
+            break
+    experiment_id = os.getenv("MLFLOW_EXPERIMENT_ID", "").strip()
+    experiment_name = os.getenv("MLFLOW_EXPERIMENT_NAME", "").strip()
+    enabled = bool(destination) and bool(experiment_id or experiment_name)
+    url: str | None = None
+    if enabled:
+        if destination.startswith(("http://", "https://")) and "databricks" not in destination:
+            # A local OSS MLflow server: link into its own UI.
+            base = destination.rstrip("/")
+            url = f"{base}/#/experiments/{experiment_id}" if experiment_id else base
+        else:
+            host = _workspace_host()
+            if host:
+                url = (
+                    f"{host}/ml/experiments/{experiment_id}"
+                    if experiment_id
+                    else f"{host}/ml/experiments"
+                )
+    return {"enabled": enabled, "experiment_id": experiment_id or None, "url": url}
 
 
 # The task string the Model Serving API reports for chat/completions endpoints; only these can back
@@ -306,6 +350,7 @@ def _require_session() -> None:
 
 async def _checkpoint_history(session_id: str, actor: str) -> dict[str, Any]:
     from agent.agent import create_agent_graph
+
     from databricks_mason.langgraph.session_store import thread_config
 
     graph = await create_agent_graph(actor)
@@ -356,27 +401,47 @@ def _chat_session_items(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def install_ui(app: FastAPI) -> None:
-    """Mount the Mason demo UI and its runtime control endpoints."""
+    """Mount the Mason UI and its runtime control endpoints."""
     app.mount("/ui-assets", StaticFiles(directory=_UI_ROOT), name="mason-demo-ui-assets")
+
+    @app.middleware("http")
+    async def disable_ui_caching(request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path == "/" or request.url.path.startswith("/ui-assets/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.get("/", include_in_schema=False)
     async def index() -> FileResponse:
         return FileResponse(_UI_ROOT / "index.html")
 
-    @app.get("/api/demo/config", include_in_schema=False)
-    async def demo_config(request: Request) -> dict:
+    @app.get("/api/ui/config", include_in_schema=False)
+    async def ui_config(request: Request) -> dict:
         actor = _request_actor(request)
         memory_store = _memory_store()
         session_store = _session_store()
         default_model = _default_model()
+        runtime_store_persistent = runtime_store_is_persistent_environment()
+        runtime_store_mode = (
+            "Runtime Store" if runtime_store_persistent else "In-process Runtime Store"
+        )
         return {
             "session_id": _request_session_id(request),
             "instance_id": _INSTANCE_ID,
             "viewer": actor if actor != "agent" else "Local developer",
             "deployed": _is_deployed(),
             "models": {"default": default_model, "available": [default_model]},
-            "streaming": {"enabled": True, "transport": "Server-sent events"},
-            "background": {"enabled": True, "durable": True},
+            "streaming": {
+                "enabled": True,
+                "transport": "Server-sent events",
+                "persistent": runtime_store_persistent,
+                "mode": runtime_store_mode,
+            },
+            "background": {
+                "enabled": True,
+                "persistent": runtime_store_persistent,
+                "mode": runtime_store_mode,
+            },
             "session": {
                 "durable": bool(session_store),
                 "managed": bool(session_store),
@@ -390,6 +455,7 @@ def install_ui(app: FastAPI) -> None:
                 "store": f"memory-stores/{memory_store}" if memory_store else None,
                 "actor": actor,
             },
+            "tracing": _tracing(),
         }
 
     @app.get("/api/demo/models", include_in_schema=False)
@@ -413,17 +479,20 @@ def install_ui(app: FastAPI) -> None:
     async def list_memory_entries(
         request: Request,
         path_prefix: str | None = Query(default=None),
+        actor: str | None = Query(default=None),
     ) -> dict:
+        # The UI can browse another actor's memories by passing ?actor=; default to the viewer.
         _require_memory()
         return await _managed_call(
-            _state_client().list_memory_entries, _request_actor(request), path_prefix
+            _state_client().list_memory_entries, actor or _request_actor(request), path_prefix
         )
 
     @app.post("/api/demo/memory/search", include_in_schema=False)
     async def search_memory_entries(request: Request, payload: MemorySearchRequest) -> dict:
+        # payload.actor lets the UI search another actor's memories; default to the viewer.
         _require_memory()
         return await _managed_call(
-            _state_client().search_memory_entries, _request_actor(request), payload
+            _state_client().search_memory_entries, payload.actor or _request_actor(request), payload
         )
 
     @app.post("/api/demo/sessions", include_in_schema=False)

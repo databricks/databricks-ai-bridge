@@ -1,4 +1,4 @@
-"""LangGraph adapter for running an agent on Databricks (installed via ``databricks-mason[runtime]``).
+"""LangGraph adapter for running an agent on Databricks (installed via ``databricks-mason[langgraph]``).
 
 Composable pieces you drop into an existing LangGraph agent — a session-store checkpointer, MCP
 tools declared in ``agent.toml``, long-term memory tools, and MLflow tracing. Each maps onto a slot
@@ -23,7 +23,7 @@ LangGraph already has, so migrating an existing agent is a graft, not a rewrite:
     result = await agent.ainvoke(inputs, config=thread_config(session_id))
 
 These need the agent stack (databricks-langchain, langgraph, langchain, fastapi, mlflow), so they sit
-behind the ``[runtime]`` extra to keep a plain ``databricks-mason`` CLI install light.
+behind the ``[langgraph]`` extra to keep a plain ``databricks-mason`` installation independent of agent frameworks.
 
 ``__all__`` is the curated surface. Other entry points (``mcp_client``, ``DatabricksSessionStoreSaver``)
 are reachable by their submodule paths but not re-exported here.
@@ -32,6 +32,7 @@ are reachable by their submodule paths but not re-exported here.
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from databricks_mason.langgraph.genie import genie_tools
     from databricks_mason.langgraph.mcp import mcp_tools
     from databricks_mason.langgraph.memory import memory_tools
     from databricks_mason.langgraph.session_store import checkpointer, thread_config
@@ -56,6 +57,7 @@ def configure_tracing() -> None:
 
 
 __all__ = [
+    "genie_tools",
     # MCP tools from agent.toml (plus any servers you pass) — add them to your agent's tool list.
     "mcp_tools",
     # Long-term memory tools (opt-in via AGENT_MEMORY_STORE) — add to your tool list.
@@ -76,6 +78,7 @@ __all__ = [
 # Re-exports resolved lazily (PEP 562) so importing one submodule (e.g. ``.mcp``) does not eagerly
 # pull in the others' dependencies. ``configure_tracing`` is defined above (binds LangChain autolog).
 _MODULE_BY_NAME = {
+    "genie_tools": "databricks_mason.langgraph.genie",
     "mcp_tools": "databricks_mason.langgraph.mcp",
     "memory_tools": "databricks_mason.langgraph.memory",
     "checkpointer": "databricks_mason.langgraph.session_store",

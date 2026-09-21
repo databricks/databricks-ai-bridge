@@ -1,4 +1,4 @@
-"""Private transport for the agents/v1 memory and session APIs.
+"""Private transport for the managed agent store APIs.
 
 The public SDK is the resource-oriented :class:`databricks_mason.MasonClient`.
 This module temporarily owns the one-method-per-endpoint transport used by that
@@ -13,6 +13,7 @@ import os
 import pathlib
 import time
 from typing import TYPE_CHECKING, Any, Optional
+from urllib.parse import quote
 
 from databricks_mason import models
 from databricks_mason.errors import TRANSIENT_ERROR_CODES, AgentCliError, wrap_api_error
@@ -20,9 +21,7 @@ from databricks_mason.errors import TRANSIENT_ERROR_CODES, AgentCliError, wrap_a
 if TYPE_CHECKING:
     from databricks.sdk import WorkspaceClient
 
-_BASE = "/api/agents/v1"
-# ExtractMemories only binds the 2.0 path (no /agents/v1 alias), so it needs its own base.
-_BASE_2_0 = "/api/2.0/agents"
+_BASE = "/api/2.0/agents"
 _MCP_SERVICES_PATH = "/api/2.1/unity-catalog/mcp-services"
 
 # Transient backend failures (e.g. a CANCELLED RPC) usually clear on a retry, so retry safe
@@ -134,7 +133,7 @@ def _workspace_client(profile: Optional[str]) -> WorkspaceClient:
 
 
 class _MasonApiClient:
-    """Private transport for the agents/v1 API until the generated SDK is available."""
+    """Private transport for the 2.0 agents API until the generated SDK is available."""
 
     def __init__(
         self,
@@ -170,6 +169,48 @@ class _MasonApiClient:
         """
         self._w.workspace.mkdirs(path)
 
+    def create_runtime_store(
+        self,
+        runtime_store_id: str,
+        app_service_principal_id: str,
+        *,
+        app_name: str,
+        retry_transient: bool = False,
+    ) -> models.RuntimeStore:
+        """Create the deployment's Runtime Store through Conversation Store."""
+        return _as(
+            models.RuntimeStore,
+            self._do(
+                "POST",
+                f"{_BASE}/runtime-stores",
+                query={"runtime_store_id": runtime_store_id},
+                body={
+                    "owner": {
+                        "app": {
+                            "name": app_name,
+                            "service_principal_id": app_service_principal_id,
+                        }
+                    }
+                },
+                safe_to_retry=retry_transient,
+            ),
+        )
+
+    def get_runtime_store(self, runtime_store_id: str) -> models.RuntimeStore:
+        """Resolve the service-managed backend and app owner before reusing a store."""
+        return _as(
+            models.RuntimeStore,
+            self._do("GET", f"{_BASE}/runtime-stores/{quote(runtime_store_id, safe='')}"),
+        )
+
+    def delete_runtime_store(self, runtime_store_id: str) -> dict:
+        """Delete a deployment's Runtime Store and its dedicated database."""
+        return self._do(
+            "DELETE",
+            f"{_BASE}/runtime-stores/{quote(runtime_store_id, safe='')}",
+            safe_to_retry=True,
+        )
+
     def _do(
         self,
         method: str,
@@ -194,6 +235,10 @@ class _MasonApiClient:
                 delay *= 2
 
     # --- Unity Catalog MCP Services -----------------------------------------
+
+    def get_mcp_service(self, service: str) -> dict:
+        """Look up a managed MCP service visible to the authenticated user."""
+        return self._do("GET", f"{_MCP_SERVICES_PATH}/{quote(service, safe='')}")
 
     def list_mcp_services(
         self, schema: str = "system.ai", page_token: Optional[str] = None
@@ -220,6 +265,7 @@ class _MasonApiClient:
             self._do(
                 "POST",
                 f"{_BASE}/memory-stores",
+                query={"managed_memory_store_id": display_name},
                 body=body,
                 safe_to_retry=retry_transient,
             ),
@@ -271,6 +317,7 @@ class _MasonApiClient:
         description: Optional[str] = None,
         session_id: Optional[str] = None,
         source_type: Optional[str] = None,
+        write_mode: Optional[str] = None,
     ) -> models.MemoryEntry:
         body = _body(
             actor_id=actor_id,
@@ -279,6 +326,7 @@ class _MasonApiClient:
             description=description,
             session_id=session_id,
             source_type=source_type,
+            write_mode=write_mode,
         )
         return _as(
             models.MemoryEntry,
@@ -363,9 +411,15 @@ class _MasonApiClient:
         body = _body(content=content, description=description)
         if not body:
             raise AgentCliError("No fields to update. Provide content and/or a description.")
+        mask = ",".join(body.keys())
         return _as(
             models.MemoryEntry,
-            self._do("PATCH", f"{_BASE}/{memory_entry_path(store, entry)}", body=body),
+            self._do(
+                "PATCH",
+                f"{_BASE}/{memory_entry_path(store, entry)}",
+                query=_query(update_mask=mask),
+                body=body,
+            ),
         )
 
     def delete_memory_entry(self, store: str, entry: str) -> dict:
@@ -387,7 +441,7 @@ class _MasonApiClient:
             self._do(
                 "POST",
                 f"{_BASE}/session-stores",
-                query={"session_store_name": name},
+                query={"session_store_name": name, "session_store_id": name},
                 body=body,
                 safe_to_retry=retry_transient,
             ),
@@ -502,11 +556,8 @@ class _MasonApiClient:
             ),
         )
 
-    def get_session(self, session_id: str, store: Optional[str] = None) -> models.Session:
-        if store:
-            path = f"{_BASE}/session-stores/{store}/sessions/{session_id}"
-        else:
-            path = f"{_BASE}/sessions/{session_id}"
+    def get_session(self, session_id: str, store: str) -> models.Session:
+        path = f"{_BASE}/session-stores/{store}/sessions/{session_id}"
         return _as(models.Session, self._do("GET", path))
 
     def update_session(self, store: str, session_id: str, metadata: dict) -> models.Session:
@@ -616,7 +667,7 @@ class _MasonApiClient:
             models.ExtractMemoriesResponse,
             self._do(
                 "POST",
-                f"{_BASE_2_0}/session-stores/{store}/sessions/{session_id}/extractions",
+                f"{_BASE}/session-stores/{store}/sessions/{session_id}/extractions",
                 body=body,
             ),
         )

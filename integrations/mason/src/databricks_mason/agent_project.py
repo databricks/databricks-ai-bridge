@@ -15,6 +15,12 @@ from tomlkit import TOMLDocument
 from tomlkit.exceptions import ParseError
 
 from databricks_mason.errors import AgentCliError
+from databricks_mason.project_types import (
+    AgentFramework,
+    AgentServer,
+    parse_framework,
+    parse_server,
+)
 from databricks_mason.runtime import tool_manifest
 from databricks_mason.runtime.tool_manifest import (
     MEMORY_STORE_TABLE,
@@ -26,8 +32,6 @@ from databricks_mason.runtime.tool_manifest import (
 TRACING_TABLE = "tracing"
 
 _SCHEMA_VERSION = 1
-_DURABILITY_TABLE = "durability"
-_SUPPORTED_FRAMEWORKS = {"langgraph", "openai"}
 _SUPPORTED_SCOPE_KINDS = {"table", "volume", "workspace"}
 _SUPPORTED_PERMISSIONS = {"read_only", "read_write"}
 _TOOL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -111,6 +115,7 @@ class ToolSource:
     kind: str
     service: str | None = None
     function: str | None = None
+    space_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -129,6 +134,19 @@ class ToolSpec:
     policy: ToolPolicy = field(default_factory=ToolPolicy)
 
     def __post_init__(self) -> None:
+        source_values = {"kind": self.source.kind}
+        for key in ("service", "function", "space_id"):
+            value = getattr(self.source, key)
+            if value is not None:
+                source_values[key] = value
+        try:
+            tool_manifest.validate_genie_source(
+                self.id, source_values, has_downscope=bool(self.policy.downscope)
+            )
+        except tool_manifest.ToolManifestError as exc:
+            raise AgentCliError(str(exc)) from exc
+        if self.source.kind in {"genie_one", "genie_agent"}:
+            return
         if not _TOOL_ID.fullmatch(self.id):
             raise AgentCliError(f"Invalid tool id {self.id!r}.")
         kind = self.source.kind
@@ -181,21 +199,32 @@ class ToolSpec:
             source=ToolSource(kind="uc_function", function=function),
         )
 
+    @classmethod
+    def genie_one(cls, tool_id: str = "genie_one") -> "ToolSpec":
+        return cls(id=tool_id, source=ToolSource(kind="genie_one"))
+
+    @classmethod
+    def genie_agent(cls, tool_id: str, *, space_id: str) -> "ToolSpec":
+        return cls(id=tool_id, source=ToolSource(kind="genie_agent", space_id=space_id))
+
 
 def _required_string(value: object, description: str) -> str:
     if not isinstance(value, str) or not value:
-        raise AgentCliError(f"Tool manifest must declare {description}.")
+        raise AgentCliError(f"agent.toml must declare {description}.")
     return value
 
 
-def default_store_name(project_name: str, suffix: str) -> str:
+def default_store_name(project_name: str, suffix: str, token: str | None = None) -> str:
     """A store display name derived from the project directory, e.g. ``my-agent`` -> ``my-agent-memory``.
 
     Sanitized to the store display-name charset (lower-case alphanumerics and hyphens); a name that
-    reduces to nothing (e.g. a directory of only punctuation) falls back to ``agent``.
+    reduces to nothing (e.g. only punctuation) falls back to ``agent``. An optional per-scaffold
+    ``token`` is inserted before the suffix (``my-agent-<token>-memory``) so fresh scaffolds get
+    distinct stores while the name still ends with the store kind.
     """
-    slug = re.sub(r"[^a-z0-9-]+", "-", project_name.lower()).strip("-") or "agent"
-    return f"{slug}-{suffix}"
+    slug = re.sub(r"[^a-z0-9-]+", "-", project_name.lower()).strip("-")
+    middle = f"{token}-" if token else ""
+    return f"{slug or 'agent'}-{middle}{suffix}"
 
 
 def _store_name_from_manifest(value: object, table: str) -> str | None:
@@ -205,17 +234,6 @@ def _store_name_from_manifest(value: object, table: str) -> str | None:
     if not isinstance(value, Mapping):
         raise AgentCliError(f"agent.toml [{table}] must be a table.")
     return _required_string(cast(Mapping[str, Any], value).get("name"), f"[{table}] name")
-
-
-def _durability_from_manifest(value: object) -> bool:
-    if value is None:
-        return False
-    if not isinstance(value, Mapping):
-        raise AgentCliError("agent.toml [durability] must be a table.")
-    enabled = cast(Mapping[str, Any], value).get("enabled")
-    if not isinstance(enabled, bool):
-        raise AgentCliError("agent.toml [durability] must set enabled = true or false.")
-    return enabled
 
 
 def _store_id_from_manifest(value: object) -> str | None:
@@ -256,15 +274,23 @@ def _tool_from_manifest(value: object) -> ToolSpec:
     if not isinstance(policy_value, Mapping):
         raise AgentCliError("Tool policy must be a TOML table.")
     policy_value = cast(Mapping[str, Any], policy_value)
+    tool_id = _required_string(value.get("id"), "an id")
+    try:
+        tool_manifest.validate_genie_source(
+            tool_id, source, has_downscope="downscope" in policy_value
+        )
+    except tool_manifest.ToolManifestError as exc:
+        raise AgentCliError(str(exc)) from exc
     downscope_value = policy_value.get("downscope", [])
     if not isinstance(downscope_value, list):
         raise AgentCliError("Tool policy downscope must be an array.")
     return ToolSpec(
-        id=_required_string(value.get("id"), "an id"),
+        id=tool_id,
         source=ToolSource(
             kind=kind,
             service=source.get("service") if isinstance(source.get("service"), str) else None,
             function=source.get("function") if isinstance(source.get("function"), str) else None,
+            space_id=source.get("space_id") if isinstance(source.get("space_id"), str) else None,
         ),
         policy=ToolPolicy(tuple(_scope_from_manifest(item) for item in downscope_value)),
     )
@@ -281,7 +307,7 @@ def _tool_table(spec: ToolSpec) -> Any:
     table = tomlkit.table()
     table.add("id", spec.id)
     source_values = {"kind": spec.source.kind}
-    for key in ("service", "function"):
+    for key in ("service", "function", "space_id"):
         value = getattr(spec.source, key)
         if value is not None:
             source_values[key] = value
@@ -299,19 +325,19 @@ def _tool_table(spec: ToolSpec) -> Any:
 
 
 class AgentProject:
-    """Loaded mutable view of a project's canonical tool manifest."""
+    """Loaded mutable view of a project's canonical agent manifest."""
 
     def __init__(
         self,
         root: pathlib.Path,
         document: TOMLDocument,
-        framework: str,
+        framework: AgentFramework,
+        server: AgentServer,
         tools: list[ToolSpec],
         memory_store: str | None = None,
         session_store: str | None = None,
         memory_store_id: str | None = None,
         deployment_name: str | None = None,
-        durability_enabled: bool = False,
         trace_experiment_id: str | None = None,
         trace_disabled: bool = False,
     ) -> None:
@@ -319,15 +345,17 @@ class AgentProject:
         self.path = root / "agent.toml"
         self._document = document
         self.framework = framework
+        # Server selection is deployment behavior, so agent.toml—not hidden template metadata—is
+        # the source of truth for whether Mason provisions and wires a Runtime Store.
+        self.server = server
         self.tools = tools
         # Managed store bindings declared in agent.toml; None = unbound. memory_store_id is the bare
         # store id the runtime needs for the entries API (the display name can't be used there).
         self.memory_store = memory_store
         self.session_store = session_store
         self.memory_store_id = memory_store_id
-        # The deployment's base name (`mason deploy` prefixes it with `mason-`); None until named.
+        # The deployment's base name (`mason deploy` prefixes it with `agent-mason-`); None until named.
         self.deployment_name = deployment_name
-        self.durability_enabled = durability_enabled
         # Tracing config: an explicit experiment id override (None = default per-project experiment), and
         # whether tracing is disabled (tracing is on by default; this flag turns it off).
         self.trace_experiment_id = trace_experiment_id
@@ -362,9 +390,8 @@ class AgentProject:
         agent = document.get("agent")
         if not isinstance(agent, Mapping):
             raise AgentCliError("agent.toml must declare an [agent] table.")
-        framework = _required_string(agent.get("framework"), "agent.framework")
-        if framework not in _SUPPORTED_FRAMEWORKS:
-            raise AgentCliError(f"Unsupported Mason framework {framework!r}.")
+        framework = parse_framework(_required_string(agent.get("framework"), "agent.framework"))
+        server = parse_server(_required_string(agent.get("server"), "agent.server"))
         deployment_name = agent.get("deployment_name")
         if deployment_name is not None and not (
             isinstance(deployment_name, str) and deployment_name
@@ -384,7 +411,6 @@ class AgentProject:
         session_store = _store_name_from_manifest(
             document.get(SESSION_STORE_TABLE), SESSION_STORE_TABLE
         )
-        durability_enabled = _durability_from_manifest(document.get(_DURABILITY_TABLE))
         tracing_table = document.get(TRACING_TABLE)
         trace_experiment_id: str | None = None
         trace_disabled = False
@@ -398,12 +424,12 @@ class AgentProject:
             project_root,
             document,
             framework,
+            server,
             tools,
             memory_store,
             session_store,
             memory_store_id,
             str(deployment_name) if deployment_name is not None else None,
-            durability_enabled,
             trace_experiment_id,
             trace_disabled,
         )
@@ -414,31 +440,27 @@ class AgentProject:
         root: pathlib.Path | str,
         *,
         framework: str,
-        durability_enabled: bool = False,
+        server: str,
         memory_store: str | None = None,
         session_store: str | None = None,
     ) -> "AgentProject":
-        if framework not in _SUPPORTED_FRAMEWORKS:
-            raise AgentCliError(f"Unsupported Mason framework {framework!r}.")
+        selected_framework = parse_framework(framework)
+        selected_server = parse_server(server)
         project_root = pathlib.Path(root).expanduser().resolve()
         document = tomlkit.document()
         document.add("schema_version", _SCHEMA_VERSION)
         document.add(tomlkit.nl())
         agent = tomlkit.table()
-        agent.add("framework", framework)
+        agent.add("framework", selected_framework.value)
+        agent.add("server", selected_server.value)
         document.add("agent", agent)
-        durability = tomlkit.table()
-        durability.add("enabled", durability_enabled)
-        document.add(_DURABILITY_TABLE, durability)
         project = cls(
             project_root,
             document,
-            framework,
+            selected_framework,
+            selected_server,
             [],
-            durability_enabled=durability_enabled,
         )
-        # agent.toml is the source of truth for stores: declare the ones we were given as active
-        # bindings (name only — `mason deploy` creates them and resolves the id at deploy time).
         if memory_store:
             project.bind_memory_store(memory_store)
         if session_store:
@@ -466,7 +488,7 @@ class AgentProject:
 
             def _summary(s: ToolSpec) -> str:
                 src = s.source
-                return src.service or src.function or src.kind
+                return src.service or src.function or src.space_id or src.kind
 
             raise AgentCliError(
                 f"Tool id {spec.id!r} already exists with a different configuration "

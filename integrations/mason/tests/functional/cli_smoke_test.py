@@ -11,11 +11,13 @@ Everything runs with an isolated HOME and no Databricks config, so no workspace 
 
 from __future__ import annotations
 
+import json
 import pathlib
 import subprocess
 import sys
 
 import pytest
+import tomli
 
 # Every top-level command; `<group> --help` proves each module imports and wires up as installed.
 _COMMANDS = (
@@ -25,7 +27,6 @@ _COMMANDS = (
     "dev",
     "memory",
     "sessions",
-    "mcp",
     "tracing",
     "deploy",
     "deployments",
@@ -53,7 +54,7 @@ def run_mason(tmp_path: pathlib.Path):
 
     def run(*args: str, check: bool = True) -> subprocess.CompletedProcess:
         result = subprocess.run(
-            [str(mason), *args], env=env, capture_output=True, text=True, timeout=60
+            [str(mason), *args], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60
         )
         if check:
             assert result.returncode == 0, (
@@ -77,7 +78,6 @@ def test_cli_and_every_command_help_load(run_mason) -> None:
         ["--framework", "langgraph"],
         ["--framework", "openai"],
         ["--framework", "langgraph", "--server", "custom"],
-        ["--framework", "langgraph", "--no-durable-runtime"],
     ],
 )
 def test_init_scaffolds(run_mason, tmp_path: pathlib.Path, extra) -> None:
@@ -88,22 +88,137 @@ def test_init_scaffolds(run_mason, tmp_path: pathlib.Path, extra) -> None:
     assert (dest / "agent.toml").is_file()
 
 
-def test_tools_add_list_remove(run_mason, tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("output", ["text", "json"])
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["sandbox", "--scope", "table:catalog.schema.table"],
+        ["uc-function", "catalog.schema.function"],
+        ["genie-one"],
+        ["genie-agent", "0" * 32],
+    ],
+)
+def test_tools_offline_add_review_manifest_remove(
+    run_mason, tmp_path, framework, output, args
+) -> None:
+    project = tmp_path / "agent"
+    run_mason("init", "--framework", framework, str(project))
+    manifest = project / "agent.toml"
+    original = {
+        path.relative_to(project): path.read_bytes()
+        for path in project.rglob("*")
+        if path.is_file() and path != manifest
+    }
+    for changed in (True, False):
+        added = run_mason(
+            "--output", output, "tools", "add", *args, "--name", "tested", "--source", str(project)
+        )
+        if output == "json":
+            payload = json.loads(added.stdout)
+            assert payload["manifest"] == str(manifest)
+            assert payload["changed"] is changed
+            assert payload["changed_files"] == ([str(manifest)] if changed else [])
+        else:
+            assert f"Review {manifest}" in added.stdout
+            assert "configured managed tools and MCP bindings" in added.stdout
+            if not changed:
+                assert "already configured" in added.stdout
+        assert [tool["id"] for tool in tomli.loads(manifest.read_text())["tools"]] == ["tested"]
+    run_mason("tools", "remove", "tested", "--source", str(project))
+    assert tomli.loads(manifest.read_text()).get("tools", []) == []
+    assert {
+        path.relative_to(project): path.read_bytes()
+        for path in project.rglob("*")
+        if path.is_file() and path != manifest
+    } == original
+
+
+@pytest.mark.parametrize("kind", ["sandbox", "uc-function", "genie-one", "genie-agent"])
+def test_tools_local_discovery_without_project_or_auth(run_mason, kind):
+    result = run_mason("-o", "json", "tools", "list", "--kind", kind)
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 2
+    assert payload["complete"] is True
+    assert payload["mcp_schema"] is None
+    assert payload["errors"] == []
+    assert [tool["kind"] for tool in payload["available_tools"]] == [kind]
+
+
+def test_tools_text_discovery_suggests_mcp_filters(run_mason):
+    result = run_mason("tools", "list", "--kind", "genie-one")
+    assert "mason tools list --kind mcp" in result.stdout
+    assert "mason tools list --kind mcp --schema catalog.schema" in result.stdout
+
+
+def test_tools_discovery_without_auth_is_explicitly_incomplete(run_mason):
+    result = run_mason("-o", "json", "tools", "list", check=False)
+    assert result.returncode == 1
+    payload = json.loads(result.stdout)
+    assert payload["complete"] is False
+    assert payload["mcp_schema"] == "system.ai"
+    assert [tool["kind"] for tool in payload["available_tools"]] == [
+        "sandbox",
+        "uc-function",
+        "genie-one",
+        "genie-agent",
+    ]
+    assert payload["errors"]
+
+
+def test_tools_help_and_removed_configured_route(run_mason):
+    for path in [
+        ("tools",),
+        ("tools", "list"),
+        ("tools", "add"),
+        ("tools", "add", "sandbox"),
+        ("tools", "add", "mcp"),
+        ("tools", "add", "uc-function"),
+        ("tools", "add", "genie-one"),
+        ("tools", "add", "genie-agent"),
+    ]:
+        text = " ".join(run_mason(*path, "--help").stdout.split())
+        assert "agent.toml" in text
+        assert "list configured tools" not in text
+        assert "mason mcp list" not in text
+    listing_help = " ".join(run_mason("tools", "list", "--help").stdout.split())
+    for expected in (
+        "--kind",
+        "--schema",
+        "system.ai",
+        "catalog.schema",
+        "genie-one",
+        "genie-agent",
+        "No agent project",
+    ):
+        assert expected in listing_help
+    assert "--source DIRECTORY" not in listing_help
+    assert run_mason("tools", "list", "--source", ".", check=False).returncode != 0
+    assert run_mason("tools", "mcp", "list", check=False).returncode != 0
+    assert run_mason("mcp", "--help", check=False).returncode != 0
+
+
+def test_mcp_add_without_auth_does_not_change_manifest(run_mason, tmp_path: pathlib.Path) -> None:
     project = tmp_path / "agent"
     run_mason("init", "--framework", "langgraph", str(project))
-    run_mason(
+    manifest = project / "agent.toml"
+    before = manifest.read_bytes()
+
+    result = run_mason(
+        "--output",
+        "json",
         "tools",
         "add",
         "mcp",
         "system.ai.web_search",
-        "--name",
-        "websearch",
         "--source",
         str(project),
+        check=False,
     )
-    listing = run_mason("tools", "list", "--source", str(project)).stdout
-    assert "websearch" in listing or "web_search" in listing
-    run_mason("tools", "remove", "websearch", "--source", str(project))
+
+    assert result.returncode == 1
+    assert "Could not initialize Databricks auth" in result.stderr
+    assert manifest.read_bytes() == before
 
 
 def test_tracing_disable_and_reenable(run_mason, tmp_path: pathlib.Path) -> None:

@@ -1,7 +1,7 @@
 command: ["uv", "run", "start-server"]
 # databricks apps listen by default on port 8000
 #
-# Mason injects the deployed Lakebase durability endpoint. The LangGraph checkpointer remains
+# Mason injects the deployed Runtime Store endpoint. The LangGraph checkpointer remains
 # in-process unless a managed Session Store is bound. To enable tracing, add these literal values:
 #
 # env:

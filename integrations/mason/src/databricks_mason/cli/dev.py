@@ -16,7 +16,6 @@ import click
 import yaml
 
 from databricks_mason import render
-from databricks_mason.agent_project import AgentProject
 from databricks_mason.cli.deploy import (
     _load_project,
     _resolve_memory_store,
@@ -25,13 +24,12 @@ from databricks_mason.cli.deploy import (
     resolve_trace_experiment_id,
     store_bindings,
 )
+from databricks_mason.cli.endpoint_examples import print_agent_invoke_command
+from databricks_mason.cli.tracing import experiment_url
 from databricks_mason.databricks_cli import _databricks
 from databricks_mason.errors import AgentCliError
-from databricks_mason.project_config import (
-    is_custom_server_template,
-    load_project_metadata,
-    require_managed_tool_support,
-)
+from databricks_mason.project_config import require_managed_tool_support
+from databricks_mason.project_types import AgentServer
 from databricks_mason.runtime.store import RUNTIME_STORE_LOCAL_ENV
 from databricks_mason.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
 
@@ -105,8 +103,8 @@ def dev(
     # the per-project experiment and wire its env. Tracing is best-effort locally — if it can't be set
     # up (e.g. no mlflow installed, or offline), dev still runs the agent, just without traces.
     memory_store, session_store = store_bindings(source_dir)
-    # `mason dev` never provisions stores (unlike `mason deploy`); warn so the missing durability /
-    # long-term memory isn't a silent surprise.
+    # `mason dev` never provisions stores (unlike `mason deploy`); warn so missing long-term memory
+    # or conversation state is not a silent surprise.
     if not memory_store:
         render.warning(
             "No memory store bound — long-term memory is disabled. Run 'mason memory bind <name>'."
@@ -160,12 +158,17 @@ def dev(
     # Tracing is best-effort: build the client and provision inside the try so ANY failure (no auth /
     # offline, no mlflow, permission) degrades to running without traces rather than aborting a purely
     # local run.
+    trace_url: Optional[str] = None
     try:
+        client = obj.client()
         experiment_id = resolve_trace_experiment_id(
-            source_dir, source_dir.resolve().name, obj.client(), obj.profile
+            source_dir, source_dir.resolve().name, client, obj.profile
         )
         if experiment_id:
             env_updates.update(mlflow_tracing_config(experiment_id).env())
+            # Show the same default experiment URL `mason deploy` prints, so a dev run surfaces where
+            # its traces land. Falls back to the bare id when the host is unavailable (offline).
+            trace_url = experiment_url(client.host, experiment_id) or experiment_id
     except Exception as exc:  # noqa: BLE001 - tracing must never block a local run
         render.diagnostic(
             "warning",
@@ -186,8 +189,8 @@ def dev(
     if app_port is not None:
         args += ["--app-port", str(app_port)]
 
-    # Run against a local-only manifest that marks durability as in-memory, removes deploy-only
-    # package-index overrides, and injects any locally-resolved store ids.
+    # Run against a local-only manifest that forces the Runtime Store in-process, removes deploy-only
+    # package-index overrides, and injects any locally resolved store ids.
     entry_point = _dev_entry_point(app_yaml, local_env or None)
     # run-local resolves this relative to cwd and rejects an absolute alternate-manifest path.
     args += ["--entry-point", entry_point.name]
@@ -195,7 +198,12 @@ def dev(
     # `run-local` prints a generic "go to http://localhost:<port>" line that points at the chat UI —
     # misleading for an API-only project, which serves no page there (404). Print an accurate line up
     # front, keyed on whether this project actually carries the chat-app overlay.
-    _announce_local_url(source_dir, app_port or _DEFAULT_APP_PORT)
+    _announce_local_url(
+        source_dir,
+        app_port or _DEFAULT_APP_PORT,
+        project.server if project else None,
+        trace_url,
+    )
 
     # Run in the project dir so run-local finds the app; stream output (no capture). Remove the
     # local-only manifest afterward so a later `mason deploy` cannot sync it to the workspace.
@@ -210,23 +218,28 @@ def dev(
         entry_point.unlink(missing_ok=True)
 
 
-def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
-    """Print how to reach the running app: the chat UI if present, else a sample invoke request."""
+def _announce_local_url(
+    source_dir: pathlib.Path, port: int, server: AgentServer | None, trace_url: str | None = None
+) -> None:
+    """Print how to reach the running app: the chat UI if present, else a sample invoke request.
+
+    ``trace_url`` (when tracing is on) is shown alongside so a dev run surfaces where its traces land,
+    matching the ``Traces`` line ``mason deploy`` prints.
+    """
     base = f"http://localhost:{port}"
     deploy_name = source_dir.resolve().name
-    try:
-        template = load_project_metadata(source_dir).template
-    except AgentCliError:
-        template = None
     tool_step: str | tuple[str, str] = (
         "Edit agent/agent.py to give the agent a tool"
-        if is_custom_server_template(template)
+        if server == AgentServer.CUSTOM
         else ("mason tools add mcp <service>", "Give the agent a tool")
     )
     if (source_dir / "runtime" / "ui.py").is_file():
+        fields = {"Chat UI": base}
+        if trace_url:
+            fields["Traces"] = trace_url
         render.success(
             "Starting agent",
-            fields={"Chat UI": base},
+            fields=fields,
             next_steps=[
                 f"Open {base} to chat with your agent",
                 tool_step,
@@ -236,11 +249,7 @@ def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
         )
     else:
         # No page is served at `/`, so give a copy-pasteable request instead of just the URL.
-        try:
-            durable = AgentProject.load(source_dir).durability_enabled
-        except AgentCliError:
-            durable = False
-        uses_runtime_api = durable or template in {"agent-langgraph", "agent-openai"}
+        uses_runtime_api = server == AgentServer.MASON
         endpoint = f"{base}/api/invocations" if uses_runtime_api else f"{base}/invocations"
         body = (
             '{"id": "00000000-0000-4000-8000-000000000000", '
@@ -249,15 +258,24 @@ def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
             else '{"input": [{"role": "user", "content": "hi"}]}'
         )
         sample = f"curl -X POST {endpoint} -H 'Content-Type: application/json' -d '{body}'"
+        fields = {"Invoke": f"POST {endpoint}"}
+        if trace_url:
+            fields["Traces"] = trace_url
         render.success(
             "Starting API-only agent (no chat UI — see `mason init --help`)",
-            fields={"Invoke": f"POST {endpoint}"},
+            fields=fields,
             next_steps=[
                 (sample, "Send a test request"),
                 tool_step,
                 (f"mason deploy {deploy_name}", "Deploy it to Databricks"),
             ],
         )
+
+    print_agent_invoke_command(
+        f"--url {base}",
+        uses_runtime_api=(source_dir / "runtime" / "ui.py").is_file()
+        or server == AgentServer.MASON,
+    )
 
 
 def _dev_entry_point(

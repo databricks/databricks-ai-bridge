@@ -1,7 +1,7 @@
 command: ["uv", "run", "start-server"]
 # databricks apps listen by default on port 8000
 #
-# Mason injects the deployed Lakebase durability endpoint. The Agents SDK session remains
+# Mason injects the deployed Runtime Store endpoint. The Agents SDK session remains
 # in-process unless a managed Session Store is bound. To enable tracing, add these literal values:
 #
 # env:
