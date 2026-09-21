@@ -399,7 +399,7 @@ def test_existing_prepares_migration_without_changing_application(
         manifest = tomli.load(manifest_file)
     assert manifest["memory_store"] == {"name": "chosen-memory"}
     assert manifest["session_store"] == {"name": "chosen-session"}
-    assert manifest["durability"] == {"enabled": True}
+    assert manifest["agent"]["server"] == "mason"
     for name, data in original.items():
         assert (tmp_path / name).read_bytes() == data
 

@@ -12,7 +12,7 @@ complete migration.
 ## Inspect the project and reference
 
 Read `references/migration.json` for the server, bundled template version, chat-app choice,
-durability setting, and optional profile. `references/template/` is a candidate project generated
+and optional profile. `references/template/` is a candidate project generated
 from the templates shipped with the installed CLI. Use it as migration evidence, not an importable
 application dependency.
 
@@ -51,7 +51,7 @@ required and accepted.
 
 Implement the command requirements in `references/template/MASON_CONTRACT.md`, using the template
 as an example. Merge candidate `agent.toml`, `.mason/project.toml`, dependencies, and startup config
-without overwriting existing choices. Candidate stores and durability are migration intent, not
+without overwriting existing choices. Candidate stores are migration intent, not
 authorization to provision resources or switch live state. Use `uv` and the bundled template's
 compatible Mason dependency.
 

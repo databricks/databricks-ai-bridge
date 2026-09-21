@@ -119,7 +119,6 @@ def _prepare_migration(
     dest: pathlib.Path,
     *,
     chat_app_enabled: bool,
-    durable_runtime: bool,
     profile: Optional[str],
     memory_store: Optional[str],
     session_store: Optional[str],
@@ -141,18 +140,21 @@ def _prepare_migration(
     with tempfile.TemporaryDirectory(prefix="mason-migrate-") as tmp:
         staged = pathlib.Path(tmp) / "mason-migrate"
         reference = staged / "references" / "template"
-        template = _TEMPLATES["langgraph"]
+        template = _TEMPLATES[AgentFramework.LANGGRAPH]
         overlays = (template.chat_app,) if chat_app_enabled else ()
         _copy_packaged_template(template.mason_server, reference, overlays)
         project_name = dest.resolve().name
+        token = "".join(secrets.choice(string.ascii_lowercase) for _ in range(6))
         AgentProject.create(
             reference,
-            framework="langgraph",
-            durability_enabled=durable_runtime,
-            memory_store=memory_store or default_store_name(project_name, "memory"),
-            session_store=session_store or default_store_name(project_name, "session"),
+            framework=AgentFramework.LANGGRAPH,
+            server=AgentServer.MASON,
+            memory_store=memory_store or default_store_name(project_name, "memory", token),
+            session_store=session_store or default_store_name(project_name, "sessions", token),
         ).write()
-        write_project_metadata(reference, framework="langgraph", template=template.mason_server)
+        write_project_metadata(
+            reference, framework=AgentFramework.LANGGRAPH, template=template.mason_server
+        )
         source = resources.files("databricks_mason").joinpath("templates").joinpath("mason-migrate")
         (staged / "SKILL.md").write_text(
             source.joinpath("SKILL.md").read_text(encoding="utf-8"), encoding="utf-8"
@@ -165,7 +167,6 @@ def _prepare_migration(
                     "template_ref": template_ref,
                     "server": "mason",
                     "chat_app_enabled": chat_app_enabled,
-                    "durable_runtime": durable_runtime,
                     "profile": profile,
                 },
                 indent=2,
@@ -195,7 +196,6 @@ def _prepare_migration(
                 "prompt": prompt.strip(),
                 "template_ref": template_ref,
                 "chat_app_enabled": chat_app_enabled,
-                "durable_runtime": durable_runtime,
             }
         )
         return
@@ -309,7 +309,6 @@ def init(
             obj,
             pathlib.Path(directory or "."),
             chat_app_enabled=chat_app_enabled,
-            durable_runtime=durable_runtime,
             profile=profile or obj.profile,
             memory_store=memory_store,
             session_store=session_store,

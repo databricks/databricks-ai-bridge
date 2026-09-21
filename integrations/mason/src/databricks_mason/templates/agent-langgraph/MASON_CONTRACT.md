@@ -13,7 +13,7 @@ needs runtime wiring as well as manifest configuration.
 | Command | Required integration |
 | --- | --- |
 | `dev`, `deploy` | Installable dependencies and an `app.yaml` command starting the application |
-| `tools add mcp`, `uc-function`, `sandbox` | Load bindings into model definitions and tool execution |
+| `tools add mcp`, `uc-function`, `genie`, `sandbox` | Load bindings into model definitions and tool execution |
 | `sessions bind` | Select the bound checkpointer and supply session/actor identity |
 | `memory bind` | Include bound, actor-scoped memory tools in definitions and execution |
 | `tracing configure`, `tracing disable` | Initialize tracing and open a root span from resolved config |
@@ -21,7 +21,7 @@ needs runtime wiring as well as manifest configuration.
 
 ### Project and startup
 
-Use `agent.toml` for framework, tool/store bindings, tracing, and durability. `.mason/project.toml`
+Use `agent.toml` for framework, tool/store bindings, and tracing. `.mason/project.toml`
 records framework and template provenance. Metadata alone does not integrate adapters. Install a
 compatible `databricks-mason[runtime]`, supply the real command in `app.yaml`, load configuration
 before adapters, and listen on the app port. Mason finds `agent.toml` from the working directory or
@@ -79,7 +79,8 @@ interrupts require explicit mappings and must not be discarded to fit the exampl
 
 Runtime Store persistence covers invocations and emitted events. Session Store persistence covers
 graph checkpoints and paused interrupts. A durable Runtime Store alone does not preserve graph
-state. `dev` uses process-local invocation storage; durable deployments use Lakebase.
+state. `dev` uses process-local invocation storage; deployment attaches a Lakebase-backed
+Runtime Store.
 
 Register recovery when intended. Resume a checkpoint only when metadata associates it with the
 current invocation; otherwise replay original input. Use synchronous checkpoint durability before

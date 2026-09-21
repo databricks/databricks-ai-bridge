@@ -465,10 +465,9 @@ projects and migration references. It explicitly handles existing history, custo
 recovery, and client/session contracts. Switching checkpointers does not migrate old conversations;
 unresolved transitions require a user decision.
 
-The reference honors `--disable-chat-app`, `--no-durable-runtime`, `--memory-store`,
-`--session-store`, and the selected profile. These are migration intent; init does not provision
-resources or change the existing application. Migration currently supports LangGraph with the
-Mason server.
+The reference honors `--disable-chat-app`, `--memory-store`, `--session-store`, and the selected
+profile. These are migration intent; init does not provision resources or change the existing
+application. Migration currently supports LangGraph with the Mason server.
 
 ## Invoke HTTP endpoints
 
