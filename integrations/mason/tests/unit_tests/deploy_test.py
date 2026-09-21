@@ -1138,20 +1138,30 @@ def test_resolve_trace_experiment_none_when_disabled(tmp_path: pathlib.Path):
     assert _REAL_RESOLVE_TRACE(tmp_path, "app", _FakeClient(), None) is None
 
 
-def test_resolve_trace_experiment_uses_pinned_id_without_creating(
+def test_resolve_trace_experiment_get_or_creates_bound_name(tmp_path: pathlib.Path, monkeypatch):
+    # A bound experiment_name is get-or-created in the current workspace; the name (not an id) stays
+    # in agent.toml, so nothing is pinned back.
+    (tmp_path / "agent.toml").write_text(
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n'
+        '\n[tracing]\nexperiment_name = "/Shared/mason_traces/bound"\n'
+    )
+    created: dict = {}
+    monkeypatch.setattr(
+        deploy_mod,
+        "create_experiment_idempotent",
+        lambda profile, client, name: created.update(name=name) or "id-b",
+    )
+    assert _REAL_RESOLVE_TRACE(tmp_path, "app", _FakeClient(), None) == "id-b"
+    assert created["name"] == "/Shared/mason_traces/bound"
+    from databricks_mason.agent_project import AgentProject
+
+    project = AgentProject.load(tmp_path)
+    assert project.trace_experiment_name == "/Shared/mason_traces/bound"  # name kept
+
+
+def test_resolve_trace_experiment_creates_shared_default_without_pinning(
     tmp_path: pathlib.Path, monkeypatch
 ):
-    (tmp_path / "agent.toml").write_text(
-        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n\n[tracing]\nexperiment_id = "pinned-1"\n'
-    )
-    # A pinned id is used directly — no experiment creation.
-    monkeypatch.setattr(
-        deploy_mod, "create_experiment_idempotent", lambda *a, **k: pytest.fail("should not create")
-    )
-    assert _REAL_RESOLVE_TRACE(tmp_path, "app", _FakeClient(), None) == "pinned-1"
-
-
-def test_resolve_trace_experiment_creates_per_project_default(tmp_path: pathlib.Path, monkeypatch):
     (tmp_path / "agent.toml").write_text(
         'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n'
     )
@@ -1163,14 +1173,15 @@ def test_resolve_trace_experiment_creates_per_project_default(tmp_path: pathlib.
     )
     exp_id = _REAL_RESOLVE_TRACE(tmp_path, "my-agent", _FakeClient(), None)
     assert exp_id == "made-id"
-    assert created["name"] == "/Users/me@example.com/mason-traces/my-agent"
-    # First run pins the resolved default into agent.toml so later runs reuse it by id.
+    # The /Shared default (username-free), get-or-created — and nothing pinned back, so it stays
+    # portable across profiles.
+    assert created["name"] == "/Shared/mason_traces/my-agent"
     from databricks_mason.agent_project import AgentProject
 
-    assert AgentProject.load(tmp_path).trace_experiment_id == "made-id"
+    assert AgentProject.load(tmp_path).trace_experiment_name is None
 
 
-def test_resolve_trace_experiment_reuses_pinned_default_on_second_run(
+def test_resolve_trace_experiment_get_or_creates_by_name_each_run(
     tmp_path: pathlib.Path, monkeypatch
 ):
     (tmp_path / "agent.toml").write_text(
@@ -1182,10 +1193,10 @@ def test_resolve_trace_experiment_reuses_pinned_default_on_second_run(
         "create_experiment_idempotent",
         lambda profile, client, name: calls.append(name) or "made-id",
     )
-    # First run creates + pins; the second reads the pinned id straight from agent.toml.
+    # No id is pinned, so each run re-derives the default name and get-or-creates it (idempotent).
     assert _REAL_RESOLVE_TRACE(tmp_path, "my-agent", _FakeClient(), None) == "made-id"
     assert _REAL_RESOLVE_TRACE(tmp_path, "my-agent", _FakeClient(), None) == "made-id"
-    assert calls == ["/Users/me@example.com/mason-traces/my-agent"]  # created only once
+    assert calls == ["/Shared/mason_traces/my-agent", "/Shared/mason_traces/my-agent"]
 
 
 def _run_deploy(src, monkeypatch, extra_args):
