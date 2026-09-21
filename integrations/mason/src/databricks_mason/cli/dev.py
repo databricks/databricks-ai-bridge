@@ -151,20 +151,19 @@ def dev(
                 f"Session store '{session_store}' is declared but not created yet — conversation "
                 "history is in-memory (not durable). Run `mason deploy` to create it."
             )
-    # Local tracing (Mason-server projects): start a local MLflow tracking server backed by sqlite
-    # under .mason/ and point the agent at it via the dev-only manifest. Traces stay on the machine —
-    # no workspace experiment, no auth, no username needed — and the same server serves the trace UI.
-    # Launched via `uvx mlflow` so it needs neither the (skinny) CLI env nor the agent venv, and it
-    # owns the sqlite schema (so there's no client/server migration mismatch). Best-effort: any launch
-    # failure degrades to running without traces. `mason deploy` handles the managed workspace
-    # experiment instead.
-    tracing_server = None
+    # Local tracing: start a local MLflow tracking server backed by sqlite under .mason/ and point the
+    # agent at it via the dev-only manifest — for any project, regardless of framework/server. An agent
+    # that uses MLflow (autolog or `start_trace`) then traces to it; it's harmless for one that doesn't.
+    # Traces stay on the machine — no workspace experiment, no auth, no username needed — and the same
+    # server serves the trace UI. Launched via `uvx mlflow` so it needs neither the (skinny) CLI env nor
+    # the agent venv, and it owns the sqlite schema (so there's no client/server migration mismatch).
+    # Best-effort: any launch failure degrades to running without traces. `mason deploy` handles the
+    # managed workspace experiment instead.
+    tracing_server, tracing_env = start_local_tracing_server(source_dir)
     trace_url: Optional[str] = None
-    if project is not None and project.server == AgentServer.MASON:
-        tracing_server, tracing_env = start_local_tracing_server(source_dir)
-        if tracing_env:
-            local_env.update(tracing_env)
-            trace_url = tracing_env["MLFLOW_TRACKING_URI"]
+    if tracing_env:
+        local_env.update(tracing_env)
+        trace_url = tracing_env["MLFLOW_TRACKING_URI"]
 
     # Default: prepare only when there's no venv yet, so repeat runs don't rebuild. Explicit
     # --prepare-environment / --no-prepare-environment overrides the auto-detect.

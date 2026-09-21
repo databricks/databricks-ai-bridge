@@ -191,11 +191,12 @@ def test_dev_skips_store_check_when_no_bindings(tmp_path: pathlib.Path, monkeypa
 
 
 def test_dev_starts_local_tracing_and_wires_dev_manifest(tmp_path: pathlib.Path, monkeypatch):
-    # For a Mason-server project, dev starts a local MLflow server and injects its MLFLOW_* env into
-    # the dev-only manifest (app.masondev.yaml) — NOT into the deployable app.yaml — then tears the
-    # server down after the run. The trace UI URL is announced.
+    # For any project (here a custom-server one, to show it's not gated to the Mason server), dev
+    # starts a local MLflow server and injects its MLFLOW_* env into the dev-only manifest
+    # (app.masondev.yaml) — NOT into the deployable app.yaml — then tears the server down after the run.
+    # The trace UI URL is announced.
     (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"], "env": []}))
-    _write_agent_manifest(tmp_path, server="mason")
+    _write_agent_manifest(tmp_path, server="custom")
     (tmp_path / ".venv").mkdir()
     fake_server = mock.Mock()
     monkeypatch.setattr(
