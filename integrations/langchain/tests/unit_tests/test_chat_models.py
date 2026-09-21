@@ -217,8 +217,15 @@ def test_chat_model_stream_custom_outputs(mock_client_delta, llm: ChatDatabricks
 
 
 def test_chat_model_stream_with_usage(llm: ChatDatabricks) -> None:
-    def _assert_usage(chunk, expected):
-        usage = chunk.usage_metadata
+    # Usage is reported once, in the dedicated usage chunk emitted after the
+    # stream ends, rather than repeated on every content chunk. LangChain sums
+    # usage_metadata when chunks are added together, so reporting it in both
+    # places made the aggregated totals a multiple of the real ones (#434).
+    def _assert_usage(chunks, expected):
+        aggregate = chunks[0]
+        for chunk in chunks[1:]:
+            aggregate = aggregate + chunk
+        usage = aggregate.usage_metadata
         assert usage is not None
         assert usage["input_tokens"] == expected["usage"]["prompt_tokens"]
         assert usage["output_tokens"] == expected["usage"]["completion_tokens"]
@@ -232,9 +239,10 @@ def test_chat_model_stream_with_usage(llm: ChatDatabricks) -> None:
         ],
         stream_usage=True,
     )
-    for chunk, expected in zip(res, _MOCK_STREAM_RESPONSE, strict=False):
+    streamed = list(res)
+    for chunk, expected in zip(streamed, _MOCK_STREAM_RESPONSE, strict=False):
         assert chunk.content == expected["choices"][0]["delta"]["content"]
-        _assert_usage(chunk, expected)
+    _assert_usage(streamed, _MOCK_STREAM_RESPONSE[-1])
 
     # Method 2: Pass stream_usage=True to the constructor
     llm_with_usage = ChatDatabricks(
@@ -247,9 +255,60 @@ def test_chat_model_stream_with_usage(llm: ChatDatabricks) -> None:
             {"role": "user", "content": "36939 * 8922.4"},
         ],
     )
-    for chunk, expected in zip(res, _MOCK_STREAM_RESPONSE, strict=False):
+    streamed = list(res)
+    for chunk, expected in zip(streamed, _MOCK_STREAM_RESPONSE, strict=False):
         assert chunk.content == expected["choices"][0]["delta"]["content"]
-        _assert_usage(chunk, expected)
+    _assert_usage(streamed, _MOCK_STREAM_RESPONSE[-1])
+
+
+def test_chat_model_stream_aggregated_usage_is_not_double_counted():
+    """Aggregating the streamed chunks must yield the provider's real token counts.
+
+    LangChain sums usage_metadata when chunks are added together, which is what
+    LangGraph and LCEL do internally. Reporting usage both on the content chunk
+    and again in the trailing usage chunk made those totals double (#434).
+    """
+    from unittest.mock import Mock, patch
+
+    usage = Mock(prompt_tokens=10, completion_tokens=5)
+
+    def chunk(content, chunk_usage=None):
+        return Mock(
+            choices=[
+                Mock(
+                    delta=Mock(
+                        role="assistant",
+                        content=content,
+                        model_dump=Mock(
+                            return_value={"role": "assistant", "content": content}
+                        ),
+                    ),
+                    finish_reason=None,
+                    logprobs=None,
+                )
+            ],
+            usage=chunk_usage,
+        )
+
+    # A provider that reports usage on the same chunk that carries content.
+    mock_chunks = [chunk("Hello"), chunk(" world", chunk_usage=usage)]
+
+    with patch("databricks_langchain.chat_models.get_openai_client") as mock_get_client:
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+        mock_client.chat.completions.create.return_value = iter(mock_chunks)
+
+        llm = ChatDatabricks(model="test-model", stream_usage=True)
+        streamed = list(llm.stream([HumanMessage(content="Hello")]))
+
+    aggregate = streamed[0]
+    for streamed_chunk in streamed[1:]:
+        aggregate = aggregate + streamed_chunk
+
+    assert aggregate.usage_metadata is not None
+    assert aggregate.usage_metadata["input_tokens"] == 10
+    assert aggregate.usage_metadata["output_tokens"] == 5
+    assert aggregate.usage_metadata["total_tokens"] == 15
 
 
 def test_chat_model_stream_usage_chunk_emission():
