@@ -390,8 +390,7 @@ class Runner:
         rejected = self.run(
             [
                 str(self.mason),
-                "--profile",
-                self.profile,
+                *self._profile_args(),
                 "--output",
                 "json",
                 "tools",
@@ -444,8 +443,7 @@ class Runner:
             self.run(
                 [
                     str(self.mason),
-                    "--profile",
-                    self.profile,
+                    *self._profile_args(),
                     *args,
                     "--source",
                     str(project),
