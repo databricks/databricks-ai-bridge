@@ -1,17 +1,16 @@
 """`mason tracing` — send an agent's traces to an MLflow experiment and inspect them.
 
-Tracing is managed MLflow tracing (traces are stored in the workspace's MLflow backend) and is **on
-by default**: with no configuration, ``mason dev`` and ``mason deploy`` send an agent's traces to a
-per-project experiment (``/Users/<you>/mason-traces/<project>``), auto-created and pinned into
-agent.toml on first run (so later runs reuse it by id). The experiment is identified everywhere by its
-**id** — that single value binds the agent (``MLFLOW_EXPERIMENT_ID``), grants the deployed app (an
-experiment app resource), reads traces, and builds the UI link.
+Tracing is on by default. ``mason dev`` runs a **local, sqlite-backed MLflow server**
+(:func:`start_local_tracing_server`) so traces stay on the machine with no workspace setup, viewable in
+the local MLflow UI. ``mason deploy`` sends traces to a per-project **workspace** experiment
+(``/Users/<you>/mason-traces/<project>``), auto-created and pinned into agent.toml, identified by its
+``MLFLOW_EXPERIMENT_ID`` — the value that binds the agent, grants the deployed app (an experiment app
+resource), reads traces, and builds the UI link.
 
-``mason tracing configure`` pins a specific experiment by id (or re-enables the per-project default
-after
-a disable); ``mason tracing disable`` turns tracing off; ``list`` / ``get`` read traces back.
+``mason tracing configure`` pins a specific experiment (or re-enables the default after a disable);
+``mason tracing disable`` turns tracing off; ``list`` / ``get`` read traces back.
 
-MLflow (``mlflow-skinny``) is a base dependency, but ``configure``/``list``/``get`` and the dev/deploy
+MLflow (``mlflow-skinny``) is a base dependency, but the ``mason tracing`` commands and the deploy
 experiment provisioning still import it lazily — ``cli.py`` imports this module at startup, so a
 top-level import would pay mlflow's heavy import cost on every ``mason`` command.
 """
@@ -19,6 +18,8 @@ top-level import would pay mlflow's heavy import cost on every ``mason`` command
 from __future__ import annotations
 
 import pathlib
+import socket
+import subprocess
 from typing import Any, Optional
 
 import click
@@ -144,6 +145,86 @@ def _trace_to_json(trace: Any) -> dict:
         "execution_time_ms": _attr(trace, "info.execution_time_ms", "info.execution_duration_ms"),
         "timestamp_ms": _attr(trace, "info.timestamp_ms", "info.request_time"),
     }
+
+
+# --- local dev tracing (`mason dev`) ----------------------------------------
+
+# Local-only scratch dir (gitignored) under a dev project: holds the sqlite tracing store + artifacts.
+_MASON_LOCAL_DIR = ".mason"
+# Pin the local tracing server to MLflow 3.x (the runtime's floor) so its sqlite schema and trace REST
+# stay compatible with the agent's client.
+_MLFLOW_SPEC = "mlflow>=3.10,<4"
+
+
+def _free_port() -> int:
+    """Ask the OS for a free localhost port for the local MLflow tracking server."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def start_local_tracing_server(
+    source_dir: pathlib.Path,
+) -> tuple[subprocess.Popen | None, dict[str, str]]:
+    """Start a local, sqlite-backed MLflow tracking server for `mason dev` tracing.
+
+    Returns ``(server_process, env)`` — ``env`` carries the ``MLFLOW_*`` vars for the dev-only manifest
+    so the agent traces locally — or ``(None, {})`` when the server can't be started (dev then runs
+    without traces). Launched via ``uvx mlflow`` so it depends on neither the skinny CLI env nor the
+    agent venv; it stores traces in ``<source>/.mason/mlflow.db`` and serves the trace UI + REST API on
+    a free localhost port. Because the server owns the sqlite schema, there is no client/server
+    migration mismatch. The agent picks up the env through the same runtime gate a deployment uses (a
+    destination + an experiment), so no agent code differs between dev and deploy.
+    """
+    mason_dir = source_dir / _MASON_LOCAL_DIR
+    try:
+        mason_dir.mkdir(exist_ok=True)
+        db = (mason_dir / "mlflow.db").resolve()
+        artifacts = (mason_dir / "mlartifacts").resolve()
+        port = _free_port()
+        # Passing the log file into Popen dups its fd to the child; closing our copy here is safe and
+        # keeps the server's output for debugging a failed local-tracing run.
+        with (mason_dir / "mlflow-server.log").open("w") as log:
+            server = subprocess.Popen(
+                [
+                    "uvx",
+                    "--from",
+                    _MLFLOW_SPEC,
+                    "mlflow",
+                    "server",
+                    "--backend-store-uri",
+                    f"sqlite:///{db}",
+                    "--default-artifact-root",
+                    str(artifacts),
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(port),
+                ],
+                stdout=log,
+                stderr=subprocess.STDOUT,
+            )
+    except OSError as exc:
+        render.diagnostic(
+            "warning",
+            f"local tracing not started — {exc}",
+            help="running without traces (is `uv` installed?)",
+        )
+        return None, {}
+    return server, {
+        "MLFLOW_TRACKING_URI": f"http://127.0.0.1:{port}",
+        # A bare experiment name is fine for local MLflow (no workspace path / username needed).
+        "MLFLOW_EXPERIMENT_NAME": source_dir.resolve().name,
+    }
+
+
+def stop_local_tracing_server(server: subprocess.Popen) -> None:
+    """Stop the local MLflow tracking server started for `mason dev`."""
+    server.terminate()
+    try:
+        server.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        server.kill()
 
 
 # --- group ------------------------------------------------------------------

@@ -10,8 +10,6 @@ rather than re-implementing it.
 from __future__ import annotations
 
 import pathlib
-import socket
-import subprocess
 from typing import Optional
 
 import click
@@ -24,6 +22,7 @@ from databricks_mason.cli.deploy import (
     store_bindings,
 )
 from databricks_mason.cli.endpoint_examples import print_agent_invoke_command
+from databricks_mason.cli.tracing import start_local_tracing_server, stop_local_tracing_server
 from databricks_mason.databricks_cli import _databricks
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import require_managed_tool_support
@@ -40,12 +39,6 @@ _LOCAL_APP_YAML = "app.masondev.yaml"
 # necessarily reachable from the local dev machine — so `mason dev`'s local `uv` build must ignore
 # them and use the machine's own configured index instead.
 _BUILD_INDEX_ENVS = frozenset({"PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDEX"})
-
-# Local-only scratch dir (gitignored) for `mason dev`: holds the sqlite tracing store + its artifacts.
-_MASON_LOCAL_DIR = ".mason"
-# Pin the local tracing server to MLflow 3.x (the runtime's floor) so its sqlite schema and trace REST
-# stay compatible with the agent's client.
-_MLFLOW_SPEC = "mlflow>=3.10,<4"
 
 
 @click.command()
@@ -165,10 +158,10 @@ def dev(
     # owns the sqlite schema (so there's no client/server migration mismatch). Best-effort: any launch
     # failure degrades to running without traces. `mason deploy` handles the managed workspace
     # experiment instead.
-    tracing_server: subprocess.Popen | None = None
+    tracing_server = None
     trace_url: Optional[str] = None
     if project is not None and project.server == AgentServer.MASON:
-        tracing_server, tracing_env = _start_local_tracing(source_dir)
+        tracing_server, tracing_env = start_local_tracing_server(source_dir)
         if tracing_env:
             local_env.update(tracing_env)
             trace_url = tracing_env["MLFLOW_TRACKING_URI"]
@@ -213,7 +206,7 @@ def dev(
     finally:
         entry_point.unlink(missing_ok=True)
         if tracing_server is not None:
-            _stop_local_tracing(tracing_server)
+            stop_local_tracing_server(tracing_server)
 
 
 def _announce_local_url(
@@ -316,74 +309,3 @@ def _dev_entry_point(
     except OSError as exc:
         raise AgentCliError(f"Could not write {dev_yaml}: {exc}") from exc
     return dev_yaml
-
-
-def _free_port() -> int:
-    """Ask the OS for a free localhost port for the local MLflow tracking server."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
-
-
-def _start_local_tracing(
-    source_dir: pathlib.Path,
-) -> tuple[subprocess.Popen | None, dict[str, str]]:
-    """Start a local, sqlite-backed MLflow tracking server for dev tracing.
-
-    Returns ``(server_process, env)`` — ``env`` carries the ``MLFLOW_*`` vars to inject into the
-    dev-only manifest so the agent traces locally — or ``(None, {})`` when the server can't be
-    started (dev then runs without traces). Launched via ``uvx mlflow`` so it depends on neither the
-    skinny CLI env nor the agent venv; it stores traces in ``<source>/.mason/mlflow.db`` and serves
-    the trace UI + REST API on a free localhost port. Because the server owns the sqlite schema, there
-    is no client/server migration mismatch. The agent picks up the env through the same runtime gate a
-    deployment uses (a destination + an experiment), so no agent code differs between dev and deploy.
-    """
-    mason_dir = source_dir / _MASON_LOCAL_DIR
-    try:
-        mason_dir.mkdir(exist_ok=True)
-        db = (mason_dir / "mlflow.db").resolve()
-        artifacts = (mason_dir / "mlartifacts").resolve()
-        port = _free_port()
-        # Passing the log file into Popen dups its fd to the child; closing our copy here is safe and
-        # keeps the server's output for debugging a failed local-tracing run.
-        with (mason_dir / "mlflow-server.log").open("w") as log:
-            server = subprocess.Popen(
-                [
-                    "uvx",
-                    "--from",
-                    _MLFLOW_SPEC,
-                    "mlflow",
-                    "server",
-                    "--backend-store-uri",
-                    f"sqlite:///{db}",
-                    "--default-artifact-root",
-                    str(artifacts),
-                    "--host",
-                    "127.0.0.1",
-                    "--port",
-                    str(port),
-                ],
-                stdout=log,
-                stderr=subprocess.STDOUT,
-            )
-    except OSError as exc:
-        render.diagnostic(
-            "warning",
-            f"local tracing not started — {exc}",
-            help="running without traces (is `uv` installed?)",
-        )
-        return None, {}
-    return server, {
-        "MLFLOW_TRACKING_URI": f"http://127.0.0.1:{port}",
-        # A bare experiment name is fine for local MLflow (no workspace path / username needed).
-        "MLFLOW_EXPERIMENT_NAME": source_dir.resolve().name,
-    }
-
-
-def _stop_local_tracing(server: subprocess.Popen) -> None:
-    """Stop the local MLflow tracking server started for `mason dev`."""
-    server.terminate()
-    try:
-        server.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        server.kill()

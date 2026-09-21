@@ -262,3 +262,40 @@ def test_status_str_handles_enum_like_and_none():
 
     assert tracing_mod._status_str(_EnumLike()) == "OK"
     assert tracing_mod._status_str(None) is None
+
+
+# --- local dev tracing server (`mason dev`) ---------------------------------
+
+
+def test_start_local_tracing_server_launches_sqlite_server(tmp_path: pathlib.Path, monkeypatch):
+    # Launch `uvx mlflow server` backed by sqlite under .mason/, returning the MLFLOW_* env pointing
+    # at it (bare experiment name = project dir, no workspace path / username needed).
+    monkeypatch.setattr(tracing_mod, "_free_port", lambda: 5599)
+    captured: dict = {}
+
+    def _fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return mock.Mock()
+
+    monkeypatch.setattr(tracing_mod.subprocess, "Popen", _fake_popen)
+    server, env = tracing_mod.start_local_tracing_server(tmp_path)
+    assert server is not None
+    assert env["MLFLOW_TRACKING_URI"] == "http://127.0.0.1:5599"
+    assert env["MLFLOW_EXPERIMENT_NAME"] == tmp_path.resolve().name
+    assert (tmp_path / ".mason").is_dir()
+    joined = " ".join(captured["cmd"])
+    assert captured["cmd"][0] == "uvx" and "server" in captured["cmd"]
+    assert "sqlite:///" in joined and ".mason/mlflow.db" in joined
+
+
+def test_start_local_tracing_server_degrades_when_launch_fails(tmp_path: pathlib.Path, monkeypatch):
+    # If the server process can't be spawned (e.g. uv missing), degrade to (None, {}) so `mason dev`
+    # runs without traces rather than aborting.
+    monkeypatch.setattr(tracing_mod, "_free_port", lambda: 5599)
+
+    def _boom(cmd, **kwargs):
+        raise OSError("uvx not found")
+
+    monkeypatch.setattr(tracing_mod.subprocess, "Popen", _boom)
+    server, env = tracing_mod.start_local_tracing_server(tmp_path)
+    assert server is None and env == {}

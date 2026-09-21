@@ -40,16 +40,12 @@ class _Ctx:
         return mock.Mock(current_user="me@example.com", host="https://my-workspace.databricks.com")
 
 
-# Captured before the autouse stub swaps the module attribute, so the helper's own tests below can
-# exercise the real implementation.
-_REAL_START_LOCAL_TRACING = dev_mod._start_local_tracing
-
-
 @pytest.fixture(autouse=True)
 def _stub_local_tracing(monkeypatch):
-    """`mason dev` starts a local MLflow tracking server (a subprocess) for Mason-server projects;
-    stub it so ordinary dev tests neither spawn one nor need uv. Tracing tests override this."""
-    monkeypatch.setattr(dev_mod, "_start_local_tracing", lambda source_dir: (None, {}))
+    """`mason dev` starts a local MLflow tracking server (via cli.tracing) for Mason-server projects;
+    stub the name dev.py imported so ordinary dev tests neither spawn one nor need uv. Tracing tests
+    override this. The server helper's own behavior is tested in tracing_test.py."""
+    monkeypatch.setattr(dev_mod, "start_local_tracing_server", lambda source_dir: (None, {}))
 
 
 def test_dev_prepares_when_no_venv(tmp_path: pathlib.Path):
@@ -204,7 +200,7 @@ def test_dev_starts_local_tracing_and_wires_dev_manifest(tmp_path: pathlib.Path,
     fake_server = mock.Mock()
     monkeypatch.setattr(
         dev_mod,
-        "_start_local_tracing",
+        "start_local_tracing_server",
         lambda source_dir: (
             fake_server,
             {
@@ -244,7 +240,7 @@ def test_dev_shows_local_traces_url_when_tracing_on(tmp_path: pathlib.Path, monk
     (tmp_path / ".venv").mkdir()
     monkeypatch.setattr(
         dev_mod,
-        "_start_local_tracing",
+        "start_local_tracing_server",
         lambda source_dir: (mock.Mock(), {"MLFLOW_TRACKING_URI": "http://127.0.0.1:5599"}),
     )
     with mock.patch.object(dev_mod, "_databricks"):
@@ -255,11 +251,11 @@ def test_dev_shows_local_traces_url_when_tracing_on(tmp_path: pathlib.Path, monk
 
 
 def test_dev_omits_traces_line_when_local_tracing_unavailable(tmp_path: pathlib.Path, monkeypatch):
-    # Local tracing couldn't start (_start_local_tracing returns none) -> no Traces line in the panel.
+    # Local tracing couldn't start (start_local_tracing_server returns none) -> no Traces line in the panel.
     (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     _write_agent_manifest(tmp_path, server="mason")
     (tmp_path / ".venv").mkdir()
-    monkeypatch.setattr(dev_mod, "_start_local_tracing", lambda source_dir: (None, {}))
+    monkeypatch.setattr(dev_mod, "start_local_tracing_server", lambda source_dir: (None, {}))
     with mock.patch.object(dev_mod, "_databricks"):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
@@ -290,12 +286,12 @@ def test_dev_runs_offline_when_client_unavailable(tmp_path: pathlib.Path):
 def test_dev_runs_without_traces_when_local_tracing_unavailable(
     tmp_path: pathlib.Path, monkeypatch
 ):
-    # Local tracing is best-effort: if the server can't start (_start_local_tracing returns none),
+    # Local tracing is best-effort: if the server can't start (start_local_tracing_server returns none),
     # dev still runs the agent and injects no MLflow env.
     (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"], "env": []}))
     _write_agent_manifest(tmp_path, server="mason")
     (tmp_path / ".venv").mkdir()
-    monkeypatch.setattr(dev_mod, "_start_local_tracing", lambda source_dir: (None, {}))
+    monkeypatch.setattr(dev_mod, "start_local_tracing_server", lambda source_dir: (None, {}))
     captured: dict = {}
 
     def _fake_databricks(args, *a, **kw):
@@ -306,40 +302,6 @@ def test_dev_runs_without_traces_when_local_tracing_unavailable(
     result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     assert not any(e["name"].startswith("MLFLOW") for e in captured.get("env", []))
-
-
-def test_start_local_tracing_launches_sqlite_server(tmp_path: pathlib.Path, monkeypatch):
-    # The real helper: launch `uvx mlflow server` backed by sqlite under .mason/, and return the
-    # MLFLOW_* env pointing at it (bare experiment name = project dir, no workspace/username).
-    monkeypatch.setattr(dev_mod, "_free_port", lambda: 5599)
-    captured: dict = {}
-
-    def _fake_popen(cmd, **kwargs):
-        captured["cmd"] = cmd
-        return mock.Mock()
-
-    monkeypatch.setattr(dev_mod.subprocess, "Popen", _fake_popen)
-    server, env = _REAL_START_LOCAL_TRACING(tmp_path)
-    assert server is not None
-    assert env["MLFLOW_TRACKING_URI"] == "http://127.0.0.1:5599"
-    assert env["MLFLOW_EXPERIMENT_NAME"] == tmp_path.resolve().name
-    assert (tmp_path / ".mason").is_dir()
-    joined = " ".join(captured["cmd"])
-    assert captured["cmd"][0] == "uvx" and "server" in captured["cmd"]
-    assert "sqlite:///" in joined and ".mason/mlflow.db" in joined
-
-
-def test_start_local_tracing_degrades_when_launch_fails(tmp_path: pathlib.Path, monkeypatch):
-    # If the server process can't be spawned (e.g. uv missing), degrade to (None, {}) — dev then
-    # runs without traces rather than aborting.
-    monkeypatch.setattr(dev_mod, "_free_port", lambda: 5599)
-
-    def _boom(cmd, **kwargs):
-        raise OSError("uvx not found")
-
-    monkeypatch.setattr(dev_mod.subprocess, "Popen", _boom)
-    server, env = _REAL_START_LOCAL_TRACING(tmp_path)
-    assert server is None and env == {}
 
 
 def test_dev_requires_app_yaml(tmp_path: pathlib.Path):
