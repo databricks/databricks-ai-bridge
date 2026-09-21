@@ -21,6 +21,7 @@ def test_public_surface() -> None:
         "AgentApp",
         "InvocationContext",
         "configure_tracing",
+        "list_ai_gateway_models",
         "start_trace",
         "workspace_client",
         "workspace_headers",

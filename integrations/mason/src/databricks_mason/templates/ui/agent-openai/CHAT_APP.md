@@ -20,17 +20,19 @@ entries (searchable, filterable by actor, with a modal for each entry); the othe
 in place, and Traces links out to the MLflow experiment. The transport selector is the only manual
 capability choice.
 
-The composer's model picker lists the workspace's ready chat serving endpoints
-(`GET /api/ui/config` → `models`, discovered from `serving_endpoints.list()` and filtered to the
-`llm/v1/chat` task), with `agent.agent.MODEL` pinned as the default. Each request sends the selected
-endpoint as `model` in the invocation body; the agent is rebuilt per turn, so the picker changes the
-model for the next turn without a restart. Discovery is best-effort: if listing is unavailable (e.g.
-no permission), the picker falls back to just the default. Omitting `model` uses `MODEL`.
+The composer's model picker lists the workspace's Unity Catalog AI Gateway chat models — the
+`system.ai.*` model services from `GET /api/2.1/unity-catalog/model-services?parent=schemas/system.ai`
+(embeddings-only services filtered out), exposed as `GET /api/demo/models` and pinned to
+`agent.agent.MODEL` as the default. Each request sends the selected model as `model` in the
+invocation body; the agent is rebuilt per turn, so the picker changes the model for the next turn
+without a restart. Discovery is best-effort: if listing is unavailable (e.g. `system.ai` isn't
+readable), the picker falls back to just the default. Omitting `model` uses `MODEL`.
 
-A large workspace can expose thousands of endpoints, so the picker is capped (`_MODEL_LIMIT`, 20)
-and ranked — default first, then `databricks-*` foundation models, then other custom/external chat
-endpoints — so the cap keeps the canonical choices. The list call is unpaginated and occasionally
-fails on big workspaces, so it is retried a few times before falling back to the default.
+The agent calls the chosen model through the gateway (`<host>/ai-gateway/mlflow/v1`) rather than
+`/serving-endpoints`, so `MODEL` is a `system.ai.*` model name. The picker is capped
+(`_MODEL_LIMIT`, 20) with the default pinned first and the rest alphabetical, so truncation never
+drops the configured default. Transient list failures are retried in
+`databricks_mason.runtime.models` before the fallback applies.
 
 The UI reads local history from the agent's in-process session (`SQLiteSession`) and managed history
 from Session Store items. It keeps a stable application session UUID in browser local storage and

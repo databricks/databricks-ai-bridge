@@ -21,7 +21,10 @@ from databricks_mason.langgraph import (
     thread_config,
 )
 
-MODEL = "databricks-gpt-5-2"
+# A Unity Catalog AI Gateway model, served from the `system.ai` schema and queried through the
+# gateway (see `use_ai_gateway=True` below). Swap for any `system.ai.*` model your workspace
+# exposes — the demo chat app's picker lists what's available.
+MODEL = "system.ai.claude-sonnet-4-5"
 _INVOCATION_METADATA_KEY = "databricks_mason.invocation_id"
 
 # Tools that require human approval before they run. Map a tool name to True to allow every decision
@@ -77,8 +80,8 @@ async def create_agent_graph(actor: str, model: str | None = None):
     ``actor`` is the identity whose long-term memory the agent reads/writes; it's captured in the
     memory tools' closures (never exposed to the model).
 
-    ``model`` selects the serving endpoint for this run; the chat UI passes the picker's choice and
-    everything else falls back to ``MODEL``. The agent is rebuilt per turn, so the endpoint can vary
+    ``model`` selects the gateway model for this run; the chat UI passes the picker's choice and
+    everything else falls back to ``MODEL``. The agent is rebuilt per turn, so the model can vary
     request to request.
     """
     mcp = await mcp_tools(build_mcp_servers())
@@ -88,7 +91,11 @@ async def create_agent_graph(actor: str, model: str | None = None):
     )
     endpoint = model or MODEL
     return create_agent(
-        model=_RoutedChatDatabricks(endpoint=endpoint, workspace_client=workspace_client()),
+        # use_ai_gateway routes to the Unity Catalog AI Gateway (`<host>/ai-gateway/mlflow/v1`), so
+        # `endpoint` is a `system.ai.*` model name rather than a serving-endpoint name.
+        model=_RoutedChatDatabricks(
+            endpoint=endpoint, workspace_client=workspace_client(), use_ai_gateway=True
+        ),
         tools=tools,
         middleware=middleware,
         checkpointer=checkpointer(),
