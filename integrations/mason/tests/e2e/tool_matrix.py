@@ -288,7 +288,9 @@ class Runner:
         )
         return self.warehouse_id
 
-    def sql(self, statement: str, *, timeout: float = 600) -> dict[str, Any]:
+    def sql(
+        self, statement: str, *, timeout: float = 600, optional: bool = False
+    ) -> dict[str, Any]:
         if self.warehouse_id is None:
             raise MatrixError("SQL warehouse was not selected.")
         payload = {
@@ -313,6 +315,13 @@ class Runner:
                 ["api", "get", f"/api/2.0/sql/statements/{statement_id}"], timeout=60
             )
         if response.get("status", {}).get("state") != "SUCCEEDED":
+            if optional:
+                error = response.get("status", {}).get("error", {})
+                self.transcript.write(
+                    f"optional SQL failed, continuing | {statement} | "
+                    f"{error.get('error_code', '?')}: {error.get('message', '?')}"
+                )
+                return response
             raise MatrixError(f"SQL failed: {json.dumps(response, indent=2)}")
         return response
 
@@ -574,8 +583,14 @@ class Runner:
             raise MatrixError(f"App response has no service_principal_client_id: {app}")
         catalog, schema, function_name = self.uc_function.split(".")
         quoted_principal = f"`{str(principal).replace('`', '``')}`"
-        for statement in (
+        # Granting at catalog level needs MANAGE on the catalog, which we don't get on a shared
+        # one. Only the uc_function tool needs USE CATALOG, so don't let it sink the rows that
+        # exercise the other tools — they fail on their own terms if the grant really was needed.
+        self.sql(
             f"GRANT USE CATALOG ON CATALOG `{catalog}` TO {quoted_principal}",
+            optional=True,
+        )
+        for statement in (
             f"GRANT USE SCHEMA ON SCHEMA `{catalog}`.`{schema}` TO {quoted_principal}",
             f"GRANT EXECUTE ON FUNCTION `{catalog}`.`{schema}`.`{function_name}` TO {quoted_principal}",
         ):
