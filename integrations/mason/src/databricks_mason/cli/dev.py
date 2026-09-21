@@ -163,7 +163,11 @@ def dev(
     trace_url: Optional[str] = None
     if tracing_env:
         local_env.update(tracing_env)
-        trace_url = tracing_env["MLFLOW_TRACKING_URI"]
+        uri = tracing_env["MLFLOW_TRACKING_URI"]
+        name = tracing_env.get("MLFLOW_EXPERIMENT_NAME")
+        # Can't deep-link the experiment (created lazily on the first request; its local id isn't
+        # stable), so name it after the local MLflow UI URL so the user knows which one to open.
+        trace_url = f"{uri} (experiment name: {name})" if name else uri
 
     # Default: prepare only when there's no venv yet, so repeat runs don't rebuild. Explicit
     # --prepare-environment / --no-prepare-environment overrides the auto-detect.

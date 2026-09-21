@@ -235,20 +235,25 @@ def test_dev_starts_local_tracing_and_wires_dev_manifest(tmp_path: pathlib.Path,
 
 
 def test_dev_shows_local_traces_url_when_tracing_on(tmp_path: pathlib.Path, monkeypatch):
-    # dev surfaces the local MLflow Traces URL so a dev run makes clear where its traces land.
+    # dev surfaces the local MLflow Traces URL plus the experiment name (in parens) so a dev run makes
+    # clear where its traces land and which experiment to open.
     (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     _write_agent_manifest(tmp_path, server="mason")
     (tmp_path / ".venv").mkdir()
     monkeypatch.setattr(
         dev_mod,
         "start_local_tracing_server",
-        lambda source_dir: (mock.Mock(), {"MLFLOW_TRACKING_URI": "http://127.0.0.1:5599"}),
+        lambda source_dir: (
+            mock.Mock(),
+            {"MLFLOW_TRACKING_URI": "http://127.0.0.1:5599", "MLFLOW_EXPERIMENT_NAME": "my-agent"},
+        ),
     )
     with mock.patch.object(dev_mod, "_databricks"):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     output = " ".join(result.output.split())
     assert "Traces" in output and "5599" in output
+    assert "experiment name: my-agent" in output
 
 
 def test_dev_omits_traces_line_when_local_tracing_unavailable(tmp_path: pathlib.Path, monkeypatch):
