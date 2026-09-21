@@ -67,7 +67,7 @@ _PIP_INDEX_ENVS = ("PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDEX")
 _AGENT_COMPUTE_OUTPUT = ("App compute", "Agent compute")
 # Internal rollout switch. Backend selection is intentionally not part of the user-facing CLI or
 # process environment; flip this only in a Mason release after the managed API is fully deployed.
-_USE_MANAGED_RUNTIME_STORE = False
+_USE_MANAGED_RUNTIME_STORE = True
 
 # Mason names every deployment `agent-mason-<name>` so `deployments list` can filter to its own apps.
 # The `agent-` prefix is what the Databricks agent registry keys on to surface these apps; the
