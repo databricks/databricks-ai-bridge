@@ -123,11 +123,20 @@ def create_experiment_idempotent(profile: Optional[str], client, name: str) -> s
     ``create_experiment`` won't make the intermediate workspace folder for a nested path (e.g.
     ``/Users/<you>/mason-traces/<project>``), so the parent dir is created first. Used by dev/deploy to
     provision the managed experiment that traces log to.
+
+    Rejects a name that already resolves to a UC-backed experiment: binding one is blocked up front,
+    but a hand-edited ``agent.toml`` can point at one directly, so deploy re-checks here - mason
+    supports managed (non-UC) tracing only.
     """
     mlflow = _mlflow()
     _set_tracking_uri(mlflow, profile)
     experiment = mlflow.get_experiment_by_name(name)
     if experiment:
+        if _is_uc_backed(experiment):
+            raise AgentCliError(
+                "UC-backed MLflow tracing is not supported by mason.",
+                hint="Point this project's tracing at a managed (non-UC) experiment.",
+            )
         return experiment.experiment_id
     parent = name.rsplit("/", 1)[0]
     if parent:
