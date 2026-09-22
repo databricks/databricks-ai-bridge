@@ -310,7 +310,12 @@ def tracing_configure(obj, experiment_id, source) -> None:
 )
 @click.pass_obj
 def tracing_disable(obj, source) -> None:
-    """Turn tracing off for this agent (recorded in agent.toml; dev/deploy then wire no MLflow env)."""
+    """Turn tracing off for the DEPLOYED agent (recorded in agent.toml; `mason deploy` then wires no
+    MLflow env).
+
+    Deploy-only: `mason dev` still traces locally to its own MLflow server, so you keep local traces
+    while the deployed agent stays untraced.
+    """
     from databricks_mason.agent_project import AgentProject  # noqa: PLC0415
 
     project = AgentProject.load(pathlib.Path(source))
@@ -321,8 +326,8 @@ def tracing_disable(obj, source) -> None:
         render.emit_json({"disabled": True})
         return
     render.success(
-        "Tracing off",
-        next_steps=[("mason tracing configure", "Turn tracing back on")],
+        "Tracing off for the deployed agent (mason dev still traces locally)",
+        next_steps=[("mason tracing configure", "Turn deployed tracing back on")],
     )
 
 

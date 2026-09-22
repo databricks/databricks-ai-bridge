@@ -853,7 +853,7 @@ Configure MLflow tracing for your agents, and inspect the traces.
 | Subcommand | Description |
 | --- | --- |
 | [`tracing configure`](#mason-tracing-configure) | Configure tracing via MLflow: pin an experiment, rebind, or re-enable after `disable`. |
-| [`tracing disable`](#mason-tracing-disable) | Turn tracing off for this agent (recorded in agent.toml; dev/deploy then wire no MLflow env). |
+| [`tracing disable`](#mason-tracing-disable) | Turn tracing off for the deployed agent (deploy-only; `mason dev` still traces locally). |
 | [`tracing list`](#mason-tracing-list) | List recent agent traces in an experiment. |
 | [`tracing get`](#mason-tracing-get) | Get a single trace by id (status, latency, span count, previews). |
 
@@ -877,7 +877,9 @@ _Options_
 
 #### `mason tracing disable`
 
-Turn tracing off for this agent (recorded in agent.toml; dev/deploy then wire no MLflow env).
+Turn tracing off for the DEPLOYED agent (recorded in agent.toml; `mason deploy` then wires no MLflow env).
+
+Deploy-only: `mason dev` still traces locally to its own MLflow server, so you keep local traces while the deployed agent stays untraced.
 
 ```
 mason tracing disable [options]
