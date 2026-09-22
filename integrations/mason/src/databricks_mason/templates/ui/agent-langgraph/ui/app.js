@@ -1,4 +1,7 @@
 const elements = {
+  appLinks: document.querySelector("#app-links"),
+  appLogsLink: document.querySelector("#app-logs-link"),
+  appSettingsLink: document.querySelector("#app-settings-link"),
   approvalPanel: document.querySelector("#approval-panel"),
   approvalSummary: document.querySelector("#approval-summary"),
   approveAction: document.querySelector("#approve-action"),
@@ -428,6 +431,24 @@ function setViewer(name) {
   const label = name || "Local developer";
   elements.viewerValue.textContent = label;
   if (elements.viewerAvatar) elements.viewerAvatar.textContent = initials(label);
+}
+
+function setAppLinks(app) {
+  const links = [
+    [elements.appSettingsLink, app?.settings_url],
+    [elements.appLogsLink, app?.logs_url],
+  ];
+  let visible = false;
+  for (const [element, href] of links) {
+    element.hidden = !href;
+    if (href) {
+      element.href = href;
+      visible = true;
+    } else {
+      element.removeAttribute("href");
+    }
+  }
+  elements.appLinks.hidden = !visible;
 }
 
 function formatClock(date = new Date()) {
@@ -1251,6 +1272,7 @@ async function loadConfig() {
     renderModels(config.models);
     void loadModels().catch((error) => addEvent("models.error", { message: String(error) }));
     setViewer(config.viewer);
+    setAppLinks(config.app);
     elements.streamingMode.textContent = config.streaming.mode;
     elements.backgroundMode.textContent = config.background.mode;
     elements.sessionMode.textContent = config.session.mode;
