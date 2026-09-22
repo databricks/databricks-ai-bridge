@@ -162,46 +162,48 @@ def dev(
     # Best-effort: any launch failure degrades to running without traces. `mason deploy` handles the
     # managed workspace experiment instead.
     tracing_server, tracing_env = start_local_tracing_server(source_dir)
-    trace_url: Optional[str] = None
-    if tracing_env:
-        local_env.update(tracing_env)
-        uri = tracing_env["MLFLOW_TRACKING_URI"]
-        name = tracing_env.get("MLFLOW_EXPERIMENT_NAME")
-        # Can't deep-link the experiment (created lazily on the first request; its local id isn't
-        # stable), so name it after the local MLflow UI URL so the user knows which one to open.
-        trace_url = f"{uri} (experiment name: {name})" if name else uri
-
-    # Default: prepare only when there's no venv yet, so repeat runs don't rebuild. Explicit
-    # --prepare-environment / --no-prepare-environment overrides the auto-detect.
-    if prepare_environment is None:
-        prepare_environment = not (source_dir / ".venv").exists()
-
-    args = ["apps", "run-local"]
-    if prepare_environment:
-        args.append("--prepare-environment")
-    if app_port is not None:
-        args += ["--app-port", str(app_port)]
-
-    # Run against a local-only manifest that forces the Runtime Store in-process, removes deploy-only
-    # package-index overrides, and injects any locally resolved store ids and the local tracing env.
-    entry_point = _dev_entry_point(app_yaml, local_env or None)
-    # run-local resolves this relative to cwd and rejects an absolute alternate-manifest path.
-    args += ["--entry-point", entry_point.name]
-
-    # `run-local` prints a generic "go to http://localhost:<port>" line that points at the chat UI —
-    # misleading for an API-only project, which serves no page there (404). Print an accurate line up
-    # front, keyed on whether this project actually carries the chat-app overlay.
-    _announce_local_url(
-        source_dir,
-        app_port or _DEFAULT_APP_PORT,
-        project.server if project else None,
-        trace_url,
-    )
-
-    # Run in the project dir so run-local finds the app; stream output (no capture). Remove the
-    # local-only manifest afterward so a later `mason deploy` cannot sync it to the workspace, and
-    # stop the local tracing server.
+    # Everything after the server starts runs under try/finally, so any failure — e.g. a malformed
+    # app.yaml that `_dev_entry_point` rejects — still tears the local server down (and removes the
+    # dev-only manifest) instead of orphaning the process.
+    entry_point: Optional[pathlib.Path] = None
     try:
+        trace_url: Optional[str] = None
+        if tracing_env:
+            local_env.update(tracing_env)
+            uri = tracing_env["MLFLOW_TRACKING_URI"]
+            name = tracing_env.get("MLFLOW_EXPERIMENT_NAME")
+            # Can't deep-link the experiment (created lazily on the first request; its local id isn't
+            # stable), so name it after the local MLflow UI URL so the user knows which one to open.
+            trace_url = f"{uri} (experiment name: {name})" if name else uri
+
+        # Default: prepare only when there's no venv yet, so repeat runs don't rebuild. Explicit
+        # --prepare-environment / --no-prepare-environment overrides the auto-detect.
+        if prepare_environment is None:
+            prepare_environment = not (source_dir / ".venv").exists()
+
+        args = ["apps", "run-local"]
+        if prepare_environment:
+            args.append("--prepare-environment")
+        if app_port is not None:
+            args += ["--app-port", str(app_port)]
+
+        # Run against a local-only manifest that forces the Runtime Store in-process, removes deploy-only
+        # package-index overrides, and injects any locally resolved store ids and the local tracing env.
+        entry_point = _dev_entry_point(app_yaml, local_env or None)
+        # run-local resolves this relative to cwd and rejects an absolute alternate-manifest path.
+        args += ["--entry-point", entry_point.name]
+
+        # `run-local` prints a generic "go to http://localhost:<port>" line that points at the chat UI —
+        # misleading for an API-only project, which serves no page there (404). Print an accurate line up
+        # front, keyed on whether this project actually carries the chat-app overlay.
+        _announce_local_url(
+            source_dir,
+            app_port or _DEFAULT_APP_PORT,
+            project.server if project else None,
+            trace_url,
+        )
+
+        # Run in the project dir so run-local finds the app; stream output (no capture).
         _databricks(
             args,
             obj.profile,
@@ -209,7 +211,10 @@ def dev(
             action="Could not start the agent locally.",
         )
     finally:
-        entry_point.unlink(missing_ok=True)
+        # Remove the local-only manifest so a later `mason deploy` cannot sync it to the workspace, and
+        # stop the local tracing server — even if setup above raised before run-local.
+        if entry_point is not None:
+            entry_point.unlink(missing_ok=True)
         if tracing_server is not None:
             stop_local_tracing_server(tracing_server)
 

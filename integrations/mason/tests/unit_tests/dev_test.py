@@ -234,6 +234,26 @@ def test_dev_starts_local_tracing_and_wires_dev_manifest(tmp_path: pathlib.Path,
     fake_server.terminate.assert_called_once()  # torn down after the run
 
 
+def test_dev_stops_local_tracing_server_when_setup_fails(tmp_path: pathlib.Path, monkeypatch):
+    # A failure after the local server starts but before run-local (here a malformed app.yaml that
+    # `_dev_entry_point` rejects) must still tear the server down, not orphan it — everything after the
+    # server start runs under the try/finally.
+    (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"], "env": "not-a-list"}))
+    _write_agent_manifest(tmp_path, server="mason")
+    (tmp_path / ".venv").mkdir()
+    fake_server = mock.Mock()
+    monkeypatch.setattr(
+        dev_mod,
+        "start_local_tracing_server",
+        lambda source_dir: (fake_server, {"MLFLOW_TRACKING_URI": "http://127.0.0.1:5599"}),
+    )
+    with mock.patch.object(dev_mod, "_databricks") as db:
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code != 0  # the bad app.yaml surfaced as an error
+    db.assert_not_called()  # failed before run-local was reached
+    fake_server.terminate.assert_called_once()  # ...but the local server was still stopped
+
+
 def test_dev_shows_local_traces_url_when_tracing_on(tmp_path: pathlib.Path, monkeypatch):
     # dev surfaces the local MLflow Traces URL plus the experiment name (in parens) so a dev run makes
     # clear where its traces land and which experiment to open.
