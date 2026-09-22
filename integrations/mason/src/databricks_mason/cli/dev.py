@@ -90,8 +90,8 @@ def dev(
     deployment. The environment is built on the first run and reused after; pass
     `--prepare-environment` to force a rebuild (e.g. after changing dependencies).
 
-    Everything runs locally: `mason dev` is a self-contained sandbox that never reaches the workspace
-    for its resources. Tracing goes to a local MLflow tracking server (sqlite-backed, under `.mason/`)
+    Everything runs locally: `mason dev` is a local deployment that does not depend on a Databricks
+    workspace for its resources. Tracing goes to a local MLflow tracking server (sqlite-backed, under `.mason/`)
     so traces are recorded on your machine with no workspace experiment or setup - open the printed
     Traces URL to view them (`mason tracing disable` doesn't affect dev; it only stops the deployed
     agent's tracing). Long-term memory is off and conversation history is in-process (not durable):
@@ -120,23 +120,13 @@ def dev(
     memory_store, session_store = store_bindings(source_dir)
     if memory_store:
         render.console().print(
-            f"[dim]Memory store '{memory_store}' is used once deployed; `mason dev` runs with "
-            "long-term memory off (local sandbox).[/]"
-        )
-    else:
-        render.warning(
-            "No memory store bound - long-term memory is off. Run 'mason memory bind <name>' so "
-            "`mason deploy` provisions one."
+            f"[dim]Memory store '{memory_store}' is bound but `mason dev` runs with "
+            "long-term memory off. Run `mason deploy` to use bound store.[/]"
         )
     if session_store:
         render.console().print(
-            f"[dim]Session store '{session_store}' is used once deployed; `mason dev` keeps "
-            "conversation history in-process (not durable).[/]"
-        )
-    else:
-        render.warning(
-            "No session store bound - conversation history is in-process (not durable). Run "
-            "'mason sessions bind <name>' so `mason deploy` provisions one."
+            f"[dim]Session store '{session_store}' is bound but `mason dev` keeps "
+            "conversation history in-process (not durable). Run `mason deploy` to use bound store.[/]"
         )
     local_env: dict[str, str] = {}
     # Local tracing: start a local MLflow tracking server backed by sqlite under .mason/ and point the
