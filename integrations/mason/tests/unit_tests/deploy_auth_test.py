@@ -152,6 +152,20 @@ def test_existing_app_requires_explicit_adoption(tmp_path, monkeypatch):
     workspace.assert_called_once_with(profile="selected")
 
 
+def test_existing_scoped_app_does_not_require_repeated_adoption(monkeypatch):
+    existing = App(
+        name="app",
+        user_api_scopes=["ai-gateway", "sql"],
+        effective_user_api_scopes=["ai-gateway", "sql"],
+    )
+    app_auth, _, _ = _sdk(monkeypatch, existing)
+
+    plan = app_auth.prepare_app_auth("app", "selected", adopt=False)
+
+    assert plan.existing_scopes == ("ai-gateway", "sql")
+    assert plan.scopes == plan.existing_scopes
+
+
 def test_sdk_read_permission_denied_is_not_treated_as_new_app(monkeypatch):
     app_auth, apps, _ = _sdk(monkeypatch)
     apps.get.side_effect = PermissionDenied("denied")
@@ -293,6 +307,7 @@ def test_effective_verification_allows_only_observed_identity_defaults(monkeypat
         assert apps.create.call_args.args[0].as_dict() == {
             "name": "app",
             "user_api_scopes": configured,
+            "forward_user_access_token": True,
         }
     else:
         apps.create_update.assert_not_called()
@@ -459,6 +474,7 @@ def test_user_deploy_creates_scoped_app_and_runtime_store_before_source(
         {
             "name": "agent-mason-test",
             "user_api_scopes": ["ai-gateway"],
+            "forward_user_access_token": True,
             "compute_min_instances": 2,
             "compute_max_instances": 2,
         },

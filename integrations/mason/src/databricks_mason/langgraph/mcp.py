@@ -13,44 +13,35 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from databricks_langchain import DatabricksMCPServer, DatabricksMultiServerMCPClient
 from langchain_mcp_adapters.sessions import create_session
 
 if TYPE_CHECKING:
-    from databricks.sdk import WorkspaceClient
     from databricks_langchain import MCPServer
 
+from databricks_mason.runtime import mcp_auth
 from databricks_mason.runtime.auth import AuthError
 from databricks_mason.runtime.tool_manifest import ToolRecord, downscope_wire, load_tools
 from databricks_mason.runtime.workspace import workspace_client, workspace_headers
 
 logger = logging.getLogger(__name__)
+_auth_error = mcp_auth.mcp_auth_error
+_tool_error = mcp_auth.mcp_tool_error
 
 
 def _server_from_tool(
     tool: ToolRecord,
     *,
-    workspace_client_for: Callable[[str], WorkspaceClient] | None = None,
+    workspace_client_for: mcp_auth.WorkspaceClientResolver | None = None,
 ) -> DatabricksMCPServer | None:
     if tool.kind not in {"sandbox", "mcp", "uc_function", "genie_one"}:
         return None
     mode = tool.auth or "app"
-    if workspace_client_for is None and mode == "user" and os.getenv("DATABRICKS_APP_NAME"):
-        raise AuthError(
-            "MCP_USER_AUTHORIZATION_MISSING",
-            "This deployed MCP integration requires request-user authorization.",
-            integration_id=tool.id,
-        )
-    try:
-        client = workspace_client_for(mode) if workspace_client_for else workspace_client()
-    except Exception as error:
-        raise _auth_error(error, tool.id) or AuthError(
-            "MCP_CLIENT_CONFIGURATION_FAILED", "Could not configure the MCP client.", 500, tool.id
-        ) from None
+    client = mcp_auth.resolve_mcp_workspace_client(
+        mode, tool.id, workspace_client_for, workspace_client
+    )
     host = client.config.host.rstrip("/")
     if tool.kind in {"sandbox", "mcp", "genie_one"}:
         url = (
@@ -81,7 +72,7 @@ def _server_from_tool(
 
 def _declared_servers(
     *,
-    workspace_client_for: Callable[[str], WorkspaceClient] | None = None,
+    workspace_client_for: mcp_auth.WorkspaceClientResolver | None = None,
 ) -> list[DatabricksMCPServer]:
     """The MCP servers declared in the agent's ``agent.toml`` (may be empty)."""
     tools = load_tools(expected_framework="langgraph")
@@ -93,73 +84,10 @@ def _declared_servers(
     ]
 
 
-def _auth_error(
-    error: BaseException, integration_id: str, seen: set[int] | None = None
-) -> AuthError | None:
-    from databricks.sdk.errors import PermissionDenied, Unauthenticated
-
-    seen = set() if seen is None else seen
-    if id(error) in seen:
-        return None
-    seen.add(id(error))
-    if isinstance(error, AuthError):
-        return (
-            error
-            if error.integration_id
-            else AuthError(error.code, str(error), error.status_code, integration_id)
-        )
-    nested_errors = [
-        *getattr(error, "exceptions", ()),
-        error.__cause__,
-        error.__context__,
-    ]
-    for nested in nested_errors:
-        if nested is not None and (classified := _auth_error(nested, integration_id, seen)):
-            return classified
-    status = getattr(error, "status_code", None) or getattr(
-        getattr(error, "response", None), "status_code", None
-    )
-    code = getattr(getattr(error, "error", None), "code", None)
-    if isinstance(error, (PermissionError, PermissionDenied)) or status == 403:
-        return AuthError("MCP_PERMISSION_DENIED", "MCP permission denied.", 403, integration_id)
-    if isinstance(error, Unauthenticated) or status == 401:
-        return AuthError(
-            "MCP_USER_AUTHORIZATION_INVALID", "MCP authorization was rejected.", 401, integration_id
-        )
-    if code == -32042:
-        return AuthError(
-            "MCP_AUTHORIZATION_REQUIRED",
-            "Authorize the configured service in Databricks before retrying.",
-            401,
-            integration_id,
-        )
-    return None
-
-
-def _tool_error(result: Any, integration_id: str) -> AuthError | None:
-    structured = getattr(result, "structuredContent", None)
-    detail = structured.get("error", structured) if isinstance(structured, dict) else {}
-    code = detail.get("code") or detail.get("error_code") if isinstance(detail, dict) else None
-    if code in (403, "PERMISSION_DENIED", "MCP_PERMISSION_DENIED"):
-        return AuthError("MCP_PERMISSION_DENIED", "MCP permission denied.", 403, integration_id)
-    if code in (401, "UNAUTHENTICATED", "MCP_USER_AUTHORIZATION_INVALID"):
-        return AuthError(
-            "MCP_USER_AUTHORIZATION_INVALID", "MCP authorization was rejected.", 401, integration_id
-        )
-    if code == -32042:
-        return AuthError(
-            "MCP_AUTHORIZATION_REQUIRED",
-            "Authorize the configured service in Databricks.",
-            401,
-            integration_id,
-        )
-    return None
-
-
 def _sandbox_interceptor(
     tools: tuple[ToolRecord, ...],
     *,
-    workspace_client_for: Callable[[str], WorkspaceClient] | None = None,
+    workspace_client_for: mcp_auth.WorkspaceClientResolver | None = None,
 ):
     declared = {tool.id: tool for tool in tools}
 
@@ -202,7 +130,7 @@ def _sandbox_interceptor(
 def mcp_client(
     servers: list[DatabricksMCPServer],
     *,
-    workspace_client_for: Callable[[str], WorkspaceClient] | None = None,
+    workspace_client_for: mcp_auth.WorkspaceClientResolver | None = None,
     tools: tuple[ToolRecord, ...] | None = None,
 ) -> DatabricksMultiServerMCPClient:
     """A multi-server MCP client over ``servers`` with the sandbox downscoping interceptor attached.
@@ -227,7 +155,7 @@ def mcp_client(
 async def mcp_tools(
     extra_servers: list[DatabricksMCPServer] | None = None,
     *,
-    workspace_client_for: Callable[[str], WorkspaceClient] | None = None,
+    workspace_client_for: mcp_auth.WorkspaceClientResolver | None = None,
 ) -> list:
     """Fetch declared tools with request identity and protected sandbox downscoping.
 

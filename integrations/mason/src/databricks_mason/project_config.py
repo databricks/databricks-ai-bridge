@@ -20,7 +20,7 @@ _CUSTOM_SERVER_TEMPLATES = frozenset({"custom-agent-langgraph", "custom-agent-op
 
 @dataclass(frozen=True)
 class ProjectMetadata:
-    """The template identity persisted by ``mason init``."""
+    """Template identity and project-level request-auth compatibility from ``mason init``."""
 
     framework: AgentFramework
     template: str | None
