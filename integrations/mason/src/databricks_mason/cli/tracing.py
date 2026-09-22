@@ -23,6 +23,9 @@ import pathlib
 import re
 import socket
 import subprocess
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -162,22 +165,44 @@ def _resolve_experiment_name(source: pathlib.Path | str) -> Optional[str]:
 class _TraceReadTarget:
     """Where `list`/`get` read traces from: an MLflow ``tracking_uri`` and the ``experiment_id`` in it.
 
-    A field is None when there's nothing to read (no experiment resolved).
+    ``local`` marks the local ``mason dev`` store (served over a short-lived REST server) so callers can
+    label it. A field is None when there's nothing to read (no experiment resolved).
     """
 
     tracking_uri: Optional[str]
     experiment_id: Optional[str]
+    local: bool = False
 
 
-def _trace_read_target(source: pathlib.Path | str, profile: Optional[str]) -> _TraceReadTarget:
-    """The target `list`/`get` read this project's traces from: its workspace experiment when that
-    exists and is managed, else the local ``mason dev`` store (``.mason/mlflow.db``).
+@contextmanager
+def _open_trace_read_target(
+    source: pathlib.Path | str,
+    profile: Optional[str],
+    experiment_name: Optional[str] = None,
+    experiment_id: Optional[str] = None,
+) -> Iterator[_TraceReadTarget]:
+    """Yield the target `list`/`get` should read from, with MLflow's tracking URI already pointed at it.
 
-    Both fields are None when nothing has traced anywhere yet.
+    Precedence: an explicit ``--experiment-name`` / ``--experiment-id`` (must exist), else this
+    project's workspace experiment when it's provisioned + managed, else the local ``mason dev`` store
+    (``.mason/mlflow.db``). Both target fields are None when nothing has traced anywhere yet.
+
+    The local store is read over REST from a short-lived MLflow server started here (and torn down on
+    exit), not by opening the sqlite file directly: the server that wrote the schema serves it, so the
+    CLI's own mlflow-skinny version needn't match the version that wrote the store (the REST protocol is
+    compatible across a major version; a direct sqlite open must match the schema head exactly). Callers
+    must run their read inside the ``with`` block so the server is still up.
     """
     mlflow = _mlflow()
+    # An explicit id/name targets the workspace directly (and must exist); it raises here, before any
+    # local server is started, so a typo never spins one up.
+    explicit = _workspace_experiment_target(profile, experiment_name, experiment_id)
+    if explicit is not None:
+        mlflow.set_tracking_uri(explicit.tracking_uri)
+        yield explicit
+        return
+    # This project's bound experiment, if it's provisioned + managed in the workspace.
     name = _resolve_experiment_name(source)
-    # A bound experiment that's provisioned + managed in the workspace wins.
     if name:
         _set_tracking_uri(mlflow, profile)
         try:
@@ -185,17 +210,24 @@ def _trace_read_target(source: pathlib.Path | str, profile: Optional[str]) -> _T
         except Exception:  # noqa: BLE001 - workspace unreachable -> try the local dev store
             experiment = None
         if experiment is not None and not _is_uc_backed(experiment):
-            return _TraceReadTarget(_workspace_uri(profile), experiment.experiment_id)
+            yield _TraceReadTarget(_workspace_uri(profile), experiment.experiment_id)
+            return
     # Unbound, not provisioned, or unreachable -> the local dev store, if any. `mason dev` traces
     # locally regardless of the binding, so its store is worth reading even when tracing is unbound.
     db = pathlib.Path(source).resolve() / _MASON_LOCAL_DIR / "mlflow.db"
-    if db.exists():
-        uri = f"sqlite:///{db}"
-        mlflow.set_tracking_uri(uri)
+    if not db.exists():
+        yield _TraceReadTarget(None, None)
+        return
+    server, base_url = _start_read_server(db)
+    if server is None:  # best-effort: couldn't bring the local store up -> nothing to read
+        yield _TraceReadTarget(None, None, local=True)
+        return
+    try:
+        mlflow.set_tracking_uri(base_url)
         local = mlflow.get_experiment_by_name(pathlib.Path(source).resolve().name)
-        if local is not None:
-            return _TraceReadTarget(uri, local.experiment_id)
-    return _TraceReadTarget(None, None)
+        yield _TraceReadTarget(base_url, local.experiment_id if local else None, local=True)
+    finally:
+        stop_local_tracing_server(server)
 
 
 def _workspace_experiment_target(
@@ -259,29 +291,16 @@ def _trace_to_json(trace: Any) -> dict:
 
 # Local-only scratch dir (gitignored) under a dev project: holds the sqlite tracing store + artifacts.
 _MASON_LOCAL_DIR = ".mason"
-# Fallback MLflow spec for the local tracing server: the 3.x range (the runtime's floor). Normally the
-# server is pinned to the CLI's own mlflow version (see _server_mlflow_spec) so the sqlite schema it
-# writes matches what `mason tracing list`/`get` read back with.
+# The local tracing server's MLflow: a broad 3.x range (the runtime's floor). `mason dev` writes the
+# sqlite store with it, and `list`/`get` read that store back over REST from a short-lived server (see
+# _open_trace_read_target) - never by opening the file with the CLI's own mlflow-skinny. So this needn't
+# match the CLI's version, and uvx reuses ONE cached environment across mason releases (fast startup
+# after the first install) instead of cold-installing a new exact version on every mlflow bump.
 _MLFLOW_SPEC = "mlflow>=3.10,<4"
-
-
-def _server_mlflow_spec() -> str:
-    """The ``uvx --from`` spec for the local server's MLflow.
-
-    Pin to the CLI's installed mlflow(-skinny) release so the server writes a sqlite schema the CLI can
-    read back (same version = same schema head, so `mason tracing list`/`get` open the local store
-    without a migration mismatch). Fall back to the 3.x range for a dev/local build whose version isn't
-    a plain ``X.Y.Z`` release on PyPI.
-    """
-    try:
-        import mlflow  # noqa: PLC0415 - lazy, only when launching the local server
-
-        version = mlflow.__version__
-        if re.fullmatch(r"\d+\.\d+\.\d+", version):
-            return f"mlflow=={version}"
-    except Exception:  # noqa: BLE001 - fall back to the range
-        pass
-    return _MLFLOW_SPEC
+# Pin the uvx server's interpreter: on Python 3.13 an older mlflow drags in a pyarrow that builds from
+# source (slow, and fails without a C toolchain); 3.12 resolves to prebuilt wheels. uv fetches it if the
+# machine lacks it.
+_SERVER_PYTHON = "3.12"
 
 
 def _free_port() -> int:
@@ -289,6 +308,84 @@ def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
+
+
+def _mlflow_server_argv(db: pathlib.Path, artifacts: pathlib.Path, port: int) -> list[str]:
+    """The ``uvx`` argv for a local, sqlite-backed MLflow tracking server on ``port``.
+
+    Shared by the `mason dev` server and the short-lived server `list`/`get` use to read the local store
+    (see _MLFLOW_SPEC / _SERVER_PYTHON for the version + interpreter pins).
+    """
+    return [
+        "uvx",
+        "--python",
+        _SERVER_PYTHON,
+        "--from",
+        _MLFLOW_SPEC,
+        "mlflow",
+        "server",
+        "--backend-store-uri",
+        f"sqlite:///{db}",
+        "--default-artifact-root",
+        str(artifacts),
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+    ]
+
+
+def _wait_for_server(base_url: str, server: subprocess.Popen, timeout: float = 60.0) -> bool:
+    """Poll the local MLflow server's health endpoint until it answers, its process exits, or timeout.
+
+    `mason dev` doesn't wait (the agent traces to the server as it comes up), but a read command queries
+    immediately and then tears the server down, so it must block until the server is live. Returns True
+    once it responds, False if the process died (e.g. install/bind failure) or it never came up.
+    """
+    import urllib.error  # noqa: PLC0415 - only needed when reading the local store
+    import urllib.request  # noqa: PLC0415
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if server.poll() is not None:  # process exited before serving -> it won't come up
+            return False
+        try:
+            with urllib.request.urlopen(f"{base_url}/health", timeout=2) as resp:
+                if resp.status == 200:
+                    return True
+        except (urllib.error.URLError, OSError):
+            time.sleep(0.3)  # not up yet (connection refused / starting) -> retry
+    return False
+
+
+def _start_read_server(db: pathlib.Path) -> tuple[subprocess.Popen | None, Optional[str]]:
+    """Start a short-lived MLflow server over the existing ``mason dev`` store and wait until it's ready.
+
+    Lets `list`/`get` read local traces over REST (the server owns the sqlite schema). Returns
+    ``(server, base_url)``, or ``(None, None)`` when it can't start - best-effort, like `mason dev`, so a
+    read degrades to showing nothing rather than erroring. The caller stops the server when done.
+    """
+    artifacts = (db.parent / "mlartifacts").resolve()
+    port = _free_port()
+    base_url = f"http://127.0.0.1:{port}"
+    try:
+        # Dup the log fd to the child and close our copy; keeps the server's output for debugging.
+        with (db.parent / "mlflow-read.log").open("w") as log:
+            server = subprocess.Popen(
+                _mlflow_server_argv(db, artifacts, port), stdout=log, stderr=subprocess.STDOUT
+            )
+    except OSError as exc:
+        render.diagnostic(
+            "warning", f"could not read local traces - {exc}", help="is `uv` installed?"
+        )
+        return None, None
+    if not _wait_for_server(base_url, server):
+        stop_local_tracing_server(server)
+        render.diagnostic(
+            "warning", "local trace store did not come up", help="see .mason/mlflow-read.log"
+        )
+        return None, None
+    return server, base_url
 
 
 def start_local_tracing_server(
@@ -314,23 +411,7 @@ def start_local_tracing_server(
         # keeps the server's output for debugging a failed local-tracing run.
         with (mason_dir / "mlflow-server.log").open("w") as log:
             server = subprocess.Popen(
-                [
-                    "uvx",
-                    "--from",
-                    _server_mlflow_spec(),
-                    "mlflow",
-                    "server",
-                    "--backend-store-uri",
-                    f"sqlite:///{db}",
-                    "--default-artifact-root",
-                    str(artifacts),
-                    "--host",
-                    "127.0.0.1",
-                    "--port",
-                    str(port),
-                ],
-                stdout=log,
-                stderr=subprocess.STDOUT,
+                _mlflow_server_argv(db, artifacts, port), stdout=log, stderr=subprocess.STDOUT
             )
     except OSError as exc:
         render.diagnostic(
@@ -541,34 +622,38 @@ def tracing_list(obj, experiment_name, experiment_id, limit, source) -> None:
             hint="They select the same experiment; use whichever identifier you have.",
         )
     mlflow = _mlflow()
-    target = _workspace_experiment_target(
-        obj.profile, experiment_name, experiment_id
-    ) or _trace_read_target(source, obj.profile)
-    traces = []
-    if target.experiment_id:
-        mlflow.set_tracking_uri(target.tracking_uri)
-        traces = mlflow.search_traces(
-            locations=[target.experiment_id], max_results=limit, return_type="list"
-        )
+    # Read inside the context manager: for a local dev store it keeps the short-lived MLflow server up
+    # for the duration of the search (return_type="list" materializes the rows before it's torn down).
+    with _open_trace_read_target(source, obj.profile, experiment_name, experiment_id) as target:
+        traces = []
+        if target.experiment_id:
+            traces = mlflow.search_traces(
+                locations=[target.experiment_id], max_results=limit, return_type="list"
+            )
 
-    if obj.output == "json":
-        render.emit_json([_trace_to_json(t) for t in traces])
-        return
-    rows = [
-        [
-            _attr(t, "info.trace_id", "info.request_id"),
-            render.status_pill(_status_str(_attr(t, "info.status", "info.state"))),
-            _attr(t, "info.execution_time_ms", "info.execution_duration_ms"),
-            timefmt.relative(_attr(t, "info.timestamp_ms", "info.request_time")),
+        if obj.output == "json":
+            render.emit_json([_trace_to_json(t) for t in traces])
+            return
+        rows = [
+            [
+                _attr(t, "info.trace_id", "info.request_id"),
+                render.status_pill(_status_str(_attr(t, "info.status", "info.state"))),
+                _attr(t, "info.execution_time_ms", "info.execution_duration_ms"),
+                timefmt.relative(_attr(t, "info.timestamp_ms", "info.request_time")),
+            ]
+            for t in traces
         ]
-        for t in traces
-    ]
-    where = " (local dev)" if (target.tracking_uri or "").startswith("sqlite:") else ""
-    render.resource_table(
-        f"Agent Traces · {str(target.experiment_id) + where if target.experiment_id else 'no experiment yet'}",
-        [("Trace ID", "left"), ("Status", "left"), ("Latency (ms)", "left"), ("Created", "left")],
-        rows,
-    )
+        where = " (local dev)" if target.local else ""
+        render.resource_table(
+            f"Agent Traces · {str(target.experiment_id) + where if target.experiment_id else 'no experiment yet'}",
+            [
+                ("Trace ID", "left"),
+                ("Status", "left"),
+                ("Latency (ms)", "left"),
+                ("Created", "left"),
+            ],
+            rows,
+        )
 
 
 @tracing.command("get")
@@ -607,27 +692,31 @@ def tracing_get(obj, trace_id, experiment_name, experiment_id, source) -> None:
             hint="They select the same experiment; use whichever identifier you have.",
         )
     mlflow = _mlflow()
-    target = _workspace_experiment_target(
-        obj.profile, experiment_name, experiment_id
-    ) or _trace_read_target(source, obj.profile)
-    mlflow.set_tracking_uri(target.tracking_uri or _workspace_uri(obj.profile))
-    trace = mlflow.get_trace(trace_id)
-    if trace is None:
-        raise AgentCliError(f"No trace found with id {trace_id!r}.")
-    if obj.output == "json":
-        render.emit_json(_trace_to_json(trace))
-        return
-    spans = _attr(trace, "data.spans", default=[]) or []
-    render.detail(
-        _BREADCRUMB,
-        trace_id,
-        {
-            "Status": _status_str(_attr(trace, "info.status", "info.state")),
-            "Latency (ms)": _attr(trace, "info.execution_time_ms", "info.execution_duration_ms"),
-            "Spans": len(spans),
-            "Request": _attr(trace, "info.request_preview", "data.request"),
-            "Response": _attr(trace, "info.response_preview", "data.response"),
-            "Created": timefmt.absolute(_attr(trace, "info.timestamp_ms", "info.request_time")),
-        },
-        status=_status_str(_attr(trace, "info.status", "info.state")),
-    )
+    # Read inside the context manager so a local dev store's short-lived server stays up for the fetch.
+    with _open_trace_read_target(source, obj.profile, experiment_name, experiment_id) as target:
+        # get_trace resolves by id and needs only the tracking URI; when nothing resolved, fall back to
+        # the workspace so an id still looks there.
+        if target.tracking_uri is None:
+            mlflow.set_tracking_uri(_workspace_uri(obj.profile))
+        trace = mlflow.get_trace(trace_id)
+        if trace is None:
+            raise AgentCliError(f"No trace found with id {trace_id!r}.")
+        if obj.output == "json":
+            render.emit_json(_trace_to_json(trace))
+            return
+        spans = _attr(trace, "data.spans", default=[]) or []
+        render.detail(
+            _BREADCRUMB,
+            trace_id,
+            {
+                "Status": _status_str(_attr(trace, "info.status", "info.state")),
+                "Latency (ms)": _attr(
+                    trace, "info.execution_time_ms", "info.execution_duration_ms"
+                ),
+                "Spans": len(spans),
+                "Request": _attr(trace, "info.request_preview", "data.request"),
+                "Response": _attr(trace, "info.response_preview", "data.response"),
+                "Created": timefmt.absolute(_attr(trace, "info.timestamp_ms", "info.request_time")),
+            },
+            status=_status_str(_attr(trace, "info.status", "info.state")),
+        )
