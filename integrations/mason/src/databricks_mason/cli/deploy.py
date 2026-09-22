@@ -310,20 +310,24 @@ def _load_project(source: pathlib.Path):
     return AgentProject.load(source)
 
 
-def store_bindings(source: pathlib.Path) -> tuple[Optional[str], Optional[str]]:
-    """The (memory, session) stores bound in agent.toml via `mason memory/sessions bind`.
+def resource_bindings(
+    source: pathlib.Path,
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """The (memory store, session store, tracing experiment) bound in agent.toml.
 
-    agent.toml is the single source of truth for an agent's stores. Both `mason dev` and `mason
-    deploy` resolve through here so the store env AND the deploy-time access grant honor the same
-    bindings. A missing agent.toml means no stores; an invalid manifest fails with a clear error.
+    agent.toml is the single source of truth for an agent's resources. Both `mason dev` and `mason
+    deploy` resolve through here so the resource env/notices AND the deploy-time provisioning honor the
+    same bindings. A missing agent.toml means nothing is bound; an invalid manifest fails with a clear
+    error.
     """
     project = _load_project(source)
     if project is None:
-        return None, None
+        return None, None, None
     # str(): agent.toml bindings come back as tomlkit strings, which don't serialize to app.yaml.
     memory = str(project.memory_store) if project.memory_store else None
     session = str(project.session_store) if project.session_store else None
-    return memory, session
+    experiment = str(project.trace_experiment_name) if project.trace_experiment_name else None
+    return memory, session, experiment
 
 
 def _resolve_deployment_name(project, name: Optional[str]) -> str:
@@ -367,7 +371,7 @@ def _reconcile_declared_stores(
     return memory_store_id
 
 
-def resolve_trace_experiment_id(source: pathlib.Path, client, profile) -> Optional[str]:
+def get_or_create_trace_experiment(source: pathlib.Path, client, profile) -> Optional[str]:
     """Get-or-create this project's bound MLflow experiment in the ``profile``'s workspace and return
     its id, or None when tracing is unbound (no ``experiment_name`` in agent.toml).
 
@@ -513,7 +517,7 @@ def deploy(
 
     # 1. Reconcile the stores DECLARED in agent.toml: create any that don't exist yet. `mason deploy`
     #    is the only reconcile-to-cloud verb; agent.toml is the source of truth and is never rewritten.
-    memory_store, session_store = store_bindings(source_dir)
+    memory_store, session_store, _ = resource_bindings(source_dir)
     memory_store_id = _reconcile_declared_stores(memory_store, session_store, client)
 
     # 2. Provision tracing (on by default): resolve/create the agent's MLflow experiment and wire the
@@ -526,7 +530,7 @@ def deploy(
     trace_experiment_id: Optional[str] = None
     trace_setup_error: Optional[str] = None
     try:
-        trace_experiment_id = resolve_trace_experiment_id(source_dir, client, obj.profile)
+        trace_experiment_id = get_or_create_trace_experiment(source_dir, client, obj.profile)
     except Exception as exc:  # noqa: BLE001 - tracing is best-effort; never block a deploy
         trace_setup_error = str(exc)
     env_updates: dict[str, str] = {}

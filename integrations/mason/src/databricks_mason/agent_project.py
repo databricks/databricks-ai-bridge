@@ -22,15 +22,15 @@ from databricks_mason.project_types import (
     parse_server,
 )
 from databricks_mason.runtime import tool_manifest
-from databricks_mason.runtime.tool_manifest import (
-    MEMORY_STORE_TABLE,
-    SESSION_STORE_TABLE,
-)
 
-# The tracing binding (`mason tracing bind` / `unbind`): `experiment_name` is the bound MLflow
-# experiment. Its presence means tracing is on; an absent binding means off. `mason init` bootstraps
-# a default name.
+# agent.toml resource-table names, read by the manifest parsing below (and by `mason dev`/`deploy`).
+MEMORY_STORE_TABLE = "memory_store"
+SESSION_STORE_TABLE = "session_store"
+# The tracing binding (`mason tracing bind` / `unbind`): the `experiment_name` key under [tracing] is
+# the bound MLflow experiment. Its presence means tracing is on; an absent binding means off. `mason
+# init` bootstraps a default name.
 TRACING_TABLE = "tracing"
+EXPERIMENT_NAME_KEY = "experiment_name"
 
 _SCHEMA_VERSION = 1
 _SUPPORTED_SCOPE_KINDS = {"table", "volume", "workspace"}
@@ -415,7 +415,7 @@ class AgentProject:
         tracing_table = document.get(TRACING_TABLE)
         trace_experiment_name: str | None = None
         if isinstance(tracing_table, Mapping):
-            raw_experiment = tracing_table.get("experiment_name")
+            raw_experiment = tracing_table.get(EXPERIMENT_NAME_KEY)
             trace_experiment_name = (
                 str(raw_experiment) if isinstance(raw_experiment, str) and raw_experiment else None
             )
@@ -546,14 +546,16 @@ class AgentProject:
         get-or-creates it). Storing a name (not an id) keeps the binding portable across
         workspaces/profiles.
         """
-        experiment_name = _required_string(experiment_name, f"[{TRACING_TABLE}] experiment_name")
+        experiment_name = _required_string(
+            experiment_name, f"[{TRACING_TABLE}] {EXPERIMENT_NAME_KEY}"
+        )
         if self.trace_experiment_name == experiment_name:
             return False
         table = self._document.get(TRACING_TABLE)
         if not isinstance(table, Mapping):
             table = tomlkit.table()
             self._document.append(TRACING_TABLE, table)
-        table["experiment_name"] = experiment_name
+        table[EXPERIMENT_NAME_KEY] = experiment_name
         self.trace_experiment_name = experiment_name
         return True
 
@@ -562,8 +564,8 @@ class AgentProject:
         if self.trace_experiment_name is None:
             return False
         table = self._document.get(TRACING_TABLE)
-        if isinstance(table, Mapping) and "experiment_name" in table:
-            del table["experiment_name"]
+        if isinstance(table, Mapping) and EXPERIMENT_NAME_KEY in table:
+            del table[EXPERIMENT_NAME_KEY]
         if isinstance(table, Mapping) and not table:
             del self._document[TRACING_TABLE]
         self.trace_experiment_name = None

@@ -849,7 +849,7 @@ _Options_
 
 ### `mason tracing`
 
-Configure MLflow tracing for your agents, and inspect the traces.
+Configure MLflow tracing for your deployed agents, and inspect the traces.
 
 | Subcommand | Description |
 | --- | --- |
@@ -935,8 +935,8 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
-| `--experiment-name <EXPERIMENT_NAME>` | string | - | no | MLflow experiment name whose store holds the trace (an absolute workspace path). Default: this project's experiment. |
-| `--experiment-id <EXPERIMENT_ID>` | string | - | no | MLflow experiment id whose store holds the trace. Mutually exclusive with --experiment-name. |
+| `--experiment-name <EXPERIMENT_NAME>` | string | - | no | MLflow experiment name to read (an absolute workspace path). Default: this project's experiment. |
+| `--experiment-id <EXPERIMENT_ID>` | string | - | no | MLflow experiment id to read (e.g. from the experiment URL). Mutually exclusive with --experiment-name. |
 | `--source <SOURCE>` | path | `.` | no | Project directory to resolve the experiment from (default: current dir). |
 
 ### `mason deploy`

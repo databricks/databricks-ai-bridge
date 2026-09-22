@@ -16,9 +16,9 @@ from databricks_mason.cli import deploy as deploy_mod
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import write_project_metadata
 
-# The autouse fixture below stubs `resolve_trace_experiment_id` for deploy-command tests; capture the
+# The autouse fixture below stubs `get_or_create_trace_experiment` for deploy-command tests; capture the
 # real function here so its own unit tests can exercise the actual logic.
-_REAL_RESOLVE_TRACE = deploy_mod.resolve_trace_experiment_id
+_REAL_RESOLVE_TRACE = deploy_mod.get_or_create_trace_experiment
 
 
 @pytest.fixture(autouse=True)
@@ -32,7 +32,7 @@ def _compute_active(monkeypatch):
 def _no_tracing_by_default(monkeypatch):
     # Tracing is on by default and would create an MLflow experiment (a live workspace op); stub the
     # provisioning off so non-tracing deploy tests stay hermetic. Tracing tests override this.
-    monkeypatch.setattr(deploy_mod, "resolve_trace_experiment_id", lambda *a, **k: None)
+    monkeypatch.setattr(deploy_mod, "get_or_create_trace_experiment", lambda *a, **k: None)
 
 
 def test_upsert_manifest_env_scaffolds_when_missing(tmp_path: pathlib.Path):
@@ -941,7 +941,7 @@ def test_deploy_wires_tracing_env_and_grants_experiment_resource(
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(deploy_mod, "resolve_trace_experiment_id", lambda *a, **k: "exp-42")
+    monkeypatch.setattr(deploy_mod, "get_or_create_trace_experiment", lambda *a, **k: "exp-42")
     granted: dict = {}
     monkeypatch.setattr(
         deploy_mod,
@@ -976,7 +976,7 @@ def test_deploy_proceeds_when_tracing_provisioning_raises(tmp_path: pathlib.Path
         raise RuntimeError("mlflow create_experiment blew up")
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(deploy_mod, "resolve_trace_experiment_id", _boom)
+    monkeypatch.setattr(deploy_mod, "get_or_create_trace_experiment", _boom)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
@@ -1246,6 +1246,7 @@ def _agent_toml(
     server: str = "custom",
     memory=None,
     session=None,
+    experiment=None,
     deployment_name=None,
 ) -> None:
     text = f'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "{server}"\n'
@@ -1255,22 +1256,30 @@ def _agent_toml(
         text += f'\n[memory_store]\nname = "{memory}"\n'
     if session:
         text += f'\n[session_store]\nname = "{session}"\n'
+    if experiment:
+        text += f'\n[tracing]\nexperiment_name = "{experiment}"\n'
     (source / "agent.toml").write_text(text, encoding="utf-8")
 
 
-def test_store_bindings_reads_agent_toml(tmp_path: pathlib.Path):
-    _agent_toml(tmp_path, memory="bound-mem", session="bound-sess")
-    assert deploy_mod.store_bindings(tmp_path) == ("bound-mem", "bound-sess")
+def test_resource_bindings_reads_agent_toml(tmp_path: pathlib.Path):
+    _agent_toml(
+        tmp_path, memory="bound-mem", session="bound-sess", experiment="/Shared/mason_traces/x"
+    )
+    assert deploy_mod.resource_bindings(tmp_path) == (
+        "bound-mem",
+        "bound-sess",
+        "/Shared/mason_traces/x",
+    )
 
 
-def test_store_bindings_none_when_unbound(tmp_path: pathlib.Path):
-    _agent_toml(tmp_path)  # scaffold with no store tables
-    assert deploy_mod.store_bindings(tmp_path) == (None, None)
+def test_resource_bindings_none_when_unbound(tmp_path: pathlib.Path):
+    _agent_toml(tmp_path)  # scaffold with no resource tables
+    assert deploy_mod.resource_bindings(tmp_path) == (None, None, None)
 
 
-def test_store_bindings_ignores_missing_manifest(tmp_path: pathlib.Path):
-    # No agent.toml -> no stores, never raises (so deploy/dev aren't blocked).
-    assert deploy_mod.store_bindings(tmp_path) == (None, None)
+def test_resource_bindings_ignores_missing_manifest(tmp_path: pathlib.Path):
+    # No agent.toml -> nothing bound, never raises (so deploy/dev aren't blocked).
+    assert deploy_mod.resource_bindings(tmp_path) == (None, None, None)
 
 
 def test_deploy_writes_deployment_name_to_toml(tmp_path: pathlib.Path, monkeypatch):

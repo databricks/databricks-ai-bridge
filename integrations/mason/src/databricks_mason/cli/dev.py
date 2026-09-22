@@ -18,7 +18,7 @@ import yaml
 from databricks_mason import render
 from databricks_mason.cli.deploy import (
     _load_project,
-    store_bindings,
+    resource_bindings,
 )
 from databricks_mason.cli.endpoint_examples import print_agent_invoke_command
 from databricks_mason.cli.tracing import start_local_tracing_server, stop_local_tracing_server
@@ -117,7 +117,7 @@ def dev(
     # durable), regardless of any binding. Stores are created and used only by `mason deploy`; the
     # deploy-written store env is stripped from the dev manifest (see `_dev_entry_point`) so a prior
     # deploy can't quietly pull dev onto the workspace stores. Read the bindings only to name them.
-    memory_store, session_store = store_bindings(source_dir)
+    memory_store, session_store, trace_experiment = resource_bindings(source_dir)
     if memory_store:
         render.console().print(
             f"[dim]Memory store '{memory_store}' is bound but `mason dev` runs with "
@@ -128,9 +128,9 @@ def dev(
             f"[dim]Session store '{session_store}' is bound but `mason dev` keeps "
             "conversation history in-process (not durable). Run `mason deploy` to use bound store.[/]"
         )
-    if project is not None and project.trace_experiment_name:
+    if trace_experiment:
         render.console().print(
-            f"[dim]Tracing experiment '{project.trace_experiment_name}' is bound but `mason dev` "
+            f"[dim]Tracing experiment '{trace_experiment}' is bound but `mason dev` "
             "traces to a local MLflow server. Run `mason deploy` to trace to the bound experiment.[/]"
         )
     local_env: dict[str, str] = {}
