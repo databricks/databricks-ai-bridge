@@ -778,7 +778,7 @@ def test_deploy_recommends_invoking_deployed_agent(
     assert len(commands) == 1, result.output
     command = commands[0]
     path = "/api/invocations" if server == "mason" else "/invocations"
-    assert f"mason endpoint invoke agent-mason-myapp --path {path} --json " in command
+    assert f"mason endpoint invoke myapp --path {path} --json " in command
     assert "│" not in command
     assert ("$(uuidgen)" in command) is (server == "mason")
     panel, example = result.output.split("Invoke with Mason\n")
@@ -786,6 +786,7 @@ def test_deploy_recommends_invoking_deployed_agent(
     assert example.splitlines() == [command]
     for existing_command in ("mason deployments get", "mason deployments logs"):
         assert any(line.startswith("│") and existing_command in line for line in panel.splitlines())
+    assert "Deployed agent 'myapp'" in result.output
     assert "Runtime Store" not in result.output
     assert "runtime-agent-mason-myapp-550e8400-e29b-41d4-a716-446655440000" not in result.output
     env = {
@@ -1229,19 +1230,47 @@ class _JsonCtx(_FakeCtx):
 def test_lifecycle_commands_honor_json_output(monkeypatch):
     monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "sp-123")
     # start/stop/delete must emit JSON (not the Rich success panel) under --output json.
+    calls: list[list[str]] = []
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+        lambda args, profile, **kw: (
+            calls.append(args) or types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        ),
     )
-    for command, key, args in (
-        (deploy_mod.deployments_start, "started", ["myapp"]),
-        (deploy_mod.deployments_stop, "stopped", ["myapp", "--yes"]),  # destructive: needs --yes
-        (deploy_mod.deployments_delete, "deleted", ["myapp", "--yes"]),
+    for command, key, verb, args in (
+        (deploy_mod.deployments_start, "started", "start", ["myapp"]),
+        (deploy_mod.deployments_stop, "stopped", "stop", ["myapp", "--yes"]),
+        (deploy_mod.deployments_delete, "deleted", "delete", ["myapp", "--yes"]),
     ):
         result = CliRunner().invoke(command, args, obj=_JsonCtx())
         assert result.exit_code == 0, result.output
         assert json.loads(result.output) == {key: "myapp"}
+        assert calls[-1][:3] == ["apps", verb, "agent-mason-myapp"]
+
+
+@pytest.mark.parametrize(
+    ("command", "args"),
+    [
+        (deploy_mod.deployments_get, ["myapp"]),
+        (deploy_mod.deployments_logs, ["myapp"]),
+    ],
+)
+def test_lifecycle_read_commands_accept_base_name(monkeypatch, command, args):
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda argv, profile, **kw: (
+            calls.append(argv)
+            or types.SimpleNamespace(returncode=0, stdout='{"name":"agent-mason-myapp"}', stderr="")
+        ),
+    )
+
+    result = CliRunner().invoke(command, args, obj=_JsonCtx())
+
+    assert result.exit_code == 0, result.output
+    assert calls[0][:3] == ["apps", command.name, "agent-mason-myapp"]
 
 
 def _agent_toml(
