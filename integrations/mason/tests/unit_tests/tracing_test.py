@@ -22,6 +22,14 @@ from databricks_mason.errors import AgentCliError
 _AGENT_TOML = 'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n'
 
 
+def _not_found_exc():
+    """The MlflowException MLflow's id lookup raises for a missing experiment (not a None return)."""
+    from mlflow.exceptions import MlflowException
+    from mlflow.protos.databricks_pb2 import RESOURCE_DOES_NOT_EXIST
+
+    return MlflowException("Experiment does not exist.", error_code=RESOURCE_DOES_NOT_EXIST)
+
+
 class _Ctx:
     """Stand-in for CliContext: tracing reads .profile / .output, and .client() for the list default."""
 
@@ -96,6 +104,24 @@ def test_create_experiment_idempotent_reuses_existing_without_mkdir():
         assert tracing_mod.create_experiment_idempotent(None, client, "/Shared/x") == "eid-2"
     client.ensure_workspace_dir.assert_not_called()  # existing experiment -> no dir work
     mlflow.create_experiment.assert_not_called()
+
+
+def test_get_experiment_by_id_maps_not_found_to_none():
+    # mlflow's id lookup raises RESOURCE_DOES_NOT_EXIST for a missing experiment; normalize to None so
+    # callers can treat it like the name lookup (which returns None).
+    mlflow = mock.Mock()
+    mlflow.get_experiment.side_effect = _not_found_exc()
+    assert tracing_mod._get_experiment_by_id(mlflow, "nope") is None
+
+
+def test_get_experiment_by_id_reraises_other_errors():
+    # A non-"not found" error (auth, network) must propagate, not look like a missing experiment.
+    from mlflow.exceptions import MlflowException
+
+    mlflow = mock.Mock()
+    mlflow.get_experiment.side_effect = MlflowException("permission denied")
+    with pytest.raises(MlflowException):
+        tracing_mod._get_experiment_by_id(mlflow, "eid-1")
 
 
 # --- configure / disable ----------------------------------------------------
@@ -202,7 +228,7 @@ def test_configure_by_experiment_id_stores_resolved_name(tmp_path: pathlib.Path)
 def test_configure_rejects_unknown_experiment_id(tmp_path: pathlib.Path):
     _project(tmp_path)
     mlflow = mock.Mock()
-    mlflow.get_experiment.return_value = None  # no such experiment
+    mlflow.get_experiment.side_effect = _not_found_exc()  # mlflow raises for an unknown id
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
         mock.patch.object(tracing_mod, "_set_tracking_uri"),
@@ -406,7 +432,7 @@ def test_list_errors_when_explicit_name_missing(tmp_path: pathlib.Path):
 def test_list_errors_when_explicit_id_missing(tmp_path: pathlib.Path):
     _project(tmp_path)
     mlflow = mock.Mock()
-    mlflow.get_experiment.return_value = None
+    mlflow.get_experiment.side_effect = _not_found_exc()  # mlflow raises for an unknown id
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
         mock.patch.object(tracing_mod, "_set_tracking_uri"),

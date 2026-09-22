@@ -96,6 +96,23 @@ def _is_uc_backed(experiment) -> bool:
     return isinstance(tags, dict) and _UC_TRACE_TAG in tags
 
 
+def _get_experiment_by_id(mlflow, experiment_id: str):
+    """``mlflow.get_experiment`` but returns ``None`` for an unknown id instead of raising.
+
+    The id lookup raises ``RESOURCE_DOES_NOT_EXIST`` for a missing experiment, whereas the name lookup
+    returns ``None`` - normalize so callers treat "not found" the same either way. Other errors (auth,
+    network) still propagate.
+    """
+    from mlflow.exceptions import MlflowException  # noqa: PLC0415 - lazy import (startup cost)
+
+    try:
+        return mlflow.get_experiment(experiment_id)
+    except MlflowException as exc:
+        if getattr(exc, "error_code", "") == "RESOURCE_DOES_NOT_EXIST":
+            return None
+        raise
+
+
 def create_experiment_idempotent(profile: Optional[str], client, name: str) -> str:
     """Create the experiment ``name`` if missing and return its id (idempotent).
 
@@ -183,7 +200,7 @@ def _explicit_experiment_target(
     mlflow = _mlflow()
     _set_tracking_uri(mlflow, profile)
     if experiment_id:
-        if mlflow.get_experiment(experiment_id) is None:
+        if _get_experiment_by_id(mlflow, experiment_id) is None:
             raise AgentCliError(
                 f"No MLflow experiment found with id {experiment_id!r} in this workspace.",
                 hint="Check the id, or omit it to use this project's experiment.",
@@ -385,7 +402,7 @@ def tracing_configure(obj, experiment_name, experiment_id, source) -> None:
     if experiment_id:
         mlflow = _mlflow()
         _set_tracking_uri(mlflow, obj.profile)
-        experiment = mlflow.get_experiment(experiment_id)
+        experiment = _get_experiment_by_id(mlflow, experiment_id)
         if experiment is None:
             raise AgentCliError(
                 f"No MLflow experiment found with id {experiment_id!r}.",
