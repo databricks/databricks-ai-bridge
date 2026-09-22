@@ -28,7 +28,8 @@ from databricks_mason.runtime.tool_manifest import (
 )
 
 # The tracing binding (`mason tracing configure` / `disable`). Tracing is on by default (a per-project
-# MLflow experiment); this table only records an explicit experiment override or a disable.
+# MLflow experiment); this table records the resolved experiment and the workspace it belongs to,
+# or an explicit disable.
 TRACING_TABLE = "tracing"
 
 _SCHEMA_VERSION = 1
@@ -340,6 +341,7 @@ class AgentProject:
         deployment_name: str | None = None,
         trace_experiment_id: str | None = None,
         trace_disabled: bool = False,
+        trace_workspace_host: str | None = None,
     ) -> None:
         self.root = root
         self.path = root / "agent.toml"
@@ -356,10 +358,11 @@ class AgentProject:
         self.memory_store_id = memory_store_id
         # The deployment's base name (`mason deploy` prefixes it with `agent-mason-`); None until named.
         self.deployment_name = deployment_name
-        # Tracing config: an explicit experiment id override (None = default per-project experiment), and
-        # whether tracing is disabled (tracing is on by default; this flag turns it off).
+        # Tracing config: the resolved experiment id and the workspace that owns it, plus whether
+        # tracing is disabled (tracing is on by default; this flag turns it off).
         self.trace_experiment_id = trace_experiment_id
         self.trace_disabled = trace_disabled
+        self.trace_workspace_host = trace_workspace_host
 
     @classmethod
     def load(cls, root: pathlib.Path | str | None = None) -> "AgentProject":
@@ -414,24 +417,32 @@ class AgentProject:
         tracing_table = document.get(TRACING_TABLE)
         trace_experiment_id: str | None = None
         trace_disabled = False
+        trace_workspace_host: str | None = None
         if isinstance(tracing_table, Mapping):
             raw_experiment = tracing_table.get("experiment_id")
             trace_experiment_id = (
                 str(raw_experiment) if isinstance(raw_experiment, str) and raw_experiment else None
             )
             trace_disabled = bool(tracing_table.get("disabled"))
+            raw_workspace_host = tracing_table.get("workspace_host")
+            trace_workspace_host = (
+                str(raw_workspace_host)
+                if isinstance(raw_workspace_host, str) and raw_workspace_host
+                else None
+            )
         return cls(
-            project_root,
-            document,
-            framework,
-            server,
-            tools,
-            memory_store,
-            session_store,
-            memory_store_id,
-            str(deployment_name) if deployment_name is not None else None,
-            trace_experiment_id,
-            trace_disabled,
+            root=project_root,
+            document=document,
+            framework=framework,
+            server=server,
+            tools=tools,
+            memory_store=memory_store,
+            session_store=session_store,
+            memory_store_id=memory_store_id,
+            deployment_name=str(deployment_name) if deployment_name is not None else None,
+            trace_experiment_id=trace_experiment_id,
+            trace_disabled=trace_disabled,
+            trace_workspace_host=trace_workspace_host,
         )
 
     @classmethod
@@ -538,14 +549,21 @@ class AgentProject:
         """Remove the session store binding from agent.toml. Returns True if it was present."""
         return self._clear_store(SESSION_STORE_TABLE)
 
-    def configure_tracing(self, experiment_id: str | None) -> bool:
+    def configure_tracing(
+        self, experiment_id: str | None, workspace_host: str | None = None
+    ) -> bool:
         """Enable tracing and (optionally) pin an explicit experiment id. Returns True if changed.
 
         ``experiment_id=None`` means "use the default per-project experiment": any prior override is
         cleared. Enabling always clears a previous ``disabled`` flag (tracing is on by default, so an
         absent ``[tracing]`` table is the enabled default).
         """
-        if self.trace_experiment_id == experiment_id and not self.trace_disabled:
+        workspace_host = workspace_host if experiment_id else None
+        if (
+            self.trace_experiment_id == experiment_id
+            and self.trace_workspace_host == workspace_host
+            and not self.trace_disabled
+        ):
             return False
         table = self._document.get(TRACING_TABLE)
         if not isinstance(table, Mapping):
@@ -557,7 +575,12 @@ class AgentProject:
             table["experiment_id"] = experiment_id
         elif "experiment_id" in table:
             del table["experiment_id"]
+        if workspace_host:
+            table["workspace_host"] = workspace_host
+        elif "workspace_host" in table:
+            del table["workspace_host"]
         self.trace_experiment_id = experiment_id
+        self.trace_workspace_host = workspace_host
         self.trace_disabled = False
         return True
 

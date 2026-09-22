@@ -41,6 +41,7 @@ from databricks_mason.cli.tracing import (
     create_experiment_idempotent,
     default_experiment_name,
     experiment_url,
+    normalize_workspace_host,
 )
 from databricks_mason.databricks_cli import _databricks
 from databricks_mason.errors import AgentCliError
@@ -376,7 +377,8 @@ def resolve_trace_experiment_id(
     app name. Tracing is on by default. Resolution:
 
     - `mason tracing disable` was run -> None (tracing off).
-    - a pinned experiment id (`mason tracing configure --experiment`) -> that id.
+    - a pinned experiment id for the active workspace -> that id.
+    - a pinned experiment from another workspace -> create/reuse this workspace's default.
     - otherwise -> create the per-project experiment (`/Users/<you>/mason-traces/<project>`), pin its
       id into agent.toml, and return it. Pinning on first run means later `mason dev` / `mason deploy`
       reuse the same experiment by id rather than re-deriving the default each time — there is no
@@ -393,14 +395,18 @@ def resolve_trace_experiment_id(
     if project is not None and project.trace_disabled:
         return None
     pinned = project.trace_experiment_id if project is not None else None
-    if pinned:
+    pinned_host = normalize_workspace_host(project.trace_workspace_host) if project else None
+    current_host = normalize_workspace_host(client.host)
+    # Hostless bindings predate workspace-aware tracing. Keep accepting them so existing manifests
+    # retain their established behavior; every newly resolved binding records its workspace.
+    if pinned and (pinned_host is None or pinned_host == current_host):
         return pinned
     experiment_id = create_experiment_idempotent(
         profile, client, default_experiment_name(client.current_user, project_name)
     )
     # Pin the resolved default so subsequent runs reuse it by id (removes the special-cased "recompute
     # the default" path). No agent.toml (raw dir) just means nowhere to pin — still trace this run.
-    if project is not None and project.configure_tracing(experiment_id):
+    if project is not None and project.configure_tracing(experiment_id, current_host):
         project.write()
     return experiment_id
 

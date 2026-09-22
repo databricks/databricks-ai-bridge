@@ -1151,6 +1151,44 @@ def test_resolve_trace_experiment_uses_pinned_id_without_creating(
     assert _REAL_RESOLVE_TRACE(tmp_path, "app", _FakeClient(), None) == "pinned-1"
 
 
+def test_resolve_trace_experiment_reuses_pin_for_same_workspace(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    (tmp_path / "agent.toml").write_text(
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n\n'
+        '[tracing]\nexperiment_id = "pinned-1"\nworkspace_host = "https://ws/"\n'
+    )
+    monkeypatch.setattr(
+        deploy_mod, "create_experiment_idempotent", lambda *a, **k: pytest.fail("should not create")
+    )
+
+    assert _REAL_RESOLVE_TRACE(tmp_path, "app", _FakeClient(), None) == "pinned-1"
+
+
+def test_resolve_trace_experiment_rebinds_pin_for_different_workspace(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    (tmp_path / "agent.toml").write_text(
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n\n'
+        '[tracing]\nexperiment_id = "dogfood-id"\n'
+        'workspace_host = "https://dogfood.databricks.com"\n'
+    )
+    client = _FakeClient()
+    client.host = "https://tilefood.databricks.com/"
+    created: dict = {}
+    monkeypatch.setattr(
+        deploy_mod,
+        "create_experiment_idempotent",
+        lambda profile, current_client, name: created.update(name=name) or "tilefood-id",
+    )
+
+    assert _REAL_RESOLVE_TRACE(tmp_path, "app", client, None) == "tilefood-id"
+    assert created["name"] == "/Users/me@example.com/mason-traces/app"
+    project = AgentProject.load(tmp_path)
+    assert project.trace_experiment_id == "tilefood-id"
+    assert project.trace_workspace_host == "https://tilefood.databricks.com"
+
+
 def test_resolve_trace_experiment_creates_per_project_default(tmp_path: pathlib.Path, monkeypatch):
     (tmp_path / "agent.toml").write_text(
         'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n'
