@@ -194,6 +194,19 @@ def test_scaffolded_agent_boots_and_answers_locally(
     )
     # Neutralize the profile mason init seeds into .env so the agent can't reach a real workspace.
     (project / ".env").write_text("")
+    if server_kind == "mason":
+        runtime_main = project / "runtime/main.py"
+        source = runtime_main.read_text()
+        source = source.replace(
+            "from databricks_mason import AgentApp",
+            "from databricks_mason import AgentApp\n"
+            "from databricks_mason.runtime.auth import InvocationAuthPolicy",
+        )
+        source = source.replace(
+            "app = AgentApp()",
+            'app = AgentApp(auth_policy=InvocationAuthPolicy(("local-probe",)))',
+        )
+        runtime_main.write_text(source)
     # Point the scaffold at both packages under test. CI supplies their built wheels; a local run
     # falls back to the corresponding editable working-tree checkout.
     mason_wheel = os.environ.get("MASON_WHEEL")

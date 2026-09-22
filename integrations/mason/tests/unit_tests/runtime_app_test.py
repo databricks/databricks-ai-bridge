@@ -43,7 +43,9 @@ def make_app(invoke=echo, *, recover=None) -> AgentApp:
 
 @asynccontextmanager
 async def running_client(app: AgentApp) -> AsyncIterator[httpx.AsyncClient]:
-    await app._runtime.start()
+    runtime = app._runtime
+    assert runtime is not None
+    await runtime.start()
     try:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
@@ -51,7 +53,7 @@ async def running_client(app: AgentApp) -> AsyncIterator[httpx.AsyncClient]:
         ) as client:
             yield client
     finally:
-        await app._runtime.stop()
+        await runtime.stop()
 
 
 async def poll(client: httpx.AsyncClient, invocation_id: str) -> dict:
@@ -325,6 +327,7 @@ async def test_agent_failure_returns_500_and_failed_event() -> None:
     app = make_app(fail)
     async with running_client(app) as client:
         response = await client.post("/api/invocations", json={"id": _RUN_1})
+        assert app._runtime is not None
         events = await app._runtime.get_events(_RUN_1)
 
     assert response.status_code == 500
@@ -381,6 +384,7 @@ def test_agent_app_defaults_to_process_local_state_outside_apps(monkeypatch) -> 
 
     app = AgentApp()
 
+    assert app._runtime is not None
     assert app._runtime.is_durable is False
     assert isinstance(app._runtime.runtime_store, InMemoryRuntimeStore)
 

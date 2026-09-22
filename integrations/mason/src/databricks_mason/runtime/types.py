@@ -12,7 +12,10 @@ so Runtime Store values can be stored consistently by in-memory and Lakebase imp
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TypeAlias
+from typing import TYPE_CHECKING, TypeAlias
+
+if TYPE_CHECKING:
+    from databricks_mason.runtime.auth import RequestAuthContext
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 JsonObject = dict[str, JsonValue]
@@ -88,6 +91,7 @@ class InvocationContext:
     session_id: str
     attempt: int
     _attempt_context: InvocationAttemptContext = field(repr=False, compare=False)
+    request_auth: "RequestAuthContext | None" = field(default=None, repr=False, compare=False)
 
     @property
     def is_recovery(self) -> bool:
