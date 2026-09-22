@@ -427,9 +427,9 @@ mason [-p <profile>] [-o text|json]
     stores     create | list | get | update | delete
     items      list | append | pop | clear
   tracing
-    configure  [--experiment E] [--source PATH]
+    configure  [--experiment-name NAME | --experiment-id ID] [--source PATH]
     disable    [--source PATH]
-    list | get
+    list | get [--experiment-name NAME | --experiment-id ID] [--source PATH]
   tools
     add sandbox      --scope SCOPE [--scope SCOPE ...] [--source PATH]
     add mcp          SERVICE [--name NAME] [--source PATH]

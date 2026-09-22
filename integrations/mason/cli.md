@@ -852,16 +852,16 @@ Configure MLflow tracing for your agents, and inspect the traces.
 
 | Subcommand | Description |
 | --- | --- |
-| [`tracing configure`](#mason-tracing-configure) | Configure tracing via MLflow: pin an experiment, rebind, or re-enable after `disable`. |
+| [`tracing configure`](#mason-tracing-configure) | Configure tracing: set the experiment to trace to (by name or id), or re-enable after `disable`. |
 | [`tracing disable`](#mason-tracing-disable) | Turn tracing off for the deployed agent (deploy-only; `mason dev` still traces locally). |
 | [`tracing list`](#mason-tracing-list) | List recent agent traces in an experiment. |
 | [`tracing get`](#mason-tracing-get) | Get a single trace by id (status, latency, span count, previews). |
 
 #### `mason tracing configure`
 
-Configure tracing via MLflow: pin an experiment, rebind, or re-enable after `disable`.
+Configure tracing: set the experiment to trace to (by name or id), or re-enable after `disable`.
 
-Tracing is on by default (a per-project experiment mason creates). Use this to pin a specific experiment by id, rebind to a different one, or turn tracing back on after ``mason tracing disable``. Omit ``--experiment`` to (re)enable the per-project default.
+The experiment is stored as a NAME, not an id, so the binding stays valid across workspaces/profiles - mason get-or-creates it in the active workspace at deploy. ``--experiment-id`` (e.g. from the experiment's URL) is a convenience: it's resolved to the experiment's name and stored as a name, never as an id. Point this at a writable path if the default /Shared experiment isn't writable in your workspace. Omit both to (re)enable the default /Shared experiment.
 
 ```
 mason tracing configure [options]
@@ -872,7 +872,8 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
-| `--experiment <EXPERIMENT_ID>` | string | - | no | MLflow experiment id to trace to. Must be an existing experiment. Omit to use (or return to) the per-project experiment mason creates automatically. |
+| `--experiment-name <EXPERIMENT_NAME>` | string | - | no | MLflow experiment name to trace to - an absolute workspace path, e.g. /Shared/mason_traces/&lt;agent&gt; or /Users/&lt;you&gt;/mason_traces/&lt;agent&gt;. mason get-or-creates it at deploy. Omit to (re)enable the default /Shared experiment. |
+| `--experiment-id <EXPERIMENT_ID>` | string | - | no | MLflow experiment id (e.g. copied from the experiment's workspace URL) to trace to. Resolved to the experiment's name and stored as a name - mason persists names, not ids, so the binding stays valid across workspaces. Mutually exclusive with --experiment-name. |
 | `--source <SOURCE>` | path | `.` | no | Project directory containing agent.toml. Defaults to the current directory. |
 
 #### `mason tracing disable`
@@ -896,7 +897,7 @@ _Options_
 
 List recent agent traces in an experiment.
 
-Resolution: ``--experiment <id>`` (works standalone), else this project's experiment (the pinned one, or its per-project default). A missing experiment just lists nothing (nothing has traced yet).
+An explicit ``--experiment-name`` / ``--experiment-id`` reads that workspace experiment and must name one that exists (errors otherwise, so a typo isn't mistaken for an empty experiment). With neither, this project's experiment is read: the workspace one if it's been provisioned (by `mason deploy`), otherwise the local `mason dev` store (`.mason/mlflow.db`), so a not-yet-deployed dev run's traces still show up here (tagged "(local dev)"). Nothing traced anywhere yet lists nothing.
 
 ```
 mason tracing list [options]
@@ -907,7 +908,8 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
-| `--experiment <EXPERIMENT_ID>` | string | - | no | MLflow experiment id to read (default: this project's experiment). |
+| `--experiment-name <EXPERIMENT_NAME>` | string | - | no | MLflow experiment name to read (an absolute workspace path). Default: this project's experiment. |
+| `--experiment-id <EXPERIMENT_ID>` | string | - | no | MLflow experiment id to read (e.g. from the experiment URL). Mutually exclusive with --experiment-name. |
 | `--limit <LIMIT>` | integer | `20` | no | - |
 | `--source <SOURCE>` | path | `.` | no | Project directory to resolve the default experiment from (default: current dir). |
 
@@ -915,8 +917,10 @@ _Options_
 
 Get a single trace by id (status, latency, span count, previews).
 
+Reads from the same place as `mason tracing list`: an explicit ``--experiment-name`` / ``--experiment-id`` targets that workspace store and must name one that exists (errors otherwise); otherwise this project's workspace experiment if provisioned, else its local `mason dev` store.
+
 ```
-mason tracing get TRACE_ID
+mason tracing get TRACE_ID [options]
 ```
 
 
@@ -925,6 +929,14 @@ _Arguments_
 | Argument | Required | Description |
 | --- | --- | --- |
 | `TRACE_ID` | yes | - |
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--experiment-name <EXPERIMENT_NAME>` | string | - | no | MLflow experiment name whose store holds the trace (an absolute workspace path). Default: this project's experiment. |
+| `--experiment-id <EXPERIMENT_ID>` | string | - | no | MLflow experiment id whose store holds the trace. Mutually exclusive with --experiment-name. |
+| `--source <SOURCE>` | path | `.` | no | Project directory to resolve the experiment from (default: current dir). |
 
 ### `mason deploy`
 

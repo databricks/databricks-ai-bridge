@@ -176,7 +176,7 @@ def _explicit_experiment_target(
     An explicit identifier always targets the workspace (that's where a named/numbered experiment
     lives) and must exist: an unknown id or name raises rather than silently reading nothing, so a
     typo isn't mistaken for an empty experiment. Only the project default (neither flag) is allowed to
-    be absent — that's the normal pre-deploy state, which falls back to the local dev store.
+    be absent - that's the normal pre-deploy state, which falls back to the local dev store.
     """
     if not (experiment_id or experiment_name):
         return None
