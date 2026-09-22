@@ -382,7 +382,10 @@ def resolve_trace_experiment_id(source: pathlib.Path, client, profile) -> Option
     name = project.trace_experiment_name if project is not None else None
     if not name:
         return None
-    return create_experiment_idempotent(profile, client, name)
+    # Show progress while the experiment is get-or-created (a workspace round-trip), matching the
+    # memory/session store reconcile spinners so deploy isn't silent about tracing.
+    with render.status(f"Reconciling tracing experiment '{name}'…"):
+        return create_experiment_idempotent(profile, client, name)
 
 
 @dataclass(frozen=True)
