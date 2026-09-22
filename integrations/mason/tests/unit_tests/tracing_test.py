@@ -143,10 +143,7 @@ def test_bind_sets_experiment_name(tmp_path: pathlib.Path):
             obj=_Ctx(output="json"),
         )
     assert result.exit_code == 0, result.output
-    assert json.loads(result.output) == {
-        "experiment_name": "/Shared/mason_traces/mine",
-        "disabled": False,
-    }
+    assert json.loads(result.output) == {"experiment_name": "/Shared/mason_traces/mine"}
     assert AgentProject.load(tmp_path).trace_experiment_name == "/Shared/mason_traces/mine"
 
 
@@ -215,10 +212,7 @@ def test_bind_by_experiment_id_stores_resolved_name(tmp_path: pathlib.Path):
             obj=_Ctx(output="json"),
         )
     assert result.exit_code == 0, result.output
-    assert json.loads(result.output) == {
-        "experiment_name": "/Shared/mason_traces/from-id",
-        "disabled": False,
-    }
+    assert json.loads(result.output) == {"experiment_name": "/Shared/mason_traces/from-id"}
     # stored as the resolved NAME, never the id
     assert AgentProject.load(tmp_path).trace_experiment_name == "/Shared/mason_traces/from-id"
 

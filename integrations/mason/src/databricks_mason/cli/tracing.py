@@ -445,7 +445,7 @@ def tracing_bind(obj, experiment_name, experiment_id, source) -> None:
 
     target = f"experiment {name}" if name else "the default /Shared experiment"
     if obj.output == "json":
-        render.emit_json({"experiment_name": name, "disabled": False})
+        render.emit_json({"experiment_name": name})
         return
     render.success(
         f"Tracing on: {target}",
