@@ -48,8 +48,7 @@ _BUILD_INDEX_ENVS = frozenset({"PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDE
 #   - stores: dev never uses the workspace memory/session stores (memory off, sessions in-process),
 #     so a prior deploy's AGENT_MEMORY_STORE / AGENT_SESSION_STORE must not quietly pull dev onto
 #     them. dev re-adds nothing here - the runtime falls back to its local defaults.
-# (The Runtime Store's lakebase env needs no strip: dev forces RUNTIME_STORE_LOCAL=true, which the
-# runtime resolves ahead of any lakebase endpoint.)
+# (The Runtime Store's lakebase env needs no strip: dev already forces RUNTIME_STORE_LOCAL=true.)
 _DEPLOY_TRACING_ENVS = frozenset(
     {"MLFLOW_TRACKING_URI", "MLFLOW_EXPERIMENT_ID", "MLFLOW_TRACING_DESTINATION"}
 )
