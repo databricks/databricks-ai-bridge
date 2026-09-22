@@ -54,11 +54,12 @@ The two ways to run an agent:
 ## Prerequisites
 
 - **Python ≥3.10** — the mason CLI installs and runs on any Python 3.10+. The
-  `memory`, `sessions`, `tracing`, and `tools` commands need nothing else.
+  `memory`, `sessions`, `tools`, and `mason tracing bind`/`unbind` commands need nothing else.
 - **[`uv`](https://docs.astral.sh/uv/)** — needed to scaffold, run, and deploy an
   agent (`mason init` → `mason dev` → `mason deploy`): the scaffolded project builds
   its environment and launches with `uv run`, both locally and in the deployed Apps
-  runtime. Not needed for the store/session/tracing/tools commands above.
+  runtime. The store/session/tools commands and `mason tracing bind`/`unbind` don't need it;
+  `mason tracing list`/`get` do, to read `mason dev`'s local trace store.
 - **[Databricks CLI](https://docs.databricks.com/dev-tools/cli/)** — needed for
   browser-based `mason login`. If a profile is already authenticated, Mason uses it
   directly and the Databricks CLI is optional.
@@ -133,9 +134,11 @@ long-term memory and durable conversation history. It creates `<name>-<6-letter-
 `mason memory bind <name>` / `mason sessions bind <name>`, or scaffold without stores using
 `mason init --server custom` (see [Initialize the chat app demo](#initialize-the-chat-app-demo)).
 
-To exercise the agent — locally under `mason dev` or once deployed — `mason endpoint invoke` sends
-it an HTTP request. MLflow tracing is on by default; `mason tracing list` shows the traces it
-produces.
+To exercise the agent (locally under `mason dev` or once deployed), `mason endpoint invoke` sends
+it an HTTP request. MLflow tracing is on by default (`mason init` binds a default
+`/Shared/mason_traces/<project>` experiment): `mason dev` traces to a local MLflow server under
+`.mason/` and `mason deploy` to the bound workspace experiment; `mason tracing list` shows whichever
+has traces.
 
 ## Python SDK
 
@@ -417,7 +420,6 @@ mason [-p <profile>] [-o text|json]
                [--memory-store NAME] [--session-store NAME]
                [--existing] [--profile P] [directory]
   dev          [--source PATH] [--prepare-environment] [--app-port PORT]
-               [--with-traces C.S]
   memory
     bind         STORE [--source PATH]
     unbind       [--source PATH]
@@ -429,8 +431,8 @@ mason [-p <profile>] [-o text|json]
     stores     create | list | get | update | delete
     items      list | append | pop | clear
   tracing
-    configure  [--experiment-name NAME | --experiment-id ID] [--source PATH]
-    disable    [--source PATH]
+    bind       (--experiment-name NAME | --experiment-id ID) [--source PATH]
+    unbind     [--source PATH]
     list | get [--experiment-name NAME | --experiment-id ID] [--source PATH]
   tools
     add sandbox      --scope SCOPE [--scope SCOPE ...] [--source PATH]
@@ -441,7 +443,7 @@ mason [-p <profile>] [-o text|json]
     list             [--kind sandbox|mcp|uc-function|genie-one|genie-agent]
                      [--schema CATALOG.SCHEMA]
     remove           TOOL_ID [MCP_SERVICE] [--source PATH]
-  deploy       <name> --source PATH [--with-traces C.S] [--instances N]
+  deploy       [<name>] [--source PATH] [--instances N]
   deployments  list | get | logs | start | stop | delete
   endpoint
     invoke      [APP] --path PATH [--url URL] [--json JSON] [--sse]

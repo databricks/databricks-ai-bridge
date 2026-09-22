@@ -395,10 +395,11 @@ def get_or_create_trace_experiment(source: pathlib.Path, client, profile) -> Opt
 
 @dataclass(frozen=True)
 class MlflowTracingConfig:
-    """The MLflow config that binds a dev/deployed agent to its experiment.
+    """The MLflow config that binds a deployed agent to its workspace experiment.
 
     The agent enables tracing when it sees both a destination (the workspace tracking uri) and an
-    experiment id; ``env`` renders them as the two env vars wired into app.yaml.
+    experiment id; ``env`` renders them as the two env vars wired into app.yaml. (`mason dev` builds
+    its own local tracing env instead - see ``cli.tracing.start_local_tracing_server``.)
     """
 
     experiment_id: str
@@ -412,7 +413,7 @@ class MlflowTracingConfig:
 
 
 def mlflow_tracing_config(experiment_id: str) -> MlflowTracingConfig:
-    """The tracing config binding a dev/deployed agent to ``experiment_id``."""
+    """The tracing config binding a deployed agent to ``experiment_id``."""
     return MlflowTracingConfig(experiment_id=experiment_id)
 
 
@@ -520,13 +521,12 @@ def deploy(
     memory_store, session_store, _ = resource_bindings(source_dir)
     memory_store_id = _reconcile_declared_stores(memory_store, session_store, client)
 
-    # 2. Provision tracing (on by default): resolve/create the agent's MLflow experiment and wire the
-    #    two env vars the runtime reads. Keyed on the source dir name (NOT the deployment's
-    #    agent-mason-prefixed name), matching `mason dev`, so dev and deploy trace to the same project
-    #    experiment. On first run the resolved default experiment id is pinned into agent.toml, so
-    #    later runs reuse it. The app's SP is granted write access to it in step 5 (an experiment app
-    #    resource). Best-effort: if it can't be set up (no mlflow, offline, permission), the deploy
-    #    still proceeds without tracing.
+    # 2. Provision tracing when bound (`mason init` binds a default experiment): get-or-create the
+    #    experiment NAME from agent.toml and wire the two env vars the runtime reads. Resolved by name,
+    #    never a stored id, and nothing is written back to agent.toml. (`mason dev` traces to a local
+    #    MLflow server instead and never touches this workspace experiment.) The app's SP is granted
+    #    write access to it in step 5 (an experiment app resource). Best-effort: if it can't be set up
+    #    (no mlflow, offline, permission), the deploy still proceeds without tracing.
     trace_experiment_id: Optional[str] = None
     trace_setup_error: Optional[str] = None
     try:

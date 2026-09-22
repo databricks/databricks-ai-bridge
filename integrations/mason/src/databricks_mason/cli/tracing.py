@@ -488,7 +488,7 @@ def _experiment_read_options(command):
     return command
 
 
-# --- configure / disable ----------------------------------------------------
+# --- bind / unbind ----------------------------------------------------------
 
 
 @tracing.command("bind")

@@ -56,11 +56,16 @@ name = "my-agent-memory"
 
 [session_store]
 name = "my-agent-session"
+
+[tracing]
+experiment_name = "/Shared/mason_traces/my-agent"
 ```
 
 Override store names at initialization with `--memory-store` and `--session-store`, or later with
 `mason memory bind <name>` and `mason sessions bind <name>`. Custom-server templates declare these
-stores only when explicitly requested.
+stores only when explicitly requested. Tracing is bound by experiment **name** (its presence turns
+tracing on); rebind or clear it with `mason tracing bind --experiment-name <path>` / `mason tracing
+unbind`.
 
 Use `mason deployments list`, `get`, `logs`, `start`, `stop`, and `delete` to manage deployed apps.
 See the [CLI documentation](../../../README.md#commands) for command options.
