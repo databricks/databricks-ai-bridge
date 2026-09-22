@@ -24,6 +24,7 @@ _COMMANDS = (
     "login",
     "logout",
     "init",
+    "doctor",
     "dev",
     "memory",
     "sessions",

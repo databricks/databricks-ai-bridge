@@ -414,6 +414,7 @@ mason [-p <profile>] [-o text|json]
                [--disable-chat-app]
                [--memory-store NAME] [--session-store NAME]
                [--existing] [--profile P] [directory]
+  doctor       [directory]
   dev          [--source PATH] [--prepare-environment] [--app-port PORT]
                [--with-traces C.S]
   memory
@@ -453,6 +454,26 @@ From the existing project, prepare a migration for your coding agent:
 mason init --framework langgraph --existing .
 mason init --framework openai --existing .
 ```
+
+Before or after the conversion, inspect its progress without changing the repository or contacting
+Databricks:
+
+```sh
+mason doctor .
+mason -o json doctor .
+```
+
+Doctor exits 0 only when the project has a valid Mason manifest and matching project metadata, uses
+the Mason server, declares the framework-appropriate `databricks-mason` extra and a non-empty
+`app.yaml` command, constructs `AgentApp` with an `invoke` hook, and calls a recognized adapter for
+the selected framework in production Python source. Test, example, and old/stale directories do
+not count as source evidence. A failed report is the normal result for a project that still needs
+migration; run
+`mason init --framework <langgraph|openai> --existing <directory>` with the appropriate framework
+to prepare the migration instructions. Doctor never imports or executes the target's source, and a
+bounded source scan that exceeds a limit fails the source checks as incomplete. Its findings are
+static repository evidence, not proof that the configured startup command executes the files it
+finds.
 
 This writes `mason-migrate/` containing a skill, a prompt to paste into your coding agent,
 `references/migration.json`, and a reference project generated from the templates bundled with the

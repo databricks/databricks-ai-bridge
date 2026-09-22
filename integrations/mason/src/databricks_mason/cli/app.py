@@ -15,6 +15,7 @@ from databricks_mason._api_client import _MasonApiClient
 from databricks_mason.cli.auth import load_default_profile, login, logout
 from databricks_mason.cli.deploy import deploy, deployments
 from databricks_mason.cli.dev import dev
+from databricks_mason.cli.doctor import doctor
 from databricks_mason.cli.endpoint import endpoint
 from databricks_mason.cli.help import configure_help
 from databricks_mason.cli.init import init
@@ -88,6 +89,7 @@ def mason(ctx: click.Context, profile: Optional[str], output: str) -> None:
 mason.add_command(login)
 mason.add_command(logout)
 mason.add_command(init)
+mason.add_command(doctor)
 mason.add_command(dev)
 mason.add_command(memory)
 mason.add_command(sessions)
