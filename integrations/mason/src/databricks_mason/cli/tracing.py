@@ -496,9 +496,9 @@ def _experiment_read_options(command):
     "--experiment-name",
     "experiment_name",
     default=None,
-    help="MLflow experiment name to trace to — an absolute workspace path, e.g. "
+    help="MLflow experiment name to trace to - an absolute workspace path, e.g. "
     "/Shared/mason_traces/<agent> or /Users/<you>/mason_traces/<agent>. mason get-or-creates it at "
-    "deploy. Omit to (re)enable the default /Shared experiment.",
+    "deploy. Mutually exclusive with --experiment-id.",
 )
 @click.option(
     "--experiment-id",
