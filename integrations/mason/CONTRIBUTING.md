@@ -85,3 +85,17 @@ Whenever you change the CLI surface, update `cli.md` in the same change. That in
 Check the tables against the actual `click` definitions in `src/databricks_mason/cli/`; the quickest
 drift check is to compare against the CLI's own `--help` output. Purely internal changes that don't
 alter the command surface or help text need no `cli.md` update.
+
+## Testing
+
+- Mocks give false confidence about library behavior; verify real API semantics with a live/E2E run.
+- Reproduce a bug end-to-end before fixing, re-verify the fix live, and clean up all created resources
+  + kill local dev servers afterward.
+
+## PR etiquette
+
+- Append-only; reconcile stacked branches by merge, not rebase.
+- Update docs (`cli.md` / README) in the same change; keep `cli.md` byte-matched to `--help` (see
+  [Keeping docs in sync](#keeping-docs-in-sync)).
+- Run `/review` before/after push and re-run after material changes (a prior approve goes stale).
+- Reply to comments at the boundary they concern; use a `TODO`, not a silent workaround, when deferring.
