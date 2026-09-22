@@ -338,7 +338,7 @@ class AgentProject:
         session_store: str | None = None,
         memory_store_id: str | None = None,
         deployment_name: str | None = None,
-        trace_experiment_id: str | None = None,
+        trace_experiment_name: str | None = None,
         trace_disabled: bool = False,
     ) -> None:
         self.root = root
@@ -356,9 +356,11 @@ class AgentProject:
         self.memory_store_id = memory_store_id
         # The deployment's base name (`mason deploy` prefixes it with `agent-mason-`); None until named.
         self.deployment_name = deployment_name
-        # Tracing config: an explicit experiment id override (None = default per-project experiment), and
-        # whether tracing is disabled (tracing is on by default; this flag turns it off).
-        self.trace_experiment_id = trace_experiment_id
+        # Tracing config: the MLflow experiment NAME to trace to — a workspace path (None = derive the
+        # default at deploy). Storing a name (not an id) keeps the binding valid across workspaces and
+        # profiles, since an id is workspace-local. `disabled` turns tracing off (tracing is on by
+        # default; an absent [tracing] table is the enabled default).
+        self.trace_experiment_name = trace_experiment_name
         self.trace_disabled = trace_disabled
 
     @classmethod
@@ -412,11 +414,11 @@ class AgentProject:
             document.get(SESSION_STORE_TABLE), SESSION_STORE_TABLE
         )
         tracing_table = document.get(TRACING_TABLE)
-        trace_experiment_id: str | None = None
+        trace_experiment_name: str | None = None
         trace_disabled = False
         if isinstance(tracing_table, Mapping):
-            raw_experiment = tracing_table.get("experiment_id")
-            trace_experiment_id = (
+            raw_experiment = tracing_table.get("experiment_name")
+            trace_experiment_name = (
                 str(raw_experiment) if isinstance(raw_experiment, str) and raw_experiment else None
             )
             trace_disabled = bool(tracing_table.get("disabled"))
@@ -430,7 +432,7 @@ class AgentProject:
             session_store,
             memory_store_id,
             str(deployment_name) if deployment_name is not None else None,
-            trace_experiment_id,
+            trace_experiment_name,
             trace_disabled,
         )
 
@@ -443,6 +445,7 @@ class AgentProject:
         server: str,
         memory_store: str | None = None,
         session_store: str | None = None,
+        experiment_name: str | None = None,
     ) -> "AgentProject":
         selected_framework = parse_framework(framework)
         selected_server = parse_server(server)
@@ -465,6 +468,8 @@ class AgentProject:
             project.bind_memory_store(memory_store)
         if session_store:
             project.bind_session_store(session_store)
+        if experiment_name:
+            project.configure_tracing(experiment_name)
         return project
 
     def set_deployment_name(self, name: str) -> bool:
@@ -538,14 +543,16 @@ class AgentProject:
         """Remove the session store binding from agent.toml. Returns True if it was present."""
         return self._clear_store(SESSION_STORE_TABLE)
 
-    def configure_tracing(self, experiment_id: str | None) -> bool:
-        """Enable tracing and (optionally) pin an explicit experiment id. Returns True if changed.
+    def configure_tracing(self, experiment_name: str | None) -> bool:
+        """Set the tracing experiment NAME and enable tracing. Returns True if changed.
 
-        ``experiment_id=None`` means "use the default per-project experiment": any prior override is
-        cleared. Enabling always clears a previous ``disabled`` flag (tracing is on by default, so an
-        absent ``[tracing]`` table is the enabled default).
+        ``experiment_name`` is an MLflow experiment path; storing a name (not an id) keeps the binding
+        portable across workspaces/profiles — deploy get-or-creates it in the active workspace.
+        ``None`` clears an explicit name (fall back to the default derived at deploy). Enabling always
+        clears a previous ``disabled`` flag (tracing is on by default, so an absent ``[tracing]`` table
+        is the enabled default).
         """
-        if self.trace_experiment_id == experiment_id and not self.trace_disabled:
+        if self.trace_experiment_name == experiment_name and not self.trace_disabled:
             return False
         table = self._document.get(TRACING_TABLE)
         if not isinstance(table, Mapping):
@@ -553,11 +560,11 @@ class AgentProject:
             self._document.append(TRACING_TABLE, table)
         if "disabled" in table:
             del table["disabled"]
-        if experiment_id:
-            table["experiment_id"] = experiment_id
-        elif "experiment_id" in table:
-            del table["experiment_id"]
-        self.trace_experiment_id = experiment_id
+        if experiment_name:
+            table["experiment_name"] = experiment_name
+        elif "experiment_name" in table:
+            del table["experiment_name"]
+        self.trace_experiment_name = experiment_name
         self.trace_disabled = False
         return True
 

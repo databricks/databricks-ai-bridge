@@ -225,7 +225,7 @@ def test_tracing_disable_and_reenable(run_mason, tmp_path: pathlib.Path) -> None
     project = tmp_path / "agent"
     run_mason("init", "--framework", "langgraph", str(project))
     run_mason("tracing", "disable", "--source", str(project))
-    # No --experiment => re-enable the per-project default; needs no workspace.
+    # No --experiment-name/--experiment-id => re-enable the per-project default; needs no workspace.
     run_mason("tracing", "configure", "--source", str(project))
 
 

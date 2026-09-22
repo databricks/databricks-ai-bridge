@@ -133,6 +133,7 @@ def test_init_defaults_to_langgraph_with_chat_app(tmp_path: pathlib.Path):
         "agent": {"framework": "langgraph", "server": "mason"},
         "memory_store": {"name": f"proj-{token}-memory"},
         "session_store": {"name": f"proj-{token}-sessions"},
+        "tracing": {"experiment_name": f"/Shared/mason_traces/proj-{token}"},
     }
 
 
@@ -174,6 +175,7 @@ def test_init_creates_canonical_agent_manifest(tmp_path: pathlib.Path):
         "agent": {"framework": "openai", "server": "mason"},
         "memory_store": {"name": f"proj-{token}-memory"},
         "session_store": {"name": f"proj-{token}-sessions"},
+        "tracing": {"experiment_name": f"/Shared/mason_traces/proj-{token}"},
     }
 
 

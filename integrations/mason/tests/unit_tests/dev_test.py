@@ -132,6 +132,35 @@ def test_dev_uses_local_entry_point_without_index_override(tmp_path: pathlib.Pat
     assert original_env == [{"name": "AGENT_SESSION_STORE", "value": "s"}]
 
 
+def test_dev_entry_point_strips_inherited_workspace_tracing_env(tmp_path: pathlib.Path):
+    # A previously-deployed app.yaml carries workspace tracing env (MLFLOW_TRACKING_URI + a workspace
+    # MLFLOW_EXPERIMENT_ID). The dev manifest must NOT inherit it — a stale id, which MLflow resolves
+    # ahead of MLFLOW_EXPERIMENT_NAME, would point local tracing at an id absent from the local store.
+    (tmp_path / "app.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "command": ["x"],
+                "env": [
+                    {"name": "MLFLOW_TRACKING_URI", "value": "databricks"},
+                    {"name": "MLFLOW_EXPERIMENT_ID", "value": "999"},
+                    {"name": "AGENT_SESSION_STORE", "value": "s"},
+                ],
+            }
+        )
+    )
+    dev_yaml = dev_mod._dev_entry_point(
+        tmp_path / "app.yaml",
+        {"MLFLOW_TRACKING_URI": "http://127.0.0.1:5599", "MLFLOW_EXPERIMENT_NAME": "my-agent"},
+    )
+    env = {e["name"]: e["value"] for e in yaml.safe_load(dev_yaml.read_text())["env"]}
+    assert (
+        "MLFLOW_EXPERIMENT_ID" not in env
+    )  # stale workspace id stripped, so it can't win over NAME
+    assert env["MLFLOW_TRACKING_URI"] == "http://127.0.0.1:5599"  # local server wins
+    assert env["MLFLOW_EXPERIMENT_NAME"] == "my-agent"
+    assert env["AGENT_SESSION_STORE"] == "s"  # unrelated env preserved
+
+
 def test_dev_entry_point_rejects_non_list_env(tmp_path: pathlib.Path):
     (tmp_path / "app.yaml").write_text("env:\n  KEY: value\n")
 

@@ -27,6 +27,7 @@ import click
 
 from databricks_mason import render
 from databricks_mason.agent_project import AgentProject, default_store_name
+from databricks_mason.cli.tracing import default_experiment_name
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import write_project_metadata
 from databricks_mason.project_types import (
@@ -409,19 +410,22 @@ def init(
         _copy_packaged_template(template_name, dest, overlay_names)
         template_ref = _bundled_template_ref()
         write_project_metadata(dest, framework=selected_framework, template=template_name)
+        experiment_name = None
         if mason_server:
             # Store display names aren't unique and projects often share a directory name, so a
-            # per-scaffold token keeps default stores from colliding. Memory and session share the
-            # token; an explicit --memory/session-store wins.
+            # per-scaffold token keeps default stores from colliding. Memory, session, and the default
+            # tracing experiment share the token; an explicit --memory/session-store wins.
             token = "".join(secrets.choice(string.ascii_lowercase) for _ in range(6))
             memory_store = memory_store or default_store_name(dest.name, "memory", token)
             session_store = session_store or default_store_name(dest.name, "sessions", token)
+            experiment_name = default_experiment_name(dest.name, token)
         project = AgentProject.create(
             dest,
             framework=selected_framework,
             server=selected_server,
             memory_store=memory_store,
             session_store=session_store,
+            experiment_name=experiment_name,
         )
         project.write()
         env_profile = profile or obj.profile
@@ -442,6 +446,7 @@ def init(
                 "env_profile": env_profile if wrote_env else None,
                 "memory_store": memory_store,
                 "session_store": session_store,
+                "experiment_name": experiment_name,
             }
         )
         return
@@ -459,6 +464,8 @@ def init(
         fields["Memory store"] = memory_store
     if session_store:
         fields["Session store"] = session_store
+    if experiment_name:
+        fields["Traces experiment"] = experiment_name
     steps: list[str | tuple[str, str]] = [(f"cd {dest}", "Enter the project directory")]
     if wrote_env:
         fields["Profile (.env)"] = env_profile
