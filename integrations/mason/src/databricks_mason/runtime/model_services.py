@@ -21,7 +21,8 @@ if TYPE_CHECKING:
 _MODEL_SERVICES_PATH = "/api/2.1/unity-catalog/model-services"
 # The AI Gateway's Databricks-managed models live in this UC schema.
 _SYSTEM_AI_SCHEMA = "system.ai"
-_PAGE_SIZE = 200
+# The list API rejects page_size above 100 (InvalidParameterValue), so use its maximum.
+_PAGE_SIZE = 100
 # Resource-name prefix the API returns, e.g. "model-services/system.ai.claude-sonnet-4-5".
 _NAME_PREFIX = "model-services/"
 # The list call can intermittently fail; retry a few times so a transient blip doesn't blank the
