@@ -78,8 +78,10 @@ def dev(
 
     Tracing runs locally: dev starts a local MLflow tracking server (sqlite-backed, under `.mason/`)
     and points the agent at it, so traces are recorded on your machine with no workspace experiment
-    or setup — open the printed Traces URL to view them. `mason deploy` sends traces to a managed
-    workspace experiment instead. Stores bound with `mason memory/sessions bind` are resolved here and
+    or setup — open the printed Traces URL to view them. `mason tracing disable` does not affect
+    `mason dev` - dev always traces to this local server; it only stops the deployed agent's tracing
+    (`mason deploy` sends traces to a managed workspace experiment). Stores bound with
+    `mason memory/sessions bind` are resolved here and
     injected into the dev-only manifest as env, so the runtime picks them up the same way a deployment
     does. Locally you already have access, so no service-principal grant is needed; that grant happens
     at `mason deploy` time.

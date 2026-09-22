@@ -138,7 +138,7 @@ Auth uses your Databricks profile (`-p` / `mason login`), and the agent reaches 
 
 Under the hood this wraps `databricks apps run-local`: it reads the command + env from `app.yaml` and runs the app the way the Apps runtime would, so local behavior matches a deployment. The environment is built on the first run and reused after; pass `--prepare-environment` to force a rebuild (e.g. after changing dependencies).
 
-Tracing is on by default: dev sends the agent's traces to the default mason experiment based on the project name (the same one `mason deploy` uses), created and pinned into agent.toml on first run - configure or turn it off with `mason tracing configure` / `disable`. Stores bound with `mason memory/sessions bind` are resolved here and injected into the dev-only manifest as env, so the runtime picks them up the same way a deployment does. Locally you already have access, so no service-principal grant is needed; that grant happens at `mason deploy` time.
+Tracing runs locally: dev starts a local MLflow tracking server (sqlite-backed, under `.mason/`) and points the agent at it, so traces are recorded on your machine with no workspace experiment or setup - open the printed Traces URL to view them. `mason tracing disable` does not affect `mason dev` - dev always traces to this local server; it only stops the deployed agent's tracing (`mason deploy` sends traces to a managed workspace experiment). Stores bound with `mason memory/sessions bind` are resolved here and injected into the dev-only manifest as env, so the runtime picks them up the same way a deployment does. Locally you already have access, so no service-principal grant is needed; that grant happens at `mason deploy` time.
 
 ```
 mason dev [options]
