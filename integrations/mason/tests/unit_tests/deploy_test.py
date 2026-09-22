@@ -964,33 +964,6 @@ def test_deploy_wires_tracing_env_and_grants_experiment_resource(
     assert granted == {"app": "agent-mason-myapp", "experiment_id": "exp-42"}
 
 
-def test_deploy_keys_experiment_on_source_dir_name_not_prefixed(
-    tmp_path: pathlib.Path, monkeypatch
-):
-    # dev keys the experiment on the source dir name; deploy must match it (NOT the deployment's
-    # agent-mason-prefixed name), so dev and deploy trace to the same per-project experiment.
-    src = tmp_path / "my-agent"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    captured: dict = {}
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(
-        deploy_mod,
-        "resolve_trace_experiment_id",
-        lambda source, app, client, profile: captured.update(app=app) or None,
-    )
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
-    result = CliRunner().invoke(
-        deploy_mod.deploy, ["my-agent", "--source", str(src)], obj=_FakeCtx()
-    )
-    assert result.exit_code == 0, result.output
-    assert captured["app"] == "my-agent"  # source dir name, not "agent-mason-my-agent"
-
-
 def test_deploy_proceeds_when_tracing_provisioning_raises(tmp_path: pathlib.Path, monkeypatch):
     # Tracing provisioning is best-effort: a non-AgentCliError (e.g. MLflow/network) must not abort
     # the deploy — it proceeds without tracing.
@@ -1131,11 +1104,20 @@ def test_mlflow_tracing_config_binds_experiment_by_id_and_workspace():
     }
 
 
-def test_resolve_trace_experiment_none_when_disabled(tmp_path: pathlib.Path):
+def test_resolve_trace_experiment_none_when_unbound(tmp_path: pathlib.Path, monkeypatch):
+    # No experiment_name bound -> tracing is off; nothing is created and None is returned (no default
+    # fallback). A legacy [tracing] disabled key is simply ignored.
     (tmp_path / "agent.toml").write_text(
-        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n\n[tracing]\ndisabled = true\n'
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n'
     )
-    assert _REAL_RESOLVE_TRACE(tmp_path, "app", _FakeClient(), None) is None
+    called: list[str] = []
+    monkeypatch.setattr(
+        deploy_mod,
+        "create_experiment_idempotent",
+        lambda profile, client, name: called.append(name) or "should-not-happen",
+    )
+    assert _REAL_RESOLVE_TRACE(tmp_path, _FakeClient(), None) is None
+    assert called == []  # unbound -> no experiment provisioned
 
 
 def test_resolve_trace_experiment_get_or_creates_bound_name(tmp_path: pathlib.Path, monkeypatch):
@@ -1151,7 +1133,7 @@ def test_resolve_trace_experiment_get_or_creates_bound_name(tmp_path: pathlib.Pa
         "create_experiment_idempotent",
         lambda profile, client, name: created.update(name=name) or "id-b",
     )
-    assert _REAL_RESOLVE_TRACE(tmp_path, "app", _FakeClient(), None) == "id-b"
+    assert _REAL_RESOLVE_TRACE(tmp_path, _FakeClient(), None) == "id-b"
     assert created["name"] == "/Shared/mason_traces/bound"
     from databricks_mason.agent_project import AgentProject
 
@@ -1159,33 +1141,13 @@ def test_resolve_trace_experiment_get_or_creates_bound_name(tmp_path: pathlib.Pa
     assert project.trace_experiment_name == "/Shared/mason_traces/bound"  # name kept
 
 
-def test_resolve_trace_experiment_creates_shared_default_without_pinning(
-    tmp_path: pathlib.Path, monkeypatch
-):
-    (tmp_path / "agent.toml").write_text(
-        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n'
-    )
-    created: dict = {}
-    monkeypatch.setattr(
-        deploy_mod,
-        "create_experiment_idempotent",
-        lambda profile, client, name: created.update(name=name) or "made-id",
-    )
-    exp_id = _REAL_RESOLVE_TRACE(tmp_path, "my-agent", _FakeClient(), None)
-    assert exp_id == "made-id"
-    # The /Shared default (username-free), get-or-created — and nothing pinned back, so it stays
-    # portable across profiles.
-    assert created["name"] == "/Shared/mason_traces/my-agent"
-    from databricks_mason.agent_project import AgentProject
-
-    assert AgentProject.load(tmp_path).trace_experiment_name is None
-
-
 def test_resolve_trace_experiment_get_or_creates_by_name_each_run(
     tmp_path: pathlib.Path, monkeypatch
 ):
+    # Nothing is pinned back, so each run re-resolves the bound name and get-or-creates it (idempotent).
     (tmp_path / "agent.toml").write_text(
         'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n'
+        '\n[tracing]\nexperiment_name = "/Shared/mason_traces/bound"\n'
     )
     calls: list[str] = []
     monkeypatch.setattr(
@@ -1193,10 +1155,9 @@ def test_resolve_trace_experiment_get_or_creates_by_name_each_run(
         "create_experiment_idempotent",
         lambda profile, client, name: calls.append(name) or "made-id",
     )
-    # No id is pinned, so each run re-derives the default name and get-or-creates it (idempotent).
-    assert _REAL_RESOLVE_TRACE(tmp_path, "my-agent", _FakeClient(), None) == "made-id"
-    assert _REAL_RESOLVE_TRACE(tmp_path, "my-agent", _FakeClient(), None) == "made-id"
-    assert calls == ["/Shared/mason_traces/my-agent", "/Shared/mason_traces/my-agent"]
+    assert _REAL_RESOLVE_TRACE(tmp_path, _FakeClient(), None) == "made-id"
+    assert _REAL_RESOLVE_TRACE(tmp_path, _FakeClient(), None) == "made-id"
+    assert calls == ["/Shared/mason_traces/bound", "/Shared/mason_traces/bound"]
 
 
 def _run_deploy(src, monkeypatch, extra_args):

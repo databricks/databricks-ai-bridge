@@ -852,16 +852,16 @@ Configure MLflow tracing for your agents, and inspect the traces.
 
 | Subcommand | Description |
 | --- | --- |
-| [`tracing bind`](#mason-tracing-bind) | Bind tracing to an experiment (by name or id), or re-enable the default after `unbind`. |
-| [`tracing unbind`](#mason-tracing-unbind) | Turn tracing off for the deployed agent (deploy-only; `mason dev` still traces locally). |
+| [`tracing bind`](#mason-tracing-bind) | Bind tracing to an experiment, by name or id (one required). |
+| [`tracing unbind`](#mason-tracing-unbind) | Unbind tracing (remove the binding), turning tracing off for the deployed agent (deploy-only; `mason dev` still traces locally). |
 | [`tracing list`](#mason-tracing-list) | List recent agent traces in an experiment. |
 | [`tracing get`](#mason-tracing-get) | Get a single trace by id (status, latency, span count, previews). |
 
 #### `mason tracing bind`
 
-Bind tracing to an experiment (by name or id), or re-enable the default after `unbind`.
+Bind tracing to an experiment, by name or id. Requires one of them (like `mason memory/sessions bind`); the binding's presence is what turns tracing on.
 
-The experiment is stored as a NAME, not an id, so the binding stays valid across workspaces/profiles - mason get-or-creates it in the active workspace at deploy. ``--experiment-id`` (e.g. from the experiment's URL) is a convenience: it's resolved to the experiment's name and stored as a name, never as an id. Point this at a writable path if the default /Shared experiment isn't writable in your workspace. Omit both to (re)enable the default /Shared experiment.
+The experiment is stored as a NAME, not an id, so the binding stays valid across workspaces/profiles - mason get-or-creates it in the active workspace at deploy. ``--experiment-id`` (e.g. from the experiment's URL) is a convenience: it's resolved to the experiment's name and stored as a name, never as an id.
 
 ```
 mason tracing bind [options]
@@ -872,13 +872,13 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
-| `--experiment-name <EXPERIMENT_NAME>` | string | - | no | MLflow experiment name to trace to - an absolute workspace path, e.g. /Shared/mason_traces/&lt;agent&gt; or /Users/&lt;you&gt;/mason_traces/&lt;agent&gt;. mason get-or-creates it at deploy. Omit to (re)enable the default /Shared experiment. |
+| `--experiment-name <EXPERIMENT_NAME>` | string | - | no | MLflow experiment name to trace to - an absolute workspace path, e.g. /Shared/mason_traces/&lt;agent&gt; or /Users/&lt;you&gt;/mason_traces/&lt;agent&gt;. mason get-or-creates it at deploy. Mutually exclusive with --experiment-id. |
 | `--experiment-id <EXPERIMENT_ID>` | string | - | no | MLflow experiment id (e.g. copied from the experiment's workspace URL) to trace to. Resolved to the experiment's name and stored as a name - mason persists names, not ids, so the binding stays valid across workspaces. Mutually exclusive with --experiment-name. |
 | `--source <SOURCE>` | path | `.` | no | Project directory containing agent.toml. Defaults to the current directory. |
 
 #### `mason tracing unbind`
 
-Turn tracing off for the DEPLOYED agent (recorded in agent.toml; `mason deploy` then wires no MLflow env).
+Unbind tracing: remove the experiment binding from agent.toml, turning tracing off for the DEPLOYED agent (`mason deploy` then wires no MLflow env).
 
 Deploy-only: `mason dev` still traces locally to its own MLflow server, so you keep local traces while the deployed agent stays untraced.
 

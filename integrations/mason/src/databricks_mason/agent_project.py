@@ -27,8 +27,9 @@ from databricks_mason.runtime.tool_manifest import (
     SESSION_STORE_TABLE,
 )
 
-# The tracing binding (`mason tracing bind` / `unbind`). Tracing is on by default (a per-project
-# MLflow experiment); this table only records an explicit experiment override or a disable.
+# The tracing binding (`mason tracing bind` / `unbind`): `experiment_name` is the bound MLflow
+# experiment. Its presence means tracing is on; an absent binding means off. `mason init` bootstraps
+# a default name.
 TRACING_TABLE = "tracing"
 
 _SCHEMA_VERSION = 1
@@ -339,7 +340,6 @@ class AgentProject:
         memory_store_id: str | None = None,
         deployment_name: str | None = None,
         trace_experiment_name: str | None = None,
-        trace_disabled: bool = False,
     ) -> None:
         self.root = root
         self.path = root / "agent.toml"
@@ -356,12 +356,11 @@ class AgentProject:
         self.memory_store_id = memory_store_id
         # The deployment's base name (`mason deploy` prefixes it with `agent-mason-`); None until named.
         self.deployment_name = deployment_name
-        # Tracing config: the MLflow experiment NAME to trace to — a workspace path (None = derive the
-        # default at deploy). Storing a name (not an id) keeps the binding valid across workspaces and
-        # profiles, since an id is workspace-local. `disabled` turns tracing off (tracing is on by
-        # default; an absent [tracing] table is the enabled default).
+        # Tracing config: the MLflow experiment NAME to trace to (a workspace path). Its presence IS
+        # the enable switch: a bound name means tracing is on (deploy get-or-creates it); None means
+        # unbound, i.e. off. Storing a name (not an id) keeps the binding valid across workspaces and
+        # profiles, since an id is workspace-local. `mason init` bootstraps a default name.
         self.trace_experiment_name = trace_experiment_name
-        self.trace_disabled = trace_disabled
 
     @classmethod
     def load(cls, root: pathlib.Path | str | None = None) -> "AgentProject":
@@ -415,13 +414,11 @@ class AgentProject:
         )
         tracing_table = document.get(TRACING_TABLE)
         trace_experiment_name: str | None = None
-        trace_disabled = False
         if isinstance(tracing_table, Mapping):
             raw_experiment = tracing_table.get("experiment_name")
             trace_experiment_name = (
                 str(raw_experiment) if isinstance(raw_experiment, str) and raw_experiment else None
             )
-            trace_disabled = bool(tracing_table.get("disabled"))
         return cls(
             project_root,
             document,
@@ -433,7 +430,6 @@ class AgentProject:
             memory_store_id,
             str(deployment_name) if deployment_name is not None else None,
             trace_experiment_name,
-            trace_disabled,
         )
 
     @classmethod
@@ -469,7 +465,7 @@ class AgentProject:
         if session_store:
             project.bind_session_store(session_store)
         if experiment_name:
-            project.configure_tracing(experiment_name)
+            project.bind_tracing(experiment_name)
         return project
 
     def set_deployment_name(self, name: str) -> bool:
@@ -543,41 +539,34 @@ class AgentProject:
         """Remove the session store binding from agent.toml. Returns True if it was present."""
         return self._clear_store(SESSION_STORE_TABLE)
 
-    def configure_tracing(self, experiment_name: str | None) -> bool:
-        """Set the tracing experiment NAME and enable tracing. Returns True if changed.
+    def bind_tracing(self, experiment_name: str) -> bool:
+        """Bind tracing to an MLflow experiment NAME (an experiment path). Returns True if changed.
 
-        ``experiment_name`` is an MLflow experiment path; storing a name (not an id) keeps the binding
-        portable across workspaces/profiles — deploy get-or-creates it in the active workspace.
-        ``None`` clears an explicit name (fall back to the default derived at deploy). Enabling always
-        clears a previous ``disabled`` flag (tracing is on by default, so an absent ``[tracing]`` table
-        is the enabled default).
+        The binding's presence is the enable switch: a bound name means tracing is on (deploy
+        get-or-creates it). Storing a name (not an id) keeps the binding portable across
+        workspaces/profiles.
         """
-        if self.trace_experiment_name == experiment_name and not self.trace_disabled:
+        experiment_name = _required_string(experiment_name, f"[{TRACING_TABLE}] experiment_name")
+        if self.trace_experiment_name == experiment_name:
             return False
         table = self._document.get(TRACING_TABLE)
         if not isinstance(table, Mapping):
             table = tomlkit.table()
             self._document.append(TRACING_TABLE, table)
-        if "disabled" in table:
-            del table["disabled"]
-        if experiment_name:
-            table["experiment_name"] = experiment_name
-        elif "experiment_name" in table:
-            del table["experiment_name"]
+        table["experiment_name"] = experiment_name
         self.trace_experiment_name = experiment_name
-        self.trace_disabled = False
         return True
 
-    def disable_tracing(self) -> bool:
-        """Turn tracing off (records ``[tracing] disabled = true``). Returns True if changed."""
-        if self.trace_disabled:
+    def unbind_tracing(self) -> bool:
+        """Unbind tracing: remove the experiment binding so tracing is off. Returns True if changed."""
+        if self.trace_experiment_name is None:
             return False
         table = self._document.get(TRACING_TABLE)
-        if not isinstance(table, Mapping):
-            table = tomlkit.table()
-            self._document.append(TRACING_TABLE, table)
-        table["disabled"] = True
-        self.trace_disabled = True
+        if isinstance(table, Mapping) and "experiment_name" in table:
+            del table["experiment_name"]
+        if isinstance(table, Mapping) and not table:
+            del self._document[TRACING_TABLE]
+        self.trace_experiment_name = None
         return True
 
     def _set_store(self, table: str, name: str, store_id: str | None = None) -> bool:

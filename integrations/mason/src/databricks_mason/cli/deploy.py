@@ -39,7 +39,6 @@ from databricks_mason.cli.tracing import (
     TRACES_EXPERIMENT_ID_ENV,
     TRACES_TRACKING_URI_ENV,
     create_experiment_idempotent,
-    default_experiment_name,
     experiment_url,
 )
 from databricks_mason.databricks_cli import _databricks
@@ -367,16 +366,12 @@ def _reconcile_declared_stores(
     return memory_store_id
 
 
-def resolve_trace_experiment_id(
-    source: pathlib.Path, project_name: str, client, profile
-) -> Optional[str]:
-    """Get-or-create this project's MLflow experiment in the ``profile``'s workspace and return its
-    id, or None when tracing is disabled.
+def resolve_trace_experiment_id(source: pathlib.Path, client, profile) -> Optional[str]:
+    """Get-or-create this project's bound MLflow experiment in the ``profile``'s workspace and return
+    its id, or None when tracing is unbound (no ``experiment_name`` in agent.toml).
 
-    Resolves by experiment **name**, never a stored id: the ``experiment_name`` configured in
-    agent.toml, else a default derived from ``project_name``. ``source`` locates agent.toml;
-    ``project_name`` is the Mason project name (the source directory's basename). Nothing is written
-    back to agent.toml. Raises if the experiment can't be created.
+    Resolves by experiment **name**, never a stored id. ``source`` locates agent.toml. Nothing is
+    written back to agent.toml. Raises if the experiment can't be created.
     """
     from databricks_mason.agent_project import AgentProject  # noqa: PLC0415 - avoid import cycle
 
@@ -384,13 +379,9 @@ def resolve_trace_experiment_id(
         project = AgentProject.load(source)
     except AgentCliError:
         project = None
-    if project is not None and project.trace_disabled:
-        return None
     name = project.trace_experiment_name if project is not None else None
     if not name:
-        # TODO: drop this default-name fallback once tracing/session/memory are consolidated so deploy
-        # provisions only what's explicitly configured in agent.toml.
-        name = default_experiment_name(project_name)
+        return None
     return create_experiment_idempotent(profile, client, name)
 
 
@@ -531,9 +522,7 @@ def deploy(
     trace_experiment_id: Optional[str] = None
     trace_setup_error: Optional[str] = None
     try:
-        trace_experiment_id = resolve_trace_experiment_id(
-            source_dir, source_dir.resolve().name, client, obj.profile
-        )
+        trace_experiment_id = resolve_trace_experiment_id(source_dir, client, obj.profile)
     except Exception as exc:  # noqa: BLE001 - tracing is best-effort; never block a deploy
         trace_setup_error = str(exc)
     env_updates: dict[str, str] = {}
