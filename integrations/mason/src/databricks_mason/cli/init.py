@@ -65,6 +65,22 @@ _FRAMEWORK_LABELS = {
     AgentFramework.OPENAI: "OpenAI Agents SDK",
 }
 
+
+def _or_join(items: list[str]) -> str:
+    """Join items into a human-readable phrase: "a", "a or b", or "a, b, or c"."""
+    if len(items) <= 1:
+        return items[0] if items else ""
+    if len(items) == 2:
+        return f"{items[0]} or {items[1]}"
+    return ", ".join(items[:-1]) + f", or {items[-1]}"
+
+
+# Derived from _FRAMEWORK_LABELS / AgentFramework so user-facing text never drifts from the
+# supported-framework list. NOTE: these must stay above the click decorators below — Click
+# evaluates `help=` strings at import time, not at call time.
+_FRAMEWORK_LABEL_PHRASE = _or_join(list(_FRAMEWORK_LABELS.values()))
+_FRAMEWORK_VALUE_PHRASE = ", ".join(framework.value for framework in AgentFramework)
+
 _MIGRATION_DIR = "mason-migrate"
 # Each coding agent discovers skills in its own configuration directory, so the bundle lives in one
 # tool-neutral directory and every agent gets a pointer to it rather than a copy of the reference.
@@ -274,8 +290,8 @@ def _prepare_migration(
 @click.option(
     "--existing",
     is_flag=True,
-    help="Prepare a coding-agent migration bundle for an existing LangGraph or OpenAI "
-    "Agents SDK project (defaults to .).",
+    help=f"Prepare a coding-agent migration bundle for an existing {_FRAMEWORK_LABEL_PHRASE} "
+    "project (defaults to .).",
 )
 @click.option(
     "--framework",
@@ -364,7 +380,8 @@ def init(
     if existing:
         if not mason_server:
             raise click.UsageError(
-                "--existing requires --server mason (supported frameworks: langgraph, openai)."
+                "--existing requires --server mason (supported frameworks: "
+                f"{_FRAMEWORK_VALUE_PHRASE})."
             )
         _prepare_migration(
             obj,
@@ -381,8 +398,8 @@ def init(
     if dest.exists():
         raise AgentCliError(
             f"Destination '{dest}' already exists.",
-            hint="Use --existing to prepare a migration from an existing LangGraph or OpenAI "
-            "Agents SDK project, or choose a new directory to scaffold.",
+            hint=f"Use --existing to prepare a migration from an existing "
+            f"{_FRAMEWORK_LABEL_PHRASE} project, or choose a new directory to scaffold.",
         )
 
     overlay_names = (template.chat_app,) if chat_app_enabled else ()
