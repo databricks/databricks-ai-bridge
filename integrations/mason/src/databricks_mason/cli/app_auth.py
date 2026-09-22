@@ -47,6 +47,9 @@ def requires_user_auth(project: AgentProject | None) -> bool:
     metadata = None
     if (project.root / ".mason/project.toml").is_file():
         metadata = load_project_metadata(project.root)
+    # This is a project-level template compatibility marker, not a per-tool scope version. Version
+    # 1 means the generated request path owns a transient RequestAuthContext and passes its client
+    # resolver into every managed-tool adapter for the lifetime of the active attempt.
     contract = metadata.request_auth_contract_version if metadata else None
     if user_auth and (contract != 1 or project.server != AgentServer.MASON):
         raise AgentCliError(
@@ -78,6 +81,7 @@ def required_user_scopes(project: AgentProject | None) -> set[str]:
     """Return baseline Apps scopes for request-user managed tools."""
     if project is None:
         return set()
+    # TODO: Return the least-privilege Apps scope for each supported request-user tool kind/service.
     return {
         "ai-gateway"
         for tool in project.tools
@@ -92,7 +96,7 @@ def prepare_app_auth(
     adopt: bool,
     required_scopes: set[str] | None = None,
 ) -> AppAuthPlan:
-    """Read scope ownership before mutations; an existing App requires explicit adoption."""
+    """Read scope ownership before mutations; adding scopes to an existing App needs adoption."""
     try:
         apps = WorkspaceClient(profile=profile).apps
         try:
@@ -103,17 +107,17 @@ def prepare_app_auth(
         raise AgentCliError(f"Could not read Apps user scopes for '{name}'.") from exc
     if existing is not None:
         _validate_forwarding(existing)
-    if existing is not None and not adopt:
-        raise AgentCliError(
-            f"App '{name}' already exists; user-auth scope management requires --adopt-user-auth.",
-            hint="Review its existing scopes and coordinate with other owners first. Adoption "
-            "preserves unrelated scopes; scope writes are not atomic with concurrent changes.",
-        )
     if existing is not None:
         _validate_implicit_identity_scopes(existing)
     configured = tuple(sorted(set(existing.user_api_scopes or []))) if existing else None
     requested = {"ai-gateway"} if required_scopes is None else required_scopes
     scopes = tuple(sorted({*(configured or ()), *requested}))
+    if existing is not None and scopes != configured and not adopt:
+        raise AgentCliError(
+            f"App '{name}' is missing required user-auth scopes; re-run with --adopt-user-auth.",
+            hint="Review its existing scopes and coordinate with other owners first. Adoption "
+            "preserves unrelated scopes; later deploys do not need the flag once scopes are present.",
+        )
     return AppAuthPlan(apps=apps, name=name, existing_scopes=configured, scopes=scopes)
 
 
@@ -130,7 +134,11 @@ def apply_app_auth(plan: AppAuthPlan, *, instances: int | None = None, attempts:
             hint="Remove scopes explicitly in Databricks Apps and verify the effective scopes. "
             "The SDK omits empty lists when serializing App; no removal was sent.",
         )
-    desired = App(name=plan.name, user_api_scopes=list(plan.scopes))
+    desired = App(
+        name=plan.name,
+        user_api_scopes=list(plan.scopes),
+        forward_user_access_token=True if plan.existing_scopes is None else None,
+    )
     mask = ["user_api_scopes"]
     if instances is not None:
         desired.compute_min_instances = instances

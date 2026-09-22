@@ -480,7 +480,8 @@ def _grant_store_access(
 @click.option(
     "--adopt-user-auth",
     is_flag=True,
-    help="Explicitly adopt an existing App for user-auth scopes, preserving unrelated scopes.",
+    help="Allow Mason to add missing user-auth scopes to an existing App. Once added, later deploys "
+    "do not need this flag.",
 )
 @click.pass_obj
 def deploy(
@@ -524,6 +525,9 @@ def deploy(
     _validate_deployment_name(name)
     if adopt_user_auth and not user_auth:
         raise AgentCliError("--adopt-user-auth requires explicit user-auth tools in agent.toml.")
+    # User-auth source cannot work until the target App forwards request credentials with every
+    # required scope. Reconcile and verify that platform contract before stores, manifests, or source
+    # deployment can mutate remote state.
     auth_plan = (
         prepare_app_auth(
             name, obj.profile, adopt=adopt_user_auth, required_scopes=required_user_scopes(project)

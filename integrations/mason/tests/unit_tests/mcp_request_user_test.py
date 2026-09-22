@@ -97,6 +97,13 @@ def test_clients_are_selected_per_tool_and_request(adapter):
     adapter.workspace_client.assert_not_called()
 
 
+def test_framework_adapters_share_auth_classification(adapter):
+    from databricks_mason.runtime.mcp_auth import mcp_auth_error, mcp_tool_error
+
+    assert adapter._auth_error is mcp_auth_error
+    assert adapter._tool_error is mcp_tool_error
+
+
 def test_explicit_deployed_user_without_resolver_fails_closed(adapter, monkeypatch):
     from databricks_mason.runtime.auth import AuthError
 
