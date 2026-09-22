@@ -18,7 +18,6 @@ import yaml
 from databricks_mason import render
 from databricks_mason.cli.deploy import (
     _load_project,
-    _resolve_memory_store,
     store_bindings,
 )
 from databricks_mason.cli.endpoint_examples import print_agent_invoke_command
@@ -40,14 +39,21 @@ _LOCAL_APP_YAML = "app.masondev.yaml"
 # them and use the machine's own configured index instead.
 _BUILD_INDEX_ENVS = frozenset({"PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDEX"})
 
-# Workspace tracing env that `mason deploy` writes into app.yaml. `mason dev` sets up its OWN tracing
-# (a local MLflow server), so these must be stripped from the dev manifest — otherwise a stale
-# workspace MLFLOW_EXPERIMENT_ID (which MLflow resolves ahead of MLFLOW_EXPERIMENT_NAME) points the
-# local agent at an experiment id that doesn't exist on the local sqlite server, so local tracing
-# errors or logs nowhere. dev re-adds the local MLFLOW_TRACKING_URI / MLFLOW_EXPERIMENT_NAME itself.
+# Workspace managed-resource env that `mason deploy` writes into app.yaml but `mason dev` must NOT
+# inherit - dev runs every resource locally. These are stripped from the dev manifest:
+#   - tracing: dev sets up its OWN local MLflow server, so a stale workspace MLFLOW_EXPERIMENT_ID
+#     (which MLflow resolves ahead of MLFLOW_EXPERIMENT_NAME) would point the local agent at an
+#     experiment that doesn't exist on the local sqlite server. dev re-adds the local
+#     MLFLOW_TRACKING_URI / MLFLOW_EXPERIMENT_NAME itself.
+#   - stores: dev never uses the workspace memory/session stores (memory off, sessions in-process),
+#     so a prior deploy's AGENT_MEMORY_STORE / AGENT_SESSION_STORE must not quietly pull dev onto
+#     them. dev re-adds nothing here - the runtime falls back to its local defaults.
+# (The Runtime Store's lakebase env needs no strip: dev forces RUNTIME_STORE_LOCAL=true, which the
+# runtime resolves ahead of any lakebase endpoint.)
 _DEPLOY_TRACING_ENVS = frozenset(
     {"MLFLOW_TRACKING_URI", "MLFLOW_EXPERIMENT_ID", "MLFLOW_TRACING_DESTINATION"}
 )
+_DEPLOY_RESOURCE_ENVS = _DEPLOY_TRACING_ENVS | {MEMORY_STORE_ENV, SESSION_STORE_ENV}
 
 
 @click.command()
@@ -85,15 +91,14 @@ def dev(
     deployment. The environment is built on the first run and reused after; pass
     `--prepare-environment` to force a rebuild (e.g. after changing dependencies).
 
-    Tracing runs locally: dev starts a local MLflow tracking server (sqlite-backed, under `.mason/`)
-    and points the agent at it, so traces are recorded on your machine with no workspace experiment
-    or setup — open the printed Traces URL to view them. `mason tracing disable` does not affect
-    `mason dev` - dev always traces to this local server; it only stops the deployed agent's tracing
-    (`mason deploy` sends traces to a managed workspace experiment). Stores bound with
-    `mason memory/sessions bind` are resolved here and
-    injected into the dev-only manifest as env, so the runtime picks them up the same way a deployment
-    does. Locally you already have access, so no service-principal grant is needed; that grant happens
-    at `mason deploy` time.
+    Everything runs locally: `mason dev` is a self-contained sandbox that never reaches the workspace
+    for its resources. Tracing goes to a local MLflow tracking server (sqlite-backed, under `.mason/`)
+    so traces are recorded on your machine with no workspace experiment or setup - open the printed
+    Traces URL to view them (`mason tracing disable` doesn't affect dev; it only stops the deployed
+    agent's tracing). Long-term memory is off and conversation history is in-process (not durable):
+    the memory/session stores bound with `mason memory/sessions bind` are created and used only when you
+    `mason deploy`, not here. So there's nothing to provision and no service-principal grant to make;
+    that all happens at `mason deploy` time.
     """
     source_dir = pathlib.Path(source)
     app_yaml = source_dir / "app.yaml"
@@ -107,61 +112,34 @@ def dev(
     if project is not None and project.tools:
         require_managed_tool_support(source_dir)
 
-    # Read the declared store bindings; they're resolved into the dev-only manifest as env (below),
-    # alongside the local tracing env (further below). Both are best-effort — dev still runs the agent
-    # if a store isn't created yet or the local tracing server can't start.
+    # `mason dev` is a fully local sandbox: the Runtime Store and tracing already run locally, and
+    # memory/sessions follow suit here. Dev never reaches the workspace for stores (so it stays fast
+    # and works offline): long-term memory is off and conversation history is in-process (not
+    # durable), regardless of any binding. Stores are created and used only by `mason deploy`; the
+    # deploy-written store env is stripped from the dev manifest (see `_dev_entry_point`) so a prior
+    # deploy can't quietly pull dev onto the workspace stores. Read the bindings only to name them.
     memory_store, session_store = store_bindings(source_dir)
-    # `mason dev` never provisions stores (unlike `mason deploy`); warn so missing long-term memory
-    # or conversation state is not a silent surprise.
-    if not memory_store:
-        render.warning(
-            "No memory store bound — long-term memory is disabled. Run 'mason memory bind <name>'."
+    if memory_store:
+        render.console().print(
+            f"[dim]Memory store '{memory_store}' is used once deployed; `mason dev` runs with "
+            "long-term memory off (local sandbox).[/]"
         )
-    if not session_store:
+    else:
         render.warning(
-            "No session store bound — conversation history is in-memory (not durable). "
-            "Run 'mason sessions bind <name>'."
+            "No memory store bound - long-term memory is off. Run 'mason memory bind <name>' so "
+            "`mason deploy` provisions one."
+        )
+    if session_store:
+        render.console().print(
+            f"[dim]Session store '{session_store}' is used once deployed; `mason dev` keeps "
+            "conversation history in-process (not durable).[/]"
+        )
+    else:
+        render.warning(
+            "No session store bound - conversation history is in-process (not durable). Run "
+            "'mason sessions bind <name>' so `mason deploy` provisions one."
         )
     local_env: dict[str, str] = {}
-    # Declared stores are created by `mason deploy`, not dev — dev never creates them. Check
-    # existence for a friendly warning, and wire the resolved store bindings into the local-only
-    # manifest (memory store's id — the entries API key; session store's name) so sessions/memory
-    # work locally when the store already exists. The runtime reads these from the env.
-    # Best-effort: if the client/auth is unavailable (offline, no credentials), degrade to the
-    # same "declared but not created yet" warning and keep running, mirroring tracing below.
-    if memory_store:
-        try:
-            with render.status("Checking memory store…"):
-                resolved = _resolve_memory_store(obj.client(), memory_store)
-            if resolved is None:
-                render.warning(
-                    f"Memory store '{memory_store}' is declared but not created yet — long-term memory "
-                    "is disabled locally. Run `mason deploy` to create it."
-                )
-            else:
-                store_id = (render.field(resolved, "name") or "").split("/", 1)[-1] or None
-                if store_id:
-                    local_env[MEMORY_STORE_ENV] = store_id
-        except Exception:  # noqa: BLE001 - store check must never block a local run
-            render.warning(
-                f"Memory store '{memory_store}' is declared but not created yet — long-term memory "
-                "is disabled locally. Run `mason deploy` to create it."
-            )
-    if session_store:
-        try:
-            with render.status("Checking session store…"):
-                obj.client().get_session_store(session_store)
-            local_env[SESSION_STORE_ENV] = session_store
-        except AgentCliError:
-            render.warning(
-                f"Session store '{session_store}' is declared but not created yet — conversation "
-                "history is in-memory (not durable). Run `mason deploy` to create it."
-            )
-        except Exception:  # noqa: BLE001 - store check must never block a local run
-            render.warning(
-                f"Session store '{session_store}' is declared but not created yet — conversation "
-                "history is in-memory (not durable). Run `mason deploy` to create it."
-            )
     # Local tracing: start a local MLflow tracking server backed by sqlite under .mason/ and point the
     # agent at it via the dev-only manifest — for any project, regardless of framework/server. An agent
     # that uses MLflow (autolog or `start_trace`) then traces to it; it's harmless for one that doesn't.
@@ -296,9 +274,9 @@ def _dev_entry_point(
     The manifest marks the process as local so Mason Runtime uses its in-memory store. Keeping this in
     the entry point is more reliable than forwarding ``--env`` through the Databricks CLI and does
     not mutate the deployable ``app.yaml``. Deploy-only package-index variables and the deploy-written
-    workspace tracing env (see ``_DEPLOY_TRACING_ENVS``) are removed so dev's local overrides win.
-    ``extra_env`` is merged in (overriding any same-named entries) for dev-only overrides such as
-    the resolved memory-store id and the local tracing config.
+    workspace resource env (see ``_DEPLOY_RESOURCE_ENVS`` - tracing + memory/session stores) are
+    removed so dev stays fully local. ``extra_env`` is merged in (overriding any same-named entries)
+    for dev-only overrides such as the local tracing config.
     """
     try:
         doc = yaml.safe_load(app_yaml.read_text()) or {}
@@ -317,10 +295,12 @@ def _dev_entry_point(
         for e in filtered
         if not (isinstance(e, dict) and e.get("name") == RUNTIME_STORE_LOCAL_ENV)
     ]
-    # Drop the deploy-written workspace tracing env so a stale MLFLOW_EXPERIMENT_ID can't override the
-    # local MLFLOW_EXPERIMENT_NAME that dev re-adds via extra_env below.
+    # Drop the deploy-written workspace resource env (tracing + memory/session stores) so a prior
+    # `mason deploy` can't pull dev onto workspace resources: a stale MLFLOW_EXPERIMENT_ID would beat
+    # the local MLFLOW_EXPERIMENT_NAME dev re-adds below, and AGENT_MEMORY_STORE / AGENT_SESSION_STORE
+    # would silently point the local runtime at the workspace stores instead of its local defaults.
     filtered = [
-        e for e in filtered if not (isinstance(e, dict) and e.get("name") in _DEPLOY_TRACING_ENVS)
+        e for e in filtered if not (isinstance(e, dict) and e.get("name") in _DEPLOY_RESOURCE_ENVS)
     ]
     for name, value in (extra_env or {}).items():
         filtered = [e for e in filtered if not (isinstance(e, dict) and e.get("name") == name)]
