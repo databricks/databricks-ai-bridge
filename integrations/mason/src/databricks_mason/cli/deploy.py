@@ -38,6 +38,7 @@ from databricks_mason.cli.endpoint_examples import print_agent_invoke_command
 from databricks_mason.cli.tracing import (
     TRACES_EXPERIMENT_ID_ENV,
     TRACES_TRACKING_URI_ENV,
+    TRACING_BIND_COMMAND,
     create_experiment_idempotent,
     experiment_url,
 )
@@ -703,13 +704,17 @@ def deploy(
             "be applied automatically (it requires store ownership). "
             f"Cause: {grant_error}",
         )
-    if trace_setup_error is not None:
-        steps.insert(
-            0,
-            "Tracing wasn't set up (deployed without it). Configure a writable experiment with "
-            "`mason tracing bind --experiment-name <path>` and redeploy. "
-            f"Cause: {trace_setup_error}",
+    if trace_experiment_id is None:
+        # Deployed without tracing - either unbound, or a bound experiment that couldn't be set up.
+        # Tell the developer (in case it wasn't intended) and point at `mason tracing bind`; append the
+        # cause when setup actually failed.
+        step = (
+            "Deployed without tracing. "
+            f"Run `{TRACING_BIND_COMMAND}` and redeploy to trace this agent."
         )
+        if trace_setup_error is not None:
+            step += f" (Tracing setup failed: {trace_setup_error})"
+        steps.insert(0, step)
     if trace_experiment_id and trace_grant_error is not None:
         steps.insert(
             0,

@@ -962,6 +962,7 @@ def test_deploy_wires_tracing_env_and_grants_experiment_resource(
     assert env["MLFLOW_TRACKING_URI"] == "databricks"
     # the experiment is granted to the app's SP as an app resource (no manual SQL grant)
     assert granted == {"app": "agent-mason-myapp", "experiment_id": "exp-42"}
+    assert "Deployed without tracing" not in result.output  # bound -> no unbound notice
 
 
 def test_deploy_proceeds_when_tracing_provisioning_raises(tmp_path: pathlib.Path, monkeypatch):
@@ -985,6 +986,29 @@ def test_deploy_proceeds_when_tracing_provisioning_raises(tmp_path: pathlib.Path
     assert result.exit_code == 0, result.output  # deploy still succeeded
     env_entries = yaml.safe_load((src / "app.yaml").read_text()).get("env") or []
     assert not any(e["name"].startswith("MLFLOW") for e in env_entries)  # tracing skipped
+    out = " ".join(result.output.split())
+    assert "Deployed without tracing" in out and "mason tracing bind" in out  # guidance shown
+    assert "mlflow create_experiment blew up" in out  # the cause is surfaced
+
+
+def test_deploy_notifies_when_tracing_unbound(tmp_path: pathlib.Path, monkeypatch):
+    # Unbound tracing deploys silently otherwise; surface a next-step so the developer knows (in case
+    # it wasn't intended) and can enable it. The autouse fixture stubs resolve -> None (unbound).
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+    assert result.exit_code == 0, result.output
+    out = " ".join(result.output.split())
+    assert "Deployed without tracing" in out
+    assert "mason tracing bind" in out  # points at the (parameter-free) enable command
+    assert "Tracing setup failed" not in out  # unbound is not an error, so no cause suffix
 
 
 def test_resolve_memory_store_pages_at_100_and_matches_display_name():

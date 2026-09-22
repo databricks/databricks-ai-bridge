@@ -44,6 +44,11 @@ _TRACES_DIR = "mason_traces"
 TRACES_TRACKING_URI_ENV = "MLFLOW_TRACKING_URI"
 TRACES_EXPERIMENT_ID_ENV = "MLFLOW_EXPERIMENT_ID"
 
+# The command that binds (enables) tracing. Referenced parameter-free by deploy's "deployed without
+# tracing" guidance and by `unbind`'s "turn it back on" step, so those hints can't go stale if the
+# flags change; the command's own `--help` documents the flags.
+TRACING_BIND_COMMAND = "mason tracing bind"
+
 
 def default_experiment_name(project: Optional[str], token: Optional[str] = None) -> str:
     """The default MLflow experiment path for a project: ``/Shared/mason_traces/<project>[-<token>]``.
@@ -574,9 +579,7 @@ def tracing_unbind(obj, source) -> None:
         return
     render.success(
         "Tracing unbound (off for the deployed agent; mason dev still traces locally)",
-        next_steps=[
-            ("mason tracing bind --experiment-name <path>", "Turn deployed tracing back on")
-        ],
+        next_steps=[(TRACING_BIND_COMMAND, "Turn deployed tracing back on")],
     )
 
 
