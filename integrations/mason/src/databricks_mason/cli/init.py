@@ -394,8 +394,6 @@ def init(
             token = "".join(secrets.choice(string.ascii_lowercase) for _ in range(6))
             memory_store = memory_store or default_store_name(dest.name, "memory", token)
             session_store = session_store or default_store_name(dest.name, "sessions", token)
-            # A default /Shared experiment name (username-free, so this stays offline); `mason deploy`
-            # get-or-creates it in the target workspace. Stored as a name, not an id, so it's portable.
             experiment_name = default_experiment_name(dest.name, token)
         project = AgentProject.create(
             dest,
