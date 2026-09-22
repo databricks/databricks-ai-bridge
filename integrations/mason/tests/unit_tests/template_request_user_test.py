@@ -96,10 +96,11 @@ async def test_user_hitl_input_rejected_before_framework_execution(template, mon
 
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
 @pytest.mark.parametrize("overlay", [False, True])
-def test_main_derives_auth_policy_after_configure(framework, overlay):
+def test_main_lets_agent_app_infer_auth_policy_after_configure(framework, overlay):
     root = TEMPLATES / "ui" if overlay else TEMPLATES
     source = (root / f"agent-{framework}" / "runtime/main.py").read_text()
-    assert "AgentApp(auth_policy=InvocationAuthPolicy.from_manifest())" in source
+    assert "app = AgentApp()" in source
+    assert "InvocationAuthPolicy" not in source
     assert source.index("configure()", source.index("load_dotenv(")) < source.index(
         "app = AgentApp"
     )

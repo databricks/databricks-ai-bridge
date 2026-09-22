@@ -35,9 +35,9 @@ from databricks_mason.app_resources import (
     apply_postgres_resources,
 )
 from databricks_mason.cli.app_auth import (
-    apply_app_auth,
-    prepare_app_auth,
-    required_user_scopes,
+    apply_app_user_scope_update,
+    plan_app_user_scope_update,
+    required_user_api_scopes,
     requires_user_auth,
 )
 from databricks_mason.cli.endpoint_examples import print_agent_invoke_command
@@ -478,10 +478,10 @@ def _grant_store_access(
     help="Number of deployment instances.",
 )
 @click.option(
-    "--adopt-user-auth",
+    "--allow-user-scope-update",
     is_flag=True,
-    help="Allow Mason to add missing user-auth scopes to an existing App. Once added, later deploys "
-    "do not need this flag.",
+    help="Allow Mason to add missing user API scopes to an existing App for tools configured with "
+    "auth = 'user'. Once added, later deploys do not need this flag.",
 )
 @click.pass_obj
 def deploy(
@@ -491,7 +491,7 @@ def deploy(
     pip_index_url,
     workspace_path,
     instances,
-    adopt_user_auth,
+    allow_user_scope_update,
 ) -> None:
     """Deploy your agent to Databricks Apps and get back a hosted URL to try it.
 
@@ -523,26 +523,31 @@ def deploy(
     base_name = _resolve_deployment_name(project, name)
     name = _prefixed_name(base_name)
     _validate_deployment_name(name)
-    if adopt_user_auth and not user_auth:
-        raise AgentCliError("--adopt-user-auth requires explicit user-auth tools in agent.toml.")
-    # User-auth source cannot work until the target App forwards request credentials with every
-    # required scope. Reconcile and verify that platform contract before stores, manifests, or source
-    # deployment can mutate remote state.
-    auth_plan = (
-        prepare_app_auth(
-            name, obj.profile, adopt=adopt_user_auth, required_scopes=required_user_scopes(project)
+    if allow_user_scope_update and not user_auth:
+        raise AgentCliError(
+            "--allow-user-scope-update requires a managed tool with auth = 'user' in agent.toml."
+        )
+    # A request-user tool cannot use OBO until the App forwards request credentials and grants every
+    # required user API scope. New Apps are configured automatically. For an existing App, adding a
+    # missing scope requires --allow-user-scope-update; already-configured Apps need no flag.
+    user_scope_plan = (
+        plan_app_user_scope_update(
+            name,
+            obj.profile,
+            allow_existing_app_update=allow_user_scope_update,
+            required_scopes=required_user_api_scopes(project),
         )
         if user_auth
         else None
     )
-    if auth_plan is not None:
+    if user_scope_plan is not None:
         click.echo(
             "User auth: scope updates are not atomic; coordinate with other App owners. "
             "Users may need to sign out and re-consent after scope changes. "
             "Scopes are never removed automatically when tools change.",
             err=True,
         )
-        apply_app_auth(auth_plan, instances=instances)
+        apply_app_user_scope_update(user_scope_plan, instances=instances)
     # Persist the base name so a later `mason deploy` (no NAME) resolves to the same app.
     if project is not None and project.set_deployment_name(base_name):
         project.write()
@@ -615,7 +620,7 @@ def deploy(
     #    `apps create` itself blocks for minutes (it provisions and waits for compute) and we capture
     #    its output to relabel "App compute" → "Agent compute", so nothing streams meanwhile. Wrap it
     #    in progress (persistent line + spinner) so the CLI isn't silent for the whole provision.
-    if auth_plan is None and not _deployment_exists(name, obj.profile):
+    if user_scope_plan is None and not _deployment_exists(name, obj.profile):
         with render.progress(
             "Creating the agent and starting its compute (this can take a few minutes)…"
         ):
@@ -627,7 +632,7 @@ def deploy(
             )
         old, new = _AGENT_COMPUTE_OUTPUT
         click.echo((result.stdout or "").replace(old, new), nl=False)
-    elif auth_plan is None and instance_args:
+    elif user_scope_plan is None and instance_args:
         update = {
             "app": {
                 "compute_min_instances": instances,

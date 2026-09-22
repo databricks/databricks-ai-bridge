@@ -20,11 +20,10 @@ _CUSTOM_SERVER_TEMPLATES = frozenset({"custom-agent-langgraph", "custom-agent-op
 
 @dataclass(frozen=True)
 class ProjectMetadata:
-    """Template identity and project-level request-auth compatibility from ``mason init``."""
+    """Template identity persisted by ``mason init``."""
 
     framework: AgentFramework
     template: str | None
-    request_auth_contract_version: int | None = None
 
 
 def write_project_metadata(
@@ -32,7 +31,6 @@ def write_project_metadata(
     *,
     framework: str,
     template: str,
-    request_auth_contract_version: int | None = None,
 ) -> pathlib.Path:
     """Write the metadata consumed by template-aware Mason commands."""
     selected_framework = parse_framework(framework)
@@ -41,12 +39,7 @@ def write_project_metadata(
     target.write_text(
         f"schema_version = {_SCHEMA_VERSION}\n"
         f"framework = {json.dumps(selected_framework.value)}\n"
-        f"template = {json.dumps(template)}\n"
-        + (
-            f"request_auth_contract_version = {request_auth_contract_version}\n"
-            if request_auth_contract_version is not None
-            else ""
-        ),
+        f"template = {json.dumps(template)}\n",
         encoding="utf-8",
     )
     return target
@@ -77,12 +70,7 @@ def _load_persisted_metadata(project: pathlib.Path) -> ProjectMetadata | None:
     template = data.get("template")
     if not isinstance(template, str) or not template:
         raise AgentCliError(f"Mason project config at {path} must declare a template.")
-    contract = data.get("request_auth_contract_version")
-    if contract is not None and (type(contract) is not int or contract != 1):
-        raise AgentCliError(f"Unsupported request_auth_contract_version in {path}.")
-    return ProjectMetadata(
-        framework=framework, template=template, request_auth_contract_version=contract
-    )
+    return ProjectMetadata(framework=framework, template=template)
 
 
 def _dependency_name(requirement: str) -> str:

@@ -44,17 +44,6 @@ def _default_store_token(manifest: dict, slug: str = "proj") -> str:
     return mem.group(1)
 
 
-@pytest.mark.parametrize("framework", ["langgraph", "openai"])
-def test_init_records_request_auth_contract_version(tmp_path, framework):
-    destination = tmp_path / "agent"
-    result = CliRunner().invoke(
-        init_mod.init, [str(destination), "--framework", framework], obj=_Ctx()
-    )
-    assert result.exit_code == 0, result.output
-    metadata = tomli.loads((destination / ".mason/project.toml").read_text())
-    assert metadata["request_auth_contract_version"] == 1
-
-
 def _copy_writing(files: dict[str, str] | None = None):
     """A `_copy_packaged_template` stub that creates the destination and optional files in it."""
 
@@ -135,7 +124,6 @@ def test_init_defaults_to_langgraph_with_chat_app(tmp_path: pathlib.Path):
             "schema_version": 1,
             "framework": "langgraph",
             "template": "agent-langgraph",
-            "request_auth_contract_version": 1,
         }
     with (dest / "agent.toml").open("rb") as manifest_file:
         manifest = tomli.load(manifest_file)

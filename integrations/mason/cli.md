@@ -972,7 +972,7 @@ _Options_
 | `--pip-index-url <PIP_INDEX_URL>` | string | `https://pypi.org/simple/` | no | Base URL of the Python Package Index. Defaults to public PyPI. |
 | `--workspace-path <WORKSPACE_PATH>` | string | - | no | Workspace destination for the synced source (defaults to a per-user path). |
 | `--instances <INSTANCES>` | integer range | - | no | Number of deployment instances. |
-| `--adopt-user-auth` | flag | - | no | Allow Mason to add missing user-auth scopes to an existing App. Once added, later deploys do not need this flag. |
+| `--allow-user-scope-update` | flag | - | no | Allow Mason to add missing user API scopes to an existing App for tools configured with `auth = 'user'`. Once added, later deploys do not need this flag. |
 
 ### `mason deployments`
 

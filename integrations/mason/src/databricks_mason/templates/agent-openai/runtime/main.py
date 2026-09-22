@@ -9,7 +9,6 @@ from agent.agent import configure
 from dotenv import load_dotenv
 
 from databricks_mason import AgentApp
-from databricks_mason.runtime.auth import InvocationAuthPolicy
 from runtime.adapter import invoke, recover
 
 # override=False so injected DATABRICKS_* (from `mason dev -p` or the deploy platform) win over a
@@ -17,7 +16,7 @@ from runtime.adapter import invoke, recover
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=False)
 configure()
 
-app = AgentApp(auth_policy=InvocationAuthPolicy.from_manifest())
+app = AgentApp()
 app.invoke(invoke)
 app.recover(recover)
 
