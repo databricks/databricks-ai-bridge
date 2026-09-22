@@ -413,7 +413,6 @@ def init(
             dest,
             framework=selected_framework,
             template=template_name,
-            request_auth_contract_version=1 if mason_server else None,
         )
         experiment_name = None
         if mason_server:

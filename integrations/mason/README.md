@@ -574,10 +574,9 @@ Managed-tool add commands write the selected identity to `agent.toml`; inspect t
 review configured bindings. Missing legacy auth continues to mean App identity at runtime; it is
 never silently upgraded to user identity.
 
-New Mason-server projects record `request_auth_contract_version = 1` in `.mason/project.toml`.
-This is a project-level template compatibility marker, not a per-tool scope: version 1 certifies
-that the generated request path keeps a transient user credential request-owned and passes its
-client resolver through each managed-tool adapter for the active attempt.
+`AgentApp` derives its request-auth policy directly from the managed tool bindings in `agent.toml`.
+Projects do not maintain a separate request-auth contract marker: the presence of any managed tool
+with `auth = "user"` makes the invocation require a transient request-user credential.
 
 Request-user invocations use the same synchronous, streaming, background, status, event-replay,
 and idempotency APIs as app-auth invocations. The Runtime Store records only token-free request
@@ -586,23 +585,23 @@ attempt and closes when that attempt completes, fails, or is cancelled. A replac
 failure recovery stops with `MCP_USER_AUTH_RECOVERY_UNSUPPORTED` because no user credential is
 available; neither the invoke nor recovery handler runs for that attempt.
 
-Before deploying user-auth tools from an older project, migrate its request handler to the
-current request-auth-aware `AgentApp` template, explicitly choose `user` or `app` on **every**
-managed MCP/sandbox entry, then set that metadata marker. Merely adding the marker does not
-upgrade copied Python code. Deploy rejects missing/invalid markers and incomplete migration
-before creating stores, changing App settings, or rewriting project files. App-only legacy
-projects and generic bring-your-own source directories keep the existing deployment path.
+Before deploying user-auth tools from an older project, migrate its request handler and framework
+adapter to the current request-auth-aware `AgentApp` template, then explicitly choose `user` or
+`app` on **every** managed MCP/sandbox entry. Changing `agent.toml` alone does not upgrade copied
+Python adapter code. Outdated adapters fail closed rather than silently using App identity.
+App-only legacy projects and generic bring-your-own source directories keep the existing path.
 
 Any user-auth tool requires the Apps `ai-gateway` user scope. For a new App, deploy explicitly
 enables user-token forwarding and includes the scope in the initial typed SDK create request before
-uploading source. An existing App that is missing a required scope needs one-time explicit adoption:
+uploading source. Updating an existing App that is missing a required scope needs one-time explicit
+permission:
 
 ```sh
-mason --profile my-workspace deploy my-agent --adopt-user-auth
+mason --profile my-workspace deploy my-agent --allow-user-scope-update
 ```
 
-Review the target App's scopes and coordinate with its other owners before adopting. Once those
-scopes are present, later deploys do not need the flag. Mason preserves unrelated configured scopes,
+Review the target App's scopes and coordinate with its other owners before allowing the update. Once
+those scopes are present, later deploys do not need the flag. Mason preserves unrelated scopes,
 updates only user scopes and any explicitly requested instance counts, and checks requested **and
 effective** scopes before source rollout. It checks for scope changes since preflight, but Apps
 read/write is **not atomic**; this is not a lock or a compare-and-swap guarantee. Polling is bounded

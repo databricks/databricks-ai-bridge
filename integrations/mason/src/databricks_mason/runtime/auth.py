@@ -44,10 +44,17 @@ class InvocationAuthPolicy:
         return bool(self.user_tools)
 
     @classmethod
-    def from_manifest(cls) -> InvocationAuthPolicy:
+    def from_manifest(cls, *, allow_missing: bool = False) -> InvocationAuthPolicy:
+        """Infer request-user tools from ``agent.toml`` in the active project."""
         from databricks_mason.runtime.tool_manifest import load_tools, project_root, tomllib
 
-        with (project_root() / "agent.toml").open("rb") as source:
+        try:
+            root = project_root()
+        except RuntimeError:
+            if allow_missing and not os.getenv("MASON_PROJECT_ROOT"):
+                return cls()
+            raise
+        with (root / "agent.toml").open("rb") as source:
             document = tomllib.load(source)
         tools = load_tools(expected_framework=document.get("agent", {}).get("framework", ""))
         return cls(tuple(tool.id for tool in tools if tool.auth == "user"))

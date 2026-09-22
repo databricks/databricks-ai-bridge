@@ -11,7 +11,6 @@ from databricks.sdk.service.apps import App
 from databricks_mason.agent_project import AgentProject, ToolSpec
 from databricks_mason.cli import deploy as deploy_mod
 from databricks_mason.errors import AgentCliError
-from databricks_mason.project_config import write_project_metadata
 
 
 @pytest.fixture(autouse=True)
@@ -30,56 +29,17 @@ def _no_remote_provisioning(monkeypatch):
     return runtime_store
 
 
-def _project(root, *, marker=1, auth="user", legacy=False):
+def _project(root, *, auth="user", legacy=False):
     project = AgentProject.create(root, framework="langgraph", server="mason")
     project.add_tool(ToolSpec.mcp("search", service="system.ai.web_search", auth=auth))
     if legacy:
         project.add_tool(ToolSpec.mcp("legacy", service="system.ai.python_exec"))
     project.write()
-    if marker != "missing":
-        write_project_metadata(root, framework="langgraph", template="agent-langgraph")
-        if marker is not None:
-            with (root / ".mason/project.toml").open("a") as metadata:
-                metadata.write(f"request_auth_contract_version = {marker}\n")
     return project
 
 
-@pytest.mark.parametrize("marker", ["missing", None, 0, 2, "true", '"1"'])
-def test_invalid_contract_fails_before_any_deploy_side_effect(tmp_path, monkeypatch, marker):
-    project = _project(tmp_path, marker=marker)
-    before = project.path.read_text()
-    client = Mock()
-    cloud = Mock()
-    monkeypatch.setattr(deploy_mod, "_databricks", cloud)
-    result = CliRunner().invoke(
-        deploy_mod.deploy,
-        ["test", "--source", str(tmp_path)],
-        obj=SimpleNamespace(profile="selected", output="text", client=client),
-    )
-    assert result.exit_code != 0
-    assert "request_auth_contract_version" in result.output
-    client.assert_not_called()
-    cloud.assert_not_called()
-    assert project.path.read_text() == before
-    assert not (tmp_path / "app.yaml").exists()
-
-
-def test_missing_contract_hint_describes_request_auth_recovery_boundary(tmp_path):
-    _project(tmp_path, marker="missing")
-    result = CliRunner().invoke(
-        deploy_mod.deploy,
-        ["test", "--source", str(tmp_path)],
-        obj=SimpleNamespace(profile="selected", output="text", client=Mock()),
-    )
-
-    assert result.exit_code != 0
-    assert "Failure recovery is unsupported for request-user attempts" in result.output
-    assert "background execution is unsupported" not in result.output
-
-
-@pytest.mark.parametrize("auth", ["user", "app"])
-def test_contract_requires_explicit_auth_on_every_managed_binding(tmp_path, monkeypatch, auth):
-    _project(tmp_path, legacy=True, auth=auth)
+def test_user_auth_requires_explicit_auth_on_every_managed_binding(tmp_path, monkeypatch):
+    _project(tmp_path, legacy=True, auth="user")
     client = Mock()
     result = CliRunner().invoke(
         deploy_mod.deploy,
@@ -118,24 +78,26 @@ def _sdk(monkeypatch, existing=None):
 
 
 @pytest.mark.parametrize("auth,expected", [("user", {"ai-gateway"}), ("app", set()), (None, set())])
-def test_required_user_scopes_follow_managed_auth(tmp_path, auth, expected):
-    from databricks_mason.cli.app_auth import required_user_scopes
+def test_required_user_api_scopes_follow_managed_auth(tmp_path, auth, expected):
+    from databricks_mason.cli.app_auth import required_user_api_scopes
 
     project = AgentProject.create(tmp_path, framework="langgraph", server="mason")
     project.add_tool(ToolSpec.mcp("search", service="system.ai.web_search", auth=auth))
-    assert required_user_scopes(project) == expected
-    assert required_user_scopes(None) == set()
+    assert required_user_api_scopes(project) == expected
+    assert required_user_api_scopes(None) == set()
 
 
-def test_prepare_app_auth_uses_exact_required_scopes(monkeypatch):
+def test_scope_update_plan_uses_exact_required_scopes(monkeypatch):
     app_auth, _, _ = _sdk(monkeypatch)
 
-    plan = app_auth.prepare_app_auth("app", "selected", adopt=False, required_scopes={"genie"})
+    plan = app_auth.plan_app_user_scope_update(
+        "app", "selected", allow_existing_app_update=False, required_scopes={"genie"}
+    )
 
     assert plan.scopes == ("genie",)
 
 
-def test_existing_app_requires_explicit_adoption(tmp_path, monkeypatch):
+def test_existing_app_requires_explicit_scope_update_permission(tmp_path, monkeypatch):
     _project(tmp_path)
     _, apps, workspace = _sdk(monkeypatch, App(name="agent-mason-test", user_api_scopes=["sql"]))
     client = Mock()
@@ -145,14 +107,14 @@ def test_existing_app_requires_explicit_adoption(tmp_path, monkeypatch):
         obj=SimpleNamespace(profile="selected", output="text", client=client),
     )
     assert result.exit_code != 0
-    assert "--adopt-user-auth" in result.output
+    assert "--allow-user-scope-update" in result.output
     client.assert_not_called()
     apps.create.assert_not_called()
     apps.create_update.assert_not_called()
     workspace.assert_called_once_with(profile="selected")
 
 
-def test_existing_scoped_app_does_not_require_repeated_adoption(monkeypatch):
+def test_existing_scoped_app_does_not_require_repeated_scope_update_permission(monkeypatch):
     existing = App(
         name="app",
         user_api_scopes=["ai-gateway", "sql"],
@@ -160,7 +122,7 @@ def test_existing_scoped_app_does_not_require_repeated_adoption(monkeypatch):
     )
     app_auth, _, _ = _sdk(monkeypatch, existing)
 
-    plan = app_auth.prepare_app_auth("app", "selected", adopt=False)
+    plan = app_auth.plan_app_user_scope_update("app", "selected", allow_existing_app_update=False)
 
     assert plan.existing_scopes == ("ai-gateway", "sql")
     assert plan.scopes == plan.existing_scopes
@@ -170,14 +132,14 @@ def test_sdk_read_permission_denied_is_not_treated_as_new_app(monkeypatch):
     app_auth, apps, _ = _sdk(monkeypatch)
     apps.get.side_effect = PermissionDenied("denied")
     with pytest.raises(AgentCliError, match="read"):
-        app_auth.prepare_app_auth("app", "selected", adopt=False)
+        app_auth.plan_app_user_scope_update("app", "selected", allow_existing_app_update=False)
     apps.create.assert_not_called()
 
 
-def test_adopted_app_preserves_unrelated_scopes_and_uses_narrow_mask(monkeypatch):
+def test_existing_app_scope_update_preserves_unrelated_scopes_and_uses_narrow_mask(monkeypatch):
     existing = App(name="app", user_api_scopes=["sql"], effective_user_api_scopes=["sql"])
     app_auth, apps, _ = _sdk(monkeypatch, existing)
-    plan = app_auth.prepare_app_auth("app", "selected", adopt=True)
+    plan = app_auth.plan_app_user_scope_update("app", "selected", allow_existing_app_update=True)
     apps.get.side_effect = [
         existing,
         App(
@@ -186,7 +148,7 @@ def test_adopted_app_preserves_unrelated_scopes_and_uses_narrow_mask(monkeypatch
             effective_user_api_scopes=["ai-gateway", "sql"],
         ),
     ]
-    app_auth.apply_app_auth(plan, instances=2)
+    app_auth.apply_app_user_scope_update(plan, instances=2)
     payload = apps.create_update.call_args.kwargs
     assert set(payload["update_mask"].split(",")) == {
         "user_api_scopes",
@@ -204,19 +166,19 @@ def test_adopted_app_preserves_unrelated_scopes_and_uses_narrow_mask(monkeypatch
 
 def test_changed_scopes_abort_instead_of_overwriting_another_owner(monkeypatch):
     app_auth, apps, _ = _sdk(monkeypatch, App(name="app", user_api_scopes=["sql"]))
-    plan = app_auth.prepare_app_auth("app", "selected", adopt=True)
+    plan = app_auth.plan_app_user_scope_update("app", "selected", allow_existing_app_update=True)
     apps.get.return_value = App(name="app", user_api_scopes=["sql", "files"])
     with pytest.raises(AgentCliError, match="changed"):
-        app_auth.apply_app_auth(plan)
+        app_auth.apply_app_user_scope_update(plan)
     apps.create_update.assert_not_called()
 
 
 def test_effective_scopes_poll_is_bounded_and_fails_closed(monkeypatch):
     app_auth, apps, _ = _sdk(monkeypatch, App(name="app", user_api_scopes=["ai-gateway"]))
-    plan = app_auth.prepare_app_auth("app", "selected", adopt=True)
+    plan = app_auth.plan_app_user_scope_update("app", "selected", allow_existing_app_update=True)
     monkeypatch.setattr(app_auth.time, "sleep", lambda _: None)
     with pytest.raises(AgentCliError, match="effective"):
-        app_auth.apply_app_auth(plan, attempts=3)
+        app_auth.apply_app_user_scope_update(plan, attempts=3)
     assert apps.get.call_count <= 5
 
 
@@ -224,9 +186,12 @@ def test_empty_scope_removal_stops_before_sdk_drops_empty_list(monkeypatch):
     from dataclasses import replace
 
     app_auth, apps, _ = _sdk(monkeypatch, App(name="app", user_api_scopes=["ai-gateway"]))
-    plan = replace(app_auth.prepare_app_auth("app", "selected", adopt=True), scopes=())
+    plan = replace(
+        app_auth.plan_app_user_scope_update("app", "selected", allow_existing_app_update=True),
+        scopes=(),
+    )
     with pytest.raises(AgentCliError, match="remov"):
-        app_auth.apply_app_auth(plan)
+        app_auth.apply_app_user_scope_update(plan)
     apps.create_update.assert_not_called()
     assert App(name="app", user_api_scopes=[]).as_dict() == {"name": "app"}
 
@@ -235,9 +200,12 @@ def test_nonempty_scope_removal_also_requires_manual_action(monkeypatch):
     from dataclasses import replace
 
     app_auth, apps, _ = _sdk(monkeypatch, App(name="app", user_api_scopes=["ai-gateway", "sql"]))
-    plan = replace(app_auth.prepare_app_auth("app", "selected", adopt=True), scopes=("ai-gateway",))
+    plan = replace(
+        app_auth.plan_app_user_scope_update("app", "selected", allow_existing_app_update=True),
+        scopes=("ai-gateway",),
+    )
     with pytest.raises(AgentCliError, match="remov"):
-        app_auth.apply_app_auth(plan)
+        app_auth.apply_app_user_scope_update(plan)
     apps.create_update.assert_not_called()
 
 
@@ -246,24 +214,24 @@ def test_update_wait_failure_stops_before_effective_scope_success(monkeypatch):
         monkeypatch,
         App(name="app", user_api_scopes=["ai-gateway"], effective_user_api_scopes=["ai-gateway"]),
     )
-    plan = app_auth.prepare_app_auth("app", "selected", adopt=True)
+    plan = app_auth.plan_app_user_scope_update("app", "selected", allow_existing_app_update=True)
     apps.create_update.return_value.result.side_effect = PermissionDenied("update failed")
     with pytest.raises(AgentCliError, match="reconcile"):
-        app_auth.apply_app_auth(plan, instances=2)
+        app_auth.apply_app_user_scope_update(plan, instances=2)
 
 
 def test_unknown_configured_scopes_do_not_overwrite_effective_grants(monkeypatch):
     app_auth, apps, _ = _sdk(monkeypatch, App(name="app", effective_user_api_scopes=["sql"]))
     with pytest.raises(AgentCliError, match="configured scopes"):
-        app_auth.prepare_app_auth("app", "selected", adopt=True)
+        app_auth.plan_app_user_scope_update("app", "selected", allow_existing_app_update=True)
     apps.create_update.assert_not_called()
 
 
-def test_adoption_does_not_request_implicit_identity_defaults(monkeypatch):
+def test_scope_update_does_not_request_implicit_identity_defaults(monkeypatch):
     defaults = ["iam.access-control:read", "iam.current-user:read"]
     existing = App(name="app", effective_user_api_scopes=defaults)
     app_auth, apps, _ = _sdk(monkeypatch, existing)
-    plan = app_auth.prepare_app_auth("app", "selected", adopt=True)
+    plan = app_auth.plan_app_user_scope_update("app", "selected", allow_existing_app_update=True)
     assert plan.existing_scopes == ()
     assert plan.scopes == ("ai-gateway",)
     updated = App(
@@ -272,7 +240,7 @@ def test_adoption_does_not_request_implicit_identity_defaults(monkeypatch):
         effective_user_api_scopes=[*plan.scopes, *defaults],
     )
     apps.get.side_effect = [existing, updated]
-    app_auth.apply_app_auth(plan, attempts=1)
+    app_auth.apply_app_user_scope_update(plan, attempts=1)
     assert apps.create_update.call_args.kwargs["app"].as_dict() == {
         "name": "app",
         "user_api_scopes": ["ai-gateway"],
@@ -285,7 +253,7 @@ def test_omitted_config_rejects_unexplained_effective_extras(monkeypatch, extra)
         monkeypatch, App(name="app", effective_user_api_scopes=["iam.current-user:read", extra])
     )
     with pytest.raises(AgentCliError, match="configured scopes"):
-        app_auth.prepare_app_auth("app", "selected", adopt=True)
+        app_auth.plan_app_user_scope_update("app", "selected", allow_existing_app_update=True)
     apps.create.assert_not_called()
     apps.create_update.assert_not_called()
 
@@ -299,10 +267,10 @@ def test_effective_verification_allows_only_observed_identity_defaults(monkeypat
         effective_user_api_scopes=[*configured, "iam.access-control:read", "iam.current-user:read"],
     )
     app_auth, apps, _ = _sdk(monkeypatch, None if new_app else ready)
-    plan = app_auth.prepare_app_auth("app", "selected", adopt=True)
+    plan = app_auth.plan_app_user_scope_update("app", "selected", allow_existing_app_update=True)
     apps.get.side_effect = None
     apps.get.return_value = ready
-    app_auth.apply_app_auth(plan, attempts=1)
+    app_auth.apply_app_user_scope_update(plan, attempts=1)
     if new_app:
         assert apps.create.call_args.args[0].as_dict() == {
             "name": "app",
@@ -328,9 +296,9 @@ def test_effective_verification_rejects_missing_required_or_unexplained_scopes(
         monkeypatch,
         App(name="app", user_api_scopes=["ai-gateway"], effective_user_api_scopes=effective),
     )
-    plan = app_auth.prepare_app_auth("app", "selected", adopt=True)
+    plan = app_auth.plan_app_user_scope_update("app", "selected", allow_existing_app_update=True)
     with pytest.raises(AgentCliError, match="effective"):
-        app_auth.apply_app_auth(plan, attempts=1)
+        app_auth.apply_app_user_scope_update(plan, attempts=1)
     apps.create_update.assert_not_called()
 
 
@@ -356,7 +324,7 @@ def test_disabled_forwarding_fails_deploy_before_app_or_store_mutations(tmp_path
     )
     result = CliRunner().invoke(
         deploy_mod.deploy,
-        ["test", "--source", str(tmp_path), "--adopt-user-auth"],
+        ["test", "--source", str(tmp_path), "--allow-user-scope-update"],
         obj=SimpleNamespace(profile="selected", output="text", client=client),
     )
     assert result.exit_code != 0
@@ -371,27 +339,27 @@ def test_disabled_forwarding_fails_deploy_before_app_or_store_mutations(tmp_path
 
 def test_forwarding_disabled_after_preflight_stops_before_update(monkeypatch):
     app_auth, apps, _ = _sdk(monkeypatch, App(name="app", user_api_scopes=["sql"]))
-    plan = app_auth.prepare_app_auth("app", "selected", adopt=True)
+    plan = app_auth.plan_app_user_scope_update("app", "selected", allow_existing_app_update=True)
     apps.get.return_value = App(
         name="app", user_api_scopes=["sql"], forward_user_access_token=False
     )
     with pytest.raises(AgentCliError, match="forward_user_access_token"):
-        app_auth.apply_app_auth(plan, attempts=1)
+        app_auth.apply_app_user_scope_update(plan, attempts=1)
     apps.create_update.assert_not_called()
 
 
 def test_unexplained_effective_grants_after_preflight_stop_before_update(monkeypatch):
     app_auth, apps, _ = _sdk(monkeypatch, App(name="app"))
-    plan = app_auth.prepare_app_auth("app", "selected", adopt=True)
+    plan = app_auth.plan_app_user_scope_update("app", "selected", allow_existing_app_update=True)
     apps.get.return_value = App(name="app", effective_user_api_scopes=["sql"])
     with pytest.raises(AgentCliError, match="configured scopes"):
-        app_auth.apply_app_auth(plan, attempts=1)
+        app_auth.apply_app_user_scope_update(plan, attempts=1)
     apps.create_update.assert_not_called()
 
 
 def test_disabled_forwarding_during_verification_stops_deploy(monkeypatch):
     app_auth, apps, _ = _sdk(monkeypatch)
-    plan = app_auth.prepare_app_auth("app", "selected", adopt=False)
+    plan = app_auth.plan_app_user_scope_update("app", "selected", allow_existing_app_update=False)
     apps.get.side_effect = None
     apps.get.return_value = App(
         name="app",
@@ -400,14 +368,12 @@ def test_disabled_forwarding_during_verification_stops_deploy(monkeypatch):
         forward_user_access_token=False,
     )
     with pytest.raises(AgentCliError, match="forward_user_access_token"):
-        app_auth.apply_app_auth(plan, attempts=1)
+        app_auth.apply_app_user_scope_update(plan, attempts=1)
 
 
 @pytest.mark.parametrize("auth", [None, "app"])
-def test_app_only_contract_keeps_deployment_path(
-    tmp_path, monkeypatch, auth, _no_remote_provisioning
-):
-    _project(tmp_path, marker=None, auth=auth)
+def test_app_only_tools_keep_deployment_path(tmp_path, monkeypatch, auth, _no_remote_provisioning):
+    _project(tmp_path, auth=auth)
     app_auth, apps, workspace = _sdk(monkeypatch)
     calls = []
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda *args: False)

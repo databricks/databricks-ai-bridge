@@ -12,7 +12,6 @@ from databricks.sdk.service.apps import App, AppsAPI
 
 from databricks_mason.agent_project import AgentProject
 from databricks_mason.errors import AgentCliError
-from databricks_mason.project_config import load_project_metadata
 from databricks_mason.project_types import AgentServer
 
 _IDENTITY_DEFAULT_SCOPES = frozenset({"iam.access-control:read", "iam.current-user:read"})
@@ -34,35 +33,29 @@ def _validate_implicit_identity_scopes(app: App) -> None:
     if effective - _IDENTITY_DEFAULT_SCOPES:
         raise AgentCliError(
             "Apps did not return configured scopes for an App with unexplained effective grants.",
-            hint="Inspect the App's scope configuration with its owner before retrying adoption.",
+            hint="Inspect the App's scope configuration with its owner before retrying the scope "
+            "update.",
         )
 
 
 def requires_user_auth(project: AgentProject | None) -> bool:
-    """Validate the local contract before any deployment or store mutation."""
+    """Infer request-user auth from tool bindings before any deployment mutation."""
     if project is None or not project.tools:
         return False
     managed = [tool for tool in project.tools if tool.source.kind in ("mcp", "sandbox")]
     user_auth = any(tool.auth == "user" for tool in managed)
-    metadata = None
-    if (project.root / ".mason/project.toml").is_file():
-        metadata = load_project_metadata(project.root)
-    # This is a project-level template compatibility marker, not a per-tool scope version. Version
-    # 1 means the generated request path owns a transient RequestAuthContext and passes its client
-    # resolver into every managed-tool adapter for the lifetime of the active attempt.
-    contract = metadata.request_auth_contract_version if metadata else None
-    if user_auth and (contract != 1 or project.server != AgentServer.MASON):
+    if user_auth and project.server != AgentServer.MASON:
         raise AgentCliError(
-            "User auth requires request_auth_contract_version = 1 in .mason/project.toml.",
-            hint="Migrate to the request-auth-aware Mason AgentApp template before setting the "
-            "marker. Failure recovery is unsupported for request-user attempts because the "
-            "credential is transient.",
+            "Managed tools with auth = 'user' require [agent].server = 'mason'.",
+            hint="Migrate to the request-auth-aware Mason AgentApp template before enabling user "
+            "auth. Failure recovery is unsupported for request-user attempts because the credential "
+            "is transient.",
         )
-    if user_auth or contract == 1:
+    if user_auth:
         unspecified = [tool.id for tool in managed if tool.auth is None]
         if unspecified:
             raise AgentCliError(
-                "Request-auth contract migration requires explicit auth on every managed "
+                "Request-user tools require explicit auth on every managed "
                 f"MCP/sandbox binding: {', '.join(unspecified)}.",
                 hint="Choose auth = 'app' to preserve legacy identity, or explicitly choose 'user'.",
             )
@@ -70,15 +63,15 @@ def requires_user_auth(project: AgentProject | None) -> bool:
 
 
 @dataclass(frozen=True)
-class AppAuthPlan:
+class AppUserScopeUpdatePlan:
     apps: AppsAPI
     name: str
     existing_scopes: tuple[str, ...] | None
     scopes: tuple[str, ...]
 
 
-def required_user_scopes(project: AgentProject | None) -> set[str]:
-    """Return baseline Apps scopes for request-user managed tools."""
+def required_user_api_scopes(project: AgentProject | None) -> set[str]:
+    """Return Databricks Apps user API scopes required by request-user tools."""
     if project is None:
         return set()
     # TODO: Return the least-privilege Apps scope for each supported request-user tool kind/service.
@@ -89,14 +82,19 @@ def required_user_scopes(project: AgentProject | None) -> set[str]:
     }
 
 
-def prepare_app_auth(
+def plan_app_user_scope_update(
     name: str,
     profile: str | None,
     *,
-    adopt: bool,
+    allow_existing_app_update: bool,
     required_scopes: set[str] | None = None,
-) -> AppAuthPlan:
-    """Read scope ownership before mutations; adding scopes to an existing App needs adoption."""
+) -> AppUserScopeUpdatePlan:
+    """Plan user-scope creation or addition without changing the Databricks App.
+
+    A new App can be created with the requested user API scopes automatically. An existing App is
+    left unchanged unless all requested scopes are already present or the caller explicitly allows
+    Mason to add the missing scopes.
+    """
     try:
         apps = WorkspaceClient(profile=profile).apps
         try:
@@ -112,21 +110,26 @@ def prepare_app_auth(
     configured = tuple(sorted(set(existing.user_api_scopes or []))) if existing else None
     requested = {"ai-gateway"} if required_scopes is None else required_scopes
     scopes = tuple(sorted({*(configured or ()), *requested}))
-    if existing is not None and scopes != configured and not adopt:
+    if existing is not None and scopes != configured and not allow_existing_app_update:
         raise AgentCliError(
-            f"App '{name}' is missing required user-auth scopes; re-run with --adopt-user-auth.",
-            hint="Review its existing scopes and coordinate with other owners first. Adoption "
-            "preserves unrelated scopes; later deploys do not need the flag once scopes are present.",
+            f"App '{name}' is missing required user API scopes; re-run with "
+            "--allow-user-scope-update to add them.",
+            hint="Review the existing App scopes and coordinate with other owners first. Mason "
+            "preserves unrelated scopes; later deploys do not need the flag once all required "
+            "scopes are present.",
         )
-    return AppAuthPlan(apps=apps, name=name, existing_scopes=configured, scopes=scopes)
+    return AppUserScopeUpdatePlan(apps=apps, name=name, existing_scopes=configured, scopes=scopes)
 
 
-def apply_app_auth(plan: AppAuthPlan, *, instances: int | None = None, attempts: int = 12) -> None:
-    """Apply only nonempty scopes, preserving unrelated settings, then verify effective scopes.
+def apply_app_user_scope_update(
+    plan: AppUserScopeUpdatePlan, *, instances: int | None = None, attempts: int = 12
+) -> None:
+    """Create a scoped App or add missing user API scopes to an existing App.
 
-    The read-before-write check detects known drift, not all races: Apps has no compare-and-swap
-    contract here. Explicit adoption requires owners to coordinate writes. Scope removal is never
-    automatic, including when the manifest becomes app-only.
+    New Apps enable user-token forwarding at creation. Existing Apps retain unrelated scopes and
+    settings; the update mask includes only user API scopes and explicitly requested instance
+    fields. The read-before-write check detects known drift, but Apps has no compare-and-swap
+    contract, so owners must still coordinate concurrent updates. Scope removal is never automatic.
     """
     if not plan.scopes or not set(plan.existing_scopes or ()).issubset(plan.scopes):
         raise AgentCliError(
