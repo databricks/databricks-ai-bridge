@@ -38,8 +38,8 @@ from databricks_mason.cli.endpoint_examples import print_agent_invoke_command
 from databricks_mason.cli.tracing import (
     TRACES_EXPERIMENT_ID_ENV,
     TRACES_TRACKING_URI_ENV,
+    TRACING_BIND_COMMAND,
     create_experiment_idempotent,
-    default_experiment_name,
     experiment_url,
 )
 from databricks_mason.databricks_cli import _databricks
@@ -310,20 +310,24 @@ def _load_project(source: pathlib.Path):
     return AgentProject.load(source)
 
 
-def store_bindings(source: pathlib.Path) -> tuple[Optional[str], Optional[str]]:
-    """The (memory, session) stores bound in agent.toml via `mason memory/sessions bind`.
+def resource_bindings(
+    source: pathlib.Path,
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """The (memory store, session store, tracing experiment) bound in agent.toml.
 
-    agent.toml is the single source of truth for an agent's stores. Both `mason dev` and `mason
-    deploy` resolve through here so the store env AND the deploy-time access grant honor the same
-    bindings. A missing agent.toml means no stores; an invalid manifest fails with a clear error.
+    agent.toml is the single source of truth for an agent's resources. Both `mason dev` and `mason
+    deploy` resolve through here so the resource env/notices AND the deploy-time provisioning honor the
+    same bindings. A missing agent.toml means nothing is bound; an invalid manifest fails with a clear
+    error.
     """
     project = _load_project(source)
     if project is None:
-        return None, None
+        return None, None, None
     # str(): agent.toml bindings come back as tomlkit strings, which don't serialize to app.yaml.
     memory = str(project.memory_store) if project.memory_store else None
     session = str(project.session_store) if project.session_store else None
-    return memory, session
+    experiment = str(project.trace_experiment_name) if project.trace_experiment_name else None
+    return memory, session, experiment
 
 
 def _resolve_deployment_name(project, name: Optional[str]) -> str:
@@ -367,16 +371,12 @@ def _reconcile_declared_stores(
     return memory_store_id
 
 
-def resolve_trace_experiment_id(
-    source: pathlib.Path, project_name: str, client, profile
-) -> Optional[str]:
-    """Get-or-create this project's MLflow experiment in the ``profile``'s workspace and return its
-    id, or None when tracing is disabled.
+def get_or_create_trace_experiment(source: pathlib.Path, client, profile) -> Optional[str]:
+    """Get-or-create this project's bound MLflow experiment in the ``profile``'s workspace and return
+    its id, or None when tracing is unbound (no ``experiment_name`` in agent.toml).
 
-    Resolves by experiment **name**, never a stored id: the ``experiment_name`` configured in
-    agent.toml, else a default derived from ``project_name``. ``source`` locates agent.toml;
-    ``project_name`` is the Mason project name (the source directory's basename). Nothing is written
-    back to agent.toml. Raises if the experiment can't be created.
+    Resolves by experiment **name**, never a stored id. ``source`` locates agent.toml. Nothing is
+    written back to agent.toml. Raises if the experiment can't be created.
     """
     from databricks_mason.agent_project import AgentProject  # noqa: PLC0415 - avoid import cycle
 
@@ -384,22 +384,22 @@ def resolve_trace_experiment_id(
         project = AgentProject.load(source)
     except AgentCliError:
         project = None
-    if project is not None and project.trace_disabled:
-        return None
     name = project.trace_experiment_name if project is not None else None
     if not name:
-        # TODO: drop this default-name fallback once tracing/session/memory are consolidated so deploy
-        # provisions only what's explicitly configured in agent.toml.
-        name = default_experiment_name(project_name)
-    return create_experiment_idempotent(profile, client, name)
+        return None
+    # Show progress while the experiment is get-or-created (a workspace round-trip), matching the
+    # memory/session store reconcile spinners so deploy isn't silent about tracing.
+    with render.status(f"Reconciling tracing experiment '{name}'…"):
+        return create_experiment_idempotent(profile, client, name)
 
 
 @dataclass(frozen=True)
 class MlflowTracingConfig:
-    """The MLflow config that binds a dev/deployed agent to its experiment.
+    """The MLflow config that binds a deployed agent to its workspace experiment.
 
     The agent enables tracing when it sees both a destination (the workspace tracking uri) and an
-    experiment id; ``env`` renders them as the two env vars wired into app.yaml.
+    experiment id; ``env`` renders them as the two env vars wired into app.yaml. (`mason dev` builds
+    its own local tracing env instead - see ``cli.tracing.start_local_tracing_server``.)
     """
 
     experiment_id: str
@@ -413,7 +413,7 @@ class MlflowTracingConfig:
 
 
 def mlflow_tracing_config(experiment_id: str) -> MlflowTracingConfig:
-    """The tracing config binding a dev/deployed agent to ``experiment_id``."""
+    """The tracing config binding a deployed agent to ``experiment_id``."""
     return MlflowTracingConfig(experiment_id=experiment_id)
 
 
@@ -518,22 +518,19 @@ def deploy(
 
     # 1. Reconcile the stores DECLARED in agent.toml: create any that don't exist yet. `mason deploy`
     #    is the only reconcile-to-cloud verb; agent.toml is the source of truth and is never rewritten.
-    memory_store, session_store = store_bindings(source_dir)
+    memory_store, session_store, _ = resource_bindings(source_dir)
     memory_store_id = _reconcile_declared_stores(memory_store, session_store, client)
 
-    # 2. Provision tracing (on by default): resolve/create the agent's MLflow experiment and wire the
-    #    two env vars the runtime reads. Keyed on the source dir name (NOT the deployment's
-    #    agent-mason-prefixed name), matching `mason dev`, so dev and deploy trace to the same project
-    #    experiment. On first run the resolved default experiment id is pinned into agent.toml, so
-    #    later runs reuse it. The app's SP is granted write access to it in step 5 (an experiment app
-    #    resource). Best-effort: if it can't be set up (no mlflow, offline, permission), the deploy
-    #    still proceeds without tracing.
+    # 2. Provision tracing when bound (`mason init` binds a default experiment): get-or-create the
+    #    experiment NAME from agent.toml and wire the two env vars the runtime reads. Resolved by name,
+    #    never a stored id, and nothing is written back to agent.toml. (`mason dev` traces to a local
+    #    MLflow server instead and never touches this workspace experiment.) The app's SP is granted
+    #    write access to it in step 5 (an experiment app resource). Best-effort: if it can't be set up
+    #    (no mlflow, offline, permission), the deploy still proceeds without tracing.
     trace_experiment_id: Optional[str] = None
     trace_setup_error: Optional[str] = None
     try:
-        trace_experiment_id = resolve_trace_experiment_id(
-            source_dir, source_dir.resolve().name, client, obj.profile
-        )
+        trace_experiment_id = get_or_create_trace_experiment(source_dir, client, obj.profile)
     except Exception as exc:  # noqa: BLE001 - tracing is best-effort; never block a deploy
         trace_setup_error = str(exc)
     env_updates: dict[str, str] = {}
@@ -547,6 +544,10 @@ def deploy(
         provisioned["Traces"] = (
             experiment_url(client.host, trace_experiment_id) or trace_experiment_id
         )
+    # Known caveat (pre-existing): `_upsert_manifest_env` is upsert-only, so unbinding tracing and
+    # redeploying leaves the previous MLFLOW_EXPERIMENT_ID in app.yaml - deploy adds env but never
+    # prunes it. A fresh (never-bound) deploy is clean; pruning stale resource env on redeploy is a
+    # separate follow-up.
     if memory_store_id:
         env_updates[MEMORY_STORE_ENV] = memory_store_id
     if session_store:
@@ -711,13 +712,17 @@ def deploy(
             "be applied automatically (it requires store ownership). "
             f"Cause: {grant_error}",
         )
-    if trace_setup_error is not None:
-        steps.insert(
-            0,
-            "Tracing wasn't set up (deployed without it). Configure a writable experiment with "
-            "`mason tracing configure --experiment-name <path>` and redeploy. "
-            f"Cause: {trace_setup_error}",
+    if trace_experiment_id is None:
+        # Deployed without tracing - either unbound, or a bound experiment that couldn't be set up.
+        # Tell the developer (in case it wasn't intended) and point at `mason tracing bind`; append the
+        # cause when setup actually failed.
+        step = (
+            "Deployed without tracing. "
+            f"Run `{TRACING_BIND_COMMAND}` and redeploy to trace this agent."
         )
+        if trace_setup_error is not None:
+            step += f" (Tracing setup failed: {trace_setup_error})"
+        steps.insert(0, step)
     if trace_experiment_id and trace_grant_error is not None:
         steps.insert(
             0,

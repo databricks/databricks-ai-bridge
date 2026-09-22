@@ -14,10 +14,8 @@ try:
 except ModuleNotFoundError:
     import tomli as tomllib
 
-# agent.toml table names for the managed store bindings (`mason memory/sessions bind`) and the env
-# vars that override them at deploy time.
-MEMORY_STORE_TABLE = "memory_store"
-SESSION_STORE_TABLE = "session_store"
+# The env vars that carry the managed store bindings to the deployed runtime. (The agent.toml table
+# names live in `agent_project`, next to the manifest parsing that reads them.)
 MEMORY_STORE_ENV = "AGENT_MEMORY_STORE"
 SESSION_STORE_ENV = "AGENT_SESSION_STORE"
 

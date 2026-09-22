@@ -60,8 +60,8 @@ Agents SDK does not expose checkpoint continuation.
 
 - Invocation state/events: in-memory in `mason dev`; Lakebase when `mason deploy` attaches a Runtime
   Store.
-- Conversation transcript: in-process by default; managed Session Store when bound.
-- Long-term memory: managed Memory Store when bound.
+- Conversation transcript: in-process in `mason dev`; managed Session Store when bound, on `mason deploy`.
+- Long-term memory: off in `mason dev`; managed Memory Store when bound, on `mason deploy`.
 - OpenAI HITL `RunState`: process-local even with Session Store; it does not survive worker loss.
 - Recovery: replay the persisted application input against the same session.
 

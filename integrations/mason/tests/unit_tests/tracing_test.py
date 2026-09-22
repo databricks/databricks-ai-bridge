@@ -42,14 +42,10 @@ class _Ctx:
         return mock.Mock(current_user=self._user, host="https://ws")
 
 
-def _project(tmp_path: pathlib.Path, *, experiment_name: str | None = None, disabled: bool = False):
+def _project(tmp_path: pathlib.Path, *, experiment_name: str | None = None):
     body = _AGENT_TOML
-    if experiment_name or disabled:
-        body += "\n[tracing]\n"
-        if experiment_name:
-            body += f'experiment_name = "{experiment_name}"\n'
-        if disabled:
-            body += "disabled = true\n"
+    if experiment_name:
+        body += f'\n[tracing]\nexperiment_name = "{experiment_name}"\n'
     (tmp_path / "agent.toml").write_text(body)
     return tmp_path
 
@@ -143,7 +139,7 @@ def test_get_experiment_by_id_reraises_other_errors():
 # --- configure / disable ----------------------------------------------------
 
 
-def test_configure_sets_experiment_name(tmp_path: pathlib.Path):
+def test_bind_sets_experiment_name(tmp_path: pathlib.Path):
     _project(tmp_path)
     mlflow = mock.Mock()
     mlflow.get_experiment_by_name.return_value = (
@@ -154,23 +150,20 @@ def test_configure_sets_experiment_name(tmp_path: pathlib.Path):
         mock.patch.object(tracing_mod, "_set_tracking_uri"),
     ):
         result = CliRunner().invoke(
-            tracing_mod.tracing_configure,
+            tracing_mod.tracing_bind,
             ["--experiment-name", "/Shared/mason_traces/mine", "--source", str(tmp_path)],
             obj=_Ctx(output="json"),
         )
     assert result.exit_code == 0, result.output
-    assert json.loads(result.output) == {
-        "experiment_name": "/Shared/mason_traces/mine",
-        "disabled": False,
-    }
+    assert json.loads(result.output) == {"experiment_name": "/Shared/mason_traces/mine"}
     assert AgentProject.load(tmp_path).trace_experiment_name == "/Shared/mason_traces/mine"
 
 
-def test_configure_rejects_non_absolute_name(tmp_path: pathlib.Path):
+def test_bind_rejects_non_absolute_name(tmp_path: pathlib.Path):
     # An experiment name must be an absolute workspace path; a bare name is rejected up front.
     _project(tmp_path)
     result = CliRunner().invoke(
-        tracing_mod.tracing_configure,
+        tracing_mod.tracing_bind,
         ["--experiment-name", "not-a-path", "--source", str(tmp_path)],
         obj=_Ctx(),
     )
@@ -179,7 +172,7 @@ def test_configure_rejects_non_absolute_name(tmp_path: pathlib.Path):
     assert AgentProject.load(tmp_path).trace_experiment_name is None  # nothing persisted
 
 
-def test_configure_rejects_uc_backed_experiment(tmp_path: pathlib.Path):
+def test_bind_rejects_uc_backed_experiment(tmp_path: pathlib.Path):
     # mason supports managed tracing only; if the name already resolves to a UC-backed experiment
     # (carries the UC destination tag) it's rejected rather than wiring a config that fails later.
     _project(tmp_path)
@@ -192,7 +185,7 @@ def test_configure_rejects_uc_backed_experiment(tmp_path: pathlib.Path):
         mock.patch.object(tracing_mod, "_set_tracking_uri"),
     ):
         result = CliRunner().invoke(
-            tracing_mod.tracing_configure,
+            tracing_mod.tracing_bind,
             ["--experiment-name", "/Shared/uc", "--source", str(tmp_path)],
             obj=_Ctx(),
         )
@@ -201,20 +194,17 @@ def test_configure_rejects_uc_backed_experiment(tmp_path: pathlib.Path):
     assert AgentProject.load(tmp_path).trace_experiment_name is None  # nothing persisted
 
 
-def test_configure_default_enables_per_project_offline(tmp_path: pathlib.Path):
-    # No --experiment-name: clears any explicit name and re-enables the default. Pure agent.toml
-    # write, no mlflow call.
-    _project(tmp_path, disabled=True)
-    result = CliRunner().invoke(
-        tracing_mod.tracing_configure, ["--source", str(tmp_path)], obj=_Ctx()
-    )
-    assert result.exit_code == 0, result.output
-    project = AgentProject.load(tmp_path)
-    assert project.trace_experiment_name is None
-    assert project.trace_disabled is False  # re-enabled
+def test_bind_requires_an_experiment(tmp_path: pathlib.Path):
+    # bind needs an experiment (name or id), like `mason memory/sessions bind`; no args -> error,
+    # nothing written. Pure agent.toml check, no mlflow call.
+    _project(tmp_path)
+    result = CliRunner().invoke(tracing_mod.tracing_bind, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code != 0
+    assert "--experiment-name or --experiment-id" in result.output
+    assert AgentProject.load(tmp_path).trace_experiment_name is None
 
 
-def test_configure_by_experiment_id_stores_resolved_name(tmp_path: pathlib.Path):
+def test_bind_by_experiment_id_stores_resolved_name(tmp_path: pathlib.Path):
     # --experiment-id is a convenience: resolve the id to the experiment's name and store the NAME.
     _project(tmp_path)
     mlflow = mock.Mock()
@@ -228,20 +218,17 @@ def test_configure_by_experiment_id_stores_resolved_name(tmp_path: pathlib.Path)
         mock.patch.object(tracing_mod, "_set_tracking_uri"),
     ):
         result = CliRunner().invoke(
-            tracing_mod.tracing_configure,
+            tracing_mod.tracing_bind,
             ["--experiment-id", "123", "--source", str(tmp_path)],
             obj=_Ctx(output="json"),
         )
     assert result.exit_code == 0, result.output
-    assert json.loads(result.output) == {
-        "experiment_name": "/Shared/mason_traces/from-id",
-        "disabled": False,
-    }
+    assert json.loads(result.output) == {"experiment_name": "/Shared/mason_traces/from-id"}
     # stored as the resolved NAME, never the id
     assert AgentProject.load(tmp_path).trace_experiment_name == "/Shared/mason_traces/from-id"
 
 
-def test_configure_rejects_unknown_experiment_id(tmp_path: pathlib.Path):
+def test_bind_rejects_unknown_experiment_id(tmp_path: pathlib.Path):
     _project(tmp_path)
     mlflow = mock.Mock()
     mlflow.get_experiment.side_effect = _not_found_exc()  # mlflow raises for an unknown id
@@ -250,7 +237,7 @@ def test_configure_rejects_unknown_experiment_id(tmp_path: pathlib.Path):
         mock.patch.object(tracing_mod, "_set_tracking_uri"),
     ):
         result = CliRunner().invoke(
-            tracing_mod.tracing_configure,
+            tracing_mod.tracing_bind,
             ["--experiment-id", "nope", "--source", str(tmp_path)],
             obj=_Ctx(),
         )
@@ -259,10 +246,10 @@ def test_configure_rejects_unknown_experiment_id(tmp_path: pathlib.Path):
     assert AgentProject.load(tmp_path).trace_experiment_name is None
 
 
-def test_configure_rejects_both_name_and_id(tmp_path: pathlib.Path):
+def test_bind_rejects_both_name_and_id(tmp_path: pathlib.Path):
     _project(tmp_path)
     result = CliRunner().invoke(
-        tracing_mod.tracing_configure,
+        tracing_mod.tracing_bind,
         ["--experiment-name", "/Shared/x", "--experiment-id", "1", "--source", str(tmp_path)],
         obj=_Ctx(),
     )
@@ -271,14 +258,14 @@ def test_configure_rejects_both_name_and_id(tmp_path: pathlib.Path):
     assert AgentProject.load(tmp_path).trace_experiment_name is None
 
 
-def test_disable_writes_disabled(tmp_path: pathlib.Path):
+def test_unbind_removes_the_experiment_binding(tmp_path: pathlib.Path):
     _project(tmp_path, experiment_name="/Shared/mason_traces/x")
     result = CliRunner().invoke(
-        tracing_mod.tracing_disable, ["--source", str(tmp_path)], obj=_Ctx(output="json")
+        tracing_mod.tracing_unbind, ["--source", str(tmp_path)], obj=_Ctx(output="json")
     )
     assert result.exit_code == 0, result.output
-    assert json.loads(result.output) == {"disabled": True}
-    assert AgentProject.load(tmp_path).trace_disabled is True
+    assert json.loads(result.output) == {"experiment_name": None}
+    assert AgentProject.load(tmp_path).trace_experiment_name is None  # binding removed -> off
 
 
 # --- list / get -------------------------------------------------------------
@@ -549,14 +536,12 @@ def test_get_reads_local_dev_store_when_not_provisioned(tmp_path: pathlib.Path):
 def test_list_degrades_when_local_read_server_unavailable(tmp_path: pathlib.Path):
     # The local store exists but its short-lived read server can't start (e.g. uv missing) -> list
     # degrades to showing nothing rather than erroring.
-    _project(tmp_path, experiment_name="/Shared/mason_traces/demo")
+    _project(tmp_path)  # unbound -> straight to the local store
     (tmp_path / ".mason").mkdir()
     (tmp_path / ".mason" / "mlflow.db").write_text("")
     mlflow = mock.Mock()
-    mlflow.get_experiment_by_name.return_value = None  # workspace miss -> local store
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
-        mock.patch.object(tracing_mod, "_set_tracking_uri"),
         mock.patch.object(tracing_mod, "_start_read_server", return_value=(None, None)),
     ):
         result = CliRunner().invoke(
