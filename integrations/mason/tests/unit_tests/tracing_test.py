@@ -392,7 +392,9 @@ def test_get_reports_missing_trace(tmp_path: pathlib.Path):
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
         mock.patch.object(tracing_mod, "_set_tracking_uri"),
     ):
-        result = CliRunner().invoke(tracing_mod.tracing_get, ["tr-x"], obj=_Ctx())
+        result = CliRunner().invoke(
+            tracing_mod.tracing_get, ["tr-x", "--source", str(tmp_path)], obj=_Ctx()
+        )
     assert result.exit_code != 0
     assert "No trace found" in result.output
 
@@ -482,42 +484,53 @@ def test_get_errors_when_explicit_name_missing():
 
 
 def test_list_reads_local_dev_store_when_not_provisioned(tmp_path: pathlib.Path):
-    # No workspace experiment yet, but a local `mason dev` store exists -> list reads the local
-    # traces, consistent with where `mason dev` traced pre-deploy.
+    # No workspace experiment yet, but a local `mason dev` store exists -> list reads the local traces
+    # over a short-lived REST server (not by opening the sqlite file), consistent with where `mason dev`
+    # traced pre-deploy, and tears the server down after.
     _project(tmp_path, experiment_name="/Shared/mason_traces/demo")
     (tmp_path / ".mason").mkdir()
     (tmp_path / ".mason" / "mlflow.db").write_text("")  # only needs to exist
     mlflow = mock.Mock()
-    # workspace miss, then local hit (bare project-name experiment in the sqlite store)
+    # workspace miss, then local hit (bare project-name experiment served by the local read server)
     mlflow.get_experiment_by_name.side_effect = [None, mock.Mock(experiment_id="local-1", tags={})]
     mlflow.search_traces.return_value = [_trace("tr-local")]
+    fake_server = mock.Mock()
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
         mock.patch.object(tracing_mod, "_set_tracking_uri"),
+        mock.patch.object(
+            tracing_mod, "_start_read_server", return_value=(fake_server, "http://127.0.0.1:5599")
+        ),
     ):
         result = CliRunner().invoke(
             tracing_mod.tracing_list, ["--source", str(tmp_path)], obj=_Ctx(output="json")
         )
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)[0]["trace_id"] == "tr-local"
-    # read from the local sqlite store, not the workspace
+    # read over the local REST server, not the workspace
     assert any(
-        str(c.args[0]).startswith("sqlite:///") for c in mlflow.set_tracking_uri.call_args_list
+        str(c.args[0]).startswith("http://127.0.0.1")
+        for c in mlflow.set_tracking_uri.call_args_list
     )
+    fake_server.terminate.assert_called_once()  # torn down after the read
 
 
 def test_get_reads_local_dev_store_when_not_provisioned(tmp_path: pathlib.Path):
-    # get resolves its store the same way as list: the local dev store when the workspace experiment
-    # isn't provisioned yet.
+    # get resolves its store the same way as list: the local dev store (over a short-lived REST server)
+    # when the workspace experiment isn't provisioned yet.
     _project(tmp_path, experiment_name="/Shared/mason_traces/demo")
     (tmp_path / ".mason").mkdir()
     (tmp_path / ".mason" / "mlflow.db").write_text("")
     mlflow = mock.Mock()
     mlflow.get_experiment_by_name.side_effect = [None, mock.Mock(experiment_id="local-1", tags={})]
     mlflow.get_trace.return_value = _trace("tr-local")
+    fake_server = mock.Mock()
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
         mock.patch.object(tracing_mod, "_set_tracking_uri"),
+        mock.patch.object(
+            tracing_mod, "_start_read_server", return_value=(fake_server, "http://127.0.0.1:5599")
+        ),
     ):
         result = CliRunner().invoke(
             tracing_mod.tracing_get,
@@ -527,8 +540,31 @@ def test_get_reads_local_dev_store_when_not_provisioned(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)["trace_id"] == "tr-local"
     assert any(
-        str(c.args[0]).startswith("sqlite:///") for c in mlflow.set_tracking_uri.call_args_list
+        str(c.args[0]).startswith("http://127.0.0.1")
+        for c in mlflow.set_tracking_uri.call_args_list
     )
+    fake_server.terminate.assert_called_once()
+
+
+def test_list_degrades_when_local_read_server_unavailable(tmp_path: pathlib.Path):
+    # The local store exists but its short-lived read server can't start (e.g. uv missing) -> list
+    # degrades to showing nothing rather than erroring.
+    _project(tmp_path, experiment_name="/Shared/mason_traces/demo")
+    (tmp_path / ".mason").mkdir()
+    (tmp_path / ".mason" / "mlflow.db").write_text("")
+    mlflow = mock.Mock()
+    mlflow.get_experiment_by_name.return_value = None  # workspace miss -> local store
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
+        mock.patch.object(tracing_mod, "_set_tracking_uri"),
+        mock.patch.object(tracing_mod, "_start_read_server", return_value=(None, None)),
+    ):
+        result = CliRunner().invoke(
+            tracing_mod.tracing_list, ["--source", str(tmp_path)], obj=_Ctx(output="json")
+        )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == []
+    mlflow.search_traces.assert_not_called()
 
 
 def test_status_str_handles_enum_like_and_none():
@@ -561,6 +597,10 @@ def test_start_local_tracing_server_launches_sqlite_server(tmp_path: pathlib.Pat
     joined = " ".join(captured["cmd"])
     assert captured["cmd"][0] == "uvx" and "server" in captured["cmd"]
     assert "sqlite:///" in joined and ".mason/mlflow.db" in joined
+    # pinned interpreter (avoids source-building pyarrow on 3.13) + broad mlflow range (uvx cache reuse
+    # across mason releases; the server owns the schema and reads go over REST, so no exact-version pin)
+    assert captured["cmd"][captured["cmd"].index("--python") + 1] == "3.12"
+    assert "mlflow>=3.10,<4" in captured["cmd"]
 
 
 def test_start_local_tracing_server_degrades_when_launch_fails(tmp_path: pathlib.Path, monkeypatch):
@@ -574,3 +614,34 @@ def test_start_local_tracing_server_degrades_when_launch_fails(tmp_path: pathlib
     monkeypatch.setattr(tracing_mod.subprocess, "Popen", _boom)
     server, env = tracing_mod.start_local_tracing_server(tmp_path)
     assert server is None and env == {}
+
+
+def test_wait_for_server_false_when_process_exits():
+    # If the server process dies before serving (e.g. an install/bind failure), detect the exit and
+    # bail immediately rather than blocking for the whole timeout.
+    server = mock.Mock()
+    server.poll.return_value = 1  # already exited
+    assert tracing_mod._wait_for_server("http://127.0.0.1:1", server, timeout=1) is False
+
+
+def test_wait_for_server_true_when_health_responds(monkeypatch):
+    # Once the health endpoint answers 200, the server is ready to query.
+    server = mock.Mock()
+    server.poll.return_value = None  # still running
+    resp_cm = mock.MagicMock()
+    resp_cm.__enter__.return_value = mock.Mock(status=200)
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: resp_cm)
+    assert tracing_mod._wait_for_server("http://127.0.0.1:5599", server) is True
+
+
+def test_start_read_server_degrades_when_launch_fails(tmp_path: pathlib.Path, monkeypatch):
+    # A short-lived read server that can't spawn (uv missing) degrades to (None, None) so `list`/`get`
+    # show nothing rather than aborting.
+    monkeypatch.setattr(tracing_mod, "_free_port", lambda: 5599)
+
+    def _boom(cmd, **kwargs):
+        raise OSError("uvx not found")
+
+    monkeypatch.setattr(tracing_mod.subprocess, "Popen", _boom)
+    server, base_url = tracing_mod._start_read_server(tmp_path / "mlflow.db")
+    assert server is None and base_url is None
