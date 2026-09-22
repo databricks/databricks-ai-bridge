@@ -89,6 +89,19 @@ def test_pages_through_next_page_token():
     assert client.api_client.calls[1].get("page_token") == "1"
 
 
+def test_page_size_never_exceeds_api_max():
+    # The list API rejects page_size > 100 (InvalidParameterValue); every page request must comply.
+    pages = [
+        {"model_services": [_svc("system.ai.claude-opus-4-8")], "next_page_token": "1"},
+        {"model_services": [_svc("system.ai.llama-4-maverick")], "next_page_token": ""},
+    ]
+    client = _Client(pages)
+    list_ai_gateway_model_services(cast(Any, client))
+    assert client.api_client.calls, "expected at least one list request"
+    for query in client.api_client.calls:
+        assert query["page_size"] <= 100
+
+
 def test_empty_listing():
     assert _list([{"model_services": []}]) == []
 

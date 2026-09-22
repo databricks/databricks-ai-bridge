@@ -59,6 +59,28 @@ _TEMPLATES = {
     AgentFramework.OPENAI: _AgentTemplate("agent-openai", "custom-agent-openai", "ui/agent-openai"),
 }
 
+# Framework -> display label for user-facing text (prompts, help).
+_FRAMEWORK_LABELS = {
+    AgentFramework.LANGGRAPH: "LangGraph",
+    AgentFramework.OPENAI: "OpenAI Agents SDK",
+}
+
+
+def _or_join(items: list[str]) -> str:
+    """Join items into a human-readable phrase: "a", "a or b", or "a, b, or c"."""
+    if len(items) <= 1:
+        return items[0] if items else ""
+    if len(items) == 2:
+        return f"{items[0]} or {items[1]}"
+    return ", ".join(items[:-1]) + f", or {items[-1]}"
+
+
+# Derived from _FRAMEWORK_LABELS / AgentFramework so user-facing text never drifts from the
+# supported-framework list. NOTE: these must stay above the click decorators below — Click
+# evaluates `help=` strings at import time, not at call time.
+_FRAMEWORK_LABEL_PHRASE = _or_join(list(_FRAMEWORK_LABELS.values()))
+_FRAMEWORK_VALUE_PHRASE = ", ".join(framework.value for framework in AgentFramework)
+
 _MIGRATION_DIR = "mason-migrate"
 # Each coding agent discovers skills in its own configuration directory, so the bundle lives in one
 # tool-neutral directory and every agent gets a pointer to it rather than a copy of the reference.
@@ -166,6 +188,7 @@ def _prepare_migration(
     obj,
     dest: pathlib.Path,
     *,
+    framework: AgentFramework,
     chat_app_enabled: bool,
     profile: Optional[str],
     memory_store: Optional[str],
@@ -191,21 +214,19 @@ def _prepare_migration(
     with tempfile.TemporaryDirectory(prefix="mason-migrate-") as tmp:
         staged = pathlib.Path(tmp) / _MIGRATION_DIR
         reference = staged / "references" / "template"
-        template = _TEMPLATES[AgentFramework.LANGGRAPH]
+        template = _TEMPLATES[framework]
         overlays = (template.chat_app,) if chat_app_enabled else ()
         _copy_packaged_template(template.mason_server, reference, overlays)
         project_name = dest.resolve().name
         token = "".join(secrets.choice(string.ascii_lowercase) for _ in range(6))
         AgentProject.create(
             reference,
-            framework=AgentFramework.LANGGRAPH,
+            framework=framework,
             server=AgentServer.MASON,
             memory_store=memory_store or default_store_name(project_name, "memory", token),
             session_store=session_store or default_store_name(project_name, "sessions", token),
         ).write()
-        write_project_metadata(
-            reference, framework=AgentFramework.LANGGRAPH, template=template.mason_server
-        )
+        write_project_metadata(reference, framework=framework, template=template.mason_server)
         source = resources.files("databricks_mason").joinpath("templates").joinpath(_MIGRATION_DIR)
         (staged / "SKILL.md").write_text(
             source.joinpath("SKILL.md").read_text(encoding="utf-8"), encoding="utf-8"
@@ -214,7 +235,7 @@ def _prepare_migration(
         (staged / "references" / "migration.json").write_text(
             json.dumps(
                 {
-                    "framework": "langgraph",
+                    "framework": framework.value,
                     "template_ref": template_ref,
                     "server": "mason",
                     "chat_app_enabled": chat_app_enabled,
@@ -227,11 +248,12 @@ def _prepare_migration(
         )
         prompt = (
             f"Use the mason-migrate skill at {_MIGRATION_DIR}/SKILL.md to adapt "
-            "my existing LangGraph agent in this project for Mason. Read its migration settings "
-            "and local template reference. Implement and verify the integration while preserving "
-            "my agent's behavior. Explicitly handle existing persistence, conversation history, "
-            "custom graph state, and client contracts; surface any unresolved migration choices. "
-            "Report which Mason commands are ready and any remaining limitations.\n"
+            f"my existing {_FRAMEWORK_LABELS[framework]} agent in this project for Mason. Read "
+            "its migration settings and local template reference. Implement and verify the "
+            "integration while preserving my agent's behavior. Explicitly handle existing "
+            "persistence, conversation history, custom state, and client contracts; surface any "
+            "unresolved migration choices. Report which Mason commands are ready and any "
+            "remaining limitations.\n"
         )
         (staged / "PROMPT.md").write_text(prompt, encoding="utf-8")
         _install_migration(staged, bundle, pointers)
@@ -240,7 +262,7 @@ def _prepare_migration(
         render.emit_json(
             {
                 "mode": "existing",
-                "framework": "langgraph",
+                "framework": framework.value,
                 "directory": str(dest),
                 "bundle": str(bundle),
                 "skill": str(bundle / "SKILL.md"),
@@ -268,8 +290,8 @@ def _prepare_migration(
 @click.option(
     "--existing",
     is_flag=True,
-    help="Prepare a coding-agent migration bundle for an existing LangGraph project "
-    "(defaults to .).",
+    help=f"Prepare a coding-agent migration bundle for an existing {_FRAMEWORK_LABEL_PHRASE} "
+    "project (defaults to .).",
 )
 @click.option(
     "--framework",
@@ -346,8 +368,8 @@ def init(
 
     With --existing, prepare a skill, prompt, and bundled template reference under
     mason-migrate/, and point each supported coding agent's skills directory at it. Run the
-    prompt in your coding agent to convert the agent; init leaves existing application source,
-    dependencies, and configuration intact.
+    prompt in your coding agent to migrate the agent onto Mason; init leaves existing
+    application source, dependencies, and configuration intact.
     """
     selected_framework = parse_framework(framework or AgentFramework.LANGGRAPH)
     selected_server = parse_server(server)
@@ -356,13 +378,15 @@ def init(
     template_name = template.mason_server if mason_server else template.custom_server
     chat_app_enabled = mason_server and not disable_chat_app
     if existing:
-        if selected_framework != "langgraph" or not mason_server:
+        if not mason_server:
             raise click.UsageError(
-                "--existing currently supports --framework langgraph --server mason"
+                "--existing requires --server mason (supported frameworks: "
+                f"{_FRAMEWORK_VALUE_PHRASE})."
             )
         _prepare_migration(
             obj,
             pathlib.Path(directory or "."),
+            framework=selected_framework,
             chat_app_enabled=chat_app_enabled,
             profile=profile or obj.profile,
             memory_store=memory_store,
@@ -374,8 +398,8 @@ def init(
     if dest.exists():
         raise AgentCliError(
             f"Destination '{dest}' already exists.",
-            hint="Use --existing --framework langgraph to prepare a migration, "
-            "or choose a new directory to scaffold.",
+            hint=f"Use --existing to prepare a migration from an existing "
+            f"{_FRAMEWORK_LABEL_PHRASE} project, or choose a new directory to scaffold.",
         )
 
     overlay_names = (template.chat_app,) if chat_app_enabled else ()
