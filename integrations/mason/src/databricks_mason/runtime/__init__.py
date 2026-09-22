@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from databricks_mason.runtime.app import AgentApp
+    from databricks_mason.runtime.auth import AuthError, InvocationAuthPolicy, RequestAuthContext
     from databricks_mason.runtime.model_services import list_ai_gateway_model_services
     from databricks_mason.runtime.tracing import configure_tracing, start_trace
     from databricks_mason.runtime.types import InvocationContext
@@ -24,6 +25,9 @@ if TYPE_CHECKING:
 __all__ = [
     "AgentApp",
     "InvocationContext",
+    "AuthError",
+    "InvocationAuthPolicy",
+    "RequestAuthContext",
     # MLflow tracing — call configure_tracing() once at startup (pass the framework's autolog, or use
     # a framework adapter that binds it). Wrap each invocation in start_trace() so a trace is recorded
     # (framework autolog only nests under an active trace); pass session_id= to group traces by session.
@@ -39,6 +43,9 @@ __all__ = [
 _MODULE_BY_NAME = {
     "AgentApp": "app",
     "InvocationContext": "types",
+    "AuthError": "auth",
+    "InvocationAuthPolicy": "auth",
+    "RequestAuthContext": "auth",
     "configure_tracing": "tracing",
     "start_trace": "tracing",
     "workspace_client": "workspace",
