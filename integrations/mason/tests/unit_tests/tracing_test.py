@@ -94,11 +94,27 @@ def test_create_experiment_idempotent_creates_parent_dir_for_nested_path():
 
 def test_create_experiment_idempotent_reuses_existing_without_mkdir():
     mlflow = mock.Mock()
-    mlflow.get_experiment_by_name.return_value = mock.Mock(experiment_id="eid-2")
+    # A managed (non-UC) experiment carries no UC destination tag.
+    mlflow.get_experiment_by_name.return_value = mock.Mock(experiment_id="eid-2", tags={})
     client = mock.Mock()
     with mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow):
         assert tracing_mod.create_experiment_idempotent(None, client, "/Shared/x") == "eid-2"
     client.ensure_workspace_dir.assert_not_called()  # existing experiment -> no dir work
+    mlflow.create_experiment.assert_not_called()
+
+
+def test_create_experiment_idempotent_rejects_uc_backed():
+    # A hand-edited agent.toml can name a UC-backed experiment, bypassing the bind-time UC check; the
+    # deploy provisioning path re-checks and refuses it, since mason supports managed tracing only.
+    mlflow = mock.Mock()
+    mlflow.get_experiment_by_name.return_value = mock.Mock(
+        tags={"mlflow.experiment.databricksTraceDestinationPath": "cat.schema"}
+    )
+    client = mock.Mock()
+    with mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow):
+        with pytest.raises(AgentCliError, match="UC-backed MLflow tracing is not supported"):
+            tracing_mod.create_experiment_idempotent(None, client, "/Shared/uc")
+    client.ensure_workspace_dir.assert_not_called()  # rejected before any provisioning
     mlflow.create_experiment.assert_not_called()
 
 
