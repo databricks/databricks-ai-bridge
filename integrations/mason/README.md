@@ -231,8 +231,11 @@ The UUID also acts as an idempotency key: repeating the same request reuses the 
 while its record is retained; using the ID for a different request returns `409`.
 
 `mason dev` keeps execution state in process and loses it on restart. For projects with
-`[agent].server = "mason"`, `mason deploy` provisions a persistent Runtime Store for requests,
-status, events, and results. Register `@app.recover` to restart interrupted work after worker
+`[agent].server = "mason"`, the scaffold records `[runtime_store] enabled = true` in `agent.toml`
+and `mason deploy` provisions a persistent Runtime Store for requests, status, events, and results.
+Custom-server scaffolds record `enabled = false`, so the effective state is explicit for audits and
+operational debugging. Older manifests without the table remain compatible and derive the same
+state from `agent.server`. Register `@app.recover` to restart interrupted work after worker
 failures. Recovery is at-least-once, so external side effects must be idempotent. Session and
 Memory Stores separately preserve the state used by your agent.
 
@@ -532,7 +535,8 @@ mason sessions items append --help
 ## Agent tools
 
 For projects with `[agent].server = "mason"` (the default from `mason init`), `agent.toml` is the
-declarative source of truth for Databricks-managed infrastructure: the Runtime Store, sandbox,
+declarative source of truth for Databricks-managed infrastructure: the explicit
+`[runtime_store].enabled` state, sandbox,
 managed MCP, Genie and Unity Catalog function bindings, plus memory and session resources. `mason tools
 add` updates only this file; direct TOML edits have the same behavior. Both Mason-server framework
 adapters read the managed bindings at runtime without generating or patching agent source:
