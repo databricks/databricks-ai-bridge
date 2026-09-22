@@ -557,24 +557,26 @@ def test_dev_runs_from_project_containing_directly_edited_agent_manifest(
     )
 
 
-def test_dev_warns_when_stores_unbound(tmp_path: pathlib.Path):
-    # `mason dev` never provisions stores (unlike deploy); it warns so the gap isn't silent.
+def test_dev_quiet_about_unbound_stores(tmp_path: pathlib.Path):
+    # Unbound stores are a `mason deploy` concern; `mason dev` doesn't warn about them, it just runs
+    # locally (memory off, sessions in-process).
     (tmp_path / "app.yaml").write_text("command: []\n")  # no agent.toml -> both unbound
-    with mock.patch.object(dev_mod, "_databricks"):
-        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
-    assert result.exit_code == 0, result.output
-    assert "No memory store bound" in result.output
-    assert "No session store bound" in result.output
-
-
-def test_dev_notes_local_stores_when_bound(tmp_path: pathlib.Path):
-    # With stores bound, dev doesn't warn "not bound"; it notes they're used once deployed while dev
-    # runs them locally. Dev makes no workspace call (the _Ctx client would fail the run if used).
-    (tmp_path / "app.yaml").write_text("command: []\n")
-    _write_agent_manifest(tmp_path, memory="mem", session="sess")
     with mock.patch.object(dev_mod, "_databricks"):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     assert "No memory store bound" not in result.output
     assert "No session store bound" not in result.output
-    assert "used once deployed" in result.output  # the local-sandbox note
+
+
+def test_dev_notes_local_stores_when_bound(tmp_path: pathlib.Path):
+    # With stores bound, dev notes they're bound but run locally here (used only once deployed). Dev
+    # makes no workspace call (the _Ctx client would fail the run if used).
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    _write_agent_manifest(tmp_path, memory="mem", session="sess")
+    with mock.patch.object(dev_mod, "_databricks"):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code == 0, result.output
+    out = " ".join(result.output.split())  # collapse rich line-wrapping
+    assert "Memory store 'mem' is bound" in out
+    assert "Session store 'sess' is bound" in out
+    assert "Run `mason deploy` to use bound store" in out
