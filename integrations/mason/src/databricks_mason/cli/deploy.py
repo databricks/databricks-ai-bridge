@@ -544,6 +544,10 @@ def deploy(
         provisioned["Traces"] = (
             experiment_url(client.host, trace_experiment_id) or trace_experiment_id
         )
+    # Known caveat (pre-existing): `_upsert_manifest_env` is upsert-only, so unbinding tracing and
+    # redeploying leaves the previous MLFLOW_EXPERIMENT_ID in app.yaml - deploy adds env but never
+    # prunes it. A fresh (never-bound) deploy is clean; pruning stale resource env on redeploy is a
+    # separate follow-up.
     if memory_store_id:
         env_updates[MEMORY_STORE_ENV] = memory_store_id
     if session_store:

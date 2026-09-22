@@ -1292,7 +1292,7 @@ async function loadConfig() {
       config.tracing?.enabled
         ? "Every run is traced to an MLflow experiment."
         : "Tracing is off. Set an MLflow destination and experiment to record traces.",
-      config.tracing?.enabled ? null : "mason tracing bind",
+      config.tracing?.enabled ? null : "mason tracing bind --experiment-name <path>",
       config.tracing?.enabled && config.tracing?.url
         ? { href: config.tracing.url, label: "View traces in MLflow" }
         : null,
