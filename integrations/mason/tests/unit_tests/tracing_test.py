@@ -252,7 +252,8 @@ def _trace(trace_id):
     )
 
 
-def test_list_searches_by_explicit_experiment_id(tmp_path: pathlib.Path):
+def test_list_by_explicit_experiment_id(tmp_path: pathlib.Path):
+    # --experiment-id targets that workspace experiment directly (no project resolution).
     _project(tmp_path)
     mlflow = mock.Mock()
     mlflow.search_traces.return_value = [_trace("tr-1")]
@@ -262,7 +263,7 @@ def test_list_searches_by_explicit_experiment_id(tmp_path: pathlib.Path):
     ):
         result = CliRunner().invoke(
             tracing_mod.tracing_list,
-            ["--experiment", "eid-9", "--limit", "7", "--source", str(tmp_path)],
+            ["--experiment-id", "eid-9", "--limit", "7", "--source", str(tmp_path)],
             obj=_Ctx(output="json"),
         )
     assert result.exit_code == 0, result.output
@@ -270,6 +271,38 @@ def test_list_searches_by_explicit_experiment_id(tmp_path: pathlib.Path):
     assert kwargs["locations"] == ["eid-9"]
     assert kwargs["max_results"] == 7
     assert json.loads(result.output)[0]["trace_id"] == "tr-1"
+
+
+def test_list_by_explicit_experiment_name(tmp_path: pathlib.Path):
+    # --experiment-name is resolved to its id in the current workspace, then read (the --store analog).
+    _project(tmp_path)
+    mlflow = mock.Mock()
+    mlflow.get_experiment_by_name.return_value = mock.Mock(experiment_id="by-name-1", tags={})
+    mlflow.search_traces.return_value = [_trace("tr-2")]
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
+        mock.patch.object(tracing_mod, "_set_tracking_uri"),
+    ):
+        result = CliRunner().invoke(
+            tracing_mod.tracing_list,
+            ["--experiment-name", "/Shared/mason_traces/mine", "--source", str(tmp_path)],
+            obj=_Ctx(output="json"),
+        )
+    assert result.exit_code == 0, result.output
+    mlflow.get_experiment_by_name.assert_called_once_with("/Shared/mason_traces/mine")
+    assert mlflow.search_traces.call_args.kwargs["locations"] == ["by-name-1"]
+    assert json.loads(result.output)[0]["trace_id"] == "tr-2"
+
+
+def test_list_rejects_both_name_and_id(tmp_path: pathlib.Path):
+    _project(tmp_path)
+    result = CliRunner().invoke(
+        tracing_mod.tracing_list,
+        ["--experiment-name", "/Shared/x", "--experiment-id", "1", "--source", str(tmp_path)],
+        obj=_Ctx(),
+    )
+    assert result.exit_code != 0
+    assert "not both" in result.output
 
 
 def test_list_defaults_to_projects_bound_experiment(tmp_path: pathlib.Path):
@@ -317,6 +350,140 @@ def test_get_reports_missing_trace(tmp_path: pathlib.Path):
         result = CliRunner().invoke(tracing_mod.tracing_get, ["tr-x"], obj=_Ctx())
     assert result.exit_code != 0
     assert "No trace found" in result.output
+
+
+def test_get_by_explicit_experiment_id(tmp_path: pathlib.Path):
+    # --experiment-id points get at that workspace store (no project resolution, no local fallback).
+    _project(tmp_path)
+    mlflow = mock.Mock()
+    mlflow.get_trace.return_value = _trace("tr-9")
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
+        mock.patch.object(tracing_mod, "_set_tracking_uri"),
+    ):
+        result = CliRunner().invoke(
+            tracing_mod.tracing_get,
+            ["tr-9", "--experiment-id", "eid-9", "--source", str(tmp_path)],
+            obj=_Ctx(output="json"),
+        )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["trace_id"] == "tr-9"
+    assert not any(
+        str(c.args[0]).startswith("sqlite:///") for c in mlflow.set_tracking_uri.call_args_list
+    )
+
+
+def test_get_rejects_both_name_and_id(tmp_path: pathlib.Path):
+    result = CliRunner().invoke(
+        tracing_mod.tracing_get,
+        ["tr-9", "--experiment-name", "/Shared/x", "--experiment-id", "1"],
+        obj=_Ctx(),
+    )
+    assert result.exit_code != 0
+    assert "not both" in result.output
+
+
+def test_list_errors_when_explicit_name_missing(tmp_path: pathlib.Path):
+    # A typed --experiment-name that doesn't exist errors (not silently empty), so a typo isn't
+    # mistaken for an empty experiment. Only the project default is allowed to be absent.
+    _project(tmp_path)
+    mlflow = mock.Mock()
+    mlflow.get_experiment_by_name.return_value = None
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
+        mock.patch.object(tracing_mod, "_set_tracking_uri"),
+    ):
+        result = CliRunner().invoke(
+            tracing_mod.tracing_list,
+            ["--experiment-name", "/Shared/nope", "--source", str(tmp_path)],
+            obj=_Ctx(),
+        )
+    assert result.exit_code != 0
+    assert "No MLflow experiment named" in result.output
+    mlflow.search_traces.assert_not_called()
+
+
+def test_list_errors_when_explicit_id_missing(tmp_path: pathlib.Path):
+    _project(tmp_path)
+    mlflow = mock.Mock()
+    mlflow.get_experiment.return_value = None
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
+        mock.patch.object(tracing_mod, "_set_tracking_uri"),
+    ):
+        result = CliRunner().invoke(
+            tracing_mod.tracing_list,
+            ["--experiment-id", "nope", "--source", str(tmp_path)],
+            obj=_Ctx(),
+        )
+    assert result.exit_code != 0
+    assert "No MLflow experiment found with id" in result.output
+    mlflow.search_traces.assert_not_called()
+
+
+def test_get_errors_when_explicit_name_missing():
+    mlflow = mock.Mock()
+    mlflow.get_experiment_by_name.return_value = None
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
+        mock.patch.object(tracing_mod, "_set_tracking_uri"),
+    ):
+        result = CliRunner().invoke(
+            tracing_mod.tracing_get, ["tr-x", "--experiment-name", "/Shared/nope"], obj=_Ctx()
+        )
+    assert result.exit_code != 0
+    assert "No MLflow experiment named" in result.output
+    mlflow.get_trace.assert_not_called()
+
+
+def test_list_reads_local_dev_store_when_not_provisioned(tmp_path: pathlib.Path):
+    # No workspace experiment yet, but a local `mason dev` store exists -> list reads the local
+    # traces, consistent with where `mason dev` traced pre-deploy.
+    _project(tmp_path, experiment_name="/Shared/mason_traces/demo")
+    (tmp_path / ".mason").mkdir()
+    (tmp_path / ".mason" / "mlflow.db").write_text("")  # only needs to exist
+    mlflow = mock.Mock()
+    # workspace miss, then local hit (bare project-name experiment in the sqlite store)
+    mlflow.get_experiment_by_name.side_effect = [None, mock.Mock(experiment_id="local-1", tags={})]
+    mlflow.search_traces.return_value = [_trace("tr-local")]
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
+        mock.patch.object(tracing_mod, "_set_tracking_uri"),
+    ):
+        result = CliRunner().invoke(
+            tracing_mod.tracing_list, ["--source", str(tmp_path)], obj=_Ctx(output="json")
+        )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)[0]["trace_id"] == "tr-local"
+    # read from the local sqlite store, not the workspace
+    assert any(
+        str(c.args[0]).startswith("sqlite:///") for c in mlflow.set_tracking_uri.call_args_list
+    )
+
+
+def test_get_reads_local_dev_store_when_not_provisioned(tmp_path: pathlib.Path):
+    # get resolves its store the same way as list: the local dev store when the workspace experiment
+    # isn't provisioned yet.
+    _project(tmp_path, experiment_name="/Shared/mason_traces/demo")
+    (tmp_path / ".mason").mkdir()
+    (tmp_path / ".mason" / "mlflow.db").write_text("")
+    mlflow = mock.Mock()
+    mlflow.get_experiment_by_name.side_effect = [None, mock.Mock(experiment_id="local-1", tags={})]
+    mlflow.get_trace.return_value = _trace("tr-local")
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
+        mock.patch.object(tracing_mod, "_set_tracking_uri"),
+    ):
+        result = CliRunner().invoke(
+            tracing_mod.tracing_get,
+            ["tr-local", "--source", str(tmp_path)],
+            obj=_Ctx(output="json"),
+        )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["trace_id"] == "tr-local"
+    assert any(
+        str(c.args[0]).startswith("sqlite:///") for c in mlflow.set_tracking_uri.call_args_list
+    )
 
 
 def test_status_str_handles_enum_like_and_none():

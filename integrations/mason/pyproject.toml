@@ -22,6 +22,10 @@ dependencies = [
     # so this is a base dependency. Auth rides on databricks-sdk (above), so the heavier
     # mlflow[databricks] extra (boto3/azure/gcs/databricks-agents, for artifact blob I/O) isn't needed.
     "mlflow-skinny>=3.10.1",
+    # alembic lets mlflow-skinny's SqlAlchemyStore open a sqlite tracking store, so `mason tracing
+    # list`/`get` can read the local `mason dev` store (.mason/mlflow.db) directly. sqlalchemy (above)
+    # is already present; skinny ships without alembic. Matches mlflow's own constraint.
+    "alembic!=1.10.0,<2",
     "psycopg[binary]>=3.1",
     "PyYAML>=6.0",
     "rich>=13.7",

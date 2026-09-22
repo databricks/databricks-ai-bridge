@@ -208,14 +208,14 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
             "mason tracing configure",
             "use the default per-project experiment (tracing is on by default)",
         ),
-        ("mason tracing configure --experiment 12345", "trace to a specific experiment id"),
+        ("mason tracing configure --experiment-id 12345", "trace to a specific experiment id"),
         ("mason tracing disable", "turn tracing off"),
     ),
     ("tracing", "configure"): (
-        ("mason tracing configure --experiment 12345", "trace to a specific experiment id"),
+        ("mason tracing configure --experiment-id 12345", "trace to a specific experiment id"),
     ),
     ("tracing", "disable"): (("mason tracing disable", "turn tracing off"),),
-    ("tracing", "list"): (("mason tracing list --experiment 12345", "list recent traces"),),
+    ("tracing", "list"): (("mason tracing list --experiment-id 12345", "list recent traces"),),
     ("tracing", "get"): (("mason tracing get <trace-id>", "show one trace"),),
     ("deploy",): (
         ("mason deploy my-agent", "deploy the agent"),
