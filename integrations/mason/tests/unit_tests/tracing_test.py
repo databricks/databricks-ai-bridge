@@ -368,7 +368,9 @@ def test_list_empty_when_no_experiment_exists(tmp_path: pathlib.Path):
 
 def test_get_reports_missing_trace(tmp_path: pathlib.Path):
     mlflow = mock.Mock()
-    mlflow.get_experiment_by_name.return_value = None  # no project experiment -> reads the workspace
+    mlflow.get_experiment_by_name.return_value = (
+        None  # no project experiment -> reads the workspace
+    )
     mlflow.get_trace.return_value = None
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),

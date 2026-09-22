@@ -24,8 +24,11 @@ dependencies = [
     "mlflow-skinny>=3.10.1",
     # alembic lets mlflow-skinny's SqlAlchemyStore open a sqlite tracking store, so `mason tracing
     # list`/`get` can read the local `mason dev` store (.mason/mlflow.db) directly. sqlalchemy (above)
-    # is already present; skinny ships without alembic. Matches mlflow's own constraint.
-    "alembic!=1.10.0,<2",
+    # is already present; skinny ships without alembic. `<2` matches mlflow's own constraint; the
+    # `>=1.10.1` floor is required because it's a direct dep (a lower `--resolution lowest-direct`
+    # bound), keeping SQLAlchemy 2.0 compatibility and skipping the broken 1.10.0 + unbuildable
+    # pre-1.x releases.
+    "alembic>=1.10.1,<2",
     "psycopg[binary]>=3.1",
     "PyYAML>=6.0",
     "rich>=13.7",
