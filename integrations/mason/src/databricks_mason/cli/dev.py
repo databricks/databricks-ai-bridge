@@ -40,6 +40,15 @@ _LOCAL_APP_YAML = "app.masondev.yaml"
 # them and use the machine's own configured index instead.
 _BUILD_INDEX_ENVS = frozenset({"PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDEX"})
 
+# Workspace tracing env that `mason deploy` writes into app.yaml. `mason dev` sets up its OWN tracing
+# (a local MLflow server), so these must be stripped from the dev manifest — otherwise a stale
+# workspace MLFLOW_EXPERIMENT_ID (which MLflow resolves ahead of MLFLOW_EXPERIMENT_NAME) points the
+# local agent at an experiment id that doesn't exist on the local sqlite server, so local tracing
+# errors or logs nowhere. dev re-adds the local MLFLOW_TRACKING_URI / MLFLOW_EXPERIMENT_NAME itself.
+_DEPLOY_TRACING_ENVS = frozenset(
+    {"MLFLOW_TRACKING_URI", "MLFLOW_EXPERIMENT_ID", "MLFLOW_TRACING_DESTINATION"}
+)
+
 
 @click.command()
 @click.option(
@@ -286,9 +295,10 @@ def _dev_entry_point(
 
     The manifest marks the process as local so Mason Runtime uses its in-memory store. Keeping this in
     the entry point is more reliable than forwarding ``--env`` through the Databricks CLI and does
-    not mutate the deployable ``app.yaml``. Deploy-only package-index variables are also removed.
+    not mutate the deployable ``app.yaml``. Deploy-only package-index variables and the deploy-written
+    workspace tracing env (see ``_DEPLOY_TRACING_ENVS``) are removed so dev's local overrides win.
     ``extra_env`` is merged in (overriding any same-named entries) for dev-only overrides such as
-    the resolved memory-store id.
+    the resolved memory-store id and the local tracing config.
     """
     try:
         doc = yaml.safe_load(app_yaml.read_text()) or {}
@@ -306,6 +316,11 @@ def _dev_entry_point(
         e
         for e in filtered
         if not (isinstance(e, dict) and e.get("name") == RUNTIME_STORE_LOCAL_ENV)
+    ]
+    # Drop the deploy-written workspace tracing env so a stale MLFLOW_EXPERIMENT_ID can't override the
+    # local MLFLOW_EXPERIMENT_NAME that dev re-adds via extra_env below.
+    filtered = [
+        e for e in filtered if not (isinstance(e, dict) and e.get("name") in _DEPLOY_TRACING_ENVS)
     ]
     for name, value in (extra_env or {}).items():
         filtered = [e for e in filtered if not (isinstance(e, dict) and e.get("name") == name)]
