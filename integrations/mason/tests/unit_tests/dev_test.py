@@ -41,10 +41,11 @@ class _Ctx:
 
 
 @pytest.fixture(autouse=True)
-def _stub_tracing(monkeypatch):
-    """Tracing is on by default and would hit MLflow/the workspace; stub the provisioning so the
-    non-tracing dev tests stay hermetic. Tracing-specific tests override this."""
-    monkeypatch.setattr(dev_mod, "resolve_trace_experiment_id", lambda *a, **k: None)
+def _stub_local_tracing(monkeypatch):
+    """`mason dev` starts a local MLflow tracking server (via cli.tracing) for Mason-server projects;
+    stub the name dev.py imported so ordinary dev tests neither spawn one nor need uv. Tracing tests
+    override this. The server helper's own behavior is tested in tracing_test.py."""
+    monkeypatch.setattr(dev_mod, "start_local_tracing_server", lambda source_dir: (None, {}))
 
 
 def test_dev_prepares_when_no_venv(tmp_path: pathlib.Path):
@@ -189,52 +190,107 @@ def test_dev_skips_store_check_when_no_bindings(tmp_path: pathlib.Path, monkeypa
     assert resolve_calls == []  # no store bound -> no resolution attempted
 
 
-def test_dev_wires_tracing_env_on_by_default(tmp_path: pathlib.Path, monkeypatch):
-    # Tracing is on by default: dev resolves the per-project experiment and wires the two MLflow env vars
-    # into app.yaml (the experiment id + the workspace tracking uri).
-    import yaml
-
-    (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+def test_dev_starts_local_tracing_and_wires_dev_manifest(tmp_path: pathlib.Path, monkeypatch):
+    # For any project (here a custom-server one, to show it's not gated to the Mason server), dev
+    # starts a local MLflow server and injects its MLFLOW_* env into the dev-only manifest
+    # (app.masondev.yaml) — NOT into the deployable app.yaml — then tears the server down after the run.
+    # The trace UI URL is announced.
+    (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"], "env": []}))
+    _write_agent_manifest(tmp_path, server="custom")
     (tmp_path / ".venv").mkdir()
-    monkeypatch.setattr(dev_mod, "resolve_trace_experiment_id", lambda *a, **k: "exp-123")
-    with mock.patch.object(dev_mod, "_databricks"):
-        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    fake_server = mock.Mock()
+    monkeypatch.setattr(
+        dev_mod,
+        "start_local_tracing_server",
+        lambda source_dir: (
+            fake_server,
+            {
+                "MLFLOW_TRACKING_URI": "http://127.0.0.1:5599",
+                "MLFLOW_EXPERIMENT_NAME": source_dir.resolve().name,
+            },
+        ),
+    )
+    captured: dict = {}
+
+    def _fake_databricks(args, *a, **kw):
+        # Read the dev manifest while it still exists (before finally-block cleanup).
+        dev_yaml = pathlib.Path(kw["cwd"]) / "app.masondev.yaml"
+        captured.update(yaml.safe_load(dev_yaml.read_text()))
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(dev_mod, "_databricks", _fake_databricks)
+    result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
-    env = {
-        e["name"]: e["value"] for e in yaml.safe_load((tmp_path / "app.yaml").read_text())["env"]
+    dev_env = {e["name"]: e["value"] for e in captured.get("env", [])}
+    assert dev_env["MLFLOW_TRACKING_URI"] == "http://127.0.0.1:5599"
+    assert dev_env["MLFLOW_EXPERIMENT_NAME"] == tmp_path.resolve().name
+    # The deployable app.yaml stays clean of MLflow env — only the dev manifest carries it.
+    real_env = {
+        e["name"]: e["value"]
+        for e in (yaml.safe_load((tmp_path / "app.yaml").read_text()).get("env") or [])
     }
-    assert env["MLFLOW_EXPERIMENT_ID"] == "exp-123"
-    assert env["MLFLOW_TRACKING_URI"] == "databricks"
+    assert not any(name.startswith("MLFLOW") for name in real_env)
+    assert "5599" in result.output  # trace UI announced
+    fake_server.terminate.assert_called_once()  # torn down after the run
 
 
-def test_dev_shows_default_experiment_url_when_tracing_on(tmp_path: pathlib.Path, monkeypatch):
-    # Tracing is on by default: dev surfaces the default experiment's Traces URL (the same link
-    # `mason deploy` prints) so a dev run makes clear where its traces land.
-    (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+def test_dev_stops_local_tracing_server_when_setup_fails(tmp_path: pathlib.Path, monkeypatch):
+    # A failure after the local server starts but before run-local (here a malformed app.yaml that
+    # `_dev_entry_point` rejects) must still tear the server down, not orphan it — everything after the
+    # server start runs under the try/finally.
+    (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"], "env": "not-a-list"}))
+    _write_agent_manifest(tmp_path, server="mason")
     (tmp_path / ".venv").mkdir()
-    monkeypatch.setattr(dev_mod, "resolve_trace_experiment_id", lambda *a, **k: "exp-123")
+    fake_server = mock.Mock()
+    monkeypatch.setattr(
+        dev_mod,
+        "start_local_tracing_server",
+        lambda source_dir: (fake_server, {"MLFLOW_TRACKING_URI": "http://127.0.0.1:5599"}),
+    )
+    with mock.patch.object(dev_mod, "_databricks") as db:
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code != 0  # the bad app.yaml surfaced as an error
+    db.assert_not_called()  # failed before run-local was reached
+    fake_server.terminate.assert_called_once()  # ...but the local server was still stopped
+
+
+def test_dev_shows_local_traces_url_when_tracing_on(tmp_path: pathlib.Path, monkeypatch):
+    # dev surfaces the local MLflow Traces URL plus the experiment name (in parens) so a dev run makes
+    # clear where its traces land and which experiment to open.
+    (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _write_agent_manifest(tmp_path, server="mason")
+    (tmp_path / ".venv").mkdir()
+    monkeypatch.setattr(
+        dev_mod,
+        "start_local_tracing_server",
+        lambda source_dir: (
+            mock.Mock(),
+            {"MLFLOW_TRACKING_URI": "http://127.0.0.1:5599", "MLFLOW_EXPERIMENT_NAME": "my-agent"},
+        ),
+    )
     with mock.patch.object(dev_mod, "_databricks"):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     output = " ".join(result.output.split())
-    assert "Traces" in output
-    assert "/ml/experiments/exp-123" in output
+    assert "Traces" in output and "5599" in output
+    assert "experiment name: my-agent" in output
 
 
-def test_dev_omits_experiment_url_when_tracing_off(tmp_path: pathlib.Path, monkeypatch):
-    # Tracing disabled (resolve returns None) -> no Traces line in the startup panel.
+def test_dev_omits_traces_line_when_local_tracing_unavailable(tmp_path: pathlib.Path, monkeypatch):
+    # Local tracing couldn't start (start_local_tracing_server returns none) -> no Traces line in the panel.
     (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _write_agent_manifest(tmp_path, server="mason")
     (tmp_path / ".venv").mkdir()
-    monkeypatch.setattr(dev_mod, "resolve_trace_experiment_id", lambda *a, **k: None)
+    monkeypatch.setattr(dev_mod, "start_local_tracing_server", lambda source_dir: (None, {}))
     with mock.patch.object(dev_mod, "_databricks"):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
-    assert "/ml/experiments/" not in result.output
+    assert "Traces" not in result.output
 
 
 def test_dev_runs_offline_when_client_unavailable(tmp_path: pathlib.Path):
-    # No stores + no auth: obj.client() raises, but tracing is best-effort, so dev still runs the
-    # agent locally (it doesn't regress the offline path).
+    # No stores + no auth: obj.client() would raise, but with nothing bound it's never called (and
+    # local tracing needs no workspace), so dev still runs the agent locally offline.
     from databricks_mason.errors import AgentCliError
 
     (tmp_path / "app.yaml").write_text("command: []\n")
@@ -253,26 +309,25 @@ def test_dev_runs_offline_when_client_unavailable(tmp_path: pathlib.Path):
     assert db.call_args.args[0][:2] == ["apps", "run-local"]  # agent still ran
 
 
-def test_dev_runs_without_traces_when_tracing_setup_fails(tmp_path: pathlib.Path, monkeypatch):
-    # Tracing is best-effort locally: if provisioning raises (e.g. offline / no workspace access),
-    # dev still runs the agent, just without wiring any MLflow env.
-    import yaml
-
-    from databricks_mason.errors import AgentCliError
-
-    (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+def test_dev_runs_without_traces_when_local_tracing_unavailable(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    # Local tracing is best-effort: if the server can't start (start_local_tracing_server returns none),
+    # dev still runs the agent and injects no MLflow env.
+    (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"], "env": []}))
+    _write_agent_manifest(tmp_path, server="mason")
     (tmp_path / ".venv").mkdir()
+    monkeypatch.setattr(dev_mod, "start_local_tracing_server", lambda source_dir: (None, {}))
+    captured: dict = {}
 
-    def _boom(*a, **k):
-        raise AgentCliError("could not reach the workspace")
+    def _fake_databricks(args, *a, **kw):
+        captured.update(yaml.safe_load((pathlib.Path(kw["cwd"]) / "app.masondev.yaml").read_text()))
+        return types.SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr(dev_mod, "resolve_trace_experiment_id", _boom)
-    with mock.patch.object(dev_mod, "_databricks") as db:
-        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    monkeypatch.setattr(dev_mod, "_databricks", _fake_databricks)
+    result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
-    env_entries = yaml.safe_load((tmp_path / "app.yaml").read_text()).get("env") or []
-    assert not any(e["name"].startswith("MLFLOW") for e in env_entries)
-    assert db.call_args.args[0][:2] == ["apps", "run-local"]
+    assert not any(e["name"].startswith("MLFLOW") for e in captured.get("env", []))
 
 
 def test_dev_requires_app_yaml(tmp_path: pathlib.Path):

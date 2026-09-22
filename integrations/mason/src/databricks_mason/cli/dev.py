@@ -19,13 +19,10 @@ from databricks_mason import render
 from databricks_mason.cli.deploy import (
     _load_project,
     _resolve_memory_store,
-    _upsert_manifest_env,
-    mlflow_tracing_config,
-    resolve_trace_experiment_id,
     store_bindings,
 )
 from databricks_mason.cli.endpoint_examples import print_agent_invoke_command
-from databricks_mason.cli.tracing import experiment_url
+from databricks_mason.cli.tracing import start_local_tracing_server, stop_local_tracing_server
 from databricks_mason.databricks_cli import _databricks
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import require_managed_tool_support
@@ -79,12 +76,15 @@ def dev(
     deployment. The environment is built on the first run and reused after; pass
     `--prepare-environment` to force a rebuild (e.g. after changing dependencies).
 
-    Tracing is on by default: dev sends the agent's traces to the default mason experiment based on
-    the project name (the same one `mason deploy` uses), created and pinned into agent.toml on first
-    run — configure or turn it off with `mason tracing configure` / `disable`. Stores bound with
-    `mason memory/sessions bind` are resolved here and injected into the dev-only manifest as env, so
-    the runtime picks them up the same way a deployment does. Locally you already have access, so no
-    service-principal grant is needed; that grant happens at `mason deploy` time.
+    Tracing runs locally: dev starts a local MLflow tracking server (sqlite-backed, under `.mason/`)
+    and points the agent at it, so traces are recorded on your machine with no workspace experiment
+    or setup — open the printed Traces URL to view them. `mason tracing disable` does not affect
+    `mason dev` - dev always traces to this local server; it only stops the deployed agent's tracing
+    (`mason deploy` sends traces to a managed workspace experiment). Stores bound with
+    `mason memory/sessions bind` are resolved here and
+    injected into the dev-only manifest as env, so the runtime picks them up the same way a deployment
+    does. Locally you already have access, so no service-principal grant is needed; that grant happens
+    at `mason deploy` time.
     """
     source_dir = pathlib.Path(source)
     app_yaml = source_dir / "app.yaml"
@@ -98,10 +98,9 @@ def dev(
     if project is not None and project.tools:
         require_managed_tool_support(source_dir)
 
-    # Read the declared store bindings and wire tracing into app.yaml. The store bindings are
-    # resolved into the dev-only manifest as env (below); tracing is on by default, so resolve/create
-    # the per-project experiment and wire its env. Tracing is best-effort locally — if it can't be set
-    # up (e.g. no mlflow installed, or offline), dev still runs the agent, just without traces.
+    # Read the declared store bindings; they're resolved into the dev-only manifest as env (below),
+    # alongside the local tracing env (further below). Both are best-effort — dev still runs the agent
+    # if a store isn't created yet or the local tracing server can't start.
     memory_store, session_store = store_bindings(source_dir)
     # `mason dev` never provisions stores (unlike `mason deploy`); warn so missing long-term memory
     # or conversation state is not a silent surprise.
@@ -114,7 +113,6 @@ def dev(
             "No session store bound — conversation history is in-memory (not durable). "
             "Run 'mason sessions bind <name>'."
         )
-    env_updates: dict[str, str] = {}
     local_env: dict[str, str] = {}
     # Declared stores are created by `mason deploy`, not dev — dev never creates them. Check
     # existence for a friendly warning, and wire the resolved store bindings into the local-only
@@ -155,59 +153,57 @@ def dev(
                 f"Session store '{session_store}' is declared but not created yet — conversation "
                 "history is in-memory (not durable). Run `mason deploy` to create it."
             )
-    # Tracing is best-effort: build the client and provision inside the try so ANY failure (no auth /
-    # offline, no mlflow, permission) degrades to running without traces rather than aborting a purely
-    # local run.
-    trace_url: Optional[str] = None
+    # Local tracing: start a local MLflow tracking server backed by sqlite under .mason/ and point the
+    # agent at it via the dev-only manifest — for any project, regardless of framework/server. An agent
+    # that uses MLflow (autolog or `start_trace`) then traces to it; it's harmless for one that doesn't.
+    # Traces stay on the machine — no workspace experiment, no auth, no username needed — and the same
+    # server serves the trace UI. Launched via `uvx mlflow` so it needs neither the (skinny) CLI env nor
+    # the agent venv, and it owns the sqlite schema (so there's no client/server migration mismatch).
+    # Best-effort: any launch failure degrades to running without traces. `mason deploy` handles the
+    # managed workspace experiment instead.
+    tracing_server, tracing_env = start_local_tracing_server(source_dir)
+    # Everything after the server starts runs under try/finally, so any failure — e.g. a malformed
+    # app.yaml that `_dev_entry_point` rejects — still tears the local server down (and removes the
+    # dev-only manifest) instead of orphaning the process.
+    entry_point: Optional[pathlib.Path] = None
     try:
-        client = obj.client()
-        experiment_id = resolve_trace_experiment_id(
-            source_dir, source_dir.resolve().name, client, obj.profile
+        trace_url: Optional[str] = None
+        if tracing_env:
+            local_env.update(tracing_env)
+            uri = tracing_env["MLFLOW_TRACKING_URI"]
+            name = tracing_env.get("MLFLOW_EXPERIMENT_NAME")
+            # Can't deep-link the experiment (created lazily on the first request; its local id isn't
+            # stable), so name it after the local MLflow UI URL so the user knows which one to open.
+            trace_url = f"{uri} (experiment name: {name})" if name else uri
+
+        # Default: prepare only when there's no venv yet, so repeat runs don't rebuild. Explicit
+        # --prepare-environment / --no-prepare-environment overrides the auto-detect.
+        if prepare_environment is None:
+            prepare_environment = not (source_dir / ".venv").exists()
+
+        args = ["apps", "run-local"]
+        if prepare_environment:
+            args.append("--prepare-environment")
+        if app_port is not None:
+            args += ["--app-port", str(app_port)]
+
+        # Run against a local-only manifest that forces the Runtime Store in-process, removes deploy-only
+        # package-index overrides, and injects any locally resolved store ids and the local tracing env.
+        entry_point = _dev_entry_point(app_yaml, local_env or None)
+        # run-local resolves this relative to cwd and rejects an absolute alternate-manifest path.
+        args += ["--entry-point", entry_point.name]
+
+        # `run-local` prints a generic "go to http://localhost:<port>" line that points at the chat UI —
+        # misleading for an API-only project, which serves no page there (404). Print an accurate line up
+        # front, keyed on whether this project actually carries the chat-app overlay.
+        _announce_local_url(
+            source_dir,
+            app_port or _DEFAULT_APP_PORT,
+            project.server if project else None,
+            trace_url,
         )
-        if experiment_id:
-            env_updates.update(mlflow_tracing_config(experiment_id).env())
-            # Show the same default experiment URL `mason deploy` prints, so a dev run surfaces where
-            # its traces land. Falls back to the bare id when the host is unavailable (offline).
-            trace_url = experiment_url(client.host, experiment_id) or experiment_id
-    except Exception as exc:  # noqa: BLE001 - tracing must never block a local run
-        render.diagnostic(
-            "warning",
-            f"tracing not enabled — {exc}",
-            help="running without traces; set it up later with `mason tracing configure`",
-        )
-    if env_updates:
-        _upsert_manifest_env(source_dir, env_updates)
 
-    # Default: prepare only when there's no venv yet, so repeat runs don't rebuild. Explicit
-    # --prepare-environment / --no-prepare-environment overrides the auto-detect.
-    if prepare_environment is None:
-        prepare_environment = not (source_dir / ".venv").exists()
-
-    args = ["apps", "run-local"]
-    if prepare_environment:
-        args.append("--prepare-environment")
-    if app_port is not None:
-        args += ["--app-port", str(app_port)]
-
-    # Run against a local-only manifest that forces the Runtime Store in-process, removes deploy-only
-    # package-index overrides, and injects any locally resolved store ids.
-    entry_point = _dev_entry_point(app_yaml, local_env or None)
-    # run-local resolves this relative to cwd and rejects an absolute alternate-manifest path.
-    args += ["--entry-point", entry_point.name]
-
-    # `run-local` prints a generic "go to http://localhost:<port>" line that points at the chat UI —
-    # misleading for an API-only project, which serves no page there (404). Print an accurate line up
-    # front, keyed on whether this project actually carries the chat-app overlay.
-    _announce_local_url(
-        source_dir,
-        app_port or _DEFAULT_APP_PORT,
-        project.server if project else None,
-        trace_url,
-    )
-
-    # Run in the project dir so run-local finds the app; stream output (no capture). Remove the
-    # local-only manifest afterward so a later `mason deploy` cannot sync it to the workspace.
-    try:
+        # Run in the project dir so run-local finds the app; stream output (no capture).
         _databricks(
             args,
             obj.profile,
@@ -215,7 +211,12 @@ def dev(
             action="Could not start the agent locally.",
         )
     finally:
-        entry_point.unlink(missing_ok=True)
+        # Remove the local-only manifest so a later `mason deploy` cannot sync it to the workspace, and
+        # stop the local tracing server — even if setup above raised before run-local.
+        if entry_point is not None:
+            entry_point.unlink(missing_ok=True)
+        if tracing_server is not None:
+            stop_local_tracing_server(tracing_server)
 
 
 def _announce_local_url(
