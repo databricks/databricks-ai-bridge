@@ -363,7 +363,7 @@ In a Mason-server agent, add the memory tools so the model can read and write me
 `memory_tools(actor)` exposes `remember` and `recall` bound to one actor's partition; it resolves the
 store from the `[memory_store]` binding, carried to the runtime by the `AGENT_MEMORY_STORE` env var
 that `mason deploy` injects, and returns no tools when no store is set, so the agent runs unchanged.
-That "no store set" path is also how it runs under `mason dev`, which is a local sandbox: memory is off
+That "no store set" path is also how it runs under `mason dev`, which runs locally: memory is off
 there (the store is provisioned and used only at deploy). The OpenAI Agents adapter exposes the same as
 `memory_tools()`:
 
@@ -717,8 +717,8 @@ mason --profile <profile> deploy mason-agent-demo --source .
 
 (`bind` declares the store name in `agent.toml`; `mason deploy` creates any declared-but-missing
 store and grants the app's service principal access to it. The memory store id flows to the runtime
-via the `AGENT_MEMORY_STORE` env var, injected by `deploy` and `mason dev` — it is not persisted
-in `agent.toml`.)
+via the `AGENT_MEMORY_STORE` env var that `deploy` injects; `mason dev` runs locally with memory off
+and does not inject it. The id is not persisted in `agent.toml`.)
 
 The chat UI generates a stable application session UUID in browser local storage, places it inside
 the invocation's opaque `input`, and creates a fresh invocation UUID per turn. The
