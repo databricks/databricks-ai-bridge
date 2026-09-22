@@ -128,6 +128,11 @@ def dev(
             f"[dim]Session store '{session_store}' is bound but `mason dev` keeps "
             "conversation history in-process (not durable). Run `mason deploy` to use bound store.[/]"
         )
+    if project is not None and project.trace_experiment_name:
+        render.console().print(
+            f"[dim]Tracing experiment '{project.trace_experiment_name}' is bound but `mason dev` "
+            "traces to a local MLflow server. Run `mason deploy` to trace to the bound experiment.[/]"
+        )
     local_env: dict[str, str] = {}
     # Local tracing: start a local MLflow tracking server backed by sqlite under .mason/ and point the
     # agent at it via the dev-only manifest — for any project, regardless of framework/server. An agent

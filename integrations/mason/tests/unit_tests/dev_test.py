@@ -22,12 +22,15 @@ def _write_agent_manifest(
     server: str = "mason",
     memory: str | None = None,
     session: str | None = None,
+    experiment_name: str | None = None,
 ) -> None:
     body = f'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "{server}"\n'
     if memory:
         body += f'\n[memory_store]\nname = "{memory}"\n'
     if session:
         body += f'\n[session_store]\nname = "{session}"\n'
+    if experiment_name:
+        body += f'\n[tracing]\nexperiment_name = "{experiment_name}"\n'
     (source / "agent.toml").write_text(body)
 
 
@@ -566,6 +569,7 @@ def test_dev_quiet_about_unbound_stores(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     assert "No memory store bound" not in result.output
     assert "No session store bound" not in result.output
+    assert "Tracing experiment" not in result.output  # unbound tracing -> no notice
 
 
 def test_dev_notes_local_stores_when_bound(tmp_path: pathlib.Path):
@@ -580,3 +584,17 @@ def test_dev_notes_local_stores_when_bound(tmp_path: pathlib.Path):
     assert "Memory store 'mem' is bound" in out
     assert "Session store 'sess' is bound" in out
     assert "Run `mason deploy` to use bound store" in out
+
+
+def test_dev_notes_bound_tracing_experiment(tmp_path: pathlib.Path):
+    # A bound tracing experiment is a `mason deploy` concern; dev always traces to its own local MLflow
+    # server, so it notes the binding but explains the deployed agent is what uses it (mirrors the
+    # memory/session store notices). Dev makes no workspace call.
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    _write_agent_manifest(tmp_path, experiment_name="/Shared/mason_traces/mine")
+    with mock.patch.object(dev_mod, "_databricks"):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code == 0, result.output
+    out = " ".join(result.output.split())  # collapse rich line-wrapping
+    assert "Tracing experiment '/Shared/mason_traces/mine' is bound" in out
+    assert "Run `mason deploy` to trace to the bound experiment" in out
