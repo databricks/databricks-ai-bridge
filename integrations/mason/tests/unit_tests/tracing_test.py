@@ -335,7 +335,7 @@ def test_list_defaults_to_projects_bound_experiment(tmp_path: pathlib.Path):
     # No explicit --experiment: resolve the project's bound name to an id in the current workspace.
     _project(tmp_path, experiment_name="/Shared/mason_traces/demo")
     mlflow = mock.Mock()
-    mlflow.get_experiment_by_name.return_value = mock.Mock(experiment_id="p1")
+    mlflow.get_experiment_by_name.return_value = mock.Mock(experiment_id="p1", tags={})
     mlflow.search_traces.return_value = []
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
@@ -368,6 +368,7 @@ def test_list_empty_when_no_experiment_exists(tmp_path: pathlib.Path):
 
 def test_get_reports_missing_trace(tmp_path: pathlib.Path):
     mlflow = mock.Mock()
+    mlflow.get_experiment_by_name.return_value = None  # no project experiment -> reads the workspace
     mlflow.get_trace.return_value = None
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),

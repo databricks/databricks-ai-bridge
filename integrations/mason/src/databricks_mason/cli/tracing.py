@@ -91,9 +91,12 @@ _UC_TRACE_TAG = "mlflow.experiment.databricksTraceDestinationPath"
 
 
 def _is_uc_backed(experiment) -> bool:
-    """True if the experiment stores traces in Unity Catalog rather than the managed MLflow backend."""
-    tags = getattr(experiment, "tags", None)
-    return isinstance(tags, dict) and _UC_TRACE_TAG in tags
+    """True if the experiment stores traces in Unity Catalog rather than the managed MLflow backend.
+
+    An MLflow ``Experiment``'s ``tags`` is always a dict (empty when it has none); ``or {}`` just
+    guards a missing attribute.
+    """
+    return _UC_TRACE_TAG in (getattr(experiment, "tags", None) or {})
 
 
 def _get_experiment_by_id(mlflow, experiment_id: str):
