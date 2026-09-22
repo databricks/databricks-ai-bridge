@@ -361,9 +361,11 @@ directly.
 
 In a Mason-server agent, add the memory tools so the model can read and write memory during a run.
 `memory_tools(actor)` exposes `remember` and `recall` bound to one actor's partition; it resolves the
-store from the `[memory_store]` binding — carried to the runtime by the `AGENT_MEMORY_STORE` env var
-that `deploy` and `mason dev` inject — and returns no tools when no store is bound, so the agent runs
-unchanged. The OpenAI Agents adapter exposes the same as `memory_tools()`:
+store from the `[memory_store]` binding, carried to the runtime by the `AGENT_MEMORY_STORE` env var
+that `mason deploy` injects, and returns no tools when no store is set, so the agent runs unchanged.
+That "no store set" path is also how it runs under `mason dev`, which is a local sandbox: memory is off
+there (the store is provisioned and used only at deploy). The OpenAI Agents adapter exposes the same as
+`memory_tools()`:
 
 ```python
 from databricks_mason.langgraph import memory_tools
