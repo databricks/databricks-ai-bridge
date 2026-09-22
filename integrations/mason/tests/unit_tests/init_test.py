@@ -353,8 +353,9 @@ def test_init_store_name_overrides(tmp_path: pathlib.Path):
 
 
 @pytest.mark.parametrize("chat_app", [True, False])
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
 def test_existing_prepares_migration_without_changing_application(
-    tmp_path: pathlib.Path, chat_app: bool
+    tmp_path: pathlib.Path, framework: str, chat_app: bool
 ):
     original = {
         "agent.py": b"# existing graph\n",
@@ -370,10 +371,18 @@ def test_existing_prepares_migration_without_changing_application(
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
 
+    # Mirror the bundled templates: every framework scaffold ships a MASON_CONTRACT.md, and the
+    # chat-app overlay adds a CHAT_APP.md.
+    def _copy(name, dest, overlay_names=()):
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "MASON_CONTRACT.md").write_text("# contract\n")
+        if overlay_names:
+            (dest / "CHAT_APP.md").write_text("# chat app\n")
+
     args = [
         "--existing",
         "--framework",
-        "langgraph",
+        framework,
         "--profile",
         "selected",
         "--memory-store",
@@ -384,7 +393,8 @@ def test_existing_prepares_migration_without_changing_application(
     ]
     if not chat_app:
         args.append("--disable-chat-app")
-    result = CliRunner().invoke(init_mod.init, args, obj=_Ctx(output="json"))
+    with mock.patch.object(init_mod, "_copy_packaged_template", side_effect=_copy):
+        result = CliRunner().invoke(init_mod.init, args, obj=_Ctx(output="json"))
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
@@ -392,15 +402,23 @@ def test_existing_prepares_migration_without_changing_application(
     assert pathlib.Path(payload["skill"]).is_file()
     assert pathlib.Path(payload["prompt_file"]).read_text().strip() == payload["prompt"]
     assert payload["mode"] == "existing"
+    assert payload["framework"] == framework
     assert payload["chat_app_enabled"] is chat_app
+    label = {"langgraph": "LangGraph", "openai": "OpenAI Agents SDK"}[framework]
+    assert label in payload["prompt"]
     settings = json.loads((skill / "references/migration.json").read_text())
+    assert settings["framework"] == framework
     assert settings["profile"] == "selected"
     assert settings["chat_app_enabled"] is chat_app
     reference = skill / "references/template"
+    assert (reference / "MASON_CONTRACT.md").is_file()
+    if chat_app:
+        assert (reference / "CHAT_APP.md").is_file()
     with (reference / "agent.toml").open("rb") as manifest_file:
         manifest = tomli.load(manifest_file)
     assert manifest["memory_store"] == {"name": "chosen-memory"}
     assert manifest["session_store"] == {"name": "chosen-session"}
+    assert manifest["agent"]["framework"] == framework
     assert manifest["agent"]["server"] == "mason"
 
     # Every supported agent finds the one bundle through a pointer, rather than its own copy.
@@ -458,8 +476,8 @@ def test_existing_refuses_migration_path_conflicts(tmp_path: pathlib.Path, confl
 @pytest.mark.parametrize(
     "args",
     [
-        ["--existing", "--framework", "openai"],
         ["--existing", "--server", "custom"],
+        ["--existing", "--framework", "openai", "--server", "custom"],
     ],
 )
 def test_existing_rejects_unsupported_modes(tmp_path: pathlib.Path, args: list[str]):
