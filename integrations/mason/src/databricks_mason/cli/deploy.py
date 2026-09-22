@@ -370,22 +370,13 @@ def _reconcile_declared_stores(
 def resolve_trace_experiment_id(
     source: pathlib.Path, project_name: str, client, profile
 ) -> Optional[str]:
-    """Get-or-create the agent's MLflow experiment in the current workspace and return its id, or
-    None when tracing is disabled.
+    """Get-or-create this project's MLflow experiment in the ``profile``'s workspace and return its
+    id, or None when tracing is disabled.
 
-    ``project_name`` is the Mason project name (the source directory's basename), not the deployed
-    app name. The experiment is resolved by **name** (portable across workspaces/profiles), never by a
-    stored id:
-
-    - `mason tracing disable` was run -> None (tracing off).
-    - otherwise -> the project's bound ``experiment_name`` (written into agent.toml at `mason init`),
-      else the default ``/Shared/mason_traces/<project>`` -> get-or-create it in the workspace the
-      current profile targets, and return that workspace's id.
-
-    Nothing is written back to agent.toml (no id is pinned), so re-deploying under a
-    different-workspace profile just get-or-creates the same-named experiment there. Raises if the
-    experiment can't be created (e.g. `/Shared` isn't writable); the caller degrades to deploying
-    without tracing and points the user at `mason tracing configure`.
+    Resolves by experiment **name**, never a stored id: the ``experiment_name`` configured in
+    agent.toml, else a default derived from ``project_name``. ``source`` locates agent.toml;
+    ``project_name`` is the Mason project name (the source directory's basename). Nothing is written
+    back to agent.toml. Raises if the experiment can't be created.
     """
     from databricks_mason.agent_project import AgentProject  # noqa: PLC0415 - avoid import cycle
 
@@ -397,6 +388,8 @@ def resolve_trace_experiment_id(
         return None
     name = project.trace_experiment_name if project is not None else None
     if not name:
+        # TODO: drop this default-name fallback once tracing/session/memory are consolidated so deploy
+        # provisions only what's explicitly configured in agent.toml.
         name = default_experiment_name(project_name)
     return create_experiment_idempotent(profile, client, name)
 
@@ -721,10 +714,9 @@ def deploy(
     if trace_setup_error is not None:
         steps.insert(
             0,
-            "Tracing wasn't set up (deployed without it) — the experiment couldn't be created "
-            "(is /Shared writable in this workspace?). Point at a writable experiment with "
-            "`mason tracing configure --experiment-name <path>` (e.g. under your /Users/<you>/…) and "
-            f"redeploy. Cause: {trace_setup_error}",
+            "Tracing wasn't set up (deployed without it). Configure a writable experiment with "
+            "`mason tracing configure --experiment-name <path>` and redeploy. "
+            f"Cause: {trace_setup_error}",
         )
     if trace_experiment_id and trace_grant_error is not None:
         steps.insert(

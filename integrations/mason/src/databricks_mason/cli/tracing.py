@@ -23,6 +23,7 @@ import pathlib
 import re
 import socket
 import subprocess
+from dataclasses import dataclass
 from typing import Any, Optional
 
 import click
@@ -135,13 +136,10 @@ def create_experiment_idempotent(profile: Optional[str], client, name: str) -> s
 
 
 def _resolve_experiment_name(source: pathlib.Path | str) -> Optional[str]:
-    """The experiment name for a project — its bound ``experiment_name``, else the per-project default
-    — or None when tracing is disabled.
+    """This project's configured ``experiment_name``, else the per-project default; None when tracing
+    is disabled.
 
-    Shared by `mason dev` and `mason tracing list` so both resolve the same experiment `mason deploy`
-    provisions (this is deploy.resolve_trace_experiment_id's resolution, minus the get-or-create).
-    Resolving by name (not a stored id) keeps it correct after switching to a different-workspace
-    profile.
+    Resolves by name, not a stored id, so it stays correct across workspaces/profiles.
     """
     from databricks_mason.agent_project import AgentProject  # noqa: PLC0415 - avoid import cycle
 
@@ -155,19 +153,26 @@ def _resolve_experiment_name(source: pathlib.Path | str) -> Optional[str]:
     return name or default_experiment_name(pathlib.Path(source).resolve().name)
 
 
-def _trace_read_target(
-    source: pathlib.Path | str, profile: Optional[str]
-) -> tuple[Optional[str], Optional[str]]:
-    """The ``(tracking_uri, experiment_id)`` that `list`/`get` should read this project's traces from.
+@dataclass(frozen=True)
+class _TraceReadTarget:
+    """Where `list`/`get` read traces from: an MLflow ``tracking_uri`` and the ``experiment_id`` in it.
 
-    The workspace experiment when it's provisioned (by `mason deploy`) and managed, else the local
-    `mason dev` store (``.mason/mlflow.db``) so traces from a not-yet-deployed dev run are still
-    inspectable from the CLI. ``(None, None)`` when tracing is disabled, the experiment isn't created
-    yet, and no local store exists (nothing has traced anywhere).
+    A field is None when there's nothing to read (no experiment resolved).
+    """
+
+    tracking_uri: Optional[str]
+    experiment_id: Optional[str]
+
+
+def _trace_read_target(source: pathlib.Path | str, profile: Optional[str]) -> _TraceReadTarget:
+    """The target `list`/`get` read this project's traces from: its workspace experiment when that
+    exists and is managed, else the local ``mason dev`` store (``.mason/mlflow.db``).
+
+    Both fields are None when nothing has traced anywhere yet.
     """
     name = _resolve_experiment_name(source)
     if not name:
-        return None, None
+        return _TraceReadTarget(None, None)
     mlflow = _mlflow()
     _set_tracking_uri(mlflow, profile)
     try:
@@ -175,7 +180,7 @@ def _trace_read_target(
     except Exception:  # noqa: BLE001 - workspace unreachable -> try the local dev store
         experiment = None
     if experiment is not None and not _is_uc_backed(experiment):
-        return _workspace_uri(profile), experiment.experiment_id
+        return _TraceReadTarget(_workspace_uri(profile), experiment.experiment_id)
     # Not provisioned in the workspace -> fall back to the local dev store, if any.
     db = pathlib.Path(source).resolve() / _MASON_LOCAL_DIR / "mlflow.db"
     if db.exists():
@@ -183,20 +188,18 @@ def _trace_read_target(
         mlflow.set_tracking_uri(uri)
         local = mlflow.get_experiment_by_name(pathlib.Path(source).resolve().name)
         if local is not None:
-            return uri, local.experiment_id
-    return None, None
+            return _TraceReadTarget(uri, local.experiment_id)
+    return _TraceReadTarget(None, None)
 
 
-def _explicit_experiment_target(
+def _workspace_experiment_target(
     profile: Optional[str], experiment_name: Optional[str], experiment_id: Optional[str]
-) -> Optional[tuple[str, Optional[str]]]:
-    """The ``(tracking_uri, experiment_id)`` for an explicit ``--experiment-id``/``--experiment-name``,
-    or ``None`` to fall back to the project default (:func:`_trace_read_target`).
+) -> Optional[_TraceReadTarget]:
+    """The workspace target for an explicit ``--experiment-id`` / ``--experiment-name``, or None when
+    neither is given (the caller falls back to the project default).
 
-    An explicit identifier always targets the workspace (that's where a named/numbered experiment
-    lives) and must exist: an unknown id or name raises rather than silently reading nothing, so a
-    typo isn't mistaken for an empty experiment. Only the project default (neither flag) is allowed to
-    be absent - that's the normal pre-deploy state, which falls back to the local dev store.
+    An explicit identifier must exist: an unknown id or name raises rather than resolving to nothing,
+    so a typo isn't mistaken for an empty experiment.
     """
     if not (experiment_id or experiment_name):
         return None
@@ -208,14 +211,14 @@ def _explicit_experiment_target(
                 f"No MLflow experiment found with id {experiment_id!r} in this workspace.",
                 hint="Check the id, or omit it to use this project's experiment.",
             )
-        return _workspace_uri(profile), experiment_id
+        return _TraceReadTarget(_workspace_uri(profile), experiment_id)
     experiment = mlflow.get_experiment_by_name(experiment_name)
     if experiment is None:
         raise AgentCliError(
             f"No MLflow experiment named {experiment_name!r} in this workspace.",
             hint="Check the name, or omit it to use this project's experiment.",
         )
-    return _workspace_uri(profile), experiment.experiment_id
+    return _TraceReadTarget(_workspace_uri(profile), experiment.experiment_id)
 
 
 def _attr(obj: Any, *paths: str, default: Any = None) -> Any:
@@ -527,13 +530,15 @@ def tracing_list(obj, experiment_name, experiment_id, limit, source) -> None:
             hint="They select the same experiment; use whichever identifier you have.",
         )
     mlflow = _mlflow()
-    tracking_uri, exp_id = _explicit_experiment_target(
+    target = _workspace_experiment_target(
         obj.profile, experiment_name, experiment_id
     ) or _trace_read_target(source, obj.profile)
     traces = []
-    if exp_id:
-        mlflow.set_tracking_uri(tracking_uri)
-        traces = mlflow.search_traces(locations=[exp_id], max_results=limit, return_type="list")
+    if target.experiment_id:
+        mlflow.set_tracking_uri(target.tracking_uri)
+        traces = mlflow.search_traces(
+            locations=[target.experiment_id], max_results=limit, return_type="list"
+        )
 
     if obj.output == "json":
         render.emit_json([_trace_to_json(t) for t in traces])
@@ -547,9 +552,9 @@ def tracing_list(obj, experiment_name, experiment_id, limit, source) -> None:
         ]
         for t in traces
     ]
-    where = " (local dev)" if (tracking_uri or "").startswith("sqlite:") else ""
+    where = " (local dev)" if (target.tracking_uri or "").startswith("sqlite:") else ""
     render.resource_table(
-        f"Agent Traces · {str(exp_id) + where if exp_id else 'no experiment yet'}",
+        f"Agent Traces · {str(target.experiment_id) + where if target.experiment_id else 'no experiment yet'}",
         [("Trace ID", "left"), ("Status", "left"), ("Latency (ms)", "left"), ("Created", "left")],
         rows,
     )
@@ -591,10 +596,10 @@ def tracing_get(obj, trace_id, experiment_name, experiment_id, source) -> None:
             hint="They select the same experiment; use whichever identifier you have.",
         )
     mlflow = _mlflow()
-    tracking_uri, _ = _explicit_experiment_target(
+    target = _workspace_experiment_target(
         obj.profile, experiment_name, experiment_id
     ) or _trace_read_target(source, obj.profile)
-    mlflow.set_tracking_uri(tracking_uri or _workspace_uri(obj.profile))
+    mlflow.set_tracking_uri(target.tracking_uri or _workspace_uri(obj.profile))
     trace = mlflow.get_trace(trace_id)
     if trace is None:
         raise AgentCliError(f"No trace found with id {trace_id!r}.")
