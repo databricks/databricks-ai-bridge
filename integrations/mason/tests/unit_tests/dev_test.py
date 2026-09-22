@@ -153,7 +153,9 @@ def test_dev_entry_point_strips_inherited_workspace_tracing_env(tmp_path: pathli
         {"MLFLOW_TRACKING_URI": "http://127.0.0.1:5599", "MLFLOW_EXPERIMENT_NAME": "my-agent"},
     )
     env = {e["name"]: e["value"] for e in yaml.safe_load(dev_yaml.read_text())["env"]}
-    assert "MLFLOW_EXPERIMENT_ID" not in env  # stale workspace id stripped, so it can't win over NAME
+    assert (
+        "MLFLOW_EXPERIMENT_ID" not in env
+    )  # stale workspace id stripped, so it can't win over NAME
     assert env["MLFLOW_TRACKING_URI"] == "http://127.0.0.1:5599"  # local server wins
     assert env["MLFLOW_EXPERIMENT_NAME"] == "my-agent"
     assert env["AGENT_SESSION_STORE"] == "s"  # unrelated env preserved
