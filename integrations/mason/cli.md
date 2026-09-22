@@ -138,7 +138,7 @@ Auth uses your Databricks profile (`-p` / `mason login`), and the agent reaches 
 
 Under the hood this wraps `databricks apps run-local`: it reads the command + env from `app.yaml` and runs the app the way the Apps runtime would, so local behavior matches a deployment. The environment is built on the first run and reused after; pass `--prepare-environment` to force a rebuild (e.g. after changing dependencies).
 
-Everything runs locally: `mason dev` is a local deployment that does not depend on a Databricks workspace for its resources. Tracing goes to a local MLflow tracking server (sqlite-backed, under `.mason/`) so traces are recorded on your machine with no workspace experiment or setup - open the printed Traces URL to view them (`mason tracing disable` doesn't affect dev; it only stops the deployed agent's tracing). Long-term memory is off and conversation history is in-process (not durable): the memory/session stores bound with `mason memory/sessions bind` are created and used only when you `mason deploy`, not here. So there's nothing to provision and no service-principal grant to make; that all happens at `mason deploy` time.
+Everything runs locally: `mason dev` is a local deployment that does not depend on a Databricks workspace for its resources. Tracing goes to a local MLflow tracking server (sqlite-backed, under `.mason/`) so traces are recorded on your machine with no workspace experiment or setup - open the printed Traces URL to view them (`mason tracing unbind` doesn't affect dev; it only stops the deployed agent's tracing). Long-term memory is off and conversation history is in-process (not durable): the memory/session stores bound with `mason memory/sessions bind` are created and used only when you `mason deploy`, not here. So there's nothing to provision and no service-principal grant to make; that all happens at `mason deploy` time.
 
 ```
 mason dev [options]
@@ -852,19 +852,19 @@ Configure MLflow tracing for your agents, and inspect the traces.
 
 | Subcommand | Description |
 | --- | --- |
-| [`tracing configure`](#mason-tracing-configure) | Configure tracing: set the experiment to trace to (by name or id), or re-enable after `disable`. |
-| [`tracing disable`](#mason-tracing-disable) | Turn tracing off for the deployed agent (deploy-only; `mason dev` still traces locally). |
+| [`tracing bind`](#mason-tracing-bind) | Bind tracing to an experiment (by name or id), or re-enable the default after `unbind`. |
+| [`tracing unbind`](#mason-tracing-unbind) | Turn tracing off for the deployed agent (deploy-only; `mason dev` still traces locally). |
 | [`tracing list`](#mason-tracing-list) | List recent agent traces in an experiment. |
 | [`tracing get`](#mason-tracing-get) | Get a single trace by id (status, latency, span count, previews). |
 
-#### `mason tracing configure`
+#### `mason tracing bind`
 
-Configure tracing: set the experiment to trace to (by name or id), or re-enable after `disable`.
+Bind tracing to an experiment (by name or id), or re-enable the default after `unbind`.
 
 The experiment is stored as a NAME, not an id, so the binding stays valid across workspaces/profiles - mason get-or-creates it in the active workspace at deploy. ``--experiment-id`` (e.g. from the experiment's URL) is a convenience: it's resolved to the experiment's name and stored as a name, never as an id. Point this at a writable path if the default /Shared experiment isn't writable in your workspace. Omit both to (re)enable the default /Shared experiment.
 
 ```
-mason tracing configure [options]
+mason tracing bind [options]
 ```
 
 
@@ -876,14 +876,14 @@ _Options_
 | `--experiment-id <EXPERIMENT_ID>` | string | - | no | MLflow experiment id (e.g. copied from the experiment's workspace URL) to trace to. Resolved to the experiment's name and stored as a name - mason persists names, not ids, so the binding stays valid across workspaces. Mutually exclusive with --experiment-name. |
 | `--source <SOURCE>` | path | `.` | no | Project directory containing agent.toml. Defaults to the current directory. |
 
-#### `mason tracing disable`
+#### `mason tracing unbind`
 
 Turn tracing off for the DEPLOYED agent (recorded in agent.toml; `mason deploy` then wires no MLflow env).
 
 Deploy-only: `mason dev` still traces locally to its own MLflow server, so you keep local traces while the deployed agent stays untraced.
 
 ```
-mason tracing disable [options]
+mason tracing unbind [options]
 ```
 
 

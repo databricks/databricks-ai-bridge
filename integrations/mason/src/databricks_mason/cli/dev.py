@@ -93,7 +93,7 @@ def dev(
     Everything runs locally: `mason dev` is a local deployment that does not depend on a Databricks
     workspace for its resources. Tracing goes to a local MLflow tracking server (sqlite-backed, under `.mason/`)
     so traces are recorded on your machine with no workspace experiment or setup - open the printed
-    Traces URL to view them (`mason tracing disable` doesn't affect dev; it only stops the deployed
+    Traces URL to view them (`mason tracing unbind` doesn't affect dev; it only stops the deployed
     agent's tracing). Long-term memory is off and conversation history is in-process (not durable):
     the memory/session stores bound with `mason memory/sessions bind` are created and used only when you
     `mason deploy`, not here. So there's nothing to provision and no service-principal grant to make;

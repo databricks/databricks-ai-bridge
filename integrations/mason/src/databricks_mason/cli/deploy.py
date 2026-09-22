@@ -715,7 +715,7 @@ def deploy(
         steps.insert(
             0,
             "Tracing wasn't set up (deployed without it). Configure a writable experiment with "
-            "`mason tracing configure --experiment-name <path>` and redeploy. "
+            "`mason tracing bind --experiment-name <path>` and redeploy. "
             f"Cause: {trace_setup_error}",
         )
     if trace_experiment_id and trace_grant_error is not None:

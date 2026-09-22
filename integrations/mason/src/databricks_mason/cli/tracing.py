@@ -9,8 +9,8 @@ the local MLflow UI. ``mason deploy`` sends traces to a per-project **workspace*
 builds the UI link). Storing the name — not the id — keeps the binding valid across workspaces and
 profiles, since an id is workspace-local.
 
-``mason tracing configure`` sets the experiment by name (or re-enables the default after a disable);
-``mason tracing disable`` turns tracing off; ``list`` / ``get`` read traces back.
+``mason tracing bind`` sets the experiment by name (or re-enables the default after an unbind);
+``mason tracing unbind`` turns tracing off; ``list`` / ``get`` read traces back.
 
 MLflow (``mlflow-skinny``) is a base dependency, but the ``mason tracing`` commands and the deploy
 experiment provisioning still import it lazily — ``cli.py`` imports this module at startup, so a
@@ -360,7 +360,7 @@ def tracing() -> None:
 # --- configure / disable ----------------------------------------------------
 
 
-@tracing.command("configure")
+@tracing.command("bind")
 @click.option(
     "--experiment-name",
     "experiment_name",
@@ -384,8 +384,8 @@ def tracing() -> None:
     help="Project directory containing agent.toml. Defaults to the current directory.",
 )
 @click.pass_obj
-def tracing_configure(obj, experiment_name, experiment_id, source) -> None:
-    """Configure tracing: set the experiment to trace to (by name or id), or re-enable after `disable`.
+def tracing_bind(obj, experiment_name, experiment_id, source) -> None:
+    """Bind tracing to an experiment (by name or id), or re-enable the default after `unbind`.
 
     The experiment is stored as a NAME, not an id, so the binding stays valid across
     workspaces/profiles — mason get-or-creates it in the active workspace at deploy. ``--experiment-id``
@@ -453,12 +453,12 @@ def tracing_configure(obj, experiment_name, experiment_id, source) -> None:
         next_steps=[
             ("mason dev", "Run locally with tracing on"),
             ("mason tracing list", "List traces once you have some"),
-            ("mason tracing disable", "Turn tracing off"),
+            ("mason tracing unbind", "Turn tracing off"),
         ],
     )
 
 
-@tracing.command("disable")
+@tracing.command("unbind")
 @click.option(
     "--source",
     default=".",
@@ -466,7 +466,7 @@ def tracing_configure(obj, experiment_name, experiment_id, source) -> None:
     help="Project directory containing agent.toml. Defaults to the current directory.",
 )
 @click.pass_obj
-def tracing_disable(obj, source) -> None:
+def tracing_unbind(obj, source) -> None:
     """Turn tracing off for the DEPLOYED agent (recorded in agent.toml; `mason deploy` then wires no
     MLflow env).
 
@@ -484,7 +484,7 @@ def tracing_disable(obj, source) -> None:
         return
     render.success(
         "Tracing off for the deployed agent (mason dev still traces locally)",
-        next_steps=[("mason tracing configure", "Turn deployed tracing back on")],
+        next_steps=[("mason tracing bind", "Turn deployed tracing back on")],
     )
 
 

@@ -27,7 +27,7 @@ from databricks_mason.runtime.tool_manifest import (
     SESSION_STORE_TABLE,
 )
 
-# The tracing binding (`mason tracing configure` / `disable`). Tracing is on by default (a per-project
+# The tracing binding (`mason tracing bind` / `unbind`). Tracing is on by default (a per-project
 # MLflow experiment); this table only records an explicit experiment override or a disable.
 TRACING_TABLE = "tracing"
 

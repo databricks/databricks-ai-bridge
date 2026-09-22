@@ -221,12 +221,12 @@ def test_mcp_add_without_auth_does_not_change_manifest(run_mason, tmp_path: path
     assert manifest.read_bytes() == before
 
 
-def test_tracing_disable_and_reenable(run_mason, tmp_path: pathlib.Path) -> None:
+def test_tracing_unbind_and_rebind(run_mason, tmp_path: pathlib.Path) -> None:
     project = tmp_path / "agent"
     run_mason("init", "--framework", "langgraph", str(project))
-    run_mason("tracing", "disable", "--source", str(project))
+    run_mason("tracing", "unbind", "--source", str(project))
     # No --experiment-name/--experiment-id => re-enable the per-project default; needs no workspace.
-    run_mason("tracing", "configure", "--source", str(project))
+    run_mason("tracing", "bind", "--source", str(project))
 
 
 def test_logout_runs_cleanly(run_mason) -> None:
