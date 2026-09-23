@@ -13,7 +13,7 @@ from click.testing import CliRunner
 
 from databricks_mason.agent_project import AgentProject, ToolSpec
 from databricks_mason.cli import deploy as deploy_mod
-from databricks_mason.cli.tracing import MLflowTraceTables
+from databricks_mason.cli.tracing import MLflowTraceTables, ResolvedTraceExperiment
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import write_project_metadata
 
@@ -972,7 +972,7 @@ def test_deploy_wires_tracing_env_and_grants_experiment_resource(
     assert env["MLFLOW_TRACKING_URI"] == "databricks"
     # the experiment is granted to the app's SP as an app resource (no manual SQL grant); a managed
     # experiment carries no UC tables
-    assert granted == {"app": "agent-mason-myapp", "experiment_id": "exp-42", "tables": ()}
+    assert granted == {"app": "agent-mason-myapp", "experiment_id": "exp-42", "tables": []}
     assert "Deployed without tracing" not in result.output  # bound -> no unbound notice
 
 
@@ -1035,7 +1035,7 @@ def test_deploy_grants_managed_experiment_with_no_uc_tables(tmp_path, monkeypatc
     result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
 
     assert result.exit_code == 0, result.output
-    trace_grant.assert_called_once_with("agent-mason-myapp", "exp-42", (), "prof")
+    trace_grant.assert_called_once_with("agent-mason-myapp", "exp-42", [], "prof")
 
 
 def test_deploy_proceeds_when_trace_grant_fails(tmp_path, monkeypatch):
@@ -1092,7 +1092,7 @@ def test_deploy_reconciles_trace_resources_even_when_unbound(tmp_path, monkeypat
     result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
 
     assert result.exit_code == 0, result.output
-    trace_grant.assert_called_once_with("agent-mason-myapp", None, (), "prof")
+    trace_grant.assert_called_once_with("agent-mason-myapp", None, [], "prof")
 
 
 def test_deploy_rebind_uc_to_uc_reconciles_to_the_new_table_set(tmp_path, monkeypatch):
@@ -1324,7 +1324,8 @@ def test_resolve_trace_experiment_get_or_creates_bound_name(tmp_path: pathlib.Pa
     monkeypatch.setattr(
         deploy_mod,
         "create_experiment_idempotent",
-        lambda profile, client, name: created.update(name=name) or ("id-b", MLflowTraceTables()),
+        lambda profile, client, name: created.update(name=name)
+        or ResolvedTraceExperiment("id-b", MLflowTraceTables()),
     )
     assert _REAL_RESOLVE_TRACE(tmp_path, _FakeClient(), None) == deploy_mod.ResolvedTraceExperiment(
         "id-b", MLflowTraceTables()
@@ -1348,7 +1349,8 @@ def test_resolve_trace_experiment_get_or_creates_by_name_each_run(
     monkeypatch.setattr(
         deploy_mod,
         "create_experiment_idempotent",
-        lambda profile, client, name: calls.append(name) or ("made-id", MLflowTraceTables()),
+        lambda profile, client, name: calls.append(name)
+        or ResolvedTraceExperiment("made-id", MLflowTraceTables()),
     )
     assert _REAL_RESOLVE_TRACE(tmp_path, _FakeClient(), None) == deploy_mod.ResolvedTraceExperiment(
         "made-id", MLflowTraceTables()

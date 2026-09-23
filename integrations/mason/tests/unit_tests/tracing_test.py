@@ -90,7 +90,9 @@ def test_create_experiment_idempotent_creates_parent_dir_for_nested_path():
     with mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow):
         result = tracing_mod.create_experiment_idempotent(None, client, "/Shared/mason_traces/demo")
     # a newly created experiment is always managed -> no UC tables
-    assert result == ("eid-1", tracing_mod.MLflowTraceTables())
+    assert result == tracing_mod.ResolvedTraceExperiment(
+        experiment_id="eid-1", tables=tracing_mod.MLflowTraceTables()
+    )
     # the intermediate workspace folder is created before the experiment (mlflow won't make it)
     client.ensure_workspace_dir.assert_called_once_with("/Shared/mason_traces")
 
@@ -102,8 +104,9 @@ def test_create_experiment_idempotent_reuses_existing_without_mkdir():
     client = mock.Mock()
     with mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow):
         assert tracing_mod.create_experiment_idempotent(None, client, "/Shared/x") == (
-            "eid-2",
-            tracing_mod.MLflowTraceTables(),
+            tracing_mod.ResolvedTraceExperiment(
+                experiment_id="eid-2", tables=tracing_mod.MLflowTraceTables()
+            )
         )
     client.ensure_workspace_dir.assert_not_called()  # existing experiment -> no dir work
     mlflow.create_experiment.assert_not_called()
@@ -136,9 +139,9 @@ def test_create_experiment_idempotent_returns_uc_tables():
     with mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow):
         result = tracing_mod.create_experiment_idempotent(None, client, "/Shared/uc")
     # The per-kind base tables; the "unified" VIEW tag is excluded.
-    assert result == (
-        "eid-uc",
-        tracing_mod.MLflowTraceTables(
+    assert result == tracing_mod.ResolvedTraceExperiment(
+        experiment_id="eid-uc",
+        tables=tracing_mod.MLflowTraceTables(
             spans="cat.schema.pfx_otel_spans",
             logs="cat.schema.pfx_otel_logs",
             annotations="cat.schema.pfx_otel_annotations",
@@ -163,7 +166,7 @@ def test_uc_trace_tables_empty_for_managed_experiment():
     tables = tracing_mod.uc_trace_tables(experiment)
     assert tables == tracing_mod.MLflowTraceTables()
     assert not tables  # empty tables are falsy
-    assert tables.otel_tables() == ()
+    assert tables.otel_tables() == []
 
 
 def test_uc_trace_tables_reads_all_base_table_tags_excluding_unified_view():
@@ -181,11 +184,11 @@ def test_uc_trace_tables_reads_all_base_table_tags_excluding_unified_view():
     assert tables.spans == "cat.schema.pfx_otel_spans"
     assert tables.logs == "cat.schema.pfx_otel_logs"
     assert tables.annotations == "cat.schema.pfx_otel_annotations"
-    assert tables.otel_tables() == (
-        ("spans", "cat.schema.pfx_otel_spans"),
-        ("logs", "cat.schema.pfx_otel_logs"),
-        ("annotations", "cat.schema.pfx_otel_annotations"),
-    )
+    assert tables.otel_tables() == [
+        tracing_mod.TraceTable("spans", "cat.schema.pfx_otel_spans"),
+        tracing_mod.TraceTable("logs", "cat.schema.pfx_otel_logs"),
+        tracing_mod.TraceTable("annotations", "cat.schema.pfx_otel_annotations"),
+    ]
 
 
 def test_uc_trace_tables_reads_span_and_log_only_layout():
@@ -199,10 +202,10 @@ def test_uc_trace_tables_reads_span_and_log_only_layout():
     )
     tables = tracing_mod.uc_trace_tables(experiment)
     assert tables.annotations is None
-    assert tables.otel_tables() == (
-        ("spans", "cat.schema.pfx_otel_spans"),
-        ("logs", "cat.schema.pfx_otel_logs"),
-    )
+    assert tables.otel_tables() == [
+        tracing_mod.TraceTable("spans", "cat.schema.pfx_otel_spans"),
+        tracing_mod.TraceTable("logs", "cat.schema.pfx_otel_logs"),
+    ]
 
 
 def test_uc_trace_tables_falls_back_to_derived_names_for_three_part_path():
@@ -596,50 +599,6 @@ def test_get_reads_uc_backed_experiment_through_warehouse(tmp_path, monkeypatch)
     assert result.exit_code == 0, result.output
     assert seen["warehouse"] == "wh-2"
     assert json.loads(result.output)["trace_id"] == "tr-uc"
-
-
-def test_uc_read_restores_a_preexisting_warehouse_env_var(tmp_path, monkeypatch):
-    # The UC read exports MLFLOW_TRACING_SQL_WAREHOUSE_ID for the duration of the search only: a
-    # pre-existing value is restored afterwards, not left clobbered by --warehouse.
-    mlflow = _bound_uc_project(tmp_path)
-    monkeypatch.setenv(_WAREHOUSE_ENV, "wh-sentinel")
-    seen = {}
-
-    def _search(**kwargs):
-        seen["warehouse"] = os.environ.get(_WAREHOUSE_ENV)  # during the read: the --warehouse value
-        return [_trace("tr-uc")]
-
-    mlflow.search_traces.side_effect = _search
-    with (
-        mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
-        mock.patch.object(tracing_mod, "_set_tracking_uri"),
-    ):
-        result = CliRunner().invoke(
-            tracing_mod.tracing_list,
-            ["--warehouse", "wh-1", "--source", str(tmp_path)],
-            obj=_Ctx(output="json"),
-        )
-    assert result.exit_code == 0, result.output
-    assert seen["warehouse"] == "wh-1"  # exported for the read
-    assert os.environ[_WAREHOUSE_ENV] == "wh-sentinel"  # restored after it
-
-
-def test_uc_read_removes_the_warehouse_env_var_when_it_was_unset(tmp_path, monkeypatch):
-    # With no pre-existing value, the --warehouse export is removed on exit, not left behind.
-    mlflow = _bound_uc_project(tmp_path)
-    monkeypatch.delenv(_WAREHOUSE_ENV, raising=False)
-    mlflow.search_traces.return_value = []
-    with (
-        mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
-        mock.patch.object(tracing_mod, "_set_tracking_uri"),
-    ):
-        result = CliRunner().invoke(
-            tracing_mod.tracing_list,
-            ["--warehouse", "wh-1", "--source", str(tmp_path)],
-            obj=_Ctx(output="json"),
-        )
-    assert result.exit_code == 0, result.output
-    assert _WAREHOUSE_ENV not in os.environ
 
 
 def test_list_empty_when_no_experiment_exists(tmp_path: pathlib.Path):

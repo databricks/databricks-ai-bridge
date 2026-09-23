@@ -7,6 +7,7 @@ import types
 from typing import Any
 
 from databricks_mason import app_resources as sa
+from databricks_mason.cli.tracing import TraceTable
 
 
 def _backend(database: str, resource_name: str) -> sa.LakebaseBackend:
@@ -146,7 +147,7 @@ def test_apply_trace_resources_managed_experiment_writes_only_the_experiment(mon
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(sa, "_databricks", fake_db)
-    assert sa.apply_trace_resources("app", "exp-1", (), "prof") is None
+    assert sa.apply_trace_resources("app", "exp-1", [], "prof") is None
     payload = json.loads(captured["args"][captured["args"].index("--json") + 1])
     assert payload["update_mask"] == "resources"  # masked upsert, like the other resources
     written = payload["app"]["resources"]
@@ -168,7 +169,10 @@ def test_apply_trace_resources_uc_experiment_adds_one_table_resource_per_table(m
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(sa, "_databricks", fake_db)
-    tables = (("spans", "cat.schema.otel_spans"), ("logs", "cat.schema.otel_logs"))
+    tables = [
+        TraceTable("spans", "cat.schema.otel_spans"),
+        TraceTable("logs", "cat.schema.otel_logs"),
+    ]
     assert sa.apply_trace_resources("app", "exp-uc", tables, "prof") is None
     payload = json.loads(captured["args"][captured["args"].index("--json") + 1])
     written = payload["app"]["resources"]
@@ -214,7 +218,7 @@ def test_apply_trace_resources_converges_when_rebinding_uc_to_managed(monkeypatc
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(sa, "_databricks", fake_db)
-    assert sa.apply_trace_resources("app", "exp-managed", (), "prof") is None
+    assert sa.apply_trace_resources("app", "exp-managed", [], "prof") is None
     # stale table resources are gone, the user resource is preserved, the experiment resource is
     # re-written to point at the managed experiment
     assert [r["name"] for r in resources] == ["user-owned", "mason-trace-experiment"]
@@ -234,7 +238,9 @@ def test_apply_trace_resources_reports_failure(monkeypatch):
             )
         ),
     )
-    err = sa.apply_trace_resources("app", "exp-1", (("spans", "cat.schema.otel_spans"),), "prof")
+    err = sa.apply_trace_resources(
+        "app", "exp-1", [TraceTable("spans", "cat.schema.otel_spans")], "prof"
+    )
     assert err == "denied: needs MANAGE"
 
 
@@ -258,5 +264,5 @@ def test_apply_trace_resources_prunes_everything_when_unbound(monkeypatch):
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(sa, "_databricks", fake_db)
-    assert sa.apply_trace_resources("app", None, (), "prof") is None
+    assert sa.apply_trace_resources("app", None, [], "prof") is None
     assert resources == [{"name": "user-owned", "secret": {}}]

@@ -46,6 +46,7 @@ from databricks_mason.cli.tracing import (
     TRACES_TRACKING_URI_ENV,
     TRACING_BIND_COMMAND,
     MLflowTraceTables,
+    ResolvedTraceExperiment,
     create_experiment_idempotent,
     experiment_url,
 )
@@ -378,19 +379,6 @@ def _reconcile_declared_stores(
     return memory_store_id
 
 
-@dataclass(frozen=True)
-class ResolvedTraceExperiment:
-    """The workspace experiment a deploy resolves for tracing: its id and its UC OTEL base tables.
-
-    ``tables`` is empty for a managed experiment; for a UC-backed one it carries the per-kind tables
-    the app's service principal must be granted MODIFY on so it can export traces (see
-    ``app_resources.apply_trace_resources``).
-    """
-
-    experiment_id: str
-    tables: MLflowTraceTables
-
-
 def get_or_create_trace_experiment(
     source: pathlib.Path, client, profile
 ) -> Optional[ResolvedTraceExperiment]:
@@ -412,8 +400,8 @@ def get_or_create_trace_experiment(
     # Show progress while the experiment is get-or-created (a workspace round-trip), matching the
     # memory/session store reconcile spinners so deploy isn't silent about tracing.
     with render.status(f"Reconciling tracing experiment '{name}'…"):
-        experiment_id, tables = create_experiment_idempotent(profile, client, name)
-    return ResolvedTraceExperiment(experiment_id=experiment_id, tables=tables)
+        resolved = create_experiment_idempotent(profile, client, name)
+    return resolved
 
 
 @dataclass(frozen=True)
@@ -747,7 +735,7 @@ def deploy(
                 "workspace_path": ws_path,
                 "env": env_updates,
                 "trace_experiment_id": trace_experiment_id,
-                "uc_trace_tables": [name for _, name in trace_tables.otel_tables()],
+                "uc_trace_tables": [t.full_name for t in trace_tables.otel_tables()],
                 "trace_setup_error": trace_setup_error,
                 "trace_grant": None
                 if not trace_experiment_id
