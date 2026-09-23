@@ -11,6 +11,7 @@ Environment:
     RUN_MASON_INTEGRATION_TESTS   "1" to enable this suite
     DATABRICKS_HOST / _CLIENT_ID / _CLIENT_SECRET   service-principal auth for the CLIs and SDK
     MASON_INTEGRATION_UC_SCHEMA   two-part ``catalog.schema`` the SP can create a scratch function in
+    MASON_INTEGRATION_PREPROVISIONED_APP_CATALOG_ACCESS   "1" when Apps already have USE CATALOG
     MASON_INTEGRATION_WAREHOUSE_ID   optional; a SQL warehouse to use instead of auto-discovering one
     MASON_WHEEL                   optional; a prebuilt databricks-mason wheel (else one is built here)
 """
@@ -69,6 +70,8 @@ def test_tool_matrix_deploy_and_invoke(tmp_path: pathlib.Path) -> None:
     warehouse = os.environ.get("MASON_INTEGRATION_WAREHOUSE_ID")
     if warehouse:
         argv += ["--warehouse-id", warehouse]
+    if os.environ.get("MASON_INTEGRATION_PREPROVISIONED_APP_CATALOG_ACCESS") == "1":
+        argv.append("--preprovisioned-app-catalog-access")
 
     # No --profile: tool_matrix falls back to ambient env credentials (the CI service principal),
     # which as OAuth also authorize the deployed App's /api calls. This deploys real Apps and starts

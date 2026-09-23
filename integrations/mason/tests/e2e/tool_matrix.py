@@ -115,6 +115,7 @@ class Runner:
         template_repo: str | None = None,
         template_ref: str | None = None,
         app_auth_profile: str | None = None,
+        preprovisioned_app_catalog_access: bool = False,
     ):
         self.profile = profile
         self.output = output
@@ -122,6 +123,7 @@ class Runner:
         self.template_repo = template_repo
         self.template_ref = template_ref
         self.app_auth_profile = app_auth_profile or profile
+        self.preprovisioned_app_catalog_access = preprovisioned_app_catalog_access
         self.transcript = Transcript(output / "commands.log")
         self.runner_venv = output / "runner-venv"
         self.mason = self.runner_venv / "bin" / "mason"
@@ -547,6 +549,10 @@ class Runner:
     def deploy(self, case: ProjectCase) -> None:
         label = f"deploy-{case.framework}-{case.authoring}"
         log_path = self.output / "logs" / f"{label}.log"
+        # Track the deterministic name before deployment because `mason deploy` can create the App
+        # and then fail while waiting for it. Deleting a name that was never created is harmless.
+        if case.app_name not in self.apps:
+            self.apps.append(case.app_name)
         try:
             self.run_long(
                 label,
@@ -560,7 +566,6 @@ class Runner:
                 ],
                 timeout=2400,
             )
-            self.apps.append(case.app_name)
             app = self._wait_for_app(case.app_name)
             self._grant_function(app)
             url = str(app.get("url") or "").rstrip("/")
@@ -594,10 +599,18 @@ class Runner:
             raise MatrixError(f"App response has no service_principal_client_id: {app}")
         catalog, schema, function_name = self.uc_function.split(".")
         quoted_principal = f"`{str(principal).replace('`', '``')}`"
-        for statement in (
-            f"GRANT USE SCHEMA ON SCHEMA `{catalog}`.`{schema}` TO {quoted_principal}",
-            f"GRANT EXECUTE ON FUNCTION `{catalog}`.`{schema}`.`{function_name}` TO {quoted_principal}",
-        ):
+        statements = []
+        if not self.preprovisioned_app_catalog_access:
+            statements.append(
+                f"GRANT USE CATALOG ON CATALOG `{catalog}` TO {quoted_principal}"
+            )
+        statements.extend(
+            (
+                f"GRANT USE SCHEMA ON SCHEMA `{catalog}`.`{schema}` TO {quoted_principal}",
+                f"GRANT EXECUTE ON FUNCTION `{catalog}`.`{schema}`.`{function_name}` TO {quoted_principal}",
+            )
+        )
+        for statement in statements:
             self.sql(statement)
 
     def _exercise(
@@ -735,12 +748,15 @@ class Runner:
         os.replace(temporary, target)
 
     def cleanup(self) -> None:
-        for app in self.apps:
-            self.run(
-                ["databricks", "apps", "delete", app, *self._profile_args()],
-                timeout=600,
-                check=False,
-            )
+        for app in dict.fromkeys(self.apps):
+            try:
+                self.run(
+                    ["databricks", "apps", "delete", app, *self._profile_args()],
+                    timeout=600,
+                    check=False,
+                )
+            except Exception as exc:
+                self.transcript.write(f"cleanup warning | App {app} | {exc}")
         if self.uc_function:
             catalog, schema, function_name = self.uc_function.split(".")
             try:
@@ -890,6 +906,12 @@ def parse_args() -> argparse.Namespace:
         help="OAuth profile for deployed App /api calls; defaults to --profile.",
     )
     parser.add_argument("--keep-resources", action="store_true")
+    parser.add_argument(
+        "--preprovisioned-app-catalog-access",
+        action="store_true",
+        help="Skip per-App USE CATALOG grants because catalog access is pre-provisioned. Without "
+        "this flag, the runner identity must be able to grant USE CATALOG on --uc-schema.",
+    )
     parser.add_argument("--verify-evidence", type=pathlib.Path)
     args = parser.parse_args()
     if args.verify_evidence is None and (args.wheel is None or args.output is None):
@@ -910,6 +932,7 @@ def main() -> int:
         args.template_repo,
         args.template_ref,
         args.app_auth_profile,
+        args.preprovisioned_app_catalog_access,
     )
     succeeded = False
     try:
@@ -925,12 +948,20 @@ def main() -> int:
         succeeded = verify_evidence(runner.output / "evidence.json") == 0
         return 0 if succeeded else 1
     finally:
-        if not args.keep_resources and succeeded:
-            runner.cleanup()
-        elif not succeeded:
+        try:
+            runner._write_evidence()
+        except Exception as exc:
+            runner.transcript.write(f"evidence warning | {exc}")
+        if args.keep_resources:
             runner.transcript.write(
-                "Resources retained after failure for diagnosis; rerun cleanup after fixing."
+                "Resources retained because --keep-resources was specified."
             )
+        else:
+            # Cleanup is best-effort and must never replace the test's original failure.
+            try:
+                runner.cleanup()
+            except Exception as exc:
+                runner.transcript.write(f"cleanup warning | unexpected | {exc}")
 
 
 if __name__ == "__main__":

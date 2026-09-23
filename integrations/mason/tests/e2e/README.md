@@ -41,6 +41,10 @@ uv run python tests/e2e/tool_matrix.py \
 The profile must identify a workspace with Databricks Apps, `system.ai.sandbox`,
 `system.ai.web_search`, and permission to create a schema/function. The suite discovers and starts
 a SQL warehouse. Override its defaults with `--warehouse-id` or `--uc-schema catalog.schema`.
+By default, the runner grants each created App service principal `USE CATALOG`, `USE SCHEMA`, and
+function `EXECUTE`; the runner identity therefore needs permission to make those grants. Pass
+`--preprovisioned-app-catalog-access` only when App identities already receive `USE CATALOG` from
+workspace provisioning; schema and function grants remain explicit.
 Deployed Databricks Apps accept programmatic calls under `/api/*` with OAuth Bearer tokens. If the
 workspace profile uses a PAT, pass an OAuth profile for the same workspace with
 `--app-auth-profile`.
@@ -72,4 +76,4 @@ uv run python tests/e2e/tool_matrix.py \
 ```
 
 Success is exactly `16 passed, 0 failed, 0 skipped`. Temporary Apps and the UC function are deleted
-after a successful run. Pass `--keep-resources` while debugging.
+after every run, including failures. Pass `--keep-resources` to retain them while debugging.
