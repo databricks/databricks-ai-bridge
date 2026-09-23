@@ -80,6 +80,10 @@ def required_user_api_scopes(project: AgentProject | None) -> set[str]:
         scopes.add("ai-gateway")
         if tool.source.service == "system.ai.dbsql":
             scopes.add("sql")
+        if tool.source.kind == "sandbox" and any(
+            scope.kind == "volume" for scope in tool.policy.downscope
+        ):
+            scopes.add("files")
     return scopes
 
 

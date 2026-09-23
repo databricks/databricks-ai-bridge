@@ -8,7 +8,7 @@ from click.testing import CliRunner
 from databricks.sdk.errors import NotFound, PermissionDenied
 from databricks.sdk.service.apps import App
 
-from databricks_mason.agent_project import AgentProject, ToolSpec
+from databricks_mason.agent_project import AgentProject, Scope, ToolSpec
 from databricks_mason.cli import deploy as deploy_mod
 from databricks_mason.errors import AgentCliError
 
@@ -103,6 +103,28 @@ def test_scope_update_plan_uses_exact_required_scopes(monkeypatch):
     )
 
     assert plan.scopes == ("genie",)
+
+
+@pytest.mark.parametrize(
+    "binding,expected",
+    [
+        (
+            ToolSpec.sandbox("volume", scopes=[Scope.volume("cat.sch.vol")], auth="user"),
+            {"ai-gateway", "files"},
+        ),
+        (
+            ToolSpec.sandbox("table", scopes=[Scope.table("cat.sch.tbl")], auth="user"),
+            {"ai-gateway"},
+        ),
+        (ToolSpec.sandbox("volume", scopes=[Scope.volume("cat.sch.vol")], auth="app"), set()),
+    ],
+)
+def test_volume_downscope_requests_files_scope(tmp_path, binding, expected):
+    from databricks_mason.cli.app_auth import required_user_api_scopes
+
+    project = AgentProject.create(tmp_path, framework="langgraph", server="mason")
+    project.add_tool(binding)
+    assert required_user_api_scopes(project) == expected
 
 
 def test_existing_app_requires_explicit_scope_update_permission(tmp_path, monkeypatch):
