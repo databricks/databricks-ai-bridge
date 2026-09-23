@@ -78,7 +78,6 @@ async def test_genie_agent_conversation_and_rows(project):
     tools = {tool.name: tool for tool in adapter.genie_tools()}
     assert set(tools) == {"genie_agent_ask", "genie_agent_poll", "genie_agent_query_result"}
     question = os.getenv("MASON_GENIE_QUESTION", "How many rows are in samples.nyctaxi.trips?")
-    question += " Use only this sample table and include a SQL result."
     started = time.monotonic()
     answer = await _native_call(
         framework, tools["genie_agent_ask"], {"question": question, "conversation_id": None}
@@ -95,8 +94,7 @@ async def test_genie_agent_conversation_and_rows(project):
         )
     _save(f"{framework}-agent-answer", answer)
     assert answer["status"] == "COMPLETED", answer
-    attachment = next((item for item in answer["attachments"] if item.get("query")), None)
-    assert attachment is not None, answer
+    attachment = next(item for item in answer["attachments"] if item.get("query"))
     rows = await _native_call(
         framework,
         tools["genie_agent_query_result"],
