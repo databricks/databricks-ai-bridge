@@ -45,7 +45,7 @@ class _InvocationRequest(BaseModel):
     stream: bool = False
 
 
-class AgentApp(FastAPI):
+class DurableAgentServer(FastAPI):
     """Expose agent handlers through Mason's invocation HTTP protocol.
 
     ``mason dev`` selects a process-local Runtime Store. A deployed Mason server receives a
@@ -310,3 +310,7 @@ class AgentApp(FastAPI):
         self._request_auth.clear()
         for request_auth in request_auths:
             request_auth.close()
+
+
+# Deprecated compatibility alias. New code should use DurableAgentServer.
+AgentApp = DurableAgentServer

@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 from runtime import ui
 
-from databricks_mason import AgentApp
+from databricks_mason import DurableAgentServer
 from databricks_mason.runtime.store import (
     RUNTIME_STORE_DATABASE_ENV,
     RUNTIME_STORE_LAKEBASE_BRANCH_ENV,
@@ -131,7 +131,7 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
     async def invoke_handler(request, context):
         return {"output": [], "session_id": context.session_id}
 
-    app = AgentApp(runtime_store=InMemoryRuntimeStore())
+    app = DurableAgentServer(runtime_store=InMemoryRuntimeStore())
     app.invoke(invoke_handler)
     app.recover(invoke_handler)
     ui.install_ui(app)

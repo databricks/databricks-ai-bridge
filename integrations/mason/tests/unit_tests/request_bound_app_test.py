@@ -6,7 +6,7 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from databricks_mason import AgentApp
+from databricks_mason import DurableAgentServer
 from databricks_mason.runtime.auth import AuthError, InvocationAuthPolicy, RequestAuthContext
 from databricks_mason.runtime.store import InMemoryRuntimeStore
 from databricks_mason.runtime.types import InvocationAttemptContext
@@ -23,7 +23,7 @@ def headers(subject="user-a", token="token-sentinel"):
 
 
 def make_app(handler):
-    app = AgentApp(
+    app = DurableAgentServer(
         runtime_store=InMemoryRuntimeStore(),
         auth_policy=InvocationAuthPolicy(user_tools=("sandbox",)),
     )
@@ -40,7 +40,7 @@ def assert_auth_not_persisted(store: InMemoryRuntimeStore, token="token-sentinel
 
 
 @asynccontextmanager
-async def running_client(app: AgentApp) -> AsyncIterator[httpx.AsyncClient]:
+async def running_client(app: DurableAgentServer) -> AsyncIterator[httpx.AsyncClient]:
     await app._runtime.start()
     try:
         async with httpx.AsyncClient(
@@ -122,7 +122,7 @@ async def test_request_user_auth_composes_with_existing_runtime_background_mode(
         return {"value": value}
 
     store = InMemoryRuntimeStore()
-    app = AgentApp(
+    app = DurableAgentServer(
         runtime_store=store,
         auth_policy=InvocationAuthPolicy(user_tools=("sandbox",)),
     )
@@ -398,7 +398,7 @@ async def test_request_user_recovery_fails_before_handlers(deployed):
     async def recover(value, context):
         calls.append("recover")
 
-    app = AgentApp(
+    app = DurableAgentServer(
         runtime_store=InMemoryRuntimeStore(),
         auth_policy=InvocationAuthPolicy(("sandbox",)),
     )

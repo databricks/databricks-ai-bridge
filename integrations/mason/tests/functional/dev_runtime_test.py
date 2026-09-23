@@ -198,13 +198,13 @@ def test_scaffolded_agent_boots_and_answers_locally(
         runtime_main = project / "runtime/main.py"
         source = runtime_main.read_text()
         source = source.replace(
-            "from databricks_mason import AgentApp",
-            "from databricks_mason import AgentApp\n"
+            "from databricks_mason import DurableAgentServer",
+            "from databricks_mason import DurableAgentServer\n"
             "from databricks_mason.runtime.auth import InvocationAuthPolicy",
         )
         source = source.replace(
-            "app = AgentApp()",
-            'app = AgentApp(auth_policy=InvocationAuthPolicy(("local-probe",)))',
+            "app = DurableAgentServer()",
+            'app = DurableAgentServer(auth_policy=InvocationAuthPolicy(("local-probe",)))',
         )
         runtime_main.write_text(source)
     # Point the scaffold at both packages under test. CI supplies their built wheels; a local run

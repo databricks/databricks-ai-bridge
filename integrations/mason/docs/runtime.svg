@@ -33,9 +33,9 @@
   <rect x="448" y="210" width="44" height="22" rx="11" fill="#FBF1EC" stroke="#E3C6BC" stroke-width="1.1"/>
   <text x="470" y="225" text-anchor="middle" font-size="11" font-weight="bold" fill="#C64A33">or</text>
 
-  <!-- ===== Implementation A: AgentApp (managed) ===== -->
+  <!-- ===== Implementation A: DurableAgentServer (managed) ===== -->
   <rect x="26" y="272" width="430" height="282" rx="12" fill="#FFFFFF" stroke="#E9A08C" stroke-width="1.3"/>
-  <text x="46" y="300" font-size="15" font-weight="bold" fill="#1F2A44">AgentApp</text>
+  <text x="46" y="300" font-size="15" font-weight="bold" fill="#1F2A44">DurableAgentServer</text>
   <rect x="344" y="286" width="96" height="24" rx="12" fill="#E7F4EE" stroke="#B7DFC9" stroke-width="1"/>
   <text x="392" y="302" text-anchor="middle" font-size="11" font-weight="bold" fill="#2E8B63">managed</text>
 
@@ -75,6 +75,6 @@
   <text x="699" y="376" text-anchor="middle" font-size="13" font-weight="bold" fill="#1F2A44">your own endpoints &amp; protocol</text>
   <text x="699" y="398" text-anchor="middle" font-size="10.5" font-family="Liberation Mono, monospace" fill="#5B76A0">/your-route &#183; your request/response shapes</text>
 
-  <text x="699" y="450" text-anchor="middle" font-size="10.5" fill="#8A94A6">no AgentApp - you define the invocation contract</text>
+  <text x="699" y="450" text-anchor="middle" font-size="10.5" fill="#8A94A6">no DurableAgentServer - you define the invocation contract</text>
   <text x="699" y="472" text-anchor="middle" font-size="10.5" fill="#8A94A6">durability and crash recovery are yours to build</text>
 </svg>

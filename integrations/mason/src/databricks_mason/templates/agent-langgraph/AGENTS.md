@@ -1,6 +1,6 @@
 # Agent Development Guide
 
-This project is a LangGraph workload hosted by `databricks_mason.AgentApp`.
+This project is a LangGraph workload hosted by `databricks_mason.DurableAgentServer`.
 
 Read [MASON_CONTRACT.md](MASON_CONTRACT.md) before changing integration points. It owns command
 requirements, tool/state/tracing wiring, and recovery. [README.md](README.md) owns setup and client

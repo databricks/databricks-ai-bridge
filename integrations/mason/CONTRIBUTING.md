@@ -12,7 +12,7 @@ re-run:
 | --- | --- | --- |
 | **CLI** | the `mason` command (`databricks_mason.cli` and its command modules) | editable install -> runs live from your working tree |
 | **Templates** | the project scaffolds under `src/databricks_mason/templates/` | shipped inside the package; `mason init` copies the template matching the installed CLI via `importlib.resources`, which for an editable install resolves to your source tree |
-| **SDK / runtime** | `databricks_mason.runtime`, the `langgraph`/`openai` adapters, `AgentApp` | a scaffold depends on the **released** `databricks-mason` from PyPI; opt into local or unreleased code with a `[tool.uv.sources]` override (see below) |
+| **SDK / runtime** | `databricks_mason.runtime`, the `langgraph`/`openai` adapters, `DurableAgentServer` | a scaffold depends on the **released** `databricks-mason` from PyPI; opt into local or unreleased code with a `[tool.uv.sources]` override (see below) |
 
 ## Editable install (CLI + templates)
 

@@ -2,7 +2,7 @@
 
 The runtime returns :class:`Invocation` snapshots and ordered :class:`InvocationEvent` records.
 An executor receives an :class:`InvocationAttemptContext` for attempt fencing and event emission.
-``AgentApp`` adapts that lower-level context into :class:`InvocationContext` for functions
+``DurableAgentServer`` adapts that lower-level context into :class:`InvocationContext` for functions
 registered with ``@app.invoke`` and ``@app.recover``.
 
 All request, response, and event payloads use the recursive ``JsonValue`` / ``JsonObject`` aliases,

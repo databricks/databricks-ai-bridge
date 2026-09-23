@@ -14,6 +14,7 @@ from databricks_mason.session_store import (
 if TYPE_CHECKING:
     from databricks_mason.runtime import (
         AgentApp,
+        DurableAgentServer,
         InvocationContext,
         configure_tracing,
         list_ai_gateway_model_services,
@@ -31,6 +32,7 @@ __all__ = [
     "Session",
     "SessionItem",
     "SessionStore",
+    "DurableAgentServer",
     "AgentApp",
     "InvocationContext",
     "configure_tracing",
@@ -42,6 +44,7 @@ __all__ = [
 
 _RUNTIME_REEXPORTS = frozenset(
     {
+        "DurableAgentServer",
         "AgentApp",
         "InvocationContext",
         "configure_tracing",

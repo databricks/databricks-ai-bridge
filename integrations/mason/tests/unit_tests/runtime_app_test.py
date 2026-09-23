@@ -8,7 +8,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from databricks_mason import AgentApp
+from databricks_mason import DurableAgentServer
 from databricks_mason.agent_project import AgentProject, ToolSpec
 from databricks_mason.runtime.store import (
     RUNTIME_STORE_DATABASE_ENV,
@@ -34,8 +34,8 @@ async def echo(input, context):
     return input
 
 
-def make_app(invoke=echo, *, recover=None) -> AgentApp:
-    app = AgentApp(runtime_store=InMemoryRuntimeStore())
+def make_app(invoke=echo, *, recover=None) -> DurableAgentServer:
+    app = DurableAgentServer(runtime_store=InMemoryRuntimeStore())
     app.invoke(invoke)
     if recover is not None:
         app.recover(recover)
@@ -43,7 +43,7 @@ def make_app(invoke=echo, *, recover=None) -> AgentApp:
 
 
 @asynccontextmanager
-async def running_client(app: AgentApp) -> AsyncIterator[httpx.AsyncClient]:
+async def running_client(app: DurableAgentServer) -> AsyncIterator[httpx.AsyncClient]:
     runtime = app._runtime
     assert runtime is not None
     await runtime.start()
@@ -340,7 +340,7 @@ async def test_agent_failure_returns_500_and_failed_event() -> None:
 
 
 def test_app_is_asgi_app_with_instance_scoped_decorators() -> None:
-    app = AgentApp(runtime_store=InMemoryRuntimeStore())
+    app = DurableAgentServer(runtime_store=InMemoryRuntimeStore())
 
     @app.invoke
     async def invoke(input, context):
@@ -375,7 +375,7 @@ def test_app_allows_custom_routes_alongside_invocation_routes() -> None:
     assert "/health" in {getattr(route, "path", None) for route in app.routes}
 
 
-def test_agent_app_defaults_to_process_local_state_outside_apps(monkeypatch) -> None:
+def test_durable_agent_server_defaults_to_process_local_state_outside_apps(monkeypatch) -> None:
     monkeypatch.delenv(RUNTIME_STORE_LOCAL_ENV, raising=False)
     monkeypatch.delenv(RUNTIME_STORE_LAKEBASE_BRANCH_ENV, raising=False)
     monkeypatch.delenv(RUNTIME_STORE_DATABASE_ENV, raising=False)
@@ -383,21 +383,23 @@ def test_agent_app_defaults_to_process_local_state_outside_apps(monkeypatch) -> 
     monkeypatch.delenv(RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV, raising=False)
     monkeypatch.delenv(RUNTIME_STORE_SCHEMA_ENV, raising=False)
 
-    app = AgentApp()
+    app = DurableAgentServer()
 
     assert app._runtime is not None
     assert app._runtime.is_durable is False
     assert isinstance(app._runtime.runtime_store, InMemoryRuntimeStore)
 
 
-def test_agent_app_infers_request_user_policy_from_manifest(tmp_path, monkeypatch) -> None:
+def test_durable_agent_server_infers_request_user_policy_from_manifest(
+    tmp_path, monkeypatch
+) -> None:
     project = AgentProject.create(tmp_path, framework="langgraph", server="mason")
     project.add_tool(ToolSpec.mcp("search", service="system.ai.web_search", auth="user"))
     project.add_tool(ToolSpec.mcp("docs", service="system.ai.docs", auth="app"))
     project.write()
     monkeypatch.chdir(tmp_path)
 
-    app = AgentApp(runtime_store=InMemoryRuntimeStore())
+    app = DurableAgentServer(runtime_store=InMemoryRuntimeStore())
 
     assert app.auth_policy.user_tools == ("search",)
 
@@ -411,7 +413,7 @@ def test_state_payload_nests_completed_application_response() -> None:
         response={"id": "application-id", "status": "application-status"},
     )
 
-    assert AgentApp._state_payload(state) == {
+    assert DurableAgentServer._state_payload(state) == {
         "id": _RUN_2,
         "status": "completed",
         "output": {"id": "application-id", "status": "application-status"},

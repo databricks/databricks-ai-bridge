@@ -73,12 +73,12 @@ it.
 
 ## Mason server adapter
 
-For Mason's invocation protocol, construct `AgentApp` in [runtime/main.py](runtime/main.py) and
+For Mason's invocation protocol, construct `DurableAgentServer` in [runtime/main.py](runtime/main.py) and
 register [runtime/adapter.py](runtime/adapter.py) hooks. Keep framework-native execution in
 [agent/agent.py](agent/agent.py), independent of Mason request/context types.
 
 The invoke hook translates opaque application input, runs the agent through the framework `Runner`,
-translates native events, calls `await context.emit(event)`, and returns JSON output. AgentApp owns
+translates native events, calls `await context.emit(event)`, and returns JSON output. DurableAgentServer owns
 foreground/background transport, polling, and replay. Invocation UUIDs differ from stable
 application session IDs; the routing cookie is not the application session.
 

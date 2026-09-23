@@ -1,6 +1,6 @@
 # Mason LangGraph Agent
 
-A LangGraph agent served by `databricks_mason.AgentApp`. Mason keeps invocation state and events in
+A LangGraph agent served by `databricks_mason.DurableAgentServer`. Mason keeps invocation state and events in
 memory during `mason dev`. Deployment attaches a persistent Runtime Store, so invocation state and
 events survive process loss and interrupted work can be recovered.
 

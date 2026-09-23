@@ -9,14 +9,14 @@ from dotenv import load_dotenv
 from runtime.adapter import invoke, recover
 from runtime.ui import install_ui
 
-from databricks_mason import AgentApp
+from databricks_mason import DurableAgentServer
 
 # override=False so injected DATABRICKS_* (from `mason dev -p` or the deploy platform) win over a
 # checked-in .env.
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=False)
 configure()
 
-app = AgentApp()
+app = DurableAgentServer()
 app.invoke(invoke)
 app.recover(recover)
 install_ui(app)
