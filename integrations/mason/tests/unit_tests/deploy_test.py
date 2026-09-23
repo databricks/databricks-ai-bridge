@@ -33,12 +33,8 @@ def _compute_active(monkeypatch):
 def _no_tracing_by_default(monkeypatch):
     # Tracing is on by default and would create an MLflow experiment (a live workspace op); stub the
     # provisioning off so non-tracing deploy tests stay hermetic. Tracing tests override this.
+    # (The trace-resource reconcile is stubbed dir-wide by conftest.py's autouse fixture.)
     monkeypatch.setattr(deploy_mod, "get_or_create_trace_experiment", lambda *a, **k: None)
-    # Deploy reconciles the trace app-resources on EVERY deploy (so an unbind prunes stale grants),
-    # which shells out to the `databricks` CLI via app_resources - not the `deploy_mod._databricks`
-    # these tests patch. Stub the reconcile to a no-op so deploy-command tests stay hermetic (no real
-    # CLI, which isn't present in CI). Tests that assert on the reconcile override this.
-    monkeypatch.setattr(deploy_mod, "apply_trace_resources", mock.Mock(return_value=None))
 
 
 def test_upsert_manifest_env_scaffolds_when_missing(tmp_path: pathlib.Path):
