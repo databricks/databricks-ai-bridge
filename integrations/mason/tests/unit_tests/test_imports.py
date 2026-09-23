@@ -18,6 +18,7 @@ def test_public_surface() -> None:
         "SessionStore",
     }
     lazy = {
+        "DurableAgentServer",
         "AgentApp",
         "InvocationContext",
         "configure_tracing",
@@ -31,16 +32,29 @@ def test_public_surface() -> None:
     for name in eager:
         assert hasattr(databricks_mason, name)
 
-    from databricks_mason import AgentApp
+    from databricks_mason import AgentApp, DurableAgentServer
     from databricks_mason.runtime import AgentApp as RuntimeAgentApp
+    from databricks_mason.runtime import DurableAgentServer as RuntimeDurableAgentServer
 
-    assert AgentApp is RuntimeAgentApp
+    assert DurableAgentServer is RuntimeDurableAgentServer
+    assert AgentApp is DurableAgentServer
+    assert RuntimeAgentApp is DurableAgentServer
 
 
 def test_runtime_public_surface_is_application_only() -> None:
     import databricks_mason.runtime as runtime
 
+    assert "DurableAgentServer" in runtime.__all__
     assert "AgentApp" in runtime.__all__
     assert "InvocationContext" in runtime.__all__
     assert "Runtime" not in runtime.__all__
     assert "LakebaseDurableRuntimeStore" not in runtime.__all__
+
+
+def test_agent_app_compatibility_alias_constructs_server() -> None:
+    from databricks_mason import AgentApp, DurableAgentServer
+    from databricks_mason.runtime.store import InMemoryRuntimeStore
+
+    server = AgentApp(runtime_store=InMemoryRuntimeStore())
+
+    assert type(server) is DurableAgentServer

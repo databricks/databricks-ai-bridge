@@ -17,8 +17,9 @@ invocation protocol to design yourself. Bring your own agent, or start from a te
   memory), and the access grants, so you ship application code and get a running endpoint.
 - **Runtime** - a managed HTTP invocation contract (synchronous, streaming, background) plus optional
   durable execution (persistence, heartbeats, crash recovery) backed by Databricks Lakebase, with no
-  database or job queue to operate. Use the opinionated `AgentApp` server to get it out of the box,
-  or bring your own server for full control.
+  database or job queue to operate. Use the opinionated `DurableAgentServer` to get it out of the box,
+  or bring your own server for full control. `AgentApp` remains available as a deprecated
+  compatibility alias; new code should use `DurableAgentServer`.
 
 **Deployment**
 
@@ -39,16 +40,16 @@ invocation protocol to design yourself. Bring your own agent, or start from a te
 
 **Runtime**
 
-![Runtime: one FastAPI server, run as AgentApp or your own implementation](docs/runtime.svg)
+![Runtime: one FastAPI server, run as DurableAgentServer or your own implementation](docs/runtime.svg)
 
 The two ways to run an agent:
 
-- **`AgentApp` - opinionated, batteries included.** Register one handler and get Mason's full
+- **`DurableAgentServer` - opinionated, batteries included.** Register one handler and get Mason's full
   invocation contract (synchronous, streaming, background). Enable the durable runtime so
   long-running and background work survives restarts, redeploys, and crashes. The framework
-  templates are thin layers over `AgentApp` (HTTP contract detailed under [Runtime](#runtime)).
+  templates are thin layers over `DurableAgentServer` (HTTP contract detailed under [Runtime](#runtime)).
 - **Custom server - generic, full control.** `mason init --server custom` scaffolds a minimal FastAPI
-  server with no `AgentApp`: you define your own endpoints, request/response shapes, and protocol.
+  server with no `DurableAgentServer`: you define your own endpoints, request/response shapes, and protocol.
   `mason dev` and `mason deploy` run and ship it the same way.
 
 ## Prerequisites
@@ -78,7 +79,7 @@ From source:
 pip install 'git+https://github.com/databricks/databricks-ai-bridge.git#subdirectory=integrations/mason'
 ```
 
-The base package includes the CLI, store SDK, and `AgentApp` HTTP runtime. Generated projects
+The base package includes the CLI, store SDK, and `DurableAgentServer` HTTP runtime. Generated projects
 declare their framework dependencies automatically.
 
 ## Shell completion
@@ -196,7 +197,7 @@ the existing CLI commands remain separate.
 
 ## Runtime
 
-`AgentApp` runs your agent through one HTTP API for synchronous, streaming, and background
+`DurableAgentServer` runs your agent through one HTTP API for synchronous, streaming, and background
 invocations. Register an `@app.invoke` handler, publish progress with `await context.emit(event)`,
 and return a JSON result. You can also add your own FastAPI endpoints.
 
@@ -574,7 +575,7 @@ Managed-tool add commands write the selected identity to `agent.toml`; inspect t
 review configured bindings. Missing legacy auth continues to mean App identity at runtime; it is
 never silently upgraded to user identity.
 
-`AgentApp` derives its request-auth policy directly from the managed tool bindings in `agent.toml`.
+`DurableAgentServer` derives its request-auth policy directly from the managed tool bindings in `agent.toml`.
 Projects do not maintain a separate request-auth contract marker: the presence of any managed tool
 with `auth = "user"` makes the invocation require a transient request-user credential.
 
@@ -586,7 +587,7 @@ failure recovery stops with `MCP_USER_AUTH_RECOVERY_UNSUPPORTED` because no user
 available; neither the invoke nor recovery handler runs for that attempt.
 
 Before deploying user-auth tools from an older project, migrate its request handler and framework
-adapter to the current request-auth-aware `AgentApp` template, then explicitly choose `user` or
+adapter to the current request-auth-aware `DurableAgentServer` template, then explicitly choose `user` or
 `app` on **every** managed MCP/sandbox entry. Changing `agent.toml` alone does not upgrade copied
 Python adapter code. Outdated adapters fail closed rather than silently using App identity.
 App-only legacy projects and generic bring-your-own source directories keep the existing path.

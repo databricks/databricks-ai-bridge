@@ -457,7 +457,7 @@ def init(
 
     fields = {
         "Framework": selected_framework.value,
-        "Server": "Mason AgentApp" if mason_server else "Custom FastAPI",
+        "Server": "Mason DurableAgentServer" if mason_server else "Custom FastAPI",
         "Template ref": template_ref,
         "Directory": str(dest),
     }

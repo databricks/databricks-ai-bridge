@@ -5,16 +5,16 @@ LangGraph or OpenAI Agents template, or bring an existing agent.
 
 - **Deployment:** Scaffold a project, run it locally, and deploy it to Databricks Apps. Mason
   provisions the stores declared in your project, grants the app access, and configures tracing.
-- **Runtime:** `AgentApp` provides synchronous, streaming, and background execution, with persistent
+- **Runtime:** `DurableAgentServer` provides synchronous, streaming, and background execution, with persistent
   results and automatic crash recovery on deployment. Request-user authentication is attached only
   to the active first attempt and is never persisted.
 
 ## Choose your server
 
-**Mason server (`server = "mason"`).** Register your agent with `AgentApp` to use Mason's invocation
+**Mason server (`server = "mason"`).** Register your agent with `DurableAgentServer` to use Mason's invocation
 API. Deployed Mason servers receive a Lakebase-backed Runtime Store. Register a recovery handler so
 Mason can restart interrupted app-auth work and mark interrupted request-user work failed.
-`AgentApp` is a FastAPI application: you can add custom endpoints alongside the invocation API.
+`DurableAgentServer` is a FastAPI application: you can add custom endpoints alongside the invocation API.
 
 If any configured tool uses `auth = "user"`, trusted Databricks Apps ingress headers supply a
 process-local credential for the first execution attempt. Synchronous, streaming, and background
@@ -98,9 +98,9 @@ The client chooses `background` and `stream` on each request; separate agent han
 needed. Registering a recovery hook enables automatic recovery when the Runtime uses a persistent
 store.
 
-For an existing agent, retain its framework code and add the runtime adapter and `AgentApp`
+For an existing agent, retain its framework code and add the runtime adapter and `DurableAgentServer`
 entrypoint. Set `[agent].server = "mason"` and have `app.yaml` start that entrypoint. Changing the
-configuration field alone does not convert a custom HTTP server into `AgentApp`.
+configuration field alone does not convert a custom HTTP server into `DurableAgentServer`.
 
 ## Invoke, stream, and reconnect
 

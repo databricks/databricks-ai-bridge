@@ -15,7 +15,7 @@ The re-exports below are resolved lazily (PEP 562) so importing a neutral submod
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from databricks_mason.runtime.app import AgentApp
+    from databricks_mason.runtime.app import AgentApp, DurableAgentServer
     from databricks_mason.runtime.auth import AuthError, InvocationAuthPolicy, RequestAuthContext
     from databricks_mason.runtime.model_services import list_ai_gateway_model_services
     from databricks_mason.runtime.tracing import configure_tracing, start_trace
@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from databricks_mason.runtime.workspace import workspace_client, workspace_headers
 
 __all__ = [
+    "DurableAgentServer",
     "AgentApp",
     "InvocationContext",
     "AuthError",
@@ -41,6 +42,7 @@ __all__ = [
 ]
 
 _MODULE_BY_NAME = {
+    "DurableAgentServer": "app",
     "AgentApp": "app",
     "InvocationContext": "types",
     "AuthError": "auth",

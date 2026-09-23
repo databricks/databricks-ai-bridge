@@ -8,7 +8,7 @@ import uvicorn
 from agent.agent import configure
 from dotenv import load_dotenv
 
-from databricks_mason import AgentApp
+from databricks_mason import DurableAgentServer
 from runtime.adapter import invoke, recover
 
 # override=False so injected DATABRICKS_* (from `mason dev -p` or the deploy platform) win over a
@@ -16,7 +16,7 @@ from runtime.adapter import invoke, recover
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=False)
 configure()
 
-app = AgentApp()
+app = DurableAgentServer()
 app.invoke(invoke)
 app.recover(recover)
 

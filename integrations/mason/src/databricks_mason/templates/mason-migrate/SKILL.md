@@ -80,7 +80,7 @@ callbacks, run limits, configurable fields, or session/checkpoint settings. Pres
 tracing when composing Mason tracing.
 
 Reuse the HTTP server where feasible. Follow the contract's distinction between basic CLI launch
-requirements, Mason `AgentApp` hooks, and optional chat UI mappings. Adapt the UI only when
+requirements, Mason `DurableAgentServer` hooks, and optional chat UI mappings. Adapt the UI only when
 selected. Do not copy sample tools, models, prompts, or business logic into the application.
 Model provider is a migration decision: keep the existing one or adopt the gateway; the
 reference example is not mandatory.

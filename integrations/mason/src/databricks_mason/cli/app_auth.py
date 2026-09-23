@@ -47,7 +47,7 @@ def requires_user_auth(project: AgentProject | None) -> bool:
     if user_auth and project.server != AgentServer.MASON:
         raise AgentCliError(
             "Managed tools with auth = 'user' require [agent].server = 'mason'.",
-            hint="Migrate to the request-auth-aware Mason AgentApp template before enabling user "
+            hint="Migrate to the request-auth-aware Mason DurableAgentServer template before enabling user "
             "auth. Failure recovery is unsupported for request-user attempts because the credential "
             "is transient.",
         )

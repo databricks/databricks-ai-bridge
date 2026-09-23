@@ -8,7 +8,7 @@ client. The public HTTP resource is an **invocation**; its UUID is also the idem
 Client
   │ POST /api/invocations, GET status/events
   ▼
-AgentApp
+DurableAgentServer
   HTTP adapter and @app.invoke / @app.recover hooks
   ▼
 Runtime
@@ -26,7 +26,7 @@ Runtime
 
 ## Lifecycle
 
-`AgentApp` uses `Runtime.from_environment(...)` for Mason-managed processes and
+`DurableAgentServer` uses `Runtime.from_environment(...)` for Mason-managed processes and
 `Runtime.from_store(...)` when a caller supplies a store explicitly. The selected Runtime Store
 determines the execution mode:
 
