@@ -59,7 +59,11 @@ class AgentApp(FastAPI):
         runtime_store: RuntimeStore | None = None,
         auth_policy: InvocationAuthPolicy | None = None,
     ) -> None:
-        self.auth_policy = auth_policy or InvocationAuthPolicy()
+        self.auth_policy = (
+            auth_policy
+            if auth_policy is not None
+            else InvocationAuthPolicy.from_manifest(allow_missing=True)
+        )
         self._invoke_hook: InvocationHook | None = None
         self._recovery_hook: InvocationHook | None = None
         self._request_auth: dict[str, RequestAuthContext] = {}
