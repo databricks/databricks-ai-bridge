@@ -592,6 +592,23 @@ def test_source_file_budget_processes_exact_limit_and_fails_on_next(
     )
 
 
+def test_source_checks_let_found_evidence_stand_despite_truncation():
+    evidence = doctor_module._SourceEvidence(
+        agent_app=pathlib.Path("runtime/main.py"),
+        adapters={"langgraph": pathlib.Path("agent/agent.py")},
+        parse_failures=0,
+        unreadable_files=0,
+        truncated=True,
+    )
+
+    agent_app_check, adapter_check = doctor_module._source_checks(evidence, "langgraph")
+
+    assert agent_app_check.status == "pass"
+    assert adapter_check.status == "pass"
+    assert "the bounded source scan exceeded its limit" in agent_app_check.detail
+    assert "the bounded source scan exceeded its limit" in adapter_check.detail
+
+
 def test_source_total_byte_budget_processes_exact_limit_and_fails_on_next(
     tmp_path: pathlib.Path, monkeypatch
 ):
@@ -633,6 +650,27 @@ def test_deep_expression_is_reported_as_unparseable_without_traceback(tmp_path: 
     assert result.exit_code == 1
     assert "Python file(s) did not parse" in result.output
     assert "Traceback" not in result.output
+
+
+def test_over_limit_integer_literal_is_reported_as_unparseable_without_raising():
+    source = ("x = " + "1" * 5000 + "\n").encode()
+
+    evidence, error = doctor_module._python_evidence(source)
+
+    assert evidence is None
+    assert error
+
+
+def test_symlink_loop_is_reported_without_raising(tmp_path: pathlib.Path):
+    link = tmp_path / "loop"
+    link.symlink_to(link)
+
+    content, error = doctor_module._bounded_bytes(
+        tmp_path, link, description="agent manifest", limit=1024
+    )
+
+    assert content is None
+    assert error
 
 
 def test_deploy_generated_app_command_placeholder_fails(tmp_path: pathlib.Path):
@@ -724,6 +762,20 @@ def test_text_output_sanitizes_and_truncates_repository_content(tmp_path: pathli
     assert "…" in text_result.output
     assert json_result.exit_code == 0, json_result.output
     assert json.loads(json_result.output)["directory"] == str(project.resolve())
+
+
+def test_unexpected_inspection_failure_becomes_a_clean_cli_error(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    def _boom(directory: pathlib.Path):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(doctor_module, "inspect_project", _boom)
+
+    result = CliRunner().invoke(mason, ["doctor", str(tmp_path)])
+
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
 
 
 def test_doctor_is_registered_and_help_documents_directory():

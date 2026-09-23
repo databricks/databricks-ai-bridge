@@ -469,7 +469,7 @@ the Mason server, declares the framework-appropriate `databricks-mason` extra an
 the selected framework in production Python source. Test, example, and old/stale directories do
 not count as source evidence. A failed report is the normal result for a project that still needs
 migration; run
-`mason init --framework <langgraph|openai> --existing <directory>` with the appropriate framework
+`mason init --framework <framework_name> --existing <directory>` with the appropriate framework
 to prepare the migration instructions. Doctor never imports or executes the target's source, and a
 bounded source scan that exceeds a limit fails the source checks as incomplete. Its findings are
 static repository evidence, not proof that the configured startup command executes the files it

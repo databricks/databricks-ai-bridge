@@ -143,7 +143,7 @@ def _bounded_bytes(
         resolved = path.resolve(strict=True)
     except FileNotFoundError:
         return None, f"{description} is missing at {path}."
-    except OSError as exc:
+    except (OSError, RuntimeError) as exc:
         return None, f"Could not resolve {description} at {path}: {exc}."
 
     try:
@@ -842,7 +842,7 @@ def _python_evidence(content: bytes) -> tuple[_PythonEvidence | None, str | None
         source = content.decode(encoding)
         tree = ast.parse(source)
         return _SourceAnalyzer().analyze(tree), None
-    except (LookupError, RecursionError, SyntaxError, UnicodeDecodeError) as exc:
+    except (LookupError, RecursionError, SyntaxError, UnicodeDecodeError, ValueError) as exc:
         return None, str(exc)
 
 
@@ -949,7 +949,7 @@ def _source_checks(
     suffix = _source_suffix(evidence)
     agent_app = _check(
         "agent_app",
-        evidence.agent_app is not None and not evidence.truncated,
+        evidence.agent_app is not None,
         (
             f"AgentApp is constructed and has invoke registered in {evidence.agent_app}.{suffix}"
             if evidence.agent_app is not None
@@ -968,7 +968,7 @@ def _source_checks(
     elif framework in evidence.adapters:
         adapter = _check(
             "framework_adapter",
-            not evidence.truncated,
+            True,
             f"A recognized databricks_mason.{framework} adapter call is present in "
             f"{evidence.adapters[framework]}.{suffix}",
         )
@@ -1089,7 +1089,18 @@ def doctor(obj: Any, directory: pathlib.Path) -> None:
     DIRECTORY defaults to the current directory. Doctor reads local configuration and Python source
     without importing it, making network calls, or changing any files.
     """
-    report = inspect_project(directory)
+    try:
+        report = inspect_project(directory)
+    except AgentCliError:
+        raise
+    except Exception as exc:
+        raise AgentCliError(
+            f"mason doctor could not finish inspecting {directory}.",
+            hint=(
+                "This is unexpected — doctor should always produce a report instead of failing. "
+                "Please report the repository layout that triggered it."
+            ),
+        ) from exc
     if obj.output == "json":
         click.echo(json.dumps(report, indent=2))
     else:

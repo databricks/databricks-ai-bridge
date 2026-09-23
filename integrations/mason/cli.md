@@ -132,7 +132,7 @@ _Options_
 
 ### `mason doctor`
 
-Check whether an existing LangGraph or OpenAI Agents SDK repository is onboarded to Agent Bricks
+Check whether an existing agent repository is onboarded to Agent Bricks
 through Mason. DIRECTORY defaults to the current directory.
 
 Doctor is read-only and offline: it does not import application source, contact Databricks, or
@@ -143,7 +143,7 @@ old/stale directories are excluded. A bounded source scan that exceeds a limit f
 checks as incomplete. These checks are static repository evidence, not proof that the configured
 startup command executes the files found. Doctor exits 0 only when every check passes, and exits 1
 after printing a normal report otherwise. If the framework is unknown, the remediation requires an
-explicit `--framework <langgraph|openai>`. Use global `-o json` for a structured report.
+explicit `--framework <framework_name>`. Use global `-o json` for a structured report.
 
 ```
 mason doctor [DIRECTORY]
