@@ -120,56 +120,84 @@ def _is_uc_backed(experiment) -> bool:
 # table (MODIFY on a view fails), so it's excluded from the grant set.
 _UC_TRACE_UNIFIED_TAG = "mlflow.experiment.databricksTraceStorageTable"
 
+# The per-kind base-table tags: each value is the fully-qualified ``<catalog>.<schema>.<table>`` the
+# deployed app must be granted MODIFY on.
+_UC_TRACE_SPAN_TAG = "mlflow.experiment.databricksTraceSpanStorageTable"
+_UC_TRACE_LOG_TAG = "mlflow.experiment.databricksTraceLogStorageTable"
+_UC_TRACE_ANNOTATION_TAG = "mlflow.experiment.databricksTraceAnnotationStorageTable"
 
-def uc_trace_tables(experiment) -> tuple[str, ...]:
-    """Fully-qualified UC OTEL base tables backing a UC experiment's traces; () when managed.
+
+@dataclass(frozen=True)
+class MLflowTraceTables:
+    """The UC OTEL base tables backing a UC experiment's traces (fully-qualified names; None when absent)."""
+
+    spans: Optional[str] = None
+    logs: Optional[str] = None
+    annotations: Optional[str] = None
+
+    def otel_tables(self) -> tuple[tuple[str, str], ...]:
+        """Present (kind, fully_qualified_table) pairs in a stable order, for grants + resource naming."""
+        return tuple(
+            (kind, name)
+            for kind, name in (
+                ("spans", self.spans),
+                ("logs", self.logs),
+                ("annotations", self.annotations),
+            )
+            if name
+        )
+
+    def __bool__(self) -> bool:
+        return bool(self.otel_tables())
+
+
+def uc_trace_tables(experiment) -> MLflowTraceTables:
+    """The UC OTEL base tables backing a UC experiment's traces; empty when managed.
 
     A UC-backed experiment stores traces in Unity Catalog base tables the deployed app must be granted
-    MODIFY on (spans, logs, annotations, and any future per-kind table). MLflow records each as a
-    ``mlflow.experiment.databricksTrace<Kind>StorageTable`` tag whose value is the fully-qualified
-    ``<catalog>.<schema>.<table>`` - those tags are the source of truth (the ``UnityCatalog`` entity
-    only surfaces spans/logs, so reading tags is what catches the annotations table). The unified
-    ``databricksTraceStorageTable`` tag is excluded: it names a read-side VIEW, not a writable table.
-    Falls back to deriving names from the destination path when the per-table tags are absent. Returns
-    () for a managed experiment.
+    MODIFY on (spans, logs, annotations). MLflow records each as a per-kind storage-table tag whose
+    value is the fully-qualified ``<catalog>.<schema>.<table>`` - those tags are the source of truth
+    (the ``UnityCatalog`` entity only surfaces spans/logs, so reading tags is what catches the
+    annotations table). Reading these three specific tags naturally excludes the "unified"
+    ``databricksTraceStorageTable`` tag, which names a read-side VIEW, not a writable table; the
+    modeling is intentionally explicit per kind, so a new OTEL kind would be a new field, not another
+    discovered tag. Falls back to deriving names from the destination path when the per-kind tags are
+    absent. Returns an empty ``MLflowTraceTables`` for a managed experiment.
     """
     tags = getattr(experiment, "tags", None) or {}
     if _UC_TRACE_TAG not in tags:
-        return ()
-    names = sorted(
-        value
-        for key, value in tags.items()
-        if key.startswith("mlflow.experiment.databricksTrace")
-        and key.endswith("StorageTable")
-        and key != _UC_TRACE_UNIFIED_TAG
-        and value
+        return MLflowTraceTables()
+    tables = MLflowTraceTables(
+        spans=tags.get(_UC_TRACE_SPAN_TAG) or None,
+        logs=tags.get(_UC_TRACE_LOG_TAG) or None,
+        annotations=tags.get(_UC_TRACE_ANNOTATION_TAG) or None,
     )
-    if names:
-        return tuple(names)
+    if tables:
+        return tables
     # Fallback: derive from the destination path (`<catalog>.<schema>[.<table_prefix>]`) when the
-    # per-table storage tags aren't present.
+    # per-kind storage tags aren't present.
     parts = (tags.get(_UC_TRACE_TAG) or "").split(".")
     if len(parts) == 3:
         prefix = ".".join(parts)
-        return tuple(
-            sorted((f"{prefix}_otel_spans", f"{prefix}_otel_logs", f"{prefix}_otel_annotations"))
+        return MLflowTraceTables(
+            spans=f"{prefix}_otel_spans",
+            logs=f"{prefix}_otel_logs",
+            annotations=f"{prefix}_otel_annotations",
         )
     if len(parts) == 2:
         base = ".".join(parts)
-        return tuple(
-            sorted(
-                (
-                    f"{base}.mlflow_experiment_trace_otel_spans",
-                    f"{base}.mlflow_experiment_trace_otel_logs",
-                    f"{base}.mlflow_experiment_trace_otel_annotations",
-                )
-            )
+        return MLflowTraceTables(
+            spans=f"{base}.mlflow_experiment_trace_otel_spans",
+            logs=f"{base}.mlflow_experiment_trace_otel_logs",
+            annotations=f"{base}.mlflow_experiment_trace_otel_annotations",
         )
-    return ()
+    return MLflowTraceTables()
 
 
-# MLflow reads the warehouse a UC trace read goes through from this env var (the `sql_warehouse_id`
-# kwarg is deprecated), so a UC read exports the resolved id before searching.
+# MLflow reads the warehouse a UC trace read goes through from this env var - its only supported knob
+# (``get_trace`` has no warehouse parameter and ``search_traces``' ``sql_warehouse_id`` kwarg is
+# deprecated) - so a UC read exports the resolved id before reading, scoped + restored by the caller
+# (``_with_trace_read_target``) rather than left in the process env.
 _SQL_WAREHOUSE_ENV = "MLFLOW_TRACING_SQL_WAREHOUSE_ID"
 
 
@@ -178,13 +206,22 @@ def _resolve_warehouse_id(warehouse_id: Optional[str]) -> Optional[str]:
     return warehouse_id or os.environ.get(_SQL_WAREHOUSE_ENV)
 
 
+def _restore_warehouse_env(prior: Optional[str]) -> None:
+    """Restore ``MLFLOW_TRACING_SQL_WAREHOUSE_ID`` to its pre-read value (removed when there was none)."""
+    if prior is None:
+        os.environ.pop(_SQL_WAREHOUSE_ENV, None)
+    else:
+        os.environ[_SQL_WAREHOUSE_ENV] = prior
+
+
 def _require_warehouse_for_uc_read(experiment, warehouse_id: Optional[str]) -> None:
     """Point MLflow at the SQL warehouse a UC-backed read needs; raise when none is available.
 
     A managed experiment needs no warehouse (and never gets one set). A UC-backed one is read through
     a warehouse MLflow takes from ``MLFLOW_TRACING_SQL_WAREHOUSE_ID``, so the resolved id is exported
     before the caller runs ``search_traces`` / ``get_trace``; with no warehouse the read would fail
-    opaquely, so this raises up front rather than falling through to the local dev store.
+    opaquely, so this raises up front rather than falling through to the local dev store. The export
+    is scoped to the read: the enclosing ``_with_trace_read_target`` restores the prior value on exit.
     """
     if not _is_uc_backed(experiment):
         return
@@ -215,17 +252,17 @@ def _get_experiment_by_id(mlflow, experiment_id: str):
 
 def create_experiment_idempotent(
     profile: Optional[str], client, name: str
-) -> tuple[str, tuple[str, ...]]:
+) -> tuple[str, MLflowTraceTables]:
     """Create the experiment ``name`` if missing; return its id and UC OTEL tables (idempotent).
 
     ``create_experiment`` won't make the intermediate workspace folder for a nested path (e.g.
     ``/Users/<you>/mason-traces/<project>``), so the parent dir is created first. Used by dev/deploy to
     provision the experiment that traces log to.
 
-    Returns ``(experiment_id, uc_tables)``: for an existing UC-backed experiment, ``uc_tables`` are the
-    fully-qualified UC OTEL tables the deployed app must be granted MODIFY on (see
-    ``uc_trace_tables``); for a managed experiment - and for one just created, since mason only creates
-    managed experiments - it is ().
+    Returns ``(experiment_id, tables)``: for an existing UC-backed experiment, ``tables`` are the UC
+    OTEL base tables the deployed app must be granted MODIFY on (see ``uc_trace_tables``); for a
+    managed experiment - and for one just created, since mason only creates managed experiments - it
+    is an empty ``MLflowTraceTables``.
     """
     mlflow = _mlflow()
     _set_tracking_uri(mlflow, profile)
@@ -235,7 +272,7 @@ def create_experiment_idempotent(
     parent = name.rsplit("/", 1)[0]
     if parent:
         client.ensure_workspace_dir(parent)
-    return mlflow.create_experiment(name), ()
+    return mlflow.create_experiment(name), MLflowTraceTables()
 
 
 def _resolve_experiment_name(source: pathlib.Path | str) -> Optional[str]:
@@ -288,41 +325,51 @@ def _with_trace_read_target(
     must run their read inside the ``with`` block so the server is still up.
     """
     mlflow = _mlflow()
-    # An explicit id/name targets the workspace directly (and must exist); it raises here, before any
-    # local server is started, so a typo never spins one up.
-    explicit = _workspace_experiment_target(profile, experiment_name, experiment_id, warehouse_id)
-    if explicit is not None:
-        mlflow.set_tracking_uri(explicit.tracking_uri)
-        yield explicit
-        return
-    # This project's bound experiment, if it's provisioned in the workspace.
-    name = _resolve_experiment_name(source)
-    if name:
-        _set_tracking_uri(mlflow, profile)
-        try:
-            experiment = mlflow.get_experiment_by_name(name)
-        except Exception:  # noqa: BLE001 - workspace unreachable -> try the local dev store
-            experiment = None
-        if experiment is not None:
-            _require_warehouse_for_uc_read(experiment, warehouse_id)
-            yield _TraceReadTarget(_workspace_uri(profile), experiment.experiment_id)
-            return
-    # Unbound, not provisioned, or unreachable -> the local dev store, if any. `mason dev` traces
-    # locally regardless of the binding, so its store is worth reading even when tracing is unbound.
-    db = pathlib.Path(source).resolve() / _MASON_LOCAL_DIR / "mlflow.db"
-    if not db.exists():
-        yield _TraceReadTarget(None, None)
-        return
-    server, base_url = _start_read_server(db)
-    if server is None:  # best-effort: couldn't bring the local store up -> nothing to read
-        yield _TraceReadTarget(None, None, local=True)
-        return
+    # A UC read's warehouse is exported to MLFLOW_TRACING_SQL_WAREHOUSE_ID (see
+    # _require_warehouse_for_uc_read); scope that mutation to the read by restoring the prior value
+    # on exit, whatever path was taken.
+    prior_warehouse = os.environ.get(_SQL_WAREHOUSE_ENV)
     try:
-        mlflow.set_tracking_uri(base_url)
-        local = mlflow.get_experiment_by_name(pathlib.Path(source).resolve().name)
-        yield _TraceReadTarget(base_url, local.experiment_id if local else None, local=True)
+        # An explicit id/name targets the workspace directly (and must exist); it raises here, before
+        # any local server is started, so a typo never spins one up.
+        explicit = _workspace_experiment_target(
+            profile, experiment_name, experiment_id, warehouse_id
+        )
+        if explicit is not None:
+            mlflow.set_tracking_uri(explicit.tracking_uri)
+            yield explicit
+            return
+        # This project's bound experiment, if it's provisioned in the workspace.
+        name = _resolve_experiment_name(source)
+        if name:
+            _set_tracking_uri(mlflow, profile)
+            try:
+                experiment = mlflow.get_experiment_by_name(name)
+            except Exception:  # noqa: BLE001 - workspace unreachable -> try the local dev store
+                experiment = None
+            if experiment is not None:
+                _require_warehouse_for_uc_read(experiment, warehouse_id)
+                yield _TraceReadTarget(_workspace_uri(profile), experiment.experiment_id)
+                return
+        # Unbound, not provisioned, or unreachable -> the local dev store, if any. `mason dev` traces
+        # locally regardless of the binding, so its store is worth reading even when tracing is
+        # unbound.
+        db = pathlib.Path(source).resolve() / _MASON_LOCAL_DIR / "mlflow.db"
+        if not db.exists():
+            yield _TraceReadTarget(None, None)
+            return
+        server, base_url = _start_read_server(db)
+        if server is None:  # best-effort: couldn't bring the local store up -> nothing to read
+            yield _TraceReadTarget(None, None, local=True)
+            return
+        try:
+            mlflow.set_tracking_uri(base_url)
+            local = mlflow.get_experiment_by_name(pathlib.Path(source).resolve().name)
+            yield _TraceReadTarget(base_url, local.experiment_id if local else None, local=True)
+        finally:
+            stop_local_tracing_server(server)
     finally:
-        stop_local_tracing_server(server)
+        _restore_warehouse_env(prior_warehouse)
 
 
 def _workspace_experiment_target(
@@ -791,13 +838,24 @@ def tracing_get(obj, trace_id, experiment_name, experiment_id, warehouse_id, sou
         source, obj.profile, experiment_name, experiment_id, warehouse
     ) as target:
         # get_trace resolves by id and needs only the tracking URI; when nothing resolved, fall back to
-        # the workspace so an id still looks there. UC-ness can't be known in that case, so export a
-        # provided warehouse unconditionally (harmless for a managed experiment).
+        # the workspace so an id still looks there.
         if target.tracking_uri is None:
             mlflow.set_tracking_uri(_workspace_uri(obj.profile))
             if warehouse:
+                # UC-ness can't be known in this fallthrough, so a provided warehouse is exported for
+                # the fetch (harmless for a managed experiment) and restored right after: the env var
+                # is MLflow's only supported knob (get_trace takes no warehouse parameter), and the
+                # read must not leave the process env mutated.
+                prior = os.environ.get(_SQL_WAREHOUSE_ENV)
                 os.environ[_SQL_WAREHOUSE_ENV] = warehouse
-        trace = mlflow.get_trace(trace_id)
+                try:
+                    trace = mlflow.get_trace(trace_id)
+                finally:
+                    _restore_warehouse_env(prior)
+            else:
+                trace = mlflow.get_trace(trace_id)
+        else:
+            trace = mlflow.get_trace(trace_id)
         if trace is None:
             raise AgentCliError(f"No trace found with id {trace_id!r}.")
         if obj.output == "json":

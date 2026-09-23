@@ -168,14 +168,14 @@ def test_apply_trace_resources_uc_experiment_adds_one_table_resource_per_table(m
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(sa, "_databricks", fake_db)
-    tables = ("cat.schema.otel_spans", "cat.schema.otel_logs")
+    tables = (("spans", "cat.schema.otel_spans"), ("logs", "cat.schema.otel_logs"))
     assert sa.apply_trace_resources("app", "exp-uc", tables, "prof") is None
     payload = json.loads(captured["args"][captured["args"].index("--json") + 1])
     written = payload["app"]["resources"]
     assert [r["name"] for r in written] == [
         "mason-trace-experiment",
-        "mason-trace-table-0",
-        "mason-trace-table-1",
+        "mason-trace-table-spans",
+        "mason-trace-table-logs",
     ]
     assert written[0]["experiment"] == {"experiment_id": "exp-uc", "permission": "CAN_EDIT"}
     assert [r["uc_securable"] for r in written[1:]] == [
@@ -194,8 +194,9 @@ def test_apply_trace_resources_uc_experiment_adds_one_table_resource_per_table(m
 
 def test_apply_trace_resources_converges_when_rebinding_uc_to_managed(monkeypatch):
     # Leak fix: a prior UC deploy left mason-trace-table-* resources behind; redeploying with a
-    # managed experiment (uc_tables == ()) must drop them in the same write, not leave the SP with
-    # MODIFY on the old UC tables.
+    # managed experiment (tables == ()) must drop them in the same write, not leave the SP with
+    # MODIFY on the old UC tables. The stale resources use the previous index-based naming
+    # (mason-trace-table-<i>) on purpose: pruning matches by prefix, so those are dropped too.
     resources: list[dict[str, Any]] = [
         {"name": "user-owned", "secret": {}},
         {"name": "mason-trace-experiment", "experiment": {"experiment_id": "old-uc"}},
@@ -233,7 +234,7 @@ def test_apply_trace_resources_reports_failure(monkeypatch):
             )
         ),
     )
-    err = sa.apply_trace_resources("app", "exp-1", ("cat.schema.otel_spans",), "prof")
+    err = sa.apply_trace_resources("app", "exp-1", (("spans", "cat.schema.otel_spans"),), "prof")
     assert err == "denied: needs MANAGE"
 
 

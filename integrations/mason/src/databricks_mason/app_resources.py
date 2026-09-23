@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Optional
 
@@ -75,7 +76,10 @@ _UC_TRACE_TABLE_RESOURCE_PREFIX = "mason-trace-table-"
 
 
 def apply_trace_resources(
-    app: str, experiment_id: Optional[str], uc_tables: tuple[str, ...], profile: Optional[str]
+    app: str,
+    experiment_id: Optional[str],
+    tables: Sequence[tuple[str, str]],
+    profile: Optional[str],
 ) -> Optional[str]:
     """Reconcile the app's mason-owned trace resources to the desired state in one masked update.
 
@@ -83,10 +87,12 @@ def apply_trace_resources(
     `uc_securable` TABLE resource (MODIFY) per UC OTEL table when the experiment is UC-backed - or
     EMPTY when tracing is unbound (``experiment_id`` is None), so an unbind + redeploy prunes the
     stale `mason-trace-experiment` / `mason-trace-table-*` resources instead of leaving the SP with
-    grants on an experiment it no longer uses. Writing the complete mason-owned set every deploy also
-    converges a UC rebind: a new experiment's tables replace the old ones in the same write. MODIFY
-    grants MODIFY+SELECT and Databricks Apps auto-grants USE CATALOG/USE SCHEMA - no catalog/schema
-    resource or SQL grant needed. Preserves every resource we don't own. None on success, else a reason.
+    grants on an experiment it no longer uses. ``tables`` are ``(kind, full_name)`` pairs (e.g.
+    ``("spans", "cat.schema.pfx_otel_spans")``); each kind names its resource
+    ``mason-trace-table-<kind>``. Writing the complete mason-owned set every deploy also converges a
+    UC rebind: a new experiment's tables replace the old ones in the same write. MODIFY grants
+    MODIFY+SELECT and Databricks Apps auto-grants USE CATALOG/USE SCHEMA - no catalog/schema resource
+    or SQL grant needed. Preserves every resource we don't own. None on success, else a reason.
     """
     ours = (
         [
@@ -99,14 +105,14 @@ def apply_trace_resources(
         else []
     ) + [
         {
-            "name": f"{_UC_TRACE_TABLE_RESOURCE_PREFIX}{i}",
+            "name": f"{_UC_TRACE_TABLE_RESOURCE_PREFIX}{kind}",
             "uc_securable": {
                 "securable_full_name": table,
                 "securable_type": "TABLE",
                 "permission": "MODIFY",
             },
         }
-        for i, table in enumerate(uc_tables)
+        for kind, table in tables
     ]
     preserved = [
         r
