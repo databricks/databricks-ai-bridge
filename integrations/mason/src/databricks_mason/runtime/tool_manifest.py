@@ -39,6 +39,7 @@ class ToolRecord:
     function: str | None = None
     downscope: tuple[ScopeRecord, ...] = ()
     space_id: str | None = None
+    auth: str | None = None
 
 
 def validate_genie_source(
@@ -130,6 +131,11 @@ def _tool(value: object) -> ToolRecord:
     kind = _required_string(source.get("kind"), "a tool source kind")
     tool_id = _required_string(value.get("id"), "a tool id")
     validate_genie_source(tool_id, source, has_downscope="downscope" in policy)
+    auth = value.get("auth")
+    if auth is not None and auth not in ("user", "app"):
+        raise ToolManifestError("Tool auth must be 'user' or 'app'.")
+    if kind == "uc_function" and auth == "user":
+        raise ToolManifestError("UC function auth supports only app/default identity.")
     if kind == "python":
         raise ToolManifestError(
             "Python tools are code-first and cannot be declared in agent.toml. "
@@ -142,6 +148,7 @@ def _tool(value: object) -> ToolRecord:
         function=source.get("function") if isinstance(source.get("function"), str) else None,
         space_id=source.get("space_id") if isinstance(source.get("space_id"), str) else None,
         downscope=tuple(_scope(item) for item in raw_downscope),
+        auth=auth,
     )
     if record.kind == "sandbox" and (record.service != "system.ai.sandbox" or not record.downscope):
         raise RuntimeError("Sandbox bindings require system.ai.sandbox and a downscope.")

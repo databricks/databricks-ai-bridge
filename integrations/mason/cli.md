@@ -974,6 +974,7 @@ _Options_
 | `--pip-index-url <PIP_INDEX_URL>` | string | `https://pypi.org/simple/` | no | Base URL of the Python Package Index. Defaults to public PyPI. |
 | `--workspace-path <WORKSPACE_PATH>` | string | - | no | Workspace destination for the synced source (defaults to a per-user path). |
 | `--instances <INSTANCES>` | integer range | - | no | Number of deployment instances. |
+| `--allow-user-scope-update` | flag | - | no | Allow Mason to add missing user API scopes to an existing App for tools configured with `auth = 'user'`. Once added, later deploys do not need this flag. |
 
 ### `mason deployments`
 
@@ -1122,37 +1123,43 @@ _Options_
 
 ### `mason tools`
 
-Manage the tools an agent can call, declared in the project's agent.toml.
+Discover available integrations and manage an agent's tool bindings.
 
 Tools are what let an agent act beyond the language model itself - query governed data, call a service, or run a function - and each one is recorded in agent.toml so `mason dev` / `mason deploy` wire it in. `mason tools add` manages these Databricks-managed tool types:
 
-sandbox Query Unity Catalog data via system.ai.sandbox, scoped to the tables, volumes, or paths you choose. mcp A Databricks-managed MCP service (see `mason mcp list`), e.g. system.ai.python_exec. uc-function An existing Unity Catalog function (catalog.schema.function).
+sandbox Query Unity Catalog data via system.ai.sandbox, scoped to the tables, volumes, or paths you choose. mcp A Databricks-managed MCP service (see `mason tools list --kind mcp`), e.g. system.ai.web_search. uc-function An existing Unity Catalog function (catalog.schema.function). genie-one Workspace-wide Genie One MCP tools. genie-agent Native Genie conversation tools for a configured space ID.
 
-Add one with `mason tools add <type>`, see what's configured with `mason tools list`, and drop one with `mason tools remove`. Custom Python tools are code-first - write them directly in your project's code rather than through the CLI.
+Browse available integrations with `mason tools list`, add one with `mason tools add <type>`, and drop a binding with `mason tools remove`. Review agent.toml for configured managed tools and MCP bindings. The list shows addable integrations, not configured bindings or individual operations inside an MCP service. Custom Python tools are code-first - write them directly in your project's code rather than through the CLI.
 
 | Subcommand | Description |
 | --- | --- |
-| [`tools add`](#mason-tools-add) | Add a managed sandbox, MCP service, or UC function. |
-| [`tools list`](#mason-tools-list) | List managed tool bindings for this agent. |
+| [`tools add`](#mason-tools-add) | Add a managed sandbox, MCP service, UC function, or Genie tool binding. |
+| [`tools list`](#mason-tools-list) | List available integrations to add, not configured agent bindings. |
 | [`tools remove`](#mason-tools-remove) | Remove a managed tool binding from this agent. |
 
 #### `mason tools add`
 
-Add a managed sandbox, MCP service, or UC function.
+Add a managed sandbox, MCP service, UC function, or Genie tool binding.
 
 Subcommands target the current directory by default.
 
 Pass --source PATH to target another project.
 
+Review that project's agent.toml to check configured managed tools and MCP bindings.
+
 | Subcommand | Description |
 | --- | --- |
 | [`tools add sandbox`](#mason-tools-add-sandbox) | Add a data sandbox tool (system.ai.sandbox), scoped to specific Unity Catalog resources. |
-| [`tools add mcp`](#mason-tools-add-mcp) | Add a Databricks-managed MCP service as a tool (see `mason mcp list` for available services). |
+| [`tools add mcp`](#mason-tools-add-mcp) | Validate and add a Databricks-managed MCP service as a tool. |
 | [`tools add uc-function`](#mason-tools-add-uc-function) | Add an existing Unity Catalog function (catalog.schema.function) as a tool. |
+| [`tools add genie-one`](#mason-tools-add-genie-one) | Add workspace-wide Genie One MCP tools. |
+| [`tools add genie-agent`](#mason-tools-add-genie-agent) | Add native Genie conversation tools for a 32-character lowercase hexadecimal SPACE_ID. |
 
 ##### `mason tools add sandbox`
 
 Add a data sandbox tool (system.ai.sandbox), scoped to specific Unity Catalog resources.
+
+Review the target project's agent.toml to check configured managed tools and MCP bindings.
 
 ```
 mason tools add sandbox [options]
@@ -1166,11 +1173,14 @@ _Options_
 | `--scope <SCOPES>` | string | - | yes | Allowed table:, volume:, or workspace: resource. Repeat for multiple scopes. |
 | `--permission <read_only|read_write>` | `read_only` \| `read_write` | `read_only` | no | - |
 | `--name <TOOL_ID>` | string | `sandbox` | no | - |
+| `--auth <user|app>` | `user` \| `app` | `user` | no | - |
 | `--source <SOURCE>` | path | `.` | no | Mason agent project containing agent.toml. |
 
 ##### `mason tools add mcp`
 
-Add a Databricks-managed MCP service as a tool (see `mason mcp list` for available services).
+Validate and add a Databricks-managed MCP service as a tool.
+
+Use `mason tools list --kind mcp` for available services. Review the target project's agent.toml to check configured managed tools and MCP bindings.
 
 ```
 mason tools add mcp SERVICE [options]
@@ -1188,6 +1198,7 @@ _Options_
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--name <TOOL_ID>` | string | - | no | - |
+| `--auth <user|app>` | `user` \| `app` | `user` | no | - |
 | `--source <SOURCE>` | path | `.` | no | Mason agent project containing agent.toml. |
 
 ##### `mason tools add uc-function`
@@ -1212,9 +1223,53 @@ _Options_
 | `--name <TOOL_ID>` | string | - | no | - |
 | `--source <SOURCE>` | path | `.` | no | Mason agent project containing agent.toml. |
 
+##### `mason tools add genie-one`
+
+Add workspace-wide Genie One MCP tools.
+
+```
+mason tools add genie-one [options]
+```
+
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--name <TOOL_ID>` | string | `genie_one` | no | - |
+| `--source <SOURCE>` | path | `.` | no | Mason agent project containing agent.toml. |
+
+##### `mason tools add genie-agent`
+
+Add native Genie conversation tools for a 32-character lowercase hexadecimal SPACE_ID.
+
+```
+mason tools add genie-agent SPACE_ID [options]
+```
+
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `SPACE_ID` | yes | - |
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--name <TOOL_ID>` | string | `genie_agent` | no | - |
+| `--source <SOURCE>` | path | `.` | no | Mason agent project containing agent.toml. |
+
 #### `mason tools list`
 
-List managed tool bindings for this agent.
+List available integrations to add, not configured agent bindings.
+
+By default, show built-in add recipes plus caller-visible MCP Services in system.ai. `--kind mcp` limits discovery to MCP Services; `--schema catalog.schema` replaces system.ai. Sandbox recipes require scopes; UC-function and Genie Agent recipes require concrete resource identifiers. Genie One needs no additional argument.
+
+No agent project is required. MCP discovery uses your Databricks profile; local recipes do not authenticate. This does not scan every workspace schema or list individual MCP operations. API failures return a nonzero exit status and mark discovery incomplete, not empty.
+
+Review agent.toml to check configured managed tools and MCP bindings. The former configured list and `--source` option are removed. JSON discovery uses schema_version 2 and available_tools.
 
 ```
 mason tools list [options]
@@ -1225,7 +1280,8 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
-| `--source <SOURCE>` | path | `.` | no | Mason agent project containing agent.toml. |
+| `--kind <sandbox|mcp|uc-function|genie-one|genie-agent>` | choice | - | no | Show one integration kind. Sandbox, uc-function, genie-one, and genie-agent show local add recipes only. |
+| `--schema <SCHEMA>` | string | - | no | Two-part UC schema: catalog.schema (default: system.ai). Requires --kind mcp. |
 
 #### `mason tools remove`
 
@@ -1248,4 +1304,3 @@ _Options_
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--source <SOURCE>` | path | `.` | no | Mason agent project containing agent.toml. |
-

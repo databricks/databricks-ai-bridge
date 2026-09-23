@@ -8,6 +8,7 @@ from langchain.messages import AIMessageChunk
 from langgraph.types import Command
 
 from databricks_mason import InvocationContext
+from databricks_mason.runtime.auth import AuthError
 
 
 def _payload(value: Any) -> dict[str, Any]:
@@ -43,11 +44,19 @@ def _agent_input(payload: dict[str, Any]) -> Any:
 
 async def invoke(value: Any, context: InvocationContext) -> dict:
     payload = _payload(value)
+    _check_user_input(payload, context)
     return await _invoke_agent(_agent_input(payload), payload, context)
 
 
 async def recover(value: Any, context: InvocationContext) -> dict:
     payload = _payload(value)
+    _check_user_input(payload, context)
+    if getattr(context, "request_auth", None) is not None:
+        raise AuthError(
+            "MCP_USER_AUTH_BACKGROUND_UNSUPPORTED",
+            "Request-user invocations cannot be recovered in the background.",
+            400,
+        )
     session_id = _session_id(payload, context)
     actor = _actor(payload, session_id)
     agent_input = await recovery_input(
@@ -59,6 +68,18 @@ async def recover(value: Any, context: InvocationContext) -> dict:
     return await _invoke_agent(agent_input, payload, context)
 
 
+def _check_user_input(payload: dict[str, Any], context: InvocationContext) -> None:
+    auth = getattr(context, "request_auth", None)
+    if auth is not None and any(
+        payload.get(key) is not None for key in ("resume", "approval", "approvals")
+    ):
+        raise AuthError(
+            "MCP_USER_AUTH_HITL_UNSUPPORTED",
+            "Request-user invocations do not support approval or resume input.",
+            400,
+        )
+
+
 async def _invoke_agent(
     agent_input: Any,
     payload: dict[str, Any],
@@ -66,17 +87,31 @@ async def _invoke_agent(
 ) -> dict:
     session_id = _session_id(payload, context)
     actor = _actor(payload, session_id)
+    auth = getattr(context, "request_auth", None)
+    internal_session_id = (
+        auth.namespace("session", session_id) if auth and payload.get("session_id") else session_id
+    )
+    actor = auth.namespace("actor", actor) if auth else actor
+    user_auth = auth is not None
+    auth_kwargs = {"workspace_client_for": auth.client_for} if user_auth else {}
     model = payload.get("model")
     outputs = []
     async for event in _serialize_events(
         run_agent(
             agent_input,
-            session_id=session_id,
+            session_id=internal_session_id,
             actor=actor,
             model=model if isinstance(model, str) else None,
             invocation_id=context.invocation_id,
+            **auth_kwargs,
         )
     ):
+        if user_auth and event.get("type") == "interrupt":
+            raise AuthError(
+                "MCP_USER_AUTH_HITL_UNSUPPORTED",
+                "Request-user invocations do not support paused approvals.",
+                400,
+            )
         await context.emit(event)
         if event.get("type") in ("message", "interrupt"):
             outputs.append(event)
@@ -84,7 +119,7 @@ async def _invoke_agent(
     interrupted = bool(outputs and outputs[-1].get("type") == "interrupt")
     return {
         "output": [event["message"] if event["type"] == "message" else event for event in outputs],
-        "session_id": session_id,
+        **({"session_id": session_id} if not user_auth or payload.get("session_id") else {}),
         "status": "interrupted" if interrupted else "completed",
     }
 

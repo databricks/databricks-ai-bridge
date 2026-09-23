@@ -9,6 +9,7 @@ import pytest
 from fastapi import FastAPI
 
 from databricks_mason import AgentApp
+from databricks_mason.agent_project import AgentProject, ToolSpec
 from databricks_mason.runtime.store import (
     RUNTIME_STORE_DATABASE_ENV,
     RUNTIME_STORE_LAKEBASE_BRANCH_ENV,
@@ -387,6 +388,18 @@ def test_agent_app_defaults_to_process_local_state_outside_apps(monkeypatch) -> 
     assert app._runtime is not None
     assert app._runtime.is_durable is False
     assert isinstance(app._runtime.runtime_store, InMemoryRuntimeStore)
+
+
+def test_agent_app_infers_request_user_policy_from_manifest(tmp_path, monkeypatch) -> None:
+    project = AgentProject.create(tmp_path, framework="langgraph", server="mason")
+    project.add_tool(ToolSpec.mcp("search", service="system.ai.web_search", auth="user"))
+    project.add_tool(ToolSpec.mcp("docs", service="system.ai.docs", auth="app"))
+    project.write()
+    monkeypatch.chdir(tmp_path)
+
+    app = AgentApp(runtime_store=InMemoryRuntimeStore())
+
+    assert app.auth_policy.user_tools == ("search",)
 
 
 def test_state_payload_nests_completed_application_response() -> None:
