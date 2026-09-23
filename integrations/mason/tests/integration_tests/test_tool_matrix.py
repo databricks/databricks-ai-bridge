@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import signal
 import subprocess
 import sys
 
@@ -34,6 +35,8 @@ _MASON_PKG = pathlib.Path(__file__).resolve().parents[2]  # integrations/mason
 _TOOL_MATRIX = _MASON_PKG / "tests" / "e2e" / "tool_matrix.py"
 # A two-part catalog.schema the CI service principal can create a scratch UC function in.
 _UC_SCHEMA = os.environ.get("MASON_INTEGRATION_UC_SCHEMA", "main.mason_agent_tools_e2e")
+_MATRIX_TIMEOUT_SECONDS = 45 * 60
+_CLEANUP_GRACE_SECONDS = 10 * 60
 
 
 def _wheel(tmp_path: pathlib.Path) -> pathlib.Path:
@@ -53,6 +56,36 @@ def _wheel(tmp_path: pathlib.Path) -> pathlib.Path:
     wheels = sorted(dist.glob("*.whl"))
     assert wheels, "uv build produced no wheel"
     return wheels[-1]
+
+
+def _signal_process_group(process: subprocess.Popen[str], sig: signal.Signals) -> None:
+    try:
+        os.killpg(process.pid, sig)
+    except ProcessLookupError:
+        pass
+
+
+def _run_matrix(argv: list[str]) -> tuple[subprocess.CompletedProcess[str], bool]:
+    process = subprocess.Popen(
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=_MATRIX_TIMEOUT_SECONDS)
+        return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr), False
+    except subprocess.TimeoutExpired:
+        # SIGINT raises KeyboardInterrupt in tool_matrix.py, which unwinds through its finally block.
+        # SIGTERM would terminate Python immediately and bypass its resource cleanup.
+        _signal_process_group(process, signal.SIGINT)
+        try:
+            stdout, stderr = process.communicate(timeout=_CLEANUP_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            _signal_process_group(process, signal.SIGKILL)
+            stdout, stderr = process.communicate()
+        return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr), True
 
 
 def test_tool_matrix_deploy_and_invoke(tmp_path: pathlib.Path) -> None:
@@ -75,14 +108,19 @@ def test_tool_matrix_deploy_and_invoke(tmp_path: pathlib.Path) -> None:
 
     # No --profile: tool_matrix falls back to ambient env credentials (the CI service principal),
     # which as OAuth also authorize the deployed App's /api calls. This deploys real Apps and starts
-    # a warehouse, so it is slow; tool_matrix bounds each step internally and the CI job timeout is
-    # the outer bound. Exit 0 means every matrix cell passed (tool_matrix verifies its own evidence).
-    result = subprocess.run(argv, capture_output=True, text=True, timeout=3600)
-    if result.returncode != 0:
+    # a warehouse, so it is slow. Reserve ten minutes before the outer job timeout for the child to
+    # unwind through its cleanup; a hard kill is only the fallback after that grace period.
+    result, timed_out = _run_matrix(argv)
+    if timed_out or result.returncode != 0:
         evidence = output / "evidence.json"
         detail = evidence.read_text() if evidence.is_file() else "(no evidence.json written)"
+        outcome = (
+            f"timed out after {_MATRIX_TIMEOUT_SECONDS}s; cleanup was requested"
+            if timed_out
+            else f"exited {result.returncode}"
+        )
         pytest.fail(
-            f"tool_matrix exited {result.returncode}\n"
+            f"tool_matrix {outcome}\n"
             f"STDOUT (tail):\n{result.stdout[-4000:]}\n"
             f"STDERR (tail):\n{result.stderr[-4000:]}\n"
             f"evidence (head):\n{detail[:4000]}"
