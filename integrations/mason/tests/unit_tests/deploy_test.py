@@ -941,12 +941,16 @@ def test_deploy_wires_tracing_env_and_grants_experiment_resource(
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(deploy_mod, "get_or_create_trace_experiment", lambda *a, **k: "exp-42")
+    monkeypatch.setattr(
+        deploy_mod, "get_or_create_trace_experiment", lambda *a, **k: ("exp-42", ())
+    )
     granted: dict = {}
     monkeypatch.setattr(
         deploy_mod,
-        "apply_experiment_resource",
-        lambda app, experiment_id, profile: granted.update(app=app, experiment_id=experiment_id),
+        "apply_trace_resources",
+        lambda app, experiment_id, uc_tables, profile: granted.update(
+            app=app, experiment_id=experiment_id, uc_tables=uc_tables
+        ),
     )
     monkeypatch.setattr(
         deploy_mod,
@@ -960,9 +964,97 @@ def test_deploy_wires_tracing_env_and_grants_experiment_resource(
     env = {e["name"]: e["value"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
     assert env["MLFLOW_EXPERIMENT_ID"] == "exp-42"
     assert env["MLFLOW_TRACKING_URI"] == "databricks"
-    # the experiment is granted to the app's SP as an app resource (no manual SQL grant)
-    assert granted == {"app": "agent-mason-myapp", "experiment_id": "exp-42"}
+    # the experiment is granted to the app's SP as an app resource (no manual SQL grant); a managed
+    # experiment carries no UC tables
+    assert granted == {"app": "agent-mason-myapp", "experiment_id": "exp-42", "uc_tables": ()}
     assert "Deployed without tracing" not in result.output  # bound -> no unbound notice
+
+
+def test_deploy_grants_uc_trace_tables_for_uc_backed_experiment(tmp_path, monkeypatch):
+    # A bound experiment that resolves UC-backed: deploy grants the experiment (CAN_EDIT) AND MODIFY
+    # on its UC OTEL tables in ONE trace-resource write - the experiment grant alone does not
+    # propagate to the UC tables the app exports traces to.
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    tables = ("cat.schema.otel_spans", "cat.schema.otel_logs")
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod, "get_or_create_trace_experiment", lambda *a, **k: ("exp-uc", tables)
+    )
+    trace_grant = mock.Mock(return_value=None)
+    monkeypatch.setattr(deploy_mod, "apply_trace_resources", trace_grant)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code == 0, result.output
+    trace_grant.assert_called_once_with("agent-mason-myapp", "exp-uc", tables, "prof")
+    env = {e["name"]: e["value"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
+    assert env["MLFLOW_EXPERIMENT_ID"] == "exp-uc"
+    assert "UC trace tables" in result.output  # the grant note calls out the UC table grant
+
+
+def test_deploy_grants_managed_experiment_with_no_uc_tables(tmp_path, monkeypatch):
+    # A managed experiment has no UC tables: the single trace-resource grant gets an empty table
+    # tuple (which also converges away any stale table resources from a prior UC binding).
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod, "get_or_create_trace_experiment", lambda *a, **k: ("exp-42", ())
+    )
+    trace_grant = mock.Mock(return_value=None)
+    monkeypatch.setattr(deploy_mod, "apply_trace_resources", trace_grant)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code == 0, result.output
+    trace_grant.assert_called_once_with("agent-mason-myapp", "exp-42", (), "prof")
+
+
+def test_deploy_proceeds_when_trace_grant_fails(tmp_path, monkeypatch):
+    # The trace grant is best-effort: a failure surfaces as next-step guidance but never aborts
+    # the deploy.
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    tables = ("cat.schema.otel_spans",)
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod, "get_or_create_trace_experiment", lambda *a, **k: ("exp-uc", tables)
+    )
+    monkeypatch.setattr(
+        deploy_mod,
+        "apply_trace_resources",
+        mock.Mock(return_value="denied: needs MANAGE on the catalog"),
+    )
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code == 0, result.output  # deploy still succeeded
+    # the panel wraps long lines behind │ borders; strip them so wrapped phrases still match
+    out = " ".join(result.output.replace("│", " ").split())
+    assert "needs write access to its trace experiment" in out  # grant-failure guidance shown
+    assert "denied: needs MANAGE on the catalog" in out  # the cause is surfaced
 
 
 def test_deploy_proceeds_when_tracing_provisioning_raises(tmp_path: pathlib.Path, monkeypatch):
@@ -1155,9 +1247,9 @@ def test_resolve_trace_experiment_get_or_creates_bound_name(tmp_path: pathlib.Pa
     monkeypatch.setattr(
         deploy_mod,
         "create_experiment_idempotent",
-        lambda profile, client, name: created.update(name=name) or "id-b",
+        lambda profile, client, name: created.update(name=name) or ("id-b", ()),
     )
-    assert _REAL_RESOLVE_TRACE(tmp_path, _FakeClient(), None) == "id-b"
+    assert _REAL_RESOLVE_TRACE(tmp_path, _FakeClient(), None) == ("id-b", ())
     assert created["name"] == "/Shared/mason_traces/bound"
     from databricks_mason.agent_project import AgentProject
 
@@ -1177,10 +1269,10 @@ def test_resolve_trace_experiment_get_or_creates_by_name_each_run(
     monkeypatch.setattr(
         deploy_mod,
         "create_experiment_idempotent",
-        lambda profile, client, name: calls.append(name) or "made-id",
+        lambda profile, client, name: calls.append(name) or ("made-id", ()),
     )
-    assert _REAL_RESOLVE_TRACE(tmp_path, _FakeClient(), None) == "made-id"
-    assert _REAL_RESOLVE_TRACE(tmp_path, _FakeClient(), None) == "made-id"
+    assert _REAL_RESOLVE_TRACE(tmp_path, _FakeClient(), None) == ("made-id", ())
+    assert _REAL_RESOLVE_TRACE(tmp_path, _FakeClient(), None) == ("made-id", ())
     assert calls == ["/Shared/mason_traces/bound", "/Shared/mason_traces/bound"]
 
 

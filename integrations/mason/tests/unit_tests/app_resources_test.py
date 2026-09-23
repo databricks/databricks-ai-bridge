@@ -128,3 +128,110 @@ def test_runtime_store_resource_coexists_with_a_second_managed_resource(monkeypa
         "postgres-runtime-store",
         "postgres-other",
     }
+
+
+# --- trace resources (experiment + UC OTEL tables) ---------------------------
+
+
+def test_apply_trace_resources_managed_experiment_writes_only_the_experiment(monkeypatch):
+    resources: list[dict[str, Any]] = [{"name": "user-owned", "secret": {}}]
+    captured = {}
+
+    def fake_db(args, profile, **kw):
+        if args[:2] == ["apps", "get"]:
+            return types.SimpleNamespace(
+                returncode=0, stdout=json.dumps({"resources": resources}), stderr=""
+            )
+        captured["args"] = args
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(sa, "_databricks", fake_db)
+    assert sa.apply_trace_resources("app", "exp-1", (), "prof") is None
+    payload = json.loads(captured["args"][captured["args"].index("--json") + 1])
+    assert payload["update_mask"] == "resources"  # masked upsert, like the other resources
+    written = payload["app"]["resources"]
+    # the unrelated user resource is preserved; ours is exactly the experiment resource
+    assert [r["name"] for r in written] == ["user-owned", "mason-trace-experiment"]
+    ours = next(r for r in written if r["name"] == "mason-trace-experiment")
+    assert ours["experiment"] == {"experiment_id": "exp-1", "permission": "CAN_EDIT"}
+
+
+def test_apply_trace_resources_uc_experiment_adds_one_table_resource_per_table(monkeypatch):
+    captured = {}
+
+    def fake_db(args, profile, **kw):
+        if args[:2] == ["apps", "get"]:
+            return types.SimpleNamespace(
+                returncode=0, stdout=json.dumps({"resources": []}), stderr=""
+            )
+        captured["args"] = args
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(sa, "_databricks", fake_db)
+    tables = ("cat.schema.otel_spans", "cat.schema.otel_logs")
+    assert sa.apply_trace_resources("app", "exp-uc", tables, "prof") is None
+    payload = json.loads(captured["args"][captured["args"].index("--json") + 1])
+    written = payload["app"]["resources"]
+    assert [r["name"] for r in written] == [
+        "mason-trace-experiment",
+        "mason-trace-table-0",
+        "mason-trace-table-1",
+    ]
+    assert written[0]["experiment"] == {"experiment_id": "exp-uc", "permission": "CAN_EDIT"}
+    assert [r["uc_securable"] for r in written[1:]] == [
+        {
+            "securable_full_name": "cat.schema.otel_spans",
+            "securable_type": "TABLE",
+            "permission": "MODIFY",
+        },
+        {
+            "securable_full_name": "cat.schema.otel_logs",
+            "securable_type": "TABLE",
+            "permission": "MODIFY",
+        },
+    ]
+
+
+def test_apply_trace_resources_converges_when_rebinding_uc_to_managed(monkeypatch):
+    # Leak fix: a prior UC deploy left mason-trace-table-* resources behind; redeploying with a
+    # managed experiment (uc_tables == ()) must drop them in the same write, not leave the SP with
+    # MODIFY on the old UC tables.
+    resources: list[dict[str, Any]] = [
+        {"name": "user-owned", "secret": {}},
+        {"name": "mason-trace-experiment", "experiment": {"experiment_id": "old-uc"}},
+        {"name": "mason-trace-table-0", "uc_securable": {"securable_full_name": "old.cat.spans"}},
+        {"name": "mason-trace-table-1", "uc_securable": {"securable_full_name": "old.cat.logs"}},
+    ]
+
+    def fake_db(args, profile, **kw):
+        if args[:2] == ["apps", "get"]:
+            return types.SimpleNamespace(
+                returncode=0, stdout=json.dumps({"resources": resources}), stderr=""
+            )
+        payload = json.loads(args[args.index("--json") + 1])
+        resources[:] = payload["app"]["resources"]
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(sa, "_databricks", fake_db)
+    assert sa.apply_trace_resources("app", "exp-managed", (), "prof") is None
+    # stale table resources are gone, the user resource is preserved, the experiment resource is
+    # re-written to point at the managed experiment
+    assert [r["name"] for r in resources] == ["user-owned", "mason-trace-experiment"]
+    ours = next(r for r in resources if r["name"] == "mason-trace-experiment")
+    assert ours["experiment"] == {"experiment_id": "exp-managed", "permission": "CAN_EDIT"}
+
+
+def test_apply_trace_resources_reports_failure(monkeypatch):
+    monkeypatch.setattr(
+        sa,
+        "_databricks",
+        lambda args, profile, **kw: (
+            types.SimpleNamespace(returncode=1, stdout="", stderr="denied: needs MANAGE")
+            if args[:2] == ["apps", "create-update"]
+            else types.SimpleNamespace(
+                returncode=0, stdout=json.dumps({"resources": []}), stderr=""
+            )
+        ),
+    )
+    err = sa.apply_trace_resources("app", "exp-1", ("cat.schema.otel_spans",), "prof")
+    assert err == "denied: needs MANAGE"

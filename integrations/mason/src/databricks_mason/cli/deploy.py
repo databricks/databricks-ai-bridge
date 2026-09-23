@@ -31,8 +31,8 @@ from databricks_mason import (
     timefmt,
 )
 from databricks_mason.app_resources import (
-    apply_experiment_resource,
     apply_postgres_resources,
+    apply_trace_resources,
 )
 from databricks_mason.cli.endpoint_examples import print_agent_invoke_command
 from databricks_mason.cli.tracing import (
@@ -371,10 +371,15 @@ def _reconcile_declared_stores(
     return memory_store_id
 
 
-def get_or_create_trace_experiment(source: pathlib.Path, client, profile) -> Optional[str]:
+def get_or_create_trace_experiment(
+    source: pathlib.Path, client, profile
+) -> Optional[tuple[str, tuple[str, ...]]]:
     """Get-or-create this project's bound MLflow experiment in the ``profile``'s workspace and return
-    its id, or None when tracing is unbound (no ``experiment_name`` in agent.toml).
+    ``(experiment_id, uc_tables)``, or None when tracing is unbound (no ``experiment_name`` in
+    agent.toml).
 
+    ``uc_tables`` are the fully-qualified UC OTEL tables backing a UC-backed experiment (() for a
+    managed one); deploy grants the app's service principal MODIFY on them so it can export traces.
     Resolves by experiment **name**, never a stored id. ``source`` locates agent.toml. Nothing is
     written back to agent.toml. Raises if the experiment can't be created.
     """
@@ -525,14 +530,16 @@ def deploy(
     #    experiment NAME from agent.toml and wire the two env vars the runtime reads. Resolved by name,
     #    never a stored id, and nothing is written back to agent.toml. (`mason dev` traces to a local
     #    MLflow server instead and never touches this workspace experiment.) The app's SP is granted
-    #    write access to it in step 5 (an experiment app resource). Best-effort: if it can't be set up
+    #    write access to it in step 5 (an experiment app resource, plus MODIFY on its UC OTEL tables
+    #    when UC-backed). Best-effort: if it can't be set up
     #    (no mlflow, offline, permission), the deploy still proceeds without tracing.
-    trace_experiment_id: Optional[str] = None
+    trace_provision: Optional[tuple[str, tuple[str, ...]]] = None
     trace_setup_error: Optional[str] = None
     try:
-        trace_experiment_id = get_or_create_trace_experiment(source_dir, client, obj.profile)
+        trace_provision = get_or_create_trace_experiment(source_dir, client, obj.profile)
     except Exception as exc:  # noqa: BLE001 - tracing is best-effort; never block a deploy
         trace_setup_error = str(exc)
+    trace_experiment_id, uc_trace_tables = trace_provision or (None, ())
     env_updates: dict[str, str] = {}
     provisioned: dict[str, Any] = {}
     if memory_store:
@@ -656,7 +663,8 @@ def deploy(
     # 6. Grant the app's service principal what it needs to run (best-effort):
     #    - stores: grant the SP read/write via the managed store API (the store service does the
     #      underlying Lakebase grant, so no store ownership / Lakebase MANAGE is required here);
-    #    - tracing: bind the experiment as an `experiment` resource (CAN_EDIT) so it can write traces.
+    #    - tracing: bind the experiment as an `experiment` resource (CAN_EDIT) so it can write traces;
+    #      a UC-backed experiment also needs MODIFY on its UC OTEL tables (`uc_securable` resources).
     #    The experiment resource is the platform-managed grant — no manual SQL grant needed.
     grants_stores = bool(session_store or memory_store)
     grant_error: Optional[str] = None
@@ -670,7 +678,9 @@ def deploy(
     trace_grant_error: Optional[str] = None
     if trace_experiment_id:
         with render.status("Granting the app access to its trace experiment…"):
-            trace_grant_error = apply_experiment_resource(name, trace_experiment_id, obj.profile)
+            trace_grant_error = apply_trace_resources(
+                name, trace_experiment_id, uc_trace_tables, obj.profile
+            )
 
     app_url = _app_url(name, obj.profile)
 
@@ -682,6 +692,7 @@ def deploy(
                 "workspace_path": ws_path,
                 "env": env_updates,
                 "trace_experiment_id": trace_experiment_id,
+                "uc_trace_tables": list(uc_trace_tables),
                 "trace_setup_error": trace_setup_error,
                 "trace_grant": None
                 if not trace_experiment_id
@@ -732,7 +743,11 @@ def deploy(
     if grants_stores and grant_error is None:
         provisioned["Store access"] = "granted to app service principal"
     if trace_experiment_id and trace_grant_error is None:
-        provisioned["Trace access"] = "granted to app service principal"
+        provisioned["Trace access"] = (
+            "granted to app service principal (UC trace tables)"
+            if uc_trace_tables
+            else "granted to app service principal"
+        )
     fields = {"URL": app_url} if app_url else {}
     fields.update({"Workspace path": ws_path, **provisioned})
     render.success(

@@ -12,6 +12,10 @@ The bound ``experiment_name``'s presence IS the enable switch: a bound name mean
 deploy, its absence means off. ``mason tracing bind`` binds an experiment (by name or id, one
 required); ``mason tracing unbind`` removes the binding; ``list`` / ``get`` read traces back.
 
+A bound experiment may be UC-backed (traces stored in Unity Catalog OTEL tables): deploy supports
+exporting to one by granting the app's service principal MODIFY on those tables. Reading UC traces
+back via ``list`` / ``get`` remains a follow-up.
+
 MLflow (``mlflow-skinny``) is a base dependency, but the ``mason tracing`` commands and the deploy
 experiment provisioning still import it lazily — ``cli.py`` imports this module at startup, so a
 top-level import would pay mlflow's heavy import cost on every ``mason`` command.
@@ -95,7 +99,9 @@ def _set_tracking_uri(mlflow, profile: Optional[str]) -> None:
 
 
 # An experiment linked to a UC schema for trace storage carries this tag (the destination schema);
-# managed experiments don't. mason supports managed tracing only (UC support is a follow-up).
+# managed experiments don't. UC-backed experiments are supported for trace export at deploy (the
+# app's service principal is granted MODIFY on their UC OTEL tables); reading UC traces back via
+# `list`/`get` remains a follow-up.
 _UC_TRACE_TAG = "mlflow.experiment.databricksTraceDestinationPath"
 
 
@@ -106,6 +112,57 @@ def _is_uc_backed(experiment) -> bool:
     guards a missing attribute.
     """
     return _UC_TRACE_TAG in (getattr(experiment, "tags", None) or {})
+
+
+# The "unified" trace-table tag names a read-side VIEW over the base OTEL tables, not a writable base
+# table (MODIFY on a view fails), so it's excluded from the grant set.
+_UC_TRACE_UNIFIED_TAG = "mlflow.experiment.databricksTraceStorageTable"
+
+
+def uc_trace_tables(experiment) -> tuple[str, ...]:
+    """Fully-qualified UC OTEL base tables backing a UC experiment's traces; () when managed.
+
+    A UC-backed experiment stores traces in Unity Catalog base tables the deployed app must be granted
+    MODIFY on (spans, logs, annotations, and any future per-kind table). MLflow records each as a
+    ``mlflow.experiment.databricksTrace<Kind>StorageTable`` tag whose value is the fully-qualified
+    ``<catalog>.<schema>.<table>`` - those tags are the source of truth (the ``UnityCatalog`` entity
+    only surfaces spans/logs, so reading tags is what catches the annotations table). The unified
+    ``databricksTraceStorageTable`` tag is excluded: it names a read-side VIEW, not a writable table.
+    Falls back to deriving names from the destination path when the per-table tags are absent. Returns
+    () for a managed experiment.
+    """
+    tags = getattr(experiment, "tags", None) or {}
+    if _UC_TRACE_TAG not in tags:
+        return ()
+    names = sorted(
+        value
+        for key, value in tags.items()
+        if key.startswith("mlflow.experiment.databricksTrace")
+        and key.endswith("StorageTable")
+        and key != _UC_TRACE_UNIFIED_TAG
+        and value
+    )
+    if names:
+        return tuple(names)
+    # Fallback: derive from the destination path (`<catalog>.<schema>[.<table_prefix>]`) when the
+    # per-table storage tags aren't present.
+    parts = tags[_UC_TRACE_TAG].split(".")
+    if len(parts) == 3:
+        prefix = ".".join(parts)
+        return tuple(
+            sorted((f"{prefix}_otel_spans", f"{prefix}_otel_logs", f"{prefix}_otel_annotations"))
+        )
+    if len(parts) == 2:
+        base = ".".join(parts)
+        return tuple(
+            sorted(
+                (
+                    f"{base}.mlflow_experiment_trace_otel_spans",
+                    f"{base}.mlflow_experiment_trace_otel_logs",
+                )
+            )
+        )
+    return ()
 
 
 def _get_experiment_by_id(mlflow, experiment_id: str):
@@ -125,31 +182,29 @@ def _get_experiment_by_id(mlflow, experiment_id: str):
         raise
 
 
-def create_experiment_idempotent(profile: Optional[str], client, name: str) -> str:
-    """Create the experiment ``name`` if missing and return its id (idempotent).
+def create_experiment_idempotent(
+    profile: Optional[str], client, name: str
+) -> tuple[str, tuple[str, ...]]:
+    """Create the experiment ``name`` if missing; return its id and UC OTEL tables (idempotent).
 
     ``create_experiment`` won't make the intermediate workspace folder for a nested path (e.g.
     ``/Users/<you>/mason-traces/<project>``), so the parent dir is created first. Used by dev/deploy to
-    provision the managed experiment that traces log to.
+    provision the experiment that traces log to.
 
-    Rejects a name that already resolves to a UC-backed experiment: binding one is blocked up front,
-    but a hand-edited ``agent.toml`` can point at one directly, so deploy re-checks here - mason
-    supports managed (non-UC) tracing only.
+    Returns ``(experiment_id, uc_tables)``: for an existing UC-backed experiment, ``uc_tables`` are the
+    fully-qualified UC OTEL tables the deployed app must be granted MODIFY on (see
+    ``uc_trace_tables``); for a managed experiment - and for one just created, since mason only creates
+    managed experiments - it is ().
     """
     mlflow = _mlflow()
     _set_tracking_uri(mlflow, profile)
     experiment = mlflow.get_experiment_by_name(name)
     if experiment:
-        if _is_uc_backed(experiment):
-            raise AgentCliError(
-                "UC-backed MLflow tracing is not supported by mason.",
-                hint="Point this project's tracing at a managed (non-UC) experiment.",
-            )
-        return experiment.experiment_id
+        return experiment.experiment_id, uc_trace_tables(experiment)
     parent = name.rsplit("/", 1)[0]
     if parent:
         client.ensure_workspace_dir(parent)
-    return mlflow.create_experiment(name)
+    return mlflow.create_experiment(name), ()
 
 
 def _resolve_experiment_name(source: pathlib.Path | str) -> Optional[str]:
@@ -529,8 +584,8 @@ def tracing_bind(obj, experiment_name, experiment_id, source) -> None:
     _check_experiment_flags(experiment_name, experiment_id, require_one=True)
 
     # The name to store. --experiment-id is resolved to the experiment's name (mason persists names,
-    # not ids). Either way, a UC-backed experiment is rejected up front — mason supports managed
-    # tracing only (UC traces need a SQL warehouse to read and UC grants for the app's SP).
+    # not ids). A UC-backed experiment is supported for trace export: deploy grants the app's service
+    # principal MODIFY on its UC OTEL tables (see app_resources.apply_trace_resources).
     name = experiment_name
     if experiment_id:
         mlflow = _mlflow()
@@ -541,11 +596,6 @@ def tracing_bind(obj, experiment_name, experiment_id, source) -> None:
                 f"No MLflow experiment found with id {experiment_id!r}.",
                 hint="Pass an existing experiment id, or use --experiment-name.",
             )
-        if _is_uc_backed(experiment):
-            raise AgentCliError(
-                "UC-backed MLflow tracing is not supported by mason.",
-                hint="Pass a managed (non-UC) experiment.",
-            )
         name = experiment.name
     elif experiment_name:
         if not experiment_name.startswith("/"):
@@ -554,16 +604,7 @@ def tracing_bind(obj, experiment_name, experiment_id, source) -> None:
                 hint="Use a path like /Shared/mason_traces/<agent> or "
                 "/Users/<you>/mason_traces/<agent>.",
             )
-        # A not-yet-created name is fine (deploy creates it); only reject a name that already resolves
-        # to a UC-backed experiment.
-        mlflow = _mlflow()
-        _set_tracking_uri(mlflow, obj.profile)
-        existing = mlflow.get_experiment_by_name(experiment_name)
-        if existing is not None and _is_uc_backed(existing):
-            raise AgentCliError(
-                "UC-backed MLflow tracing is not supported by mason.",
-                hint="Pass a managed (non-UC) experiment.",
-            )
+        # A not-yet-created name is fine (deploy creates it), so no workspace lookup happens here.
 
     project = AgentProject.load(pathlib.Path(source))
     project.bind_tracing(name)

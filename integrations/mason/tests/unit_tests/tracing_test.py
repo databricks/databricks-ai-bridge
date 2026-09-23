@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import types
 from unittest import mock
 
 import pytest
@@ -86,8 +87,9 @@ def test_create_experiment_idempotent_creates_parent_dir_for_nested_path():
     mlflow.create_experiment.return_value = "eid-1"
     client = mock.Mock()
     with mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow):
-        eid = tracing_mod.create_experiment_idempotent(None, client, "/Shared/mason_traces/demo")
-    assert eid == "eid-1"
+        result = tracing_mod.create_experiment_idempotent(None, client, "/Shared/mason_traces/demo")
+    # a newly created experiment is always managed -> no UC tables
+    assert result == ("eid-1", ())
     # the intermediate workspace folder is created before the experiment (mlflow won't make it)
     client.ensure_workspace_dir.assert_called_once_with("/Shared/mason_traces")
 
@@ -98,24 +100,112 @@ def test_create_experiment_idempotent_reuses_existing_without_mkdir():
     mlflow.get_experiment_by_name.return_value = mock.Mock(experiment_id="eid-2", tags={})
     client = mock.Mock()
     with mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow):
-        assert tracing_mod.create_experiment_idempotent(None, client, "/Shared/x") == "eid-2"
+        assert tracing_mod.create_experiment_idempotent(None, client, "/Shared/x") == ("eid-2", ())
     client.ensure_workspace_dir.assert_not_called()  # existing experiment -> no dir work
     mlflow.create_experiment.assert_not_called()
 
 
-def test_create_experiment_idempotent_rejects_uc_backed():
-    # A hand-edited agent.toml can name a UC-backed experiment, bypassing the bind-time UC check; the
-    # deploy provisioning path re-checks and refuses it, since mason supports managed tracing only.
+# The experiment tags MLflow sets on a UC-backed experiment (values verified against a real
+# e2-dogfood UC experiment: per-kind base-table tags plus the "unified" tag naming a read-side VIEW).
+_DEST_TAG = "mlflow.experiment.databricksTraceDestinationPath"
+_SPAN_TAG = "mlflow.experiment.databricksTraceSpanStorageTable"
+_LOG_TAG = "mlflow.experiment.databricksTraceLogStorageTable"
+_ANNOTATION_TAG = "mlflow.experiment.databricksTraceAnnotationStorageTable"
+_UNIFIED_TAG = "mlflow.experiment.databricksTraceStorageTable"
+
+
+def test_create_experiment_idempotent_returns_uc_tables():
+    # A hand-edited agent.toml can name a UC-backed experiment; deploy supports exporting to one, so
+    # provisioning returns its id together with the UC OTEL tables the app must be granted MODIFY on.
     mlflow = mock.Mock()
-    mlflow.get_experiment_by_name.return_value = mock.Mock(
-        tags={"mlflow.experiment.databricksTraceDestinationPath": "cat.schema"}
+    mlflow.get_experiment_by_name.return_value = types.SimpleNamespace(
+        experiment_id="eid-uc",
+        tags={
+            _DEST_TAG: "cat.schema.pfx",
+            _SPAN_TAG: "cat.schema.pfx_otel_spans",
+            _LOG_TAG: "cat.schema.pfx_otel_logs",
+            _UNIFIED_TAG: "cat.schema.mlflow_experiment_trace_unified",
+        },
     )
     client = mock.Mock()
     with mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow):
-        with pytest.raises(AgentCliError, match="UC-backed MLflow tracing is not supported"):
-            tracing_mod.create_experiment_idempotent(None, client, "/Shared/uc")
-    client.ensure_workspace_dir.assert_not_called()  # rejected before any provisioning
+        result = tracing_mod.create_experiment_idempotent(None, client, "/Shared/uc")
+    # Sorted base tables; the "unified" VIEW tag is excluded.
+    assert result == ("eid-uc", ("cat.schema.pfx_otel_logs", "cat.schema.pfx_otel_spans"))
+    client.ensure_workspace_dir.assert_not_called()  # existing experiment -> no dir work
     mlflow.create_experiment.assert_not_called()
+
+
+# --- uc_trace_tables --------------------------------------------------------
+
+
+def _uc_experiment(**extra_tags):
+    """A UC-backed experiment (carries the UC destination tag) with any extra storage-table tags."""
+    return types.SimpleNamespace(
+        experiment_id="eid-uc", tags={_DEST_TAG: "cat.schema.pfx", **extra_tags}
+    )
+
+
+def test_uc_trace_tables_empty_for_managed_experiment():
+    experiment = types.SimpleNamespace(experiment_id="eid-1", tags={})
+    assert tracing_mod.uc_trace_tables(experiment) == ()
+
+
+def test_uc_trace_tables_reads_all_base_table_tags_excluding_unified_view():
+    # Current layout: per-kind storage-table tags (spans/logs/annotations) are the source of truth;
+    # the "unified" tag names a read-side VIEW and must NOT be granted MODIFY.
+    experiment = _uc_experiment(
+        **{
+            _SPAN_TAG: "cat.schema.pfx_otel_spans",
+            _LOG_TAG: "cat.schema.pfx_otel_logs",
+            _ANNOTATION_TAG: "cat.schema.pfx_otel_annotations",
+            _UNIFIED_TAG: "cat.schema.mlflow_experiment_trace_unified",
+        }
+    )
+    assert tracing_mod.uc_trace_tables(experiment) == (
+        "cat.schema.pfx_otel_annotations",
+        "cat.schema.pfx_otel_logs",
+        "cat.schema.pfx_otel_spans",
+    )
+
+
+def test_uc_trace_tables_reads_span_and_log_only_layout():
+    # An older UC experiment with just spans + logs (no annotations tag) still excludes the unified tag.
+    experiment = _uc_experiment(
+        **{
+            _SPAN_TAG: "cat.schema.pfx_otel_spans",
+            _LOG_TAG: "cat.schema.pfx_otel_logs",
+            _UNIFIED_TAG: "cat.schema.mlflow_experiment_trace_unified",
+        }
+    )
+    assert tracing_mod.uc_trace_tables(experiment) == (
+        "cat.schema.pfx_otel_logs",
+        "cat.schema.pfx_otel_spans",
+    )
+
+
+def test_uc_trace_tables_falls_back_to_derived_names_for_three_part_path():
+    # No per-table storage tags: derive spans/logs/annotations from a 3-part destination path.
+    experiment = types.SimpleNamespace(tags={_DEST_TAG: "cat.schema.pfx"})
+    assert tracing_mod.uc_trace_tables(experiment) == (
+        "cat.schema.pfx_otel_annotations",
+        "cat.schema.pfx_otel_logs",
+        "cat.schema.pfx_otel_spans",
+    )
+
+
+def test_uc_trace_tables_falls_back_to_legacy_fixed_names_for_two_part_path():
+    # Legacy schema-linked layout: a 2-part destination path yields the two fixed table names.
+    experiment = types.SimpleNamespace(tags={_DEST_TAG: "cat.schema"})
+    assert tracing_mod.uc_trace_tables(experiment) == (
+        "cat.schema.mlflow_experiment_trace_otel_logs",
+        "cat.schema.mlflow_experiment_trace_otel_spans",
+    )
+
+
+def test_uc_trace_tables_empty_when_destination_path_is_unusable():
+    experiment = types.SimpleNamespace(tags={_DEST_TAG: "catalog-only"})
+    assert tracing_mod.uc_trace_tables(experiment) == ()
 
 
 def test_get_experiment_by_id_maps_not_found_to_none():
@@ -172,14 +262,12 @@ def test_bind_rejects_non_absolute_name(tmp_path: pathlib.Path):
     assert AgentProject.load(tmp_path).trace_experiment_name is None  # nothing persisted
 
 
-def test_bind_rejects_uc_backed_experiment(tmp_path: pathlib.Path):
-    # mason supports managed tracing only; if the name already resolves to a UC-backed experiment
-    # (carries the UC destination tag) it's rejected rather than wiring a config that fails later.
+def test_bind_accepts_uc_backed_experiment(tmp_path: pathlib.Path):
+    # UC-backed experiments are supported for trace export (deploy grants their UC OTEL tables), so
+    # binding a name persists it as-is; bind no longer consults the workspace for a name at all (any
+    # UC resolution happens at deploy).
     _project(tmp_path)
     mlflow = mock.Mock()
-    mlflow.get_experiment_by_name.return_value = mock.Mock(
-        tags={"mlflow.experiment.databricksTraceDestinationPath": "cat.schema"}
-    )
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
         mock.patch.object(tracing_mod, "_set_tracking_uri"),
@@ -187,11 +275,12 @@ def test_bind_rejects_uc_backed_experiment(tmp_path: pathlib.Path):
         result = CliRunner().invoke(
             tracing_mod.tracing_bind,
             ["--experiment-name", "/Shared/uc", "--source", str(tmp_path)],
-            obj=_Ctx(),
+            obj=_Ctx(output="json"),
         )
-    assert result.exit_code != 0
-    assert "UC-backed MLflow tracing is not supported" in result.output
-    assert AgentProject.load(tmp_path).trace_experiment_name is None  # nothing persisted
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == {"experiment_name": "/Shared/uc"}
+    assert AgentProject.load(tmp_path).trace_experiment_name == "/Shared/uc"
+    mlflow.get_experiment_by_name.assert_not_called()  # no workspace lookup for a name bind
 
 
 def test_bind_requires_an_experiment(tmp_path: pathlib.Path):

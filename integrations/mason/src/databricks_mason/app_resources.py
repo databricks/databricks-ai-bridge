@@ -1,7 +1,8 @@
 """Lakebase/Apps resource plumbing for a deployed app.
 
 Binds Databricks Apps resources onto an app so its service principal gets platform-managed grants:
-a `postgres` resource for the legacy per-app Runtime Store and the tracing `experiment` resource.
+a `postgres` resource for the legacy per-app Runtime Store, the tracing `experiment` resource, and
+`uc_securable` TABLE resources granting MODIFY on a UC-backed experiment's OTEL trace tables.
 The service-managed Runtime Store path grants database access through Conversation Store instead.
 
 Managed-store (session/memory) table access is NOT granted here. The deployed app reaches those
@@ -69,29 +70,45 @@ def _current_app_resources(app: str, profile: Optional[str]) -> list[dict]:
 
 # The app-resource name for the trace experiment (unique across an app's resources, like a store's).
 _TRACE_EXPERIMENT_RESOURCE = "mason-trace-experiment"
+# Prefix for the per-table trace resources (one uc_securable resource per OTEL table).
+_UC_TRACE_TABLE_RESOURCE_PREFIX = "mason-trace-table-"
 
 
-def apply_experiment_resource(
-    app: str, experiment_id: str, profile: Optional[str]
+def apply_trace_resources(
+    app: str, experiment_id: str, uc_tables: tuple[str, ...], profile: Optional[str]
 ) -> Optional[str]:
-    """Bind the trace experiment as an `experiment` app resource so the SP can write traces.
-
-    This is the platform-managed grant: declaring the experiment as a `CAN_EDIT` resource lets the
-    app's service principal log traces to it (no manual SQL grant). Uses the same masked
-    read-modify-write as `apply_postgres_resources`: replace the whole resource array (preserving
-    every resource we don't own) while `update_mask` keeps the write from touching any other app
-    field. Returns None on success or a human-readable reason on failure.
+    """Bind the app's trace resources in one masked update: the `experiment` resource (CAN_EDIT) so
+    the SP can write to the experiment, plus one `uc_securable` TABLE resource (MODIFY) per UC OTEL
+    table when the experiment is UC-backed. Writing the complete mason-owned set every deploy makes it
+    converge: rebinding a UC experiment to a managed one (uc_tables == ()) drops the now-stale
+    `mason-trace-table-*` resources instead of leaving the SP with MODIFY on the old tables. MODIFY
+    grants MODIFY+SELECT and Databricks Apps auto-grants USE CATALOG/USE SCHEMA - no catalog/schema
+    resource or SQL grant needed. Preserves every resource we don't own. None on success, else a reason.
     """
-    ours = {
-        "name": _TRACE_EXPERIMENT_RESOURCE,
-        "experiment": {"experiment_id": experiment_id, "permission": "CAN_EDIT"},
-    }
+    ours = [
+        {
+            "name": _TRACE_EXPERIMENT_RESOURCE,
+            "experiment": {"experiment_id": experiment_id, "permission": "CAN_EDIT"},
+        }
+    ] + [
+        {
+            "name": f"{_UC_TRACE_TABLE_RESOURCE_PREFIX}{i}",
+            "uc_securable": {
+                "securable_full_name": table,
+                "securable_type": "TABLE",
+                "permission": "MODIFY",
+            },
+        }
+        for i, table in enumerate(uc_tables)
+    ]
     preserved = [
         r
         for r in _current_app_resources(app, profile)
-        if isinstance(r, dict) and r.get("name") != _TRACE_EXPERIMENT_RESOURCE
+        if isinstance(r, dict)
+        and r.get("name") != _TRACE_EXPERIMENT_RESOURCE
+        and not str(r.get("name", "")).startswith(_UC_TRACE_TABLE_RESOURCE_PREFIX)
     ]
-    result = _update_app_resources(app, preserved + [ours], profile)
+    result = _update_app_resources(app, preserved + ours, profile)
     if result.returncode == 0:
         return None
     return (result.stderr or result.stdout or "").strip() or "unknown error"
