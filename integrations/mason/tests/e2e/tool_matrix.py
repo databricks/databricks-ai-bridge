@@ -601,9 +601,7 @@ class Runner:
         quoted_principal = f"`{str(principal).replace('`', '``')}`"
         statements = []
         if not self.preprovisioned_app_catalog_access:
-            statements.append(
-                f"GRANT USE CATALOG ON CATALOG `{catalog}` TO {quoted_principal}"
-            )
+            statements.append(f"GRANT USE CATALOG ON CATALOG `{catalog}` TO {quoted_principal}")
         statements.extend(
             (
                 f"GRANT USE SCHEMA ON SCHEMA `{catalog}`.`{schema}` TO {quoted_principal}",
@@ -953,9 +951,7 @@ def main() -> int:
         except Exception as exc:
             runner.transcript.write(f"evidence warning | {exc}")
         if args.keep_resources:
-            runner.transcript.write(
-                "Resources retained because --keep-resources was specified."
-            )
+            runner.transcript.write("Resources retained because --keep-resources was specified.")
         else:
             # Cleanup is best-effort and must never replace the test's original failure.
             try:
