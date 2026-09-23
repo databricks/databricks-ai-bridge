@@ -75,22 +75,29 @@ _UC_TRACE_TABLE_RESOURCE_PREFIX = "mason-trace-table-"
 
 
 def apply_trace_resources(
-    app: str, experiment_id: str, uc_tables: tuple[str, ...], profile: Optional[str]
+    app: str, experiment_id: Optional[str], uc_tables: tuple[str, ...], profile: Optional[str]
 ) -> Optional[str]:
-    """Bind the app's trace resources in one masked update: the `experiment` resource (CAN_EDIT) so
-    the SP can write to the experiment, plus one `uc_securable` TABLE resource (MODIFY) per UC OTEL
-    table when the experiment is UC-backed. Writing the complete mason-owned set every deploy makes it
-    converge: rebinding a UC experiment to a managed one (uc_tables == ()) drops the now-stale
-    `mason-trace-table-*` resources instead of leaving the SP with MODIFY on the old tables. MODIFY
+    """Reconcile the app's mason-owned trace resources to the desired state in one masked update.
+
+    The desired set is the `experiment` resource (CAN_EDIT, so the SP can write traces) plus one
+    `uc_securable` TABLE resource (MODIFY) per UC OTEL table when the experiment is UC-backed - or
+    EMPTY when tracing is unbound (``experiment_id`` is None), so an unbind + redeploy prunes the
+    stale `mason-trace-experiment` / `mason-trace-table-*` resources instead of leaving the SP with
+    grants on an experiment it no longer uses. Writing the complete mason-owned set every deploy also
+    converges a UC rebind: a new experiment's tables replace the old ones in the same write. MODIFY
     grants MODIFY+SELECT and Databricks Apps auto-grants USE CATALOG/USE SCHEMA - no catalog/schema
     resource or SQL grant needed. Preserves every resource we don't own. None on success, else a reason.
     """
-    ours = [
-        {
-            "name": _TRACE_EXPERIMENT_RESOURCE,
-            "experiment": {"experiment_id": experiment_id, "permission": "CAN_EDIT"},
-        }
-    ] + [
+    ours = (
+        [
+            {
+                "name": _TRACE_EXPERIMENT_RESOURCE,
+                "experiment": {"experiment_id": experiment_id, "permission": "CAN_EDIT"},
+            }
+        ]
+        if experiment_id is not None
+        else []
+    ) + [
         {
             "name": f"{_UC_TRACE_TABLE_RESOURCE_PREFIX}{i}",
             "uc_securable": {

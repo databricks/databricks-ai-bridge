@@ -675,12 +675,16 @@ def deploy(
                 grant_error = "could not resolve the app's service principal."
             else:
                 grant_error = _grant_store_access(client, sp, session_store, memory_store)
+    # Reconcile the mason-owned trace resources EVERY deploy, bound or not: with tracing unbound
+    # (experiment_id None) the write prunes stale mason-trace-experiment / mason-trace-table-*
+    # resources left by an earlier bound deploy. (Whether removing a `uc_securable` resource also
+    # revokes the underlying UC MODIFY grant is platform behavior - documented but not yet verified
+    # live - so pruning the resource is the right action regardless.)
     trace_grant_error: Optional[str] = None
-    if trace_experiment_id:
-        with render.status("Granting the app access to its trace experiment…"):
-            trace_grant_error = apply_trace_resources(
-                name, trace_experiment_id, uc_trace_tables, obj.profile
-            )
+    with render.status("Granting the app access to its trace experiment…"):
+        trace_grant_error = apply_trace_resources(
+            name, trace_experiment_id, uc_trace_tables, obj.profile
+        )
 
     app_url = _app_url(name, obj.profile)
 

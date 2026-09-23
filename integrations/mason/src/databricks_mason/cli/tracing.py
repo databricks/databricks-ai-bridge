@@ -13,8 +13,9 @@ deploy, its absence means off. ``mason tracing bind`` binds an experiment (by na
 required); ``mason tracing unbind`` removes the binding; ``list`` / ``get`` read traces back.
 
 A bound experiment may be UC-backed (traces stored in Unity Catalog OTEL tables): deploy supports
-exporting to one by granting the app's service principal MODIFY on those tables. Reading UC traces
-back via ``list`` / ``get`` remains a follow-up.
+exporting to one by granting the app's service principal MODIFY on those tables, and ``list`` /
+``get`` read UC traces back through a SQL warehouse (``--warehouse`` or the
+``MLFLOW_TRACING_SQL_WAREHOUSE_ID`` env var).
 
 MLflow (``mlflow-skinny``) is a base dependency, but the ``mason tracing`` commands and the deploy
 experiment provisioning still import it lazily — ``cli.py`` imports this module at startup, so a
@@ -23,6 +24,7 @@ top-level import would pay mlflow's heavy import cost on every ``mason`` command
 
 from __future__ import annotations
 
+import os
 import pathlib
 import re
 import socket
@@ -100,8 +102,8 @@ def _set_tracking_uri(mlflow, profile: Optional[str]) -> None:
 
 # An experiment linked to a UC schema for trace storage carries this tag (the destination schema);
 # managed experiments don't. UC-backed experiments are supported for trace export at deploy (the
-# app's service principal is granted MODIFY on their UC OTEL tables); reading UC traces back via
-# `list`/`get` remains a follow-up.
+# app's service principal is granted MODIFY on their UC OTEL tables) and for reads via `list`/`get`
+# through a SQL warehouse.
 _UC_TRACE_TAG = "mlflow.experiment.databricksTraceDestinationPath"
 
 
@@ -146,7 +148,7 @@ def uc_trace_tables(experiment) -> tuple[str, ...]:
         return tuple(names)
     # Fallback: derive from the destination path (`<catalog>.<schema>[.<table_prefix>]`) when the
     # per-table storage tags aren't present.
-    parts = tags[_UC_TRACE_TAG].split(".")
+    parts = (tags.get(_UC_TRACE_TAG) or "").split(".")
     if len(parts) == 3:
         prefix = ".".join(parts)
         return tuple(
@@ -159,10 +161,39 @@ def uc_trace_tables(experiment) -> tuple[str, ...]:
                 (
                     f"{base}.mlflow_experiment_trace_otel_spans",
                     f"{base}.mlflow_experiment_trace_otel_logs",
+                    f"{base}.mlflow_experiment_trace_otel_annotations",
                 )
             )
         )
     return ()
+
+
+# MLflow reads the warehouse a UC trace read goes through from this env var (the `sql_warehouse_id`
+# kwarg is deprecated), so a UC read exports the resolved id before searching.
+_SQL_WAREHOUSE_ENV = "MLFLOW_TRACING_SQL_WAREHOUSE_ID"
+
+
+def _resolve_warehouse_id(warehouse_id: Optional[str]) -> Optional[str]:
+    """The effective SQL warehouse for a UC trace read: ``--warehouse``, else the env var, else None."""
+    return warehouse_id or os.environ.get(_SQL_WAREHOUSE_ENV)
+
+
+def _require_warehouse_for_uc_read(experiment, warehouse_id: Optional[str]) -> None:
+    """Point MLflow at the SQL warehouse a UC-backed read needs; raise when none is available.
+
+    A managed experiment needs no warehouse (and never gets one set). A UC-backed one is read through
+    a warehouse MLflow takes from ``MLFLOW_TRACING_SQL_WAREHOUSE_ID``, so the resolved id is exported
+    before the caller runs ``search_traces`` / ``get_trace``; with no warehouse the read would fail
+    opaquely, so this raises up front rather than falling through to the local dev store.
+    """
+    if not _is_uc_backed(experiment):
+        return
+    if warehouse_id is None:
+        raise AgentCliError(
+            "Reading traces from a UC-backed experiment requires a SQL warehouse.",
+            hint=f"Pass --warehouse <id> (or set {_SQL_WAREHOUSE_ENV}).",
+        )
+    os.environ[_SQL_WAREHOUSE_ENV] = warehouse_id
 
 
 def _get_experiment_by_id(mlflow, experiment_id: str):
@@ -240,12 +271,15 @@ def _with_trace_read_target(
     profile: Optional[str],
     experiment_name: Optional[str] = None,
     experiment_id: Optional[str] = None,
+    warehouse_id: Optional[str] = None,
 ) -> Iterator[_TraceReadTarget]:
     """Yield the target `list`/`get` should read from, with MLflow's tracking URI already pointed at it.
 
     Precedence: an explicit ``--experiment-name`` / ``--experiment-id`` (must exist), else this
-    project's workspace experiment when it's provisioned + managed, else the local ``mason dev`` store
-    (``.mason/mlflow.db``). Both target fields are None when nothing has traced anywhere yet.
+    project's workspace experiment when it's provisioned, else the local ``mason dev`` store
+    (``.mason/mlflow.db``). Both target fields are None when nothing has traced anywhere yet. A
+    UC-backed target is read through the resolved SQL warehouse (see
+    ``_require_warehouse_for_uc_read``); managed and local reads need none.
 
     The local store is read over REST from a short-lived MLflow server started here (and torn down on
     exit), not by opening the sqlite file directly: the server that wrote the schema serves it, so the
@@ -256,12 +290,12 @@ def _with_trace_read_target(
     mlflow = _mlflow()
     # An explicit id/name targets the workspace directly (and must exist); it raises here, before any
     # local server is started, so a typo never spins one up.
-    explicit = _workspace_experiment_target(profile, experiment_name, experiment_id)
+    explicit = _workspace_experiment_target(profile, experiment_name, experiment_id, warehouse_id)
     if explicit is not None:
         mlflow.set_tracking_uri(explicit.tracking_uri)
         yield explicit
         return
-    # This project's bound experiment, if it's provisioned + managed in the workspace.
+    # This project's bound experiment, if it's provisioned in the workspace.
     name = _resolve_experiment_name(source)
     if name:
         _set_tracking_uri(mlflow, profile)
@@ -269,7 +303,8 @@ def _with_trace_read_target(
             experiment = mlflow.get_experiment_by_name(name)
         except Exception:  # noqa: BLE001 - workspace unreachable -> try the local dev store
             experiment = None
-        if experiment is not None and not _is_uc_backed(experiment):
+        if experiment is not None:
+            _require_warehouse_for_uc_read(experiment, warehouse_id)
             yield _TraceReadTarget(_workspace_uri(profile), experiment.experiment_id)
             return
     # Unbound, not provisioned, or unreachable -> the local dev store, if any. `mason dev` traces
@@ -291,24 +326,30 @@ def _with_trace_read_target(
 
 
 def _workspace_experiment_target(
-    profile: Optional[str], experiment_name: Optional[str], experiment_id: Optional[str]
+    profile: Optional[str],
+    experiment_name: Optional[str],
+    experiment_id: Optional[str],
+    warehouse_id: Optional[str] = None,
 ) -> Optional[_TraceReadTarget]:
     """The workspace target for an explicit ``--experiment-id`` / ``--experiment-name``, or None when
     neither is given (the caller falls back to the project default).
 
     An explicit identifier must exist: an unknown id or name raises rather than resolving to nothing,
-    so a typo isn't mistaken for an empty experiment.
+    so a typo isn't mistaken for an empty experiment. A UC-backed target needs the resolved SQL
+    warehouse (``_require_warehouse_for_uc_read``).
     """
     if not (experiment_id or experiment_name):
         return None
     mlflow = _mlflow()
     _set_tracking_uri(mlflow, profile)
     if experiment_id:
-        if _get_experiment_by_id(mlflow, experiment_id) is None:
+        experiment = _get_experiment_by_id(mlflow, experiment_id)
+        if experiment is None:
             raise AgentCliError(
                 f"No MLflow experiment found with id {experiment_id!r} in this workspace.",
                 hint="Check the id, or omit it to use this project's experiment.",
             )
+        _require_warehouse_for_uc_read(experiment, warehouse_id)
         return _TraceReadTarget(_workspace_uri(profile), experiment_id)
     experiment = mlflow.get_experiment_by_name(experiment_name)
     if experiment is None:
@@ -316,6 +357,7 @@ def _workspace_experiment_target(
             f"No MLflow experiment named {experiment_name!r} in this workspace.",
             hint="Check the name, or omit it to use this project's experiment.",
         )
+    _require_warehouse_for_uc_read(experiment, warehouse_id)
     return _TraceReadTarget(_workspace_uri(profile), experiment.experiment_id)
 
 
@@ -525,7 +567,15 @@ def _check_experiment_flags(
 
 
 def _experiment_read_options(command):
-    """Add the shared ``--experiment-name`` / ``--experiment-id`` read options to `list` and `get`."""
+    """Add the shared ``--experiment-name`` / ``--experiment-id`` / ``--warehouse`` read options."""
+    command = click.option(
+        "--warehouse",
+        "warehouse_id",
+        default=None,
+        help="SQL warehouse id used to read traces from a UC-backed experiment (required for UC "
+        "experiments; ignored for managed). Falls back to the MLFLOW_TRACING_SQL_WAREHOUSE_ID "
+        "env var.",
+    )(command)
     command = click.option(
         "--experiment-id",
         "experiment_id",
@@ -667,7 +717,7 @@ def tracing_unbind(obj, source) -> None:
     help="Project directory to resolve the default experiment from (default: current dir).",
 )
 @click.pass_obj
-def tracing_list(obj, experiment_name, experiment_id, limit, source) -> None:
+def tracing_list(obj, experiment_name, experiment_id, warehouse_id, limit, source) -> None:
     """List recent agent traces in an experiment.
 
     An explicit ``--experiment-name`` / ``--experiment-id`` reads that workspace experiment and must
@@ -675,13 +725,15 @@ def tracing_list(obj, experiment_name, experiment_id, limit, source) -> None:
     neither, this project's experiment is read: the **workspace** one if it's been provisioned (by
     `mason deploy`), otherwise the local `mason dev` store (``.mason/mlflow.db``), so a not-yet-deployed
     dev run's traces still show up here (tagged "(local dev)"). Nothing traced anywhere yet lists
-    nothing.
+    nothing. A UC-backed experiment is read through a SQL warehouse (``--warehouse``).
     """
     _check_experiment_flags(experiment_name, experiment_id)
     mlflow = _mlflow()
     # Read inside the context manager: for a local dev store it keeps the short-lived MLflow server up
     # for the duration of the search (return_type="list" materializes the rows before it's torn down).
-    with _with_trace_read_target(source, obj.profile, experiment_name, experiment_id) as target:
+    with _with_trace_read_target(
+        source, obj.profile, experiment_name, experiment_id, _resolve_warehouse_id(warehouse_id)
+    ) as target:
         traces = []
         if target.experiment_id:
             traces = mlflow.search_traces(
@@ -723,21 +775,28 @@ def tracing_list(obj, experiment_name, experiment_id, limit, source) -> None:
     help="Project directory to resolve the experiment from (default: current dir).",
 )
 @click.pass_obj
-def tracing_get(obj, trace_id, experiment_name, experiment_id, source) -> None:
+def tracing_get(obj, trace_id, experiment_name, experiment_id, warehouse_id, source) -> None:
     """Get a single trace by id (status, latency, span count, previews).
 
     Reads from the same place as `mason tracing list`: an explicit ``--experiment-name`` /
     ``--experiment-id`` targets that workspace store and must name one that exists (errors otherwise);
     otherwise this project's workspace experiment if provisioned, else its local `mason dev` store.
+    A UC-backed experiment is read through a SQL warehouse (``--warehouse``).
     """
     _check_experiment_flags(experiment_name, experiment_id)
     mlflow = _mlflow()
+    warehouse = _resolve_warehouse_id(warehouse_id)
     # Read inside the context manager so a local dev store's short-lived server stays up for the fetch.
-    with _with_trace_read_target(source, obj.profile, experiment_name, experiment_id) as target:
+    with _with_trace_read_target(
+        source, obj.profile, experiment_name, experiment_id, warehouse
+    ) as target:
         # get_trace resolves by id and needs only the tracking URI; when nothing resolved, fall back to
-        # the workspace so an id still looks there.
+        # the workspace so an id still looks there. UC-ness can't be known in that case, so export a
+        # provided warehouse unconditionally (harmless for a managed experiment).
         if target.tracking_uri is None:
             mlflow.set_tracking_uri(_workspace_uri(obj.profile))
+            if warehouse:
+                os.environ[_SQL_WAREHOUSE_ENV] = warehouse
         trace = mlflow.get_trace(trace_id)
         if trace is None:
             raise AgentCliError(f"No trace found with id {trace_id!r}.")

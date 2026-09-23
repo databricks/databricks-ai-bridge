@@ -495,6 +495,8 @@ def test_deploy_custom_server_skips_runtime_store_provisioning_and_binding(
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda app, profile: False)
     monkeypatch.setattr(_FakeClient, "create_runtime_store", create)
+    # the trace-resource reconcile issues its own create-update and is out of scope here
+    monkeypatch.setattr(deploy_mod, "apply_trace_resources", mock.Mock(return_value=None))
     monkeypatch.setattr(deploy_mod, "_databricks", fake_databricks)
 
     result = CliRunner().invoke(
@@ -1055,6 +1057,59 @@ def test_deploy_proceeds_when_trace_grant_fails(tmp_path, monkeypatch):
     out = " ".join(result.output.replace("│", " ").split())
     assert "needs write access to its trace experiment" in out  # grant-failure guidance shown
     assert "denied: needs MANAGE on the catalog" in out  # the cause is surfaced
+
+
+def test_deploy_reconciles_trace_resources_even_when_unbound(tmp_path, monkeypatch):
+    # Unbound (mason tracing unbind): deploy still reconciles the mason-owned trace set - passing
+    # experiment_id=None prunes stale mason-trace-* resources left by a previously bound deploy.
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    # the autouse fixture already stubs get_or_create_trace_experiment -> None (unbound)
+    trace_grant = mock.Mock(return_value=None)
+    monkeypatch.setattr(deploy_mod, "apply_trace_resources", trace_grant)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code == 0, result.output
+    trace_grant.assert_called_once_with("agent-mason-myapp", None, (), "prof")
+
+
+def test_deploy_rebind_uc_to_uc_reconciles_to_the_new_table_set(tmp_path, monkeypatch):
+    # UC -> UC rebind: the redeploy resolves the NEW experiment's tables and reconciles to them, so
+    # the old experiment's mason-trace-table-* resources are dropped in the same write (convergence
+    # itself is apply_trace_resources' job; here we guard that deploy passes the new set through).
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    # the app currently carries the OLD experiment's 3 table resources
+    old_tables = ("old.schema.otel_spans", "old.schema.otel_logs", "old.schema.otel_annotations")
+    new_tables = ("new.schema.otel_spans", "new.schema.otel_logs")
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod, "get_or_create_trace_experiment", lambda *a, **k: ("exp-new", new_tables)
+    )
+    trace_grant = mock.Mock(return_value=None)
+    monkeypatch.setattr(deploy_mod, "apply_trace_resources", trace_grant)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code == 0, result.output
+    assert len(old_tables) != len(new_tables)  # the rebind changed the table count
+    trace_grant.assert_called_once_with("agent-mason-myapp", "exp-new", new_tables, "prof")
 
 
 def test_deploy_proceeds_when_tracing_provisioning_raises(tmp_path: pathlib.Path, monkeypatch):

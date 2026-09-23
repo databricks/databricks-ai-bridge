@@ -9,6 +9,7 @@ workspace).
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import types
 from unittest import mock
@@ -124,14 +125,22 @@ def test_create_experiment_idempotent_returns_uc_tables():
             _DEST_TAG: "cat.schema.pfx",
             _SPAN_TAG: "cat.schema.pfx_otel_spans",
             _LOG_TAG: "cat.schema.pfx_otel_logs",
+            _ANNOTATION_TAG: "cat.schema.pfx_otel_annotations",
             _UNIFIED_TAG: "cat.schema.mlflow_experiment_trace_unified",
         },
     )
     client = mock.Mock()
     with mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow):
         result = tracing_mod.create_experiment_idempotent(None, client, "/Shared/uc")
-    # Sorted base tables; the "unified" VIEW tag is excluded.
-    assert result == ("eid-uc", ("cat.schema.pfx_otel_logs", "cat.schema.pfx_otel_spans"))
+    # Sorted base tables (annotations, logs, spans); the "unified" VIEW tag is excluded.
+    assert result == (
+        "eid-uc",
+        (
+            "cat.schema.pfx_otel_annotations",
+            "cat.schema.pfx_otel_logs",
+            "cat.schema.pfx_otel_spans",
+        ),
+    )
     client.ensure_workspace_dir.assert_not_called()  # existing experiment -> no dir work
     mlflow.create_experiment.assert_not_called()
 
@@ -195,12 +204,21 @@ def test_uc_trace_tables_falls_back_to_derived_names_for_three_part_path():
 
 
 def test_uc_trace_tables_falls_back_to_legacy_fixed_names_for_two_part_path():
-    # Legacy schema-linked layout: a 2-part destination path yields the two fixed table names.
+    # Legacy schema-linked layout: a 2-part destination path yields the fixed table names (sorted,
+    # annotations included for symmetry with the 3-part fallback - MODIFY on a table that may not
+    # exist is harmless).
     experiment = types.SimpleNamespace(tags={_DEST_TAG: "cat.schema"})
     assert tracing_mod.uc_trace_tables(experiment) == (
+        "cat.schema.mlflow_experiment_trace_otel_annotations",
         "cat.schema.mlflow_experiment_trace_otel_logs",
         "cat.schema.mlflow_experiment_trace_otel_spans",
     )
+
+
+def test_uc_trace_tables_empty_when_destination_tag_is_none_or_empty():
+    # A present-but-valueless destination tag must not crash the fallback derivation.
+    assert tracing_mod.uc_trace_tables(types.SimpleNamespace(tags={_DEST_TAG: None})) == ()
+    assert tracing_mod.uc_trace_tables(types.SimpleNamespace(tags={_DEST_TAG: ""})) == ()
 
 
 def test_uc_trace_tables_empty_when_destination_path_is_unusable():
@@ -374,6 +392,7 @@ def test_list_by_explicit_experiment_id(tmp_path: pathlib.Path):
     # --experiment-id targets that workspace experiment directly (no project resolution).
     _project(tmp_path)
     mlflow = mock.Mock()
+    mlflow.get_experiment.return_value = mock.Mock(tags={})  # managed experiment
     mlflow.search_traces.return_value = [_trace("tr-1")]
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
@@ -441,6 +460,131 @@ def test_list_defaults_to_projects_bound_experiment(tmp_path: pathlib.Path):
     assert mlflow.search_traces.call_args.kwargs["locations"] == ["p1"]
 
 
+# --- UC-backed reads (SQL warehouse) ------------------------------------------
+
+_WAREHOUSE_ENV = "MLFLOW_TRACING_SQL_WAREHOUSE_ID"
+
+
+def _bound_uc_project(tmp_path: pathlib.Path):
+    """A project bound to a name that resolves to a UC-backed experiment."""
+    _project(tmp_path, experiment_name="/Shared/uc")
+    mlflow = mock.Mock()
+    mlflow.get_experiment_by_name.return_value = types.SimpleNamespace(
+        experiment_id="eid-uc", tags={_DEST_TAG: "cat.schema.pfx"}
+    )
+    return mlflow
+
+
+def test_list_reads_uc_backed_experiment_through_warehouse(tmp_path, monkeypatch):
+    # A UC-backed bound experiment is read from the workspace (no longer skipped to the local store)
+    # through the SQL warehouse: --warehouse exports MLFLOW_TRACING_SQL_WAREHOUSE_ID before the search.
+    mlflow = _bound_uc_project(tmp_path)
+    monkeypatch.delenv(_WAREHOUSE_ENV, raising=False)
+    seen = {}
+
+    def _search(**kwargs):
+        seen["warehouse"] = os.environ.get(_WAREHOUSE_ENV)  # captured at search time
+        seen["locations"] = kwargs["locations"]
+        return [_trace("tr-uc")]
+
+    mlflow.search_traces.side_effect = _search
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
+        mock.patch.object(tracing_mod, "_set_tracking_uri"),
+    ):
+        result = CliRunner().invoke(
+            tracing_mod.tracing_list,
+            ["--warehouse", "wh-1", "--source", str(tmp_path)],
+            obj=_Ctx(output="json"),
+        )
+    assert result.exit_code == 0, result.output
+    assert seen == {"warehouse": "wh-1", "locations": ["eid-uc"]}
+    assert json.loads(result.output)[0]["trace_id"] == "tr-uc"
+    mlflow.get_experiment_by_name.assert_called_once_with("/Shared/uc")
+
+
+def test_list_reads_uc_backed_experiment_with_warehouse_from_env(tmp_path, monkeypatch):
+    # No --warehouse flag: the MLFLOW_TRACING_SQL_WAREHOUSE_ID env var is used instead.
+    mlflow = _bound_uc_project(tmp_path)
+    monkeypatch.setenv(_WAREHOUSE_ENV, "wh-env")
+    mlflow.search_traces.return_value = []
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
+        mock.patch.object(tracing_mod, "_set_tracking_uri"),
+    ):
+        result = CliRunner().invoke(
+            tracing_mod.tracing_list, ["--source", str(tmp_path)], obj=_Ctx(output="json")
+        )
+    assert result.exit_code == 0, result.output
+    assert mlflow.search_traces.call_args.kwargs["locations"] == ["eid-uc"]
+    assert os.environ[_WAREHOUSE_ENV] == "wh-env"
+
+
+def test_list_uc_backed_experiment_requires_a_warehouse(tmp_path, monkeypatch):
+    # A UC-backed target with neither --warehouse nor the env var is a clean error, not a silent
+    # fallthrough to the local dev store.
+    mlflow = _bound_uc_project(tmp_path)
+    monkeypatch.delenv(_WAREHOUSE_ENV, raising=False)
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
+        mock.patch.object(tracing_mod, "_set_tracking_uri"),
+    ):
+        result = CliRunner().invoke(
+            tracing_mod.tracing_list, ["--source", str(tmp_path)], obj=_Ctx()
+        )
+    assert result.exit_code != 0
+    assert "requires a SQL warehouse" in result.output
+    mlflow.search_traces.assert_not_called()
+
+
+def test_list_explicit_uc_experiment_requires_a_warehouse(tmp_path, monkeypatch):
+    # An explicit --experiment-name that resolves UC-backed also requires a warehouse.
+    _project(tmp_path)
+    monkeypatch.delenv(_WAREHOUSE_ENV, raising=False)
+    mlflow = mock.Mock()
+    mlflow.get_experiment_by_name.return_value = types.SimpleNamespace(
+        experiment_id="eid-uc", tags={_DEST_TAG: "cat.schema"}
+    )
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
+        mock.patch.object(tracing_mod, "_set_tracking_uri"),
+    ):
+        result = CliRunner().invoke(
+            tracing_mod.tracing_list,
+            ["--experiment-name", "/Shared/uc", "--source", str(tmp_path)],
+            obj=_Ctx(),
+        )
+    assert result.exit_code != 0
+    assert "requires a SQL warehouse" in result.output
+    mlflow.search_traces.assert_not_called()
+
+
+def test_get_reads_uc_backed_experiment_through_warehouse(tmp_path, monkeypatch):
+    # get resolves through the same helper: a UC-backed bound experiment + --warehouse exports the
+    # env var before get_trace.
+    mlflow = _bound_uc_project(tmp_path)
+    monkeypatch.delenv(_WAREHOUSE_ENV, raising=False)
+    seen = {}
+
+    def _get_trace(trace_id):
+        seen["warehouse"] = os.environ.get(_WAREHOUSE_ENV)  # captured at fetch time
+        return _trace(trace_id)
+
+    mlflow.get_trace.side_effect = _get_trace
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
+        mock.patch.object(tracing_mod, "_set_tracking_uri"),
+    ):
+        result = CliRunner().invoke(
+            tracing_mod.tracing_get,
+            ["tr-uc", "--warehouse", "wh-2", "--source", str(tmp_path)],
+            obj=_Ctx(output="json"),
+        )
+    assert result.exit_code == 0, result.output
+    assert seen["warehouse"] == "wh-2"
+    assert json.loads(result.output)["trace_id"] == "tr-uc"
+
+
 def test_list_empty_when_no_experiment_exists(tmp_path: pathlib.Path):
     # No pinned id and the per-project experiment isn't created yet -> nothing traced, list is empty.
     _project(tmp_path)
@@ -479,6 +623,7 @@ def test_get_by_explicit_experiment_id(tmp_path: pathlib.Path):
     # --experiment-id points get at that workspace store (no project resolution, no local fallback).
     _project(tmp_path)
     mlflow = mock.Mock()
+    mlflow.get_experiment.return_value = mock.Mock(tags={})  # managed experiment
     mlflow.get_trace.return_value = _trace("tr-9")
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),

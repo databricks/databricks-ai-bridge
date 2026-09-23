@@ -235,3 +235,27 @@ def test_apply_trace_resources_reports_failure(monkeypatch):
     )
     err = sa.apply_trace_resources("app", "exp-1", ("cat.schema.otel_spans",), "prof")
     assert err == "denied: needs MANAGE"
+
+
+def test_apply_trace_resources_prunes_everything_when_unbound(monkeypatch):
+    # The unbind case: experiment_id None -> the desired set is empty, so the write drops EVERY
+    # mason-trace-* resource (experiment + UC tables) while preserving unrelated user resources.
+    resources: list[dict[str, Any]] = [
+        {"name": "user-owned", "secret": {}},
+        {"name": "mason-trace-experiment", "experiment": {"experiment_id": "exp-1"}},
+        {"name": "mason-trace-table-0", "uc_securable": {"securable_full_name": "c.s.spans"}},
+        {"name": "mason-trace-table-1", "uc_securable": {"securable_full_name": "c.s.logs"}},
+    ]
+
+    def fake_db(args, profile, **kw):
+        if args[:2] == ["apps", "get"]:
+            return types.SimpleNamespace(
+                returncode=0, stdout=json.dumps({"resources": resources}), stderr=""
+            )
+        payload = json.loads(args[args.index("--json") + 1])
+        resources[:] = payload["app"]["resources"]
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(sa, "_databricks", fake_db)
+    assert sa.apply_trace_resources("app", None, (), "prof") is None
+    assert resources == [{"name": "user-owned", "secret": {}}]
