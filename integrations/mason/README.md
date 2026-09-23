@@ -601,6 +601,10 @@ permission:
 mason --profile my-workspace deploy my-agent --allow-user-scope-update
 ```
 
+The `system.ai.dbsql` managed MCP additionally requests the Apps `sql` user scope. This is full SQL
+API consent, not `sql:restricted-query`; read-only enforcement remains the service policy plus the
+requesting user's Unity Catalog grants. DBSQL does not use Databricks Connect.
+
 Review the target App's scopes and coordinate with its other owners before allowing the update. Once
 those scopes are present, later deploys do not need the flag. Mason preserves unrelated scopes,
 updates only user scopes and any explicitly requested instance counts, and checks requested **and
