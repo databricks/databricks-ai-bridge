@@ -1,0 +1,15 @@
+command: ["uv", "run", "start-server"]
+# databricks apps listen by default on port 8000
+#
+# Agent Bricks injects the deployed Runtime Store endpoint. The Agents SDK session remains
+# in-process unless a managed Session Store is bound. Tracing is bound with `ab tracing bind
+# --experiment-name <path>` (ab deploy then wires the env below; `ab dev` traces to a local
+# MLflow server). To set a deployment's tracing env by hand instead:
+#
+# env:
+#   # Tracing (set a destination + an experiment). Destination: MLFLOW_TRACKING_URI or
+#   # MLFLOW_TRACING_DESTINATION. Experiment: MLFLOW_EXPERIMENT_ID or MLFLOW_EXPERIMENT_NAME.
+#   - name: MLFLOW_TRACKING_URI
+#     value: "databricks"
+#   - name: MLFLOW_EXPERIMENT_ID
+#     value: "<experiment-id>"
