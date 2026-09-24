@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the LangGraph × CLI/direct × dev/deploy × tool E2E matrix."""
+"""Run the LangGraph × CLI/direct × dev/deploy × tool and access-grant E2E matrix."""
 
 from __future__ import annotations
 
@@ -20,16 +20,19 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+import zipfile
 from collections.abc import Callable, Sequence
 from typing import Any
 
 import tomli
 from databricks.sdk import WorkspaceClient
+from databricks.sdk.errors import DatabricksError, NotFound
+from databricks.sdk.service.catalog import SecurableType
 
 FRAMEWORKS = ("langgraph",)
 AUTHORING_PATHS = ("cli", "direct")
 RUNTIMES = ("dev", "deploy")
-TOOL_KINDS = ("sandbox", "mcp", "python", "uc_function")
+TOOL_KINDS = ("sandbox", "mcp", "python", "uc_function", "genie")
 
 PROMPTS = {
     "sandbox": (
@@ -45,6 +48,10 @@ PROMPTS = {
         "You must call the matrix_marker Python tool with value 'matrix'. Return its exact result."
     ),
     "uc_function": "",
+    "genie": (
+        "You must call the genie_ask tool and ask what data is available in the configured "
+        "Genie space. Return a one-sentence summary based only on the tool response."
+    ),
 }
 
 EXPECTED = {
@@ -52,7 +59,14 @@ EXPECTED = {
     "python": "AGENTBRICKS_PYTHON_OK",
     "uc_function": "AGENTBRICKS_UC_OK:matrix",
     "mcp": "a web-search tool call and a non-empty https result",
+    "genie": "a genie_ask tool call and a non-empty Genie response",
 }
+
+_WHEEL_SOURCE_FILES = (
+    "databricks_agentbricks/tool_access.py",
+    "databricks_agentbricks/app_resources.py",
+    "databricks_agentbricks/cli/deploy.py",
+)
 
 
 class MatrixError(RuntimeError):
@@ -115,6 +129,10 @@ class Runner:
         template_repo: str | None = None,
         template_ref: str | None = None,
         app_auth_profile: str | None = None,
+        genie_space_id: str | None = None,
+        commit_sha: str | None = None,
+        source_root: pathlib.Path | None = None,
+        cleanup_required: bool = True,
     ):
         self.profile = profile
         self.output = output
@@ -122,15 +140,29 @@ class Runner:
         self.template_repo = template_repo
         self.template_ref = template_ref
         self.app_auth_profile = app_auth_profile or profile
+        self.genie_space_id = genie_space_id
+        self.commit_sha = commit_sha.lower() if commit_sha else None
+        self.source_root = source_root.resolve() if source_root is not None else None
+        self.source_provenance: dict[str, Any] = {}
+        self.cleanup_required = cleanup_required
+        self.cleanup_complete = False
+        self.started_at = dt.datetime.now(dt.timezone.utc).isoformat()
+        self.ended_at: str | None = None
+        self.versions: dict[str, str] = {}
         self.transcript = Transcript(output / "commands.log")
         self.runner_venv = output / "runner-venv"
         self.agentbricks = self.runner_venv / "bin" / "ab"
         self.rows: list[EvidenceRow] = []
         self.apps: list[str] = []
         self.uc_function: str | None = None
+        self.transitive_uc_function: str | None = None
+        self.uc_table: str | None = None
+        self.uc_volume: str | None = None
         self.warehouse_id: str | None = None
         self.host: str | None = None
         self.headers: dict[str, str] = {}
+        self.grant_checks: list[dict[str, Any]] = []
+        self.cleanup_results: list[dict[str, Any]] = []
 
     def run(
         self,
@@ -215,6 +247,9 @@ class Runner:
 
     def bootstrap(self) -> None:
         self.output.mkdir(parents=True, exist_ok=True)
+        if self.source_root is None or self.commit_sha is None:
+            raise MatrixError("Live runs require a source root and commit SHA.")
+        self.source_provenance = _source_provenance(self.source_root, self.commit_sha, self.wheel)
         self.run(["uv", "venv", str(self.runner_venv)], timeout=300)
         self.run(
             [
@@ -228,6 +263,18 @@ class Runner:
             timeout=600,
         )
         self.run([str(self.agentbricks), "tools", "--help"])
+        version_commands = {
+            "agentbricks": [str(self.agentbricks), "--version"],
+            "databricks": ["databricks", "version"],
+            "uv": ["uv", "--version"],
+            "python": [str(self.runner_venv / "bin" / "python"), "--version"],
+        }
+        for name, command in version_commands.items():
+            result = self.run(command, log=False, check=False)
+            version = (result.stdout or result.stderr).strip()
+            if result.returncode != 0 or not version:
+                raise MatrixError(f"Could not record {name} version: {version or 'no output'}")
+            self.versions[name] = version
         workspace_client = WorkspaceClient(profile=self.profile)
         app_auth_client = WorkspaceClient(profile=self.app_auth_profile)
         if not workspace_client.config.host:
@@ -316,8 +363,23 @@ class Runner:
         if not separator or not catalog or not schema_name or "." in schema_name:
             raise MatrixError("--uc-schema must be a two-part catalog.schema name.")
         self.sql(f"CREATE SCHEMA IF NOT EXISTS `{catalog}`.`{schema_name}`")
-        function_name = f"agentbricks_uc_{uuid.uuid4().hex[:8]}"
+        suffix = uuid.uuid4().hex[:8]
+        nested_function_name = f"agentbricks_nested_{suffix}"
+        self.transitive_uc_function = f"{catalog}.{schema_name}.{nested_function_name}"
+        self.sql(
+            f"CREATE OR REPLACE FUNCTION `{catalog}`.`{schema_name}`.`{nested_function_name}`"
+            "(value STRING) RETURNS STRING "
+            "COMMENT 'Transitive Agent Bricks E2E marker; never declared in agent.toml' "
+            "RETURN concat('AGENTBRICKS_UC_OK:', value)"
+        )
+        function_name = f"agentbricks_uc_{suffix}"
         self.uc_function = f"{catalog}.{schema_name}.{function_name}"
+        table_name = f"agentbricks_table_{suffix}"
+        self.uc_table = f"{catalog}.{schema_name}.{table_name}"
+        self.sql(f"CREATE TABLE `{catalog}`.`{schema_name}`.`{table_name}` AS SELECT 1 AS marker")
+        volume_name = f"agentbricks_volume_{suffix}"
+        self.uc_volume = f"{catalog}.{schema_name}.{volume_name}"
+        self.sql(f"CREATE VOLUME `{catalog}`.`{schema_name}`.`{volume_name}`")
         exposed_tool_name = self.uc_function.replace(".", "__")
         if len(exposed_tool_name) > 64:
             raise MatrixError(
@@ -327,8 +389,8 @@ class Runner:
         self.sql(
             f"CREATE OR REPLACE FUNCTION `{catalog}`.`{schema_name}`.`{function_name}`"
             "(value STRING) RETURNS STRING "
-            "COMMENT 'Deterministic AgentBricks E2E marker tool' "
-            "RETURN concat('AGENTBRICKS_UC_OK:', value)"
+            "COMMENT 'Deterministic Agent Bricks E2E marker tool' "
+            f"RETURN `{catalog}`.`{schema_name}`.`{nested_function_name}`(value)"
         )
         return self.uc_function
 
@@ -372,6 +434,8 @@ class Runner:
         return cases
 
     def _author_cli(self, project: pathlib.Path) -> None:
+        if self.uc_table is None or self.uc_volume is None:
+            raise MatrixError("Sandbox table and volume were not created.")
         manifest = project / "agent.toml"
         before = manifest.read_bytes()
         rejected = self.run(
@@ -416,8 +480,18 @@ class Runner:
         if any(tool["id"] == "broken_mcp" for tool in manifest.get("tools", [])):
             raise MatrixError("ab tools remove left the broken MCP binding in agent.toml")
         commands = [
-            ["tools", "add", "sandbox", "--scope", "table:samples.nyctaxi.trips"],
-            ["tools", "add", "mcp", "system.ai.web_search"],
+            [
+                "tools",
+                "add",
+                "sandbox",
+                "--scope",
+                f"table:{self.uc_table}",
+                "--scope",
+                f"volume:{self.uc_volume}",
+                "--auth",
+                "app",
+            ],
+            ["tools", "add", "mcp", "system.ai.web_search", "--auth", "app"],
             [
                 "tools",
                 "add",
@@ -425,6 +499,16 @@ class Runner:
                 self.uc_function or "",
                 "--name",
                 "agentbricks_uc_marker",
+            ],
+            [
+                "tools",
+                "add",
+                "genie-agent",
+                self.genie_space_id or "",
+                "--name",
+                "genie",
+                "--auth",
+                "app",
             ],
         ]
         for args in commands:
@@ -440,18 +524,27 @@ class Runner:
             )
         manifest = tomli.loads((project / "agent.toml").read_text())
         tool_ids = {tool["id"] for tool in manifest.get("tools", [])}
-        expected = {"sandbox", "web_search", "agentbricks_uc_marker"}
+        expected = {"sandbox", "web_search", "agentbricks_uc_marker", "genie"}
         if tool_ids != expected:
             raise MatrixError(
                 f"managed bindings mismatch: expected {sorted(expected)}, got {sorted(tool_ids)}"
             )
+        tools_by_id = {tool["id"]: tool for tool in manifest.get("tools", [])}
+        for tool_id in ("sandbox", "web_search", "genie"):
+            if tools_by_id[tool_id].get("auth") != "app":
+                raise MatrixError(f"CLI-authored {tool_id} binding is not App-auth.")
 
     def _author_direct(self, project: pathlib.Path, framework: str) -> None:
+        if self.uc_table is None or self.uc_volume is None:
+            raise MatrixError("Sandbox table and volume were not created.")
         fixture = pathlib.Path(__file__).parent / "fixtures" / "direct_agent.toml"
         manifest = (
             fixture.read_text(encoding="utf-8")
             .replace("__FRAMEWORK__", framework)
             .replace("__UC_FUNCTION__", self.uc_function or "")
+            .replace("__GENIE_SPACE_ID__", self.genie_space_id or "")
+            .replace("__UC_TABLE__", self.uc_table)
+            .replace("__UC_VOLUME__", self.uc_volume)
         )
         target = project / "agent.toml"
         self.transcript.file_step(target, "direct authoring; no ab tools command")
@@ -564,7 +657,55 @@ class Runner:
             )
             self.apps.append(case.app_name)
             app = self._wait_for_app(case.app_name)
-            self._grant_function(app)
+            initial_grants = self._grant_snapshot(app)
+            repeat_grants = None
+            idempotent = None
+            if case.authoring == "cli":
+                self.run_long(
+                    f"{label}-repeat",
+                    [
+                        str(self.agentbricks),
+                        "--profile",
+                        self.profile,
+                        "deploy",
+                        case.app_name,
+                        "--source",
+                        str(case.path),
+                    ],
+                    timeout=2400,
+                )
+                app = self._wait_for_app(case.app_name)
+                repeat_grants = self._grant_snapshot(app)
+                idempotent = (
+                    initial_grants["tool_resources"] == repeat_grants["tool_resources"]
+                    and initial_grants["unrelated_resources"]
+                    == repeat_grants["unrelated_resources"]
+                    and initial_grants["uc_effective"] == repeat_grants["uc_effective"]
+                    and initial_grants["transitive_direct_privileges"]
+                    == repeat_grants["transitive_direct_privileges"]
+                    and initial_grants["transitive_effective_privileges"]
+                    == repeat_grants["transitive_effective_privileges"]
+                )
+                if not idempotent:
+                    raise MatrixError(
+                        "Repeat deploy changed grant state:\n"
+                        f"initial={json.dumps(initial_grants, indent=2)}\n"
+                        f"repeat={json.dumps(repeat_grants, indent=2)}"
+                    )
+            post_manual_grant = self._grant_transitive_function(app)
+            self.grant_checks.append(
+                {
+                    "app_name": case.app_name,
+                    "authoring": case.authoring,
+                    "service_principal_client_id": app.get("service_principal_client_id"),
+                    "initial": initial_grants,
+                    "repeat": repeat_grants,
+                    "repeat_deploy_idempotent": idempotent,
+                    "post_manual_transitive_grant": post_manual_grant,
+                    "manual_transitive_grant_applied": True,
+                }
+            )
+            self._write_evidence()
             url = str(app.get("url") or "").rstrip("/")
             if not url:
                 raise MatrixError(f"App {case.app_name} has no URL: {app}")
@@ -590,18 +731,160 @@ class Runner:
             time.sleep(15)
         raise MatrixError(f"App {name} did not become ACTIVE.")
 
-    def _grant_function(self, app: dict[str, Any]) -> None:
+    def _grant_snapshot(self, app: dict[str, Any]) -> dict[str, Any]:
         principal = app.get("service_principal_client_id")
-        if not principal or self.uc_function is None:
+        if not principal or self.uc_function is None or self.transitive_uc_function is None:
             raise MatrixError(f"App response has no service_principal_client_id: {app}")
-        catalog, schema, function_name = self.uc_function.split(".")
-        quoted_principal = f"`{str(principal).replace('`', '``')}`"
-        for statement in (
-            f"GRANT USE CATALOG ON CATALOG `{catalog}` TO {quoted_principal}",
-            f"GRANT USE SCHEMA ON SCHEMA `{catalog}`.`{schema}` TO {quoted_principal}",
-            f"GRANT EXECUTE ON FUNCTION `{catalog}`.`{schema}`.`{function_name}` TO {quoted_principal}",
+        resources = app.get("resources") or []
+        if not isinstance(resources, list):
+            raise MatrixError(f"App resources are not a list: {resources}")
+        tool_resources = sorted(
+            (
+                resource
+                for resource in resources
+                if str(resource.get("name", "")).startswith("agentbricks-tool-")
+            ),
+            key=lambda resource: str(resource.get("name", "")),
+        )
+        unrelated_resources = sorted(
+            (
+                resource
+                for resource in resources
+                if not str(resource.get("name", "")).startswith("agentbricks-tool-")
+            ),
+            key=lambda resource: str(resource.get("name", "")),
+        )
+        if not unrelated_resources:
+            raise MatrixError("Expected a non-tool App resource to prove preservation on redeploy.")
+        expected_app_resources = {
+            ("uc_securable", self.uc_function, "FUNCTION", "EXECUTE"),
+            ("uc_securable", self.uc_table, "TABLE", "SELECT"),
+            ("uc_securable", self.uc_volume, "VOLUME", "READ_VOLUME"),
+            ("genie_space", self.genie_space_id or "", "GENIE_SPACE", "CAN_RUN"),
+        }
+        actual_app_resources = set()
+        for resource in tool_resources:
+            if "uc_securable" in resource:
+                value = resource["uc_securable"]
+                actual_app_resources.add(
+                    (
+                        "uc_securable",
+                        value.get("securable_full_name"),
+                        value.get("securable_type"),
+                        value.get("permission"),
+                    )
+                )
+            elif "genie_space" in resource:
+                value = resource["genie_space"]
+                actual_app_resources.add(
+                    (
+                        "genie_space",
+                        value.get("space_id"),
+                        "GENIE_SPACE",
+                        value.get("permission"),
+                    )
+                )
+        if actual_app_resources != expected_app_resources:
+            raise MatrixError(
+                "Unexpected automatic Apps resources: "
+                f"expected={sorted(expected_app_resources)}, actual={sorted(actual_app_resources)}"
+            )
+
+        client = WorkspaceClient(profile=self.profile)
+        direct_targets = (
+            (SecurableType.CATALOG, "system", "USE_CATALOG"),
+            (SecurableType.SCHEMA, "system.ai", "USE_SCHEMA"),
+            (SecurableType.MCP_SERVICE, "system.ai.sandbox", "EXECUTE"),
+            (SecurableType.MCP_SERVICE, "system.ai.web_search", "EXECUTE"),
+        )
+        uc_effective: dict[str, list[str]] = {}
+        for securable_type, full_name, expected_privilege in direct_targets:
+            privileges = _effective_privileges(client, securable_type, full_name, str(principal))
+            uc_effective[f"{securable_type.value}:{full_name}"] = privileges
+            if expected_privilege not in privileges:
+                raise MatrixError(
+                    f"{expected_privilege} is not effective on {securable_type.value} "
+                    f"{full_name} for {principal}: {privileges}"
+                )
+
+        transitive_direct = _direct_privileges(
+            client,
+            SecurableType.FUNCTION,
+            self.transitive_uc_function,
+            str(principal),
+        )
+        if "EXECUTE" in transitive_direct:
+            raise MatrixError(
+                "Agent Bricks granted the transitive function directly: "
+                f"{self.transitive_uc_function} -> {transitive_direct}"
+            )
+        transitive_effective = _effective_privileges(
+            client,
+            SecurableType.FUNCTION,
+            self.transitive_uc_function,
+            str(principal),
+        )
+        if "EXECUTE" in transitive_effective:
+            raise MatrixError(
+                "The transitive function was already effective before the manual grant: "
+                f"{self.transitive_uc_function} -> {transitive_effective}"
+            )
+        if any(
+            resource.get("uc_securable", {}).get("securable_full_name")
+            == self.transitive_uc_function
+            for resource in tool_resources
         ):
-            self.sql(statement)
+            raise MatrixError(
+                "The transitive function appeared in Agent Bricks-owned Apps resources."
+            )
+        return {
+            "checked_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "tool_resources": tool_resources,
+            "unrelated_resources": unrelated_resources,
+            "uc_effective": uc_effective,
+            "transitive_resource": self.transitive_uc_function,
+            "transitive_direct_privileges": transitive_direct,
+            "transitive_effective_privileges": transitive_effective,
+        }
+
+    def _grant_transitive_function(self, app: dict[str, Any]) -> dict[str, Any]:
+        principal = app.get("service_principal_client_id")
+        if not principal or self.transitive_uc_function is None:
+            raise MatrixError("Cannot grant the transitive control without an App principal.")
+        catalog, schema, function_name = self.transitive_uc_function.split(".")
+        quoted_principal = f"`{str(principal).replace('`', '``')}`"
+        self.sql(
+            f"GRANT EXECUTE ON FUNCTION `{catalog}`.`{schema}`.`{function_name}` "
+            f"TO {quoted_principal}"
+        )
+        client = WorkspaceClient(profile=self.profile)
+        direct = _direct_privileges(
+            client,
+            SecurableType.FUNCTION,
+            self.transitive_uc_function,
+            str(principal),
+        )
+        effective = _effective_privileges(
+            client,
+            SecurableType.FUNCTION,
+            self.transitive_uc_function,
+            str(principal),
+        )
+        if "EXECUTE" not in effective:
+            raise MatrixError(
+                "Manual EXECUTE grant did not become effective for the transitive function: "
+                f"{self.transitive_uc_function} -> {effective}"
+            )
+        if "EXECUTE" not in direct:
+            raise MatrixError(
+                "Manual EXECUTE grant was not persisted directly for the transitive function: "
+                f"{self.transitive_uc_function} -> {direct}"
+            )
+        return {
+            "granted_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "direct_privileges": direct,
+            "effective_privileges": effective,
+        }
 
     def _exercise(
         self,
@@ -723,13 +1006,29 @@ class Runner:
     def _write_evidence(self) -> None:
         payload = {
             "schema_version": 1,
+            "commit_sha": self.commit_sha,
+            "source_provenance": self.source_provenance,
+            "template_repo": self.template_repo or "wheel://databricks-agentbricks",
+            "template_ref": self.template_ref or _sha256(self.wheel),
+            "workspace_host": self.host,
+            "started_at": self.started_at,
+            "ended_at": self.ended_at,
+            "versions": self.versions,
             "profile": self.profile,
             "app_auth_profile": self.app_auth_profile,
             "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
             "wheel": str(self.wheel),
             "wheel_sha256": _sha256(self.wheel),
             "uc_function": self.uc_function,
+            "transitive_uc_function": self.transitive_uc_function,
+            "uc_table": self.uc_table,
+            "uc_volume": self.uc_volume,
+            "genie_space_id": self.genie_space_id,
             "warehouse_id": self.warehouse_id,
+            "grant_checks": self.grant_checks,
+            "cleanup_required": self.cleanup_required,
+            "cleanup_complete": self.cleanup_complete,
+            "cleanup": self.cleanup_results,
             "rows": [dataclasses.asdict(row) for row in self.rows],
         }
         target = self.output / "evidence.json"
@@ -739,17 +1038,131 @@ class Runner:
 
     def cleanup(self) -> None:
         for app in self.apps:
-            self.run(
+            result = self.run(
                 ["databricks", "apps", "delete", app, "--profile", self.profile],
                 timeout=600,
                 check=False,
             )
+            if result.returncode != 0:
+                self.cleanup_results.append(
+                    {
+                        "resource": f"app:{app}",
+                        "status": "failed",
+                        "detail": (result.stderr or result.stdout).strip(),
+                    }
+                )
+                continue
+            try:
+                self._wait_for_app_deleted(app)
+            except MatrixError as exc:
+                self.cleanup_results.append(
+                    {"resource": f"app:{app}", "status": "failed", "detail": str(exc)}
+                )
+            else:
+                self.cleanup_results.append(
+                    {
+                        "resource": f"app:{app}",
+                        "status": "deleted",
+                        "confirmed_absent_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                    }
+                )
         if self.uc_function:
             catalog, schema, function_name = self.uc_function.split(".")
             try:
                 self.sql(f"DROP FUNCTION IF EXISTS `{catalog}`.`{schema}`.`{function_name}`")
+                self.cleanup_results.append(
+                    {"resource": f"function:{self.uc_function}", "status": "deleted"}
+                )
             except Exception as exc:
                 self.transcript.write(f"cleanup warning | UC function | {exc}")
+                self.cleanup_results.append(
+                    {
+                        "resource": f"function:{self.uc_function}",
+                        "status": "failed",
+                        "detail": str(exc),
+                    }
+                )
+        if self.transitive_uc_function:
+            catalog, schema, function_name = self.transitive_uc_function.split(".")
+            try:
+                self.sql(f"DROP FUNCTION IF EXISTS `{catalog}`.`{schema}`.`{function_name}`")
+                self.cleanup_results.append(
+                    {
+                        "resource": f"function:{self.transitive_uc_function}",
+                        "status": "deleted",
+                    }
+                )
+            except Exception as exc:
+                self.transcript.write(f"cleanup warning | transitive UC function | {exc}")
+                self.cleanup_results.append(
+                    {
+                        "resource": f"function:{self.transitive_uc_function}",
+                        "status": "failed",
+                        "detail": str(exc),
+                    }
+                )
+        if self.uc_table:
+            catalog, schema, table_name = self.uc_table.split(".")
+            try:
+                self.sql(f"DROP TABLE IF EXISTS `{catalog}`.`{schema}`.`{table_name}`")
+                self.cleanup_results.append(
+                    {"resource": f"table:{self.uc_table}", "status": "deleted"}
+                )
+            except Exception as exc:
+                self.transcript.write(f"cleanup warning | UC table | {exc}")
+                self.cleanup_results.append(
+                    {
+                        "resource": f"table:{self.uc_table}",
+                        "status": "failed",
+                        "detail": str(exc),
+                    }
+                )
+        if self.uc_volume:
+            catalog, schema, volume_name = self.uc_volume.split(".")
+            try:
+                self.sql(f"DROP VOLUME IF EXISTS `{catalog}`.`{schema}`.`{volume_name}`")
+                self.cleanup_results.append(
+                    {"resource": f"volume:{self.uc_volume}", "status": "deleted"}
+                )
+            except Exception as exc:
+                self.transcript.write(f"cleanup warning | UC volume | {exc}")
+                self.cleanup_results.append(
+                    {
+                        "resource": f"volume:{self.uc_volume}",
+                        "status": "failed",
+                        "detail": str(exc),
+                    }
+                )
+        self.cleanup_complete = not any(
+            result.get("status") == "failed" for result in self.cleanup_results
+        )
+        self._write_evidence()
+
+    def _wait_for_app_deleted(self, name: str, timeout: float = 1200) -> None:
+        client = WorkspaceClient(profile=self.profile)
+        started = time.monotonic()
+        next_tick = 0.0
+        while True:
+            try:
+                client.apps.get(name)
+            except NotFound:
+                self.transcript.write(
+                    f"tick {dt.datetime.now(dt.timezone.utc):%H:%M} | delete-{name} | absent"
+                )
+                return
+            except DatabricksError as exc:
+                raise MatrixError(f"Could not verify deletion of App {name!r}: {exc}") from exc
+            elapsed = time.monotonic() - started
+            if elapsed >= timeout:
+                raise MatrixError(
+                    f"App {name!r} still existed {timeout:.0f}s after delete returned."
+                )
+            if elapsed >= next_tick:
+                self.transcript.write(
+                    f"tick {dt.datetime.now(dt.timezone.utc):%H:%M} | delete-{name} | deleting"
+                )
+                next_tick += 60
+            time.sleep(15)
 
 
 def _last_lines(path: pathlib.Path, count: int) -> str:
@@ -818,9 +1231,19 @@ def _assert_semantics(tool_kind: str, serialized: str) -> None:
         if marker not in serialized:
             raise MatrixError(f"Missing semantic marker {marker!r}: {serialized[:2000]}")
         return
-    tool_evidence = any(value in lowered for value in ("web_search", "web search", "search"))
-    if not tool_evidence or "https" not in lowered or len(serialized) < 80:
-        raise MatrixError(f"Missing web-search execution/result evidence: {serialized[:2000]}")
+    if tool_kind == "mcp":
+        tool_evidence = any(value in lowered for value in ("web_search", "web search", "search"))
+        if not tool_evidence or "https" not in lowered or len(serialized) < 80:
+            raise MatrixError(f"Missing web-search execution/result evidence: {serialized[:2000]}")
+        return
+    if tool_kind == "genie":
+        if (
+            not any(value in lowered for value in ("genie_ask", "genie", "conversation_id"))
+            or len(serialized) < 80
+        ):
+            raise MatrixError(f"Missing Genie execution/result evidence: {serialized[:2000]}")
+        return
+    raise MatrixError(f"No semantic assertion is defined for tool kind {tool_kind!r}.")
 
 
 def _curl_command(invocation_url: str, prompt: str, authenticated: bool) -> str:
@@ -848,9 +1271,142 @@ def _sha256(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
-def verify_evidence(path: pathlib.Path) -> int:
+def _source_provenance(
+    source_root: pathlib.Path, commit_sha: str, wheel: pathlib.Path
+) -> dict[str, Any]:
+    def git(*args: str, text: bool = True) -> subprocess.CompletedProcess:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=source_root,
+            capture_output=True,
+            text=text,
+            check=False,
+        )
+        if result.returncode != 0:
+            detail = result.stderr if text else result.stderr.decode(errors="replace")
+            raise MatrixError(f"Could not inspect source provenance: {detail.strip()}")
+        return result
+
+    head = git("rev-parse", "HEAD").stdout.strip().lower()
+    if head != commit_sha.lower():
+        raise MatrixError(
+            f"Claimed commit {commit_sha} does not match source checkout HEAD {head}."
+        )
+    status = git("status", "--porcelain", "--untracked-files=no").stdout.strip()
+    source_hashes: dict[str, str] = {}
+    try:
+        with zipfile.ZipFile(wheel) as archive:
+            for member in _WHEEL_SOURCE_FILES:
+                source_path = source_root / "integrations" / "agentbricks" / "src" / member
+                source_bytes = source_path.read_bytes()
+                try:
+                    wheel_bytes = archive.read(member)
+                except KeyError as exc:
+                    raise MatrixError(f"Built wheel is missing source module {member}.") from exc
+                if wheel_bytes != source_bytes:
+                    raise MatrixError(
+                        f"Built wheel module {member} does not match source checkout."
+                    )
+                source_hashes[member] = hashlib.sha256(wheel_bytes).hexdigest()
+    except zipfile.BadZipFile as exc:
+        raise MatrixError(f"Built wheel is not a readable zip archive: {wheel}") from exc
+    diff = git("diff", "--binary", "HEAD", text=False).stdout
+    return {
+        "source_head_sha": head,
+        "source_dirty": bool(status),
+        "source_diff_sha256": hashlib.sha256(diff).hexdigest(),
+        "wheel_source_matches": True,
+        "wheel_source_sha256": source_hashes,
+    }
+
+
+def _effective_privileges(
+    client: WorkspaceClient,
+    securable_type: SecurableType,
+    full_name: str,
+    principal: str,
+) -> list[str]:
+    privileges: set[str] = set()
+    page_token: str | None = None
+    while True:
+        response = client.grants.get_effective(
+            securable_type.value,
+            full_name,
+            max_results=0,
+            principal=principal,
+            **({"page_token": page_token} if page_token else {}),
+        )
+        for assignment in response.privilege_assignments or ():
+            if assignment.principal != principal:
+                continue
+            privileges.update(
+                privilege.privilege.value
+                for privilege in assignment.privileges or ()
+                if privilege.privilege is not None
+            )
+        page_token = response.next_page_token
+        if not page_token:
+            return sorted(privileges)
+
+
+def _direct_privileges(
+    client: WorkspaceClient,
+    securable_type: SecurableType,
+    full_name: str,
+    principal: str,
+) -> list[str]:
+    privileges: set[str] = set()
+    page_token: str | None = None
+    while True:
+        response = client.grants.get(
+            securable_type.value,
+            full_name,
+            max_results=0,
+            principal=principal,
+            **({"page_token": page_token} if page_token else {}),
+        )
+        for assignment in response.privilege_assignments or ():
+            if assignment.principal == principal:
+                privileges.update(privilege.value for privilege in assignment.privileges or ())
+        page_token = response.next_page_token
+        if not page_token:
+            return sorted(privileges)
+
+
+def verify_evidence(path: pathlib.Path, *, require_cleanup: bool = True) -> int:
     document = json.loads(path.read_text(encoding="utf-8"))
+    provenance_fields = ("commit_sha", "workspace_host", "started_at", "ended_at")
+    missing_provenance = [field for field in provenance_fields if not document.get(field)]
+    template_repo = document.get("template_repo")
+    template_ref = document.get("template_ref")
+    if (
+        not isinstance(template_repo, str)
+        or not template_repo
+        or not isinstance(template_ref, str)
+        or not template_ref
+    ):
+        missing_provenance.append("template_repo/template_ref")
+    elif template_repo.startswith("wheel://") and template_ref != document.get("wheel_sha256"):
+        missing_provenance.append("wheel_template_ref")
+    source_provenance = document.get("source_provenance")
+    if (
+        not isinstance(source_provenance, dict)
+        or source_provenance.get("source_head_sha") != document.get("commit_sha")
+        or source_provenance.get("wheel_source_matches") is not True
+        or not isinstance(source_provenance.get("wheel_source_sha256"), dict)
+        or not source_provenance.get("wheel_source_sha256")
+    ):
+        missing_provenance.append("source_provenance")
+    versions = document.get("versions")
+    if not isinstance(versions, dict) or any(
+        not versions.get(name) for name in ("agentbricks", "databricks", "uv", "python")
+    ):
+        missing_provenance.append("versions")
+    if missing_provenance:
+        sys.stdout.write(f"evidence provenance missing: {sorted(missing_provenance)}\n")
+        return 1
     rows = document.get("rows", [])
+    grant_checks = document.get("grant_checks", [])
     expected = {
         (framework, authoring, runtime, tool)
         for framework in FRAMEWORKS
@@ -872,6 +1428,55 @@ def verify_evidence(path: pathlib.Path) -> int:
         if duplicates:
             sys.stdout.write(f"duplicate rows: {duplicates}\n")
         return 1
+    expected_deployments = len(FRAMEWORKS) * len(AUTHORING_PATHS)
+    if len(grant_checks) != expected_deployments:
+        sys.stdout.write(
+            f"grant evidence: expected {expected_deployments} deployments, got {len(grant_checks)}\n"
+        )
+        return 1
+    repeated = [check for check in grant_checks if check.get("repeat") is not None]
+    if len(repeated) != len(FRAMEWORKS) or any(
+        check.get("repeat_deploy_idempotent") is not True for check in repeated
+    ):
+        sys.stdout.write("grant evidence: repeat-deploy idempotency proof is missing or failed\n")
+        return 1
+    if any(
+        "EXECUTE" in check.get("initial", {}).get("transitive_direct_privileges", [])
+        or "EXECUTE" in check.get("initial", {}).get("transitive_effective_privileges", [])
+        or check.get("manual_transitive_grant_applied") is not True
+        or "EXECUTE"
+        not in check.get("post_manual_transitive_grant", {}).get("direct_privileges", [])
+        or "EXECUTE"
+        not in check.get("post_manual_transitive_grant", {}).get("effective_privileges", [])
+        for check in grant_checks
+    ):
+        sys.stdout.write("grant evidence: transitive exclusion/manual-grant proof failed\n")
+        return 1
+    cleanup_required = document.get("cleanup_required")
+    if not isinstance(cleanup_required, bool):
+        sys.stdout.write("cleanup evidence: cleanup_required was not recorded\n")
+        return 1
+    cleanup = document.get("cleanup", [])
+    if (
+        require_cleanup
+        and cleanup_required
+        and (
+            document.get("cleanup_complete") is not True
+            or not isinstance(cleanup, list)
+            or any(result.get("status") == "failed" for result in cleanup)
+            or any(
+                result.get("resource", "").startswith("app:")
+                and result.get("status") == "deleted"
+                and not result.get("confirmed_absent_at")
+                for result in cleanup
+            )
+        )
+    ):
+        sys.stdout.write("cleanup evidence: required cleanup is incomplete or failed\n")
+        return 1
+    sys.stdout.write(
+        f"{len(grant_checks)} grant snapshots passed; {len(repeated)} repeat deploy idempotent\n"
+    )
     return 0
 
 
@@ -881,9 +1486,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wheel", type=pathlib.Path)
     parser.add_argument("--output", type=pathlib.Path)
     parser.add_argument("--warehouse-id")
-    parser.add_argument("--uc-schema", default="main.agentbricks_agent_tools_e2e")
+    parser.add_argument("--uc-schema", default="supervisor_agent.mason_agent_tools_e2e")
     parser.add_argument("--template-repo")
     parser.add_argument("--template-ref")
+    parser.add_argument(
+        "--source-root",
+        type=pathlib.Path,
+        help="Required source checkout whose HEAD and wheel contents are verified for provenance.",
+    )
+    parser.add_argument(
+        "--commit-sha",
+        help="Required source commit SHA for provenance in a live matrix run.",
+    )
+    parser.add_argument(
+        "--genie-space-id",
+        default=os.environ.get("AGENTBRICKS_E2E_GENIE_SPACE_ID"),
+        help="Existing 32-character Genie space ID for App-auth grant/invocation coverage.",
+    )
     parser.add_argument(
         "--app-auth-profile",
         help="OAuth profile for deployed App /api calls; defaults to --profile.",
@@ -893,8 +1512,23 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.verify_evidence is None and (args.wheel is None or args.output is None):
         parser.error("--wheel and --output are required unless --verify-evidence is used")
+    if args.verify_evidence is None and not args.commit_sha:
+        parser.error("--commit-sha is required unless --verify-evidence is used")
+    if args.verify_evidence is None and args.source_root is None:
+        parser.error("--source-root is required unless --verify-evidence is used")
+    if args.verify_evidence is None and (
+        len(args.commit_sha) != 40
+        or any(character not in "0123456789abcdefABCDEF" for character in args.commit_sha)
+    ):
+        parser.error("--commit-sha must be a full 40-character hexadecimal Git SHA")
     if bool(args.template_repo) != bool(args.template_ref):
         parser.error("--template-repo and --template-ref must be provided together")
+    if args.verify_evidence is None and (
+        not isinstance(args.genie_space_id, str)
+        or len(args.genie_space_id) != 32
+        or any(character not in "0123456789abcdef" for character in args.genie_space_id)
+    ):
+        parser.error("--genie-space-id must be a 32-character lowercase hexadecimal ID")
     return args
 
 
@@ -909,8 +1543,12 @@ def main() -> int:
         args.template_repo,
         args.template_ref,
         args.app_auth_profile,
+        args.genie_space_id,
+        args.commit_sha,
+        args.source_root,
+        cleanup_required=not args.keep_resources,
     )
-    succeeded = False
+    precheck_passed = False
     try:
         runner.bootstrap()
         runner.select_warehouse(args.warehouse_id)
@@ -920,13 +1558,24 @@ def main() -> int:
             runner.run_dev(case, 8400 + index)
         for case in cases:
             runner.deploy(case)
+        runner.ended_at = dt.datetime.now(dt.timezone.utc).isoformat()
         runner._write_evidence()
-        succeeded = verify_evidence(runner.output / "evidence.json") == 0
-        return 0 if succeeded else 1
-    finally:
-        if not args.keep_resources and succeeded:
+        precheck_passed = (
+            verify_evidence(runner.output / "evidence.json", require_cleanup=False) == 0
+        )
+        if not precheck_passed:
+            return 1
+        if runner.cleanup_required:
             runner.cleanup()
-        elif not succeeded:
+        else:
+            runner._write_evidence()
+        runner.ended_at = dt.datetime.now(dt.timezone.utc).isoformat()
+        runner._write_evidence()
+        return verify_evidence(runner.output / "evidence.json")
+    finally:
+        if not precheck_passed:
+            runner.ended_at = dt.datetime.now(dt.timezone.utc).isoformat()
+            runner._write_evidence()
             runner.transcript.write(
                 "Resources retained after failure for diagnosis; rerun cleanup after fixing."
             )

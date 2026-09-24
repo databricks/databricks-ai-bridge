@@ -1,8 +1,9 @@
-"""Lakebase/Apps resource plumbing for a deployed app.
+"""Masked Apps resource reconciliation for a deployed app.
 
 Binds Databricks Apps resources onto an app so its service principal gets platform-managed grants:
-a `postgres` resource for the legacy per-app Runtime Store and the tracing `experiment` resource.
-The service-managed Runtime Store path grants database access through Conversation Store instead.
+a `postgres` resource for the legacy per-app Runtime Store, the tracing `experiment` resource, and
+the Agent Bricks-owned direct tool resources declared in `agent.toml`. The service-managed Runtime Store
+path grants database access through Conversation Store instead.
 
 Managed-store (session/memory) table access is NOT granted here. The deployed app reaches those
 stores over the conversation-store REST API, which grants the app's service principal read/write
@@ -13,8 +14,9 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 from databricks_agentbricks.databricks_cli import _databricks
 
@@ -69,6 +71,23 @@ def _current_app_resources(app: str, profile: Optional[str]) -> list[dict]:
 
 # The app-resource name for the trace experiment (unique across an app's resources, like a store's).
 _TRACE_EXPERIMENT_RESOURCE = "agentbricks-trace-experiment"
+_TOOL_RESOURCE_PREFIX = "agentbricks-tool-"
+
+
+def _read_app_resources_strict(
+    app: str, profile: Optional[str], *, action: str
+) -> tuple[list[Any] | None, str | None]:
+    result = _databricks(["apps", "get", app, "-o", "json"], profile, capture=True, check=False)
+    if result.returncode != 0:
+        reason = (result.stderr or result.stdout or "").strip() or "unknown error"
+        return None, f"{action}: {reason}"
+    try:
+        resources = json.loads(result.stdout or "{}").get("resources", [])
+    except (json.JSONDecodeError, AttributeError):
+        return None, f"{action}: invalid Apps response"
+    if not isinstance(resources, list):
+        return None, f"{action}: invalid resources array"
+    return resources, None
 
 
 def apply_experiment_resource(
@@ -118,6 +137,55 @@ def apply_postgres_resources(
     if result.returncode == 0:
         return None
     return (result.stderr or result.stdout or "").strip() or "unknown error"
+
+
+def apply_tool_resources(
+    app: str, resources: Sequence[dict[str, Any]], profile: Optional[str]
+) -> Optional[str]:
+    """Replace Agent Bricks-owned tool resources while preserving unrelated App resources."""
+    current, read_error = _read_app_resources_strict(
+        app, profile, action="Could not read existing App resources"
+    )
+    if read_error is not None:
+        return read_error
+    assert current is not None
+
+    preserved = [
+        resource
+        for resource in current
+        if not (
+            isinstance(resource, dict)
+            and isinstance(resource.get("name"), str)
+            and resource["name"].startswith(_TOOL_RESOURCE_PREFIX)
+        )
+    ]
+    owned = sorted(resources, key=lambda resource: str(resource.get("name", "")))
+    reconciled = [*preserved, *owned]
+    if reconciled == current:
+        return None
+    update = _update_app_resources(app, reconciled, profile)
+    if update.returncode != 0:
+        return (update.stderr or update.stdout or "").strip() or "unknown error"
+
+    persisted, verify_error = _read_app_resources_strict(
+        app, profile, action="Could not verify App tool resources"
+    )
+    if verify_error is not None:
+        return verify_error
+    assert persisted is not None
+    persisted_owned = sorted(
+        (
+            resource
+            for resource in persisted
+            if isinstance(resource, dict)
+            and isinstance(resource.get("name"), str)
+            and resource["name"].startswith(_TOOL_RESOURCE_PREFIX)
+        ),
+        key=lambda resource: str(resource.get("name", "")),
+    )
+    if persisted_owned != owned:
+        return "Could not verify App tool resources: Agent Bricks-owned resources do not match"
+    return None
 
 
 def _update_app_resources(

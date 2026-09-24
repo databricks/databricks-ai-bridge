@@ -35,6 +35,17 @@ def _no_tracing_by_default(monkeypatch):
     monkeypatch.setattr(deploy_mod, "get_or_create_trace_experiment", lambda *a, **k: None)
 
 
+@pytest.fixture(autouse=True)
+def _no_tool_access_reconciliation_by_default(monkeypatch):
+    # Tool access has dedicated planner/reconciler and deploy-order coverage. Keep unrelated deploy
+    # tests hermetic by replacing the cloud boundary, just as tracing is isolated above.
+    monkeypatch.setattr(
+        deploy_mod,
+        "reconcile_tool_access",
+        lambda client, app, principal, plan, profile: plan,
+    )
+
+
 def test_upsert_manifest_env_scaffolds_when_missing(tmp_path: pathlib.Path):
     scaffolded = deploy_mod._upsert_manifest_env(
         tmp_path, {"AGENT_MEMORY_STORE": "memory-stores/x"}
@@ -598,11 +609,7 @@ def test_deploy_defaults_to_legacy_runtime_store(tmp_path: pathlib.Path, monkeyp
         "_deployment_exists",
         lambda *args: (events.append("app-exists"), True)[1],
     )
-    monkeypatch.setattr(
-        deploy_mod,
-        "_app_service_principal",
-        mock.Mock(side_effect=AssertionError("legacy provisioning does not need an app SP lookup")),
-    )
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", mock.Mock(return_value="app-sp"))
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
