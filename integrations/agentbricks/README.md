@@ -607,9 +607,9 @@ Deploy derives Apps user scopes from explicit `auth = "user"` bindings:
 
 | Binding | Requested Apps scopes |
 | --- | --- |
-| Managed MCP (governed ingress) | `ai-gateway` |
-| `system.ai.genie_one_mcp` | `ai-gateway`, `genie` |
-| First-class Genie One or Genie Agent | `genie` |
+| Managed MCP (governed ingress) | `workspace.workspace`, `ai-gateway` |
+| `system.ai.genie_one_mcp` | `workspace.workspace`, `ai-gateway`, `genie` |
+| First-class Genie One or Genie Agent | `workspace.workspace`, `genie` |
 
 For example, bind Genie tools in a current project with `server = "agentbricks"`:
 
@@ -622,6 +622,10 @@ Mixed bindings request the union. App-auth and legacy bindings add no user scope
 explicit service-consent scopes, not a claim that gateway access alone authorizes the downstream
 resource. OAuth consent does not grant Unity Catalog privileges: the user still needs access to
 the configured Genie Space and its underlying data.
+
+Every request-user managed binding requests `workspace.workspace`, the workspace API scope accepted
+by Databricks Apps. It does not satisfy endpoints that still require the legacy `workspace` scope;
+Apps rejects that legacy scope, so those endpoints require a platform-side scope annotation update.
 
 For a new App, deploy explicitly enables user-token forwarding and includes these scopes in the
 initial typed SDK create request before uploading source. An existing App that is missing a required

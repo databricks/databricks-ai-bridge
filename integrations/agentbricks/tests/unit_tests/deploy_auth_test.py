@@ -80,17 +80,23 @@ def _sdk(monkeypatch, existing=None):
 @pytest.mark.parametrize(
     ("binding", "expected"),
     [
-        (ToolSpec.mcp("search", service="system.ai.web_search", auth="user"), {"ai-gateway"}),
+        (
+            ToolSpec.mcp("search", service="system.ai.web_search", auth="user"),
+            {"ai-gateway", "workspace.workspace"},
+        ),
         (
             ToolSpec.mcp("dbsql", service="system.ai.dbsql", auth="user"),
-            {"ai-gateway", "sql"},
+            {"ai-gateway", "sql", "workspace.workspace"},
         ),
         (
             ToolSpec.mcp("genie", service="system.ai.genie_one_mcp", auth="user"),
-            {"ai-gateway", "genie"},
+            {"ai-gateway", "genie", "workspace.workspace"},
         ),
-        (ToolSpec.genie_one(auth="user"), {"genie"}),
-        (ToolSpec.genie_agent("space", space_id="0" * 32, auth="user"), {"genie"}),
+        (ToolSpec.genie_one(auth="user"), {"genie", "workspace.workspace"}),
+        (
+            ToolSpec.genie_agent("space", space_id="0" * 32, auth="user"),
+            {"genie", "workspace.workspace"},
+        ),
         (ToolSpec.mcp("dbsql", service="system.ai.dbsql", auth="app"), set()),
         (ToolSpec.mcp("dbsql", service="system.ai.dbsql"), set()),
         (ToolSpec.mcp("genie", service="system.ai.genie_one_mcp", auth="app"), set()),
@@ -121,11 +127,11 @@ def test_scope_update_plan_uses_exact_required_scopes(monkeypatch):
     [
         (
             ToolSpec.sandbox("volume", scopes=[Scope.volume("cat.sch.vol")], auth="user"),
-            {"ai-gateway", "files"},
+            {"ai-gateway", "files", "workspace.workspace"},
         ),
         (
             ToolSpec.sandbox("table", scopes=[Scope.table("cat.sch.tbl")], auth="user"),
-            {"ai-gateway"},
+            {"ai-gateway", "workspace.workspace"},
         ),
         (ToolSpec.sandbox("volume", scopes=[Scope.volume("cat.sch.vol")], auth="app"), set()),
     ],
@@ -144,7 +150,11 @@ def test_required_user_api_scopes_union_only_user_bindings(tmp_path):
     project = _project(tmp_path)
     project.add_tool(ToolSpec.mcp("genie", service="system.ai.genie_one_mcp", auth="user"))
     project.add_tool(ToolSpec.genie_one("first_class", auth="user"))
-    assert required_user_api_scopes(project) == {"ai-gateway", "genie"}
+    assert required_user_api_scopes(project) == {
+        "ai-gateway",
+        "genie",
+        "workspace.workspace",
+    }
 
 
 @pytest.mark.parametrize(
@@ -538,7 +548,7 @@ def test_user_deploy_creates_scoped_app_and_runtime_store_before_source(
         "sdk-create",
         {
             "name": "agent-bricks-test",
-            "user_api_scopes": ["ai-gateway"],
+            "user_api_scopes": ["ai-gateway", "workspace.workspace"],
             "forward_user_access_token": True,
             "compute_min_instances": 2,
             "compute_max_instances": 2,
