@@ -25,7 +25,7 @@ import builtins
 import hashlib
 import random
 from collections import defaultdict
-from typing import Any, Iterator, Optional, Sequence
+from typing import Any, Iterator, Mapping, Optional, Sequence
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import (
@@ -53,9 +53,33 @@ _EMPTY_CHANNEL_VALUE = "__databricks_empty_channel__"
 # Fetch items oldest-first so replaying them reconstructs state in write order.
 _ORDER_BY = "create_time asc"
 
+# Checkpoint metadata kept by generated agents. The legacy key remains in each new checkpoint so
+# an older worker can resume a run started by a newer worker during a rolling deployment.
+INVOCATION_METADATA_KEY = "databricks_agentkit.invocation_id"
+_LEGACY_INVOCATION_METADATA_KEY = "databricks_mason.invocation_id"
+
 # One saver per process, opened lazily on first use and shared thereafter — that's what makes
 # multi-turn work in-process (and, for the durable saver, reuses one client/session cache).
 _saver: BaseCheckpointSaver | None = None
+
+
+def invocation_metadata(invocation_id: str) -> dict[str, str]:
+    """Return checkpoint metadata compatible with current and legacy workers."""
+    return {
+        INVOCATION_METADATA_KEY: invocation_id,
+        _LEGACY_INVOCATION_METADATA_KEY: invocation_id,
+    }
+
+
+def invocation_id_from_metadata(metadata: Mapping[str, Any] | None) -> str | None:
+    """Read a checkpoint invocation id, preferring the canonical key over the legacy key."""
+    if not metadata:
+        return None
+    for key in (INVOCATION_METADATA_KEY, _LEGACY_INVOCATION_METADATA_KEY):
+        value = metadata.get(key)
+        if isinstance(value, str):
+            return value
+    return None
 
 
 def checkpointer(store: str | None = None) -> BaseCheckpointSaver:

@@ -2,8 +2,8 @@ import pytest
 from fastapi.testclient import TestClient
 from runtime import ui
 
-from databricks_mason import DurableAgentServer
-from databricks_mason.runtime.store import (
+from databricks_agentkit import DurableAgentServer
+from databricks_agentkit.runtime.store import (
     RUNTIME_STORE_DATABASE_ENV,
     RUNTIME_STORE_LAKEBASE_BRANCH_ENV,
     RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV,
@@ -395,7 +395,7 @@ def test_discover_chat_models_caps_the_picker(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_local_history_reads_messages_from_in_process_session(monkeypatch):
-    import databricks_mason.openai.sessions as ss
+    import databricks_agentkit.openai.sessions as ss
 
     class _FakeSession:
         async def get_items(self, limit=None):

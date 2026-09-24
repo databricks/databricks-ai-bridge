@@ -100,6 +100,23 @@ def test_managed_connection_uses_the_shared_lakebase_connector(monkeypatch):
     )
 
 
+def test_managed_connection_accepts_an_explicit_schema(monkeypatch):
+    from databricks_ai_bridge import lakebase as lakebase_module
+
+    lakebase, _ = mock_lakebase()
+    factory = MagicMock(return_value=lakebase)
+    monkeypatch.setattr(lakebase_module, "AsyncLakebaseSQLAlchemy", factory)
+
+    LakebaseDurableRuntimeStore.from_managed_runtime_store(
+        branch="projects/project/branches/runtime-branch",
+        database="runtime-db",
+        username="app-sp",
+        schema="databricks_agentkit_runtime",
+    )
+
+    assert factory.call_args.kwargs["schema"] == "databricks_agentkit_runtime"
+
+
 def test_app_resource_connection_uses_injected_coordinates(monkeypatch):
     endpoint = "projects/project/branches/production/endpoints/primary"
     client = MagicMock()
@@ -162,6 +179,7 @@ def test_partial_managed_configuration_does_not_fall_back_to_apps_resource(monke
 def test_environment_store_uses_managed_api_coordinates(monkeypatch):
     expected = MagicMock()
     monkeypatch.delenv(RUNTIME_STORE_LOCAL_ENV, raising=False)
+    monkeypatch.delenv(RUNTIME_STORE_SCHEMA_ENV, raising=False)
     monkeypatch.setenv(
         RUNTIME_STORE_LAKEBASE_BRANCH_ENV,
         "projects/project/branches/runtime-branch",
@@ -176,8 +194,31 @@ def test_environment_store_uses_managed_api_coordinates(monkeypatch):
         branch="projects/project/branches/runtime-branch",
         database="runtime-db-id",
         username="app-sp",
+        schema="databricks_mason_runtime",
     )
     assert runtime_store_is_persistent_environment()
+
+
+def test_environment_store_uses_explicit_managed_schema(monkeypatch):
+    expected = MagicMock()
+    monkeypatch.delenv(RUNTIME_STORE_LOCAL_ENV, raising=False)
+    monkeypatch.setenv(
+        RUNTIME_STORE_LAKEBASE_BRANCH_ENV,
+        "projects/project/branches/runtime-branch",
+    )
+    monkeypatch.setenv(RUNTIME_STORE_DATABASE_ENV, "runtime-db-id")
+    monkeypatch.setenv(RUNTIME_STORE_USERNAME_ENV, "app-sp")
+    monkeypatch.setenv(RUNTIME_STORE_SCHEMA_ENV, "databricks_agentkit_runtime")
+    factory = MagicMock(return_value=expected)
+    monkeypatch.setattr(LakebaseDurableRuntimeStore, "from_managed_runtime_store", factory)
+
+    assert runtime_store_from_environment() is expected
+    factory.assert_called_once_with(
+        branch="projects/project/branches/runtime-branch",
+        database="runtime-db-id",
+        username="app-sp",
+        schema="databricks_agentkit_runtime",
+    )
 
 
 def test_environment_store_uses_the_attached_lakebase_resource(monkeypatch):

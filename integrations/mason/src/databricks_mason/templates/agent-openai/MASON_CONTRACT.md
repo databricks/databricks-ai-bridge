@@ -3,7 +3,7 @@
 This document owns the requirements shared by generated projects and existing agents adopting
 the managed runtime. The [README](README.md) owns commands and HTTP examples; adapter docstrings own API details.
 The adjacent template is an example, not a required agent architecture. Runtime internals live in
-the installed package's `databricks_mason/runtime/README.md`.
+the installed package's runtime guide.
 
 ## Command requirements
 
@@ -42,7 +42,7 @@ from the app.
 
 ### Tools
 
-Use `databricks_mason.openai.mcp_servers()` for MCP, UC function, and sandbox bindings, combining
+Use `databricks_agentkit.openai.mcp_servers()` for MCP, UC function, and sandbox bindings, combining
 them with agent-owned servers without duplicates. It applies sandbox downscoping. Genie Agent
 bindings arrive as tools from `genie_tools()`. Local Python tools belong in source; the template
 discovers `@function_tool` functions through [agent/tools/__init__.py](agent/tools/__init__.py).

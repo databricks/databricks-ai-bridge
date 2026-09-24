@@ -1,5 +1,5 @@
-from databricks_mason import DurableAgentServer
-from databricks_mason.runtime.store import InMemoryRuntimeStore
+from databricks_agentkit import DurableAgentServer
+from databricks_agentkit.runtime.store import InMemoryRuntimeStore
 
 
 async def _invoke(request, context):

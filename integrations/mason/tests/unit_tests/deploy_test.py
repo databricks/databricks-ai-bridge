@@ -217,7 +217,7 @@ class _FakeClient:
                 "lakebase": {
                     "project_id": "databricks-internal-custom-agents",
                     "branch": "projects/databricks-internal-custom-agents/branches/production",
-                    "database_id": "runtime-agent-bricks-myapp-550e8400-e29b-41d4-a716-446655440000",
+                    "database_id": f"runtime-{app_name}-550e8400-e29b-41d4-a716-446655440000",
                 }
             },
         }
@@ -517,7 +517,16 @@ def test_deploy_custom_server_skips_runtime_store_provisioning_and_binding(
     assert "DATABRICKS_MASON_RUNTIME_STORE_SCHEMA" not in env
 
 
-def test_deploy_mason_server_provisions_runtime_store(tmp_path: pathlib.Path, monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("deploy_name", "database_prefix"),
+    [
+        ("myapp", "runtime-agent-bricks-myapp-"),
+        ("agent-mason-myapp", "runtime-agent-mason-myapp-"),
+    ],
+)
+def test_deploy_mason_server_provisions_runtime_store(
+    tmp_path: pathlib.Path, monkeypatch, deploy_name: str, database_prefix: str
+) -> None:
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
@@ -539,7 +548,7 @@ def test_deploy_mason_server_provisions_runtime_store(tmp_path: pathlib.Path, mo
 
     result = CliRunner().invoke(
         deploy_mod.deploy,
-        ["myapp", "--source", str(src)],
+        [deploy_name, "--source", str(src)],
         obj=_FakeCtx(),
     )
 
@@ -551,7 +560,7 @@ def test_deploy_mason_server_provisions_runtime_store(tmp_path: pathlib.Path, mo
     assert env[deploy_mod.RUNTIME_STORE_LAKEBASE_BRANCH_ENV] == (
         "projects/databricks-internal-custom-agents/branches/production"
     )
-    assert env[deploy_mod.RUNTIME_STORE_DATABASE_ENV].startswith("runtime-agent-bricks-myapp-")
+    assert env[deploy_mod.RUNTIME_STORE_DATABASE_ENV].startswith(database_prefix)
     assert env[deploy_mod.RUNTIME_STORE_USERNAME_ENV] == "sp-123"
     assert deployed_env is not None
     assert deployed_env[deploy_mod.RUNTIME_STORE_LAKEBASE_BRANCH_ENV] == (
@@ -640,7 +649,12 @@ def test_deploy_runtime_store_uses_dedicated_backend_with_managed_store(
         return create(*args, **kwargs)
 
     monkeypatch.setattr(client, "create_runtime_store", create_store)
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda *args: False)
+    existence_checks: list[str] = []
+    monkeypatch.setattr(
+        deploy_mod,
+        "_deployment_exists",
+        lambda app, profile: (existence_checks.append(app) or False),
+    )
     monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "sp-123")
     monkeypatch.setattr(deploy_mod, "_grant_store_access", lambda *args, **kwargs: None)
 
@@ -664,7 +678,7 @@ def test_deploy_runtime_store_uses_dedicated_backend_with_managed_store(
                 == "projects/databricks-internal-custom-agents/branches/production"
             )
             assert deploy_mod.RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV not in env
-            assert deploy_mod.RUNTIME_STORE_SCHEMA_ENV not in env
+            assert env[deploy_mod.RUNTIME_STORE_SCHEMA_ENV] == "databricks_agentkit_runtime"
             events.append("app-deployed")
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
@@ -673,6 +687,7 @@ def test_deploy_runtime_store_uses_dedicated_backend_with_managed_store(
     result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=ctx)
 
     assert result.exit_code == 0, result.output
+    assert existence_checks == ["agent-bricks-myapp"]
     assert events == ["app-created", "runtime-store", "app-deployed"]
 
 
@@ -1339,6 +1354,70 @@ def test_deploy_reads_deployment_name_from_toml_when_omitted(
     assert result.exit_code == 0, result.output
     ws = f"/Workspace/Users/me@example.com/mason_deployments/{expected_name}"
     assert ["apps", "deploy", expected_name, "--source-code-path", ws] in calls
+
+
+def test_deploy_reuses_max_length_legacy_name_before_validating_new_prefix(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    base_name = "a" * 18
+    legacy_name = f"agent-mason-{base_name}"
+    new_name = f"agent-bricks-{base_name}"
+    assert len(legacy_name) == 30
+    assert len(new_name) == 31
+
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _agent_toml(src, server="custom", deployment_name=base_name)
+
+    existence_checks: list[str] = []
+    monkeypatch.setattr(
+        deploy_mod,
+        "_deployment_exists",
+        lambda app, profile: (existence_checks.append(app) or app == legacy_name),
+    )
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: (
+            calls.append(args) or types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        ),
+    )
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code == 0, result.output
+    assert new_name not in existence_checks
+    assert legacy_name in existence_checks
+    assert ["apps", "deploy", legacy_name, "--source-code-path", mock.ANY] in calls
+
+
+def test_deploy_rejects_overlong_new_name_when_no_legacy_app_exists(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    base_name = "a" * 18
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _agent_toml(src, server="custom", deployment_name=base_name)
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda app, profile: False)
+    databricks_calls: list[list[str]] = []
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: (
+            databricks_calls.append(args)
+            or types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        ),
+    )
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code != 0
+    assert "31 > 30" in result.output
+    assert databricks_calls == []
 
 
 def test_deploy_without_name_or_toml_errors(tmp_path: pathlib.Path, monkeypatch):

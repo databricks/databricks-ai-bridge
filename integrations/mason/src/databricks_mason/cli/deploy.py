@@ -80,6 +80,7 @@ _USE_MANAGED_RUNTIME_STORE = False
 _DEPLOYMENT_PREFIX = "agent-bricks-"
 _LEGACY_DEPLOYMENT_PREFIX = "agent-mason-"
 _DEPLOYMENT_PREFIXES = (_DEPLOYMENT_PREFIX, _LEGACY_DEPLOYMENT_PREFIX)
+_AGENTKIT_RUNTIME_STORE_SCHEMA = "databricks_agentkit_runtime"
 _MAX_DEPLOYMENT_NAME_LEN = 30  # Databricks Apps name limit
 
 
@@ -123,7 +124,7 @@ def _app_compute_state(name: str, profile: Optional[str]) -> Optional[str]:
         return None
 
 
-def _validate_deployment_name(name: str) -> str:
+def _validate_deployment_name(name: str, *, check_length: bool = True) -> str:
     """Reject an empty or unsafe deployment name before it reaches a URL / workspace path."""
     if (
         not (name or "").strip()
@@ -136,7 +137,7 @@ def _validate_deployment_name(name: str) -> str:
             hint="Use a non-empty name of letters, digits, and hyphens "
             "(no slashes, spaces, or '..').",
         )
-    if len(name) > _MAX_DEPLOYMENT_NAME_LEN:
+    if check_length and len(name) > _MAX_DEPLOYMENT_NAME_LEN:
         raise AgentCliError(
             f"Deployment name {name!r} is too long ({len(name)} > {_MAX_DEPLOYMENT_NAME_LEN}).",
             hint=f"Databricks app names cap at {_MAX_DEPLOYMENT_NAME_LEN} characters, including the "
@@ -525,7 +526,11 @@ def deploy(
     requested_name = name
     base_name = _resolve_deployment_name(project, name)
     name = _prefixed_name(base_name)
-    _validate_deployment_name(name)
+    # Validate the shape before looking up a legacy app, but defer the length check until the
+    # selected prefix is known. The legacy prefix is one character shorter, so a valid legacy app
+    # can exist when the corresponding new name is one character over the Apps limit.
+    _validate_deployment_name(name, check_length=False)
+    deployment_exists: Optional[bool] = None
     # Older releases stored the unprefixed base name in agent.toml, so a project that was already
     # deployed as `agent-mason-<name>` can still have only `<name>` recorded. When NAME is omitted,
     # keep using that existing app if it is present; otherwise this is a new `agent-bricks-*` app.
@@ -536,11 +541,21 @@ def deploy(
         and not base_name.startswith(_DEPLOYMENT_PREFIXES)
     ):
         # Prefer a new app if both names exist. This can happen after a user explicitly deploys an
-        # old project under the new prefix during a migration.
-        if not _deployment_exists(name, obj.profile):
+        # old project under the new prefix during a migration. An over-limit new name cannot be
+        # queried, so check the shorter legacy candidate directly in that case.
+        new_name_exists = len(name) <= _MAX_DEPLOYMENT_NAME_LEN and _deployment_exists(
+            name, obj.profile
+        )
+        deployment_exists = new_name_exists
+        if not new_name_exists:
             legacy_name = f"{_LEGACY_DEPLOYMENT_PREFIX}{base_name}"
-            if _deployment_exists(legacy_name, obj.profile):
-                name = legacy_name
+            if len(legacy_name) <= _MAX_DEPLOYMENT_NAME_LEN:
+                _validate_deployment_name(legacy_name)
+                legacy_exists = _deployment_exists(legacy_name, obj.profile)
+                if legacy_exists:
+                    name = legacy_name
+                    deployment_exists = True
+    _validate_deployment_name(name)
     if allow_user_scope_update and not user_auth:
         raise AgentCliError(
             "--allow-user-scope-update requires a managed tool with auth = 'user' in agent.toml."
@@ -565,6 +580,8 @@ def deploy(
             "Scopes are never removed automatically when tools change.",
             err=True,
         )
+        if deployment_exists is None:
+            deployment_exists = user_scope_plan.existing_scopes is not None
         apply_app_user_scope_update(user_scope_plan, instances=instances)
     # Persist the base name so a later `ab deploy` (no NAME) resolves to the same app.
     if project is not None and project.set_deployment_name(base_name):
@@ -639,7 +656,9 @@ def deploy(
     #    `apps create` itself blocks for minutes (it provisions and waits for compute) and we capture
     #    its output to relabel "App compute" → "Agent compute", so nothing streams meanwhile. Wrap it
     #    in progress (persistent line + spinner) so the CLI isn't silent for the whole provision.
-    if user_scope_plan is None and not _deployment_exists(name, obj.profile):
+    if deployment_exists is None:
+        deployment_exists = _deployment_exists(name, obj.profile)
+    if user_scope_plan is None and not deployment_exists:
         with render.progress(
             "Creating the agent and starting its compute (this can take a few minutes)…"
         ):
@@ -690,6 +709,8 @@ def deploy(
             RUNTIME_STORE_DATABASE_ENV: runtime_backend.database_id,
             RUNTIME_STORE_USERNAME_ENV: runtime_backend.username,
         }
+        if not deployment_exists and name.startswith(_DEPLOYMENT_PREFIX):
+            managed_env[RUNTIME_STORE_SCHEMA_ENV] = _AGENTKIT_RUNTIME_STORE_SCHEMA
         scaffolded = _upsert_manifest_env(source_dir, managed_env) or scaffolded
         env_updates.update(managed_env)
 

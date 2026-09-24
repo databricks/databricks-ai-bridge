@@ -1,6 +1,6 @@
 # Agent Development Guide
 
-This project is an OpenAI Agents SDK workload hosted by `databricks_mason.DurableAgentServer`.
+This project is an OpenAI Agents SDK workload hosted by `databricks_agentkit.DurableAgentServer`.
 
 Read [MASON_CONTRACT.md](MASON_CONTRACT.md) before changing integration points. It owns command
 requirements, tool/state/tracing wiring, and recovery. [README.md](README.md) owns setup and client

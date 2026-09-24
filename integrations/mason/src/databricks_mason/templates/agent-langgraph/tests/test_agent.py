@@ -14,7 +14,11 @@ from agent.tools import all_tools
 from langchain_core.tools import BaseTool
 from runtime.adapter import _serialize_events
 
-from databricks_mason.langgraph.session_store import checkpointer, thread_config
+from databricks_agentkit.langgraph.session_store import (
+    checkpointer,
+    invocation_metadata,
+    thread_config,
+)
 
 
 def test_tools_autoregister():
@@ -86,7 +90,7 @@ def test_thread_config_uses_supplied_actor():
 
 def test_checkpointer_is_shared(monkeypatch):
     # In-memory by default (no AGENT_SESSION_STORE); built once and shared so multi-turn works.
-    import databricks_mason.langgraph.session_store as ss
+    import databricks_agentkit.langgraph.session_store as ss
 
     monkeypatch.setattr(ss, "_saver", None)  # reset the process-wide saver
     assert checkpointer() is checkpointer()
@@ -95,7 +99,7 @@ def test_checkpointer_is_shared(monkeypatch):
 def test_session_store_selects_durable_saver(monkeypatch):
     # AGENT_SESSION_STORE must route to the durable Session Store saver, not stay in-memory. Stub the
     # REST client so it stays hermetic (no network); the saver builds without touching the API.
-    import databricks_mason.langgraph.session_store as ss
+    import databricks_agentkit.langgraph.session_store as ss
 
     monkeypatch.setattr(ss, "_saver", None)
     monkeypatch.setenv("AGENT_SESSION_STORE", "my-store")
@@ -115,7 +119,7 @@ async def test_recovery_input_resumes_current_checkpoint(monkeypatch):
 
     class Saver:
         async def aget_tuple(self, config):
-            return SimpleNamespace(metadata={"databricks_mason.invocation_id": "inv-1"})
+            return SimpleNamespace(metadata=invocation_metadata("inv-1"))
 
     monkeypatch.setattr(agent_module, "checkpointer", lambda: Saver())
     original = {"messages": [{"role": "user", "content": "hi"}]}

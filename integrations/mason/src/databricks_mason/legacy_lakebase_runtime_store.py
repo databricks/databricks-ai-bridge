@@ -15,6 +15,9 @@ _BRANCH = "production"
 _DATABASE = "databricks-postgres"
 _ENDPOINT = "primary"
 _RESOURCE_NAME = "postgres-runtime-store"
+_NEW_APP_PREFIX = "agent-bricks-"
+_LEGACY_SCHEMA_PREFIX = "databricks_mason_runtime_"
+_NEW_SCHEMA_PREFIX = "databricks_agentkit_runtime_"
 
 
 def backend(app: str) -> LakebaseBackend:
@@ -68,6 +71,7 @@ def _project_id(app: str) -> str:
 
 
 def get_lakebase_schema(app: str) -> str:
-    """Return the legacy per-app Runtime Store schema name."""
+    """Return the per-app Runtime Store schema name."""
     digest = hashlib.sha256(app.encode("utf-8")).hexdigest()[:12]
-    return f"databricks_mason_runtime_{digest}"
+    schema_prefix = _NEW_SCHEMA_PREFIX if app.startswith(_NEW_APP_PREFIX) else _LEGACY_SCHEMA_PREFIX
+    return f"{schema_prefix}{digest}"

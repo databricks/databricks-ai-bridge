@@ -3,7 +3,7 @@ from typing import Any
 from databricks_langchain import ChatDatabricks
 from langchain.agents import create_agent
 
-from databricks_mason import workspace_client, workspace_headers
+from databricks_agentkit import workspace_client, workspace_headers
 
 MODEL = "databricks-gpt-5-2"
 

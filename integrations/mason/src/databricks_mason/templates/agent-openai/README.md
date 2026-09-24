@@ -1,6 +1,6 @@
 # OpenAI Agents template
 
-An OpenAI Agents SDK agent served by `databricks_mason.DurableAgentServer`. The managed runtime keeps invocation state and
+An OpenAI Agents SDK agent served by `databricks_agentkit.DurableAgentServer`. The managed runtime keeps invocation state and
 events in memory during `ab dev`. Deployment attaches a persistent Runtime Store, so invocation
 state and events survive process loss and interrupted work can be recovered.
 
@@ -16,8 +16,8 @@ client -> runtime/main.py -> runtime/adapter.py -> agent/agent.py:run_agent
   `invoke` and `recover`.
 - `runtime/main.py` constructs the server and registers those hooks.
 
-The `databricks_mason` import path is the runtime's existing package name. The public AgentKit
-client uses `databricks_agentkit.AgentKitClient`.
+Generated runtime code imports from `databricks_agentkit`, and existing runtime import paths remain
+supported. The AgentKit client uses `databricks_agentkit.AgentKitClient`.
 
 To bring an existing Agents SDK agent, keep its normal execution code in `agent/agent.py`, expose a
 `run_agent` function that returns the native streaming result, and make only the small payload/event
@@ -119,8 +119,9 @@ Use `ab init --framework openai --disable-chat-app` for API-only output.
 ab --profile <profile> deploy agent-openai --source .
 ```
 
-Deployment provisions or reuses the app's dedicated Runtime Store. Only the app-owned
-`databricks_mason_runtime_<hash>` schema and runtime tables are added.
+When deployment provisions a dedicated Runtime Store, only the app-owned
+`databricks_agentkit_runtime_<hash>` schema and runtime tables are added. Managed Runtime Store
+deployments use their own default schema.
 
 The `__Host-databricks-app-router` cookie may be supplied independently for sticky replica routing.
 It is not authentication and is not used as the template's application session ID.

@@ -248,7 +248,7 @@ def test_configure_routes_openai_client_to_workspace(monkeypatch):
 
 
 def test_session_store_defaults_to_in_process(monkeypatch):
-    import databricks_mason.openai.sessions as ss
+    import databricks_agentkit.openai.sessions as ss
 
     monkeypatch.delenv("AGENT_SESSION_STORE", raising=False)
     ss._local_sessions.clear()
@@ -257,7 +257,7 @@ def test_session_store_defaults_to_in_process(monkeypatch):
 
 
 def test_session_store_selects_durable_store(monkeypatch):
-    import databricks_mason.openai.sessions as ss
+    import databricks_agentkit.openai.sessions as ss
 
     monkeypatch.setenv("AGENT_SESSION_STORE", "my-store")
     monkeypatch.setattr(ss, "SessionStoreClient", lambda *a, **k: _FakeStoreClient())

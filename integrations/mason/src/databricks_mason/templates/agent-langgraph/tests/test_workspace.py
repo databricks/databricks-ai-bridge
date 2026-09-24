@@ -1,4 +1,4 @@
-from databricks_mason.runtime import workspace
+from databricks_agentkit.runtime import workspace
 
 
 class _FakeWorkspaceClient:

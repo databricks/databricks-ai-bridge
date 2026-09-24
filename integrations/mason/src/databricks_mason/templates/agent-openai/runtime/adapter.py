@@ -8,8 +8,8 @@ from agents import RunResultStreaming
 from agents.items import ToolApprovalItem
 from openai.types.responses import ResponseTextDeltaEvent
 
-from databricks_mason import InvocationContext
-from databricks_mason.runtime.auth import AuthError
+from databricks_agentkit import InvocationContext
+from databricks_agentkit.runtime.auth import AuthError
 
 _RECOVERY_INSTRUCTION = (
     "This is a recovery attempt after a previous worker stopped before completing this invocation. "

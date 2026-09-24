@@ -15,9 +15,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from databricks_mason import workspace_client
-from databricks_mason.runtime.model_services import list_ai_gateway_model_services
-from databricks_mason.runtime.store import runtime_store_is_persistent_environment
+from databricks_agentkit import workspace_client
+from databricks_agentkit.runtime.model_services import list_ai_gateway_model_services
+from databricks_agentkit.runtime.store import runtime_store_is_persistent_environment
 
 _UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
 _INSTANCE_ID = uuid.uuid4().hex[:12]  # identifies this process in the UI
@@ -57,13 +57,13 @@ _USER_HEADERS = ("x-forwarded-email", "x-forwarded-user")
 def _memory_store() -> str:
     # Same resolution the agent uses (AGENT_MEMORY_STORE env → agent.toml binding), so the demo
     # panels reflect exactly the store the agent reads/writes.
-    from databricks_mason.runtime.tool_manifest import resolve_memory_store
+    from databricks_agentkit.runtime.tool_manifest import resolve_memory_store
 
     return (resolve_memory_store() or "").strip().strip("/")
 
 
 def _session_store() -> str:
-    from databricks_mason.runtime.tool_manifest import resolve_session_store
+    from databricks_agentkit.runtime.tool_manifest import resolve_session_store
 
     return (resolve_session_store() or "").strip()
 
@@ -98,7 +98,7 @@ def _is_deployed() -> bool:
 
 
 # Tracing turns on only with both a destination and an experiment, mirroring
-# databricks_mason.runtime.tracing so the UI card matches what the agent actually does.
+# the runtime tracing setup so the UI card matches what the agent actually does.
 _TRACING_DESTINATION_VARS = ("MLFLOW_TRACKING_URI", "MLFLOW_TRACING_DESTINATION")
 
 
@@ -314,7 +314,7 @@ def _require_session() -> None:
 async def _checkpoint_history(session_id: str, actor: str) -> dict[str, Any]:
     from agent.agent import create_agent_graph
 
-    from databricks_mason.langgraph.session_store import thread_config
+    from databricks_agentkit.langgraph.session_store import thread_config
 
     graph = await create_agent_graph(actor)
     snapshot = await graph.aget_state(thread_config(session_id, actor))

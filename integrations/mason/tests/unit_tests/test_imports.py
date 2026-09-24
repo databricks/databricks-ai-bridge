@@ -56,9 +56,19 @@ def test_agentkit_import_uses_public_client() -> None:
         "SessionItem",
         "SessionStore",
     }
+    runtime_helpers = {
+        "DurableAgentServer",
+        "AgentApp",
+        "InvocationContext",
+        "configure_tracing",
+        "list_ai_gateway_model_services",
+        "start_trace",
+        "workspace_client",
+        "workspace_headers",
+    }
 
-    assert set(databricks_agentkit.__all__) == public_sdk_types
-    for name in public_sdk_types:
+    assert set(databricks_agentkit.__all__) == public_sdk_types | runtime_helpers
+    for name in public_sdk_types | runtime_helpers:
         assert getattr(databricks_agentkit, name) is getattr(databricks_mason, name)
 
 

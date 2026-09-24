@@ -150,9 +150,9 @@ has traces. `.mason/` is the existing local state directory.
 
 Use `ab` for the CLI and `AgentKitClient` from `databricks_agentkit` for the Python SDK. Existing
 projects retain several historical identifiers: local state and traces use `.mason/` and
-`~/.mason/`, older deployed app names use the `agent-mason-` prefix, `agent.toml` selects the
-managed server with `server = "mason"`, and generated runtime code imports from
-`databricks_mason`. Keep these names when working with projects that still use them.
+`~/.mason/`, older deployed app names use the `agent-mason-` prefix, and `agent.toml` selects the
+managed server with `server = "mason"`. New projects import runtime helpers from
+`databricks_agentkit`; existing `databricks_mason` imports remain supported.
 
 ## AgentKit SDK
 
@@ -341,7 +341,7 @@ run with `thread_config(session_id)`; the OpenAI Agents adapter exposes the same
 `session_store(session_id)`:
 
 ```python
-from databricks_mason.langgraph import checkpointer, thread_config
+from databricks_agentkit.langgraph import checkpointer, thread_config
 
 agent = create_agent(model=..., tools=[...], checkpointer=checkpointer())
 result = await agent.ainvoke(inputs, config=thread_config(session_id))
@@ -390,7 +390,7 @@ there (the store is provisioned and used only at deploy). The OpenAI Agents adap
 `memory_tools()`:
 
 ```python
-from databricks_mason.langgraph import memory_tools
+from databricks_agentkit.langgraph import memory_tools
 
 agent = create_agent(model=..., tools=[*your_tools, *memory_tools(actor)])
 ```
@@ -796,7 +796,7 @@ again. If submission times out before a message ID is received, ask returns
 `NOT_SUBMITTED` means client setup timed out before sending the question. Query results include
 the first 100 rows, column schema, a truncation indicator, and a deep link to the conversation.
 
-Both framework modules, `databricks_mason.langgraph` and `databricks_mason.openai`, export
+Both framework modules, `databricks_agentkit.langgraph` and `databricks_agentkit.openai`, export
 `genie_tools()`. New managed-server templates (`server = "mason"`) use it automatically for native Genie Agent bindings;
 Genie One uses the existing managed MCP helpers. In an existing project with `server = "mason"`, import
 `genie_tools` from your framework module and add `*genie_tools()` to the agent's existing tool list.

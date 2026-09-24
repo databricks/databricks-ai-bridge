@@ -36,6 +36,11 @@ def test_validate_deployment_name_rejects_too_long():
         deploy_mod._validate_deployment_name("mason-" + "a" * 25)  # 31 chars
 
 
+def test_validate_deployment_name_accepts_platform_limit():
+    name = "a" * 30
+    assert deploy_mod._validate_deployment_name(name) == name
+
+
 # --- deployment prefixes + list filtering -----------------------------------
 
 

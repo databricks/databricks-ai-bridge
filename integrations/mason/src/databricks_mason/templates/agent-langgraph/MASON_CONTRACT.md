@@ -3,7 +3,7 @@
 This document owns the requirements shared by generated projects and existing agents adopting
 the managed runtime. The [README](README.md) owns commands and HTTP examples; adapter docstrings own API details.
 The adjacent template is an example, not a required graph architecture. Runtime internals live in
-the installed package's `databricks_mason/runtime/README.md`.
+the installed package's runtime guide.
 
 ## Command requirements
 
@@ -35,7 +35,7 @@ that make later bindings ineffective.
 
 ### Tools
 
-Use `databricks_mason.langgraph.mcp_tools()` for MCP, UC function, and sandbox bindings, combining
+Use `databricks_agentkit.langgraph.mcp_tools()` for MCP, UC function, and sandbox bindings, combining
 them with existing servers without duplicates. It applies sandbox downscoping. Local Python tools
 belong in source; the template discovers `BaseTool` objects through
 [agent/tools/__init__.py](agent/tools/__init__.py).

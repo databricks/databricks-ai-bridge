@@ -263,10 +263,12 @@ def runtime_store_from_environment() -> RuntimeStore:
         assert branch is not None
         assert database is not None
         assert username is not None
+        schema = os.getenv(RUNTIME_STORE_SCHEMA_ENV) or DEFAULT_RUNTIME_STORE_SCHEMA
         return LakebaseDurableRuntimeStore.from_managed_runtime_store(
             branch=branch,
             database=database,
             username=username,
+            schema=schema,
         )
 
     endpoint = os.getenv(RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV)

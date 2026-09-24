@@ -11,8 +11,8 @@ from agent.mcps import build_mcp_servers
 
 # Importing the tools package auto-registers every tool module.
 from agent.tools import all_tools
-from databricks_mason import workspace_client, workspace_headers
-from databricks_mason.langgraph import (
+from databricks_agentkit import workspace_client, workspace_headers
+from databricks_agentkit.langgraph import (
     checkpointer,
     configure_tracing,
     genie_tools,
@@ -21,13 +21,16 @@ from databricks_mason.langgraph import (
     start_trace,
     thread_config,
 )
-from databricks_mason.runtime.auth import AuthError
+from databricks_agentkit.langgraph.session_store import (
+    invocation_id_from_metadata,
+    invocation_metadata,
+)
+from databricks_agentkit.runtime.auth import AuthError
 
 # A Unity Catalog AI Gateway model service, served from the `system.ai` schema and queried through
 # the gateway (see `use_ai_gateway=True` below). Swap for any `system.ai.*` model service your
 # workspace exposes — the demo chat app's picker lists what's available.
 MODEL = "system.ai.claude-sonnet-4-5"
-_INVOCATION_METADATA_KEY = "databricks_mason.invocation_id"
 
 # Tools that require human approval before they run. Map a tool name to True to allow every decision
 # (approve / edit / reject / respond), or to a config dict to restrict them (see HumanInTheLoopMiddleware).
@@ -128,7 +131,7 @@ async def recovery_input(
     """
     checkpoint = await checkpointer().aget_tuple(thread_config(session_id, actor))
     current_invocation_checkpointed = bool(
-        checkpoint and checkpoint.metadata.get(_INVOCATION_METADATA_KEY) == invocation_id
+        checkpoint and invocation_id_from_metadata(checkpoint.metadata) == invocation_id
     )
     return None if current_invocation_checkpointed else agent_input
 
@@ -151,7 +154,7 @@ async def run_agent(
     graph = await create_agent_graph(actor, model, workspace_client_for=workspace_client_for)
     config = thread_config(session_id, actor)
     if invocation_id:
-        config["metadata"] = {_INVOCATION_METADATA_KEY: invocation_id}
+        config["metadata"] = invocation_metadata(invocation_id)
 
     last_update: Any = None
     with start_trace(name="invoke", inputs=agent_input, session_id=session_id) as span:

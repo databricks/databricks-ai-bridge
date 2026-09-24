@@ -242,6 +242,7 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
         database: str,
         username: str,
         workspace_client: WorkspaceClient | None = None,
+        schema: str = DEFAULT_RUNTIME_STORE_SCHEMA,
     ) -> "LakebaseDurableRuntimeStore":
         """Connect using the backend coordinates returned by the Runtime Store API."""
         return cls(
@@ -249,6 +250,7 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
             database=database,
             username=username,
             workspace_client=workspace_client,
+            schema=schema,
         )
 
     async def initialize(self) -> None:

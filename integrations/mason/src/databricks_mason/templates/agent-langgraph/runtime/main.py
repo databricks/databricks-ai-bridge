@@ -8,7 +8,7 @@ import uvicorn
 from agent.agent import configure
 from dotenv import load_dotenv
 
-from databricks_mason import DurableAgentServer
+from databricks_agentkit import DurableAgentServer
 from runtime.adapter import invoke, recover
 
 # override=False so injected DATABRICKS_* (from `ab dev -p` or the deploy platform) win over a

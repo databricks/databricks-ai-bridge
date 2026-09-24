@@ -2,8 +2,8 @@ import pytest
 from fastapi.testclient import TestClient
 from runtime import ui
 
-from databricks_mason import DurableAgentServer
-from databricks_mason.runtime.store import (
+from databricks_agentkit import DurableAgentServer
+from databricks_agentkit.runtime.store import (
     RUNTIME_STORE_DATABASE_ENV,
     RUNTIME_STORE_LAKEBASE_BRANCH_ENV,
     RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV,

@@ -1,6 +1,6 @@
 # Agent Development Guide
 
-This project is a LangGraph workload hosted by `databricks_mason.DurableAgentServer`.
+This project is a LangGraph workload hosted by `databricks_agentkit.DurableAgentServer`.
 
 Read [MASON_CONTRACT.md](MASON_CONTRACT.md) before changing integration points. It owns command
 requirements, tool/state/tracing wiring, and recovery. [README.md](README.md) owns setup and client
@@ -26,6 +26,6 @@ ab --profile <profile> deploy <name> --source .
 | Browser and managed-state routes | `runtime/ui.py` |
 | Browser behavior | `ui/app.js` |
 
-Shared adapters come from `databricks_mason.langgraph` and `databricks_mason.runtime`. Consult
+Shared adapters come from `databricks_agentkit.langgraph` and `databricks_agentkit.runtime`. Consult
 their docstrings for API details. Update the shared contract and relevant tests when integration
 requirements change.

@@ -104,8 +104,8 @@ entrypoint. Set `[agent].server = "mason"` and have `app.yaml` start that entryp
 existing `mason` value for projects that use the managed server. Changing the configuration field
 alone does not convert a custom HTTP server into `DurableAgentServer`.
 
-Generated runtime code imports from the existing `databricks_mason` package. Those runtime import
-paths remain separate from the public AgentKit client import, `databricks_agentkit.AgentKitClient`.
+Newly generated runtime code imports from `databricks_agentkit`. Existing projects can keep
+using `databricks_mason`. The AgentKit client uses `databricks_agentkit.AgentKitClient`.
 
 ## Invoke, stream, and reconnect
 

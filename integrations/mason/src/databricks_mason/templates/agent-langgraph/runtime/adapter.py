@@ -7,8 +7,8 @@ from agent.agent import recovery_input, run_agent
 from langchain.messages import AIMessageChunk
 from langgraph.types import Command
 
-from databricks_mason import InvocationContext
-from databricks_mason.runtime.auth import AuthError
+from databricks_agentkit import InvocationContext
+from databricks_agentkit.runtime.auth import AuthError
 
 
 def _payload(value: Any) -> dict[str, Any]:

@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from runtime.adapter import invoke, recover
 from runtime.ui import install_ui
 
-from databricks_mason import DurableAgentServer
+from databricks_agentkit import DurableAgentServer
 
 # override=False so injected DATABRICKS_* (from `ab dev -p` or the deploy platform) win over a
 # checked-in .env.

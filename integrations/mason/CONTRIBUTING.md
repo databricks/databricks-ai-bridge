@@ -13,7 +13,7 @@ re-run:
 | --- | --- | --- |
 | **CLI** | the `ab` command (`databricks_mason.cli` and its command modules) | editable install -> runs live from your working tree |
 | **Templates** | the project scaffolds under `src/databricks_mason/templates/` | shipped inside the package; `ab init` copies the template matching the installed CLI via `importlib.resources`, which for an editable install resolves to your source tree |
-| **SDK / runtime** | `databricks_agentkit.AgentKitClient`, `databricks_mason.runtime`, the `langgraph`/`openai` adapters, `DurableAgentServer` | a scaffold depends on the **released** `databricks-agentbricks` distribution from PyPI; opt into local or unreleased code with a `[tool.uv.sources]` override (see below) |
+| **SDK / runtime** | `databricks_agentkit.AgentKitClient`, `databricks_agentkit.runtime`, the `langgraph`/`openai` adapters, `DurableAgentServer` | a scaffold depends on the **released** `databricks-agentbricks` distribution from PyPI; opt into local or unreleased code with a `[tool.uv.sources]` override (see below) |
 
 ## Editable install (CLI + templates)
 
@@ -37,7 +37,7 @@ its own copy of the template, so to iterate on a scaffolded project edit that co
 ## Testing SDK / runtime changes in a scaffold
 
 A scaffold uses a normal `databricks-agentbricks` PyPI dependency, so `ab dev` and `ab deploy`
-install the **released** SDK - editing `databricks_mason.runtime` / `.langgraph` / `.openai` in your
+install the **released** SDK - editing the runtime and adapter implementation under `databricks_mason` in your
 checkout does **not** change what a scaffold runs. To exercise local or unreleased SDK changes, add a
 `[tool.uv.sources]` override to the scaffold's `pyproject.toml`. It is a dev-loop-only edit - don't
 ship it in a real deployment.
@@ -68,7 +68,7 @@ override):
 
 ```sh
 # local: the source uv resolved into the agent venv
-cat /tmp/scratch-agent/.venv/lib/python*/site-packages/databricks_agentbricks-*.dist-info/direct_url.json
+cat /tmp/scratch-agent/.venv/lib/python*/site-packages/databricks_agentkit-*.dist-info/direct_url.json
 # deployed: watch the build/install logs
 ab deployments logs agent-bricks-<name>
 ```

@@ -3,7 +3,7 @@ from typing import Any
 from agents import Agent, Runner, set_default_openai_api, set_default_openai_client
 from databricks_openai import AsyncDatabricksOpenAI
 
-from databricks_mason import workspace_client, workspace_headers
+from databricks_agentkit import workspace_client, workspace_headers
 
 MODEL = "databricks-gpt-5-2"
 

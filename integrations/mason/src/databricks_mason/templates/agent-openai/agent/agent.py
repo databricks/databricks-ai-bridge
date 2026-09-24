@@ -14,8 +14,8 @@ from agent.mcps import build_mcp_servers
 
 # Importing the tools package auto-registers every tool module.
 from agent.tools import all_tools
-from databricks_mason import workspace_client, workspace_headers
-from databricks_mason.openai import (
+from databricks_agentkit import workspace_client, workspace_headers
+from databricks_agentkit.openai import (
     configure_tracing,
     genie_tools,
     mcp_servers,
@@ -23,7 +23,7 @@ from databricks_mason.openai import (
     session_store,
     start_trace,
 )
-from databricks_mason.runtime.auth import AuthError
+from databricks_agentkit.runtime.auth import AuthError
 
 logger = logging.getLogger(__name__)
 
