@@ -1407,3 +1407,146 @@ def test_deploy_grants_bound_store(tmp_path: pathlib.Path, monkeypatch):
     env = {e["name"]: e["value"] for e in env_entries}
     assert env["AGENT_SESSION_STORE"] == "bound-sess"
     assert "AGENT_MEMORY_STORE" not in env
+
+
+# ---------------------------------------------------------------------------
+# DeployOrchestrator unit tests - exercise the DI seam directly with fakes
+# ---------------------------------------------------------------------------
+
+
+def _make_orchestrator(*, runner=None, apps=None, stores=None, client=None):
+    """Build a minimal DeployOrchestrator with injectable fakes."""
+    import types as _types
+
+    fake_client = client or _FakeClient()
+    fake_runner = runner or (
+        lambda args, profile, **kw: _types.SimpleNamespace(returncode=0, stdout="", stderr="")
+    )
+
+    class _FakeApps:
+        def exists(self, name):
+            return True
+
+        def wait_for_running(self, name, timeout_s=300):
+            pass
+
+        def service_principal(self, name):
+            return "sp-fake-123"
+
+        def url(self, name):
+            return None
+
+    class _FakeStores:
+        def grant_store_access(self, sp, session_store, memory_store):
+            return None
+
+    fake_stores = stores or _FakeStores()
+    return deploy_mod.DeployOrchestrator(
+        client_factory=lambda: fake_client,
+        apps=apps or _FakeApps(),
+        stores_factory=lambda _c: fake_stores,
+        profile="prof",
+        output="text",
+        runner=fake_runner,
+    )
+
+
+def test_orchestrator_grant_access_succeeds_when_sp_found():
+    # _grant_access returns (True, None, None) when stores are declared and SP is resolvable.
+    from databricks_mason.cli.tracing import MLflowTraceTables
+
+    granted: dict = {}
+
+    class _AppsWithSP:
+        def service_principal(self, name):
+            return "sp-real"
+
+        def url(self, name):
+            return None
+
+    class _Stores:
+        def grant_store_access(self, sp, session_store, memory_store):
+            granted.update(sp=sp, session=session_store, memory=memory_store)
+            return None
+
+    orch = _make_orchestrator(apps=_AppsWithSP(), stores=_Stores())
+    # Seed _stores so _grant_access can use it (run() normally does this after _authorize).
+    orch._stores = _Stores()
+    grants_stores, grant_error, trace_grant_error = orch._grant_access(
+        "agent-mason-myapp", "mem-store", "sess-store", None, MLflowTraceTables()
+    )
+
+    assert grants_stores is True
+    assert grant_error is None
+    assert trace_grant_error is None
+    assert granted == {"sp": "sp-real", "session": "sess-store", "memory": "mem-store"}
+
+
+def test_orchestrator_grant_access_surfaces_error_when_sp_none():
+    # _grant_access sets grant_error when service_principal returns None; deploy still continues.
+    from databricks_mason.cli.tracing import MLflowTraceTables
+
+    class _AppsNoSP:
+        def service_principal(self, name):
+            return None
+
+        def url(self, name):
+            return None
+
+    orch = _make_orchestrator(apps=_AppsNoSP())
+    grants_stores, grant_error, trace_grant_error = orch._grant_access(
+        "agent-mason-myapp", "mem-store", None, None, MLflowTraceTables()
+    )
+
+    assert grants_stores is True  # memory_store is truthy -> grant was attempted
+    assert grant_error is not None
+    assert "service principal" in grant_error
+
+
+def test_orchestrator_ensure_app_issues_create_when_not_exists():
+    # _ensure_app calls runner with ["apps", "create", name, ...] when app does not yet exist.
+    import types as _types
+
+    runner_calls: list[list[str]] = []
+
+    def fake_runner(args, profile, **kw):
+        runner_calls.append(args)
+        return _types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    class _AppsNotExists:
+        def exists(self, name):
+            return False
+
+        def wait_for_running(self, name, timeout_s=300):
+            pass
+
+    orch = _make_orchestrator(runner=fake_runner, apps=_AppsNotExists())
+    orch._ensure_app("agent-mason-myapp", None, None, [])
+
+    create_calls = [c for c in runner_calls if c[:2] == ["apps", "create"]]
+    assert len(create_calls) == 1
+    assert create_calls[0][2] == "agent-mason-myapp"
+
+
+def test_orchestrator_ensure_app_skips_create_when_exists():
+    # _ensure_app does NOT call runner with apps create when the app already exists.
+    import types as _types
+
+    runner_calls: list[list[str]] = []
+
+    def fake_runner(args, profile, **kw):
+        runner_calls.append(args)
+        return _types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    class _AppsExists:
+        def exists(self, name):
+            return True
+
+        def wait_for_running(self, name, timeout_s=300):
+            pass
+
+    orch = _make_orchestrator(runner=fake_runner, apps=_AppsExists())
+    orch._ensure_app("agent-mason-myapp", None, None, [])
+
+    create_calls = [c for c in runner_calls if c[:2] == ["apps", "create"]]
+    assert create_calls == []  # no create issued for an already-existing app
