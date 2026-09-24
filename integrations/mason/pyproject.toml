@@ -1,5 +1,5 @@
 [project]
-name = "databricks-mason"
+name = "databricks-agentbricks"
 version = "0.2.0"
 description = "Databricks integration for Mason"
 authors = [

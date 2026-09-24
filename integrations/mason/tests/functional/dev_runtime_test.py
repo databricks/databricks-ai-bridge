@@ -221,7 +221,7 @@ def test_scaffolded_agent_boots_and_answers_locally(
         if bridge_wheel
         else {"path": str(pathlib.Path(__file__).resolve().parents[4]), "editable": True}
     )
-    _pin_package_source(project / "pyproject.toml", "databricks-mason", mason_source)
+    _pin_package_source(project / "pyproject.toml", "databricks-agentbricks", mason_source)
     _pin_package_source(
         project / "pyproject.toml",
         "databricks-ai-bridge",
@@ -229,7 +229,7 @@ def test_scaffolded_agent_boots_and_answers_locally(
         direct_requirement="databricks-ai-bridge[memory]",
     )
 
-    # 2. Build the agent's venv (installs the databricks-mason pinned above + its runtime deps).
+    # 2. Build the agent's venv (installs the databricks-agentbricks pinned above + its runtime deps).
     subprocess.run(
         [uv, "sync"],
         cwd=project,

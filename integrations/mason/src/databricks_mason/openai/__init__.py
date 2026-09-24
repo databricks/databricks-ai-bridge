@@ -1,4 +1,4 @@
-"""OpenAI Agents SDK adapter for running an agent on Databricks (installed via ``databricks-mason[openai]``).
+"""OpenAI Agents SDK adapter for running an agent on Databricks (installed via ``databricks-agentbricks[openai]``).
 
 Composable pieces you drop into an existing OpenAI Agents SDK agent — a session store, MCP servers
 declared in ``agent.toml``, long-term memory tools, and MLflow tracing. Each maps onto a slot the
@@ -21,7 +21,7 @@ Agents SDK already has, so migrating an existing agent is a graft, not a rewrite
     result = await Runner.run(agent, messages, session=session_store(session_id))
 
 These need the agent stack (openai-agents, databricks-openai, mlflow), so they sit behind the
-``[openai]`` extra to keep a plain ``databricks-mason`` installation independent of agent frameworks.
+``[openai]`` extra to keep a plain ``databricks-agentbricks`` installation independent of agent frameworks.
 
 ``__all__`` is the curated surface. Other entry points (``DatabricksSessionStore``) are reachable by
 their submodule paths but not re-exported here.

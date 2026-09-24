@@ -1,4 +1,4 @@
-# Contributing to `databricks-mason`
+# Contributing to `databricks-agentbricks`
 
 This guide covers developing Mason itself - the CLI, the SDK/runtime, and the project templates -
 and how to run and test your changes locally and on Databricks Apps.
@@ -12,7 +12,7 @@ re-run:
 | --- | --- | --- |
 | **CLI** | the `mason` command (`databricks_mason.cli` and its command modules) | editable install -> runs live from your working tree |
 | **Templates** | the project scaffolds under `src/databricks_mason/templates/` | shipped inside the package; `mason init` copies the template matching the installed CLI via `importlib.resources`, which for an editable install resolves to your source tree |
-| **SDK / runtime** | `databricks_mason.runtime`, the `langgraph`/`openai` adapters, `DurableAgentServer` | a scaffold depends on the **released** `databricks-mason` from PyPI; opt into local or unreleased code with a `[tool.uv.sources]` override (see below) |
+| **SDK / runtime** | `databricks_mason.runtime`, the `langgraph`/`openai` adapters, `DurableAgentServer` | a scaffold depends on the **released** `databricks-agentbricks` from PyPI; opt into local or unreleased code with a `[tool.uv.sources]` override (see below) |
 
 ## Editable install (CLI + templates)
 
@@ -35,7 +35,7 @@ its own copy of the template, so to iterate on a scaffolded project edit that co
 
 ## Testing SDK / runtime changes in a scaffold
 
-A scaffold uses a normal `databricks-mason` PyPI dependency, so `mason dev` and `mason deploy`
+A scaffold uses a normal `databricks-agentbricks` PyPI dependency, so `mason dev` and `mason deploy`
 install the **released** SDK - editing `databricks_mason.runtime` / `.langgraph` / `.openai` in your
 checkout does **not** change what a scaffold runs. To exercise local or unreleased SDK changes, add a
 `[tool.uv.sources]` override to the scaffold's `pyproject.toml`. It is a dev-loop-only edit - don't
@@ -45,7 +45,7 @@ ship it in a real deployment.
 
 ```toml
 [tool.uv.sources]
-databricks-mason = { path = "/abs/path/to/databricks-ai-bridge/integrations/mason", editable = true }
+databricks-agentbricks = { path = "/abs/path/to/databricks-ai-bridge/integrations/mason", editable = true }
 ```
 
 `mason dev` builds the scaffold's venv from this, so your working-tree SDK edits run live. After
@@ -56,7 +56,7 @@ changing the pin or the scaffold's dependencies, rebuild once with `mason dev --
 
 ```toml
 [tool.uv.sources]
-databricks-mason = { git = "https://github.com/<you>/databricks-ai-bridge", rev = "<pushed-sha>", subdirectory = "integrations/mason" }
+databricks-agentbricks = { git = "https://github.com/<you>/databricks-ai-bridge", rev = "<pushed-sha>", subdirectory = "integrations/mason" }
 ```
 
 Commit and push first - the Apps build clones that commit. A `path` or `file://` pin won't resolve

@@ -346,7 +346,7 @@ jobs:
       # Build the wheel and run the functional tier from a venv it's installed into, so the tests
       # exercise the shipped artifact (a packaging gap fails here) rather than an editable source
       # tree. `mason` on PATH is the wheel's console script; MASON_WHEEL pins the scaffolded agent's
-      # databricks-mason at the same wheel.
+      # databricks-agentbricks at the same wheel.
       - name: Build and install the mason wheel
         working-directory: integrations/mason
         run: |
@@ -355,10 +355,10 @@ jobs:
           uv venv .venv-functional
           uv pip install --python .venv-functional/bin/python --no-sources \
             "$(ls dist/databricks_ai_bridge-*.whl)" \
-            "$(ls dist/databricks_mason-*.whl)" --group tests
+            "$(ls dist/databricks_agentbricks-*.whl)" --group tests
       - name: Run mason functional tests against the wheel
         working-directory: integrations/mason
         run: |
           AI_BRIDGE_WHEEL="$(ls "$PWD"/dist/databricks_ai_bridge-*.whl)" \
-          MASON_WHEEL="$(ls "$PWD"/dist/databricks_mason-*.whl)" \
+          MASON_WHEEL="$(ls "$PWD"/dist/databricks_agentbricks-*.whl)" \
             .venv-functional/bin/pytest tests/functional/

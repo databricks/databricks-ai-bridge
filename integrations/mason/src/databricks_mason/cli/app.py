@@ -49,7 +49,7 @@ class CliContext:
     default="text",
     help="Output format (default: text).",
 )
-@click.version_option(package_name="databricks-mason", prog_name="mason")
+@click.version_option(package_name="databricks-agentbricks", prog_name="mason")
 @click.pass_context
 def mason(ctx: click.Context, profile: Optional[str], output: str) -> None:
     """Mason is a CLI for building and deploying custom AI agents on Databricks.

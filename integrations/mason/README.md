@@ -1,4 +1,4 @@
-# `databricks-mason`
+# `databricks-agentbricks`
 
 Mason is an experimental CLI for Databricks custom agent preview APIs and
 deployments. It manages memory, sessions, tracing, and deployments from one
@@ -70,7 +70,7 @@ The two ways to run an agent:
 From PyPI:
 
 ```sh
-pip install databricks-mason
+pip install databricks-agentbricks
 ```
 
 From source:

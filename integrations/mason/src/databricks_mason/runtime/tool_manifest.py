@@ -75,7 +75,7 @@ def validate_genie_source(
 def project_root() -> pathlib.Path:
     """Resolve the agent project containing ``agent.toml``.
 
-    This module ships in the databricks-mason package, not inside the agent project, so locate the
+    This module ships in the databricks-agentbricks package, not inside the agent project, so locate the
     project relative to where the agent runs (the current working directory) — not this file's
     location. ``MASON_PROJECT_ROOT`` overrides for cases where the process starts elsewhere.
     """
