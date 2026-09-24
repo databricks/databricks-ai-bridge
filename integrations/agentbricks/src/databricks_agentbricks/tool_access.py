@@ -36,13 +36,14 @@ _WORKSPACE_OBJECT_TYPES = {
     ObjectType.FILE: "files",
     ObjectType.NOTEBOOK: "notebooks",
 }
+_MCP_SERVICE_SECURABLE_TYPE = "MCP_SERVICE"
 
 
 @dataclass(frozen=True)
 class UcGrant:
     """One effective Unity Catalog privilege required by a direct tool resource."""
 
-    securable_type: SecurableType
+    securable_type: SecurableType | str
     full_name: str
     privilege: Privilege
 
@@ -85,8 +86,12 @@ def _mcp_grants(service: str) -> set[UcGrant]:
     return {
         UcGrant(SecurableType.CATALOG, catalog, Privilege.USE_CATALOG),
         UcGrant(SecurableType.SCHEMA, f"{catalog}.{schema}", Privilege.USE_SCHEMA),
-        UcGrant(SecurableType.MCP_SERVICE, service, Privilege.EXECUTE),
+        UcGrant(_MCP_SERVICE_SECURABLE_TYPE, service, Privilege.EXECUTE),
     }
+
+
+def _securable_type_value(securable_type: SecurableType | str) -> str:
+    return securable_type.value if isinstance(securable_type, SecurableType) else securable_type
 
 
 def plan_tool_access(tools: Sequence[ToolSpec]) -> ToolAccessPlan:
@@ -152,7 +157,7 @@ def plan_tool_access(tools: Sequence[ToolSpec]) -> ToolAccessPlan:
             sorted(
                 uc_grants,
                 key=lambda grant: (
-                    grant.securable_type.value,
+                    _securable_type_value(grant.securable_type),
                     grant.full_name,
                     grant.privilege.value,
                 ),
@@ -170,7 +175,7 @@ def _effective_uc_privileges(client: Any, principal: str, grant: UcGrant) -> set
     try:
         while True:
             response = client.grants.get_effective(
-                grant.securable_type.value,
+                _securable_type_value(grant.securable_type),
                 grant.full_name,
                 max_results=0,
                 principal=principal,
@@ -190,7 +195,7 @@ def _effective_uc_privileges(client: Any, principal: str, grant: UcGrant) -> set
     except DatabricksError as exc:
         raise AgentCliError(
             f"Could not read effective {grant.privilege.value} access on "
-            f"{grant.securable_type.value} {grant.full_name!r}."
+            f"{_securable_type_value(grant.securable_type)} {grant.full_name!r}."
         ) from exc
 
 
@@ -200,18 +205,19 @@ def _ensure_uc_grant(client: Any, principal: str, grant: UcGrant) -> None:
         return
     try:
         client.grants.update(
-            grant.securable_type.value,
+            _securable_type_value(grant.securable_type),
             grant.full_name,
             changes=[PermissionsChange(principal=principal, add=[grant.privilege])],
         )
     except DatabricksError as exc:
         raise AgentCliError(
             f"Could not grant {grant.privilege.value} on "
-            f"{grant.securable_type.value} {grant.full_name!r} to the App service principal."
+            f"{_securable_type_value(grant.securable_type)} {grant.full_name!r} "
+            "to the App service principal."
         ) from exc
     if grant.privilege not in _effective_uc_privileges(client, principal, grant):
         raise AgentCliError(
-            f"{grant.privilege.value} on {grant.securable_type.value} "
+            f"{grant.privilege.value} on {_securable_type_value(grant.securable_type)} "
             f"{grant.full_name!r} did not become effective for the App service principal."
         )
 

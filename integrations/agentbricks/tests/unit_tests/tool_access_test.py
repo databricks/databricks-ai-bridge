@@ -72,8 +72,8 @@ def test_plan_maps_only_explicit_app_auth_resources_to_least_privilege():
     assert set(plan.uc_grants) == {
         UcGrant(SecurableType.CATALOG, "system", Privilege.USE_CATALOG),
         UcGrant(SecurableType.SCHEMA, "system.ai", Privilege.USE_SCHEMA),
-        UcGrant(SecurableType.MCP_SERVICE, "system.ai.sandbox", Privilege.EXECUTE),
-        UcGrant(SecurableType.MCP_SERVICE, "system.ai.web_search", Privilege.EXECUTE),
+        UcGrant("MCP_SERVICE", "system.ai.sandbox", Privilege.EXECUTE),
+        UcGrant("MCP_SERVICE", "system.ai.web_search", Privilege.EXECUTE),
     }
     assert plan.workspace_grants == (
         WorkspaceGrant(
@@ -165,10 +165,26 @@ def _effective(principal: str, privilege: Privilege) -> EffectivePermissionsList
 def test_uc_grant_accepts_existing_effective_inherited_privilege():
     client = Mock()
     client.grants.get_effective.return_value = _effective("app-sp", Privilege.EXECUTE)
-    grant = UcGrant(SecurableType.MCP_SERVICE, "system.ai.web_search", Privilege.EXECUTE)
+    grant = UcGrant("MCP_SERVICE", "system.ai.web_search", Privilege.EXECUTE)
 
     _ensure_uc_grant(client, "app-sp", grant)
 
+    client.grants.update.assert_not_called()
+
+
+def test_uc_grant_accepts_string_securable_type_for_minimum_sdk():
+    client = Mock()
+    client.grants.get_effective.return_value = _effective("app-sp", Privilege.EXECUTE)
+    grant = UcGrant("MCP_SERVICE", "system.ai.web_search", Privilege.EXECUTE)
+
+    _ensure_uc_grant(client, "app-sp", grant)
+
+    client.grants.get_effective.assert_called_once_with(
+        "MCP_SERVICE",
+        "system.ai.web_search",
+        max_results=0,
+        principal="app-sp",
+    )
     client.grants.update.assert_not_called()
 
 
@@ -194,7 +210,7 @@ def test_uc_grant_follows_empty_effective_permission_pages():
         EffectivePermissionsList(privilege_assignments=[], next_page_token="page-2"),
         _effective("app-sp", Privilege.EXECUTE),
     ]
-    grant = UcGrant(SecurableType.MCP_SERVICE, "system.ai.web_search", Privilege.EXECUTE)
+    grant = UcGrant("MCP_SERVICE", "system.ai.web_search", Privilege.EXECUTE)
 
     _ensure_uc_grant(client, "app-sp", grant)
 
@@ -205,7 +221,7 @@ def test_uc_grant_follows_empty_effective_permission_pages():
 def test_uc_grant_fails_when_update_does_not_become_effective():
     client = Mock()
     client.grants.get_effective.return_value = EffectivePermissionsList(privilege_assignments=[])
-    grant = UcGrant(SecurableType.MCP_SERVICE, "system.ai.web_search", Privilege.EXECUTE)
+    grant = UcGrant("MCP_SERVICE", "system.ai.web_search", Privilege.EXECUTE)
 
     with pytest.raises(AgentCliError, match="did not become effective"):
         _ensure_uc_grant(client, "app-sp", grant)
@@ -215,7 +231,7 @@ def test_uc_grant_wraps_update_failure_with_target():
     client = Mock()
     client.grants.get_effective.return_value = EffectivePermissionsList(privilege_assignments=[])
     client.grants.update.side_effect = PermissionDenied("denied")
-    grant = UcGrant(SecurableType.MCP_SERVICE, "system.ai.web_search", Privilege.EXECUTE)
+    grant = UcGrant("MCP_SERVICE", "system.ai.web_search", Privilege.EXECUTE)
 
     with pytest.raises(AgentCliError, match="system.ai.web_search"):
         _ensure_uc_grant(client, "app-sp", grant)
