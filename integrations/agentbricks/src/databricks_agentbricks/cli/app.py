@@ -6,7 +6,6 @@ Root Click group. Global `--profile` and `--output` flow to every subcommand via
 
 from __future__ import annotations
 
-from importlib import metadata
 from typing import Optional
 
 import click
@@ -39,13 +38,6 @@ class CliContext:
         return self._client
 
 
-def _show_version(ctx: click.Context, param: click.Parameter, value: bool) -> None:
-    if value and not ctx.resilient_parsing:
-        package_version = metadata.version("databricks-agentbricks")
-        click.echo(f"{ctx.find_root().info_name}, version {package_version}", color=ctx.color)
-        ctx.exit()
-
-
 @click.group(name="ab", context_settings={"help_option_names": ["-h", "--help"]})
 @click.option(
     "--profile", "-p", default=None, help="~/.databrickscfg profile to authenticate with."
@@ -57,14 +49,7 @@ def _show_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
     default="text",
     help="Output format (default: text).",
 )
-@click.option(
-    "--version",
-    is_flag=True,
-    callback=_show_version,
-    expose_value=False,
-    is_eager=True,
-    help="Show the version and exit.",
-)
+@click.version_option(package_name="databricks-agentbricks")
 @click.pass_context
 def agentbricks(ctx: click.Context, profile: Optional[str], output: str) -> None:
     """Agent Bricks is a CLI for building and deploying custom AI agents on Databricks.
