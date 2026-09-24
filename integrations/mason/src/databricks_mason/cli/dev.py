@@ -13,9 +13,9 @@ import pathlib
 from typing import Optional
 
 import click
-import yaml
 
 from databricks_mason import render
+from databricks_mason.app_manifest import AppManifest
 from databricks_mason.cli.deploy import (
     _load_project,
     resource_bindings,
@@ -272,18 +272,9 @@ def _dev_entry_point(
     removed so dev stays fully local. ``extra_env`` is merged in (overriding any same-named entries)
     for dev-only overrides such as the local tracing config.
     """
-    try:
-        doc = yaml.safe_load(app_yaml.read_text()) or {}
-    except yaml.YAMLError as exc:
-        raise AgentCliError(f"Could not parse {app_yaml}: {exc}") from exc
-    if not isinstance(doc, dict):
-        raise AgentCliError(f"Invalid {app_yaml}: top level must be an object.")
-    env = doc.get("env")
-    if env is not None and not isinstance(env, list):
-        raise AgentCliError(f"Invalid {app_yaml}: env must be a list.")
-    filtered = [
-        e for e in (env or []) if not (isinstance(e, dict) and e.get("name") in _BUILD_INDEX_ENVS)
-    ]
+    manifest = AppManifest.parse(app_yaml.read_text(), source=app_yaml)
+    env = manifest.raw_env()
+    filtered = [e for e in env if not (isinstance(e, dict) and e.get("name") in _BUILD_INDEX_ENVS)]
     filtered = [
         e
         for e in filtered
@@ -300,11 +291,11 @@ def _dev_entry_point(
         filtered = [e for e in filtered if not (isinstance(e, dict) and e.get("name") == name)]
         filtered.append({"name": name, "value": value})
     filtered.append({"name": RUNTIME_STORE_LOCAL_ENV, "value": "true"})
-    doc["env"] = filtered
+    manifest.set_env(filtered)
     # The Apps CLI rejects hidden or hyphenated entry-point filenames.
     dev_yaml = app_yaml.parent / _LOCAL_APP_YAML
     try:
-        dev_yaml.write_text(yaml.safe_dump(doc, sort_keys=False))
+        dev_yaml.write_text(manifest.to_yaml())
     except OSError as exc:
         raise AgentCliError(f"Could not write {dev_yaml}: {exc}") from exc
     return dev_yaml
