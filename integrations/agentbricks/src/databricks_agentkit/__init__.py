@@ -1,15 +1,13 @@
-"""Public AgentKit resources and generated-agent runtime helpers.
+"""AgentKit resources and generated-agent runtime helpers.
 
-The runtime implementation remains in :mod:`databricks_agentbricks` for compatibility with existing
-projects. New generated agents use this package's runtime and framework paths; those exports are
-resolved lazily so a base AgentKit installation does not import optional agent frameworks.
+Runtime exports are resolved lazily so the base package does not import optional agent frameworks.
 """
 
 from typing import TYPE_CHECKING
 
-from databricks_agentbricks.client import AgentKitClient
-from databricks_agentbricks.memory_store import Memory, MemorySearchResult, MemoryStore
-from databricks_agentbricks.session_store import (
+from databricks_agentkit.client import AgentKitClient
+from databricks_agentkit.memory_store import Memory, MemorySearchResult, MemoryStore
+from databricks_agentkit.session_store import (
     ExtractedMemory,
     Session,
     SessionItem,
@@ -17,7 +15,7 @@ from databricks_agentbricks.session_store import (
 )
 
 if TYPE_CHECKING:
-    from databricks_agentbricks.runtime import (
+    from databricks_agentkit.runtime import (
         AgentApp,
         DurableAgentServer,
         InvocationContext,
@@ -65,5 +63,5 @@ def __getattr__(name: str) -> object:
     if name in _RUNTIME_REEXPORTS:
         import importlib
 
-        return getattr(importlib.import_module("databricks_agentbricks.runtime"), name)
+        return getattr(importlib.import_module("databricks_agentkit.runtime"), name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

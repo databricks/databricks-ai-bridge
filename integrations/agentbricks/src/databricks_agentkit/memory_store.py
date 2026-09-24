@@ -7,11 +7,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional
 
-from databricks_agentbricks._pagination import validate_limit, validate_page_size
-from databricks_agentbricks.timefmt import parse_timestamp
+from databricks_agentkit._pagination import validate_limit, validate_page_size
+from databricks_agentkit.timefmt import parse_timestamp
 
 if TYPE_CHECKING:
-    from databricks_agentbricks._api_client import _AgentBricksApiClient
+    from databricks_agentkit._api_client import _AgentBricksApiClient
 
 
 def _resource_id(name: str) -> str:

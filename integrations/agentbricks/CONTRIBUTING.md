@@ -37,7 +37,7 @@ its own copy of the template, so to iterate on a scaffolded project edit that co
 ## Testing SDK / runtime changes in a scaffold
 
 A scaffold uses a normal `databricks-agentbricks` PyPI dependency, so `ab dev` and `ab deploy`
-install the **released** SDK - editing the runtime and adapter implementation under `databricks_agentbricks` in your
+install the **released** SDK - editing the runtime and adapter implementation under `databricks_agentkit` in your
 checkout does **not** change what a scaffold runs. To exercise local or unreleased SDK changes, add a
 `[tool.uv.sources]` override to the scaffold's `pyproject.toml`. It is a dev-loop-only edit - don't
 ship it in a real deployment.

@@ -19,7 +19,7 @@ from databricks_agentbricks.agent_project import (
 )
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.project_types import AgentFramework, AgentServer
-from databricks_agentbricks.runtime.tool_manifest import ToolManifestError, load_tools
+from databricks_agentkit.runtime.tool_manifest import ToolManifestError, load_tools
 
 
 @pytest.mark.parametrize("kind", ["mcp", "sandbox", "uc_function", "genie_one", "genie_agent"])

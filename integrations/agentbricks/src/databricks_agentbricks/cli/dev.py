@@ -26,8 +26,8 @@ from databricks_agentbricks.databricks_cli import _databricks
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.project_config import require_managed_tool_support
 from databricks_agentbricks.project_types import AgentServer
-from databricks_agentbricks.runtime.store import RUNTIME_STORE_LOCAL_ENV
-from databricks_agentbricks.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
+from databricks_agentkit.runtime.store import RUNTIME_STORE_LOCAL_ENV
+from databricks_agentkit.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
 
 # Default local port; `databricks apps run-local` listens here unless --app-port overrides it.
 _DEFAULT_APP_PORT = 8000

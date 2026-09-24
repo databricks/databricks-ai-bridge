@@ -180,7 +180,7 @@ def test_init_creates_canonical_agent_manifest(tmp_path: pathlib.Path):
 
 
 def test_init_langgraph_does_not_vendor_runtime_plumbing(tmp_path: pathlib.Path):
-    # Runtime plumbing lives in databricks_agentbricks.runtime (imported, not vendored), so init must not
+    # Runtime plumbing lives in databricks_agentkit.runtime (imported, not vendored), so init must not
     # write an agent/agentbricks/ dir into the scaffold.
     dest = tmp_path / "langgraph"
     with mock.patch.object(

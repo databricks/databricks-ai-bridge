@@ -10,15 +10,15 @@ from unittest import mock
 
 import pytest
 
-from databricks_agentbricks._api_client import (
+from databricks_agentbricks.errors import AgentCliError
+from databricks_agentkit import AgentKitClient
+from databricks_agentkit._api_client import (
     _AgentBricksApiClient,
     _workspace_client,
     memory_entry_path,
     memory_store_path,
     session_store_path,
 )
-from databricks_agentbricks.errors import AgentCliError
-from databricks_agentkit import AgentKitClient
 
 
 def _client(workspace_client):
@@ -33,7 +33,7 @@ def _client(workspace_client):
     [AgentKitClient],
     ids=["agentkit"],
 )
-@mock.patch("databricks_agentbricks.client._AgentBricksApiClient")
+@mock.patch("databricks_agentkit.client._AgentBricksApiClient")
 def test_client_wraps_workspace_client(api_client, client_class):
     workspace_client = mock.Mock()
 
@@ -468,7 +468,7 @@ def test_preview_error_is_mapped_with_hint(workspace_client):
 
 
 @mock.patch(
-    "databricks_agentbricks._api_client._workspace_client", side_effect=RuntimeError("no auth")
+    "databricks_agentkit._api_client._workspace_client", side_effect=RuntimeError("no auth")
 )
 def test_auth_error_hint_explains_profile_selection_and_login(_workspace_client):
     with pytest.raises(AgentCliError) as exc_info:
@@ -547,7 +547,7 @@ class _TransientError(RuntimeError):
     error_code = "CANCELLED"
 
 
-@mock.patch("databricks_agentbricks._api_client.time.sleep")
+@mock.patch("databricks_agentkit._api_client.time.sleep")
 @mock.patch("databricks.sdk.WorkspaceClient")
 def test_delete_runtime_store_retries_transient_errors(workspace_client, sleep):
     client, do = _client(workspace_client)
@@ -558,7 +558,7 @@ def test_delete_runtime_store_retries_transient_errors(workspace_client, sleep):
     sleep.assert_called_once()
 
 
-@mock.patch("databricks_agentbricks._api_client.time.sleep")
+@mock.patch("databricks_agentkit._api_client.time.sleep")
 @mock.patch("databricks.sdk.WorkspaceClient")
 def test_do_retries_transient_error_then_succeeds(workspace_client, sleep):
     client, do = _client(workspace_client)
@@ -571,7 +571,7 @@ def test_do_retries_transient_error_then_succeeds(workspace_client, sleep):
     sleep.assert_called_once()
 
 
-@mock.patch("databricks_agentbricks._api_client.time.sleep")
+@mock.patch("databricks_agentkit._api_client.time.sleep")
 @mock.patch("databricks.sdk.WorkspaceClient")
 @pytest.mark.parametrize(
     ("method_name", "args"),
@@ -593,7 +593,7 @@ def test_create_store_does_not_retry_transient_error_by_default(
     sleep.assert_not_called()
 
 
-@mock.patch("databricks_agentbricks._api_client.time.sleep")
+@mock.patch("databricks_agentkit._api_client.time.sleep")
 @mock.patch("databricks.sdk.WorkspaceClient")
 def test_do_stops_after_max_attempts(workspace_client, sleep):
     client, do = _client(workspace_client)
@@ -607,7 +607,7 @@ def test_do_stops_after_max_attempts(workspace_client, sleep):
     assert "None" not in exc_info.value.message
 
 
-@mock.patch("databricks_agentbricks._api_client.time.sleep")
+@mock.patch("databricks_agentkit._api_client.time.sleep")
 @mock.patch("databricks.sdk.WorkspaceClient")
 def test_do_does_not_retry_non_transient_error(workspace_client, sleep):
     client, do = _client(workspace_client)
@@ -624,7 +624,7 @@ def test_do_does_not_retry_non_transient_error(workspace_client, sleep):
     sleep.assert_not_called()
 
 
-@mock.patch("databricks_agentbricks._api_client.time.sleep")
+@mock.patch("databricks_agentkit._api_client.time.sleep")
 @mock.patch("databricks.sdk.WorkspaceClient")
 def test_do_does_not_retry_transient_error_for_pop(workspace_client, sleep):
     client, do = _client(workspace_client)
@@ -646,7 +646,7 @@ def test_account_routed_profile_uses_configured_host_and_workspace_header():
     with (
         mock.patch("databricks.sdk.WorkspaceClient", side_effect=[resolved, routed]) as wc,
         mock.patch(
-            "databricks_agentbricks._api_client._profile_host",
+            "databricks_agentkit._api_client._profile_host",
             return_value="https://account.example.com",
         ),
     ):

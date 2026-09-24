@@ -75,9 +75,9 @@ def test_cli_and_every_command_help_load(run_ab) -> None:
 def test_installed_wheel_exposes_agentkit_sdk() -> None:
     from databricks_agentkit import AgentKitClient, MemoryStore, SessionStore
 
-    assert AgentKitClient.__module__ == "databricks_agentbricks.client"
-    assert MemoryStore.__module__ == "databricks_agentbricks.memory_store"
-    assert SessionStore.__module__ == "databricks_agentbricks.session_store"
+    assert AgentKitClient.__module__ == "databricks_agentkit.client"
+    assert MemoryStore.__module__ == "databricks_agentkit.memory_store"
+    assert SessionStore.__module__ == "databricks_agentkit.session_store"
 
 
 @pytest.mark.parametrize(

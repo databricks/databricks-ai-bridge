@@ -20,8 +20,8 @@ from typing import Optional
 import click
 
 from databricks_agentbricks import render
-from databricks_agentbricks._api_client import _AgentBricksApiClient
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentkit._api_client import _AgentBricksApiClient
 
 
 def _config_file() -> pathlib.Path:

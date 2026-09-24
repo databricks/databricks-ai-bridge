@@ -31,8 +31,9 @@ from typing import Any, Optional
 
 import click
 
-from databricks_agentbricks import render, timefmt
+from databricks_agentbricks import render
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentkit import timefmt
 
 _BREADCRUMB = "Agent Tracing"
 # Per-app experiment folder under /Shared: username-free (so `ab init` can name it offline) and

@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from databricks_agentbricks import models
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentkit import models
 
 
 @dataclass(frozen=True)

@@ -9,12 +9,12 @@ from uuid import uuid4
 
 import click
 
-from databricks_agentbricks._api_client import _workspace_client
 from databricks_agentbricks.cli.deploy import _app_url, _prefixed_name
 from databricks_agentbricks.cli.endpoint_output import SsePrinter, render_response
 from databricks_agentbricks.cli.endpoint_request import build_request
 from databricks_agentbricks.cli.endpoint_transport import HttpSession
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentkit._api_client import _workspace_client
 
 _ROUTING_COOKIE = "__Host-databricks-app-router"
 

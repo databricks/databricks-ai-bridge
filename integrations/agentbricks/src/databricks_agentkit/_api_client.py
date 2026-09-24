@@ -15,8 +15,8 @@ import time
 from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import quote
 
-from databricks_agentbricks import models
 from databricks_agentbricks.errors import TRANSIENT_ERROR_CODES, AgentCliError, wrap_api_error
+from databricks_agentkit import models
 
 if TYPE_CHECKING:
     from databricks.sdk import WorkspaceClient

@@ -82,8 +82,8 @@ See the [CLI documentation](../../../README.md#commands) for command options.
 ## Connect your agent to the runtime
 
 Keep framework code in `agent/` and HTTP setup and event translation in `runtime/`. The generated
-[LangGraph](../templates/agent-langgraph/runtime/adapter.py) and
-[OpenAI Agents](../templates/agent-openai/runtime/adapter.py) adapters show how to
+[LangGraph](../../databricks_agentbricks/templates/agent-langgraph/runtime/adapter.py) and
+[OpenAI Agents](../../databricks_agentbricks/templates/agent-openai/runtime/adapter.py) adapters show how to
 connect framework-native agent loops to the managed runtime.
 
 - **`@app.invoke`:** Register an async handler that receives the request's `input` and an
@@ -104,8 +104,8 @@ entrypoint. Set `[agent].server = "agentbricks"` and have `app.yaml` start that 
 existing `agentbricks` value for projects that use the managed server. Changing the configuration field
 alone does not convert a custom HTTP server into `DurableAgentServer`.
 
-Newly generated runtime code imports from `databricks_agentkit`. Existing projects can keep
-using `databricks_agentbricks`. The AgentKit client uses `databricks_agentkit.AgentKitClient`.
+Newly generated runtime code imports from `databricks_agentkit`. The AgentKit client uses
+`databricks_agentkit.AgentKitClient`.
 
 ## Invoke, stream, and reconnect
 

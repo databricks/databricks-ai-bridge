@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from databricks_agentbricks.runtime.durability import lakebase_runtime_store as implementation_store
+from databricks_agentkit.runtime.durability import lakebase_runtime_store as implementation_store
 from databricks_agentkit.runtime.durability.lakebase_runtime_store import (
     LakebaseDurableRuntimeStore,
 )

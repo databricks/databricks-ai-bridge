@@ -266,7 +266,7 @@ is never written to the Runtime Store. A replacement attempt after failure recov
 Use `server = "custom"` to deploy your own HTTP server without provisioning a Runtime Store.
 Changing the server type of an existing deployment is not supported. To use a different server,
 scaffold a new project with the desired `ab init --server` option and deploy it under a new name.
-See the [runtime guide](src/databricks_agentbricks/runtime/README.md) for agent hooks, full API examples,
+See the [runtime guide](src/databricks_agentkit/runtime/README.md) for agent hooks, full API examples,
 and recovery behavior.
 
 ## Memory and sessions

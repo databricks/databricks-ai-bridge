@@ -1,21 +1,30 @@
-"""Lazy compatibility exports for :mod:`databricks_agentbricks.runtime`."""
+"""Framework-neutral runtime helpers for an agent deployed on Databricks (via ``databricks-agentbricks``).
+
+These have no agent-framework dependency — MLflow tracing setup and workspace-routed SDK client
+construction — so they work regardless of which framework an agent is built with. Framework-specific
+helpers (session-store checkpointer, MCP tools, memory tools) live in the per-framework adapter
+package, e.g. :mod:`databricks_agentkit.langgraph`, which re-exports these for a single import point.
+
+``__all__`` is the supported surface. ``tool_manifest`` and ``session_store_client`` are internal and
+reachable by their submodule paths but not re-exported here.
+
+The re-exports below are resolved lazily (PEP 562) so importing a neutral submodule such as
+``databricks_agentkit.runtime.tool_manifest`` does not pull in the tracing module's ``mlflow`` dependency.
+"""
 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from databricks_agentbricks.runtime import (
-        AgentApp,
+    from databricks_agentkit.runtime.app import AgentApp, DurableAgentServer
+    from databricks_agentkit.runtime.auth import (
         AuthError,
-        DurableAgentServer,
         InvocationAuthPolicy,
-        InvocationContext,
         RequestAuthContext,
-        configure_tracing,
-        list_ai_gateway_model_services,
-        start_trace,
-        workspace_client,
-        workspace_headers,
     )
+    from databricks_agentkit.runtime.model_services import list_ai_gateway_model_services
+    from databricks_agentkit.runtime.tracing import configure_tracing, start_trace
+    from databricks_agentkit.runtime.types import InvocationContext
+    from databricks_agentkit.runtime.workspace import workspace_client, workspace_headers
 
 __all__ = [
     "DurableAgentServer",
@@ -24,55 +33,37 @@ __all__ = [
     "AuthError",
     "InvocationAuthPolicy",
     "RequestAuthContext",
+    # MLflow tracing — call configure_tracing() once at startup (pass the framework's autolog, or use
+    # a framework adapter that binds it). Wrap each invocation in start_trace() so a trace is recorded
+    # (framework autolog only nests under an active trace); pass session_id= to group traces by session.
     "configure_tracing",
     "start_trace",
+    # Workspace SDK client construction (account-host / run-local routing handled).
     "workspace_client",
     "workspace_headers",
+    # Unity Catalog AI Gateway discovery (system.ai chat model services, for the demo UI's picker).
     "list_ai_gateway_model_services",
 ]
 
 _MODULE_BY_NAME = {
-    "DurableAgentServer": "databricks_agentbricks.runtime",
-    "AgentApp": "databricks_agentbricks.runtime",
-    "InvocationContext": "databricks_agentbricks.runtime",
-    "AuthError": "databricks_agentbricks.runtime",
-    "InvocationAuthPolicy": "databricks_agentbricks.runtime",
-    "RequestAuthContext": "databricks_agentbricks.runtime",
-    "configure_tracing": "databricks_agentbricks.runtime",
-    "start_trace": "databricks_agentbricks.runtime",
-    "workspace_client": "databricks_agentbricks.runtime",
-    "workspace_headers": "databricks_agentbricks.runtime",
-    "list_ai_gateway_model_services": "databricks_agentbricks.runtime",
+    "DurableAgentServer": "app",
+    "AgentApp": "app",
+    "InvocationContext": "types",
+    "AuthError": "auth",
+    "InvocationAuthPolicy": "auth",
+    "RequestAuthContext": "auth",
+    "configure_tracing": "tracing",
+    "start_trace": "tracing",
+    "workspace_client": "workspace",
+    "workspace_headers": "workspace",
+    "list_ai_gateway_model_services": "model_services",
 }
-
-_SUBMODULES = frozenset(
-    {
-        "app",
-        "auth",
-        "durability",
-        "execution",
-        "genie",
-        "mcp_auth",
-        "model_services",
-        "runtime",
-        "session_store_client",
-        "store",
-        "tool_manifest",
-        "tracing",
-        "types",
-        "workspace",
-    }
-)
 
 
 def __getattr__(name: str) -> object:
-    module_name = _MODULE_BY_NAME.get(name)
-    if module_name is not None:
-        import importlib
+    module = _MODULE_BY_NAME.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import importlib
 
-        return getattr(importlib.import_module(module_name), name)
-    if name in _SUBMODULES:
-        import importlib
-
-        return importlib.import_module(f"{__name__}.{name}")
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return getattr(importlib.import_module(f"{__name__}.{module}"), name)

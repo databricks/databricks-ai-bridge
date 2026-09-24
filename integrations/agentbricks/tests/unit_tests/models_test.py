@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from databricks_agentbricks import models
+from databricks_agentkit import models
 
 # Shapes captured from a live agents workspace.
 STORE = {

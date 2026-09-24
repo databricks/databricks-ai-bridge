@@ -21,7 +21,7 @@ from databricks_agentbricks.project_types import (
     parse_framework,
     parse_server,
 )
-from databricks_agentbricks.runtime import tool_manifest
+from databricks_agentkit.runtime import tool_manifest
 
 # agent.toml resource-table names, read by the manifest parsing below (and by `ab dev`/`deploy`).
 MEMORY_STORE_TABLE = "memory_store"

@@ -12,7 +12,6 @@ from typing import Optional
 import click
 
 from databricks_agentbricks import errors
-from databricks_agentbricks._api_client import _AgentBricksApiClient
 from databricks_agentbricks.cli.auth import load_default_profile, login, logout
 from databricks_agentbricks.cli.deploy import deploy, deployments
 from databricks_agentbricks.cli.dev import dev
@@ -23,6 +22,7 @@ from databricks_agentbricks.cli.memory import memory
 from databricks_agentbricks.cli.sessions import sessions
 from databricks_agentbricks.cli.tools import tools
 from databricks_agentbricks.cli.tracing import tracing
+from databricks_agentkit._api_client import _AgentBricksApiClient
 
 
 class CliContext:

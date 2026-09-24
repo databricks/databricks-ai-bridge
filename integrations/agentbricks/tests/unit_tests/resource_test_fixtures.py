@@ -3,8 +3,8 @@
 from typing import Any, Optional
 from unittest import mock
 
-from databricks_agentbricks._api_client import _AgentBricksApiClient
 from databricks_agentkit import AgentKitClient
+from databricks_agentkit._api_client import _AgentBricksApiClient
 
 STORE_ID = "15402663-997b-4300-b695-46913ad90c9f"
 MEMORY_STORE_NAME = f"memory-stores/{STORE_ID}"
@@ -99,6 +99,6 @@ def item_payload(*, item_id: str = "item-1", data: Any = None) -> dict[str, Any]
 
 def resource_client() -> tuple[AgentKitClient, mock.MagicMock]:
     api = mock.MagicMock(spec=_AgentBricksApiClient)
-    with mock.patch("databricks_agentbricks.client._AgentBricksApiClient", return_value=api):
+    with mock.patch("databricks_agentkit.client._AgentBricksApiClient", return_value=api):
         client = AgentKitClient()
     return client, api

@@ -26,10 +26,7 @@ import yaml
 
 import databricks_agentbricks.lakebase_runtime_store as managed_runtime_store
 import databricks_agentbricks.legacy_lakebase_runtime_store as legacy_runtime_store
-from databricks_agentbricks import (
-    render,
-    timefmt,
-)
+from databricks_agentbricks import render
 from databricks_agentbricks.app_resources import (
     apply_experiment_resource,
     apply_postgres_resources,
@@ -55,14 +52,15 @@ from databricks_agentbricks.project_config import (
 )
 from databricks_agentbricks.project_types import AgentServer
 from databricks_agentbricks.render import field
-from databricks_agentbricks.runtime.store import (
+from databricks_agentkit import timefmt
+from databricks_agentkit.runtime.store import (
     RUNTIME_STORE_DATABASE_ENV,
     RUNTIME_STORE_LAKEBASE_BRANCH_ENV,
     RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV,
     RUNTIME_STORE_SCHEMA_ENV,
     RUNTIME_STORE_USERNAME_ENV,
 )
-from databricks_agentbricks.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
+from databricks_agentkit.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
 
 # TEMPORARY: the Apps build environment currently can't reach the internal pypi proxy, so builds
 # time out installing dependencies. Point the build at public PyPI (sanctioned interim workaround)

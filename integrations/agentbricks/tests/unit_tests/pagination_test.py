@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from databricks_agentbricks._pagination import validate_limit, validate_page_size
+from databricks_agentkit._pagination import validate_limit, validate_page_size
 
 
 @pytest.mark.parametrize("fn,name", [(validate_page_size, "page_size"), (validate_limit, "limit")])

@@ -3,7 +3,7 @@ import importlib
 import pytest
 
 
-def test_agentkit_runtime_submodules_alias_implementation_modules() -> None:
+def test_agentkit_runtime_submodules_are_canonical() -> None:
     for module_name in (
         "auth",
         "model_services",
@@ -11,30 +11,26 @@ def test_agentkit_runtime_submodules_alias_implementation_modules() -> None:
         "tool_manifest",
         "workspace",
     ):
-        public_module = importlib.import_module(f"databricks_agentkit.runtime.{module_name}")
-        implementation_module = importlib.import_module(
-            f"databricks_agentbricks.runtime.{module_name}"
-        )
-        assert public_module is implementation_module
+        module = importlib.import_module(f"databricks_agentkit.runtime.{module_name}")
+        assert module.__name__ == f"databricks_agentkit.runtime.{module_name}"
 
-    from databricks_agentbricks.runtime.store import InMemoryRuntimeStore as ImplementationStore
     from databricks_agentkit.runtime.store import InMemoryRuntimeStore
 
-    assert InMemoryRuntimeStore is ImplementationStore
+    assert InMemoryRuntimeStore.__module__ == "databricks_agentkit.runtime.store"
 
 
 def test_agentkit_runtime_package_imports_workspace_module() -> None:
     from databricks_agentkit.runtime import workspace
 
-    assert workspace is importlib.import_module("databricks_agentbricks.runtime.workspace")
+    assert workspace is importlib.import_module("databricks_agentkit.runtime.workspace")
 
 
 def test_agentkit_framework_packages_are_importable_without_framework_extras() -> None:
     langgraph = importlib.import_module("databricks_agentkit.langgraph")
     openai = importlib.import_module("databricks_agentkit.openai")
 
-    assert langgraph.__all__ == importlib.import_module("databricks_agentbricks.langgraph").__all__
-    assert openai.__all__ == importlib.import_module("databricks_agentbricks.openai").__all__
+    assert langgraph.__name__ == "databricks_agentkit.langgraph"
+    assert openai.__name__ == "databricks_agentkit.openai"
 
 
 def test_langgraph_invocation_metadata_uses_the_agentkit_key() -> None:

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from databricks_agentbricks._api_client import _AgentBricksApiClient
-from databricks_agentbricks.memory_store import MemoryStores
-from databricks_agentbricks.session_store import SessionStores
+from databricks_agentkit._api_client import _AgentBricksApiClient
+from databricks_agentkit.memory_store import MemoryStores
+from databricks_agentkit.session_store import SessionStores
 
 if TYPE_CHECKING:
     # Imported lazily elsewhere: pulling databricks.sdk costs ~0.7s, so keeping it out of the
@@ -29,7 +29,3 @@ class AgentKitClient:
         api = _AgentBricksApiClient(workspace_client=workspace_client)
         self.memory_stores = MemoryStores(api)
         self.session_stores = SessionStores(api)
-
-
-class AgentBricksClient(AgentKitClient):
-    """Backward-compatible name for :class:`AgentKitClient`."""

@@ -54,9 +54,7 @@ def _reload_mcp():
     # The runtime modules read env at call time, but re-import so patched sys.modules take effect.
     for name in (
         "databricks_agentkit.langgraph.mcp",
-        "databricks_agentbricks.langgraph.mcp",
         "databricks_agentkit.runtime.tool_manifest",
-        "databricks_agentbricks.runtime.tool_manifest",
     ):
         sys.modules.pop(name, None)
     return importlib.import_module("databricks_agentkit.langgraph.mcp")
