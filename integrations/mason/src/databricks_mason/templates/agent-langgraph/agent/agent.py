@@ -2,8 +2,8 @@ import os
 from collections.abc import AsyncGenerator, Callable
 from typing import Any
 
-from databricks_langchain import ChatDatabricks
 from databricks.sdk import WorkspaceClient
+from databricks_langchain import ChatDatabricks
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 
@@ -12,7 +12,6 @@ from agent.mcps import build_mcp_servers
 # Importing the tools package auto-registers every tool module.
 from agent.tools import all_tools
 from databricks_mason import workspace_client, workspace_headers
-from databricks_mason.runtime.auth import AuthError
 from databricks_mason.langgraph import (
     checkpointer,
     configure_tracing,
@@ -22,6 +21,7 @@ from databricks_mason.langgraph import (
     start_trace,
     thread_config,
 )
+from databricks_mason.runtime.auth import AuthError
 
 # A Unity Catalog AI Gateway model service, served from the `system.ai` schema and queried through
 # the gateway (see `use_ai_gateway=True` below). Swap for any `system.ai.*` model service your
@@ -92,7 +92,12 @@ async def create_agent_graph(
     request to request.
     """
     mcp = await mcp_tools(build_mcp_servers(), workspace_client_for=workspace_client_for)
-    tools = [*all_tools(), *memory_tools(actor), *genie_tools(), *mcp]
+    tools = [
+        *all_tools(),
+        *memory_tools(actor),
+        *genie_tools(workspace_client_for=workspace_client_for),
+        *mcp,
+    ]
     middleware = (
         [HumanInTheLoopMiddleware(interrupt_on=REQUIRE_APPROVAL)] if REQUIRE_APPROVAL else []
     )

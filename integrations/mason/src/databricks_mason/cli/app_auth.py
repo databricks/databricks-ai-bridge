@@ -42,7 +42,11 @@ def requires_user_auth(project: AgentProject | None) -> bool:
     """Infer request-user auth from tool bindings before any deployment mutation."""
     if project is None or not project.tools:
         return False
-    managed = [tool for tool in project.tools if tool.source.kind in ("mcp", "sandbox")]
+    managed = [
+        tool
+        for tool in project.tools
+        if tool.source.kind in ("mcp", "sandbox", "genie_one", "genie_agent")
+    ]
     user_auth = any(tool.auth == "user" for tool in managed)
     if user_auth and project.server != AgentServer.MASON:
         raise AgentCliError(
@@ -56,7 +60,7 @@ def requires_user_auth(project: AgentProject | None) -> bool:
         if unspecified:
             raise AgentCliError(
                 "Request-user tools require explicit auth on every managed "
-                f"MCP/sandbox binding: {', '.join(unspecified)}.",
+                f"tool binding: {', '.join(unspecified)}.",
                 hint="Choose auth = 'app' to preserve legacy identity, or explicitly choose 'user'.",
             )
     return user_auth
@@ -75,11 +79,18 @@ def required_user_api_scopes(project: AgentProject | None) -> set[str]:
     scopes: set[str] = set()
     # TODO: Extend this least-privilege mapping for each supported request-user tool kind/service.
     for tool in project.tools if project else ():
-        if tool.auth != "user" or tool.source.kind not in ("mcp", "sandbox"):
+        if tool.auth != "user":
+            continue
+        if tool.source.kind in ("genie_one", "genie_agent"):
+            scopes.add("genie")
+            continue
+        if tool.source.kind not in ("mcp", "sandbox"):
             continue
         scopes.add("ai-gateway")
         if tool.source.service == "system.ai.dbsql":
             scopes.add("sql")
+        if tool.source.service == "system.ai.genie_one_mcp":
+            scopes.add("genie")
         if tool.source.kind == "sandbox" and any(
             scope.kind == "volume" for scope in tool.policy.downscope
         ):

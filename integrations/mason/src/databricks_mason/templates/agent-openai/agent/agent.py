@@ -84,13 +84,23 @@ def _check_databricks_auth() -> None:
         ) from e
 
 
-def create_agent(actor: str, mcp=None, model: str | None = None) -> Agent:
+def create_agent(
+    actor: str,
+    mcp=None,
+    model: str | None = None,
+    *,
+    workspace_client_for: Callable[[str], WorkspaceClient] | None = None,
+) -> Agent:
     """Build the OpenAI Agents SDK agent: tools, memory, MCP servers, and model."""
     return Agent(
         name="Agent",
         instructions="You are a helpful assistant.",
         model=model or MODEL,
-        tools=[*all_tools(), *memory_tools(actor), *genie_tools()],
+        tools=[
+            *all_tools(),
+            *memory_tools(actor),
+            *genie_tools(workspace_client_for=workspace_client_for),
+        ],
         mcp_servers=mcp or [],
     )
 
@@ -158,7 +168,12 @@ async def run_agent(
             finally:
                 server.tool_filter = tool_filter
 
-        agent = create_agent(actor, active_servers, model=model)
+        agent = create_agent(
+            actor,
+            active_servers,
+            model=model,
+            workspace_client_for=workspace_client_for,
+        )
         with start_trace(name="invoke", inputs=agent_input, session_id=session_id) as span:
             if isinstance(agent_input, RunState):
                 result = Runner.run_streamed(agent, agent_input)

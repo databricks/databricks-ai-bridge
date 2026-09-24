@@ -1235,6 +1235,7 @@ _Options_
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--name <TOOL_ID>` | string | `genie_one` | no | - |
+| `--auth <user|app>` | `user` \| `app` | `user` | no | - |
 | `--source <SOURCE>` | path | `.` | no | Mason agent project containing agent.toml. |
 
 ##### `mason tools add genie-agent`
@@ -1257,6 +1258,7 @@ _Options_
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--name <TOOL_ID>` | string | `genie_agent` | no | - |
+| `--auth <user|app>` | `user` \| `app` | `user` | no | - |
 | `--source <SOURCE>` | path | `.` | no | Mason agent project containing agent.toml. |
 
 #### `mason tools list`

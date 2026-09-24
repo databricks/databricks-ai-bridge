@@ -272,7 +272,7 @@ def test_genie_add_remove_is_manifest_only_and_idempotent(
     if name is not None:
         args.extend(["--name", name])
     tool_id = name or kind
-    record = {"id": tool_id, "kind": kind, "source": source_value}
+    record = {"id": tool_id, "kind": kind, "source": source_value, "auth": "user"}
     first = runner.invoke(tools, args, obj=_Ctx(output="json"))
     assert first.exit_code == 0, first.output
     assert json.loads(first.output) == {
@@ -295,6 +295,24 @@ def test_genie_add_remove_is_manifest_only_and_idempotent(
     removed = runner.invoke(tools, ["remove", tool_id, "--source", str(project)], obj=_Ctx())
     assert removed.exit_code == 0, removed.output
     assert AgentProject.load(project).tools == []
+
+
+@pytest.mark.parametrize(
+    ("command", "kind"),
+    [(["genie-one"], "genie_one"), (["genie-agent", "0" * 32], "genie_agent")],
+)
+@pytest.mark.parametrize("auth", ["user", "app"])
+def test_genie_add_writes_explicit_auth(tmp_path, command, kind, auth):
+    project = _project(tmp_path)
+    result = CliRunner().invoke(
+        tools,
+        ["add", *command, "--auth", auth, "--source", str(project)],
+        obj=_Ctx(output="json"),
+    )
+    assert result.exit_code == 0, result.output
+    spec = AgentProject.load(project).tools[0]
+    assert spec.source.kind == kind
+    assert spec.auth == auth
 
 
 @pytest.mark.parametrize(

@@ -147,13 +147,13 @@ class ToolSpec:
             )
         except tool_manifest.ToolManifestError as exc:
             raise AgentCliError(str(exc)) from exc
-        if self.source.kind in {"genie_one", "genie_agent"}:
-            return
-        if not _TOOL_ID.fullmatch(self.id):
-            raise AgentCliError(f"Invalid tool id {self.id!r}.")
         kind = self.source.kind
         if self.auth is not None and self.auth not in ("user", "app"):
             raise AgentCliError("Tool auth must be 'user' or 'app'.")
+        if kind in {"genie_one", "genie_agent"}:
+            return
+        if not _TOOL_ID.fullmatch(self.id):
+            raise AgentCliError(f"Invalid tool id {self.id!r}.")
         if kind == "uc_function" and self.auth == "user":
             raise AgentCliError("UC function auth supports only app/default identity.")
         if kind == "sandbox":
@@ -213,12 +213,27 @@ class ToolSpec:
         )
 
     @classmethod
-    def genie_one(cls, tool_id: str = "genie_one") -> "ToolSpec":
-        return cls(id=tool_id, source=ToolSource(kind="genie_one"))
+    def genie_one(
+        cls,
+        tool_id: str = "genie_one",
+        *,
+        auth: Literal["user", "app"] | None = None,
+    ) -> "ToolSpec":
+        return cls(id=tool_id, source=ToolSource(kind="genie_one"), auth=auth)
 
     @classmethod
-    def genie_agent(cls, tool_id: str, *, space_id: str) -> "ToolSpec":
-        return cls(id=tool_id, source=ToolSource(kind="genie_agent", space_id=space_id))
+    def genie_agent(
+        cls,
+        tool_id: str,
+        *,
+        space_id: str,
+        auth: Literal["user", "app"] | None = None,
+    ) -> "ToolSpec":
+        return cls(
+            id=tool_id,
+            source=ToolSource(kind="genie_agent", space_id=space_id),
+            auth=auth,
+        )
 
 
 def _required_string(value: object, description: str) -> str:
