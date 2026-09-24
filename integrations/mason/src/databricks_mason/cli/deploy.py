@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import pathlib
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -194,8 +195,15 @@ def _wait_for_running(name: str, profile: Optional[str], timeout_s: int = 300) -
 def _upsert_manifest_env(
     source: pathlib.Path,
     updates: dict[str, str],
+    removals: Sequence[str] = (),
 ) -> bool:
-    """Reconcile env entries in <source>/app.yaml. Returns True if it scaffolded a new file."""
+    """Reconcile env entries in <source>/app.yaml: upsert ``updates``, drop any named in ``removals``.
+
+    Returns True if it scaffolded a new file. ``removals`` lets an unbind clear stale mason-managed env
+    (e.g. the ``MLFLOW_*`` keys when tracing is unbound) so the manifest stops pointing the deployed
+    runtime at a resource whose grant has just been pruned; without it, the upsert-only merge would
+    leave the stale entry behind. ``updates`` and ``removals`` are expected to be disjoint.
+    """
     app_yaml = source / "app.yaml"
     if app_yaml.exists():
         loaded = yaml.safe_load(app_yaml.read_text())
@@ -215,6 +223,9 @@ def _upsert_manifest_env(
             by_name[name].pop("valueFrom", None)
         else:
             env.append({"name": name, "value": value})
+    if removals:
+        drop = set(removals)
+        env = [e for e in env if e.get("name") not in drop]
     doc["env"] = env
     app_yaml.write_text(yaml.safe_dump(doc, sort_keys=False))
     return scaffolded
@@ -586,15 +597,19 @@ def deploy(
         provisioned["Memory store"] = memory_store
     if session_store:
         provisioned["Session store"] = session_store
+    # Trace env: set it when bound; on a CLEAN unbind (tracing resolved to None, no setup error) remove
+    # the stale MLFLOW_* keys so the manifest stops pointing the runtime at an experiment whose grant
+    # was just pruned. On a resolve ERROR (trace_setup_error) we touch neither the env nor the trace
+    # resources - a transient failure must not look like an unbind. (Store env is still upsert-only, a
+    # separate follow-up.)
+    trace_env_removals: list[str] = []
     if trace_experiment_id:
         env_updates.update(mlflow_tracing_config(trace_experiment_id).env())
         provisioned["Traces"] = (
             experiment_url(client.host, trace_experiment_id) or trace_experiment_id
         )
-    # Known caveat (pre-existing): `_upsert_manifest_env` is upsert-only, so unbinding tracing and
-    # redeploying leaves the previous MLFLOW_EXPERIMENT_ID in app.yaml - deploy adds env but never
-    # prunes it. A fresh (never-bound) deploy is clean; pruning stale resource env on redeploy is a
-    # separate follow-up.
+    elif trace_setup_error is None:
+        trace_env_removals = list(mlflow_tracing_config("").env())  # the MLFLOW_* keys to prune
     if memory_store_id:
         env_updates[MEMORY_STORE_ENV] = memory_store_id
     if session_store:
@@ -620,8 +635,8 @@ def deploy(
     # 3. Patch app.yaml before creating the app. The managed Runtime Store fields are added after
     #    app creation because that API requires the app's service principal.
     scaffolded = False
-    if env_updates:
-        scaffolded = _upsert_manifest_env(source_dir, env_updates)
+    if env_updates or trace_env_removals:
+        scaffolded = _upsert_manifest_env(source_dir, env_updates, trace_env_removals)
 
     # 4. Ensure the app exists and its compute is active. Create only when new; the compute wait
     #    runs every deploy.

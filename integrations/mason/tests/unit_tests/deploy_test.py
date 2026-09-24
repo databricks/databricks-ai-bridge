@@ -89,6 +89,29 @@ def test_upsert_manifest_env_preserves_unrelated_entries_and_replaces_value_from
     assert doc["env"] == [unrelated, {"name": "AGENT_MEMORY_STORE", "value": "new"}]
 
 
+def test_upsert_manifest_env_removes_named_entries(tmp_path: pathlib.Path):
+    # `removals` drops named entries (e.g. the MLFLOW_* keys on unbind) while upsert still applies and
+    # unrelated entries are preserved.
+    (tmp_path / "app.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "command": ["x"],
+                "env": [
+                    {"name": "KEEP", "value": "1"},
+                    {"name": "MLFLOW_TRACKING_URI", "value": "databricks"},
+                    {"name": "MLFLOW_EXPERIMENT_ID", "value": "123"},
+                ],
+            }
+        )
+    )
+    scaffolded = deploy_mod._upsert_manifest_env(
+        tmp_path, {"OTHER": "z"}, removals=["MLFLOW_TRACKING_URI", "MLFLOW_EXPERIMENT_ID"]
+    )
+    assert scaffolded is False
+    doc = yaml.safe_load((tmp_path / "app.yaml").read_text())
+    assert doc["env"] == [{"name": "KEEP", "value": "1"}, {"name": "OTHER", "value": "z"}]
+
+
 def test_managed_runtime_store_is_an_internal_disabled_rollout_switch():
     assert deploy_mod._USE_MANAGED_RUNTIME_STORE is False
 
@@ -1183,6 +1206,38 @@ def test_deploy_notifies_when_tracing_unbound(tmp_path: pathlib.Path, monkeypatc
     assert "Deployed without tracing" in out
     assert "mason tracing bind" in out  # points at the (parameter-free) enable command
     assert "Tracing setup failed" not in out  # unbound is not an error, so no cause suffix
+
+
+def test_deploy_prunes_stale_trace_env_from_manifest_on_unbind(tmp_path: pathlib.Path, monkeypatch):
+    # A previously-bound app.yaml carries the MLFLOW_* trace env. On a CLEAN unbind (autouse fixture
+    # stubs resolve -> None with no setup error), deploy prunes those keys so the manifest stops
+    # pointing the runtime at an experiment whose grant was just pruned; unrelated env is preserved.
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "command": ["x"],
+                "env": [
+                    {"name": "KEEP", "value": "1"},
+                    {"name": deploy_mod.TRACES_TRACKING_URI_ENV, "value": "databricks"},
+                    {"name": deploy_mod.TRACES_EXPERIMENT_ID_ENV, "value": "old-exp"},
+                ],
+            }
+        )
+    )
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+    assert result.exit_code == 0, result.output
+    names = {e["name"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
+    assert deploy_mod.TRACES_TRACKING_URI_ENV not in names  # stale trace env pruned
+    assert deploy_mod.TRACES_EXPERIMENT_ID_ENV not in names
+    assert "KEEP" in names  # unrelated env preserved
 
 
 def test_resolve_memory_store_pages_at_100_and_matches_display_name():
