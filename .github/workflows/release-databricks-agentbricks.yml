@@ -1,12 +1,12 @@
 # GENERATED FILE - DO NOT EDIT DIRECTLY
 # Regenerate with: uv run python .github/workflows/generate_release_workflows.py
 
-name: Release databricks-mason
+name: Release databricks-agentbricks
 
 on:
   push:
     tags:
-      - "databricks-mason-v*"
+      - "databricks-agentbricks-v*"
   workflow_dispatch:
     inputs:
       production:
@@ -27,7 +27,7 @@ jobs:
       contents: write
     environment:
       name: ${{ inputs.production && 'pypi' || 'testpypi' }}
-      url: ${{ inputs.production && 'https://pypi.org/p/databricks-mason' || 'https://test.pypi.org/p/databricks-mason' }}
+      url: ${{ inputs.production && 'https://pypi.org/p/databricks-agentbricks' || 'https://test.pypi.org/p/databricks-agentbricks' }}
     defaults:
       run:
         working-directory: integrations/mason
@@ -49,7 +49,7 @@ jobs:
           echo "version=$PKG_VERSION" >> $GITHUB_OUTPUT
 
           # Construct the expected tag name
-          TAG_NAME="databricks-mason-v$PKG_VERSION"
+          TAG_NAME="databricks-agentbricks-v$PKG_VERSION"
 
           # Check if the tag exists on GitHub and points to the current commit
           CURRENT_COMMIT=$(git rev-parse HEAD)
@@ -73,7 +73,7 @@ jobs:
       - name: Store the distribution packages
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
         with:
-          name: dist-databricks-mason
+          name: dist-databricks-agentbricks
           path: integrations/mason/dist/
 
       - uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd
@@ -102,17 +102,17 @@ jobs:
       - name: Install published package from PyPI
         if: inputs.production
         run: |
-          pip install databricks-mason
+          pip install databricks-agentbricks
 
       - name: Install published package from Test PyPI
         if: github.event_name == 'push' || !inputs.production
         run: |
-          pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple databricks-mason==${{ steps.verify-version.outputs.version }}
+          pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple databricks-agentbricks==${{ steps.verify-version.outputs.version }}
 
       - name: Smoke test - verify version
         run: |
           EXPECTED_VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
-          INSTALLED_VERSION=$(python -c "from importlib.metadata import version; print(version('databricks-mason'))")
+          INSTALLED_VERSION=$(python -c "from importlib.metadata import version; print(version('databricks-agentbricks'))")
           echo "Expected version: $EXPECTED_VERSION"
           echo "Installed version: $INSTALLED_VERSION"
           if [ "$EXPECTED_VERSION" != "$INSTALLED_VERSION" ]; then
@@ -125,17 +125,17 @@ jobs:
         run: |
           VERSION=${{ steps.verify-version.outputs.version }}
           if [ "${{ inputs.production }}" == "true" ]; then
-            LINK="https://pypi.org/project/databricks-mason/$VERSION/"
+            LINK="https://pypi.org/project/databricks-agentbricks/$VERSION/"
             echo "## :rocket: Package Released" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**databricks-mason v$VERSION** has been published to PyPI!" >> $GITHUB_STEP_SUMMARY
+            echo "**databricks-agentbricks v$VERSION** has been published to PyPI!" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo ":link: [$LINK]($LINK)" >> $GITHUB_STEP_SUMMARY
           else
-            LINK="https://test.pypi.org/project/databricks-mason/$VERSION/"
+            LINK="https://test.pypi.org/project/databricks-agentbricks/$VERSION/"
             echo "## :test_tube: Package Released to Test PyPI" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**databricks-mason v$VERSION** has been published to Test PyPI!" >> $GITHUB_STEP_SUMMARY
+            echo "**databricks-agentbricks v$VERSION** has been published to Test PyPI!" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo ":link: [$LINK]($LINK)" >> $GITHUB_STEP_SUMMARY
           fi

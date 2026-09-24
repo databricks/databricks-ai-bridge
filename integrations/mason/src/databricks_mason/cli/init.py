@@ -38,7 +38,7 @@ from databricks_mason.project_types import (
 )
 
 # Templates ship inside this package (databricks_mason/templates/), so `mason init` always copies
-# the one for the installed CLI — the scaffold can't drift from the databricks-mason it runs
+# the one for the installed CLI — the scaffold can't drift from the databricks-agentbricks it runs
 # against. For an editable install `resources.files` resolves to the source tree, so a Mason
 # developer's uncommitted template edits are scaffolded too.
 
@@ -103,16 +103,16 @@ def _copy_packaged_template(
     for index, rel in enumerate((name, *overlay_names)):
         src = root.joinpath(*rel.split("/"))
         if not src.is_dir():
-            raise AgentCliError(f"Template '{rel}' is not bundled in databricks-mason.")
+            raise AgentCliError(f"Template '{rel}' is not bundled in databricks-agentbricks.")
         shutil.copytree(
             str(src), dest, dirs_exist_ok=index > 0, ignore=shutil.ignore_patterns("__pycache__")
         )
 
 
 def _bundled_template_ref() -> str:
-    """A label for the packaged template's origin — the installed databricks-mason version."""
+    """A label for the packaged template's origin — the installed databricks-agentbricks version."""
     try:
-        return f"bundled (databricks-mason {_installed_version('databricks-mason')})"
+        return f"bundled (databricks-agentbricks {_installed_version('databricks-agentbricks')})"
     except PackageNotFoundError:
         return "bundled"
 
@@ -406,7 +406,7 @@ def init(
     overlay_names = (template.chat_app,) if chat_app_enabled else ()
     try:
         # Copy the template bundled with the installed CLI. The scaffold keeps the template's own
-        # databricks-mason PyPI dependency; it can't drift from the CLI because both ship together.
+        # databricks-agentbricks PyPI dependency; it can't drift from the CLI because both ship together.
         _copy_packaged_template(template_name, dest, overlay_names)
         template_ref = _bundled_template_ref()
         write_project_metadata(

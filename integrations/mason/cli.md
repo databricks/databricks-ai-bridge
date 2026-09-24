@@ -17,7 +17,7 @@ help - append `--help` (or `-h`) at any level, for example `mason deploy --help`
 ## Installation
 
 ```sh
-pip install databricks-mason
+pip install databricks-agentbricks
 ```
 
 See [Installation](README.md#installation) for installing from source and for shell completion.

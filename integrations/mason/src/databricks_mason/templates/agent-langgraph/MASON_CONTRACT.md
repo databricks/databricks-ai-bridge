@@ -23,7 +23,7 @@ needs runtime wiring as well as manifest configuration.
 
 Use `agent.toml` for framework, tool/store bindings, and tracing. `.mason/project.toml`
 records framework and template provenance. Metadata alone does not integrate adapters. Install a
-compatible `databricks-mason[runtime]`, supply the real command in `app.yaml`, load configuration
+compatible `databricks-agentbricks[runtime]`, supply the real command in `app.yaml`, load configuration
 before adapters, and listen on the app port. Mason finds `agent.toml` from the working directory or
 `MASON_PROJECT_ROOT`. Keep credentials out of `app.yaml`.
 

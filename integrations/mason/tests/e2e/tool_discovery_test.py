@@ -18,7 +18,7 @@ def live_mason(tmp_path):
         pytest.skip("set MASON_E2E_PROFILE for read-only live MCP discovery")
     mason = pathlib.Path(sys.executable).with_name("mason")
     assert mason.is_file(), "install the built Mason wheel beside the test interpreter"
-    package = distribution("databricks-mason")
+    package = distribution("databricks-agentbricks")
     provenance = json.loads(package.read_text("direct_url.json") or "{}")
     assert "archive_info" in provenance, "install a built wheel, not an editable checkout"
     assert (

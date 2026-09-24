@@ -22,7 +22,7 @@ def template(request, monkeypatch):
         else ("agents", "databricks_openai")
     )
     for dependency in dependencies:
-        pytest.importorskip(dependency, reason=f"Requires databricks-mason[{framework}]")
+        pytest.importorskip(dependency, reason=f"Requires databricks-agentbricks[{framework}]")
     monkeypatch.syspath_prepend(str(TEMPLATES / f"agent-{framework}"))
     for name in list(sys.modules):
         if name in {"agent", "runtime"} or name.startswith(("agent.", "runtime.")):

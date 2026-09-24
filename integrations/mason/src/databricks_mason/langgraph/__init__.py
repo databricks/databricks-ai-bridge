@@ -1,4 +1,4 @@
-"""LangGraph adapter for running an agent on Databricks (installed via ``databricks-mason[langgraph]``).
+"""LangGraph adapter for running an agent on Databricks (installed via ``databricks-agentbricks[langgraph]``).
 
 Composable pieces you drop into an existing LangGraph agent — a session-store checkpointer, MCP
 tools declared in ``agent.toml``, long-term memory tools, and MLflow tracing. Each maps onto a slot
@@ -23,7 +23,7 @@ LangGraph already has, so migrating an existing agent is a graft, not a rewrite:
     result = await agent.ainvoke(inputs, config=thread_config(session_id))
 
 These need the agent stack (databricks-langchain, langgraph, langchain, fastapi, mlflow), so they sit
-behind the ``[langgraph]`` extra to keep a plain ``databricks-mason`` installation independent of agent frameworks.
+behind the ``[langgraph]`` extra to keep a plain ``databricks-agentbricks`` installation independent of agent frameworks.
 
 ``__all__`` is the curated surface. Other entry points (``mcp_client``, ``DatabricksSessionStoreSaver``)
 are reachable by their submodule paths but not re-exported here.

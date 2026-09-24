@@ -9,7 +9,7 @@ authors = [
 requires-python = ">=3.11"
 dependencies = [
     # Mason includes the HTTP runtime; this extra adds the langgraph framework adapter.
-    "databricks-mason[langgraph]>=0.2.0",
+    "databricks-agentbricks[langgraph]>=0.2.0",
     "uvicorn>=0.41.0",
     "python-dotenv>=1.2.1",
     "databricks-sdk>=0.124.0",
