@@ -39,6 +39,7 @@ import click
 
 from databricks_mason import render, timefmt
 from databricks_mason.errors import AgentCliError
+from databricks_mason.trace_tables import TraceTable  # re-exported for callers of this module
 
 _BREADCRUMB = "Agent Tracing"
 # Per-app experiment folder under /Shared: username-free (so `mason init` can name it offline) and
@@ -129,14 +130,6 @@ _UC_TRACE_ANNOTATION_TAG = "mlflow.experiment.databricksTraceAnnotationStorageTa
 # the destination-path derivation below), so mason picks the metrics table up automatically if MLflow
 # starts tagging it.
 _UC_TRACE_METRIC_TAG = "mlflow.experiment.databricksTraceMetricStorageTable"
-
-
-@dataclass(frozen=True)
-class TraceTable:
-    """One UC OTEL base table for a trace experiment - its kind ("spans" / "logs" / "annotations") and its fully-qualified catalog.schema.table name."""
-
-    kind: str
-    full_name: str
 
 
 @dataclass(frozen=True)

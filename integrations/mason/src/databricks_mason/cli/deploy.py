@@ -714,16 +714,20 @@ def deploy(
                 grant_error = "could not resolve the app's service principal."
             else:
                 grant_error = _grant_store_access(client, sp, session_store, memory_store)
-    # Reconcile the mason-owned trace resources EVERY deploy, bound or not: with tracing unbound
-    # (experiment_id None) the write prunes stale mason-trace-experiment / mason-trace-table-*
-    # resources left by an earlier bound deploy. (Whether removing a `uc_securable` resource also
-    # revokes the underlying UC MODIFY grant is platform behavior - documented but not yet verified
-    # live - so pruning the resource is the right action regardless.)
+    # Reconcile the mason-owned trace resources whenever tracing resolved cleanly (`trace_setup_error
+    # is None`): a resolved experiment grants that set, and a cleanly-unbound project (experiment_id
+    # None) prunes stale mason-trace-experiment / mason-trace-table-* resources left by an earlier
+    # bound deploy. If resolving the BOUND experiment errored instead (offline / permission /
+    # transient), we don't know the intended state, so we skip the reconcile rather than prune - a
+    # flaky deploy must not silently revoke the SP's trace access the way an unbind does. (Whether
+    # removing a `uc_securable` resource also revokes the underlying UC MODIFY grant is platform
+    # behavior - documented but not yet verified live.)
     trace_grant_error: Optional[str] = None
-    with render.status("Granting the agent runtime access to its trace experiment…"):
-        trace_grant_error = apply_trace_resources(
-            name, trace_experiment_id, trace_tables.otel_tables(), obj.profile
-        )
+    if trace_setup_error is None:
+        with render.status("Granting the agent runtime access to its trace experiment…"):
+            trace_grant_error = apply_trace_resources(
+                name, trace_experiment_id, trace_tables.otel_tables(), obj.profile
+            )
 
     app_url = _app_url(name, obj.profile)
 

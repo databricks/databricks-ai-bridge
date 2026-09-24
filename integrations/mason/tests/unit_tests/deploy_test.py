@@ -1136,7 +1136,9 @@ def test_deploy_rebind_uc_to_uc_reconciles_to_the_new_table_set(tmp_path, monkey
 
 def test_deploy_proceeds_when_tracing_provisioning_raises(tmp_path: pathlib.Path, monkeypatch):
     # Tracing provisioning is best-effort: a non-AgentCliError (e.g. MLflow/network) must not abort
-    # the deploy — it proceeds without tracing.
+    # the deploy — it proceeds without tracing. Crucially, a resolve FAILURE must NOT prune the
+    # mason-owned trace resources: we don't know the intended state, so a flaky/offline deploy of a
+    # still-bound experiment must not silently revoke the SP's grants the way an unbind does.
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
@@ -1146,6 +1148,8 @@ def test_deploy_proceeds_when_tracing_provisioning_raises(tmp_path: pathlib.Path
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(deploy_mod, "get_or_create_trace_experiment", _boom)
+    trace_grant = mock.Mock(return_value=None)
+    monkeypatch.setattr(deploy_mod, "apply_trace_resources", trace_grant)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
@@ -1158,6 +1162,7 @@ def test_deploy_proceeds_when_tracing_provisioning_raises(tmp_path: pathlib.Path
     out = " ".join(result.output.split())
     assert "Deployed without tracing" in out and "mason tracing bind" in out  # guidance shown
     assert "mlflow create_experiment blew up" in out  # the cause is surfaced
+    trace_grant.assert_not_called()  # resolve errored -> reconcile skipped, grants left intact
 
 
 def test_deploy_notifies_when_tracing_unbound(tmp_path: pathlib.Path, monkeypatch):

@@ -7,7 +7,7 @@ import types
 from typing import Any
 
 from databricks_mason import app_resources as sa
-from databricks_mason.cli.tracing import TraceTable
+from databricks_mason.trace_tables import TraceTable
 
 
 def _backend(database: str, resource_name: str) -> sa.LakebaseBackend:

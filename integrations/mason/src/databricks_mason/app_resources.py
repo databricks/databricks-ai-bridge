@@ -18,8 +18,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Optional
 
-from databricks_mason.cli.tracing import TraceTable
 from databricks_mason.databricks_cli import _databricks
+from databricks_mason.trace_tables import TraceTable
 
 
 @dataclass(frozen=True)
