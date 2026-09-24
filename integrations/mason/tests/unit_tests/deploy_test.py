@@ -217,7 +217,7 @@ class _FakeClient:
                 "lakebase": {
                     "project_id": "databricks-internal-custom-agents",
                     "branch": "projects/databricks-internal-custom-agents/branches/production",
-                    "database_id": "runtime-agent-mason-myapp-550e8400-e29b-41d4-a716-446655440000",
+                    "database_id": "runtime-agent-bricks-myapp-550e8400-e29b-41d4-a716-446655440000",
                 }
             },
         }
@@ -357,11 +357,11 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
     )
 
     assert result.exit_code == 0, result.output
-    # Mason prefixes the app name with `agent-mason-` so `deployments list` can find its own apps.
-    ws = "/Workspace/Users/me@example.com/mason_deployments/agent-mason-myapp"
+    # Agent Bricks prefixes new app names with `agent-bricks-` so `deployments list` can find its own apps.
+    ws = "/Workspace/Users/me@example.com/mason_deployments/agent-bricks-myapp"
     # uv.lock is excluded so the build resolves fresh against its own index (not the dev machine's).
     assert ["sync", str(src), ws, "--exclude", "uv.lock"] in calls
-    assert ["apps", "deploy", "agent-mason-myapp", "--source-code-path", ws] in calls
+    assert ["apps", "deploy", "agent-bricks-myapp", "--source-code-path", ws] in calls
     # deploy injects the resolved memory-store id so the entries API (keyed by id) can be addressed.
     env_entries = yaml.safe_load((src / "app.yaml").read_text()).get("env") or []
     env = {e["name"]: e["value"] for e in env_entries}
@@ -396,7 +396,7 @@ def test_deploy_creates_with_instance_count(tmp_path: pathlib.Path, monkeypatch)
         [
             "apps",
             "create",
-            "agent-mason-myapp",
+            "agent-bricks-myapp",
             "--compute-min-instances",
             "2",
             "--compute-max-instances",
@@ -404,7 +404,7 @@ def test_deploy_creates_with_instance_count(tmp_path: pathlib.Path, monkeypatch)
         ],
         {
             "capture": True,
-            "action": "Could not create deployment 'agent-mason-myapp'.",
+            "action": "Could not create deployment 'agent-bricks-myapp'.",
         },
     ) in calls
 
@@ -433,11 +433,11 @@ def test_deploy_updates_existing_instance_count(tmp_path: pathlib.Path, monkeypa
 
     assert result.exit_code == 0, result.output
     update_args, update_kwargs = next(
-        call for call in calls if call[0][:3] == ["apps", "create-update", "agent-mason-myapp"]
+        call for call in calls if call[0][:3] == ["apps", "create-update", "agent-bricks-myapp"]
     )
     assert update_kwargs == {
         "capture": True,
-        "action": "Could not update deployment 'agent-mason-myapp'.",
+        "action": "Could not update deployment 'agent-bricks-myapp'.",
     }
     payload = json.loads(update_args[update_args.index("--json") + 1])
     assert payload == {
@@ -505,8 +505,8 @@ def test_deploy_custom_server_skips_runtime_store_provisioning_and_binding(
 
     assert result.exit_code == 0, result.output
     create.assert_not_called()
-    assert any(args[:3] == ["apps", "create", "agent-mason-myapp"] for args in calls)
-    assert any(args[:3] == ["apps", "deploy", "agent-mason-myapp"] for args in calls)
+    assert any(args[:3] == ["apps", "create", "agent-bricks-myapp"] for args in calls)
+    assert any(args[:3] == ["apps", "deploy", "agent-bricks-myapp"] for args in calls)
     assert not any(args[:2] in (["apps", "update"], ["apps", "create-update"]) for args in calls)
     env = {
         entry["name"]: entry["value"]
@@ -551,7 +551,7 @@ def test_deploy_mason_server_provisions_runtime_store(tmp_path: pathlib.Path, mo
     assert env[deploy_mod.RUNTIME_STORE_LAKEBASE_BRANCH_ENV] == (
         "projects/databricks-internal-custom-agents/branches/production"
     )
-    assert env[deploy_mod.RUNTIME_STORE_DATABASE_ENV].startswith("runtime-agent-mason-myapp-")
+    assert env[deploy_mod.RUNTIME_STORE_DATABASE_ENV].startswith("runtime-agent-bricks-myapp-")
     assert env[deploy_mod.RUNTIME_STORE_USERNAME_ENV] == "sp-123"
     assert deployed_env is not None
     assert deployed_env[deploy_mod.RUNTIME_STORE_LAKEBASE_BRANCH_ENV] == (
@@ -575,7 +575,7 @@ def test_deploy_defaults_to_legacy_runtime_store(tmp_path: pathlib.Path, monkeyp
     _write_agent_manifest(src)
     monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", False)
 
-    backend = deploy_mod.legacy_runtime_store.backend("agent-mason-myapp")
+    backend = deploy_mod.legacy_runtime_store.backend("agent-bricks-myapp")
     events = []
     provision = mock.Mock(side_effect=lambda *args: (events.append("legacy-project"), backend)[1])
     attach = mock.Mock(side_effect=lambda *args: events.append("legacy-resource"))
@@ -606,8 +606,8 @@ def test_deploy_defaults_to_legacy_runtime_store(tmp_path: pathlib.Path, monkeyp
     result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=ctx)
 
     assert result.exit_code == 0, result.output
-    provision.assert_called_once_with("agent-mason-myapp", "prof")
-    attach.assert_called_once_with("agent-mason-myapp", [backend], "prof")
+    provision.assert_called_once_with("agent-bricks-myapp", "prof")
+    attach.assert_called_once_with("agent-bricks-myapp", [backend], "prof")
     create_managed.assert_not_called()
     assert events[:4] == ["legacy-project", "app-exists", "legacy-resource", "sync"]
     env = {
@@ -655,7 +655,7 @@ def test_deploy_runtime_store_uses_dedicated_backend_with_managed_store(
                 for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
             }
             assert env[deploy_mod.RUNTIME_STORE_DATABASE_ENV].startswith(
-                "runtime-agent-mason-myapp-"
+                "runtime-agent-bricks-myapp-"
             )
             assert env[deploy_mod.RUNTIME_STORE_DATABASE_ENV] != "other-store"
             assert env[deploy_mod.RUNTIME_STORE_USERNAME_ENV] == "sp-123"
@@ -706,9 +706,9 @@ def test_deploy_renames_underlying_app_compute_output(tmp_path: pathlib.Path, mo
     # reported in Mason's terms instead of echoing the raw `databricks apps` command.
     assert apps_calls[0][1] == {
         "capture": True,
-        "action": "Could not create deployment 'agent-mason-myapp'.",
+        "action": "Could not create deployment 'agent-bricks-myapp'.",
     }
-    assert apps_calls[1][1] == {"action": "Could not deploy 'agent-mason-myapp'."}
+    assert apps_calls[1][1] == {"action": "Could not deploy 'agent-bricks-myapp'."}
     assert "Agent compute is starting" in result.output
     assert "App compute" not in result.output
     get_call = next(call for call in calls if call[0][:2] == ["apps", "get"])
@@ -778,7 +778,7 @@ def test_deploy_recommends_invoking_deployed_agent(
     assert len(commands) == 1, result.output
     command = commands[0]
     path = "/api/invocations" if server == "mason" else "/invocations"
-    assert f"ab endpoint invoke agent-mason-myapp --path {path} --json " in command
+    assert f"ab endpoint invoke agent-bricks-myapp --path {path} --json " in command
     assert "│" not in command
     assert ("$(uuidgen)" in command) is (server == "mason")
     panel, example = result.output.split("Invoke with Agent Bricks\n")
@@ -787,7 +787,7 @@ def test_deploy_recommends_invoking_deployed_agent(
     for existing_command in ("ab deployments get", "ab deployments logs"):
         assert any(line.startswith("│") and existing_command in line for line in panel.splitlines())
     assert "Runtime Store" not in result.output
-    assert "runtime-agent-mason-myapp-550e8400-e29b-41d4-a716-446655440000" not in result.output
+    assert "runtime-agent-bricks-myapp-550e8400-e29b-41d4-a716-446655440000" not in result.output
     env = {
         entry["name"]: entry["value"]
         for entry in yaml.safe_load((src / "app.yaml").read_text()).get("env", [])
@@ -823,7 +823,7 @@ def test_deploy_sync_keeps_directly_edited_agent_manifest(tmp_path: pathlib.Path
     assert sync[:3] == [
         "sync",
         str(src),
-        "/Workspace/Users/me@example.com/mason_deployments/agent-mason-myapp",
+        "/Workspace/Users/me@example.com/mason_deployments/agent-bricks-myapp",
     ]
     excluded = {sync[index + 1] for index, value in enumerate(sync[:-1]) if value == "--exclude"}
     assert "agent.toml" not in excluded
@@ -856,7 +856,7 @@ def test_first_deploy_waits_for_running_before_deploying(tmp_path: pathlib.Path,
     result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
 
     assert result.exit_code == 0, result.output
-    assert ["apps", "create", "agent-mason-myapp"] in calls
+    assert ["apps", "create", "agent-bricks-myapp"] in calls
     assert waited["called"], "must wait for the new app to be running before deploying"
 
 
@@ -885,7 +885,7 @@ def test_redeploy_waits_for_running_and_skips_create(tmp_path: pathlib.Path, mon
     result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
 
     assert result.exit_code == 0, result.output
-    assert ["apps", "create", "agent-mason-myapp"] not in calls  # never re-create an existing app
+    assert ["apps", "create", "agent-bricks-myapp"] not in calls  # never re-create an existing app
     assert waited["called"], "re-deploy must also wait for compute"
 
 
@@ -961,7 +961,7 @@ def test_deploy_wires_tracing_env_and_grants_experiment_resource(
     assert env["MLFLOW_EXPERIMENT_ID"] == "exp-42"
     assert env["MLFLOW_TRACKING_URI"] == "databricks"
     # the experiment is granted to the app's SP as an app resource (no manual SQL grant)
-    assert granted == {"app": "agent-mason-myapp", "experiment_id": "exp-42"}
+    assert granted == {"app": "agent-bricks-myapp", "experiment_id": "exp-42"}
     assert "Deployed without tracing" not in result.output  # bound -> no unbound notice
 
 
@@ -1301,14 +1301,31 @@ def test_deploy_writes_deployment_name_to_toml(tmp_path: pathlib.Path, monkeypat
     assert AgentProject.load(src).deployment_name == "myapp"  # persisted for later deploys
 
 
-def test_deploy_reads_deployment_name_from_toml_when_omitted(tmp_path: pathlib.Path, monkeypatch):
+@pytest.mark.parametrize(
+    ("existing_names", "expected_name"),
+    [
+        ({"agent-mason-stored"}, "agent-mason-stored"),
+        ({"agent-bricks-stored"}, "agent-bricks-stored"),
+        (
+            {"agent-mason-stored", "agent-bricks-stored"},
+            "agent-bricks-stored",
+        ),
+    ],
+)
+def test_deploy_reads_deployment_name_from_toml_when_omitted(
+    tmp_path: pathlib.Path, monkeypatch, existing_names: set[str], expected_name: str
+):
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     _agent_toml(src, deployment_name="stored")
 
     calls: list[list[str]] = []
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_deployment_exists",
+        lambda app, profile: app in existing_names,
+    )
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
@@ -1320,8 +1337,8 @@ def test_deploy_reads_deployment_name_from_toml_when_omitted(tmp_path: pathlib.P
     result = CliRunner().invoke(deploy_mod.deploy, ["--source", str(src)], obj=_FakeCtx())
 
     assert result.exit_code == 0, result.output
-    ws = "/Workspace/Users/me@example.com/mason_deployments/agent-mason-stored"
-    assert ["apps", "deploy", "agent-mason-stored", "--source-code-path", ws] in calls
+    ws = f"/Workspace/Users/me@example.com/mason_deployments/{expected_name}"
+    assert ["apps", "deploy", expected_name, "--source-code-path", ws] in calls
 
 
 def test_deploy_without_name_or_toml_errors(tmp_path: pathlib.Path, monkeypatch):

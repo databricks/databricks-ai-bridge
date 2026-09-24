@@ -231,20 +231,20 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("deployments",): (("ab deployments list", "list agent deployments"),),
     ("deployments", "list"): (("ab deployments list", "list agent deployments"),),
-    ("deployments", "get"): (("ab deployments get agent-mason-my-agent", "show one deployment"),),
+    ("deployments", "get"): (("ab deployments get agent-bricks-my-agent", "show one deployment"),),
     ("deployments", "logs"): (
-        ("ab deployments logs agent-mason-my-agent", "stream a deployment's logs"),
+        ("ab deployments logs agent-bricks-my-agent", "stream a deployment's logs"),
     ),
     ("deployments", "start"): (
-        ("ab deployments start agent-mason-my-agent", "start a deployment"),
+        ("ab deployments start agent-bricks-my-agent", "start a deployment"),
     ),
-    ("deployments", "stop"): (("ab deployments stop agent-mason-my-agent", "stop a deployment"),),
+    ("deployments", "stop"): (("ab deployments stop agent-bricks-my-agent", "stop a deployment"),),
     ("deployments", "delete"): (
-        ("ab deployments delete agent-mason-my-agent", "delete a deployment"),
+        ("ab deployments delete agent-bricks-my-agent", "delete a deployment"),
     ),
     ("endpoint",): (
         (
-            "ab endpoint invoke agent-mason-my-agent --path /api/invocations "
+            "ab endpoint invoke agent-bricks-my-agent --path /api/invocations "
             "--json "
             '\'{"id":"00000000-0000-4000-8000-000000000001",'
             '"input":[{"role":"user","content":"Hello"}]}\'',
@@ -253,7 +253,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("endpoint", "invoke"): (
         (
-            "ab endpoint invoke agent-mason-my-agent --path /api/invocations "
+            "ab endpoint invoke agent-bricks-my-agent --path /api/invocations "
             "--json "
             '\'{"id":"00000000-0000-4000-8000-000000000001",'
             '"input":[{"role":"user","content":"Hello"}]}\'',

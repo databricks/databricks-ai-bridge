@@ -947,7 +947,7 @@ Deploy your agent to Databricks Apps and get back a hosted URL to try it.
 
 Rolls the agent out to Databricks Apps and prints the URL where you (or anyone you share it with) can use it. The deployed agent reaches Databricks model serving through the AI Gateway using the app's own identity - no model keys to configure - and `deploy` also reconciles the stores declared in agent.toml and wires in any tracing.
 
-NAME is recorded in agent.toml on the first deploy, so a later `ab deploy` from the project directory can omit it (passing NAME again updates the recorded name). The deployed app is named `agent-mason-<name>`; this existing prefix is retained for deployed apps. Use that full name with the `ab deployments` commands. `deployments list` shows only apps carrying this prefix.
+NAME is recorded in agent.toml on the first deploy, so a later `ab deploy` from the project directory can omit it (passing NAME again updates the recorded name). New deployed apps are named `agent-bricks-<name>`; existing `agent-mason-*` apps keep their names. A project with a recorded base name reuses an existing `agent-mason-*` app when NAME is omitted; you can also pass that full app name to update it. Use the full app name with the `ab deployments` commands. `deployments list` shows apps with either prefix.
 
 Any memory/session store declared in agent.toml (for example, by `ab memory/sessions bind`) is created if it doesn't exist yet; agent.toml itself is never modified for stores.
 
@@ -982,7 +982,7 @@ Inspect and manage deployed agents: list, get, stream logs, start, stop, or dele
 
 | Subcommand | Description |
 | --- | --- |
-| [`deployments list`](#ab-deployments-list) | List Agent Bricks agent deployments (apps named `agent-mason-*`) in the workspace. |
+| [`deployments list`](#ab-deployments-list) | List Agent Bricks deployments (apps named `agent-bricks-*` or `agent-mason-*`). |
 | [`deployments get`](#ab-deployments-get) | Get an agent deployment's details. |
 | [`deployments logs`](#ab-deployments-logs) | Stream a deployment's logs. |
 | [`deployments start`](#ab-deployments-start) | Start a deployment. |
@@ -991,7 +991,7 @@ Inspect and manage deployed agents: list, get, stream logs, start, stop, or dele
 
 #### `ab deployments list`
 
-List Agent Bricks agent deployments (apps named `agent-mason-*`) in the workspace.
+List Agent Bricks deployments (apps named `agent-bricks-*` or `agent-mason-*`).
 
 ```
 ab deployments list

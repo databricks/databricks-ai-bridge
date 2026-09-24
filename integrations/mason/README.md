@@ -126,10 +126,12 @@ ab deploy my-agent     # deploy to Databricks
 `ab dev` runs the agent locally on `http://localhost:8000`, wrapping the Databricks Apps
 local runtime so local behavior matches a deployment.
 
-`ab deploy my-agent` deploys a Databricks App named `agent-mason-my-agent`, provisions the
+`ab deploy my-agent` deploys a Databricks App named `agent-bricks-my-agent`, provisions the
 stores declared in `agent.toml`, and grants the app's service principal access to them. Deployed
-app names retain the `agent-mason-` prefix. `ab deployments list` shows what you have deployed,
-and `ab deployments get my-agent` prints its URL and status.
+apps created with older versions retain the `agent-mason-` prefix. `ab deployments list` shows
+both prefixes, and `ab deployments get agent-bricks-my-agent` prints its URL and status. Pass an
+older app's full `agent-mason-*` name to `ab deploy` to update that app; a project that already
+records its base name in `agent.toml` also reuses the older app when deploying without NAME.
 
 `ab init` declares default memory and session stores in `agent.toml`, so the deployed agent has
 long-term memory and durable conversation history. It creates `<name>-<6-letter-token>-memory` and
@@ -148,9 +150,9 @@ has traces. `.mason/` is the existing local state directory.
 
 Use `ab` for the CLI and `AgentKitClient` from `databricks_agentkit` for the Python SDK. Existing
 projects retain several historical identifiers: local state and traces use `.mason/` and
-`~/.mason/`, deployed app names use the `agent-mason-` prefix, `agent.toml` selects the managed
-server with `server = "mason"`, and generated runtime code imports from `databricks_mason`. Keep
-these names when working with projects that still use them.
+`~/.mason/`, older deployed app names use the `agent-mason-` prefix, `agent.toml` selects the
+managed server with `server = "mason"`, and generated runtime code imports from
+`databricks_mason`. Keep these names when working with projects that still use them.
 
 ## AgentKit SDK
 

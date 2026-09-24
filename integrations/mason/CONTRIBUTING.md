@@ -70,7 +70,7 @@ override):
 # local: the source uv resolved into the agent venv
 cat /tmp/scratch-agent/.venv/lib/python*/site-packages/databricks_agentbricks-*.dist-info/direct_url.json
 # deployed: watch the build/install logs
-ab deployments logs agent-mason-<name>
+ab deployments logs agent-bricks-<name>
 ```
 
 ## Keeping docs in sync

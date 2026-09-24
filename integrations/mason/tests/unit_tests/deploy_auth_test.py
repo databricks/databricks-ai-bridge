@@ -201,7 +201,7 @@ def test_existing_app_requires_explicit_scope_update_permission(tmp_path, monkey
     client = Mock()
     result = CliRunner().invoke(
         deploy_mod.deploy,
-        ["test", "--source", str(tmp_path)],
+        ["agent-mason-test", "--source", str(tmp_path)],
         obj=SimpleNamespace(profile="selected", output="text", client=client),
     )
     assert result.exit_code != 0
@@ -209,6 +209,7 @@ def test_existing_app_requires_explicit_scope_update_permission(tmp_path, monkey
     client.assert_not_called()
     apps.create.assert_not_called()
     apps.create_update.assert_not_called()
+    apps.get.assert_called_once_with("agent-mason-test")
     workspace.assert_called_once_with(profile="selected")
 
 
@@ -422,7 +423,7 @@ def test_disabled_forwarding_fails_deploy_before_app_or_store_mutations(tmp_path
     )
     result = CliRunner().invoke(
         deploy_mod.deploy,
-        ["test", "--source", str(tmp_path), "--allow-user-scope-update"],
+        ["agent-mason-test", "--source", str(tmp_path), "--allow-user-scope-update"],
         obj=SimpleNamespace(profile="selected", output="text", client=client),
     )
     assert result.exit_code != 0
@@ -491,7 +492,7 @@ def test_app_only_tools_keep_deployment_path(tmp_path, monkeypatch, auth, _no_re
     assert result.exit_code == 0, result.output
     workspace.assert_not_called()
     _no_remote_provisioning.assert_called_once()
-    assert ["apps", "create", "agent-mason-test"] in calls
+    assert ["apps", "create", "agent-bricks-test"] in calls
 
 
 def test_user_deploy_creates_scoped_app_and_runtime_store_before_source(
@@ -536,7 +537,7 @@ def test_user_deploy_creates_scoped_app_and_runtime_store_before_source(
     assert calls[0] == (
         "sdk-create",
         {
-            "name": "agent-mason-test",
+            "name": "agent-bricks-test",
             "user_api_scopes": ["ai-gateway"],
             "forward_user_access_token": True,
             "compute_min_instances": 2,

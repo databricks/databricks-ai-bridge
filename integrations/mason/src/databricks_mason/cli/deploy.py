@@ -75,10 +75,11 @@ _AGENT_COMPUTE_OUTPUT = ("App compute", "Agent compute")
 # process environment; flip this only in a Mason release after the managed API is fully deployed.
 _USE_MANAGED_RUNTIME_STORE = False
 
-# Mason names every deployment `agent-mason-<name>` so `deployments list` can filter to its own apps.
-# The `agent-` prefix is what the Databricks agent registry keys on to surface these apps; the
-# `-mason-` segment narrows `deployments list` to Mason's own agents, not every `agent-*` app.
-_DEPLOYMENT_PREFIX = "agent-mason-"
+# New deployments use the public Agent Bricks prefix. Keep the legacy prefix in the list filter and
+# in `_prefixed_name` so apps created by older CLI versions remain manageable.
+_DEPLOYMENT_PREFIX = "agent-bricks-"
+_LEGACY_DEPLOYMENT_PREFIX = "agent-mason-"
+_DEPLOYMENT_PREFIXES = (_DEPLOYMENT_PREFIX, _LEGACY_DEPLOYMENT_PREFIX)
 _MAX_DEPLOYMENT_NAME_LEN = 30  # Databricks Apps name limit
 
 
@@ -157,8 +158,8 @@ def _instance_args(instances: Optional[int]) -> list[str]:
 
 
 def _prefixed_name(name: str) -> str:
-    """Agent Bricks deployments carry an `agent-mason-` prefix for filtering in `deployments list`."""
-    return name if name.startswith(_DEPLOYMENT_PREFIX) else f"{_DEPLOYMENT_PREFIX}{name}"
+    """Add the current prefix while preserving names from older CLI versions."""
+    return name if name.startswith(_DEPLOYMENT_PREFIXES) else f"{_DEPLOYMENT_PREFIX}{name}"
 
 
 def _confirm_destroy(target: str, *, assume_yes: bool) -> None:
@@ -501,9 +502,10 @@ def deploy(
     in agent.toml and wires in any tracing.
 
     NAME is recorded in agent.toml on the first deploy, so a later `ab deploy` from the project
-    directory can omit it (passing NAME again updates the recorded name). The deployed app is named
-    `agent-mason-<name>` (Agent Bricks adds the prefix if absent); use that full name with the `ab
-    deployments` commands. `deployments list` shows only apps carrying this prefix.
+    directory can omit it (passing NAME again updates the recorded name). New apps are named
+    `agent-bricks-<name>`; apps created by older CLI versions keep their `agent-mason-*` names. If
+    NAME is omitted, a recorded base name reuses an existing older app. Use the full app name with
+    the `ab deployments` commands. `deployments list` shows both prefixes.
 
     Any memory/session store declared in agent.toml (for example, by `ab memory/sessions bind`)
     is created if it doesn't exist yet; agent.toml itself is never modified for stores.
@@ -520,9 +522,25 @@ def deploy(
     if project is not None and project.tools:
         require_managed_tool_support(source_dir)
     user_auth = requires_user_auth(project)
+    requested_name = name
     base_name = _resolve_deployment_name(project, name)
     name = _prefixed_name(base_name)
     _validate_deployment_name(name)
+    # Older releases stored the unprefixed base name in agent.toml, so a project that was already
+    # deployed as `agent-mason-<name>` can still have only `<name>` recorded. When NAME is omitted,
+    # keep using that existing app if it is present; otherwise this is a new `agent-bricks-*` app.
+    if (
+        requested_name is None
+        and project is not None
+        and project.deployment_name
+        and not base_name.startswith(_DEPLOYMENT_PREFIXES)
+    ):
+        # Prefer a new app if both names exist. This can happen after a user explicitly deploys an
+        # old project under the new prefix during a migration.
+        if not _deployment_exists(name, obj.profile):
+            legacy_name = f"{_LEGACY_DEPLOYMENT_PREFIX}{base_name}"
+            if _deployment_exists(legacy_name, obj.profile):
+                name = legacy_name
     if allow_user_scope_update and not user_auth:
         raise AgentCliError(
             "--allow-user-scope-update requires a managed tool with auth = 'user' in agent.toml."
@@ -802,7 +820,7 @@ def _deployment_status(a: dict) -> Optional[str]:
 @deployments.command("list")
 @click.pass_obj
 def deployments_list(obj) -> None:
-    """List Agent Bricks deployments (apps named `agent-mason-*`) in the workspace."""
+    """List Agent Bricks deployments (apps named `agent-bricks-*` or `agent-mason-*`)."""
     result = _databricks(
         ["apps", "list", "-o", "json"],
         obj.profile,
@@ -811,7 +829,7 @@ def deployments_list(obj) -> None:
     )
     data = json.loads(result.stdout or "[]")
     items = data.get("apps", data) if isinstance(data, dict) else data
-    items = [a for a in items if str(field(a, "name") or "").startswith(_DEPLOYMENT_PREFIX)]
+    items = [a for a in items if str(field(a, "name") or "").startswith(_DEPLOYMENT_PREFIXES)]
     if obj.output == "json":
         render.emit_json(items)
         return

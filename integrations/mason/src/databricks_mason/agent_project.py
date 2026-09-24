@@ -384,7 +384,7 @@ class AgentProject:
         self.memory_store = memory_store
         self.session_store = session_store
         self.memory_store_id = memory_store_id
-        # The deployment's base name (`ab deploy` prefixes it with `agent-mason-`); None until named.
+        # Bare deployment names get `agent-bricks-`; full legacy names can be retained here.
         self.deployment_name = deployment_name
         # Tracing config: the MLflow experiment NAME to trace to (a workspace path). Its presence IS
         # the enable switch: a bound name means tracing is on (deploy get-or-creates it); None means
