@@ -58,31 +58,35 @@ class LakebaseBackend:
         }
 
 
-def _current_app_resources(app: str, profile: Optional[str]) -> Optional[list[dict]]:
-    """Read the app's existing resources array.
+class _AppResourcesReadError(RuntimeError):
+    """The app's current resources couldn't be read.
 
-    Returns None when the read FAILED (``apps get`` errored or returned unparseable output), so callers
-    can tell a failed read apart from a genuinely empty array and NOT drop resources: the resource
-    write is a full-array replace, so treating a failed read as "no resources" would wipe every
-    resource the app has. An empty list means the app genuinely has no resources.
+    Raised (rather than returning None or []) so a failed read is unambiguous: an ``apps get`` error or
+    unparseable output must NOT be mistaken for "no resources", because the resource write is a
+    full-array replace and would then drop every resource the app has. Carries the underlying error so
+    callers can surface it; a returned list (possibly empty) always reflects the app's real state.
     """
+
+
+def _current_app_resources(app: str, profile: Optional[str]) -> list[dict]:
+    """Read the app's existing resources array; raise ``_AppResourcesReadError`` if the read fails."""
     result = _databricks(["apps", "get", app, "-o", "json"], profile, capture=True, check=False)
     if result.returncode != 0:
-        return None
+        detail = (result.stderr or result.stdout or "").strip() or "apps get failed"
+        raise _AppResourcesReadError(detail)
     try:
         resources = json.loads(result.stdout or "{}").get("resources", [])
-    except (json.JSONDecodeError, AttributeError):
-        return None
+    except (json.JSONDecodeError, AttributeError) as exc:
+        raise _AppResourcesReadError(f"unparseable apps get output: {exc}") from exc
     return resources if isinstance(resources, list) else []
 
 
-# Returned when the current-resources read fails: the resource write is a full-array replace, so we
-# must not proceed on a failed read (that would drop every resource the app has). Bail and leave the
-# app's resources untouched.
-_RESOURCE_READ_FAILED = (
-    "could not read the app's current resources (apps get failed); "
-    "skipped the resource update to avoid dropping the app's other resources"
-)
+def _read_failed_reason(exc: _AppResourcesReadError) -> str:
+    """The non-fatal reason a reconcile skipped its write because current resources couldn't be read."""
+    return (
+        "skipped the resource update to avoid dropping the app's other resources "
+        f"(could not read current resources: {exc})"
+    )
 
 
 # The app-resource name for the trace experiment (unique across an app's resources, like a store's).
@@ -104,8 +108,9 @@ def apply_trace_resources(
     EMPTY when tracing is unbound (``experiment_id`` is None), so an unbind + redeploy prunes the
     stale `mason-trace-experiment` / `mason-trace-table-*` resources instead of leaving the SP with
     grants on an experiment it no longer uses. ``tables`` are ``TraceTable`` entries (``kind`` and
-    ``full_name``, e.g. ``TraceTable("spans", "cat.schema.pfx_otel_spans")``); each kind names its
-    resource ``mason-trace-table-<kind>``. Writing the complete mason-owned set every deploy also
+    ``full_name``, e.g. ``TraceTable(TraceTableKind.SPANS, "cat.schema.pfx_otel_spans")``); each kind
+    names its resource ``mason-trace-table-<kind>``. Writing the complete mason-owned set every deploy
+    also
     converges a UC rebind: a new experiment's tables replace the old ones in the same write. MODIFY
     grants MODIFY+SELECT and Databricks Apps auto-grants USE CATALOG/USE SCHEMA - no
     catalog/schema resource or SQL grant needed. Preserves every resource we don't own. None on
@@ -122,7 +127,7 @@ def apply_trace_resources(
         else []
     ) + [
         {
-            "name": f"{_UC_TRACE_TABLE_RESOURCE_PREFIX}{t.kind}",
+            "name": f"{_UC_TRACE_TABLE_RESOURCE_PREFIX}{t.kind.value}",
             "uc_securable": {
                 "securable_full_name": t.full_name,
                 "securable_type": "TABLE",
@@ -131,9 +136,10 @@ def apply_trace_resources(
         }
         for t in tables
     ]
-    current = _current_app_resources(app, profile)
-    if current is None:
-        return _RESOURCE_READ_FAILED
+    try:
+        current = _current_app_resources(app, profile)
+    except _AppResourcesReadError as exc:
+        return _read_failed_reason(exc)
     preserved = [
         r
         for r in current
@@ -159,9 +165,10 @@ def apply_postgres_resources(
     """
     ours = [b.postgres_resource() for b in backends]
     our_names = {r["name"] for r in ours}
-    current = _current_app_resources(app, profile)
-    if current is None:
-        return _RESOURCE_READ_FAILED
+    try:
+        current = _current_app_resources(app, profile)
+    except _AppResourcesReadError as exc:
+        return _read_failed_reason(exc)
     preserved = [r for r in current if isinstance(r, dict) and r.get("name") not in our_names]
     result = _update_app_resources(app, preserved + ours, profile)
     if result.returncode == 0:

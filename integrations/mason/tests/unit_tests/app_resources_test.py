@@ -7,7 +7,7 @@ import types
 from typing import Any
 
 from databricks_mason import app_resources as sa
-from databricks_mason.trace_tables import TraceTable
+from databricks_mason.trace_tables import TraceTable, TraceTableKind
 
 
 def _backend(database: str, resource_name: str) -> sa.LakebaseBackend:
@@ -170,9 +170,9 @@ def test_apply_trace_resources_uc_experiment_adds_one_table_resource_per_table(m
 
     monkeypatch.setattr(sa, "_databricks", fake_db)
     tables = [
-        TraceTable("spans", "cat.schema.otel_spans"),
-        TraceTable("logs", "cat.schema.otel_logs"),
-        TraceTable("metrics", "cat.schema.otel_metrics"),
+        TraceTable(TraceTableKind.SPANS, "cat.schema.otel_spans"),
+        TraceTable(TraceTableKind.LOGS, "cat.schema.otel_logs"),
+        TraceTable(TraceTableKind.METRICS, "cat.schema.otel_metrics"),
     ]
     assert sa.apply_trace_resources("app", "exp-uc", tables, "prof") is None
     payload = json.loads(captured["args"][captured["args"].index("--json") + 1])
@@ -246,7 +246,7 @@ def test_apply_trace_resources_reports_failure(monkeypatch):
         ),
     )
     err = sa.apply_trace_resources(
-        "app", "exp-1", [TraceTable("spans", "cat.schema.otel_spans")], "prof"
+        "app", "exp-1", [TraceTable(TraceTableKind.SPANS, "cat.schema.otel_spans")], "prof"
     )
     assert err == "denied: needs MANAGE"
 
@@ -272,7 +272,7 @@ def test_apply_trace_resources_skips_write_when_current_resources_unreadable(mon
     calls: list[list[str]] = []
     monkeypatch.setattr(sa, "_databricks", _fake_db_get_fails(calls))
     err = sa.apply_trace_resources(
-        "app", "exp-1", [TraceTable("spans", "cat.schema.otel_spans")], "prof"
+        "app", "exp-1", [TraceTable(TraceTableKind.SPANS, "cat.schema.otel_spans")], "prof"
     )
     assert err and "apps get failed" in err
     assert ["apps", "create-update"] not in calls  # never wrote

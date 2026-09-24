@@ -39,7 +39,10 @@ import click
 
 from databricks_mason import render, timefmt
 from databricks_mason.errors import AgentCliError
-from databricks_mason.trace_tables import TraceTable  # re-exported for callers of this module
+from databricks_mason.trace_tables import (  # re-exported for callers of this module
+    TraceTable,
+    TraceTableKind,
+)
 
 _BREADCRUMB = "Agent Tracing"
 # Per-app experiment folder under /Shared: username-free (so `mason init` can name it offline) and
@@ -149,10 +152,10 @@ class MLflowTraceTables:
         return [
             TraceTable(kind=kind, full_name=name)
             for kind, name in (
-                ("spans", self.spans),
-                ("logs", self.logs),
-                ("annotations", self.annotations),
-                ("metrics", self.metrics),
+                (TraceTableKind.SPANS, self.spans),
+                (TraceTableKind.LOGS, self.logs),
+                (TraceTableKind.ANNOTATIONS, self.annotations),
+                (TraceTableKind.METRICS, self.metrics),
             )
             if name
         ]

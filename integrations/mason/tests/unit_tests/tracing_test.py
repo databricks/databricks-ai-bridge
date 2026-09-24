@@ -188,10 +188,12 @@ def test_uc_trace_tables_reads_all_base_table_tags_excluding_unified_view():
     # metrics has no per-kind tag; it's derived from the destination path (cat.schema.pfx).
     assert tables.metrics == "cat.schema.pfx_otel_metrics"
     assert tables.otel_tables() == [
-        tracing_mod.TraceTable("spans", "cat.schema.pfx_otel_spans"),
-        tracing_mod.TraceTable("logs", "cat.schema.pfx_otel_logs"),
-        tracing_mod.TraceTable("annotations", "cat.schema.pfx_otel_annotations"),
-        tracing_mod.TraceTable("metrics", "cat.schema.pfx_otel_metrics"),
+        tracing_mod.TraceTable(tracing_mod.TraceTableKind.SPANS, "cat.schema.pfx_otel_spans"),
+        tracing_mod.TraceTable(tracing_mod.TraceTableKind.LOGS, "cat.schema.pfx_otel_logs"),
+        tracing_mod.TraceTable(
+            tracing_mod.TraceTableKind.ANNOTATIONS, "cat.schema.pfx_otel_annotations"
+        ),
+        tracing_mod.TraceTable(tracing_mod.TraceTableKind.METRICS, "cat.schema.pfx_otel_metrics"),
     ]
 
 
@@ -209,9 +211,9 @@ def test_uc_trace_tables_reads_span_log_and_derived_metrics_layout():
     assert tables.annotations is None
     assert tables.metrics == "cat.schema.pfx_otel_metrics"
     assert tables.otel_tables() == [
-        tracing_mod.TraceTable("spans", "cat.schema.pfx_otel_spans"),
-        tracing_mod.TraceTable("logs", "cat.schema.pfx_otel_logs"),
-        tracing_mod.TraceTable("metrics", "cat.schema.pfx_otel_metrics"),
+        tracing_mod.TraceTable(tracing_mod.TraceTableKind.SPANS, "cat.schema.pfx_otel_spans"),
+        tracing_mod.TraceTable(tracing_mod.TraceTableKind.LOGS, "cat.schema.pfx_otel_logs"),
+        tracing_mod.TraceTable(tracing_mod.TraceTableKind.METRICS, "cat.schema.pfx_otel_metrics"),
     ]
 
 
