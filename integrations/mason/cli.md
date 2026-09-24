@@ -58,6 +58,7 @@ These options apply to every command. Pass them before the command name, for exa
 | [`login`](#mason-login) | Authenticate and save a default profile |
 | [`logout`](#mason-logout) | Forget the saved default profile |
 | [`init`](#mason-init) | Scaffold a new agent project |
+| [`doctor`](#mason-doctor) | Check an existing agent's Mason onboarding |
 | [`dev`](#mason-dev) | Run the agent locally with a chat UI |
 | [`memory`](#mason-memory) | Manage an agent's long-term memory |
 | [`mcp`](#mason-mcp) | Discover managed MCP services |
@@ -128,6 +129,31 @@ _Options_
 | `--memory-store <MEMORY_STORE>` | string | - | no | Name for the declared memory store (default: derived from the directory, <dir>-memory). Only --server mason declares stores by default. |
 | `--session-store <SESSION_STORE>` | string | - | no | Name for the declared session store (default: derived from the directory, <dir>-session). |
 | `--existing` | flag | - | no | Prepare a coding-agent migration bundle for an existing LangGraph or OpenAI Agents SDK project (defaults to `.`). Requires `--server mason`. |
+
+### `mason doctor`
+
+Check whether an existing agent repository is onboarded to Agent Bricks
+through Mason. DIRECTORY defaults to the current directory.
+
+Doctor is read-only and offline: it does not import application source, contact Databricks, or
+change files. It checks `agent.toml`, `.mason/project.toml`, the framework-specific
+`databricks-mason` dependency extra, `app.yaml`, and production Python source for an `AgentApp`
+instance with an `invoke` hook plus a recognized framework adapter call; test, example, and
+old/stale directories are excluded. A bounded source scan that exceeds a limit fails the source
+checks as incomplete. These checks are static repository evidence, not proof that the configured
+startup command executes the files found. Doctor exits 0 only when every check passes, and exits 1
+after printing a normal report otherwise. If the framework is unknown, the remediation requires an
+explicit `--framework <framework_name>`. Use global `-o json` for a structured report.
+
+```
+mason doctor [DIRECTORY]
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `DIRECTORY` | no | Existing agent repository to inspect (default: `.`). |
 
 ### `mason dev`
 

@@ -85,3 +85,17 @@ Whenever you change the CLI surface, update `cli.md` in the same change. That in
 Check the tables against the actual `click` definitions in `src/databricks_mason/cli/`; the quickest
 drift check is to compare against the CLI's own `--help` output. Purely internal changes that don't
 alter the command surface or help text need no `cli.md` update.
+
+## Adding a new agent framework
+
+`mason doctor` recognizes onboarded projects per framework, so adding a new framework (a new
+`--framework` choice with its own template and adapter) means updating the doctor's static checks in
+the same change, in `src/databricks_mason/cli/doctor.py`:
+
+- add the framework to the `_SUPPORTED_FRAMEWORKS` tuple;
+- add its public adapter call symbols to `_FRAMEWORK_ADAPTER_CALLS`, kept in sync with the calls the
+  generated template for that framework actually makes (prefix matching is intentionally not used —
+  every recognized symbol must be listed explicitly).
+
+Also refresh the framework references and examples in `cli.md` and `README.md`, and add doctor test
+coverage for the new framework in `tests/unit_tests/doctor_test.py`.

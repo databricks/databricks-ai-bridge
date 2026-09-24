@@ -16,7 +16,7 @@ CommandPath = tuple[str, ...]
 # getting-started path. Any command missing here still lists under "Other commands" (see
 # `_group.MasonGroup`).
 _COMMAND_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("SETUP", ("login", "logout", "init")),
+    ("SETUP", ("login", "logout", "init", "doctor")),
     ("DEVELOP", ("dev", "tools", "memory", "sessions", "tracing")),
     ("SHIP", ("deploy", "deployments")),
 )
@@ -43,6 +43,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
             "prepare a coding-agent migration bundle for an existing agent",
         ),
     ),
+    ("doctor",): (("mason doctor .", "check an existing repository's Mason onboarding"),),
     ("dev",): (("mason dev", "run the agent locally with a chat UI"),),
     ("memory",): (
         ("mason memory stores create --display-name agent-memory", "create a memory store"),
@@ -329,6 +330,7 @@ _SHORT_HELP: dict[CommandPath, str] = {
     ("login",): "Authenticate and save a default profile",
     ("logout",): "Forget the saved default profile",
     ("init",): "Scaffold a new agent project",
+    ("doctor",): "Check an existing agent's onboarding",
     ("dev",): "Run the agent locally with a chat UI",
     ("deploy",): "Deploy an agent to Databricks Apps",
     ("deployments",): "Manage deployed agents",

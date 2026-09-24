@@ -93,7 +93,8 @@ interrupt/resume and approval flows, and invocation recovery where used. Use fak
 services. Confirm the configured entrypoint starts with the project's test setup.
 
 Do not provision, deploy, make live model/tool calls, or run integration tests unless authorized.
-`mason doctor` is a separate planned feature; do not implement it here.
+Run `mason doctor .` after the migration and resolve every failed check. Doctor is a read-only,
+offline verification step; it does not replace the focused runtime and contract tests above.
 
 Report changes, validation, unresolved state or client-contract decisions, and readiness for
 `dev`, `tools add`, `sessions bind`, `memory bind`, tracing, `endpoint`, and `deploy`. Distinguish
