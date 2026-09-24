@@ -10,7 +10,7 @@ from unittest import mock
 
 import pytest
 
-from databricks_mason import MasonClient
+from databricks_mason import AgentKitClient, MasonClient
 from databricks_mason._api_client import (
     _MasonApiClient,
     _workspace_client,
@@ -28,11 +28,16 @@ def _client(workspace_client):
     return _MasonApiClient(profile="p"), inst.api_client.do
 
 
+@pytest.mark.parametrize(
+    "client_class",
+    [AgentKitClient, MasonClient],
+    ids=["agentkit", "mason-compatibility"],
+)
 @mock.patch("databricks_mason.client._MasonApiClient")
-def test_mason_client_wraps_workspace_client(api_client):
+def test_client_wraps_workspace_client(api_client, client_class):
     workspace_client = mock.Mock()
 
-    client = MasonClient(workspace_client)
+    client = client_class(workspace_client)
 
     api_client.assert_called_once_with(workspace_client=workspace_client)
     assert client.memory_stores._api is api_client.return_value
@@ -469,8 +474,8 @@ def test_auth_error_hint_explains_profile_selection_and_login(_workspace_client)
 
     hint = exc_info.value.hint
     assert hint is not None
-    assert "`mason --profile <name> <command>`" in hint
-    assert "`mason login --profile <name>`" in hint
+    assert "`ab --profile <name> <command>`" in hint
+    assert "`ab login --profile <name>`" in hint
     assert "`databricks auth login --profile <name>`" not in hint
 
 

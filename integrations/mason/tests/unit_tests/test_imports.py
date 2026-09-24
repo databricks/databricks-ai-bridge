@@ -8,6 +8,7 @@ def test_public_surface() -> None:
     import databricks_mason
 
     eager = {
+        "AgentKitClient",
         "MasonClient",
         "Memory",
         "MemorySearchResult",
@@ -39,6 +40,26 @@ def test_public_surface() -> None:
     assert DurableAgentServer is RuntimeDurableAgentServer
     assert AgentApp is DurableAgentServer
     assert RuntimeAgentApp is DurableAgentServer
+
+
+def test_agentkit_import_uses_public_client() -> None:
+    import databricks_agentkit
+    import databricks_mason
+
+    public_sdk_types = {
+        "AgentKitClient",
+        "Memory",
+        "MemorySearchResult",
+        "MemoryStore",
+        "ExtractedMemory",
+        "Session",
+        "SessionItem",
+        "SessionStore",
+    }
+
+    assert set(databricks_agentkit.__all__) == public_sdk_types
+    for name in public_sdk_types:
+        assert getattr(databricks_agentkit, name) is getattr(databricks_mason, name)
 
 
 def test_runtime_public_surface_is_application_only() -> None:

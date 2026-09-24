@@ -1,4 +1,4 @@
-"""`mason sessions` — manage session stores, sessions, and session items."""
+"""`ab sessions` — manage session stores, sessions, and session items."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ def sessions() -> None:
     items, giving it durable conversation history it can list, resume, fork, or delete.
 
     This is the short-term, per-conversation counterpart to the cross-conversation memory in
-    `mason memory`.
+    `ab memory`.
     """
 
 
@@ -57,7 +57,7 @@ def _source_option(function):
         type=click.Path(exists=True, file_okay=False, path_type=pathlib.Path),
         default=pathlib.Path("."),
         show_default=True,
-        help="Mason agent project containing agent.toml.",
+        help="Agent Bricks project containing agent.toml.",
     )(function)
 
 
@@ -68,7 +68,7 @@ def _source_option(function):
 def sessions_bind(obj, store: str, source: pathlib.Path) -> None:
     """Bind session STORE to the agent by declaring it in agent.toml.
 
-    This only edits agent.toml — it does not create the store. `mason deploy` creates any declared
+    This only edits agent.toml — it does not create the store. `ab deploy` creates any declared
     store that doesn't exist yet and grants the deployed app's service principal access to it.
     """
     from databricks_mason.agent_project import AgentProject
@@ -84,11 +84,11 @@ def sessions_bind(obj, store: str, source: pathlib.Path) -> None:
         fields={"agent.toml": str(project.path)},
         next_steps=[
             (
-                f"mason sessions stores create --name {store}",
+                f"ab sessions stores create --name {store}",
                 "Create the store now without deploying",
             ),
-            ("mason dev", "Re-run to pick up the store locally"),
-            ("mason deploy <name>", "Create it if missing and grant the app access"),
+            ("ab dev", "Re-run to pick up the store locally"),
+            ("ab deploy <name>", "Create it if missing and grant the app access"),
         ],
     )
 
@@ -100,7 +100,7 @@ def sessions_unbind(obj, source: pathlib.Path) -> None:
     """Remove the session store binding from the agent's agent.toml.
 
     Only edits agent.toml; the managed store itself is untouched (delete it with
-    `mason sessions stores delete`).
+    `ab sessions stores delete`).
     """
     from databricks_mason.agent_project import AgentProject
 
@@ -157,12 +157,12 @@ def stores_create(obj, name, description, metadata) -> None:
         fields={"Store ID": field(data, "session_store_id")},
         next_steps=[
             (
-                f"mason sessions create --store {name} --actor-id <id>",
+                f"ab sessions create --store {name} --actor-id <id>",
                 "Start a session for an actor",
             ),
-            (f"mason sessions stores get {name}", "View this store's details"),
+            (f"ab sessions stores get {name}", "View this store's details"),
             (
-                f"mason sessions bind {name}",
+                f"ab sessions bind {name}",
                 "Bind this store to the agent (wired in on dev/deploy)",
             ),
         ],
@@ -273,9 +273,9 @@ curl -X POST "{obj.client().host}/api/2.0/agents/session-stores/{store}/sessions
             "mason",
             "bash",
             f"""
-mason sessions items append --store {store} --session-id {session_id} \\
+ab sessions items append --store {store} --session-id {session_id} \\
   --data '{{"role": "user", "content": "Hello"}}'
-mason sessions items list --store {store} --session-id {session_id}
+ab sessions items list --store {store} --session-id {session_id}
 """,
         ),
     ]
@@ -321,7 +321,7 @@ def sessions_create(obj, store, actor_id, session_id, parent_session_id, metadat
         fields={"Actor": actor_id, "Store": store},
         next_steps=[
             (
-                f"mason sessions items append --store {store} "
+                f"ab sessions items append --store {store} "
                 f"--session-id {field(data, 'session_id')} --data '{{...}}'",
                 "Append an item to this session",
             ),

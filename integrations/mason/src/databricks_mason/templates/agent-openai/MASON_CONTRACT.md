@@ -1,13 +1,13 @@
-# Mason integration contract for OpenAI Agents
+# Managed runtime integration contract for OpenAI Agents
 
 This document owns the requirements shared by generated projects and existing agents adopting
-Mason. The [README](README.md) owns commands and HTTP examples; adapter docstrings own API details.
+the managed runtime. The [README](README.md) owns commands and HTTP examples; adapter docstrings own API details.
 The adjacent template is an example, not a required agent architecture. Runtime internals live in
 the installed package's `databricks_mason/runtime/README.md`.
 
 ## Command requirements
 
-Mason commands operate on an application directory; they do not rewrite its agent. Each capability
+Agent Bricks CLI commands operate on an application directory; they do not rewrite its agent. Each capability
 needs runtime wiring as well as manifest configuration.
 
 | Command | Required integration |
@@ -21,10 +21,11 @@ needs runtime wiring as well as manifest configuration.
 
 ### Project and startup
 
-Use `agent.toml` for framework, tool/store bindings, and tracing. `.mason/project.toml`
-records framework and template provenance. Metadata alone does not integrate adapters. Install a
-compatible `databricks-agentbricks[openai]`, supply the real command in `app.yaml`, load configuration
-before adapters, and listen on the app port. Mason finds `agent.toml` from the working directory or
+Use `agent.toml` for framework, tool/store bindings, and tracing. The existing `.mason/project.toml`
+file records framework and template provenance; keep it when working with projects that have it.
+Metadata alone does not integrate adapters. Install a compatible `databricks-agentbricks[openai]`
+distribution, supply the real command in `app.yaml`, load configuration before adapters, and listen
+on the app port. The Agent Bricks CLI and runtime find `agent.toml` from the working directory or
 `MASON_PROJECT_ROOT`. Keep credentials out of `app.yaml`.
 
 Store binding commands declare intent. `dev` and `deploy` resolve or provision declared stores and
@@ -54,7 +55,7 @@ construction or restart without another source edit.
 ### Sessions and memory
 
 Pass `session_store(session_id)` as the `session` argument of `Runner.run(agent, messages,
-session=...)` for Mason-managed conversation state. The helper selects the bound Session Store or
+session=...)` for managed conversation state. The helper selects the bound Session Store or
 an in-process session; explicit arguments and environment overrides take precedence. Supply the
 actor so the durable store partitions transcripts per user. It caches the in-process session per
 process, so restart after a binding change.
@@ -71,11 +72,11 @@ framework autologging record children. The helper enables tracing when destinati
 settings are present and disables it otherwise. Preserve existing tracing semantics when composing
 it.
 
-## Mason server adapter
+## Managed server adapter
 
-For Mason's invocation protocol, construct `DurableAgentServer` in [runtime/main.py](runtime/main.py) and
-register [runtime/adapter.py](runtime/adapter.py) hooks. Keep framework-native execution in
-[agent/agent.py](agent/agent.py), independent of Mason request/context types.
+For the managed invocation protocol, construct `DurableAgentServer` in [runtime/main.py](runtime/main.py)
+and register [runtime/adapter.py](runtime/adapter.py) hooks. Keep framework-native execution in
+[agent/agent.py](agent/agent.py), independent of runtime request/context types.
 
 The invoke hook translates opaque application input, runs the agent through the framework `Runner`,
 translates native events, calls `await context.emit(event)`, and returns JSON output. DurableAgentServer owns
@@ -100,7 +101,7 @@ tolerate replay.
 
 ## Optional chat app
 
-No Mason command requires the chat UI. The default overlay supplies it; `--disable-chat-app` omits
+No CLI command requires the chat UI. The default overlay supplies it; `--disable-chat-app` omits
 it. When adopting it, inspect `CHAT_APP.md`, `runtime/ui.py`, and browser code. Adapt model choice,
 history, approval interrupts, and authentication to the actual agent. Its message-oriented
 assumptions must not silently change custom application behavior.

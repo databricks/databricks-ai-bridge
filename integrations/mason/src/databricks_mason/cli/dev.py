@@ -1,8 +1,8 @@
-"""`mason dev` — run a scaffolded agent locally, wrapping `databricks apps run-local`.
+"""`ab dev` — run a scaffolded agent locally, wrapping `databricks apps run-local`.
 
 Runs the app from its ``app.yaml`` exactly as the Databricks Apps runtime would locally: reads the
 manifest's command + env, and (with ``--prepare-environment``) builds the venv via uv. This is the
-local counterpart to ``mason deploy`` — same source dir, same manifest — so what runs here matches
+local counterpart to ``ab deploy`` — same source dir, same manifest — so what runs here matches
 what ships. Delegating to ``apps run-local`` means mason inherits the Apps team's local-run behavior
 rather than re-implementing it.
 """
@@ -34,12 +34,12 @@ _DEFAULT_APP_PORT = 8000
 _LOCAL_APP_YAML = "app.masondev.yaml"
 
 # Env vars that pin a package index for the *deployed* Apps build (a cloud-only workaround, see
-# `mason deploy`). They point at an index the deploying environment can reach, which is not
-# necessarily reachable from the local dev machine — so `mason dev`'s local `uv` build must ignore
+# `ab deploy`). They point at an index the deploying environment can reach, which is not
+# necessarily reachable from the local dev machine — so `ab dev`'s local `uv` build must ignore
 # them and use the machine's own configured index instead.
 _BUILD_INDEX_ENVS = frozenset({"PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDEX"})
 
-# Workspace managed-resource env that `mason deploy` writes into app.yaml but `mason dev` must NOT
+# Workspace managed-resource env that `ab deploy` writes into app.yaml but `ab dev` must NOT
 # inherit - dev runs every resource locally. These are stripped from the dev manifest:
 #   - tracing: dev sets up its OWN local MLflow server, so a stale workspace MLFLOW_EXPERIMENT_ID
 #     (which MLflow resolves ahead of MLFLOW_EXPERIMENT_NAME) would point the local agent at an
@@ -82,7 +82,7 @@ def dev(
     reach it: the chat UI if the project has one, otherwise a sample request against the agent's
     API.
 
-    Auth uses your Databricks profile (`-p` / `mason login`), and the agent reaches Databricks model
+    Auth uses your Databricks profile (`-p` / `ab login`), and the agent reaches Databricks model
     serving through the AI Gateway on that profile — so there are no model keys to set up.
 
     Under the hood this wraps `databricks apps run-local`: it reads the command + env from
@@ -90,48 +90,48 @@ def dev(
     deployment. The environment is built on the first run and reused after; pass
     `--prepare-environment` to force a rebuild (e.g. after changing dependencies).
 
-    Everything runs locally: `mason dev` is a local deployment that does not depend on a Databricks
+    Everything runs locally: `ab dev` is a local deployment that does not depend on a Databricks
     workspace for its resources. Tracing goes to a local MLflow tracking server (sqlite-backed, under `.mason/`)
     so traces are recorded on your machine with no workspace experiment or setup - open the printed
-    Traces URL to view them (`mason tracing unbind` doesn't affect dev; it only stops the deployed
+    Traces URL to view them (`ab tracing unbind` doesn't affect dev; it only stops the deployed
     agent's tracing). Long-term memory is off and conversation history is in-process (not durable):
-    the memory/session stores bound with `mason memory/sessions bind` are created and used only when you
-    `mason deploy`, not here. So there's nothing to provision and no service-principal grant to make;
-    that all happens at `mason deploy` time.
+    the memory/session stores bound with `ab memory/sessions bind` are created and used only when you
+    `ab deploy`, not here. So there's nothing to provision and no service-principal grant to make;
+    that all happens at `ab deploy` time.
     """
     source_dir = pathlib.Path(source)
     app_yaml = source_dir / "app.yaml"
     if not app_yaml.exists():
         raise AgentCliError(
             f"No app.yaml found at {app_yaml}.",
-            hint="Run from a scaffolded project, or pass --source <dir> (see `mason init`).",
+            hint="Run from a scaffolded project, or pass --source <dir> (see `ab init`).",
         )
 
     project = _load_project(source_dir)
     if project is not None and project.tools:
         require_managed_tool_support(source_dir)
 
-    # `mason dev` is a fully local sandbox: the Runtime Store and tracing already run locally, and
+    # `ab dev` is a fully local sandbox: the Runtime Store and tracing already run locally, and
     # memory/sessions follow suit here. Dev never reaches the workspace for stores (so it stays fast
     # and works offline): long-term memory is off and conversation history is in-process (not
-    # durable), regardless of any binding. Stores are created and used only by `mason deploy`; the
+    # durable), regardless of any binding. Stores are created and used only by `ab deploy`; the
     # deploy-written store env is stripped from the dev manifest (see `_dev_entry_point`) so a prior
     # deploy can't quietly pull dev onto the workspace stores. Read the bindings only to name them.
     memory_store, session_store, trace_experiment = resource_bindings(source_dir)
     if memory_store:
         render.console().print(
-            f"[dim]Memory store '{memory_store}' is bound but `mason dev` runs with "
-            "long-term memory off. Run `mason deploy` to use bound store.[/]"
+            f"[dim]Memory store '{memory_store}' is bound but `ab dev` runs with "
+            "long-term memory off. Run `ab deploy` to use bound store.[/]"
         )
     if session_store:
         render.console().print(
-            f"[dim]Session store '{session_store}' is bound but `mason dev` keeps "
-            "conversation history in-process (not durable). Run `mason deploy` to use bound store.[/]"
+            f"[dim]Session store '{session_store}' is bound but `ab dev` keeps "
+            "conversation history in-process (not durable). Run `ab deploy` to use bound store.[/]"
         )
     if trace_experiment:
         render.console().print(
-            f"[dim]Tracing experiment '{trace_experiment}' is bound but `mason dev` "
-            "traces to a local MLflow server. Run `mason deploy` to trace to the bound experiment.[/]"
+            f"[dim]Tracing experiment '{trace_experiment}' is bound but `ab dev` "
+            "traces to a local MLflow server. Run `ab deploy` to trace to the bound experiment.[/]"
         )
     local_env: dict[str, str] = {}
     # Local tracing: start a local MLflow tracking server backed by sqlite under .mason/ and point the
@@ -140,7 +140,7 @@ def dev(
     # Traces stay on the machine — no workspace experiment, no auth, no username needed — and the same
     # server serves the trace UI. Launched via `uvx mlflow` so it needs neither the (skinny) CLI env nor
     # the agent venv, and it owns the sqlite schema (so there's no client/server migration mismatch).
-    # Best-effort: any launch failure degrades to running without traces. `mason deploy` handles the
+    # Best-effort: any launch failure degrades to running without traces. `ab deploy` handles the
     # managed workspace experiment instead.
     tracing_server, tracing_env = start_local_tracing_server(source_dir)
     # Everything after the server starts runs under try/finally, so any failure — e.g. a malformed
@@ -192,7 +192,7 @@ def dev(
             action="Could not start the agent locally.",
         )
     finally:
-        # Remove the local-only manifest so a later `mason deploy` cannot sync it to the workspace, and
+        # Remove the local-only manifest so a later `ab deploy` cannot sync it to the workspace, and
         # stop the local tracing server — even if setup above raised before run-local.
         if entry_point is not None:
             entry_point.unlink(missing_ok=True)
@@ -206,14 +206,14 @@ def _announce_local_url(
     """Print how to reach the running app: the chat UI if present, else a sample invoke request.
 
     ``trace_url`` (when tracing is on) is shown alongside so a dev run surfaces where its traces land,
-    matching the ``Traces`` line ``mason deploy`` prints.
+    matching the ``Traces`` line ``ab deploy`` prints.
     """
     base = f"http://localhost:{port}"
     deploy_name = source_dir.resolve().name
     tool_step: str | tuple[str, str] = (
         "Edit agent/agent.py to give the agent a tool"
         if server == AgentServer.CUSTOM
-        else ("mason tools add mcp <service>", "Give the agent a tool")
+        else ("ab tools add mcp <service>", "Give the agent a tool")
     )
     if (source_dir / "runtime" / "ui.py").is_file():
         fields = {"Chat UI": base}
@@ -225,8 +225,8 @@ def _announce_local_url(
             next_steps=[
                 f"Open {base} to chat with your agent",
                 tool_step,
-                ("mason memory bind <store>", "Attach a memory / session store"),
-                (f"mason deploy {deploy_name}", "Deploy it to Databricks"),
+                ("ab memory bind <store>", "Attach a memory / session store"),
+                (f"ab deploy {deploy_name}", "Deploy it to Databricks"),
             ],
         )
     else:
@@ -244,12 +244,12 @@ def _announce_local_url(
         if trace_url:
             fields["Traces"] = trace_url
         render.success(
-            "Starting API-only agent (no chat UI — see `mason init --help`)",
+            "Starting API-only agent (no chat UI — see `ab init --help`)",
             fields=fields,
             next_steps=[
                 (sample, "Send a test request"),
                 tool_step,
-                (f"mason deploy {deploy_name}", "Deploy it to Databricks"),
+                (f"ab deploy {deploy_name}", "Deploy it to Databricks"),
             ],
         )
 
@@ -265,7 +265,7 @@ def _dev_entry_point(
 ) -> pathlib.Path:
     """Write the local-only app manifest consumed by ``apps run-local``.
 
-    The manifest marks the process as local so Mason Runtime uses its in-memory store. Keeping this in
+    The manifest marks the process as local so Agent Bricks Runtime uses its in-memory store. Keeping this in
     the entry point is more reliable than forwarding ``--env`` through the Databricks CLI and does
     not mutate the deployable ``app.yaml``. Deploy-only package-index variables and the deploy-written
     workspace resource env (see ``_DEPLOY_RESOURCE_ENVS`` - tracing + memory/session stores) are
@@ -290,7 +290,7 @@ def _dev_entry_point(
         if not (isinstance(e, dict) and e.get("name") == RUNTIME_STORE_LOCAL_ENV)
     ]
     # Drop the deploy-written workspace resource env (tracing + memory/session stores) so a prior
-    # `mason deploy` can't pull dev onto workspace resources: a stale MLFLOW_EXPERIMENT_ID would beat
+    # `ab deploy` can't pull dev onto workspace resources: a stale MLFLOW_EXPERIMENT_ID would beat
     # the local MLFLOW_EXPERIMENT_NAME dev re-adds below, and AGENT_MEMORY_STORE / AGENT_SESSION_STORE
     # would silently point the local runtime at the workspace stores instead of its local defaults.
     filtered = [

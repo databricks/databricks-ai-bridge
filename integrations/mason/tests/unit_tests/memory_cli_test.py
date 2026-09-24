@@ -1,4 +1,4 @@
-"""CLI-level unit tests for `mason memory` entries + stores commands.
+"""CLI-level unit tests for `ab memory` entries + stores commands.
 
 Backfills coverage for the memory command handlers/render paths in
 src/databricks_mason/cli/memory.py using a fake low-level client.

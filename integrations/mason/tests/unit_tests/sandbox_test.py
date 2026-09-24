@@ -256,7 +256,7 @@ def test_add_sandbox_rejects_unsupported_framework_without_writes(tmp_path: path
     )
 
     assert result.exit_code != 0
-    assert "Unsupported Mason framework 'custom'" in result.output
+    assert "Unsupported Agent Bricks framework 'custom'" in result.output
     assert mcps.read_text() == original
 
 

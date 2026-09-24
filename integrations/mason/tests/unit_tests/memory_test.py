@@ -1,4 +1,4 @@
-"""Unit tests for `mason memory` store rendering (timestamp field mapping)."""
+"""Unit tests for `ab memory` store rendering (timestamp field mapping)."""
 
 from __future__ import annotations
 
@@ -88,7 +88,7 @@ def test_store_create_suggests_binding_the_store():
         stores, ["create", "--display-name", "demo"], obj=_Ctx(_Client(store=store))
     )
     assert result.exit_code == 0, result.output
-    assert "mason memory bind demo" in result.output
+    assert "ab memory bind demo" in result.output
 
 
 def test_store_list_renders_timestamps_from_create_time():
@@ -175,10 +175,10 @@ def test_memory_bind_only_edits_agent_toml(tmp_path):
     )
 
     assert result.exit_code == 0, result.output
-    assert ctx.client().created == []  # bind never provisions — that's `mason deploy`'s job
+    assert ctx.client().created == []  # bind never provisions — that's `ab deploy`'s job
     assert "Bound memory store 'agent-mem'" in result.output
     # Point the user at the create-now escape hatch (whitespace-normalized to survive Rich wrapping).
-    assert "mason memory stores create" in " ".join(result.output.split())
+    assert "ab memory stores create" in " ".join(result.output.split())
     project = AgentProject.load(tmp_path)
     assert project.memory_store == "agent-mem"
     # No remote id is recorded — deploy/dev resolve it at runtime via AGENT_MEMORY_STORE.

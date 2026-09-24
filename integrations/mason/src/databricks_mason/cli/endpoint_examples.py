@@ -1,4 +1,4 @@
-"""Copy-pasteable examples for invoking Mason-generated agent endpoints."""
+"""Copy-pasteable examples for invoking Agent Bricks-generated agent endpoints."""
 
 from __future__ import annotations
 
@@ -19,13 +19,13 @@ def agent_invoke_command(target: str, *, uses_runtime_api: bool) -> str:
         json_arg = '"' + body.replace('"', r"\"") + '"'
     else:
         json_arg = shlex.quote(body)
-    return f"mason endpoint invoke {target} --path {path} --json {json_arg}"
+    return f"ab endpoint invoke {target} --path {path} --json {json_arg}"
 
 
 def print_agent_invoke_command(target: str, *, uses_runtime_api: bool) -> None:
     """Print only the new invocation example without changing the existing success panel."""
     con = render.console()
-    con.print(Text("Invoke with Mason", style=render.SECONDARY))
+    con.print(Text("Invoke with Agent Bricks", style=render.SECONDARY))
     # A separate, soft-wrapped line avoids copying panel borders or inserted line breaks.
     con.print(
         Text(agent_invoke_command(target, uses_runtime_api=uses_runtime_api), style=render.COMMAND),

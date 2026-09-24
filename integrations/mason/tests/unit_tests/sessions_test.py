@@ -1,4 +1,4 @@
-"""Unit tests for `mason sessions items pop` and `sessions stores list` rendering."""
+"""Unit tests for `ab sessions items pop` and `sessions stores list` rendering."""
 
 from __future__ import annotations
 
@@ -130,5 +130,5 @@ def test_sessions_bind_only_edits_agent_toml(tmp_path):
 
     assert result.exit_code == 0, result.output
     assert "Bound session store 'agent-sess'" in result.output
-    assert "mason sessions stores create" in " ".join(result.output.split())
+    assert "ab sessions stores create" in " ".join(result.output.split())
     assert AgentProject.load(tmp_path).session_store == "agent-sess"

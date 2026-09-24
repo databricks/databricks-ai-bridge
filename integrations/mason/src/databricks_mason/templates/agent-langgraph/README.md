@@ -1,21 +1,24 @@
-# Mason LangGraph Agent
+# LangGraph agent template
 
-A LangGraph agent served by `databricks_mason.DurableAgentServer`. Mason keeps invocation state and events in
-memory during `mason dev`. Deployment attaches a persistent Runtime Store, so invocation state and
+A LangGraph agent served by `databricks_mason.DurableAgentServer`. The managed runtime keeps invocation state and events in
+memory during `ab dev`. Deployment attaches a persistent Runtime Store, so invocation state and
 events survive process loss and interrupted work can be recovered.
 
-The generated project separates portable agent execution from Mason's HTTP protocol:
+The generated project separates portable agent execution from the managed HTTP protocol:
 
 ```text
 client -> runtime/main.py -> runtime/adapter.py -> agent/agent.py:run_agent
 ```
 
 - `agent/agent.py` owns the framework-native agent, sessions, tools, MCP lifetime, and `run_agent`.
-- `runtime/adapter.py` owns the agent-author integration hooks: Mason input/output translation plus
+- `runtime/adapter.py` owns the agent-author integration hooks: runtime input/output translation plus
   `invoke` and `recover`.
 - `runtime/main.py` constructs the server and registers those hooks.
 
-To bring an existing LangGraph agent, run `mason init --framework langgraph --existing .` in its
+The `databricks_mason` import path is the runtime's existing package name. The public AgentKit
+client uses `databricks_agentkit.AgentKitClient`.
+
+To bring an existing LangGraph agent, run `ab init --framework langgraph --existing .` in its
 project and follow the generated prompt in your coding agent. The migration skill and this template share
 [MASON_CONTRACT.md](MASON_CONTRACT.md), which owns integration requirements. This README owns
 configuration and client examples; [AGENTS.md](AGENTS.md) provides the development map.
@@ -23,7 +26,7 @@ configuration and client examples; [AGENTS.md](AGENTS.md) provides the developme
 ## Run locally
 
 ```bash
-mason dev
+ab dev
 ```
 
 The API is available at `http://localhost:8000/api/invocations`. Every request supplies a UUID `id`.
@@ -87,7 +90,7 @@ The default checkpointer is process-local. Bind a managed Session Store to prese
 paused LangGraph state across restarts:
 
 ```bash
-mason sessions bind my-agent-sessions
+ab sessions bind my-agent-sessions
 ```
 
 ## Crash recovery
@@ -100,18 +103,18 @@ repeated side effects. See [Recovery and durability](MASON_CONTRACT.md#recovery-
 
 The browser UI is included by default. It generates a stable application session ID in local
 storage, places it inside each invocation's `input`, and generates a fresh invocation UUID per turn.
-Use `mason init --framework langgraph --disable-chat-app` for API-only output.
+Use `ab init --framework langgraph --disable-chat-app` for API-only output.
 
 ## Configure and deploy
 
 - Change the model, instructions, tools, graph, and framework-native execution in `agent/agent.py`.
 - Change `runtime/adapter.py` only to map a different application input/output contract.
 - Add local tools under `agent/tools/`; modules are auto-discovered.
-- Add MCP servers in `agent/mcps.py` or with `mason tools add mcp`.
-- Bind long-term memory with `mason memory bind <store>`.
+- Add MCP servers in `agent/mcps.py` or with `ab tools add mcp`.
+- Bind long-term memory with `ab memory bind <store>`.
 
 ```bash
-mason --profile <profile> deploy agent-langgraph --source .
+ab --profile <profile> deploy agent-langgraph --source .
 ```
 
 Deployment provisions or reuses the app's dedicated Runtime Store. Only the app-owned

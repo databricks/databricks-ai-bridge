@@ -61,7 +61,7 @@ def test_tools_add_outside_project_gives_clear_hint(tmp_path):
         tools, ["add", "mcp", "system.ai.web_search", "--source", str(empty)], obj=_Ctx()
     )
     assert result.exit_code != 0
-    assert "needs a Mason project" in result.output
+    assert "needs an Agent Bricks project" in result.output
     assert "legacy compatibility command" not in result.output
 
 

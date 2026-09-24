@@ -23,11 +23,11 @@ from databricks_mason.project_types import (
 )
 from databricks_mason.runtime import tool_manifest
 
-# agent.toml resource-table names, read by the manifest parsing below (and by `mason dev`/`deploy`).
+# agent.toml resource-table names, read by the manifest parsing below (and by `ab dev`/`deploy`).
 MEMORY_STORE_TABLE = "memory_store"
 SESSION_STORE_TABLE = "session_store"
-# The tracing binding (`mason tracing bind` / `unbind`): the `experiment_name` key under [tracing] is
-# the bound MLflow experiment. Its presence means tracing is on; an absent binding means off. `mason
+# The tracing binding (`ab tracing bind` / `unbind`): the `experiment_name` key under [tracing] is
+# the bound MLflow experiment. Its presence means tracing is on; an absent binding means off. `ab
 # init` bootstraps a default name.
 TRACING_TABLE = "tracing"
 EXPERIMENT_NAME_KEY = "experiment_name"
@@ -384,12 +384,12 @@ class AgentProject:
         self.memory_store = memory_store
         self.session_store = session_store
         self.memory_store_id = memory_store_id
-        # The deployment's base name (`mason deploy` prefixes it with `agent-mason-`); None until named.
+        # The deployment's base name (`ab deploy` prefixes it with `agent-mason-`); None until named.
         self.deployment_name = deployment_name
         # Tracing config: the MLflow experiment NAME to trace to (a workspace path). Its presence IS
         # the enable switch: a bound name means tracing is on (deploy get-or-creates it); None means
         # unbound, i.e. off. Storing a name (not an id) keeps the binding valid across workspaces and
-        # profiles, since an id is workspace-local. `mason init` bootstraps a default name.
+        # profiles, since an id is workspace-local. `ab init` bootstraps a default name.
         self.trace_experiment_name = trace_experiment_name
 
     @classmethod
@@ -408,7 +408,7 @@ class AgentProject:
         except FileNotFoundError as exc:
             raise AgentCliError(
                 f"Could not find agent.toml in {project_root}.",
-                hint="This command needs a Mason project. Run `mason init` to create one, "
+                hint="This command needs an Agent Bricks project. Run `ab init` to create one, "
                 "or point at an existing project with --source <dir>.",
             ) from exc
         except (OSError, ParseError) as exc:
@@ -551,7 +551,7 @@ class AgentProject:
     def bind_memory_store(self, name: str, store_id: str | None = None) -> bool:
         """Declare the memory store binding in agent.toml. Returns True if it changed.
 
-        ``store_id`` is the bare store id (``memory-stores/<id>`` minus the prefix). `mason deploy`
+        ``store_id`` is the bare store id (``memory-stores/<id>`` minus the prefix). `ab deploy`
         resolves the id fresh and injects it via ``AGENT_MEMORY_STORE``; the field is only recorded for
         legacy/hand-written bindings that pin the id in the manifest.
         """

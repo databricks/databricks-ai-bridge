@@ -156,7 +156,7 @@ def test_demo_ui_routes(monkeypatch):
     app_script = client.get("/ui-assets/app.js")
     assert app_script.status_code == 200
     assert app_script.headers["cache-control"] == "no-store"
-    assert "mason memory bind <store-name>" in app_script.text
+    assert "ab memory bind <store-name>" in app_script.text
     assert "refreshSessionView({ hydrateChat: true })" in app_script.text
     assert "function renderModels(" in app_script.text
     assert 'demoUrl("/api/ui/config")' in app_script.text

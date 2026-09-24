@@ -36,7 +36,7 @@ def parse_framework(value: object) -> AgentFramework:
             pass
     rendered = repr(str(value)) if isinstance(value, str) else "missing"
     raise AgentCliError(
-        f"Unsupported Mason framework {rendered}.",
+        f"Unsupported Agent Bricks framework {rendered}.",
         hint=f"Supported frameworks: {', '.join(framework.value for framework in AgentFramework)}.",
     )
 
@@ -50,6 +50,6 @@ def parse_server(value: object) -> AgentServer:
             pass
     rendered = repr(str(value)) if isinstance(value, str) else "missing"
     raise AgentCliError(
-        f"Unsupported Mason server {rendered}.",
+        f"Unsupported Agent Bricks server {rendered}.",
         hint=f"Supported servers: {', '.join(server.value for server in AgentServer)}.",
     )

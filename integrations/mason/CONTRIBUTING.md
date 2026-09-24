@@ -1,25 +1,26 @@
-# Contributing to `databricks-agentbricks`
+# Contributing to Agent Bricks CLI and AgentKit
 
-This guide covers developing Mason itself - the CLI, the SDK/runtime, and the project templates -
-and how to run and test your changes locally and on Databricks Apps.
+This guide covers the Agent Bricks CLI (`ab`), AgentKit, the runtime, and the project templates,
+including how to run and test changes locally and on Databricks Apps. The current Python
+distribution is `databricks-agentbricks`; installing it provides the `ab` command and AgentKit.
 
 ## Three kinds of change, and how each is sourced
 
-Mason has three layers a contributor edits. Knowing which one you're changing tells you what to
+There are three layers a contributor edits. Knowing which one you're changing tells you what to
 re-run:
 
 | Layer | What it is | How it's sourced |
 | --- | --- | --- |
-| **CLI** | the `mason` command (`databricks_mason.cli` and its command modules) | editable install -> runs live from your working tree |
-| **Templates** | the project scaffolds under `src/databricks_mason/templates/` | shipped inside the package; `mason init` copies the template matching the installed CLI via `importlib.resources`, which for an editable install resolves to your source tree |
-| **SDK / runtime** | `databricks_mason.runtime`, the `langgraph`/`openai` adapters, `DurableAgentServer` | a scaffold depends on the **released** `databricks-agentbricks` from PyPI; opt into local or unreleased code with a `[tool.uv.sources]` override (see below) |
+| **CLI** | the `ab` command (`databricks_mason.cli` and its command modules) | editable install -> runs live from your working tree |
+| **Templates** | the project scaffolds under `src/databricks_mason/templates/` | shipped inside the package; `ab init` copies the template matching the installed CLI via `importlib.resources`, which for an editable install resolves to your source tree |
+| **SDK / runtime** | `databricks_agentkit.AgentKitClient`, `databricks_mason.runtime`, the `langgraph`/`openai` adapters, `DurableAgentServer` | a scaffold depends on the **released** `databricks-agentbricks` distribution from PyPI; opt into local or unreleased code with a `[tool.uv.sources]` override (see below) |
 
 ## Editable install (CLI + templates)
 
 ```sh
 pip install -e integrations/mason     # editable install of the CLI
-mason init /tmp/scratch-agent         # scaffolds from your working-tree template
-cd /tmp/scratch-agent && mason dev
+ab init /tmp/scratch-agent         # scaffolds from your working-tree template
+cd /tmp/scratch-agent && ab dev
 ```
 
 With an editable install, CLI edits and template edits both run straight from your working tree - no
@@ -30,29 +31,29 @@ dependency in `integrations/mason/pyproject.toml`:
 pip install -e integrations/mason     # only when dependencies changed
 ```
 
-Editing a template in the repo only affects **future** `mason init` runs. An existing scaffold has
+Editing a template in the repo only affects **future** `ab init` runs. An existing scaffold has
 its own copy of the template, so to iterate on a scaffolded project edit that copy (or re-init).
 
 ## Testing SDK / runtime changes in a scaffold
 
-A scaffold uses a normal `databricks-agentbricks` PyPI dependency, so `mason dev` and `mason deploy`
+A scaffold uses a normal `databricks-agentbricks` PyPI dependency, so `ab dev` and `ab deploy`
 install the **released** SDK - editing `databricks_mason.runtime` / `.langgraph` / `.openai` in your
 checkout does **not** change what a scaffold runs. To exercise local or unreleased SDK changes, add a
 `[tool.uv.sources]` override to the scaffold's `pyproject.toml`. It is a dev-loop-only edit - don't
 ship it in a real deployment.
 
-**`mason dev` - your local checkout (editable, picks up uncommitted edits):**
+**`ab dev` - your local checkout (editable, picks up uncommitted edits):**
 
 ```toml
 [tool.uv.sources]
 databricks-agentbricks = { path = "/abs/path/to/databricks-ai-bridge/integrations/mason", editable = true }
 ```
 
-`mason dev` builds the scaffold's venv from this, so your working-tree SDK edits run live. After
-changing the pin or the scaffold's dependencies, rebuild once with `mason dev --prepare-environment`
-(otherwise `mason dev` reuses the existing `.venv` and you run stale code).
+`ab dev` builds the scaffold's venv from this, so your working-tree SDK edits run live. After
+changing the pin or the scaffold's dependencies, rebuild once with `ab dev --prepare-environment`
+(otherwise `ab dev` reuses the existing `.venv` and you run stale code).
 
-**`mason deploy` - a pushed git ref (the Apps build can't reach a local path):**
+**`ab deploy` - a pushed git ref (the Apps build can't reach a local path):**
 
 ```toml
 [tool.uv.sources]
@@ -67,9 +68,9 @@ override):
 
 ```sh
 # local: the source uv resolved into the agent venv
-cat /tmp/scratch-agent/.venv/lib/python*/site-packages/databricks_mason-*.dist-info/direct_url.json
+cat /tmp/scratch-agent/.venv/lib/python*/site-packages/databricks_agentbricks-*.dist-info/direct_url.json
 # deployed: watch the build/install logs
-mason deployments logs agent-mason-<name>
+ab deployments logs agent-mason-<name>
 ```
 
 ## Keeping docs in sync

@@ -63,7 +63,7 @@ def checkpointer(store: str | None = None) -> BaseCheckpointSaver:
 
     In-memory by default; a durable ``DatabricksSessionStoreSaver`` when a managed store is
     configured. The store resolves ``store`` arg → ``AGENT_SESSION_STORE`` env → the
-    ``[session_store]`` binding in agent.toml (`mason sessions bind`) → none (in-memory).
+    ``[session_store]`` binding in agent.toml (`ab sessions bind`) → none (in-memory).
     """
     from databricks_mason.runtime.tool_manifest import resolve_session_store
 

@@ -23,7 +23,7 @@ _REAL_RESOLVE_TRACE = deploy_mod.get_or_create_trace_experiment
 
 @pytest.fixture(autouse=True)
 def _compute_active(monkeypatch):
-    # `mason deploy` now waits for compute on every deploy; report ACTIVE so the wait returns
+    # `ab deploy` now waits for compute on every deploy; report ACTIVE so the wait returns
     # immediately. Tests that exercise _wait_for_running directly override _app_compute_state.
     monkeypatch.setattr(deploy_mod, "_app_compute_state", lambda name, profile: "ACTIVE")
 
@@ -290,7 +290,7 @@ def test_deploy_rejects_custom_server_manifest_tools_before_mutation_or_network(
         )
 
     assert result.exit_code != 0
-    assert "require a Mason server template" in " ".join(result.output.split())
+    assert "require an Agent Bricks server template" in " ".join(result.output.split())
     assert manifest.read_text(encoding="utf-8") == before
     client.assert_not_called()
     db.assert_not_called()
@@ -774,17 +774,17 @@ def test_deploy_recommends_invoking_deployed_agent(
     )
 
     assert result.exit_code == 0, result.output
-    commands = [line for line in result.output.splitlines() if line.startswith("mason endpoint")]
+    commands = [line for line in result.output.splitlines() if line.startswith("ab endpoint")]
     assert len(commands) == 1, result.output
     command = commands[0]
     path = "/api/invocations" if server == "mason" else "/invocations"
-    assert f"mason endpoint invoke agent-mason-myapp --path {path} --json " in command
+    assert f"ab endpoint invoke agent-mason-myapp --path {path} --json " in command
     assert "│" not in command
     assert ("$(uuidgen)" in command) is (server == "mason")
-    panel, example = result.output.split("Invoke with Mason\n")
+    panel, example = result.output.split("Invoke with Agent Bricks\n")
     assert panel.splitlines()[-1].startswith("╰")
     assert example.splitlines() == [command]
-    for existing_command in ("mason deployments get", "mason deployments logs"):
+    for existing_command in ("ab deployments get", "ab deployments logs"):
         assert any(line.startswith("│") and existing_command in line for line in panel.splitlines())
     assert "Runtime Store" not in result.output
     assert "runtime-agent-mason-myapp-550e8400-e29b-41d4-a716-446655440000" not in result.output
@@ -987,7 +987,7 @@ def test_deploy_proceeds_when_tracing_provisioning_raises(tmp_path: pathlib.Path
     env_entries = yaml.safe_load((src / "app.yaml").read_text()).get("env") or []
     assert not any(e["name"].startswith("MLFLOW") for e in env_entries)  # tracing skipped
     out = " ".join(result.output.split())
-    assert "Deployed without tracing" in out and "mason tracing bind" in out  # guidance shown
+    assert "Deployed without tracing" in out and "ab tracing bind" in out  # guidance shown
     assert "mlflow create_experiment blew up" in out  # the cause is surfaced
 
 
@@ -1007,7 +1007,7 @@ def test_deploy_notifies_when_tracing_unbound(tmp_path: pathlib.Path, monkeypatc
     assert result.exit_code == 0, result.output
     out = " ".join(result.output.split())
     assert "Deployed without tracing" in out
-    assert "mason tracing bind" in out  # points at the (parameter-free) enable command
+    assert "ab tracing bind" in out  # points at the (parameter-free) enable command
     assert "Tracing setup failed" not in out  # unbound is not an error, so no cause suffix
 
 
@@ -1385,7 +1385,7 @@ def test_deploy_creates_declared_but_missing_store_without_writing_agent_toml(
 
 
 def test_deploy_grants_bound_store(tmp_path: pathlib.Path, monkeypatch):
-    # `mason sessions bind` then plain `mason deploy`: the binding must drive both the
+    # `ab sessions bind` then plain `ab deploy`: the binding must drive both the
     # app.yaml env AND the SP access grant, or the deployed app can't reach its durable store.
     src = tmp_path / "app"
     src.mkdir()

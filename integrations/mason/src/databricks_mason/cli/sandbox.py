@@ -1,4 +1,4 @@
-"""``mason add-sandbox`` — attach a downscoped ``system.ai.sandbox`` MCP server."""
+"""``ab add-sandbox`` — attach a downscoped ``system.ai.sandbox`` MCP server."""
 
 from __future__ import annotations
 
@@ -112,7 +112,7 @@ def _find_server_list(tree: ast.Module) -> tuple[ast.FunctionDef, ast.List]:
     if len(functions) != 1:
         raise AgentCliError(
             "Could not find one build_mcp_servers() function in agent/mcps.py.",
-            hint="Run this command from a Mason agent project generated from a supported template.",
+            hint="Run this command from an Agent Bricks project generated from a supported template.",
         )
 
     direct_returns = [node for node in functions[0].body if isinstance(node, ast.Return)]
@@ -123,7 +123,7 @@ def _find_server_list(tree: ast.Module) -> tuple[ast.FunctionDef, ast.List]:
         or not isinstance(direct_returns[0].value, ast.List)
     ):
         raise AgentCliError(
-            "build_mcp_servers() must directly return a list before Mason can add the sandbox.",
+            "build_mcp_servers() must directly return a list before Agent Bricks can add the sandbox.",
             hint="Change the function to `return [...]`, then retry.",
         )
     return functions[0], direct_returns[0].value
@@ -253,9 +253,9 @@ def _insert_imports(
     ]
     if len(protocol_imports) != 1:
         raise AgentCliError(
-            f"agent/mcps.py must import {required_name} from {required_module} before Mason can "
+            f"agent/mcps.py must import {required_name} from {required_module} before Agent Bricks can "
             "add the sandbox.",
-            hint="Start from the Mason agent template, then retry.",
+            hint="Start from the Agent Bricks agent template, then retry.",
         )
 
     insert_after: ast.stmt | None = None
@@ -597,7 +597,7 @@ def _configure_langgraph_runtime(source: str) -> str:
     if len(imports) != 1 or imports[0].lineno != imports[0].end_lineno:
         raise AgentCliError(
             "agent/mason/mcp_runtime.py must import build_mcp_servers from agent.mcps.",
-            hint="Start from the Mason LangGraph agent template, then retry.",
+            hint="Start from the Agent Bricks LangGraph agent template, then retry.",
         )
 
     configured = any(alias.name == "_sandbox_tool_interceptor" for alias in imports[0].names)
@@ -630,7 +630,7 @@ def _configure_langgraph_runtime(source: str) -> str:
         raise AgentCliError(
             "Could not find one DatabricksMultiServerMCPClient() call in "
             "agent/mason/mcp_runtime.py.",
-            hint="Start from the Mason LangGraph agent template, then retry.",
+            hint="Start from the Agent Bricks LangGraph agent template, then retry.",
         )
     client_call = client_calls[0]
     interceptor_keywords = [
@@ -709,7 +709,7 @@ class _LangGraphSandboxAdapter:
         if not runtime.is_file():
             raise AgentCliError(
                 f"Could not find {runtime}.",
-                hint="Start from the Mason LangGraph agent template, then retry.",
+                hint="Start from the Agent Bricks LangGraph agent template, then retry.",
             )
 
         current = _read_source(target)
@@ -768,13 +768,13 @@ _SANDBOX_ADAPTERS: dict[AgentFramework, _SandboxAdapter] = {
     type=click.Path(exists=True, file_okay=False, path_type=pathlib.Path),
     default=pathlib.Path("."),
     show_default=True,
-    help="Mason agent project containing agent/mcps.py.",
+    help="Agent Bricks project containing agent/mcps.py.",
 )
 @click.option(
     "--framework",
     type=click.Choice([framework.value for framework in AgentFramework]),
     default=None,
-    help="Override framework detection for projects created before Mason metadata existed.",
+    help="Override framework detection for projects created before Agent Bricks metadata existed.",
 )
 @click.pass_obj
 def add_sandbox(
@@ -799,7 +799,7 @@ def add_sandbox(
     if not target.is_file():
         raise AgentCliError(
             f"Could not find {target}.",
-            hint="Pass --source pointing to a Mason agent project containing agent/mcps.py.",
+            hint="Pass --source pointing to an Agent Bricks project containing agent/mcps.py.",
         )
 
     metadata = load_project_metadata(project, framework_override=framework)

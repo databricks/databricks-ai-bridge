@@ -67,17 +67,17 @@ def test_kind_mcp_replaces_default_scope(monkeypatch):
     payload = json.loads(result.stdout)
     assert payload["mcp_schema"] == "main.tools"
     assert [tool["name"] for tool in payload["available_tools"]] == ["main.tools.search"]
-    assert payload["available_tools"][0]["add_command"] == "mason tools add mcp main.tools.search"
+    assert payload["available_tools"][0]["add_command"] == "ab tools add mcp main.tools.search"
     assert client.calls == [("main.tools", None)]
 
 
 @pytest.mark.parametrize(
     ("kind", "add_command"),
     [
-        ("sandbox", "mason tools add sandbox --scope table:catalog.schema.table"),
-        ("uc-function", "mason tools add uc-function catalog.schema.function"),
-        ("genie-one", "mason tools add genie-one"),
-        ("genie-agent", "mason tools add genie-agent SPACE_ID"),
+        ("sandbox", "ab tools add sandbox --scope table:catalog.schema.table"),
+        ("uc-function", "ab tools add uc-function catalog.schema.function"),
+        ("genie-one", "ab tools add genie-one"),
+        ("genie-agent", "ab tools add genie-agent SPACE_ID"),
     ],
 )
 def test_local_recipe_needs_no_client_or_project(monkeypatch, tmp_path, kind, add_command):
@@ -118,7 +118,7 @@ def test_discovered_sandbox_uses_scoped_recipe(monkeypatch):
     assert result.exit_code == 0, result.output
     tool = json.loads(result.stdout)["available_tools"][0]
     assert tool["kind"] == "mcp"
-    assert tool["add_command"] == "mason tools add sandbox --scope table:catalog.schema.table"
+    assert tool["add_command"] == "ab tools add sandbox --scope table:catalog.schema.table"
 
 
 def test_empty_discovery_is_complete(monkeypatch):
@@ -184,8 +184,8 @@ def test_discovery_text_labels_scope_and_manifest(monkeypatch):
     assert "system.ai" in result.stdout
     assert "agent.toml" in result.stdout
     assert "recipe" in result.stdout.lower()
-    assert "mason tools list --kind mcp" in result.stdout
-    assert "mason tools list --kind mcp --schema catalog.schema" in result.stdout
+    assert "ab tools list --kind mcp" in result.stdout
+    assert "ab tools list --kind mcp --schema catalog.schema" in result.stdout
 
 
 def test_command_tree_has_no_legacy_or_nested_mcp_group():

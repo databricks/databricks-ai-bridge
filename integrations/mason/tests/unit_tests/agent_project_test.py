@@ -437,7 +437,7 @@ def test_load_and_create_share_unsupported_selection_validation(
     assert (
         loaded.value.message
         == created.value.message
-        == (f"Unsupported Mason {selection} 'unsupported'.")
+        == (f"Unsupported Agent Bricks {selection} 'unsupported'.")
     )
     assert loaded.value.hint == created.value.hint
     assert path.read_text() == before

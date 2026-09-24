@@ -1,4 +1,4 @@
-"""Unit tests for `mason login` / `logout` and the saved-profile helpers.
+"""Unit tests for `ab login` / `logout` and the saved-profile helpers.
 
 `MASON_CONFIG_HOME` redirects the config file into a tmp dir, and `_MasonApiClient`
 is stubbed so login never touches the network.

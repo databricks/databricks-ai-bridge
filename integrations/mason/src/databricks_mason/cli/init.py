@@ -1,10 +1,10 @@
-"""`mason init` — scaffold a local agent project from a mason template.
+"""`ab init` — scaffold a local agent project from an Agent Bricks template.
 
 Copies one template bundled in the databricks_mason package into a local target directory, ready
-for `mason deploy --source <dir>`. Because the template ships with the package, the scaffold always
+for `ab deploy --source <dir>`. Because the template ships with the package, the scaffold always
 matches the installed CLI; to try a fork or branch, install that mason and re-run init.
 
-The Mason server provisions its Runtime Store at deployment. Use `--server custom` for a minimal
+The Agent Bricks server provisions its Runtime Store at deployment. Use `--server custom` for a minimal
 foreground-only FastAPI server.
 """
 
@@ -37,7 +37,7 @@ from databricks_mason.project_types import (
     parse_server,
 )
 
-# Templates ship inside this package (databricks_mason/templates/), so `mason init` always copies
+# Templates ship inside this package (databricks_mason/templates/), so `ab init` always copies
 # the one for the installed CLI — the scaffold can't drift from the databricks-agentbricks it runs
 # against. For an editable install `resources.files` resolves to the source tree, so a Mason
 # developer's uncommitted template edits are scaffolded too.
@@ -82,7 +82,9 @@ def _or_join(items: list[str]) -> str:
 _FRAMEWORK_LABEL_PHRASE = _or_join(list(_FRAMEWORK_LABELS.values()))
 _FRAMEWORK_VALUE_PHRASE = ", ".join(framework.value for framework in AgentFramework)
 
-_MIGRATION_DIR = "mason-migrate"
+_MIGRATION_DIR = "agent-bricks-migrate"
+# Keep an existing bundle usable and prevent a second skill from being generated beside it.
+_LEGACY_MIGRATION_DIR = "mason-migrate"
 # Each coding agent discovers skills in its own configuration directory, so the bundle lives in one
 # tool-neutral directory and every agent gets a pointer to it rather than a copy of the reference.
 _POINTER_ROOTS = (".claude", ".agent")
@@ -122,7 +124,7 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
 
     Returns True if a `.env` was written. Skips if `.env` already exists (never clobbers). The
     template reads DATABRICKS_CONFIG_PROFILE for local model auth, so this makes the scaffolded
-    project runnable with `mason dev` without a manual `cp .env.example .env` step.
+    project runnable with `ab dev` without a manual `cp .env.example .env` step.
     """
     env_path = dest / ".env"
     if env_path.exists():
@@ -200,19 +202,31 @@ def _prepare_migration(
         raise AgentCliError(f"Existing project directory '{dest}' was not found.")
     bundle = dest / _MIGRATION_DIR
     pointers = tuple(dest / root / "skills" / _MIGRATION_DIR for root in _POINTER_ROOTS)
-    for target in (bundle, *pointers):
+    legacy_bundle = dest / _LEGACY_MIGRATION_DIR
+    legacy_pointers = tuple(
+        dest / root / "skills" / _LEGACY_MIGRATION_DIR for root in _POINTER_ROOTS
+    )
+    bundle_targets = (bundle, legacy_bundle)
+    for target in (*bundle_targets, *pointers, *legacy_pointers):
         for path in _migration_paths(dest, target):
             if path.is_symlink() or (path.exists() and not path.is_dir()):
                 raise AgentCliError(f"Cannot write migration files at '{path}'.")
         if target.exists():
+            relative_target = target.relative_to(dest).as_posix()
+            if target in bundle_targets:
+                hint = (
+                    f"Use the existing {relative_target}/PROMPT.md, or move that directory "
+                    "before regenerating."
+                )
+            else:
+                hint = f"Move the existing skill at {relative_target} before regenerating."
             raise AgentCliError(
                 f"Migration files already exist at '{target}'.",
-                hint=f"Use the existing {_MIGRATION_DIR}/PROMPT.md, or move that directory "
-                "before regenerating.",
+                hint=hint,
             )
 
     # Build the bundle before touching the project, so a failed copy leaves no partial skill.
-    with tempfile.TemporaryDirectory(prefix="mason-migrate-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="agent-bricks-migrate-") as tmp:
         staged = pathlib.Path(tmp) / _MIGRATION_DIR
         reference = staged / "references" / "template"
         template = _TEMPLATES[framework]
@@ -248,12 +262,12 @@ def _prepare_migration(
             encoding="utf-8",
         )
         prompt = (
-            f"Use the mason-migrate skill at {_MIGRATION_DIR}/SKILL.md to adapt "
-            f"my existing {_FRAMEWORK_LABELS[framework]} agent in this project for Mason. Read "
+            f"Use the {_MIGRATION_DIR} skill at {_MIGRATION_DIR}/SKILL.md to adapt "
+            f"my existing {_FRAMEWORK_LABELS[framework]} agent in this project for Agent Bricks. Read "
             "its migration settings and local template reference. Implement and verify the "
             "integration while preserving my agent's behavior. Explicitly handle existing "
             "persistence, conversation history, custom state, and client contracts; surface any "
-            "unresolved migration choices. Report which Mason commands are ready and any "
+            "unresolved migration choices. Report which Agent Bricks commands are ready and any "
             "remaining limitations.\n"
         )
         (staged / "PROMPT.md").write_text(prompt, encoding="utf-8")
@@ -305,13 +319,13 @@ def _prepare_migration(
     type=click.Choice([server.value for server in AgentServer]),
     default=AgentServer.MASON.value,
     show_default=True,
-    help="Use Mason's invocation server or a minimal custom FastAPI server.",
+    help="Use the Agent Bricks invocation server or a minimal custom FastAPI server.",
 )
 @click.option(
     "--profile",
     default=None,
-    help="Seed a local .env with this DATABRICKS_CONFIG_PROFILE so `mason dev` works "
-    "immediately (defaults to the profile from -p / `mason login`).",
+    help="Seed a local .env with this DATABRICKS_CONFIG_PROFILE so `ab dev` works "
+    "immediately (defaults to the profile from -p / `ab login`).",
 )
 @click.option(
     "--disable-chat-app",
@@ -351,25 +365,25 @@ def init(
     memory_store: Optional[str],
     session_store: Optional[str],
 ) -> None:
-    """Scaffold a local agent project from a mason template.
+    """Scaffold a local agent project from an Agent Bricks template.
 
     DIRECTORY is the target path to create (defaults to the template's own name). The
     directory must not already exist unless --existing is supplied. Once scaffolded, deploy it with
-    `mason deploy <name> --source <directory>`.
+    `ab deploy <name> --source <directory>`.
 
-    Pass --profile (or set a default via `mason login` / -p) to seed a local `.env` so the
-    scaffolded project runs with `mason dev` right away.
+    Pass --profile (or set a default via `ab login` / -p) to seed a local `.env` so the
+    scaffolded project runs with `ab dev` right away.
 
     The scaffold is preconfigured to call Databricks model serving through the AI Gateway using
     that profile, so it can talk to a model with no separate endpoint or API key to set up.
 
-    The default Mason server supports foreground, streaming, and background invocations through one
+    The default Agent Bricks server supports foreground, streaming, and background invocations through one
     HTTP contract and Runtime Store. Pass --server custom for a minimal foreground-only
     FastAPI server.
 
     With --existing, prepare a skill, prompt, and bundled template reference under
-    mason-migrate/, and point each supported coding agent's skills directory at it. Run the
-    prompt in your coding agent to migrate the agent onto Mason; init leaves existing
+    agent-bricks-migrate/, and point each supported coding agent's skills directory at it. Run the
+    prompt in your coding agent to migrate the agent onto Agent Bricks; init leaves existing
     application source, dependencies, and configuration intact.
     """
     selected_framework = parse_framework(framework or AgentFramework.LANGGRAPH)
@@ -457,7 +471,7 @@ def init(
 
     fields = {
         "Framework": selected_framework.value,
-        "Server": "Mason DurableAgentServer" if mason_server else "Custom FastAPI",
+        "Server": "Agent Bricks DurableAgentServer" if mason_server else "Custom FastAPI",
         "Template ref": template_ref,
         "Directory": str(dest),
     }
@@ -478,10 +492,10 @@ def init(
         # than burying it, since running locally fails without a Databricks profile.
         steps += [
             ("cp .env.example .env", "Create your local env file"),
-            "Set DATABRICKS_CONFIG_PROFILE in .env (or re-run `mason init --profile <profile>`)",
+            "Set DATABRICKS_CONFIG_PROFILE in .env (or re-run `ab init --profile <profile>`)",
         ]
-    steps.append(("mason dev", "Run the agent locally"))
+    steps.append(("ab dev", "Run the agent locally"))
     if chat_app_enabled:
         steps.append("Open http://localhost:8000 to chat with it")
-    steps.append((f"mason deploy {dest.name}", "Deploy it to Databricks (from the project dir)"))
+    steps.append((f"ab deploy {dest.name}", "Deploy it to Databricks (from the project dir)"))
     render.success(f"Scaffolded '{template_name}'", fields=fields, next_steps=steps)

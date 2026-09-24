@@ -23,7 +23,7 @@ TRANSIENT_ERROR_CODES = frozenset({"CANCELLED", "UNAVAILABLE", "DEADLINE_EXCEEDE
 
 # Process-global output mode, set once by the root CLI group. When "json", errors are
 # emitted as a machine-readable JSON object instead of the styled text one-liner, so a
-# script driving `mason -o json` can parse failures instead of scraping human text.
+# script driving `ab -o json` can parse failures instead of scraping human text.
 _OUTPUT_MODE = "text"
 
 

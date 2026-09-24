@@ -1,4 +1,4 @@
-"""CLI tests for `mason memory bind/unbind` and `mason sessions bind/unbind`.
+"""CLI tests for `ab memory bind/unbind` and `ab sessions bind/unbind`.
 
 Backfills coverage for the store-binding command handlers, which mutate agent.toml.
 Uses a real temp AgentProject and rejects workspace calls: binding only edits agent.toml.

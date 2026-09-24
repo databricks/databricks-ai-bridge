@@ -1,4 +1,4 @@
-"""Unit tests for `mason tracing`: configure/disable binding, experiment provisioning, list/get.
+"""Unit tests for `ab tracing`: configure/disable binding, experiment provisioning, list/get.
 
 Tracing is managed MLflow tracing, bound by experiment **name** (portable across workspaces). The pure
 surface (default_experiment_name, experiment_url) is tested directly; the mlflow-backed paths are
@@ -195,7 +195,7 @@ def test_bind_rejects_uc_backed_experiment(tmp_path: pathlib.Path):
 
 
 def test_bind_requires_an_experiment(tmp_path: pathlib.Path):
-    # bind needs an experiment (name or id), like `mason memory/sessions bind`; no args -> error,
+    # bind needs an experiment (name or id), like `ab memory/sessions bind`; no args -> error,
     # nothing written. Pure agent.toml check, no mlflow call.
     _project(tmp_path)
     result = CliRunner().invoke(tracing_mod.tracing_bind, ["--source", str(tmp_path)], obj=_Ctx())
@@ -471,8 +471,8 @@ def test_get_errors_when_explicit_name_missing():
 
 
 def test_list_reads_local_dev_store_when_not_provisioned(tmp_path: pathlib.Path):
-    # No workspace experiment yet, but a local `mason dev` store exists -> list reads the local traces
-    # over a short-lived REST server (not by opening the sqlite file), consistent with where `mason dev`
+    # No workspace experiment yet, but a local `ab dev` store exists -> list reads the local traces
+    # over a short-lived REST server (not by opening the sqlite file), consistent with where `ab dev`
     # traced pre-deploy, and tears the server down after.
     _project(tmp_path, experiment_name="/Shared/mason_traces/demo")
     (tmp_path / ".mason").mkdir()
@@ -560,7 +560,7 @@ def test_status_str_handles_enum_like_and_none():
     assert tracing_mod._status_str(None) is None
 
 
-# --- local dev tracing server (`mason dev`) ---------------------------------
+# --- local dev tracing server (`ab dev`) ---------------------------------
 
 
 def test_start_local_tracing_server_launches_sqlite_server(tmp_path: pathlib.Path, monkeypatch):
@@ -589,7 +589,7 @@ def test_start_local_tracing_server_launches_sqlite_server(tmp_path: pathlib.Pat
 
 
 def test_start_local_tracing_server_degrades_when_launch_fails(tmp_path: pathlib.Path, monkeypatch):
-    # If the server process can't be spawned (e.g. uv missing), degrade to (None, {}) so `mason dev`
+    # If the server process can't be spawned (e.g. uv missing), degrade to (None, {}) so `ab dev`
     # runs without traces rather than aborting.
     monkeypatch.setattr(tracing_mod, "_free_port", lambda: 5599)
 

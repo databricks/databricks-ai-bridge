@@ -1,4 +1,4 @@
-"""Mason CLI: the ``mason`` command and its subcommands.
+"""Agent Bricks CLI: the ``ab`` command and its subcommands.
 
 The console entrypoint (``project.scripts``) is ``databricks_mason.cli:main``, re-exported here from
 ``databricks_mason.cli.app`` (the command tree) so that path stays stable. The entry function is named

@@ -1,10 +1,10 @@
-# Mason OpenAI Agent
+# OpenAI Agents template
 
-An OpenAI Agents SDK agent served by `databricks_mason.DurableAgentServer`. Mason keeps invocation state and
-events in memory during `mason dev`. Deployment attaches a persistent Runtime Store, so invocation
+An OpenAI Agents SDK agent served by `databricks_mason.DurableAgentServer`. The managed runtime keeps invocation state and
+events in memory during `ab dev`. Deployment attaches a persistent Runtime Store, so invocation
 state and events survive process loss and interrupted work can be recovered.
 
-The generated project separates portable agent execution from Mason's HTTP protocol:
+The generated project separates portable agent execution from the managed HTTP protocol:
 
 ```text
 client -> runtime/main.py -> runtime/adapter.py -> agent/agent.py:run_agent
@@ -12,9 +12,12 @@ client -> runtime/main.py -> runtime/adapter.py -> agent/agent.py:run_agent
 
 - `agent/agent.py` owns the framework-native agent, sessions, tools, MCP lifetime, HITL state, and
   `run_agent`.
-- `runtime/adapter.py` owns the agent-author integration hooks: Mason input/output translation plus
+- `runtime/adapter.py` owns the agent-author integration hooks: runtime input/output translation plus
   `invoke` and `recover`.
 - `runtime/main.py` constructs the server and registers those hooks.
+
+The `databricks_mason` import path is the runtime's existing package name. The public AgentKit
+client uses `databricks_agentkit.AgentKitClient`.
 
 To bring an existing Agents SDK agent, keep its normal execution code in `agent/agent.py`, expose a
 `run_agent` function that returns the native streaming result, and make only the small payload/event
@@ -23,7 +26,7 @@ mapping changes needed in `runtime/adapter.py`.
 ## Run locally
 
 ```bash
-mason dev
+ab dev
 ```
 
 The API is available at `http://localhost:8000/api/invocations`. Every request supplies a UUID `id`.
@@ -93,7 +96,7 @@ checkpoints, so `recover` replays the original application input against the sam
 adapter prepends a developer instruction telling the agent that this is a recovery attempt and that
 some tool calls or external side effects may already have completed or may still be in progress.
 When deployment attaches a Runtime Store, invocation state and emitted events survive process loss
-and Mason can call `recover` on a replacement worker. Without a Runtime Store, invocation state
+and the runtime can call `recover` on a replacement worker. Without a Runtime Store, invocation state
 remains process-local and interrupted work is not automatically recovered. External side effects
 remain at-least-once and must be idempotent.
 
@@ -101,19 +104,19 @@ remain at-least-once and must be idempotent.
 
 The browser UI is included by default. It generates a stable application session ID in local
 storage, places it inside each invocation's `input`, and generates a fresh invocation UUID per turn.
-Use `mason init --framework openai --disable-chat-app` for API-only output.
+Use `ab init --framework openai --disable-chat-app` for API-only output.
 
 ## Configure and deploy
 
 - Change the model, instructions, tools, and framework-native execution in `agent/agent.py`.
 - Change `runtime/adapter.py` only to map a different application input/output contract.
 - Add local tools under `agent/tools/`; modules are auto-discovered.
-- Add MCP servers in `agent/mcps.py` or with `mason tools add mcp`.
-- Bind long-term memory with `mason memory bind <store>`.
-- Bind durable transcript history with `mason sessions bind <store>`.
+- Add MCP servers in `agent/mcps.py` or with `ab tools add mcp`.
+- Bind long-term memory with `ab memory bind <store>`.
+- Bind durable transcript history with `ab sessions bind <store>`.
 
 ```bash
-mason --profile <profile> deploy agent-openai --source .
+ab --profile <profile> deploy agent-openai --source .
 ```
 
 Deployment provisions or reuses the app's dedicated Runtime Store. Only the app-owned

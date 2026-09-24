@@ -1,7 +1,7 @@
-"""Functional e2e for `mason tracing`'s local dev store, read back by the REAL CLI.
+"""Functional e2e for `ab tracing`'s local dev store, read back by the REAL CLI.
 
-Writes a trace to the sqlite-backed MLflow server that `mason dev` starts, then reads it with the
-actual `mason tracing list` / `get`, which spin up a short-lived server and read over REST (never
+Writes a trace to the sqlite-backed MLflow server that `ab dev` starts, then reads it with the
+actual `ab tracing list` / `get`, which spin up a short-lived server and read over REST (never
 opening the sqlite file directly). This is the loop we otherwise verify by hand. Fully local: an
 unbound project resolves straight to the local store, so no workspace or auth is used.
 
@@ -31,7 +31,7 @@ _AGENT_TOML = 'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "ma
 def local_trace_store(tmp_path: pathlib.Path) -> pathlib.Path:
     """A project dir whose ``.mason/mlflow.db`` holds one real trace.
 
-    Uses mason's own ``start_local_tracing_server`` (the real ``uvx mlflow`` server `mason dev` runs),
+    Uses mason's own ``start_local_tracing_server`` (the real ``uvx mlflow`` server `ab dev` runs),
     logs a trace over REST with the mlflow client, and tears the server down (guaranteed, so nothing is
     orphaned). Skips when uv/uvx or the local server aren't available in the sandbox.
     """
@@ -66,17 +66,17 @@ def local_trace_store(tmp_path: pathlib.Path) -> pathlib.Path:
     return project
 
 
-def _mason_json(*args: str, project: pathlib.Path, home: pathlib.Path):
-    """Run the real `mason` CLI with `--output json`, isolated HOME, and return the parsed stdout.
+def _ab_json(*args: str, project: pathlib.Path, home: pathlib.Path):
+    """Run the real `ab` CLI with `--output json`, isolated HOME, and return the parsed stdout.
 
-    Inherits PATH so the read command can find `uvx`, but points HOME at an empty dir (no mason login /
+    Inherits PATH so the read command can find `uvx`, but points HOME at an empty dir (no ab login /
     real ~/.mason) and silences MLflow's agent hint so stdout is clean JSON.
     """
-    mason = pathlib.Path(sys.executable).with_name("mason")
-    if not mason.is_file():
-        pytest.skip("requires the mason CLI on PATH")
+    ab = pathlib.Path(sys.executable).with_name("ab")
+    if not ab.is_file():
+        pytest.skip("requires the ab CLI on PATH")
     result = subprocess.run(
-        [str(mason), "--output", "json", *args, "--source", str(project)],
+        [str(ab), "--output", "json", *args, "--source", str(project)],
         capture_output=True,
         text=True,
         timeout=180,
@@ -94,11 +94,11 @@ def test_tracing_list_and_get_read_the_local_dev_store(
     home = tmp_path / "cli-home"
     home.mkdir()
 
-    listed = _mason_json("tracing", "list", project=local_trace_store, home=home)
-    assert listed, "`mason tracing list` returned no local traces"
+    listed = _ab_json("tracing", "list", project=local_trace_store, home=home)
+    assert listed, "`ab tracing list` returned no local traces"
     trace_id = listed[0]["trace_id"]
     assert isinstance(trace_id, str) and trace_id.startswith("tr-")
 
-    got = _mason_json("tracing", "get", trace_id, project=local_trace_store, home=home)
+    got = _ab_json("tracing", "get", trace_id, project=local_trace_store, home=home)
     assert got["trace_id"] == trace_id
     assert got["status"]  # the probe span completed, so the trace has a status

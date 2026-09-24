@@ -1,20 +1,20 @@
-"""`mason tracing` — send an agent's traces to an MLflow experiment and inspect them.
+"""`ab tracing` — send an agent's traces to an MLflow experiment and inspect them.
 
-``mason dev`` runs a **local, sqlite-backed MLflow server** (:func:`start_local_tracing_server`) so
-traces stay on the machine with no workspace setup, viewable in the local MLflow UI. ``mason deploy``
+``ab dev`` runs a **local, sqlite-backed MLflow server** (:func:`start_local_tracing_server`) so
+traces stay on the machine with no workspace setup, viewable in the local MLflow UI. ``ab deploy``
 sends traces to a per-project **workspace** experiment whose **name** lives in agent.toml (a default
-``/Shared/mason_traces/<project>`` is written at ``mason init``); deploy get-or-creates it in the active
+``/Shared/mason_traces/<project>`` is written at ``ab init``); deploy get-or-creates it in the active
 workspace and wires its ``MLFLOW_EXPERIMENT_ID`` (which binds the agent, grants the deployed app via an
 experiment app resource, reads traces, and builds the UI link). Storing the name (not the id) keeps
 the binding valid across workspaces and profiles, since an id is workspace-local.
 
 The bound ``experiment_name``'s presence IS the enable switch: a bound name means tracing is on for
-deploy, its absence means off. ``mason tracing bind`` binds an experiment (by name or id, one
-required); ``mason tracing unbind`` removes the binding; ``list`` / ``get`` read traces back.
+deploy, its absence means off. ``ab tracing bind`` binds an experiment (by name or id, one
+required); ``ab tracing unbind`` removes the binding; ``list`` / ``get`` read traces back.
 
-MLflow (``mlflow-skinny``) is a base dependency, but the ``mason tracing`` commands and the deploy
+MLflow (``mlflow-skinny``) is a base dependency, but the ``ab tracing`` commands and the deploy
 experiment provisioning still import it lazily — ``cli.py`` imports this module at startup, so a
-top-level import would pay mlflow's heavy import cost on every ``mason`` command.
+top-level import would pay mlflow's heavy import cost on every Agent Bricks CLI command.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ from databricks_mason import render, timefmt
 from databricks_mason.errors import AgentCliError
 
 _BREADCRUMB = "Agent Tracing"
-# Per-app experiment folder under /Shared: username-free (so `mason init` can name it offline) and
+# Per-app experiment folder under /Shared: username-free (so `ab init` can name it offline) and
 # workspace-independent (so the same name is valid in whatever workspace the active profile targets).
 _TRACES_DIR = "mason_traces"
 
@@ -47,15 +47,15 @@ TRACES_EXPERIMENT_ID_ENV = "MLFLOW_EXPERIMENT_ID"
 # The command that binds (enables) tracing. Referenced parameter-free by deploy's "deployed without
 # tracing" guidance and by `unbind`'s "turn it back on" step, so those hints can't go stale if the
 # flags change; the command's own `--help` documents the flags.
-TRACING_BIND_COMMAND = "mason tracing bind"
+TRACING_BIND_COMMAND = "ab tracing bind"
 
 
 def default_experiment_name(project: Optional[str], token: Optional[str] = None) -> str:
     """The default MLflow experiment path for a project: ``/Shared/mason_traces/<project>[-<token>]``.
 
-    Under ``/Shared`` (not a user home) so it needs no username — ``mason init`` writes it offline —
+    Under ``/Shared`` (not a user home) so it needs no username — ``ab init`` writes it offline —
     and it's workspace-independent, so the same name is valid in whatever workspace the active profile
-    targets (``mason deploy`` get-or-creates it there). ``project`` is the Mason project name (the
+    targets (``ab deploy`` get-or-creates it there). ``project`` is the Agent Bricks project name (the
     source directory's basename); an optional per-scaffold ``token`` (shared with the default store
     names) keeps like-named projects from colliding in the shared ``/Shared`` namespace.
     """
@@ -85,17 +85,17 @@ def _mlflow():
 
 
 def _workspace_uri(profile: Optional[str]) -> str:
-    """The MLflow tracking URI for the workspace (honoring mason's --profile)."""
+    """The MLflow tracking URI for the workspace (honoring Agent Bricks' --profile)."""
     return f"databricks://{profile}" if profile else "databricks"
 
 
 def _set_tracking_uri(mlflow, profile: Optional[str]) -> None:
-    """Point MLflow at the workspace (honoring mason's --profile)."""
+    """Point MLflow at the workspace (honoring Agent Bricks' --profile)."""
     mlflow.set_tracking_uri(_workspace_uri(profile))
 
 
 # An experiment linked to a UC schema for trace storage carries this tag (the destination schema);
-# managed experiments don't. mason supports managed tracing only (UC support is a follow-up).
+# managed experiments don't. Agent Bricks supports managed tracing only (UC support is a follow-up).
 _UC_TRACE_TAG = "mlflow.experiment.databricksTraceDestinationPath"
 
 
@@ -133,7 +133,7 @@ def create_experiment_idempotent(profile: Optional[str], client, name: str) -> s
     provision the managed experiment that traces log to.
 
     Rejects a name that already resolves to a UC-backed experiment: binding one is blocked up front,
-    but a hand-edited ``agent.toml`` can point at one directly, so deploy re-checks here - mason
+    but a hand-edited ``agent.toml`` can point at one directly, so deploy re-checks here - Agent Bricks
     supports managed (non-UC) tracing only.
     """
     mlflow = _mlflow()
@@ -142,7 +142,7 @@ def create_experiment_idempotent(profile: Optional[str], client, name: str) -> s
     if experiment:
         if _is_uc_backed(experiment):
             raise AgentCliError(
-                "UC-backed MLflow tracing is not supported by mason.",
+                "UC-backed MLflow tracing is not supported by Agent Bricks.",
                 hint="Point this project's tracing at a managed (non-UC) experiment.",
             )
         return experiment.experiment_id
@@ -170,7 +170,7 @@ def _resolve_experiment_name(source: pathlib.Path | str) -> Optional[str]:
 class _TraceReadTarget:
     """Where `list`/`get` read traces from: an MLflow ``tracking_uri`` and the ``experiment_id`` in it.
 
-    ``local`` marks the local ``mason dev`` store (served over a short-lived REST server) so callers can
+    ``local`` marks the local ``ab dev`` store (served over a short-lived REST server) so callers can
     label it. A field is None when there's nothing to read (no experiment resolved).
     """
 
@@ -189,7 +189,7 @@ def _with_trace_read_target(
     """Yield the target `list`/`get` should read from, with MLflow's tracking URI already pointed at it.
 
     Precedence: an explicit ``--experiment-name`` / ``--experiment-id`` (must exist), else this
-    project's workspace experiment when it's provisioned + managed, else the local ``mason dev`` store
+    project's workspace experiment when it's provisioned + managed, else the local ``ab dev`` store
     (``.mason/mlflow.db``). Both target fields are None when nothing has traced anywhere yet.
 
     The local store is read over REST from a short-lived MLflow server started here (and torn down on
@@ -217,7 +217,7 @@ def _with_trace_read_target(
         if experiment is not None and not _is_uc_backed(experiment):
             yield _TraceReadTarget(_workspace_uri(profile), experiment.experiment_id)
             return
-    # Unbound, not provisioned, or unreachable -> the local dev store, if any. `mason dev` traces
+    # Unbound, not provisioned, or unreachable -> the local dev store, if any. `ab dev` traces
     # locally regardless of the binding, so its store is worth reading even when tracing is unbound.
     db = pathlib.Path(source).resolve() / _MASON_LOCAL_DIR / "mlflow.db"
     if not db.exists():
@@ -292,11 +292,11 @@ def _trace_to_json(trace: Any) -> dict:
     }
 
 
-# --- local dev tracing (`mason dev`) ----------------------------------------
+# --- local dev tracing (`ab dev`) ----------------------------------------
 
 # Local-only scratch dir (gitignored) under a dev project: holds the sqlite tracing store + artifacts.
 _MASON_LOCAL_DIR = ".mason"
-# The local tracing server's MLflow: a broad 3.x range (the runtime's floor). `mason dev` writes the
+# The local tracing server's MLflow: a broad 3.x range (the runtime's floor). `ab dev` writes the
 # sqlite store with it, and `list`/`get` read that store back over REST from a short-lived server (see
 # _with_trace_read_target) - never by opening the file with the CLI's own mlflow-skinny. So this needn't
 # match the CLI's version, and uvx reuses ONE cached environment across mason releases (fast startup
@@ -318,7 +318,7 @@ def _free_port() -> int:
 def _mlflow_server_argv(db: pathlib.Path, artifacts: pathlib.Path, port: int) -> list[str]:
     """The ``uvx`` argv for a local, sqlite-backed MLflow tracking server on ``port``.
 
-    Shared by the `mason dev` server and the short-lived server `list`/`get` use to read the local store
+    Shared by the `ab dev` server and the short-lived server `list`/`get` use to read the local store
     (see _MLFLOW_SPEC / _SERVER_PYTHON for the version + interpreter pins).
     """
     return [
@@ -343,7 +343,7 @@ def _mlflow_server_argv(db: pathlib.Path, artifacts: pathlib.Path, port: int) ->
 def _wait_for_server(base_url: str, server: subprocess.Popen, timeout: float = 60.0) -> bool:
     """Poll the local MLflow server's health endpoint until it answers, its process exits, or timeout.
 
-    `mason dev` doesn't wait (the agent traces to the server as it comes up), but a read command queries
+    `ab dev` doesn't wait (the agent traces to the server as it comes up), but a read command queries
     immediately and then tears the server down, so it must block until the server is live. Returns True
     once it responds, False if the process died (e.g. install/bind failure) or it never came up.
     """
@@ -364,10 +364,10 @@ def _wait_for_server(base_url: str, server: subprocess.Popen, timeout: float = 6
 
 
 def _start_read_server(db: pathlib.Path) -> tuple[subprocess.Popen | None, Optional[str]]:
-    """Start a short-lived MLflow server over the existing ``mason dev`` store and wait until it's ready.
+    """Start a short-lived MLflow server over the existing ``ab dev`` store and wait until it's ready.
 
     Lets `list`/`get` read local traces over REST (the server owns the sqlite schema). Returns
-    ``(server, base_url)``, or ``(None, None)`` when it can't start - best-effort, like `mason dev`, so a
+    ``(server, base_url)``, or ``(None, None)`` when it can't start - best-effort, like `ab dev`, so a
     read degrades to showing nothing rather than erroring. The caller stops the server when done.
     """
     artifacts = (db.parent / "mlartifacts").resolve()
@@ -396,7 +396,7 @@ def _start_read_server(db: pathlib.Path) -> tuple[subprocess.Popen | None, Optio
 def start_local_tracing_server(
     source_dir: pathlib.Path,
 ) -> tuple[subprocess.Popen | None, dict[str, str]]:
-    """Start a local, sqlite-backed MLflow tracking server for `mason dev` tracing.
+    """Start a local, sqlite-backed MLflow tracking server for `ab dev` tracing.
 
     Returns ``(server_process, env)`` — ``env`` carries the ``MLFLOW_*`` vars for the dev-only manifest
     so the agent traces locally — or ``(None, {})`` when the server can't be started (dev then runs
@@ -433,7 +433,7 @@ def start_local_tracing_server(
 
 
 def stop_local_tracing_server(server: subprocess.Popen) -> None:
-    """Stop the local MLflow tracking server started for `mason dev`."""
+    """Stop the local MLflow tracking server started for `ab dev`."""
     server.terminate()
     try:
         server.wait(timeout=5)
@@ -465,7 +465,7 @@ def _check_experiment_flags(
     if require_one and not (experiment_name or experiment_id):
         raise AgentCliError(
             "Pass --experiment-name or --experiment-id to bind tracing to an experiment.",
-            hint="Absence of a bound experiment means tracing is off; `mason tracing unbind` clears it.",
+            hint="Absence of a bound experiment means tracing is off; `ab tracing unbind` clears it.",
         )
 
 
@@ -497,7 +497,7 @@ def _experiment_read_options(command):
     "experiment_name",
     default=None,
     help="MLflow experiment name to trace to - an absolute workspace path, e.g. "
-    "/Shared/mason_traces/<agent> or /Users/<you>/mason_traces/<agent>. mason get-or-creates it at "
+    "/Shared/mason_traces/<agent> or /Users/<you>/mason_traces/<agent>. Agent Bricks creates it at "
     "deploy. Mutually exclusive with --experiment-id.",
 )
 @click.option(
@@ -505,7 +505,7 @@ def _experiment_read_options(command):
     "experiment_id",
     default=None,
     help="MLflow experiment id (e.g. copied from the experiment's workspace URL) to trace to. "
-    "Resolved to the experiment's name and stored as a name — mason persists names, not ids, so the "
+    "Resolved to the experiment's name and stored as a name — Agent Bricks stores names, not ids, so the "
     "binding stays valid across workspaces. Mutually exclusive with --experiment-name.",
 )
 @click.option(
@@ -516,11 +516,11 @@ def _experiment_read_options(command):
 )
 @click.pass_obj
 def tracing_bind(obj, experiment_name, experiment_id, source) -> None:
-    """Bind tracing to an experiment, by name or id. Requires one of them (like `mason memory/sessions
+    """Bind tracing to an experiment, by name or id. Requires one of them (like `ab memory/sessions
     bind`); the binding's presence is what turns tracing on.
 
     The experiment is stored as a NAME, not an id, so the binding stays valid across
-    workspaces/profiles — mason get-or-creates it in the active workspace at deploy. ``--experiment-id``
+    workspaces/profiles — Agent Bricks creates it if absent in the active workspace at deploy. ``--experiment-id``
     (e.g. from the experiment's URL) is a convenience: it's resolved to the experiment's name and
     stored as a name, never as an id.
     """
@@ -528,8 +528,8 @@ def tracing_bind(obj, experiment_name, experiment_id, source) -> None:
 
     _check_experiment_flags(experiment_name, experiment_id, require_one=True)
 
-    # The name to store. --experiment-id is resolved to the experiment's name (mason persists names,
-    # not ids). Either way, a UC-backed experiment is rejected up front — mason supports managed
+    # The name to store. --experiment-id is resolved to the experiment's name (Agent Bricks stores names,
+    # not ids). Either way, a UC-backed experiment is rejected up front — Agent Bricks supports managed
     # tracing only (UC traces need a SQL warehouse to read and UC grants for the app's SP).
     name = experiment_name
     if experiment_id:
@@ -543,7 +543,7 @@ def tracing_bind(obj, experiment_name, experiment_id, source) -> None:
             )
         if _is_uc_backed(experiment):
             raise AgentCliError(
-                "UC-backed MLflow tracing is not supported by mason.",
+                "UC-backed MLflow tracing is not supported by Agent Bricks.",
                 hint="Pass a managed (non-UC) experiment.",
             )
         name = experiment.name
@@ -561,7 +561,7 @@ def tracing_bind(obj, experiment_name, experiment_id, source) -> None:
         existing = mlflow.get_experiment_by_name(experiment_name)
         if existing is not None and _is_uc_backed(existing):
             raise AgentCliError(
-                "UC-backed MLflow tracing is not supported by mason.",
+                "UC-backed MLflow tracing is not supported by Agent Bricks.",
                 hint="Pass a managed (non-UC) experiment.",
             )
 
@@ -576,9 +576,9 @@ def tracing_bind(obj, experiment_name, experiment_id, source) -> None:
         f"Tracing on: experiment {name}",
         fields={"Experiment": name},
         next_steps=[
-            ("mason dev", "Run locally with tracing on"),
-            ("mason tracing list", "List traces once you have some"),
-            ("mason tracing unbind", "Turn tracing off"),
+            ("ab dev", "Run locally with tracing on"),
+            ("ab tracing list", "List traces once you have some"),
+            ("ab tracing unbind", "Turn tracing off"),
         ],
     )
 
@@ -593,9 +593,9 @@ def tracing_bind(obj, experiment_name, experiment_id, source) -> None:
 @click.pass_obj
 def tracing_unbind(obj, source) -> None:
     """Unbind tracing: remove the experiment binding from agent.toml, turning tracing off for the
-    DEPLOYED agent (`mason deploy` then wires no MLflow env).
+    DEPLOYED agent (`ab deploy` then wires no MLflow env).
 
-    Deploy-only: `mason dev` still traces locally to its own MLflow server, so you keep local traces
+    Deploy-only: `ab dev` still traces locally to its own MLflow server, so you keep local traces
     while the deployed agent stays untraced.
     """
     from databricks_mason.agent_project import AgentProject  # noqa: PLC0415
@@ -608,7 +608,7 @@ def tracing_unbind(obj, source) -> None:
         render.emit_json({"experiment_name": None})
         return
     render.success(
-        "Tracing unbound (off for the deployed agent; mason dev still traces locally)",
+        "Tracing unbound (off for the deployed agent; ab dev still traces locally)",
         next_steps=[(TRACING_BIND_COMMAND, "Turn deployed tracing back on")],
     )
 
@@ -632,7 +632,7 @@ def tracing_list(obj, experiment_name, experiment_id, limit, source) -> None:
     An explicit ``--experiment-name`` / ``--experiment-id`` reads that workspace experiment and must
     name one that exists (errors otherwise, so a typo isn't mistaken for an empty experiment). With
     neither, this project's experiment is read: the **workspace** one if it's been provisioned (by
-    `mason deploy`), otherwise the local `mason dev` store (``.mason/mlflow.db``), so a not-yet-deployed
+    `ab deploy`), otherwise the local `ab dev` store (``.mason/mlflow.db``), so a not-yet-deployed
     dev run's traces still show up here (tagged "(local dev)"). Nothing traced anywhere yet lists
     nothing.
     """
@@ -685,9 +685,9 @@ def tracing_list(obj, experiment_name, experiment_id, limit, source) -> None:
 def tracing_get(obj, trace_id, experiment_name, experiment_id, source) -> None:
     """Get a single trace by id (status, latency, span count, previews).
 
-    Reads from the same place as `mason tracing list`: an explicit ``--experiment-name`` /
+    Reads from the same place as `ab tracing list`: an explicit ``--experiment-name`` /
     ``--experiment-id`` targets that workspace store and must name one that exists (errors otherwise);
-    otherwise this project's workspace experiment if provisioned, else its local `mason dev` store.
+    otherwise this project's workspace experiment if provisioned, else its local `ab dev` store.
     """
     _check_experiment_flags(experiment_name, experiment_id)
     mlflow = _mlflow()

@@ -1,13 +1,13 @@
-# Mason integration contract for LangGraph
+# Managed runtime integration contract for LangGraph
 
 This document owns the requirements shared by generated projects and existing agents adopting
-Mason. The [README](README.md) owns commands and HTTP examples; adapter docstrings own API details.
+the managed runtime. The [README](README.md) owns commands and HTTP examples; adapter docstrings own API details.
 The adjacent template is an example, not a required graph architecture. Runtime internals live in
 the installed package's `databricks_mason/runtime/README.md`.
 
 ## Command requirements
 
-Mason commands operate on an application directory; they do not rewrite its graph. Each capability
+Agent Bricks CLI commands operate on an application directory; they do not rewrite its graph. Each capability
 needs runtime wiring as well as manifest configuration.
 
 | Command | Required integration |
@@ -21,10 +21,11 @@ needs runtime wiring as well as manifest configuration.
 
 ### Project and startup
 
-Use `agent.toml` for framework, tool/store bindings, and tracing. `.mason/project.toml`
-records framework and template provenance. Metadata alone does not integrate adapters. Install a
-compatible `databricks-agentbricks[runtime]`, supply the real command in `app.yaml`, load configuration
-before adapters, and listen on the app port. Mason finds `agent.toml` from the working directory or
+Use `agent.toml` for framework, tool/store bindings, and tracing. The existing `.mason/project.toml`
+file records framework and template provenance; keep it when working with projects that have it.
+Metadata alone does not integrate adapters. Install a compatible `databricks-agentbricks[runtime]`
+distribution, supply the real command in `app.yaml`, load configuration before adapters, and listen
+on the app port. The Agent Bricks CLI and runtime find `agent.toml` from the working directory or
 `MASON_PROJECT_ROOT`. Keep credentials out of `app.yaml`.
 
 Store binding commands declare intent. `dev` and `deploy` resolve or provision declared stores and
@@ -45,7 +46,7 @@ another source edit.
 
 ### Sessions and memory
 
-Use `checkpointer()` for Mason-managed state and merge `thread_config(session_id, actor)` into every
+Use `checkpointer()` for managed state and merge `thread_config(session_id, actor)` into every
 graph run. The helper selects the bound Session Store or an in-process saver; explicit arguments
 and environment overrides take precedence. It caches the saver per process, so restart after a
 binding change. The application state must be serializable by the selected saver.
@@ -61,11 +62,11 @@ Call `configure_tracing()` after loading config, then wrap agent execution, incl
 The helper enables tracing when destination and experiment settings are present and disables it
 otherwise. Preserve existing tracing semantics when composing it.
 
-## Mason server adapter
+## Managed server adapter
 
-For Mason's invocation protocol, construct `DurableAgentServer` in [runtime/main.py](runtime/main.py) and
-register [runtime/adapter.py](runtime/adapter.py) hooks. Keep framework-native execution in
-[agent/agent.py](agent/agent.py), independent of Mason request/context types.
+For the managed invocation protocol, construct `DurableAgentServer` in [runtime/main.py](runtime/main.py)
+and register [runtime/adapter.py](runtime/adapter.py) hooks. Keep framework-native execution in
+[agent/agent.py](agent/agent.py), independent of runtime request/context types.
 
 The invoke hook translates opaque application input, runs the graph, translates native events,
 calls `await context.emit(event)`, and returns JSON output. DurableAgentServer owns foreground/background
@@ -88,7 +89,7 @@ acknowledging progress. Recovery is at least once, so side effects must tolerate
 
 ## Optional chat app
 
-No Mason command requires the chat UI. The default overlay supplies it; `--disable-chat-app` omits
+No CLI command requires the chat UI. The default overlay supplies it; `--disable-chat-app` omits
 it. When adopting it, inspect `CHAT_APP.md`, `runtime/ui.py`, and browser code. Adapt model choice,
 history, interrupts, and authentication to the actual graph. Its message-oriented assumptions must
 not silently change custom application behavior.

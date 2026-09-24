@@ -1,4 +1,4 @@
-"""Unit tests for `mason dev`: wraps `databricks apps run-local` from the project dir."""
+"""Unit tests for `ab dev`: wraps `databricks apps run-local` from the project dir."""
 
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ class _Ctx:
 
 @pytest.fixture(autouse=True)
 def _stub_local_tracing(monkeypatch):
-    """`mason dev` starts a local MLflow tracking server (via cli.tracing) for Mason-server projects;
+    """`ab dev` starts a local MLflow tracking server (via cli.tracing) for Agent Bricks projects;
     stub the name dev.py imported so ordinary dev tests neither spawn one nor need uv. Tracing tests
     override this. The server helper's own behavior is tested in tracing_test.py."""
     monkeypatch.setattr(dev_mod, "start_local_tracing_server", lambda source_dir: (None, {}))
@@ -166,7 +166,7 @@ def test_dev_entry_point_strips_inherited_workspace_tracing_env(tmp_path: pathli
 
 def test_dev_strips_inherited_deploy_store_env(tmp_path: pathlib.Path):
     # A previously-deployed app.yaml carries the workspace store env (AGENT_MEMORY_STORE +
-    # AGENT_SESSION_STORE). `mason dev` runs stores locally (memory off, sessions in-process), so the
+    # AGENT_SESSION_STORE). `ab dev` runs stores locally (memory off, sessions in-process), so the
     # dev manifest must NOT inherit them - otherwise dev would silently use the workspace stores.
     (tmp_path / "app.yaml").write_text(
         yaml.safe_dump(
@@ -210,7 +210,7 @@ def test_dev_removes_local_entry_point_when_run_local_fails(tmp_path: pathlib.Pa
 
 
 def test_dev_does_not_wire_workspace_stores_when_bound(tmp_path: pathlib.Path, monkeypatch):
-    # `mason dev` is a local sandbox: even with stores bound, it never wires the workspace store env.
+    # `ab dev` is a local sandbox: even with stores bound, it never wires the workspace store env.
     # The dev-only manifest carries no AGENT_MEMORY_STORE / AGENT_SESSION_STORE (the runtime falls back
     # to memory-off / in-process sessions), and the deployable app.yaml stays clean (deploy owns that).
     src = tmp_path / "app"
@@ -395,7 +395,7 @@ def test_dev_announces_chat_ui_when_overlay_present(tmp_path: pathlib.Path):
     assert "Chat UI" in result.output
     assert "http://localhost:9000" in result.output
     output = " ".join(result.output.split())
-    assert "mason endpoint invoke" in output
+    assert "ab endpoint invoke" in output
     assert "--url http://localhost:9000" in output
     assert "--path /api/invocations" in output
     assert "$(uuidgen)" in output
@@ -411,7 +411,7 @@ def test_dev_announces_api_endpoint_when_no_ui(tmp_path: pathlib.Path):
     # a copy-pasteable sample request, not just the bare endpoint
     assert "curl -X POST" in " ".join(result.output.split())
     output = " ".join(result.output.split())
-    assert "mason endpoint invoke" in output
+    assert "ab endpoint invoke" in output
     assert "--url http://localhost:8000" in output
     assert "--path /invocations" in output
 
@@ -428,21 +428,19 @@ def test_dev_prints_standalone_invoke_for_each_template(tmp_path, framework, ser
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
 
     assert result.exit_code == 0, result.output
-    commands = [line for line in result.output.splitlines() if line.startswith("mason endpoint")]
+    commands = [line for line in result.output.splitlines() if line.startswith("ab endpoint")]
     assert len(commands) == 1, result.output
     command = commands[0]
     path = "/api/invocations" if server == "mason" else "/invocations"
-    assert f"mason endpoint invoke --url http://localhost:8000 --path {path} --json " in command
+    assert f"ab endpoint invoke --url http://localhost:8000 --path {path} --json " in command
     assert "│" not in command
     assert ("$(uuidgen)" in command) is (server == "mason")
-    panel, example = result.output.split("Invoke with Mason\n")
+    panel, example = result.output.split("Invoke with Agent Bricks\n")
     assert panel.splitlines()[-1].startswith("╰")
     assert example.splitlines() == [command]
-    assert any(line.startswith("│") and "mason deploy" in line for line in panel.splitlines())
+    assert any(line.startswith("│") and "ab deploy" in line for line in panel.splitlines())
     if server == "mason":
-        assert any(
-            line.startswith("│") and "mason tools add" in line for line in panel.splitlines()
-        )
+        assert any(line.startswith("│") and "ab tools add" in line for line in panel.splitlines())
     if not chat_ui:
         assert "curl -X POST" in panel  # preserve the existing API-only next step
 
@@ -461,7 +459,7 @@ def test_dev_custom_server_recommends_wiring_tools_in_agent_code(
     assert result.exit_code == 0, result.output
     output = " ".join(result.output.split())
     assert "agent/agent.py" in output
-    assert "mason tools add" not in output
+    assert "ab tools add" not in output
 
 
 @pytest.mark.parametrize(
@@ -492,7 +490,7 @@ def test_dev_rejects_custom_server_manifest_tools_before_starting(
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=ctx)
 
     assert result.exit_code != 0
-    assert "require a Mason server template" in " ".join(result.output.split())
+    assert "require an Agent Bricks server template" in " ".join(result.output.split())
     assert manifest.read_text(encoding="utf-8") == before
     client.assert_not_called()
     db.assert_not_called()
@@ -561,7 +559,7 @@ def test_dev_runs_from_project_containing_directly_edited_agent_manifest(
 
 
 def test_dev_quiet_about_unbound_stores(tmp_path: pathlib.Path):
-    # Unbound stores are a `mason deploy` concern; `mason dev` doesn't warn about them, it just runs
+    # Unbound stores are a `ab deploy` concern; `ab dev` doesn't warn about them, it just runs
     # locally (memory off, sessions in-process).
     (tmp_path / "app.yaml").write_text("command: []\n")  # no agent.toml -> both unbound
     with mock.patch.object(dev_mod, "_databricks"):
@@ -583,11 +581,11 @@ def test_dev_notes_local_stores_when_bound(tmp_path: pathlib.Path):
     out = " ".join(result.output.split())  # collapse rich line-wrapping
     assert "Memory store 'mem' is bound" in out
     assert "Session store 'sess' is bound" in out
-    assert "Run `mason deploy` to use bound store" in out
+    assert "Run `ab deploy` to use bound store" in out
 
 
 def test_dev_notes_bound_tracing_experiment(tmp_path: pathlib.Path):
-    # A bound tracing experiment is a `mason deploy` concern; dev always traces to its own local MLflow
+    # A bound tracing experiment is a `ab deploy` concern; dev always traces to its own local MLflow
     # server, so it notes the binding but explains the deployed agent is what uses it (mirrors the
     # memory/session store notices). Dev makes no workspace call.
     (tmp_path / "app.yaml").write_text("command: []\n")
@@ -597,4 +595,4 @@ def test_dev_notes_bound_tracing_experiment(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     out = " ".join(result.output.split())  # collapse rich line-wrapping
     assert "Tracing experiment '/Shared/mason_traces/mine' is bound" in out
-    assert "Run `mason deploy` to trace to the bound experiment" in out
+    assert "Run `ab deploy` to trace to the bound experiment" in out

@@ -1,8 +1,8 @@
-# `databricks-agentbricks`
+# Agent Bricks CLI (`ab`)
 
-Mason is an experimental CLI for Databricks custom agent preview APIs and
-deployments. It manages memory, sessions, tracing, and deployments from one
-authenticated command.
+Agent Bricks CLI is an experimental command-line interface for building and deploying custom
+agents on Databricks. It manages memory, sessions, tracing, and deployments from one authenticated
+command.
 
 > The underlying APIs are in preview and may need workspace enablement.
 
@@ -25,17 +25,17 @@ invocation protocol to design yourself. Bring your own agent, or start from a te
 
 ![Deployment: from a blank directory to a running service](docs/deployment.svg)
 
-- **Agent project** - `mason init` scaffolds a deployable project from a framework template
+- **Agent project** - `ab init` scaffolds a deployable project from a framework template
   (LangGraph or OpenAI Agents) with the runtime, tests, and an optional chat UI wired up; you edit
   the application code (model, tools, prompts).
 - **`agent.toml`** - the declarative source of truth for the Databricks-managed infrastructure your
   agent depends on: tool bindings (data sandbox, managed MCP services, Unity Catalog functions) and
-  memory, session, and durability resources. `mason deploy` reads it to provision and wire everything
+  memory, session, and durability resources. `ab deploy` reads it to provision and wire everything
   up (detailed under [Agent tools](#agent-tools)).
-- **`mason deploy`** - provisions the bound stores, grants the app's service principal access to
+- **`ab deploy`** - provisions the bound stores, grants the app's service principal access to
   them, provisions the durable-runtime database when durability is on, configures tracing, and rolls
-  out the app. `mason deployments` covers the lifecycle (list, get, logs, start, stop, delete).
-- **`mason dev`** - runs your agent from the same manifest the deployment uses, so local behavior
+  out the app. `ab deployments` covers the lifecycle (list, get, logs, start, stop, delete).
+- **`ab dev`** - runs your agent from the same manifest the deployment uses, so local behavior
   matches what ships.
 
 **Runtime**
@@ -44,30 +44,32 @@ invocation protocol to design yourself. Bring your own agent, or start from a te
 
 The two ways to run an agent:
 
-- **`DurableAgentServer` - opinionated, batteries included.** Register one handler and get Mason's full
+- **`DurableAgentServer` - opinionated, batteries included.** Register one handler and get the managed
   invocation contract (synchronous, streaming, background). Enable the durable runtime so
   long-running and background work survives restarts, redeploys, and crashes. The framework
   templates are thin layers over `DurableAgentServer` (HTTP contract detailed under [Runtime](#runtime)).
-- **Custom server - generic, full control.** `mason init --server custom` scaffolds a minimal FastAPI
+- **Custom server - generic, full control.** `ab init --server custom` scaffolds a minimal FastAPI
   server with no `DurableAgentServer`: you define your own endpoints, request/response shapes, and protocol.
-  `mason dev` and `mason deploy` run and ship it the same way.
+  `ab dev` and `ab deploy` run and ship it the same way.
 
 ## Prerequisites
 
-- **Python ≥3.10** — the mason CLI installs and runs on any Python 3.10+. The
-  `memory`, `sessions`, `tools`, and `mason tracing bind`/`unbind` commands need nothing else.
+- **Python ≥3.10** — the `ab` CLI installs and runs on any Python 3.10+. The
+  `memory`, `sessions`, `tools`, and `ab tracing bind`/`unbind` commands need nothing else.
 - **[`uv`](https://docs.astral.sh/uv/)** — needed to scaffold, run, and deploy an
-  agent (`mason init` → `mason dev` → `mason deploy`): the scaffolded project builds
+  agent (`ab init` → `ab dev` → `ab deploy`): the scaffolded project builds
   its environment and launches with `uv run`, both locally and in the deployed Apps
-  runtime. The store/session/tools commands and `mason tracing bind`/`unbind` don't need it;
-  `mason tracing list`/`get` do, to read `mason dev`'s local trace store.
+  runtime. The store/session/tools commands and `ab tracing bind`/`unbind` don't need it;
+  `ab tracing list`/`get` do, to read `ab dev`'s local trace store.
 - **[Databricks CLI](https://docs.databricks.com/dev-tools/cli/)** — needed for
-  browser-based `mason login`. If a profile is already authenticated, Mason uses it
+  browser-based `ab login`. If a profile is already authenticated, the CLI uses it
   directly and the Databricks CLI is optional.
 
 ## Installation
 
 From PyPI:
+
+The `databricks-agentbricks` Python distribution installs the `ab` command and AgentKit.
 
 ```sh
 pip install databricks-agentbricks
@@ -85,75 +87,84 @@ declare their framework dependencies automatically.
 ## Shell completion
 Add this to `~/.zshrc`:
 ```sh
-eval "$(_MASON_COMPLETE=zsh_source mason)"
+eval "$(_AB_COMPLETE=zsh_source ab)"
 ```
 
 ## Authentication
 
-Mason uses [Databricks authentication](https://docs.databricks.com/aws/en/dev-tools/cli/authentication).
-Ask Mason to authenticate and remember a named profile:
+Agent Bricks CLI uses [Databricks authentication](https://docs.databricks.com/aws/en/dev-tools/cli/authentication).
+Ask the CLI to authenticate and remember a named profile:
 
 ```sh
-mason login --profile <profile>
-mason sessions stores list
+ab login --profile <profile>
+ab sessions stores list
 ```
 
-`mason login` validates existing credentials first. If credentials are missing or rejected in
-an interactive terminal, Mason runs `databricks auth login --profile <profile>`, revalidates the
-profile, and stores the selection in `~/.mason/config.json`. This browser-based setup requires
-the Databricks CLI. In non-interactive environments, authenticate the profile before running
-Mason. `mason logout` forgets the saved selection without revoking the underlying credentials.
+`ab login` validates existing credentials first. If credentials are missing or rejected in
+an interactive terminal, the CLI runs `databricks auth login --profile <profile>`, revalidates the
+profile, and stores the selection in the existing `~/.mason/config.json` state file. This
+browser-based setup requires the Databricks CLI. In non-interactive environments, authenticate the
+profile before running `ab`. `ab logout` forgets the saved selection without revoking the underlying
+credentials.
 
-If Databricks SDK default authentication is already configured, you can skip `mason login`.
+If Databricks SDK default authentication is already configured, you can skip `ab login`.
 You can also pass the global `--profile/-p` option before an individual command, for example
-`mason --profile <profile> tools list`. Use `--output json` for scripting.
+`ab --profile <profile> tools list`. Use `--output json` for scripting.
 
 ## Quickstart
 
 The shortest path from a blank directory to a running and deployed agent:
 
 ```sh
-mason login --profile <profile>
-mason init my-agent
+ab login --profile <profile>
+ab init my-agent
 cd my-agent
-mason dev                 # run locally
-mason deploy my-agent     # deploy to Databricks
+ab dev                 # run locally
+ab deploy my-agent     # deploy to Databricks
 ```
 
-`mason dev` runs the agent locally on `http://localhost:8000`, wrapping the Databricks Apps
+`ab dev` runs the agent locally on `http://localhost:8000`, wrapping the Databricks Apps
 local runtime so local behavior matches a deployment.
 
-`mason deploy my-agent` deploys a Databricks App named `agent-mason-my-agent`, provisions the
-stores declared in `agent.toml`, and grants the app's service principal access to them. `mason
-deployments list` shows what you have deployed, and `mason deployments get my-agent` prints its
-URL and status.
+`ab deploy my-agent` deploys a Databricks App named `agent-mason-my-agent`, provisions the
+stores declared in `agent.toml`, and grants the app's service principal access to them. Deployed
+app names retain the `agent-mason-` prefix. `ab deployments list` shows what you have deployed,
+and `ab deployments get my-agent` prints its URL and status.
 
-`mason init` declares default memory and session stores in `agent.toml`, so the deployed agent has
+`ab init` declares default memory and session stores in `agent.toml`, so the deployed agent has
 long-term memory and durable conversation history. It creates `<name>-<6-letter-token>-memory` and
 `<name>-<6-letter-token>-sessions`, and records both names in `agent.toml`.
-`mason deploy` creates them if they don't exist yet. Point the agent at stores you already have with
-`mason memory bind <name>` / `mason sessions bind <name>`, or scaffold without stores using
-`mason init --server custom` (see [Initialize the chat app demo](#initialize-the-chat-app-demo)).
+`ab deploy` creates them if they don't exist yet. Point the agent at stores you already have with
+`ab memory bind <name>` / `ab sessions bind <name>`, or scaffold without stores using
+`ab init --server custom` (see [Initialize the chat app demo](#initialize-the-chat-app-demo)).
 
-To exercise the agent (locally under `mason dev` or once deployed), `mason endpoint invoke` sends
-it an HTTP request. MLflow tracing is on by default (`mason init` binds a default
-`/Shared/mason_traces/<project>` experiment): `mason dev` traces to a local MLflow server under
-`.mason/` and `mason deploy` to the bound workspace experiment; `mason tracing list` shows whichever
-has traces.
+To exercise the agent (locally under `ab dev` or once deployed), `ab endpoint invoke` sends
+it an HTTP request. MLflow tracing is on by default (`ab init` binds a default
+`/Shared/mason_traces/<project>` experiment): `ab dev` traces to a local MLflow server under
+`.mason/` and `ab deploy` to the bound workspace experiment; `ab tracing list` shows whichever
+has traces. `.mason/` is the existing local state directory.
 
-## Python SDK
+## Public names and existing identifiers
 
-`MasonClient` adds a small resource-oriented layer over the Mason API. Pass it an
+Use `ab` for the CLI and `AgentKitClient` from `databricks_agentkit` for the Python SDK. Existing
+projects retain several historical identifiers: local state and traces use `.mason/` and
+`~/.mason/`, deployed app names use the `agent-mason-` prefix, `agent.toml` selects the managed
+server with `server = "mason"`, and generated runtime code imports from `databricks_mason`. Keep
+these names when working with projects that still use them.
+
+## AgentKit SDK
+
+`AgentKitClient` adds a small resource-oriented layer over AgentKit APIs. Pass it an
 authenticated Databricks `WorkspaceClient`, or omit the argument to use the
 Databricks SDK's default authentication resolution:
 
 ```python
 from databricks.sdk import WorkspaceClient
-from databricks_mason import MasonClient
+from databricks_agentkit import AgentKitClient
 
-mason = MasonClient(WorkspaceClient(profile="my-workspace"))
+agentkit = AgentKitClient(WorkspaceClient(profile="my-workspace"))
 
-session_store = mason.session_stores.create("support-agent-sessions")
+session_store = agentkit.session_stores.create("support-agent-sessions")
 session = session_store.add(actor_id="customer-123", session_id="case-456")
 session.append_items(
     [
@@ -162,7 +173,7 @@ session.append_items(
     ]
 )
 
-memory_store = mason.memory_stores.create("coding-agent-memory")
+memory_store = agentkit.memory_stores.create("coding-agent-memory")
 memory = memory_store.add(
     actor_id="alice",
     path="/preferences/style.md",
@@ -177,8 +188,8 @@ memory = memory.update(content="The user prefers very concise answers.")
 memory.delete()
 ```
 
-The root collections manage stores: `mason.memory_stores.create/get/list` and
-`mason.session_stores.create/get/list`. A returned store owns operations on its
+The root collections manage stores: `agentkit.memory_stores.create/get/list` and
+`agentkit.session_stores.create/get/list`. A returned store owns operations on its
 contents, such as `memory_store.add()`, `memory_store.get("memory-id")`,
 `memory_store.list()`, and `memory_store.search()`, or `session_store.add()`,
 `session_store.get("session-id")`, and `session_store.list()`. Returned memories,
@@ -204,11 +215,11 @@ and return a JSON result. You can also add your own FastAPI endpoints.
 Start from a template, edit the agent code in `agent/`, and run it locally before deploying:
 
 ```sh
-mason init my-agent --framework langgraph --server mason --profile <profile>
+ab init my-agent --framework langgraph --server mason --profile <profile>
 cd my-agent
-mason dev
+ab dev
 # Stop the local server when ready to deploy.
-mason --profile <profile> deploy my-agent
+ab --profile <profile> deploy my-agent
 ```
 
 Use `--framework openai` for OpenAI Agents. Templates keep agent code separate from the runtime
@@ -234,18 +245,18 @@ Each managed run is an **invocation**. Send a client-generated UUID `id` and you
 The UUID also acts as an idempotency key: repeating the same request reuses the existing invocation
 while its record is retained; using the ID for a different request returns `409`.
 
-`mason dev` keeps execution state in process and loses it on restart. For projects with
-`[agent].server = "mason"`, `mason deploy` provisions a persistent Runtime Store for requests,
+`ab dev` keeps execution state in process and loses it on restart. For projects with
+`[agent].server = "mason"`, `ab deploy` provisions a persistent Runtime Store for requests,
 status, events, and results. Register `@app.recover` to restart interrupted app-auth work after
 worker failures. Recovery is at-least-once, so external side effects must be idempotent. Session
 and Memory Stores separately preserve the state used by your agent.
 
 The managed path uses the internal Runtime Store API to create a dedicated database in the
-workspace's shared Lakebase project and give the app SP ownership. Mason initializes its schema and
+workspace's shared Lakebase project and give the app SP ownership. The managed runtime initializes its schema and
 tables; no manual Lakebase grant or Postgres app-resource attachment is needed. Backend selection
-is an internal rollout detail, not a user-facing setting; Mason currently retains the legacy
+is an internal rollout detail, not a user-facing setting; the current implementation retains the legacy
 per-app Lakebase project by default. Once enabled, redeploy reads the stored backend and verifies
-the app identity, and `mason deployments delete` removes the managed store before deleting the app.
+the app identity, and `ab deployments delete` removes the managed store before deleting the app.
 The switch does not migrate existing deployments between backends. Managed cleanup errors retain
 the app for retry. Direct app deletion bypasses managed store cleanup.
 
@@ -256,7 +267,7 @@ is never written to the Runtime Store. A replacement attempt after failure recov
 
 Use `server = "custom"` to deploy your own HTTP server without provisioning a Runtime Store.
 Changing the server type of an existing deployment is not supported. To use a different server,
-scaffold a new project with the desired `mason init --server` option and deploy it under a new name.
+scaffold a new project with the desired `ab init --server` option and deploy it under a new name.
 See the [runtime guide](src/databricks_mason/runtime/README.md) for agent hooks, full API examples,
 and recovery behavior.
 
@@ -274,8 +285,8 @@ fully managed store for each, both backed by Lakebase and usable from agents bui
 - **Managed agent memory** stores durable facts, preferences, and decisions that an agent recalls in
   later, separate conversations, retrieved by semantic search.
 
-The examples below use the [`MasonClient` Python SDK](#python-sdk); the same operations are available
-as `mason sessions` / `mason memory` CLI commands.
+The examples below use the [`AgentKitClient` Python SDK](#agentkit-sdk); the same operations are available
+as `ab sessions` / `ab memory` CLI commands.
 
 ![Sessions and memory: the agent reads and appends one conversation's transcript in the session store, and recalls and saves durable facts in the memory store, which outlive any single conversation.](docs/sessions_and_memory.png)
 
@@ -293,11 +304,11 @@ request:
 
 ```python
 from databricks.sdk import WorkspaceClient
-from databricks_mason import MasonClient
+from databricks_agentkit import AgentKitClient
 
-mason = MasonClient(WorkspaceClient())
+agentkit = AgentKitClient(WorkspaceClient())
 
-session_store = mason.session_stores.create("support-agent-sessions")
+session_store = agentkit.session_stores.create("support-agent-sessions")
 session = session_store.add(actor_id="customer-123", session_id="case-456")
 
 session.append_items(
@@ -322,7 +333,7 @@ branch = session.fork(actor_id="customer-123")  # add up_to_item_id=... to branc
 
 Deleting a session that has such descendants requires `session.delete(force=True)` to cascade.
 
-In a Mason-server agent you don't call these directly — the framework adapter reads and appends
+In an agent configured with `server = "mason"`, you don't call these directly — the framework adapter reads and appends
 session state for you. With LangGraph, pass `checkpointer()` when you build the agent and scope each
 run with `thread_config(session_id)`; the OpenAI Agents adapter exposes the same as
 `session_store(session_id)`:
@@ -349,11 +360,11 @@ conversation with a natural-language search — results are ranked by full-text 
 
 ```python
 from databricks.sdk import WorkspaceClient
-from databricks_mason import MasonClient
+from databricks_agentkit import AgentKitClient
 
-mason = MasonClient(WorkspaceClient())
+agentkit = AgentKitClient(WorkspaceClient())
 
-memory_store = mason.memory_stores.create("support-agent-memory")
+memory_store = agentkit.memory_stores.create("support-agent-memory")
 memory_store.add(
     actor_id="user-123",
     path="/preferences/communication.md",
@@ -368,11 +379,11 @@ results = memory_store.search(actor_id="user-123", query="communication preferen
 To browse rather than search, `memory_store.list(actor_id=..., path_prefix=...)` returns entries
 directly.
 
-In a Mason-server agent, add the memory tools so the model can read and write memory during a run.
+In an agent configured with `server = "mason"`, add the memory tools so the model can read and write memory during a run.
 `memory_tools(actor)` exposes `remember` and `recall` bound to one actor's partition; it resolves the
 store from the `[memory_store]` binding, carried to the runtime by the `AGENT_MEMORY_STORE` env var
-that `mason deploy` injects, and returns no tools when no store is set, so the agent runs unchanged.
-That "no store set" path is also how it runs under `mason dev`, which runs locally: memory is off
+that `ab deploy` injects, and returns no tools when no store is set, so the agent runs unchanged.
+That "no store set" path is also how it runs under `ab dev`, which runs locally: memory is off
 there (the store is provisioned and used only at deploy). The OpenAI Agents adapter exposes the same as
 `memory_tools()`:
 
@@ -387,27 +398,27 @@ agent = create_agent(model=..., tools=[*your_tools, *memory_tools(actor)])
 > actor's entries. For strict isolation between tenants or users, use a separate store per boundary.
 > Grant another principal — such as your app's service principal — access with
 > `session_store.grant_permission(principal_id)` or `memory_store.grant_permission(principal_id)`;
-> `mason deploy` does this for the deployed app automatically.
+> `ab deploy` does this for the deployed app automatically.
 
 ### Declaring and provisioning stores
 
-For a deployed agent, `agent.toml` declares which stores it uses and `mason deploy` provisions them —
-you don't create stores by hand. `mason init` declares a default memory and session store named from
+For a deployed agent, `agent.toml` declares which stores it uses and `ab deploy` provisions them —
+you don't create stores by hand. `ab init` declares a default memory and session store named from
 the project; override those names, point at stores you already have, or let `deploy` create them:
 
 ```sh
 # Scaffold a project with default memory and session stores declared in agent.toml.
-mason init my-agent
+ab init my-agent
 
 # Override the declared store names at init time.
-mason init my-agent --memory-store support-agent-memory --session-store support-agent-sessions
+ab init my-agent --memory-store support-agent-memory --session-store support-agent-sessions
 
 # Or point an existing project at specific stores (edits agent.toml only; creates nothing).
-mason sessions bind support-agent-sessions
-mason memory bind support-agent-memory
+ab sessions bind support-agent-sessions
+ab memory bind support-agent-memory
 
 # deploy creates any declared-but-missing store and grants the app's service principal access.
-mason deploy my-agent
+ab deploy my-agent
 ```
 
 Memory and session stores are independent resources: deleting one never affects the other.
@@ -418,7 +429,7 @@ For the full command reference - every command, subcommand, argument, and option
 see [`cli.md`](cli.md). The tree below is a quick overview.
 
 ```text
-mason [-p <profile>] [-o text|json]
+ab [-p <profile>] [-o text|json]
   login        [--profile P]
   logout
   init         [--framework openai|langgraph] [--server mason|custom]
@@ -460,23 +471,25 @@ mason [-p <profile>] [-o text|json]
 From the existing project, prepare a migration for your coding agent:
 
 ```sh
-mason init --framework langgraph --existing .
-mason init --framework openai --existing .
+ab init --framework langgraph --existing .
+ab init --framework openai --existing .
 ```
 
-This writes `mason-migrate/` containing a skill, a prompt to paste into your coding agent,
+This writes `agent-bricks-migrate/` containing a skill, a prompt to paste into your coding agent,
 `references/migration.json`, and a reference project generated from the templates bundled with the
 installed CLI. The bundle sits outside any single agent's configuration directory; `.claude/skills/`
 and `.agent/skills/` each receive a small skill that points at it, so Claude Code, Codex, and
-similar tools discover the same instructions without duplicating the reference. Mason prepares the
-instructions; the coding agent performs and verifies the conversion. Init leaves application
-source, dependencies, `.env`, and existing Mason configuration intact and refuses to overwrite
+similar tools discover the same instructions without duplicating the reference. Agent Bricks CLI
+prepares the instructions; the coding agent performs and verifies the conversion. Init leaves application
+source, dependencies, `.env`, and existing `.mason/project.toml` configuration intact and refuses to overwrite
 existing migration files.
 
-The bundle is scaffolding for the migration, not part of the application: delete `mason-migrate/`
+The bundle is scaffolding for the migration, not part of the application: delete `agent-bricks-migrate/`
 and the two pointer skills once the conversion is done, and keep them out of commits meanwhile.
+Projects with a `mason-migrate/` bundle generated by an earlier CLI version can keep using it; no
+on-disk rename is needed.
 
-The skill follows the shared Mason contract for the selected framework, included in new projects and
+The skill follows the shared managed-runtime contract for the selected framework, included in new projects and
 migration references:
 [LangGraph](src/databricks_mason/templates/agent-langgraph/MASON_CONTRACT.md) or
 [OpenAI Agents SDK](src/databricks_mason/templates/agent-openai/MASON_CONTRACT.md). It explicitly
@@ -487,37 +500,37 @@ decision.
 
 The reference honors `--disable-chat-app`, `--memory-store`, `--session-store`, and the selected
 profile. These are migration intent; init does not provision resources or change the existing
-application. Migration supports LangGraph and the OpenAI Agents SDK with the Mason server;
+application. Migration supports LangGraph and the OpenAI Agents SDK with the managed server (`server = "mason"`);
 `--server custom` is not supported for `--existing`.
 
 ## Invoke HTTP endpoints
 
-`mason endpoint invoke` is a low-level HTTP command. It resolves and authenticates a deployed
+`ab endpoint invoke` is a low-level HTTP command. It resolves and authenticates a deployed
 Databricks App, or targets localhost and arbitrary servers through `--url`. It does not assume an
 agent protocol: provide the method, path, query parameters, and complete JSON body required by the
 server.
 
 ```sh
-mason --profile <profile> endpoint invoke mason-my-agent \
+ab --profile <profile> endpoint invoke mason-my-agent \
   --path /api/invocations \
   --json '{"id":"00000000-0000-4000-8000-000000000001","input":[{"role":"user","content":"Hello"}]}'
 
-mason endpoint invoke --url http://localhost:8000 \
+ab endpoint invoke --url http://localhost:8000 \
   --path /api/invocations \
   --json '{"id":"00000000-0000-4000-8000-000000000001","input":[{"role":"user","content":"Hello"}]}'
 ```
 
-The JSON body remains explicit even for Mason-generated agents. For example, Mason Runtime agents require
+The JSON body remains explicit even for generated agents. For example, managed runtime agents require
 a client-generated invocation ID, and streaming servers require their own streaming field plus
 `--sse` so the CLI consumes the response as Server-Sent Events.
 
 ```sh
 INVOCATION_ID=$(uuidgen)
-mason --profile <profile> endpoint invoke mason-my-agent \
+ab --profile <profile> endpoint invoke mason-my-agent \
   --path /api/invocations \
   --json "{\"id\":\"$INVOCATION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Run the report\"}]}"
 
-mason --profile <profile> endpoint invoke mason-my-agent \
+ab --profile <profile> endpoint invoke mason-my-agent \
   --path /api/invocations \
   --sse \
   --json "{\"id\":\"$INVOCATION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"stream\":true}"
@@ -525,7 +538,7 @@ mason --profile <profile> endpoint invoke mason-my-agent \
 
 `--session-id` preserves one application session across calls by setting the Databricks Apps routing
 cookie. This also works with a direct App URL and with the generated runtime on localhost. OAuth and
-session headers are managed by Mason; arbitrary custom request headers are intentionally not exposed
+session headers are managed by the runtime; arbitrary custom request headers are intentionally not exposed
 by this command.
 
 ## Command help
@@ -534,33 +547,33 @@ Use the conventional help flag at any command level. Every command's help includ
 examples:
 
 ```sh
-mason --help
-mason deploy --help
-mason sessions items append --help
+ab --help
+ab deploy --help
+ab sessions items append --help
 ```
 
 ## Agent tools
 
-For projects with `[agent].server = "mason"` (the default from `mason init`), `agent.toml` is the
+For projects with `[agent].server = "mason"` (the default from `ab init`), `agent.toml` is the
 declarative source of truth for Databricks-managed infrastructure: the Runtime Store, sandbox,
-managed MCP, Genie and Unity Catalog function bindings, plus memory and session resources. `mason tools
-add` updates only this file; direct TOML edits have the same behavior. Both Mason-server framework
+managed MCP, Genie and Unity Catalog function bindings, plus memory and session resources. `ab tools
+add` updates only this file; direct TOML edits have the same behavior. Both managed-server framework
 adapters read the managed bindings at runtime without generating or patching agent source:
 
 ```sh
-mason tools add sandbox --scope table:samples.nyctaxi.trips
-mason tools add mcp system.ai.web_search
-mason tools add uc-function catalog.schema.lookup_ticket
-mason tools add genie-one
-mason tools add genie-agent SPACE_ID
-mason tools remove mcp system.ai.web_search
-mason tools list
+ab tools add sandbox --scope table:samples.nyctaxi.trips
+ab tools add mcp system.ai.web_search
+ab tools add uc-function catalog.schema.lookup_ticket
+ab tools add genie-one
+ab tools add genie-agent SPACE_ID
+ab tools remove mcp system.ai.web_search
+ab tools list
 ```
 
 ### Managed tool identity and migration
 
-`mason tools add mcp`, `mason tools add sandbox`, `mason tools add genie-one`, and
-`mason tools add genie-agent` write explicit `auth = "user"` by default.
+`ab tools add mcp`, `ab tools add sandbox`, `ab tools add genie-one`, and
+`ab tools add genie-agent` write explicit `auth = "user"` by default.
 Use `--auth app` for the App service principal instead. This field is on the tool entry, not
 inside `source` or `policy`:
 
@@ -602,11 +615,11 @@ Deploy derives Apps user scopes from explicit `auth = "user"` bindings:
 | `system.ai.genie_one_mcp` | `ai-gateway`, `genie` |
 | First-class Genie One or Genie Agent | `genie` |
 
-For example, bind Genie tools in a current Mason-server project:
+For example, bind Genie tools in a current project with `server = "mason"`:
 
 ```sh
-mason tools add mcp system.ai.genie_one_mcp --auth user
-mason tools add genie-agent SPACE_ID --auth user
+ab tools add mcp system.ai.genie_one_mcp --auth user
+ab tools add genie-agent SPACE_ID --auth user
 ```
 
 Mixed bindings request the union. App-auth and legacy bindings add no user scopes. These are
@@ -619,7 +632,7 @@ initial typed SDK create request before uploading source. An existing App that i
 scope needs one-time explicit permission:
 
 ```sh
-mason --profile my-workspace deploy my-agent --allow-user-scope-update
+ab --profile my-workspace deploy my-agent --allow-user-scope-update
 ```
 
 The `system.ai.dbsql` managed MCP additionally requests the Apps `sql` user scope. This is full SQL
@@ -632,7 +645,7 @@ Unity Catalog privileges, and the sandbox downscope remains authoritative. Table
 bindings request `ai-gateway` but do not request `files`.
 
 Review the target App's scopes and coordinate with its other owners before allowing the update. Once
-those scopes are present, later deploys do not need the flag. Mason preserves unrelated scopes,
+those scopes are present, later deploys do not need the flag. The CLI preserves unrelated scopes,
 updates only user scopes and any explicitly requested instance counts, and checks requested **and
 effective** scopes before source rollout. It checks for scope changes since preflight, but Apps
 read/write is **not atomic**; this is not a lock or a compare-and-swap guarantee. Polling is bounded
@@ -641,13 +654,13 @@ Users may need to sign out and **re-consent** after changing scopes; effective-s
 does not refresh an existing user's consent.
 
 Apps may report `iam.access-control:read` and `iam.current-user:read` as implicit effective
-scopes. Mason permits these platform defaults during verification but does not request them
+scopes. The CLI permits these platform defaults during verification but does not request them
 as configurable scopes. Explicitly disabled user-token forwarding stops deployment; enable
 forwarding and restart the App compute before retrying.
 
 Removing a tool or switching back to app-only auth **does not remove Apps scopes**. Remove
 unneeded scopes explicitly in Databricks Apps, and verify both configured and effective scopes
-before declaring removal complete. Mason does not send empty-list scope updates: the SDK's
+before declaring removal complete. The CLI does not send empty-list scope updates: the SDK's
 `App.as_dict()` omits empty lists, so that would not prove removal succeeded. No scopes are
 managed for generic bring-your-own apps without this managed user contract.
 
@@ -656,32 +669,32 @@ for **all** App-auth tools, or deploy those tools separately. Models, custom MCP
 Memory/Session Stores, and tracing keep their existing credentials.
 
 For MCP services, the remove command accepts the same service name as the add command. You can also
-remove any binding by its `id` in `agent.toml`, for example `mason tools remove web_search`.
+remove any binding by its `id` in `agent.toml`, for example `ab tools remove web_search`.
 Every successful add (including an already-configured no-op) points you to the target project's
 `agent.toml` to review configured managed tools and MCP bindings. With `--source`, the message
 points to that project's file. JSON add output includes its path in `manifest`.
 
-`mason tools list` discovers **available integrations to add**, not configured bindings. By default
+`ab tools list` discovers **available integrations to add**, not configured bindings. By default
 it shows built-in add recipes and caller-visible MCP Services in `system.ai`. A recipe may still
 need your resources: sandbox scopes, a concrete UC function name, or a Genie Space ID. Genie One
 needs no additional argument. `system.ai.sandbox` is represented by its scoped recipe rather than
 a second unscoped add command. The list does not enumerate every workspace schema, individual
 operations inside MCP services, or custom Python tools.
 
-`mason tools add mcp` looks up the service in the selected workspace before writing `agent.toml`.
-Use `mason --profile <profile> tools add mcp <service>` to select a workspace. A missing service or
+`ab tools add mcp` looks up the service in the selected workspace before writing `agent.toml`.
+Use `ab --profile <profile> tools add mcp <service>` to select a workspace. A missing service or
 failed lookup (including authentication or permission errors) leaves the project unchanged. This
 checks service metadata access, not whether every tool can be executed at runtime. Removing local
 bindings does not require workspace access.
 
 ```sh
-mason tools list
-mason tools list --kind mcp
-mason tools list --kind mcp --schema main.tools
-mason tools list --kind sandbox
-mason tools list --kind genie-one
-mason tools list --kind genie-agent
-mason --output json tools list
+ab tools list
+ab tools list --kind mcp
+ab tools list --kind mcp --schema main.tools
+ab tools list --kind sandbox
+ab tools list --kind genie-one
+ab tools list --kind genie-agent
+ab --output json tools list
 ```
 
 No agent project is required for discovery. MCP discovery uses your Databricks profile; the
@@ -695,9 +708,9 @@ runtime execution permissions.
 Read `agent.toml` (its `[[tools]]` entries) to inspect configured bindings. Discovery JSON uses
 `schema_version: 2`, with `available_tools` (`name`, `kind`, `add_command`), `mcp_schema` (null for
 local-only recipes), `complete`, and `errors`. Replace old scripts that read configured-list JSON
-with TOML inspection. Replace `mason mcp list [--schema catalog.schema]` with
-`mason tools list --kind mcp [--schema catalog.schema]`; the former command is removed. Use
-`mason tools list --help` for the new discovery contract.
+with TOML inspection. Replace `ab mcp list [--schema catalog.schema]` with
+`ab tools list --kind mcp [--schema catalog.schema]`; the former command is removed. Use
+`ab tools list --help` for the new discovery contract.
 
 Read-only live discovery can be checked against the installed wheel without creating a project
 or deploying an agent:
@@ -710,7 +723,7 @@ The live checks compare default and MCP-filtered discovery with the compatibilit
 Set `MASON_E2E_SCHEMA=catalog.schema` to exercise an additional schema. The installed CLI's local
 add/review/remove flows and all updated help pages are covered by `tests/functional/cli_smoke_test.py`.
 
-In Mason-server templates, custom Python tools are code-first. Write them with the framework's native
+In managed-server templates, custom Python tools are code-first. Write them with the framework's native
 decorator in `agent/tools/`: LangGraph uses `@tool`, while OpenAI Agents uses `@function_tool`. The
 templates auto-discover decorated tools from that package and add them to the agent; there is no CLI
 command or `agent.toml` entry to keep in sync. Customer-managed MCP servers are likewise ordinary
@@ -718,11 +731,11 @@ code in `agent/mcps.py` and are joined with the managed bindings by `mcp_tools(.
 `mcp_servers(...)`.
 
 Projects created with `--server custom` do not auto-discover `agent/tools/` or load managed tool
-bindings from `agent.toml`, so `mason tools add` rejects those projects. Wire framework-native Python
+bindings from `agent.toml`, so `ab tools add` rejects those projects. Wire framework-native Python
 tools and MCP servers directly in `agent/agent.py` instead.
 
-If an older Mason-server manifest contains `source = { kind = "python", ... }`, remove that
-`[[tools]]` entry; the decorated tool in `agent/tools/` remains active. `mason dev` and `mason deploy`
+If an older manifest with `server = "mason"` contains `source = { kind = "python", ... }`, remove that
+`[[tools]]` entry; the decorated tool in `agent/tools/` remains active. `ab dev` and `ab deploy`
 do not generate or patch Python tool code, and do not alter the manifest's `[[tools]]` bindings.
 
 Sandbox scopes default to read-only access. Repeat `--scope` to allow more than one resource, use
@@ -732,17 +745,17 @@ arguments controlled by the model.
 
 ### Genie tools
 
-Genie One and Genie Agent support ship with Mason, but bindings are opt-in, like sandbox tools.
-Installing Mason does not configure a Genie Space ID or enable a Genie binding. Add only the
+Genie One and Genie Agent support ship with Agent Bricks CLI, but bindings are opt-in, like sandbox tools.
+Installing the current `databricks-agentbricks` distribution does not configure a Genie Space ID or enable a Genie binding. Add only the
 capabilities your agent needs:
 
 ```sh
-mason tools add genie-one --name genie_one --auth user
-mason tools add genie-agent SPACE_ID --name genie_agent --auth user
-mason tools list --kind genie-one
-mason tools list --kind genie-agent
-mason tools remove genie_one
-mason tools remove genie_agent
+ab tools add genie-one --name genie_one --auth user
+ab tools add genie-agent SPACE_ID --name genie_agent --auth user
+ab tools list --kind genie-one
+ab tools list --kind genie-agent
+ab tools remove genie_one
+ab tools remove genie_agent
 ```
 
 `--name` is optional and defaults to `genie_one` or `genie_agent`, respectively. `--auth` defaults
@@ -751,7 +764,7 @@ without `auth` preserve App/default identity. Both add commands and `remove` acc
 to select a project instead of the current directory. Discovery needs no project; read that
 project's `agent.toml` to inspect configured bindings. For scripted output, put the global
 `-o json` option before `tools`, as in
-`mason -o json tools add genie-one --source ./my-agent`. Adding a binding is offline: it updates
+`ab -o json tools add genie-one --source ./my-agent`. Adding a binding is offline: it updates
 `agent.toml` without contacting Genie or checking permissions. The corresponding sources are:
 
 ```toml
@@ -782,15 +795,15 @@ again. If submission times out before a message ID is received, ask returns
 the first 100 rows, column schema, a truncation indicator, and a deep link to the conversation.
 
 Both framework modules, `databricks_mason.langgraph` and `databricks_mason.openai`, export
-`genie_tools()`. New Mason-server templates use it automatically for native Genie Agent bindings;
-Genie One uses the existing managed MCP helpers. In an existing Mason-server project, import
+`genie_tools()`. New managed-server templates (`server = "mason"`) use it automatically for native Genie Agent bindings;
+Genie One uses the existing managed MCP helpers. In an existing project with `server = "mason"`, import
 `genie_tools` from your framework module and add `*genie_tools()` to the agent's existing tool list.
 The CLI does not patch existing Python code.
 
-Both paths use Mason's existing authentication and routed workspace. Genie One requires the
+Both paths use Databricks authentication and the routed workspace. Genie One requires the
 Managed MCP Servers workspace preview; delegated access requires the `genie` OAuth scope.
 The effective caller needs access to the data, the SQL warehouse, and the selected Genie space
-where applicable. Mason does not grant permissions or promise a service-principal fallback when
+where applicable. Agent Bricks CLI does not grant permissions or promise a service-principal fallback when
 caller credentials lack access. An offline add succeeding does not establish runtime access.
 
 The opt-in live tests exercise both frameworks against the configured workspace and an existing
@@ -812,11 +825,11 @@ It is included by default for `--framework langgraph`; pass `--disable-chat-app`
 API-only backend instead.
 
 ```sh
-mason init --framework langgraph \
+ab init --framework langgraph \
   --profile <profile> \
   ./my-agent
 cd ./my-agent
-mason dev
+ab dev
 ```
 
 The chat app includes synchronous, SSE streaming, background polling, Session Store, Memory Store,
@@ -826,14 +839,14 @@ and HITL resume UI. The framework-specific overlay adds `ui/`, `runtime/ui.py`, 
 For the full deployed demo, bind both managed stores, then deploy:
 
 ```sh
-mason sessions bind mason-demo-sessions
-mason memory bind mason-demo-memory
-mason --profile <profile> deploy mason-agent-demo --source .
+ab sessions bind mason-demo-sessions
+ab memory bind mason-demo-memory
+ab --profile <profile> deploy mason-agent-demo --source .
 ```
 
-(`bind` declares the store name in `agent.toml`; `mason deploy` creates any declared-but-missing
+(`bind` declares the store name in `agent.toml`; `ab deploy` creates any declared-but-missing
 store and grants the app's service principal access to it. The memory store id flows to the runtime
-via the `AGENT_MEMORY_STORE` env var that `deploy` injects; `mason dev` runs locally with memory off
+via the `AGENT_MEMORY_STORE` env var that `deploy` injects; `ab dev` runs locally with memory off
 and does not inject it. The id is not persisted in `agent.toml`.)
 
 The chat UI generates a stable application session UUID in browser local storage, places it inside
@@ -848,6 +861,6 @@ sync/streaming/background transport selector is manual.
 
 ## Contributing
 
-Developing Mason itself - the CLI, SDK/runtime, and templates - plus the local dev loop and how to
-test unreleased changes on `mason dev` and `mason deploy`, is covered in
+Developing Agent Bricks CLI (`ab`), AgentKit, the runtime, and templates - plus the local dev loop and how to
+test unreleased changes on `ab dev` and `ab deploy`, is covered in
 [CONTRIBUTING.md](CONTRIBUTING.md).

@@ -30,7 +30,7 @@ def test_metadata_override_conflict_uses_values_in_error(tmp_path: pathlib.Path)
 
 
 def test_metadata_rejects_unsupported_framework_before_writing(tmp_path: pathlib.Path):
-    with pytest.raises(AgentCliError, match="Unsupported Mason framework 'unsupported'"):
+    with pytest.raises(AgentCliError, match="Unsupported Agent Bricks framework 'unsupported'"):
         write_project_metadata(tmp_path, framework="unsupported", template="agent-template")
     assert not (tmp_path / ".mason").exists()
 

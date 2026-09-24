@@ -18,7 +18,7 @@
   <line x1="728" y1="148" x2="754" y2="148" stroke="#E9664F" stroke-width="2" marker-end="url(#arw)"/>
 
   <rect x="32" y="104" width="150" height="88" rx="10" fill="#FFFFFF" stroke="#E9A08C" stroke-width="1.4" filter="url(#soft)"/>
-  <text x="107" y="142" text-anchor="middle" font-size="15" font-weight="bold" font-family="Liberation Mono, monospace" fill="#1F2A44">mason init</text>
+  <text x="107" y="142" text-anchor="middle" font-size="15" font-weight="bold" font-family="Liberation Mono, monospace" fill="#1F2A44">ab init</text>
   <text x="107" y="164" text-anchor="middle" font-size="11" fill="#8A94A6">scaffold from a</text>
   <text x="107" y="178" text-anchor="middle" font-size="11" fill="#8A94A6">framework template</text>
 
@@ -28,12 +28,12 @@
   <text x="289" y="179" text-anchor="middle" font-size="11" fill="#8A94A6">+ your agent code</text>
 
   <rect x="396" y="104" width="150" height="88" rx="10" fill="#FFFFFF" stroke="#E9A08C" stroke-width="1.4" filter="url(#soft)"/>
-  <text x="471" y="142" text-anchor="middle" font-size="15" font-weight="bold" font-family="Liberation Mono, monospace" fill="#1F2A44">mason dev</text>
+  <text x="471" y="142" text-anchor="middle" font-size="15" font-weight="bold" font-family="Liberation Mono, monospace" fill="#1F2A44">ab dev</text>
   <text x="471" y="164" text-anchor="middle" font-size="11" fill="#8A94A6">run locally,</text>
   <text x="471" y="178" text-anchor="middle" font-size="11" fill="#8A94A6">same manifest &#183; chat UI</text>
 
   <rect x="578" y="104" width="150" height="88" rx="10" fill="#FFFFFF" stroke="#E9A08C" stroke-width="1.4" filter="url(#soft)"/>
-  <text x="653" y="142" text-anchor="middle" font-size="15" font-weight="bold" font-family="Liberation Mono, monospace" fill="#1F2A44">mason deploy</text>
+  <text x="653" y="142" text-anchor="middle" font-size="15" font-weight="bold" font-family="Liberation Mono, monospace" fill="#1F2A44">ab deploy</text>
   <text x="653" y="164" text-anchor="middle" font-size="11" fill="#8A94A6">ship to</text>
   <text x="653" y="178" text-anchor="middle" font-size="11" fill="#8A94A6">Databricks Apps</text>
 
@@ -45,6 +45,6 @@
   <line x1="653" y1="192" x2="653" y2="226" stroke="#D3A79A" stroke-width="1.5" stroke-dasharray="4 3"/>
 
   <rect x="214" y="226" width="694" height="60" rx="9" fill="#FFFFFF" stroke="#E3C6BC" stroke-width="1.4"/>
-  <text x="232" y="250" font-size="12.5" font-weight="bold" fill="#C64A33">mason deploy also provisions &amp; wires up, from agent.toml:</text>
+  <text x="232" y="250" font-size="12.5" font-weight="bold" fill="#C64A33">ab deploy also provisions &amp; wires up, from agent.toml:</text>
   <text x="232" y="271" font-size="11" font-family="Liberation Mono, monospace" fill="#4A5568">bound memory &amp; session stores &#183; service-principal grants &#183; durable-runtime DB &#183; MLflow tracing</text>
 </svg>

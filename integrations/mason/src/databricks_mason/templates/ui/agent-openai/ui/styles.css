@@ -16,7 +16,7 @@
   --accent-deep: #1a5fc4;
   --accent-soft: #edf3fd;
 
-  /* Brand mark stays warm terracotta (Mason's signature). */
+  /* Brand mark stays warm terracotta. */
   --brand: #c2410c;
 
   --success: #137333;
@@ -133,8 +133,13 @@ code {
   width: 30px;
   height: 30px;
   flex: 0 0 auto;
-  display: block;
-  object-fit: contain;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--brand);
+  border-radius: 6px;
+  color: var(--brand);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .brand-copy {

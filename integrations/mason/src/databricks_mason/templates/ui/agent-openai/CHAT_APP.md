@@ -1,6 +1,6 @@
-# Mason OpenAI Chat App Overlay
+# OpenAI Agents Chat App Overlay
 
-`mason init --framework openai` copies this framework-specific overlay after the base `agent-openai`
+`ab init --framework openai` copies this framework-specific overlay after the base `agent-openai`
 template (it is included by default; `--disable-chat-app` opts out). It is intentionally not a
 post-generation mutation command.
 

@@ -1,9 +1,9 @@
-"""Functional smoke tests: the REAL installed `mason` binary runs each workspace-free command.
+"""Functional smoke tests: the REAL installed `ab` binary runs each workspace-free command.
 
 These complement the in-process CliRunner unit tests, which already own detailed behavior (arg
 handling, help text, agent.toml effects). CliRunner imports the command modules in-process, so it
 can't catch a regression that only shows up under the real console script — a broken entry point, a
-packaging/dependency gap, an import that fails only when installed. This runs the `mason` on PATH,
+packaging/dependency gap, an import that fails only when installed. This runs the `ab` on PATH,
 next to the interpreter running the tests: CI installs the built wheel and runs pytest from that
 venv (so CI exercises the shipped artifact), while a local `uv run` provides the editable install.
 Everything runs with an isolated HOME and no Databricks config, so no workspace is used.
@@ -36,10 +36,10 @@ _COMMANDS = (
 
 
 @pytest.fixture
-def run_mason(tmp_path: pathlib.Path):
-    mason = pathlib.Path(sys.executable).with_name("mason")
-    if not mason.is_file():
-        pytest.skip("requires the mason CLI on PATH")
+def run_ab(tmp_path: pathlib.Path):
+    ab = pathlib.Path(sys.executable).with_name("ab")
+    if not ab.is_file():
+        pytest.skip("requires the ab CLI on PATH")
     home = tmp_path / "home"
     home.mkdir()
     empty_cfg = tmp_path / "empty.databrickscfg"
@@ -47,18 +47,18 @@ def run_mason(tmp_path: pathlib.Path):
     # Isolate HOME so login/logout can't touch the real ~/.mason; empty config file so no real
     # profile is reachable. env= replaces the environment wholesale (no ambient DATABRICKS_* leaks).
     env = {
-        "PATH": f"{mason.parent}:/usr/bin:/bin",
+        "PATH": f"{ab.parent}:/usr/bin:/bin",
         "HOME": str(home),
         "DATABRICKS_CONFIG_FILE": str(empty_cfg),
     }
 
     def run(*args: str, check: bool = True) -> subprocess.CompletedProcess:
         result = subprocess.run(
-            [str(mason), *args], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60
+            [str(ab), *args], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60
         )
         if check:
             assert result.returncode == 0, (
-                f"`mason {' '.join(args)}` exited {result.returncode}\n"
+                f"`ab {' '.join(args)}` exited {result.returncode}\n"
                 f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
             )
         return result
@@ -66,10 +66,26 @@ def run_mason(tmp_path: pathlib.Path):
     return run
 
 
-def test_cli_and_every_command_help_load(run_mason) -> None:
-    assert "Usage" in run_mason("--help").stdout
+def test_cli_and_every_command_help_load(run_ab) -> None:
+    assert "Usage" in run_ab("--help").stdout
     for command in _COMMANDS:
-        run_mason(command, "--help")
+        run_ab(command, "--help")
+
+
+def test_legacy_mason_command_still_loads() -> None:
+    mason = pathlib.Path(sys.executable).with_name("mason")
+    assert mason.is_file(), "the compatibility console script is missing from the installed wheel"
+    result = subprocess.run([str(mason), "--help"], capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    assert "Agent Bricks" in result.stdout
+
+
+def test_installed_wheel_exposes_agentkit_sdk() -> None:
+    from databricks_agentkit import AgentKitClient, MemoryStore, SessionStore
+
+    assert AgentKitClient.__module__ == "databricks_mason.client"
+    assert MemoryStore.__module__ == "databricks_mason.memory_store"
+    assert SessionStore.__module__ == "databricks_mason.session_store"
 
 
 @pytest.mark.parametrize(
@@ -80,12 +96,25 @@ def test_cli_and_every_command_help_load(run_mason) -> None:
         ["--framework", "langgraph", "--server", "custom"],
     ],
 )
-def test_init_scaffolds(run_mason, tmp_path: pathlib.Path, extra) -> None:
+def test_init_scaffolds(run_ab, tmp_path: pathlib.Path, extra) -> None:
     dest = tmp_path / ("proj_" + "_".join(token.lstrip("-") for token in extra))
-    run_mason("init", *extra, str(dest))
+    run_ab("init", *extra, str(dest))
     assert (dest / "pyproject.toml").is_file()
     assert (dest / "app.yaml").is_file()
     assert (dest / "agent.toml").is_file()
+
+
+def test_existing_init_includes_migration_skill_from_wheel(run_ab, tmp_path: pathlib.Path) -> None:
+    project = tmp_path / "existing-agent"
+    project.mkdir()
+
+    run_ab("init", "--existing", "--framework", "langgraph", str(project))
+
+    skill = project / "agent-bricks-migrate/SKILL.md"
+    assert "name: agent-bricks-migrate" in skill.read_text()
+    pointer = project / ".claude/skills/agent-bricks-migrate/SKILL.md"
+    assert pointer.is_file()
+    assert "../../../agent-bricks-migrate/SKILL.md" in pointer.read_text()
 
 
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
@@ -100,10 +129,10 @@ def test_init_scaffolds(run_mason, tmp_path: pathlib.Path, extra) -> None:
     ],
 )
 def test_tools_offline_add_review_manifest_remove(
-    run_mason, tmp_path, framework, output, args
+    run_ab, tmp_path, framework, output, args
 ) -> None:
     project = tmp_path / "agent"
-    run_mason("init", "--framework", framework, str(project))
+    run_ab("init", "--framework", framework, str(project))
     manifest = project / "agent.toml"
     original = {
         path.relative_to(project): path.read_bytes()
@@ -111,7 +140,7 @@ def test_tools_offline_add_review_manifest_remove(
         if path.is_file() and path != manifest
     }
     for changed in (True, False):
-        added = run_mason(
+        added = run_ab(
             "--output", output, "tools", "add", *args, "--name", "tested", "--source", str(project)
         )
         if output == "json":
@@ -125,7 +154,7 @@ def test_tools_offline_add_review_manifest_remove(
             if not changed:
                 assert "already configured" in added.stdout
         assert [tool["id"] for tool in tomli.loads(manifest.read_text())["tools"]] == ["tested"]
-    run_mason("tools", "remove", "tested", "--source", str(project))
+    run_ab("tools", "remove", "tested", "--source", str(project))
     assert tomli.loads(manifest.read_text()).get("tools", []) == []
     assert {
         path.relative_to(project): path.read_bytes()
@@ -135,8 +164,8 @@ def test_tools_offline_add_review_manifest_remove(
 
 
 @pytest.mark.parametrize("kind", ["sandbox", "uc-function", "genie-one", "genie-agent"])
-def test_tools_local_discovery_without_project_or_auth(run_mason, kind):
-    result = run_mason("-o", "json", "tools", "list", "--kind", kind)
+def test_tools_local_discovery_without_project_or_auth(run_ab, kind):
+    result = run_ab("-o", "json", "tools", "list", "--kind", kind)
     payload = json.loads(result.stdout)
     assert payload["schema_version"] == 2
     assert payload["complete"] is True
@@ -145,14 +174,14 @@ def test_tools_local_discovery_without_project_or_auth(run_mason, kind):
     assert [tool["kind"] for tool in payload["available_tools"]] == [kind]
 
 
-def test_tools_text_discovery_suggests_mcp_filters(run_mason):
-    result = run_mason("tools", "list", "--kind", "genie-one")
-    assert "mason tools list --kind mcp" in result.stdout
-    assert "mason tools list --kind mcp --schema catalog.schema" in result.stdout
+def test_tools_text_discovery_suggests_mcp_filters(run_ab):
+    result = run_ab("tools", "list", "--kind", "genie-one")
+    assert "ab tools list --kind mcp" in result.stdout
+    assert "ab tools list --kind mcp --schema catalog.schema" in result.stdout
 
 
-def test_tools_discovery_without_auth_is_explicitly_incomplete(run_mason):
-    result = run_mason("-o", "json", "tools", "list", check=False)
+def test_tools_discovery_without_auth_is_explicitly_incomplete(run_ab):
+    result = run_ab("-o", "json", "tools", "list", check=False)
     assert result.returncode == 1
     payload = json.loads(result.stdout)
     assert payload["complete"] is False
@@ -166,7 +195,7 @@ def test_tools_discovery_without_auth_is_explicitly_incomplete(run_mason):
     assert payload["errors"]
 
 
-def test_tools_help_and_removed_configured_route(run_mason):
+def test_tools_help_and_removed_configured_route(run_ab):
     for path in [
         ("tools",),
         ("tools", "list"),
@@ -177,11 +206,11 @@ def test_tools_help_and_removed_configured_route(run_mason):
         ("tools", "add", "genie-one"),
         ("tools", "add", "genie-agent"),
     ]:
-        text = " ".join(run_mason(*path, "--help").stdout.split())
+        text = " ".join(run_ab(*path, "--help").stdout.split())
         assert "agent.toml" in text
         assert "list configured tools" not in text
         assert "mason mcp list" not in text
-    listing_help = " ".join(run_mason("tools", "list", "--help").stdout.split())
+    listing_help = " ".join(run_ab("tools", "list", "--help").stdout.split())
     for expected in (
         "--kind",
         "--schema",
@@ -193,18 +222,18 @@ def test_tools_help_and_removed_configured_route(run_mason):
     ):
         assert expected in listing_help
     assert "--source DIRECTORY" not in listing_help
-    assert run_mason("tools", "list", "--source", ".", check=False).returncode != 0
-    assert run_mason("tools", "mcp", "list", check=False).returncode != 0
-    assert run_mason("mcp", "--help", check=False).returncode != 0
+    assert run_ab("tools", "list", "--source", ".", check=False).returncode != 0
+    assert run_ab("tools", "mcp", "list", check=False).returncode != 0
+    assert run_ab("mcp", "--help", check=False).returncode != 0
 
 
-def test_mcp_add_without_auth_does_not_change_manifest(run_mason, tmp_path: pathlib.Path) -> None:
+def test_mcp_add_without_auth_does_not_change_manifest(run_ab, tmp_path: pathlib.Path) -> None:
     project = tmp_path / "agent"
-    run_mason("init", "--framework", "langgraph", str(project))
+    run_ab("init", "--framework", "langgraph", str(project))
     manifest = project / "agent.toml"
     before = manifest.read_bytes()
 
-    result = run_mason(
+    result = run_ab(
         "--output",
         "json",
         "tools",
@@ -221,18 +250,18 @@ def test_mcp_add_without_auth_does_not_change_manifest(run_mason, tmp_path: path
     assert manifest.read_bytes() == before
 
 
-def test_tracing_unbind_then_bind_requires_an_experiment(run_mason, tmp_path: pathlib.Path) -> None:
+def test_tracing_unbind_then_bind_requires_an_experiment(run_ab, tmp_path: pathlib.Path) -> None:
     project = tmp_path / "agent"
-    run_mason("init", "--framework", "langgraph", str(project))
-    # unbind removes the default binding `mason init` wrote - a pure agent.toml edit, no workspace.
-    run_mason("tracing", "unbind", "--source", str(project))
+    run_ab("init", "--framework", "langgraph", str(project))
+    # unbind removes the default binding `ab init` wrote - a pure agent.toml edit, no workspace.
+    run_ab("tracing", "unbind", "--source", str(project))
     # bind now requires an experiment (the old no-arg "re-enable the default" is gone); with neither
     # flag it errors clearly - and does so before any workspace call, so this stays hermetic.
-    result = run_mason("tracing", "bind", "--source", str(project), check=False)
+    result = run_ab("tracing", "bind", "--source", str(project), check=False)
     assert result.returncode != 0
     assert "Pass --experiment-name or --experiment-id" in result.stderr
 
 
-def test_logout_runs_cleanly(run_mason) -> None:
+def test_logout_runs_cleanly(run_ab) -> None:
     # Isolated HOME: there's no saved selection to forget, but it must still exit cleanly.
-    run_mason("logout")
+    run_ab("logout")

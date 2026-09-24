@@ -21,12 +21,12 @@ pytestmark = pytest.mark.skipif(
 def test_mcp_registration_validates_before_writing(tmp_path: pathlib.Path, framework: str):
     profile = os.environ["MASON_E2E_PROFILE"]
     service = os.environ.get("MASON_E2E_MCP_SERVICE", "system.ai.web_search")
-    mason = pathlib.Path(sys.executable).with_name("mason")
-    assert mason.is_file(), "Install the Mason wheel into the test environment first."
+    ab = pathlib.Path(sys.executable).with_name("ab")
+    assert ab.is_file(), "Install the Agent Bricks CLI into the test environment first."
     project = tmp_path / f"agent-{framework}"
 
     def run(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-        command = [str(mason), "--profile", profile, "--output", "json", *args]
+        command = [str(ab), "--profile", profile, "--output", "json", *args]
         result = subprocess.run(command, capture_output=True, text=True, timeout=90)
         sys.stdout.write(
             f"$ {' '.join(command)}\nexit={result.returncode}\n{result.stdout}{result.stderr}\n"

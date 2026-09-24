@@ -48,7 +48,7 @@ class _InvocationRequest(BaseModel):
 class DurableAgentServer(FastAPI):
     """Expose agent handlers through Mason's invocation HTTP protocol.
 
-    ``mason dev`` selects a process-local Runtime Store. A deployed Mason server receives a
+    ``ab dev`` selects a process-local Runtime Store. A deployed Mason server receives a
     Lakebase-backed Runtime Store, which preserves invocation state and can recover stale work when
     a handler is registered with :meth:`recover`.
     """

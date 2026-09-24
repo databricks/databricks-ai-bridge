@@ -1,7 +1,7 @@
 """Tests for the runtime store resolvers (databricks_mason.runtime.tool_manifest).
 
 The runtime resolves stores from the explicit arg → env only; it never reads ``agent.toml`` (that
-file is the CLI's authoring source, which `mason deploy`/`dev` resolve into env). These tests pin
+file is the CLI's authoring source, which `ab deploy`/`dev` resolve into env). These tests pin
 that contract, including that a store declared in ``agent.toml`` is ignored at runtime.
 """
 

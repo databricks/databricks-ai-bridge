@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING
 
-from databricks_mason.client import MasonClient
+from databricks_mason.client import AgentKitClient, MasonClient
 from databricks_mason.memory_store import Memory, MemorySearchResult, MemoryStore
 from databricks_mason.session_store import (
     ExtractedMemory,
@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     )
 
 __all__ = [
+    "AgentKitClient",
     "MasonClient",
     "Memory",
     "MemorySearchResult",

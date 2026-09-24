@@ -1,4 +1,4 @@
-"""CLI-level unit tests for `mason sessions` commands (stores / sessions / items).
+"""CLI-level unit tests for `ab sessions` commands (stores / sessions / items).
 
 Exercises each command's handler + render path with a fake low-level client, covering
 both text and JSON output modes. Backfills coverage for src/databricks_mason/cli/sessions.py.

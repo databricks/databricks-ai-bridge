@@ -9,9 +9,9 @@ examples. Keep this file as a development map rather than repeating those rules.
 ## Commands
 
 ```bash
-mason dev
+ab dev
 uv run pytest
-mason --profile <profile> deploy <name> --source .
+ab --profile <profile> deploy <name> --source .
 ```
 
 ## Code map
@@ -21,8 +21,8 @@ mason --profile <profile> deploy <name> --source .
 | Framework-native agent and `run_agent` | `agent/agent.py` |
 | Local tools | `agent/tools/` |
 | MCP servers | `agent/mcps.py` |
-| Mason `invoke`/`recover` hooks and input/output translation | `runtime/adapter.py` |
-| Mason server construction and hook registration | `runtime/main.py` |
+| Managed runtime `invoke`/`recover` hooks and input/output translation | `runtime/adapter.py` |
+| `DurableAgentServer` construction and hook registration | `runtime/main.py` |
 | Browser and managed-state routes | `runtime/ui.py` |
 | Browser behavior | `ui/app.js` |
 

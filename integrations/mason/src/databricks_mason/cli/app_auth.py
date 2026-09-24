@@ -51,7 +51,7 @@ def requires_user_auth(project: AgentProject | None) -> bool:
     if user_auth and project.server != AgentServer.MASON:
         raise AgentCliError(
             "Managed tools with auth = 'user' require [agent].server = 'mason'.",
-            hint="Migrate to the request-auth-aware Mason DurableAgentServer template before enabling user "
+            hint="Migrate to the request-auth-aware Agent Bricks DurableAgentServer template before enabling user "
             "auth. Failure recovery is unsupported for request-user attempts because the credential "
             "is transient.",
         )
@@ -109,7 +109,7 @@ def plan_app_user_scope_update(
 
     A new App can be created with the requested user API scopes automatically. An existing App is
     left unchanged unless all requested scopes are already present or the caller explicitly allows
-    Mason to add the missing scopes.
+    Agent Bricks to add the missing scopes.
     """
     try:
         apps = WorkspaceClient(profile=profile).apps
@@ -130,7 +130,7 @@ def plan_app_user_scope_update(
         raise AgentCliError(
             f"App '{name}' is missing required user API scopes; re-run with "
             "--allow-user-scope-update to add them.",
-            hint="Review the existing App scopes and coordinate with other owners first. Mason "
+            hint="Review the existing App scopes and coordinate with other owners first. Agent Bricks "
             "preserves unrelated scopes; later deploys do not need the flag once all required "
             "scopes are present.",
         )

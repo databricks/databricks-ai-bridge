@@ -1,4 +1,4 @@
-"""Selection enums retain Mason's lowercase command and manifest values."""
+"""Selection enums retain the lowercase `mason` server and manifest values."""
 
 import json
 
@@ -37,7 +37,7 @@ def test_enum_text_and_json_use_the_lowercase_value(selection: AgentFramework | 
 def test_selection_parsers_surface_cli_errors(parser, invalid: object):
     with pytest.raises(AgentCliError) as error:
         parser(invalid)
-    assert "Unsupported Mason" in error.value.message
+    assert "Unsupported Agent Bricks" in error.value.message
     assert "Supported" in (error.value.hint or "")
     assert "AgentFramework" not in str(error.value)
     assert "AgentServer" not in str(error.value)
@@ -46,4 +46,4 @@ def test_selection_parsers_surface_cli_errors(parser, invalid: object):
 def test_invalid_cross_enum_value_does_not_leak_enum_representation():
     with pytest.raises(AgentCliError) as error:
         parse_framework(AgentServer.MASON)
-    assert error.value.message == "Unsupported Mason framework 'mason'."
+    assert error.value.message == "Unsupported Agent Bricks framework 'mason'."

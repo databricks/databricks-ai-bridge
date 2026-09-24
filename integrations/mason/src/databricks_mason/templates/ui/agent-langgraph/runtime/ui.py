@@ -299,7 +299,7 @@ def _require_memory() -> None:
     if not _memory_store():
         raise HTTPException(
             status_code=503,
-            detail="No memory store configured. Run `mason memory bind <store>`.",
+            detail="No memory store configured. Run `ab memory bind <store>`.",
         )
 
 
@@ -307,7 +307,7 @@ def _require_session() -> None:
     if not _session_store():
         raise HTTPException(
             status_code=503,
-            detail="No session store configured. Run `mason sessions bind <store>`.",
+            detail="No session store configured. Run `ab sessions bind <store>`.",
         )
 
 

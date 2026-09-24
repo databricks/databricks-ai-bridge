@@ -1,6 +1,6 @@
 """Private transport for the managed agent store APIs.
 
-The public SDK is the resource-oriented :class:`databricks_mason.MasonClient`.
+The public SDK is the resource-oriented :class:`databricks_agentkit.AgentKitClient`.
 This module temporarily owns the one-method-per-endpoint transport used by that
 wrapper and the CLI. It can be replaced by the generated ``WorkspaceClient.mason``
 service without changing the public resource surface.
@@ -148,8 +148,8 @@ class _MasonApiClient:
         except Exception as exc:  # noqa: BLE001 - surfaced as a clean CLI error
             raise AgentCliError(
                 f"Could not initialize Databricks auth: {exc}",
-                hint="Select an existing profile with `mason --profile <name> <command>` "
-                "or authenticate and save it with `mason login --profile <name>`.",
+                hint="Select an existing profile with `ab --profile <name> <command>` "
+                "or authenticate and save it with `ab login --profile <name>`.",
             ) from exc
 
     @property

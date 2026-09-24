@@ -93,7 +93,7 @@ def _add_spec(obj: Any, source: pathlib.Path, spec: ToolSpec) -> None:
                 f"Could not validate MCP service {service!r}: {exc.message}",
                 error_code=exc.error_code,
                 hint=exc.hint
-                or "Run `mason tools list --kind mcp` with the same --profile to find "
+                or "Run `ab tools list --kind mcp` with the same --profile to find "
                 "available services.",
             ) from exc
     changed_files = [project.write()] if changed else []
@@ -126,20 +126,20 @@ def tools() -> None:
     """Discover available integrations and manage an agent's tool bindings.
 
     Tools are what let an agent act beyond the language model itself — query governed data, call a
-    service, or run a function — and each one is recorded in agent.toml so `mason dev` / `mason
-    deploy` wire it in. `mason tools add` manages these Databricks-managed tool types:
+    service, or run a function — and each one is recorded in agent.toml so `ab dev` / `ab deploy`
+    wire it in. `ab tools add` manages these Databricks-managed tool types:
 
     \b
       sandbox       Query Unity Catalog data via system.ai.sandbox, scoped
                     to the tables, volumes, or paths you choose.
-      mcp           A Databricks-managed MCP service (see `mason tools list --kind mcp`),
+      mcp           A Databricks-managed MCP service (see `ab tools list --kind mcp`),
                     e.g. system.ai.web_search.
       uc-function   An existing Unity Catalog function (catalog.schema.function).
       genie-one     Workspace-wide Genie One MCP tools.
       genie-agent   Native Genie conversation tools for a configured space ID.
 
-    Browse available integrations with `mason tools list`, add one with `mason tools add <type>`,
-    and drop a binding with `mason tools remove`. Review agent.toml for configured managed tools
+    Browse available integrations with `ab tools list`, add one with `ab tools add <type>`,
+    and drop a binding with `ab tools remove`. Review agent.toml for configured managed tools
     and MCP bindings. The list shows addable integrations, not configured bindings or individual
     operations inside an MCP service. Custom Python tools are code-first — write them directly
     in your project's code rather than through the CLI.
@@ -164,7 +164,7 @@ def _source_option(function):
         type=click.Path(exists=True, file_okay=False, path_type=pathlib.Path),
         default=pathlib.Path("."),
         show_default=True,
-        help="Mason agent project containing agent.toml.",
+        help="Agent Bricks project containing agent.toml.",
     )(function)
 
 
@@ -216,7 +216,7 @@ def add_mcp(
 ) -> None:
     """Validate and add a Databricks-managed MCP service as a tool.
 
-    Use `mason tools list --kind mcp` for available services. Review the target project's
+    Use `ab tools list --kind mcp` for available services. Review the target project's
     agent.toml to check configured managed tools and MCP bindings.
     """
     _require_arg(service, "managed MCP service name (e.g. system.ai.web_search)")
@@ -253,7 +253,7 @@ def add_uc_function(
     )
 
 
-@add.command("genie-one", epilog=_example_epilog(("mason tools add genie-one",)))
+@add.command("genie-one", epilog=_example_epilog(("ab tools add genie-one",)))
 @click.option("--name", "tool_id", default="genie_one", show_default=True)
 @click.option("--auth", type=click.Choice(["user", "app"]), default="user", show_default=True)
 @_source_option
@@ -268,7 +268,7 @@ def add_genie_one(
 @add.command(
     "genie-agent",
     epilog=_example_epilog(
-        ("mason tools add genie-agent 0123456789abcdef0123456789abcdef --name sales",)
+        ("ab tools add genie-agent 0123456789abcdef0123456789abcdef --name sales",)
     ),
 )
 @click.argument("space_id")
@@ -333,17 +333,17 @@ def list_tools(obj: Any, kind: str | None, schema: str | None) -> None:
         {
             "name": "uc-function",
             "kind": "uc-function",
-            "add_command": "mason tools add uc-function catalog.schema.function",
+            "add_command": "ab tools add uc-function catalog.schema.function",
         },
         {
             "name": "genie-one",
             "kind": "genie-one",
-            "add_command": "mason tools add genie-one",
+            "add_command": "ab tools add genie-one",
         },
         {
             "name": "genie-agent",
             "kind": "genie-agent",
-            "add_command": "mason tools add genie-agent SPACE_ID",
+            "add_command": "ab tools add genie-agent SPACE_ID",
         },
     ]
     rows = [recipe for recipe in recipes if kind is None or recipe["kind"] == kind]
@@ -398,10 +398,10 @@ def list_tools(obj: Any, kind: str | None, schema: str | None) -> None:
                 subtitle=f"Caller-visible in {mcp_schema}"
                 + (" — discovery incomplete" if discovery_error is not None else ""),
             )
-        click.echo("Tip: focus on MCP services with `mason tools list --kind mcp`.")
+        click.echo("Tip: focus on MCP services with `ab tools list --kind mcp`.")
         click.echo(
             "Discover services in another UC schema with "
-            "`mason tools list --kind mcp --schema catalog.schema`."
+            "`ab tools list --kind mcp --schema catalog.schema`."
         )
         click.echo("Review agent.toml to check configured managed tools and MCP bindings.")
         if discovery_error is not None:

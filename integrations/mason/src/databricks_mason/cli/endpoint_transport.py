@@ -1,4 +1,4 @@
-"""HTTP transport and response decoding for Mason endpoint commands."""
+"""HTTP transport and response decoding for Agent Bricks endpoint commands."""
 
 from __future__ import annotations
 

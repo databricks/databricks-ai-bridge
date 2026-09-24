@@ -1,6 +1,6 @@
-# Mason Runtime internals
+# Managed runtime internals
 
-Mason Runtime owns the HTTP lifecycle for one agent invocation: accepting an idempotent request,
+The managed runtime owns the HTTP lifecycle for one agent invocation: accepting an idempotent request,
 scheduling work, storing status and events, returning results, and replaying events to a reconnecting
 client. The public HTTP resource is an **invocation**; its UUID is also the idempotency key.
 
@@ -26,7 +26,7 @@ Runtime
 
 ## Lifecycle
 
-`DurableAgentServer` uses `Runtime.from_environment(...)` for Mason-managed processes and
+`DurableAgentServer` uses `Runtime.from_environment(...)` for managed processes and
 `Runtime.from_store(...)` when a caller supplies a store explicitly. The selected Runtime Store
 determines the execution mode:
 

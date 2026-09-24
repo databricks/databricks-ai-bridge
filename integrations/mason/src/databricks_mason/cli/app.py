@@ -1,4 +1,4 @@
-"""`mason` — the Databricks CLI for agent deployment, memory, and sessions.
+"""`ab` — the Databricks CLI for agent deployment, memory, and sessions.
 
 Root Click group. Global `--profile` and `--output` flow to every subcommand via
 `CliContext` on `ctx.obj`; subcommands build an authenticated API client on demand.
@@ -6,6 +6,7 @@ Root Click group. Global `--profile` and `--output` flow to every subcommand via
 
 from __future__ import annotations
 
+from importlib import metadata
 from typing import Optional
 
 import click
@@ -38,7 +39,14 @@ class CliContext:
         return self._client
 
 
-@click.group(context_settings={"help_option_names": ["-h", "--help"]})
+def _show_version(ctx: click.Context, param: click.Parameter, value: bool) -> None:
+    if value and not ctx.resilient_parsing:
+        package_version = metadata.version("databricks-agentbricks")
+        click.echo(f"{ctx.find_root().info_name}, version {package_version}", color=ctx.color)
+        ctx.exit()
+
+
+@click.group(name="ab", context_settings={"help_option_names": ["-h", "--help"]})
 @click.option(
     "--profile", "-p", default=None, help="~/.databrickscfg profile to authenticate with."
 )
@@ -49,24 +57,31 @@ class CliContext:
     default="text",
     help="Output format (default: text).",
 )
-@click.version_option(package_name="databricks-agentbricks", prog_name="mason")
+@click.option(
+    "--version",
+    is_flag=True,
+    callback=_show_version,
+    expose_value=False,
+    is_eager=True,
+    help="Show the version and exit.",
+)
 @click.pass_context
 def mason(ctx: click.Context, profile: Optional[str], output: str) -> None:
-    """Mason is a CLI for building and deploying custom AI agents on Databricks.
+    """Agent Bricks is a CLI for building and deploying custom AI agents on Databricks.
 
-    Mason is experimental: the CLI, its commands, and the underlying agent APIs are all in preview,
-    may need to be enabled for your workspace, and are likely to change in backward-incompatible
-    ways.
+    The Agent Bricks CLI is experimental: its commands and the underlying agent APIs are all in
+    preview, may need to be enabled for your workspace, and are likely to change in
+    backward-incompatible ways.
 
     Scaffold an agent project from a template, run it locally with a chat UI, and deploy it to
     Databricks Apps — then manage the tools, memory, sessions, and tracing behind it, all from one
     authenticated command.
 
-    New here? The examples below take you from an empty directory to a deployed agent. Mason
-    authenticates with a Databricks profile: run `mason login` once to save a default, or pass
+    New here? The examples below take you from an empty directory to a deployed agent. Agent Bricks
+    authenticates with a Databricks profile: run `ab login` once to save a default, or pass
     --profile / -p (without one, the Databricks SDK's default authentication is used).
 
-    An agent you build with Mason can combine the platform's capabilities:
+    Agents built with Agent Bricks combine the platform's capabilities:
 
     \b
       Models       Call Databricks model serving out of the box, routed through
@@ -78,7 +93,7 @@ def mason(ctx: click.Context, profile: Optional[str], output: str) -> None:
       Tracing      MLflow traces in Unity Catalog to debug and evaluate runs.
       Deployment   Hosting on Databricks Apps, with scaling and sticky routing.
 
-    `mason deploy` provisions and wires these into a single agent hosted on Databricks Apps.
+    `ab deploy` provisions and wires these into a single agent hosted on Databricks Apps.
     """
     # Let errors render to match the selected output mode (JSON errors for -o json).
     errors.set_output_mode(output)
@@ -100,7 +115,8 @@ configure_help(mason)
 
 
 def main() -> None:
-    mason(prog_name="mason")
+    # Click derives the display name from argv[0], preserving both the `ab` and `mason` scripts.
+    mason()
 
 
 if __name__ == "__main__":

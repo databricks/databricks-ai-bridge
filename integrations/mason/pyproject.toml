@@ -1,7 +1,7 @@
 [project]
 name = "databricks-agentbricks"
 version = "0.2.0"
-description = "Databricks integration for Mason"
+description = "Agent Bricks CLI and AgentKit SDK for custom agents on Databricks"
 authors = [
     { name="Databricks", email="agent-feedback@databricks.com" },
 ]
@@ -49,6 +49,7 @@ openai = [
 ]
 
 [project.scripts]
+ab = "databricks_mason.cli:main"
 mason = "databricks_mason.cli:main"
 
 [dependency-groups]
@@ -73,13 +74,14 @@ build-backend = "hatchling.build"
 [tool.hatch.build]
 include = [
     "NOTICE",
+    "src/databricks_agentkit/*",
     "src/databricks_mason/*",
     "src/databricks_mason/py.typed",
     "src/databricks_mason/templates/**",
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/databricks_mason"]
+packages = ["src/databricks_agentkit", "src/databricks_mason"]
 
 [tool.uv.sources]
 databricks-ai-bridge = { path = "../..", editable = true }

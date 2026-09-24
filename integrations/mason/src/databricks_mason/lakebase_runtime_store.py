@@ -50,7 +50,7 @@ def delete(client: Any, app: str, app_service_principal_id: str) -> None:
         raise AgentCliError(
             f"Could not delete Runtime Store '{app}': {exc.message}",
             error_code=exc.error_code,
-            hint=f"The deployment was retained. Retry `mason deployments delete {app}` "
+            hint=f"The deployment was retained. Retry `ab deployments delete {app}` "
             "after resolving the Runtime Store error.",
         ) from exc
 

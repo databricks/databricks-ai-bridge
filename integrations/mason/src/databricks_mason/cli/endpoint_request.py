@@ -1,4 +1,4 @@
-"""Generic HTTP request construction for Mason endpoint commands."""
+"""Generic HTTP request construction for Agent Bricks endpoint commands."""
 
 from __future__ import annotations
 

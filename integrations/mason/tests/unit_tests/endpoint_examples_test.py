@@ -31,7 +31,7 @@ def test_printed_invoke_command_is_shell_copyable(
     monkeypatch.setattr(render, "_stdout", Console(file=buf, width=width, no_color=True))
     print_agent_invoke_command(target, uses_runtime_api=uses_runtime_api)
     # Copy the whole line, without removing borders, stripping padding, or joining wrapped lines.
-    commands = [line for line in buf.getvalue().splitlines() if line.startswith("mason endpoint")]
+    commands = [line for line in buf.getvalue().splitlines() if line.startswith("ab endpoint")]
     assert len(commands) == 1, buf.getvalue()
     command = commands[0]
     path = "/api/invocations" if uses_runtime_api else "/invocations"
@@ -39,7 +39,7 @@ def test_printed_invoke_command_is_shell_copyable(
     for _ in range(2):
         # Capture argv instead of reaching a workspace; functional tests exercise the real CLI/HTTP.
         result = subprocess.run(
-            [executable, "-f", "-c", 'mason() { printf "%s\\0" "$@"; }\n' + command],
+            [executable, "-f", "-c", 'ab() { printf "%s\\0" "$@"; }\n' + command],
             capture_output=True,
             text=True,
             timeout=10,
@@ -62,10 +62,10 @@ def test_invoke_example_preserves_existing_panel(monkeypatch, width, terminal):
     buf = io.StringIO()
     con = Console(file=buf, width=width, no_color=True, force_terminal=terminal)
     monkeypatch.setattr(render, "_stdout", con)
-    render.success("Started", next_steps=[("mason dev", "Run locally")])
+    render.success("Started", next_steps=[("ab dev", "Run locally")])
     panel = buf.getvalue()
     assert any(
-        line.startswith("│") and "mason dev" in line and "Run locally" in line
+        line.startswith("│") and "ab dev" in line and "Run locally" in line
         for line in panel.splitlines()
     )
     assert panel.splitlines()[-1].startswith("╰")
@@ -73,6 +73,6 @@ def test_invoke_example_preserves_existing_panel(monkeypatch, width, terminal):
     print_agent_invoke_command("--url http://localhost:8000", uses_runtime_api=True)
     assert buf.getvalue().startswith(panel)
     assert buf.getvalue()[len(panel) :].splitlines() == [
-        "Invoke with Mason",
+        "Invoke with Agent Bricks",
         agent_invoke_command("--url http://localhost:8000", uses_runtime_api=True),
     ]

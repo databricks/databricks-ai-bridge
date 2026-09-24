@@ -1,6 +1,6 @@
-"""Unit tests for `mason init`: template mapping, destination guard, scaffold flow.
+"""Unit tests for `ab init`: template mapping, destination guard, scaffold flow.
 
-Templates ship inside the package; `mason init` copies them via `_copy_packaged_template`, which is
+Templates ship inside the package; `ab init` copies them via `_copy_packaged_template`, which is
 stubbed here so tests don't touch the real bundled templates.
 """
 
@@ -398,7 +398,7 @@ def test_existing_prepares_migration_without_changing_application(
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    skill = tmp_path / "mason-migrate"
+    skill = tmp_path / "agent-bricks-migrate"
     assert pathlib.Path(payload["skill"]).is_file()
     assert pathlib.Path(payload["prompt_file"]).read_text().strip() == payload["prompt"]
     assert payload["mode"] == "existing"
@@ -406,6 +406,7 @@ def test_existing_prepares_migration_without_changing_application(
     assert payload["chat_app_enabled"] is chat_app
     label = {"langgraph": "LangGraph", "openai": "OpenAI Agents SDK"}[framework]
     assert label in payload["prompt"]
+    assert "agent-bricks-migrate/SKILL.md" in payload["prompt"]
     settings = json.loads((skill / "references/migration.json").read_text())
     assert settings["framework"] == framework
     assert settings["profile"] == "selected"
@@ -422,12 +423,16 @@ def test_existing_prepares_migration_without_changing_application(
     assert manifest["agent"]["server"] == "mason"
 
     # Every supported agent finds the one bundle through a pointer, rather than its own copy.
-    pointers = [tmp_path / root / "skills/mason-migrate/SKILL.md" for root in (".claude", ".agent")]
+    pointers = [
+        tmp_path / root / "skills/agent-bricks-migrate/SKILL.md" for root in (".claude", ".agent")
+    ]
     assert payload["pointers"] == [str(pointer) for pointer in pointers]
     for pointer in pointers:
         body = pointer.read_text()
-        assert "name: mason-migrate" in body
-        assert "../../../mason-migrate/SKILL.md" in body
+        assert "name: agent-bricks-migrate" in body
+        assert "../../../agent-bricks-migrate/SKILL.md" in body
+        link_target = body.split("](", 1)[1].split(")", 1)[0]
+        assert (pointer.parent / link_target).resolve() == (skill / "SKILL.md").resolve()
         assert not (pointer.parent / "references").exists()
 
     for name, data in original.items():
@@ -438,25 +443,38 @@ def test_existing_defaults_to_current_directory(tmp_path: pathlib.Path, monkeypa
     monkeypatch.chdir(tmp_path)
     result = CliRunner().invoke(init_mod.init, ["--existing"], obj=_Ctx(profile="saved"))
     assert result.exit_code == 0, result.output
-    settings = json.loads((tmp_path / "mason-migrate/references/migration.json").read_text())
+    settings = json.loads((tmp_path / "agent-bricks-migrate/references/migration.json").read_text())
     assert settings["profile"] == "saved"
     assert not (tmp_path / ".env").exists()
     assert not (tmp_path / "agent.toml").exists()
 
 
-@pytest.mark.parametrize("conflict", ["bundle", "claude-skill", "agent-skill", "file", "symlink"])
+@pytest.mark.parametrize(
+    "conflict",
+    [
+        "bundle",
+        "claude-skill",
+        "agent-skill",
+        "legacy-bundle",
+        "legacy-claude-skill",
+        "legacy-agent-skill",
+        "file",
+        "symlink",
+    ],
+)
 def test_existing_refuses_migration_path_conflicts(tmp_path: pathlib.Path, conflict: str):
     claude = tmp_path / ".claude"
-    if conflict == "bundle":
-        bundle = tmp_path / "mason-migrate"
+    migration_dir = "mason-migrate" if conflict.startswith("legacy-") else "agent-bricks-migrate"
+    if conflict in ("bundle", "legacy-bundle"):
+        bundle = tmp_path / migration_dir
         bundle.mkdir()
         (bundle / "SKILL.md").write_text("user instructions")
-    elif conflict == "claude-skill":
-        skill = claude / "skills/mason-migrate"
+    elif conflict in ("claude-skill", "legacy-claude-skill"):
+        skill = claude / "skills" / migration_dir
         skill.mkdir(parents=True)
         (skill / "SKILL.md").write_text("user instructions")
-    elif conflict == "agent-skill":
-        skill = tmp_path / ".agent/skills/mason-migrate"
+    elif conflict in ("agent-skill", "legacy-agent-skill"):
+        skill = tmp_path / ".agent" / "skills" / migration_dir
         skill.mkdir(parents=True)
         (skill / "SKILL.md").write_text("user instructions")
     elif conflict == "file":

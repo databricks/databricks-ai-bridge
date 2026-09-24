@@ -14,8 +14,8 @@ if TYPE_CHECKING:
     from databricks.sdk import WorkspaceClient
 
 
-class MasonClient:
-    """High-level Mason client.
+class AgentKitClient:
+    """High-level client for AgentKit memory and session APIs.
 
     ``WorkspaceClient.mason`` will replace the private transport once the generated
     Mason SDK is released; the resource-oriented public surface remains unchanged.
@@ -29,3 +29,7 @@ class MasonClient:
         api = _MasonApiClient(workspace_client=workspace_client)
         self.memory_stores = MemoryStores(api)
         self.session_stores = SessionStores(api)
+
+
+class MasonClient(AgentKitClient):
+    """Backward-compatible name for :class:`AgentKitClient`."""

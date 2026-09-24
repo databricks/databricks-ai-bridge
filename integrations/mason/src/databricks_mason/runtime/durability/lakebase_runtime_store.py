@@ -134,8 +134,8 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
     app replica connects to the same schema, another replica can detect a stale heartbeat, claim the
     next attempt, and continue after process or pod loss.
 
-    This store requires a Lakebase Postgres database. ``mason deploy`` reuses or provisions a
-    dedicated app-owned database, then assigns the app its own schema. ``mason dev`` uses
+    This store requires a Lakebase Postgres database. ``ab deploy`` reuses or provisions a
+    dedicated app-owned database, then assigns the app its own schema. ``ab dev`` uses
     ``InMemoryRuntimeStore`` instead.
     """
 

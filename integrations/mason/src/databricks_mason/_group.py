@@ -81,12 +81,13 @@ class MasonGroup(_FlushEpilog, click.Group):
             raise self._unknown_command_error(ctx, name) from None
 
     def _unknown_command_error(self, ctx: click.Context, name: str) -> AgentCliError:
-        invocation = ctx.command_path or "mason"
-        # A doubled `mason` (`mason mason login`) is a common paste/typo — name it directly.
-        if name == "mason":
+        invocation = ctx.command_path or "ab"
+        # Repeating the executable as a command is a common paste typo — call it out directly.
+        program = invocation.split(maxsplit=1)[0]
+        if ctx.parent is None and name == program:
             return AgentCliError(
                 f"unknown command `{name}`",
-                hint=f"you typed `mason` twice — drop the extra `mason` (run `{invocation} --help`)",
+                hint=f"you typed `{name}` twice — drop the extra `{name}` (run `{invocation} --help`)",
             )
         suggestions = difflib.get_close_matches(name, self.list_commands(ctx), n=3, cutoff=0.5)
         if suggestions:
@@ -175,7 +176,7 @@ def _usage_error_show(self: click.exceptions.UsageError, file=None) -> None:
 
     from databricks_mason import errors, render
 
-    invocation = self.ctx.command_path if self.ctx is not None else "mason"
+    invocation = self.ctx.command_path if self.ctx is not None else "ab"
     message = self.format_message()
     hint = f"run `{invocation} --help` to see the available options and arguments"
     if errors._OUTPUT_MODE == "json":

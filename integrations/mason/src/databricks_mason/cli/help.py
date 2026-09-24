@@ -1,4 +1,4 @@
-"""Discover the Mason command tree and render help for any nested command."""
+"""Discover the Agent Bricks CLI command tree and render help for nested commands."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from databricks_mason._group import apply_group_class, dim
 
 CommandPath = tuple[str, ...]
 
-# Root commands grouped by intent, so the top-level `mason --help` reads as a workflow instead of a
+# Root commands grouped by intent, so the top-level `ab --help` reads as a workflow instead of a
 # flat alphabetical dump. Ordered SETUP → DEVELOP → SHIP, matching the
 # getting-started path. Any command missing here still lists under "Other commands" (see
 # `_group.MasonGroup`).
@@ -28,229 +28,223 @@ Example = str | tuple[str, str]
 
 _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     (): (
-        ("mason login --profile <profile>", "authenticate and save a default profile"),
-        ("mason init my-agent", "scaffold a new agent project"),
+        ("ab login --profile <profile>", "authenticate and save a default profile"),
+        ("ab init my-agent", "scaffold a new agent project"),
         ("cd my-agent", "enter the project directory"),
-        ("mason dev", "run the agent locally with a chat UI"),
-        ("mason deploy my-agent", "deploy the agent to Databricks Apps"),
+        ("ab dev", "run the agent locally with a chat UI"),
+        ("ab deploy my-agent", "deploy the agent to Databricks Apps"),
     ),
-    ("login",): (("mason login --profile <profile>", "save a profile as your default"),),
-    ("logout",): (("mason logout", "forget the saved default profile"),),
+    ("login",): (("ab login --profile <profile>", "save a profile as your default"),),
+    ("logout",): (("ab logout", "forget the saved default profile"),),
     ("init",): (
-        ("mason init my-agent", "scaffold a new agent project"),
+        ("ab init my-agent", "scaffold a new agent project"),
         (
-            "mason init --framework langgraph --existing .",
+            "ab init --framework langgraph --existing .",
             "prepare a coding-agent migration bundle for an existing agent",
         ),
     ),
-    ("dev",): (("mason dev", "run the agent locally with a chat UI"),),
+    ("dev",): (("ab dev", "run the agent locally with a chat UI"),),
     ("memory",): (
-        ("mason memory stores create --display-name agent-memory", "create a memory store"),
-        ("mason memory bind agent-memory", "bind it to the agent (wired in on dev / deploy)"),
+        ("ab memory stores create --display-name agent-memory", "create a memory store"),
+        ("ab memory bind agent-memory", "bind it to the agent (wired in on dev / deploy)"),
         (
-            "mason memory entries create --store <store> --actor-id alice "
+            "ab memory entries create --store <store> --actor-id alice "
             '--path /preferences/style.md --content "Terse, code first."',
             "add a memory entry for an actor (--store takes the store id)",
         ),
         (
-            'mason memory entries search --store <store> --actor-id alice --query "style"',
+            'ab memory entries search --store <store> --actor-id alice --query "style"',
             "search an actor's entries",
         ),
     ),
     ("memory", "bind"): (
-        ("mason memory bind agent-memory --source .", "declare a memory store in agent.toml"),
+        ("ab memory bind agent-memory --source .", "declare a memory store in agent.toml"),
     ),
     ("memory", "unbind"): (
-        ("mason memory unbind --source .", "remove the memory store binding from agent.toml"),
+        ("ab memory unbind --source .", "remove the memory store binding from agent.toml"),
     ),
-    ("memory", "stores"): (("mason memory stores list", "list managed memory stores"),),
+    ("memory", "stores"): (("ab memory stores list", "list managed memory stores"),),
     ("memory", "stores", "create"): (
-        ("mason memory stores create --display-name agent-memory", "create a memory store"),
+        ("ab memory stores create --display-name agent-memory", "create a memory store"),
     ),
-    ("memory", "stores", "list"): (("mason memory stores list", "list managed memory stores"),),
-    ("memory", "stores", "get"): (("mason memory stores get <store>", "show one store's details"),),
+    ("memory", "stores", "list"): (("ab memory stores list", "list managed memory stores"),),
+    ("memory", "stores", "get"): (("ab memory stores get <store>", "show one store's details"),),
     ("memory", "stores", "update"): (
-        ('mason memory stores update <store> --description "Agent memory"', "edit a store"),
+        ('ab memory stores update <store> --description "Agent memory"', "edit a store"),
     ),
-    ("memory", "stores", "delete"): (("mason memory stores delete <store>", "delete a store"),),
+    ("memory", "stores", "delete"): (("ab memory stores delete <store>", "delete a store"),),
     ("memory", "entries"): (
-        ("mason memory entries list --store <store> --actor-id alice", "list an actor's entries"),
+        ("ab memory entries list --store <store> --actor-id alice", "list an actor's entries"),
     ),
     ("memory", "entries", "create"): (
         (
-            "mason memory entries create --store <store> --actor-id alice "
+            "ab memory entries create --store <store> --actor-id alice "
             '--path /preferences/style.md --content "Terse, code first."',
             "add a memory entry for an actor",
         ),
     ),
     ("memory", "entries", "get"): (
-        ("mason memory entries get --store <store> <entry>", "show one entry"),
+        ("ab memory entries get --store <store> <entry>", "show one entry"),
     ),
     ("memory", "entries", "list"): (
-        ("mason memory entries list --store <store> --actor-id alice", "list an actor's entries"),
+        ("ab memory entries list --store <store> --actor-id alice", "list an actor's entries"),
     ),
     ("memory", "entries", "search"): (
         (
-            'mason memory entries search --store <store> --actor-id alice --query "style"',
+            'ab memory entries search --store <store> --actor-id alice --query "style"',
             "search an actor's entries",
         ),
     ),
     ("memory", "entries", "update"): (
         (
-            'mason memory entries update --store <store> <entry> --content "Concise"',
+            'ab memory entries update --store <store> <entry> --content "Concise"',
             "edit an entry",
         ),
     ),
     ("memory", "entries", "delete"): (
-        ("mason memory entries delete --store <store> <entry>", "delete an entry"),
+        ("ab memory entries delete --store <store> <entry>", "delete an entry"),
     ),
     ("sessions",): (
-        ("mason sessions stores create --name agent-sessions", "create a session store"),
-        ("mason sessions bind agent-sessions", "bind it to the agent (wired in on dev / deploy)"),
+        ("ab sessions stores create --name agent-sessions", "create a session store"),
+        ("ab sessions bind agent-sessions", "bind it to the agent (wired in on dev / deploy)"),
         (
-            "mason sessions create --store agent-sessions --actor-id alice",
+            "ab sessions create --store agent-sessions --actor-id alice",
             "start a session for an actor",
         ),
         (
-            "mason sessions items append --store agent-sessions --session-id <session-id> "
+            "ab sessions items append --store agent-sessions --session-id <session-id> "
             '--data \'{"role":"user","content":"Hello"}\'',
             "append an item to the session",
         ),
         (
-            "mason sessions items list --store agent-sessions --session-id <session-id>",
+            "ab sessions items list --store agent-sessions --session-id <session-id>",
             "list the session's items",
         ),
     ),
     ("sessions", "bind"): (
-        ("mason sessions bind agent-sessions --source .", "declare a session store in agent.toml"),
+        ("ab sessions bind agent-sessions --source .", "declare a session store in agent.toml"),
     ),
     ("sessions", "unbind"): (
-        ("mason sessions unbind --source .", "remove the session store binding from agent.toml"),
+        ("ab sessions unbind --source .", "remove the session store binding from agent.toml"),
     ),
-    ("sessions", "stores"): (("mason sessions stores list", "list managed session stores"),),
+    ("sessions", "stores"): (("ab sessions stores list", "list managed session stores"),),
     ("sessions", "stores", "create"): (
-        ("mason sessions stores create --name agent-sessions", "create a session store"),
+        ("ab sessions stores create --name agent-sessions", "create a session store"),
     ),
-    ("sessions", "stores", "list"): (
-        ("mason sessions stores list", "list managed session stores"),
-    ),
+    ("sessions", "stores", "list"): (("ab sessions stores list", "list managed session stores"),),
     ("sessions", "stores", "get"): (
-        ("mason sessions stores get agent-sessions", "show one store's details"),
+        ("ab sessions stores get agent-sessions", "show one store's details"),
     ),
     ("sessions", "stores", "update"): (
         (
-            'mason sessions stores update agent-sessions --description "Agent sessions"',
+            'ab sessions stores update agent-sessions --description "Agent sessions"',
             "edit a store",
         ),
     ),
     ("sessions", "stores", "delete"): (
-        ("mason sessions stores delete agent-sessions", "delete a store"),
+        ("ab sessions stores delete agent-sessions", "delete a store"),
     ),
     ("sessions", "items"): (
         (
-            "mason sessions items list --store agent-sessions --session-id <session-id>",
+            "ab sessions items list --store agent-sessions --session-id <session-id>",
             "list a session's items",
         ),
     ),
     ("sessions", "items", "list"): (
         (
-            "mason sessions items list --store agent-sessions --session-id <session-id>",
+            "ab sessions items list --store agent-sessions --session-id <session-id>",
             "list a session's items",
         ),
     ),
     ("sessions", "items", "append"): (
         (
-            "mason sessions items append --store agent-sessions --session-id <session-id> "
+            "ab sessions items append --store agent-sessions --session-id <session-id> "
             '--data \'{"role":"user","content":"Hello"}\'',
             "append an item to a session",
         ),
     ),
     ("sessions", "items", "pop"): (
         (
-            "mason sessions items pop --store agent-sessions --session-id <session-id>",
+            "ab sessions items pop --store agent-sessions --session-id <session-id>",
             "remove the last item",
         ),
     ),
     ("sessions", "items", "clear"): (
         (
-            "mason sessions items clear --store agent-sessions --session-id <session-id>",
+            "ab sessions items clear --store agent-sessions --session-id <session-id>",
             "remove all items",
         ),
     ),
     ("sessions", "create"): (
-        ("mason sessions create --store agent-sessions --actor-id alice", "start a new session"),
+        ("ab sessions create --store agent-sessions --actor-id alice", "start a new session"),
     ),
     ("sessions", "list"): (
-        ("mason sessions list --store agent-sessions", "list sessions in a store"),
+        ("ab sessions list --store agent-sessions", "list sessions in a store"),
     ),
     ("sessions", "get"): (
-        ("mason sessions get <session-id> --store agent-sessions", "show one session"),
+        ("ab sessions get <session-id> --store agent-sessions", "show one session"),
     ),
     ("sessions", "update"): (
         (
-            "mason sessions update <session-id> --store agent-sessions "
+            "ab sessions update <session-id> --store agent-sessions "
             '--metadata \'{"status":"reviewed"}\'',
             "edit a session's metadata",
         ),
     ),
     ("sessions", "delete"): (
-        ("mason sessions delete <session-id> --store agent-sessions", "delete a session"),
+        ("ab sessions delete <session-id> --store agent-sessions", "delete a session"),
     ),
     ("sessions", "fork"): (
         (
-            "mason sessions fork --store agent-sessions --source-session-id <session-id> "
+            "ab sessions fork --store agent-sessions --source-session-id <session-id> "
             "--actor-id alice",
             "copy a session into a new one",
         ),
     ),
     ("tracing",): (
         (
-            "mason tracing bind --experiment-name /Shared/mason_traces/my-agent",
+            "ab tracing bind --experiment-name /Shared/mason_traces/my-agent",
             "bind tracing to an experiment by name",
         ),
-        ("mason tracing bind --experiment-id 12345", "or by experiment id"),
-        ("mason tracing unbind", "turn tracing off"),
+        ("ab tracing bind --experiment-id 12345", "or by experiment id"),
+        ("ab tracing unbind", "turn tracing off"),
     ),
     ("tracing", "bind"): (
         (
-            "mason tracing bind --experiment-name /Shared/mason_traces/my-agent",
+            "ab tracing bind --experiment-name /Shared/mason_traces/my-agent",
             "trace to a specific experiment by name",
         ),
-        ("mason tracing bind --experiment-id 12345", "or by experiment id"),
+        ("ab tracing bind --experiment-id 12345", "or by experiment id"),
     ),
-    ("tracing", "unbind"): (("mason tracing unbind", "turn tracing off"),),
+    ("tracing", "unbind"): (("ab tracing unbind", "turn tracing off"),),
     ("tracing", "list"): (
         (
-            "mason tracing list --experiment-name /Shared/mason_traces/my-agent",
+            "ab tracing list --experiment-name /Shared/mason_traces/my-agent",
             "list a specific experiment's traces",
         ),
-        ("mason tracing list --experiment-id 12345", "or by experiment id"),
+        ("ab tracing list --experiment-id 12345", "or by experiment id"),
     ),
-    ("tracing", "get"): (("mason tracing get <trace-id>", "show one trace"),),
+    ("tracing", "get"): (("ab tracing get <trace-id>", "show one trace"),),
     ("deploy",): (
-        ("mason deploy my-agent", "deploy the agent"),
-        ("mason deploy my-agent --instances 2", "deploy with two instances"),
+        ("ab deploy my-agent", "deploy the agent"),
+        ("ab deploy my-agent --instances 2", "deploy with two instances"),
     ),
-    ("deployments",): (("mason deployments list", "list agent deployments"),),
-    ("deployments", "list"): (("mason deployments list", "list agent deployments"),),
-    ("deployments", "get"): (
-        ("mason deployments get agent-mason-my-agent", "show one deployment"),
-    ),
+    ("deployments",): (("ab deployments list", "list agent deployments"),),
+    ("deployments", "list"): (("ab deployments list", "list agent deployments"),),
+    ("deployments", "get"): (("ab deployments get agent-mason-my-agent", "show one deployment"),),
     ("deployments", "logs"): (
-        ("mason deployments logs agent-mason-my-agent", "stream a deployment's logs"),
+        ("ab deployments logs agent-mason-my-agent", "stream a deployment's logs"),
     ),
     ("deployments", "start"): (
-        ("mason deployments start agent-mason-my-agent", "start a deployment"),
+        ("ab deployments start agent-mason-my-agent", "start a deployment"),
     ),
-    ("deployments", "stop"): (
-        ("mason deployments stop agent-mason-my-agent", "stop a deployment"),
-    ),
+    ("deployments", "stop"): (("ab deployments stop agent-mason-my-agent", "stop a deployment"),),
     ("deployments", "delete"): (
-        ("mason deployments delete agent-mason-my-agent", "delete a deployment"),
+        ("ab deployments delete agent-mason-my-agent", "delete a deployment"),
     ),
     ("endpoint",): (
         (
-            "mason endpoint invoke agent-mason-my-agent --path /api/invocations "
+            "ab endpoint invoke agent-mason-my-agent --path /api/invocations "
             "--json "
             '\'{"id":"00000000-0000-4000-8000-000000000001",'
             '"input":[{"role":"user","content":"Hello"}]}\'',
@@ -259,55 +253,53 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("endpoint", "invoke"): (
         (
-            "mason endpoint invoke agent-mason-my-agent --path /api/invocations "
+            "ab endpoint invoke agent-mason-my-agent --path /api/invocations "
             "--json "
             '\'{"id":"00000000-0000-4000-8000-000000000001",'
             '"input":[{"role":"user","content":"Hello"}]}\'',
             "invoke a deployed HTTP agent",
         ),
         (
-            "mason endpoint invoke --url http://localhost:8000 --path /custom/run "
+            "ab endpoint invoke --url http://localhost:8000 --path /custom/run "
             '--json \'{"input":"hello"}\'',
             "invoke a local or arbitrary HTTP server",
         ),
     ),
     ("tools",): (
-        ("mason tools add --help", "see all tool types you can add"),
-        ("mason tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
-        ("mason tools add mcp system.ai.web_search", "add a managed MCP tool"),
-        ("mason tools remove mcp system.ai.web_search", "remove a tool binding"),
-        ("mason tools list", "browse available integrations to add"),
+        ("ab tools add --help", "see all tool types you can add"),
+        ("ab tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
+        ("ab tools add mcp system.ai.web_search", "add a managed MCP tool"),
+        ("ab tools remove mcp system.ai.web_search", "remove a tool binding"),
+        ("ab tools list", "browse available integrations to add"),
     ),
     ("tools", "add"): (
-        ("mason tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
-        ("mason tools add mcp system.ai.web_search", "add a managed MCP tool"),
-        ("mason tools add uc-function catalog.schema.lookup_ticket", "add a UC function tool"),
-        ("mason tools add genie-one", "add workspace-wide Genie One tools"),
-        ("mason tools add genie-agent SPACE_ID", "add tools for one Genie Space"),
+        ("ab tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
+        ("ab tools add mcp system.ai.web_search", "add a managed MCP tool"),
+        ("ab tools add uc-function catalog.schema.lookup_ticket", "add a UC function tool"),
+        ("ab tools add genie-one", "add workspace-wide Genie One tools"),
+        ("ab tools add genie-agent SPACE_ID", "add tools for one Genie Space"),
     ),
     ("tools", "add", "sandbox"): (
-        ("mason tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
+        ("ab tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
     ),
-    ("tools", "add", "mcp"): (
-        ("mason tools add mcp system.ai.web_search", "add a managed MCP tool"),
-    ),
+    ("tools", "add", "mcp"): (("ab tools add mcp system.ai.web_search", "add a managed MCP tool"),),
     ("tools", "add", "uc-function"): (
-        ("mason tools add uc-function catalog.schema.lookup_ticket", "add a UC function tool"),
+        ("ab tools add uc-function catalog.schema.lookup_ticket", "add a UC function tool"),
     ),
     ("tools", "remove"): (
-        ("mason tools remove mcp system.ai.web_search", "remove an MCP tool by service"),
-        ("mason tools remove web_search", "remove a tool by id"),
+        ("ab tools remove mcp system.ai.web_search", "remove an MCP tool by service"),
+        ("ab tools remove web_search", "remove a tool by id"),
     ),
     ("tools", "list"): (
-        ("mason tools list", "browse built-in recipes and system.ai MCP Services"),
-        ("mason tools list --kind mcp", "discover MCP Services in system.ai"),
+        ("ab tools list", "browse built-in recipes and system.ai MCP Services"),
+        ("ab tools list --kind mcp", "discover MCP Services in system.ai"),
         (
-            "mason tools list --kind mcp --schema main.tools",
+            "ab tools list --kind mcp --schema main.tools",
             "replace the default MCP schema",
         ),
-        ("mason tools list --kind sandbox", "show the local recipe without authentication"),
-        ("mason tools list --kind genie-one", "show the Genie One add recipe"),
-        ("mason tools list --kind genie-agent", "show the Genie Agent add recipe"),
+        ("ab tools list --kind sandbox", "show the local recipe without authentication"),
+        ("ab tools list --kind genie-one", "show the Genie One add recipe"),
+        ("ab tools list --kind genie-agent", "show the Genie Agent add recipe"),
     ),
 }
 
@@ -316,7 +308,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
 _INLINE_COMMENT_MAX = 46
 
 # Where to send a reader who wants more than the help text — best-practice CLI help links out to
-# docs and a support/issues path. Shown only on the root `mason --help`, so subcommand help stays
+# docs and a support/issues path. Shown only on the root `ab --help`, so subcommand help stays
 # uncluttered.
 _DOCS_URL = "https://github.com/databricks/databricks-ai-bridge/tree/main/integrations/mason"
 _ISSUES_URL = "https://github.com/databricks/databricks-ai-bridge/issues"
@@ -414,7 +406,7 @@ def _root_epilog() -> str:
             "\b",
             "Not authenticated yet? Create a profile with the Databricks CLI first:",
             "  databricks auth login --profile <profile>",
-            "Then `mason login --profile <profile>` saves it as your default.",
+            "Then `ab login --profile <profile>` saves it as your default.",
         ]
     )
     links = "\n".join(["\b", f"Docs:   {_DOCS_URL}", f"Issues: {_ISSUES_URL}"])

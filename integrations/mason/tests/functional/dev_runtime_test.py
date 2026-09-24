@@ -1,7 +1,7 @@
 """Hermetic e2e for the local dev loop: a scaffolded agent installs, boots, and answers an invocation.
 
-`mason init` scaffolds an agent; ``uv sync`` builds its venv; then the agent's real entrypoint
-(``start-server`` — the command ``mason dev`` runs the app with) boots in a from-scratch environment
+`ab init` scaffolds an agent; ``uv sync`` builds its venv; then the agent's real entrypoint
+(``start-server`` — the command ``ab dev`` runs the app with) boots in a from-scratch environment
 whose only Databricks target is an in-process fake model-serving endpoint. Copying the printed
 next-step command into a real shell must come back with the model's answer, for each template.
 No cloud, no auth, no workspace.
@@ -164,10 +164,10 @@ def _pin_package_source(
 def test_scaffolded_agent_boots_and_answers_locally(
     tmp_path: pathlib.Path, monkeypatch, framework: str, server_kind: str, chat_ui: bool
 ) -> None:
-    mason = pathlib.Path(sys.executable).with_name("mason")
+    ab = pathlib.Path(sys.executable).with_name("ab")
     uv = shutil.which("uv")
-    if not mason.is_file() or uv is None:
-        pytest.skip("requires the mason CLI and uv on PATH")
+    if not ab.is_file() or uv is None:
+        pytest.skip("requires the ab CLI and uv on PATH")
     shells = [path for shell in ("bash", "zsh") if (path := shutil.which(shell))]
     if not shells or (server_kind == "mason" and shutil.which("uuidgen") is None):
         pytest.skip("requires bash or zsh, plus uuidgen for runtime invocation examples")
@@ -175,7 +175,7 @@ def test_scaffolded_agent_boots_and_answers_locally(
     # 1. Scaffold each supported framework/server/UI combination.
     project = tmp_path / "agent"
     init_args = [
-        str(mason),
+        str(ab),
         "init",
         "--framework",
         framework,
@@ -192,7 +192,7 @@ def test_scaffolded_agent_boots_and_answers_locally(
         text=True,
         timeout=120,
     )
-    # Neutralize the profile mason init seeds into .env so the agent can't reach a real workspace.
+    # Neutralize the profile ab init seeds into .env so the agent can't reach a real workspace.
     (project / ".env").write_text("")
     if server_kind == "mason":
         runtime_main = project / "runtime/main.py"
@@ -241,7 +241,7 @@ def test_scaffolded_agent_boots_and_answers_locally(
     start_server = project / ".venv" / "bin" / "start-server"
     assert start_server.is_file(), "uv sync did not install the start-server entrypoint"
 
-    # 3. Take mason dev's OWN local manifest env, so the boot matches what `mason dev` runs the app
+    # 3. Take ab dev's OWN local manifest env, so the boot matches what `ab dev` runs the app
     #    with (the env it injects for a local run — e.g. the local-runtime marker).
     from databricks_mason.cli.dev import _announce_local_url, _dev_entry_point
 
@@ -260,10 +260,10 @@ def test_scaffolded_agent_boots_and_answers_locally(
     threading.Thread(target=fake.serve_forever, daemon=True).start()
 
     # 5. Boot the real entrypoint in a from-scratch environment: only PATH/HOME + project root, the
-    #    fake as the sole Databricks target, and mason dev's manifest env. `env=` replaces the whole
+    #    fake as the sole Databricks target, and ab dev's manifest env. `env=` replaces the whole
     #    environment, so no ambient DATABRICKS_* / profile can leak in.
     #
-    #    DATABRICKS_APP_NAME reproduces a real local run: `mason dev` runs the app as an Apps-style
+    #    DATABRICKS_APP_NAME reproduces a real local run: `ab dev` runs the app as an Apps-style
     #    local process, where the durable runtime falls back to in-memory *only* via
     #    DATABRICKS_MASON_RUNTIME_STORE_LOCAL. The assertion above and successful boot together
     #    verify that the dev manifest selects the in-memory Runtime Store.
@@ -302,10 +302,10 @@ def test_scaffolded_agent_boots_and_answers_locally(
             _announce_local_url(project, app_port, AgentServer(server_kind))
             (tmp_path / "next-steps.txt").write_text(buf.getvalue())
             commands = [
-                line for line in buf.getvalue().splitlines() if line.startswith("mason endpoint")
+                line for line in buf.getvalue().splitlines() if line.startswith("ab endpoint")
             ]
             assert len(commands) == 1, buf.getvalue()
-            cli_env = {**boot_env, "PATH": f"{mason.parent}:/usr/bin:/bin"}
+            cli_env = {**boot_env, "PATH": f"{ab.parent}:/usr/bin:/bin"}
             invocation_ids = set()
             for shell in shells:
                 for attempt in range(2):

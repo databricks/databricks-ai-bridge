@@ -124,7 +124,7 @@ class Runner:
         self.app_auth_profile = app_auth_profile or profile
         self.transcript = Transcript(output / "commands.log")
         self.runner_venv = output / "runner-venv"
-        self.mason = self.runner_venv / "bin" / "mason"
+        self.mason = self.runner_venv / "bin" / "ab"
         self.rows: list[EvidenceRow] = []
         self.apps: list[str] = []
         self.uc_function: str | None = None
@@ -394,7 +394,7 @@ class Runner:
         )
         if rejected.returncode == 0 or manifest.read_bytes() != before:
             raise MatrixError(
-                "mason tools add accepted an unavailable MCP service or changed agent.toml"
+                "ab tools add accepted an unavailable MCP service or changed agent.toml"
             )
         if json.loads(rejected.stderr).get("error", {}).get("code") not in {
             "NOT_FOUND",
@@ -414,7 +414,7 @@ class Runner:
         )
         manifest = tomli.loads((project / "agent.toml").read_text())
         if any(tool["id"] == "broken_mcp" for tool in manifest.get("tools", [])):
-            raise MatrixError("mason tools remove left the broken MCP binding in agent.toml")
+            raise MatrixError("ab tools remove left the broken MCP binding in agent.toml")
         commands = [
             ["tools", "add", "sandbox", "--scope", "table:samples.nyctaxi.trips"],
             ["tools", "add", "mcp", "system.ai.web_search"],
@@ -454,7 +454,7 @@ class Runner:
             .replace("__UC_FUNCTION__", self.uc_function or "")
         )
         target = project / "agent.toml"
-        self.transcript.file_step(target, "direct authoring; no mason tools command")
+        self.transcript.file_step(target, "direct authoring; no ab tools command")
         target.write_text(manifest, encoding="utf-8")
 
     def _write_python_marker(self, project: pathlib.Path) -> None:

@@ -1,10 +1,10 @@
-"""`mason login` / `logout` — remember an optional Databricks profile.
+"""`ab login` / `logout` — remember an optional Databricks profile.
 
 `login` validates a named profile and persists the selection; when credentials are missing or
 rejected in an interactive terminal, it delegates setup to `databricks auth login` and retries.
 The root group falls back to the saved profile whenever `-p` is omitted. Without a saved profile,
 the Databricks SDK performs its normal default authentication resolution. `logout` removes only
-Mason's saved selection, not the underlying credentials. State lives in a small JSON file under
+Agent Bricks' saved selection, not the underlying credentials. State lives in a small JSON file under
 `~/.mason` (override the directory with `MASON_CONFIG_HOME`, mainly for tests).
 """
 
@@ -31,7 +31,7 @@ def _config_file() -> pathlib.Path:
 
 
 def load_default_profile() -> Optional[str]:
-    """The profile saved by `mason login`, or None if the user never logged in."""
+    """The profile saved by `ab login`, or None if the user never logged in."""
     try:
         return json.loads(_config_file().read_text()).get("profile")
     except (OSError, json.JSONDecodeError):
@@ -56,12 +56,12 @@ def _is_interactive() -> bool:
 def _run_databricks_login(profile: str) -> None:
     command = ["databricks", "auth", "login", "--profile", profile]
     try:
-        # Keep the child process interactive while preserving stdout for Mason's JSON output.
+        # Keep the child process interactive while preserving stdout for Agent Bricks JSON output.
         result = subprocess.run(command, text=True, check=False, stdout=sys.stderr)
     except FileNotFoundError as exc:
         raise AgentCliError(
             "Could not configure Databricks authentication: the `databricks` CLI was not found.",
-            hint=f"Install the Databricks CLI, then retry `mason login --profile {profile}`.",
+            hint=f"Install the Databricks CLI, then retry `ab login --profile {profile}`.",
         ) from exc
     if result.returncode != 0:
         raise AgentCliError(
@@ -80,7 +80,7 @@ def _authenticate_profile(profile: str) -> tuple[_MasonApiClient, str]:
         if not _is_interactive():
             raise AgentCliError(
                 f"Could not validate Databricks profile {profile!r}: {initial_error}",
-                hint="Run this command in an interactive terminal so Mason can open "
+                hint="Run this command in an interactive terminal so Agent Bricks can open "
                 "Databricks login, or authenticate first with "
                 f"`databricks auth login --profile {profile}`.",
             ) from initial_error
@@ -113,7 +113,7 @@ def login(obj, profile) -> None:
     if not profile:
         raise AgentCliError(
             "No profile to save.",
-            hint="Pass one to remember, e.g. `mason login --profile <profile>`.",
+            hint="Pass one to remember, e.g. `ab login --profile <profile>`.",
         )
     client, user = _authenticate_profile(profile)
     _save_default_profile(profile)
@@ -124,7 +124,7 @@ def login(obj, profile) -> None:
         f"Logged in as {user}",
         fields={"Profile": profile, "Host": client.host},
         next_steps=[
-            ("mason init my-agent", "Scaffold a new agent project"),
+            ("ab init my-agent", "Scaffold a new agent project"),
         ],
     )
 

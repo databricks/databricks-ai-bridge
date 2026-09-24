@@ -20,7 +20,7 @@ _CUSTOM_SERVER_TEMPLATES = frozenset({"custom-agent-langgraph", "custom-agent-op
 
 @dataclass(frozen=True)
 class ProjectMetadata:
-    """Template identity persisted by ``mason init``."""
+    """Template identity persisted by ``ab init``."""
 
     framework: AgentFramework
     template: str | None
@@ -60,16 +60,16 @@ def _load_persisted_metadata(project: pathlib.Path) -> ProjectMetadata | None:
     path = project / _CONFIG_PATH
     if not path.is_file():
         return None
-    data = _read_toml(path, "Mason project config")
+    data = _read_toml(path, "Agent Bricks project config")
     if data.get("schema_version") != _SCHEMA_VERSION:
         raise AgentCliError(
-            f"Unsupported Mason project config schema in {path}.",
+            f"Unsupported Agent Bricks project config schema in {path}.",
             hint=f"Expected schema_version = {_SCHEMA_VERSION}.",
         )
     framework = parse_framework(data.get("framework"))
     template = data.get("template")
     if not isinstance(template, str) or not template:
-        raise AgentCliError(f"Mason project config at {path} must declare a template.")
+        raise AgentCliError(f"Agent Bricks project config at {path} must declare a template.")
     return ProjectMetadata(framework=framework, template=template)
 
 
@@ -83,8 +83,8 @@ def _infer_legacy_framework(project: pathlib.Path) -> ProjectMetadata:
     pyproject = project / "pyproject.toml"
     if not pyproject.is_file():
         raise AgentCliError(
-            f"Could not determine the Mason framework for {project}.",
-            hint="Run `mason init` to create project metadata or pass `--framework`.",
+            f"Could not determine the Agent Bricks framework for {project}.",
+            hint="Run `ab init` to create project metadata or pass `--framework`.",
         )
     data = _read_toml(pyproject, "pyproject")
     project_table = data.get("project")
@@ -109,7 +109,7 @@ def _infer_legacy_framework(project: pathlib.Path) -> ProjectMetadata:
             else "no framework dependency was found"
         )
         raise AgentCliError(
-            f"Could not determine the Mason framework for {project}: {detail}.",
+            f"Could not determine the Agent Bricks framework for {project}: {detail}.",
             hint="Pass `--framework openai` or `--framework langgraph`.",
         )
     return ProjectMetadata(framework=candidates.pop(), template=None)
@@ -151,7 +151,7 @@ def require_managed_tool_support(project: pathlib.Path) -> None:
     if not uses_custom_server(project):
         return
     raise AgentCliError(
-        "Managed tool bindings in agent.toml require a Mason server template.",
+        "Managed tool bindings in agent.toml require an Agent Bricks server template.",
         hint="Wire tools directly in agent/agent.py, or create a project with "
-        "`mason init --server mason`.",
+        "`ab init --server mason`.",
     )
