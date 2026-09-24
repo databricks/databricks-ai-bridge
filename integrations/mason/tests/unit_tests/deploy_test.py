@@ -17,6 +17,7 @@ from databricks_mason.cli import deploy as deploy_mod
 from databricks_mason.cli.tracing import MLflowTraceTables, ResolvedTraceExperiment
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import write_project_metadata
+from databricks_mason.store_provisioner import StoreProvisioner
 
 # The autouse fixture below stubs `get_or_create_trace_experiment` for deploy-command tests; capture the
 # real function here so its own unit tests can exercise the actual logic.
@@ -92,93 +93,6 @@ def test_upsert_manifest_env_preserves_unrelated_entries_and_replaces_value_from
 
 def test_managed_runtime_store_is_an_internal_disabled_rollout_switch():
     assert deploy_mod._USE_MANAGED_RUNTIME_STORE is False
-
-
-def test_ensure_session_store_reuses_on_already_exists():
-    client = mock.Mock()
-    client.create_session_store.side_effect = AgentCliError("exists", error_code="ALREADY_EXISTS")
-    client.get_session_store.return_value = {"session_store_name": "s"}
-    # Reused store -> created is False.
-    assert deploy_mod._ensure_session_store(client, "s") == ({"session_store_name": "s"}, False)
-    client.create_session_store.assert_called_once_with("s", retry_transient=True)
-
-
-def test_ensure_session_store_reports_created():
-    client = mock.Mock()
-    client.create_session_store.return_value = {"session_store_name": "s"}
-    assert deploy_mod._ensure_session_store(client, "s") == ({"session_store_name": "s"}, True)
-
-
-def test_ensure_memory_store_reuses_on_already_exists():
-    client = mock.Mock()
-    client.create_memory_store.side_effect = AgentCliError("exists", error_code="ALREADY_EXISTS")
-    client.list_memory_stores.return_value = {
-        "managed_memory_stores": [{"name": "memory-stores/mem-id-123", "display_name": "mem"}]
-    }
-
-    # Reused store -> created is False.
-    assert deploy_mod._ensure_memory_store(client, "mem") == (
-        {"name": "memory-stores/mem-id-123", "display_name": "mem"},
-        False,
-    )
-    client.create_memory_store.assert_called_once_with("mem", retry_transient=True)
-
-
-def test_ensure_memory_store_reports_created():
-    client = mock.Mock()
-    client.create_memory_store.return_value = {"name": "memory-stores/mem-id-123"}
-    assert deploy_mod._ensure_memory_store(client, "mem") == (
-        {"name": "memory-stores/mem-id-123"},
-        True,
-    )
-
-
-def test_ensure_memory_store_permission_denied_gives_admin_hint():
-    # ML-69282: admin-restricted Lakebase project creation -> actionable message, not a raw error.
-    client = mock.Mock()
-    client.create_memory_store.side_effect = AgentCliError("denied", error_code="PERMISSION_DENIED")
-    with pytest.raises(AgentCliError) as excinfo:
-        deploy_mod._ensure_memory_store(client, "mem")
-    err = excinfo.value
-    assert "permission to create memory store 'mem'" in err.message
-    assert err.hint is not None and "workspace admin" in err.hint
-    assert "--no-create-stores" in err.hint
-
-
-def test_ensure_memory_store_already_exists_but_inaccessible():
-    # ML-69292: name taken but not visible to the caller -> "you don't have access", not "could
-    # not be resolved".
-    client = mock.Mock()
-    client.create_memory_store.side_effect = AgentCliError("exists", error_code="ALREADY_EXISTS")
-    client.list_memory_stores.return_value = {"managed_memory_stores": []}
-    with pytest.raises(AgentCliError) as excinfo:
-        deploy_mod._ensure_memory_store(client, "mem")
-    err = excinfo.value
-    assert "already exists but you don't have access" in err.message
-    assert err.hint is not None and "grant you access" in err.hint
-
-
-def test_ensure_session_store_permission_denied_gives_admin_hint():
-    client = mock.Mock()
-    client.create_session_store.side_effect = AgentCliError(
-        "denied", error_code="PERMISSION_DENIED"
-    )
-    with pytest.raises(AgentCliError) as excinfo:
-        deploy_mod._ensure_session_store(client, "s")
-    err = excinfo.value
-    assert "permission to create session store 's'" in err.message
-    assert err.hint is not None and "workspace admin" in err.hint
-
-
-def test_ensure_session_store_already_exists_but_inaccessible():
-    client = mock.Mock()
-    client.create_session_store.side_effect = AgentCliError("exists", error_code="ALREADY_EXISTS")
-    client.get_session_store.side_effect = AgentCliError("denied", error_code="PERMISSION_DENIED")
-    with pytest.raises(AgentCliError) as excinfo:
-        deploy_mod._ensure_session_store(client, "s")
-    err = excinfo.value
-    assert "already exists but you don't have access" in err.message
-    assert err.hint is not None and "grant you access" in err.hint
 
 
 class _FakeClient:
@@ -647,7 +561,7 @@ def test_deploy_runtime_store_uses_dedicated_backend_with_managed_store(
     monkeypatch.setattr(client, "create_runtime_store", create_store)
     monkeypatch.setattr(AppsClient, "exists", lambda *args: False)
     monkeypatch.setattr(AppsClient, "service_principal", lambda *args: "sp-123")
-    monkeypatch.setattr(deploy_mod, "_grant_store_access", lambda *args, **kwargs: None)
+    monkeypatch.setattr(StoreProvisioner, "grant_store_access", lambda self, *a, **k: None)
 
     def fake_databricks(args, profile, **kwargs):
         assert args[:1] != ["postgres"]
@@ -1168,75 +1082,6 @@ def test_deploy_notifies_when_tracing_unbound(tmp_path: pathlib.Path, monkeypatc
     assert "Tracing setup failed" not in out  # unbound is not an error, so no cause suffix
 
 
-def test_resolve_memory_store_pages_at_100_and_matches_display_name():
-    # The list API caps page_size at 100, so resolution must page (not request 1000) and match the
-    # display name across pages.
-    class _PagingClient:
-        def __init__(self):
-            self.calls = []
-
-        def list_memory_stores(self, page_size=None, page_token=None):
-            self.calls.append((page_size, page_token))
-            if page_token is None:
-                return {
-                    "managed_memory_stores": [{"name": "memory-stores/a", "display_name": "other"}],
-                    "next_page_token": "p2",
-                }
-            return {
-                "managed_memory_stores": [{"name": "memory-stores/b", "display_name": "wanted"}],
-                "next_page_token": "",
-            }
-
-    client = _PagingClient()
-    store = deploy_mod._resolve_memory_store(client, "wanted")
-    assert store is not None
-    assert store["name"] == "memory-stores/b"  # found on page 2
-    assert all(ps == 100 for ps, _ in client.calls)  # never exceeds the API cap
-    assert [pt for _, pt in client.calls] == [None, "p2"]  # followed the page token
-
-
-def test_resolve_memory_store_returns_none_when_absent():
-    class _EmptyClient:
-        def list_memory_stores(self, page_size=None, page_token=None):
-            return {"managed_memory_stores": [], "next_page_token": ""}
-
-    assert deploy_mod._resolve_memory_store(_EmptyClient(), "nope") is None
-
-
-def test_grant_store_access_grants_both_stores_via_api(monkeypatch):
-    # Grants go through the managed store API (the store service does the Lakebase grant server-side),
-    # not a direct Lakebase resource attach — so a non-owner/non-admin deployer can still grant.
-    calls = []
-
-    class _Client:
-        def grant_session_store_permission(self, name, sp):
-            calls.append(("session", name, sp))
-
-        def grant_memory_store_permission(self, name, sp):
-            calls.append(("memory", name, sp))
-
-    # Memory is granted by resource id, so the display-name binding is resolved first.
-    monkeypatch.setattr(
-        deploy_mod, "_resolve_memory_store", lambda client, name: {"name": "memory-stores/uuid-x"}
-    )
-    err = deploy_mod._grant_store_access(_Client(), "sp-1", "sess-1", "mem-display")
-
-    assert err is None
-    assert calls == [
-        ("session", "sess-1", "sp-1"),
-        ("memory", "memory-stores/uuid-x", "sp-1"),
-    ]
-
-
-def test_grant_store_access_surfaces_api_error(monkeypatch):
-    class _Client:
-        def grant_session_store_permission(self, name, sp):
-            raise AgentCliError("grant failed", hint="the store service refused the grant")
-
-    err = deploy_mod._grant_store_access(_Client(), "sp", "sess-1", None)
-    assert err == "the store service refused the grant"
-
-
 def test_deploy_resolves_existing_memory_store_by_display_name(tmp_path: pathlib.Path, monkeypatch):
     # deploy reconciles the declared store; when it already exists it is resolved by display name
     # (list+match, not get_memory_store which keys on resource id) and its id is injected into app.yaml.
@@ -1504,27 +1349,6 @@ def test_deploy_without_name_or_toml_errors(tmp_path: pathlib.Path, monkeypatch)
     assert called == []  # errored before shelling out to `databricks apps`
 
 
-def test_reconcile_declared_stores_returns_none_when_unbound():
-    assert deploy_mod._reconcile_declared_stores(None, None, _FakeClient()) is None
-
-
-def test_reconcile_declared_stores_creates_missing_and_returns_memory_id(capsys):
-    client = _FakeClient()  # seeded with only "mem" (id mem-id-123)
-    memory_id = deploy_mod._reconcile_declared_stores("new-mem", "new-sess", client)
-    # A freshly created memory store's bare id is returned for AGENT_MEMORY_STORE.
-    assert memory_id == "new-mem"  # _FakeClient names created stores memory-stores/<display_name>
-    out = capsys.readouterr().out
-    assert "Created memory store 'new-mem'" in out
-    assert "Created session store 'new-sess'" in out
-
-
-def test_reconcile_declared_stores_reuses_existing_memory_id(capsys):
-    client = _FakeClient()  # "mem" already exists with id mem-id-123
-    memory_id = deploy_mod._reconcile_declared_stores("mem", None, client)
-    assert memory_id == "mem-id-123"
-    assert "Created memory store" not in capsys.readouterr().out  # reused, not created
-
-
 def test_deploy_creates_declared_but_missing_store_without_writing_agent_toml(
     tmp_path, monkeypatch
 ):
@@ -1566,9 +1390,9 @@ def test_deploy_grants_bound_store(tmp_path: pathlib.Path, monkeypatch):
     monkeypatch.setattr(AppsClient, "service_principal", lambda self, name: "sp-123")
     grant_args: dict = {}
     monkeypatch.setattr(
-        deploy_mod,
-        "_grant_store_access",
-        lambda client, sp, session_store, memory_store: (
+        StoreProvisioner,
+        "grant_store_access",
+        lambda self, sp, session_store, memory_store: (
             grant_args.update(sp=sp, session_store=session_store, memory_store=memory_store) or None
         ),
     )

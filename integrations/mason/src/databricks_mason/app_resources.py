@@ -7,7 +7,7 @@ The service-managed Runtime Store path grants database access through Conversati
 
 Managed-store (session/memory) table access is NOT granted here. The deployed app reaches those
 stores over the conversation-store REST API, which grants the app's service principal read/write
-server-side (see `deploy._grant_store_access`), so no direct Lakebase grant is needed.
+server-side (see `store_provisioner.StoreProvisioner.grant_store_access`), so no direct Lakebase grant is needed.
 """
 
 from __future__ import annotations
