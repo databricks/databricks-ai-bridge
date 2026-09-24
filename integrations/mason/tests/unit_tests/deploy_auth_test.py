@@ -9,6 +9,7 @@ from databricks.sdk.errors import NotFound, PermissionDenied
 from databricks.sdk.service.apps import App
 
 from databricks_mason.agent_project import AgentProject, ToolSpec
+from databricks_mason.apps_client import AppsClient
 from databricks_mason.cli import deploy as deploy_mod
 from databricks_mason.errors import AgentCliError
 
@@ -17,7 +18,7 @@ from databricks_mason.errors import AgentCliError
 def _no_remote_provisioning(monkeypatch):
     monkeypatch.setattr(deploy_mod, "get_or_create_trace_experiment", lambda *args: None)
     monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", True)
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "app-sp")
+    monkeypatch.setattr(AppsClient, "service_principal", lambda *args: "app-sp")
     runtime_store = Mock(
         return_value=SimpleNamespace(
             branch="projects/shared/branches/production",
@@ -318,8 +319,8 @@ def test_disabled_forwarding_fails_deploy_before_app_or_store_mutations(tmp_path
     cloud = Mock()
     monkeypatch.setattr(deploy_mod, "_databricks", cloud)
     monkeypatch.setattr(
-        deploy_mod,
-        "_wait_for_running",
+        AppsClient,
+        "wait_for_running",
         Mock(side_effect=AssertionError("unexpected compute lifecycle")),
     )
     result = CliRunner().invoke(
@@ -376,8 +377,8 @@ def test_app_only_tools_keep_deployment_path(tmp_path, monkeypatch, auth, _no_re
     _project(tmp_path, auth=auth)
     app_auth, apps, workspace = _sdk(monkeypatch)
     calls = []
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda *args: False)
-    monkeypatch.setattr(deploy_mod, "_wait_for_running", lambda *args: None)
+    monkeypatch.setattr(AppsClient, "exists", lambda *args: False)
+    monkeypatch.setattr(AppsClient, "wait_for_running", lambda *args: None)
 
     def databricks(arguments, profile, **kwargs):
         calls.append(arguments)
@@ -420,7 +421,7 @@ def test_user_deploy_creates_scoped_app_and_runtime_store_before_source(
         return SimpleNamespace(returncode=0, stdout="{}", stderr="")
 
     monkeypatch.setattr(deploy_mod, "_databricks", databricks)
-    monkeypatch.setattr(deploy_mod, "_wait_for_running", lambda *args: None)
+    monkeypatch.setattr(AppsClient, "wait_for_running", lambda *args: None)
     monkeypatch.setattr(deploy_mod, "get_or_create_trace_experiment", lambda *args: None)
     runtime_backend = _no_remote_provisioning.return_value
     _no_remote_provisioning.side_effect = lambda *args: (

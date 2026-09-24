@@ -7,6 +7,7 @@ import urllib.error
 import pytest
 from click.testing import CliRunner
 
+from databricks_mason.apps_client import AppsClient
 from databricks_mason.cli import endpoint as endpoint_mod
 from databricks_mason.cli import endpoint_output as endpoint_output_mod
 from databricks_mason.cli import endpoint_request as endpoint_request_mod
@@ -129,7 +130,7 @@ def test_invoke_deployed_app_resolves_oauth_and_generated_session(monkeypatch):
             captured["request"] = request
             return _response({"ok": True}, url=request.url)
 
-    monkeypatch.setattr(endpoint_mod, "_app_url", lambda name, profile: "https://app.example")
+    monkeypatch.setattr(AppsClient, "url", lambda self, name: "https://app.example")
     monkeypatch.setattr(endpoint_mod, "_authorization_header", lambda profile: "Bearer token")
     monkeypatch.setattr(endpoint_mod, "HttpSession", FakeSession)
 
