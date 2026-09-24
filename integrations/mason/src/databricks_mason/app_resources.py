@@ -58,16 +58,31 @@ class LakebaseBackend:
         }
 
 
-def _current_app_resources(app: str, profile: Optional[str]) -> list[dict]:
-    """Read the app's existing resources array (empty list if it can't be read)."""
+def _current_app_resources(app: str, profile: Optional[str]) -> Optional[list[dict]]:
+    """Read the app's existing resources array.
+
+    Returns None when the read FAILED (``apps get`` errored or returned unparseable output), so callers
+    can tell a failed read apart from a genuinely empty array and NOT drop resources: the resource
+    write is a full-array replace, so treating a failed read as "no resources" would wipe every
+    resource the app has. An empty list means the app genuinely has no resources.
+    """
     result = _databricks(["apps", "get", app, "-o", "json"], profile, capture=True, check=False)
     if result.returncode != 0:
-        return []
+        return None
     try:
         resources = json.loads(result.stdout or "{}").get("resources", [])
     except (json.JSONDecodeError, AttributeError):
-        return []
+        return None
     return resources if isinstance(resources, list) else []
+
+
+# Returned when the current-resources read fails: the resource write is a full-array replace, so we
+# must not proceed on a failed read (that would drop every resource the app has). Bail and leave the
+# app's resources untouched.
+_RESOURCE_READ_FAILED = (
+    "could not read the app's current resources (apps get failed); "
+    "skipped the resource update to avoid dropping the app's other resources"
+)
 
 
 # The app-resource name for the trace experiment (unique across an app's resources, like a store's).
@@ -116,9 +131,12 @@ def apply_trace_resources(
         }
         for t in tables
     ]
+    current = _current_app_resources(app, profile)
+    if current is None:
+        return _RESOURCE_READ_FAILED
     preserved = [
         r
-        for r in _current_app_resources(app, profile)
+        for r in current
         if isinstance(r, dict)
         and r.get("name") != _TRACE_EXPERIMENT_RESOURCE
         and not str(r.get("name", "")).startswith(_UC_TRACE_TABLE_RESOURCE_PREFIX)
@@ -141,11 +159,10 @@ def apply_postgres_resources(
     """
     ours = [b.postgres_resource() for b in backends]
     our_names = {r["name"] for r in ours}
-    preserved = [
-        r
-        for r in _current_app_resources(app, profile)
-        if isinstance(r, dict) and r.get("name") not in our_names
-    ]
+    current = _current_app_resources(app, profile)
+    if current is None:
+        return _RESOURCE_READ_FAILED
+    preserved = [r for r in current if isinstance(r, dict) and r.get("name") not in our_names]
     result = _update_app_resources(app, preserved + ours, profile)
     if result.returncode == 0:
         return None

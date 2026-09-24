@@ -251,6 +251,42 @@ def test_apply_trace_resources_reports_failure(monkeypatch):
     assert err == "denied: needs MANAGE"
 
 
+def _fake_db_get_fails(calls):
+    """A `_databricks` stub whose `apps get` fails; records every command's first two args."""
+
+    def fake_db(args, profile, **kw):
+        calls.append(args[:2])
+        if args[:2] == ["apps", "get"]:
+            return types.SimpleNamespace(
+                returncode=1, stdout="", stderr="transient: apps get failed"
+            )
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    return fake_db
+
+
+def test_apply_trace_resources_skips_write_when_current_resources_unreadable(monkeypatch):
+    # A failed `apps get` must NOT be treated as "no resources": the write is a full-array replace, so
+    # proceeding with an empty `preserved` would drop every OTHER resource the app has. Bail with a
+    # reason and perform NO write, leaving the app's resources (and existing trace grants) intact.
+    calls: list[list[str]] = []
+    monkeypatch.setattr(sa, "_databricks", _fake_db_get_fails(calls))
+    err = sa.apply_trace_resources(
+        "app", "exp-1", [TraceTable("spans", "cat.schema.otel_spans")], "prof"
+    )
+    assert err and "apps get failed" in err
+    assert ["apps", "create-update"] not in calls  # never wrote
+
+
+def test_apply_postgres_resources_skips_write_when_current_resources_unreadable(monkeypatch):
+    # Same guard for the postgres reconcile - a failed read bails before the full-array replace.
+    calls: list[list[str]] = []
+    monkeypatch.setattr(sa, "_databricks", _fake_db_get_fails(calls))
+    err = sa.apply_postgres_resources("app", [_backend("db", "postgres-runtime-store")], "prof")
+    assert err and "apps get failed" in err
+    assert ["apps", "create-update"] not in calls  # never wrote
+
+
 def test_apply_trace_resources_prunes_everything_when_unbound(monkeypatch):
     # The unbind case: experiment_id None -> the desired set is empty, so the write drops EVERY
     # mason-trace-* resource (experiment + UC tables) while preserving unrelated user resources.
