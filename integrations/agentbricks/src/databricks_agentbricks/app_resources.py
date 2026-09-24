@@ -16,7 +16,7 @@ import json
 import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 from databricks_agentbricks.databricks_cli import _databricks
 from databricks_agentbricks.trace_tables import TraceTable
@@ -98,6 +98,24 @@ _TRACE_EXPERIMENT_RESOURCE = "agentbricks-trace-experiment"
 # grant. (`agentbricks-trace-table-` + `annotations` = 35 chars, which is what regressed.)
 _UC_TRACE_TABLE_RESOURCE_PREFIX = "agentbricks-trace-"
 
+_TOOL_RESOURCE_PREFIX = "agentbricks-tool-"
+
+
+def _read_app_resources_strict(
+    app: str, profile: Optional[str], *, action: str
+) -> tuple[list[Any] | None, str | None]:
+    result = _databricks(["apps", "get", app, "-o", "json"], profile, capture=True, check=False)
+    if result.returncode != 0:
+        reason = (result.stderr or result.stdout or "").strip() or "unknown error"
+        return None, f"{action}: {reason}"
+    try:
+        resources = json.loads(result.stdout or "{}").get("resources", [])
+    except (json.JSONDecodeError, AttributeError):
+        return None, f"{action}: invalid Apps response"
+    if not isinstance(resources, list):
+        return None, f"{action}: invalid resources array"
+    return resources, None
+
 
 def apply_trace_resources(
     app: str,
@@ -155,6 +173,55 @@ def apply_trace_resources(
         return None
     return (result.stderr or result.stdout or "").strip() or "unknown error"
 
+
+
+def apply_tool_resources(
+    app: str, resources: Sequence[dict[str, Any]], profile: Optional[str]
+) -> Optional[str]:
+    """Replace Agent Bricks-owned tool resources while preserving unrelated App resources."""
+    current, read_error = _read_app_resources_strict(
+        app, profile, action="Could not read existing App resources"
+    )
+    if read_error is not None:
+        return read_error
+    assert current is not None
+
+    preserved = [
+        resource
+        for resource in current
+        if not (
+            isinstance(resource, dict)
+            and isinstance(resource.get("name"), str)
+            and resource["name"].startswith(_TOOL_RESOURCE_PREFIX)
+        )
+    ]
+    owned = sorted(resources, key=lambda resource: str(resource.get("name", "")))
+    reconciled = [*preserved, *owned]
+    if reconciled == current:
+        return None
+    update = _update_app_resources(app, reconciled, profile)
+    if update.returncode != 0:
+        return (update.stderr or update.stdout or "").strip() or "unknown error"
+
+    persisted, verify_error = _read_app_resources_strict(
+        app, profile, action="Could not verify App tool resources"
+    )
+    if verify_error is not None:
+        return verify_error
+    assert persisted is not None
+    persisted_owned = sorted(
+        (
+            resource
+            for resource in persisted
+            if isinstance(resource, dict)
+            and isinstance(resource.get("name"), str)
+            and resource["name"].startswith(_TOOL_RESOURCE_PREFIX)
+        ),
+        key=lambda resource: str(resource.get("name", "")),
+    )
+    if persisted_owned != owned:
+        return "Could not verify App tool resources: Agent Bricks-owned resources do not match"
+    return None
 
 def apply_postgres_resources(
     app: str, backends: list[LakebaseBackend], profile: Optional[str]

@@ -29,6 +29,13 @@ def _no_remote_provisioning(monkeypatch):
     return runtime_store
 
 
+@pytest.fixture(autouse=True)
+def _no_tool_access_reconciliation(monkeypatch):
+    reconcile = Mock()
+    monkeypatch.setattr(deploy_mod, "reconcile_tool_access", reconcile, raising=False)
+    return reconcile
+
+
 def _project(root, *, auth="user", legacy=False):
     project = AgentProject.create(root, framework="langgraph", server="agentbricks")
     project.add_tool(ToolSpec.mcp("search", service="system.ai.web_search", auth=auth))
@@ -551,3 +558,101 @@ def test_user_deploy_creates_scoped_app_and_runtime_store_before_source(
         "sync"
     )
     assert "re-consent" in result.output
+
+
+def test_app_auth_reconciles_explicit_access_before_source_rollout(
+    tmp_path, monkeypatch, _no_tool_access_reconciliation
+):
+    _project(tmp_path, auth="app")
+    events = []
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda *args: True)
+    monkeypatch.setattr(deploy_mod, "_wait_for_running", lambda *args: events.append("app-running"))
+
+    def databricks(arguments, profile, **kwargs):
+        if arguments[0] == "sync":
+            events.append("sync")
+        elif arguments[:2] == ["apps", "deploy"]:
+            events.append("apps-deploy")
+        return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(deploy_mod, "_databricks", databricks)
+
+    def reconcile(client, app, principal, plan, profile):
+        events.append("tool-access")
+        assert app == "agent-mason-test"
+        assert principal == "app-sp"
+        assert profile == "selected"
+        assert {grant.full_name for grant in plan.uc_grants} == {
+            "system",
+            "system.ai",
+            "system.ai.web_search",
+        }
+        return plan
+
+    _no_tool_access_reconciliation.side_effect = reconcile
+    client = SimpleNamespace(host="https://workspace", current_user="user@example.com")
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["test", "--source", str(tmp_path)],
+        obj=SimpleNamespace(profile="selected", output="text", client=lambda: client),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert events == ["app-running", "tool-access", "sync", "apps-deploy"]
+    assert "UC/Workspace grants" in result.output
+    assert "are additive" in result.output
+
+
+def test_deploy_json_labels_only_uc_workspace_grants_as_additive(
+    tmp_path, monkeypatch, _no_tool_access_reconciliation
+):
+    _project(tmp_path, auth="app")
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda *args: True)
+    monkeypatch.setattr(deploy_mod, "_wait_for_running", lambda *args: None)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="{}", stderr=""),
+    )
+    captured = {}
+    monkeypatch.setattr(deploy_mod.render, "emit_json", lambda value: captured.update(value))
+    client = SimpleNamespace(host="https://workspace", current_user="user@example.com")
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["test", "--source", str(tmp_path)],
+        obj=SimpleNamespace(profile="selected", output="json", client=lambda: client),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["tool_access"]["uc_workspace_grants_additive"] is True
+    assert "direct_grants_additive" not in captured["tool_access"]
+
+
+def test_tool_access_failure_stops_before_source_rollout(
+    tmp_path, monkeypatch, _no_tool_access_reconciliation
+):
+    _project(tmp_path, auth="app")
+    calls = []
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda *args: True)
+    monkeypatch.setattr(deploy_mod, "_wait_for_running", lambda *args: None)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda arguments, profile, **kwargs: (
+            calls.append(arguments) or SimpleNamespace(returncode=0, stdout="{}", stderr="")
+        ),
+    )
+    _no_tool_access_reconciliation.side_effect = AgentCliError("tool grant denied")
+    client = SimpleNamespace(host="https://workspace", current_user="user@example.com")
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["test", "--source", str(tmp_path)],
+        obj=SimpleNamespace(profile="selected", output="text", client=lambda: client),
+    )
+
+    assert result.exit_code != 0
+    assert "tool grant denied" in result.output
+    assert not any(call[0] == "sync" or call[:2] == ["apps", "deploy"] for call in calls)
