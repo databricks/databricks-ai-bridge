@@ -12,6 +12,7 @@ import yaml
 from click.testing import CliRunner
 
 from databricks_mason.agent_project import AgentProject, ToolSpec
+from databricks_mason.apps_client import AppsClient
 from databricks_mason.cli import deploy as deploy_mod
 from databricks_mason.cli.tracing import MLflowTraceTables, ResolvedTraceExperiment
 from databricks_mason.errors import AgentCliError
@@ -25,8 +26,8 @@ _REAL_RESOLVE_TRACE = deploy_mod.get_or_create_trace_experiment
 @pytest.fixture(autouse=True)
 def _compute_active(monkeypatch):
     # `mason deploy` now waits for compute on every deploy; report ACTIVE so the wait returns
-    # immediately. Tests that exercise _wait_for_running directly override _app_compute_state.
-    monkeypatch.setattr(deploy_mod, "_app_compute_state", lambda name, profile: "ACTIVE")
+    # immediately. Tests that exercise wait_for_running directly override AppsClient.compute_state.
+    monkeypatch.setattr(AppsClient, "compute_state", lambda self, name: "ACTIVE")
 
 
 @pytest.fixture(autouse=True)
@@ -343,7 +344,7 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
     _agent_toml(src, memory="mem")
 
     calls: list[list[str]] = []
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: True)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
@@ -376,8 +377,8 @@ def test_deploy_creates_with_instance_count(tmp_path: pathlib.Path, monkeypatch)
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
 
     calls: list[tuple[list[str], dict]] = []
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: False)
-    monkeypatch.setattr(deploy_mod, "_wait_for_running", lambda name, profile: None)
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: False)
+    monkeypatch.setattr(AppsClient, "wait_for_running", lambda self, name, timeout_s=300: None)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
@@ -417,7 +418,7 @@ def test_deploy_updates_existing_instance_count(tmp_path: pathlib.Path, monkeypa
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
 
     calls: list[tuple[list[str], dict]] = []
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: True)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
@@ -495,7 +496,7 @@ def test_deploy_custom_server_skips_runtime_store_provisioning_and_binding(
         assert profile == "prof"
         return types.SimpleNamespace(returncode=0, stdout="{}", stderr="")
 
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda app, profile: False)
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: False)
     monkeypatch.setattr(_FakeClient, "create_runtime_store", create)
     # the trace-resource reconcile issues its own create-update and is out of scope here
     monkeypatch.setattr(deploy_mod, "apply_trace_resources", mock.Mock(return_value=None))
@@ -528,8 +529,8 @@ def test_deploy_mason_server_provisions_runtime_store(tmp_path: pathlib.Path, mo
     _write_agent_manifest(src)
     monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", True)
 
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "sp-123")
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: True)
+    monkeypatch.setattr(AppsClient, "service_principal", lambda *args: "sp-123")
     deployed_env = None
 
     def fake_databricks(args, profile, **kwargs):
@@ -589,13 +590,13 @@ def test_deploy_defaults_to_legacy_runtime_store(tmp_path: pathlib.Path, monkeyp
     monkeypatch.setattr(deploy_mod.legacy_runtime_store, "get_or_create_backend", provision)
     monkeypatch.setattr(deploy_mod, "apply_postgres_resources", attach)
     monkeypatch.setattr(
-        deploy_mod,
-        "_deployment_exists",
+        AppsClient,
+        "exists",
         lambda *args: (events.append("app-exists"), True)[1],
     )
     monkeypatch.setattr(
-        deploy_mod,
-        "_app_service_principal",
+        AppsClient,
+        "service_principal",
         mock.Mock(side_effect=AssertionError("legacy provisioning does not need an app SP lookup")),
     )
     monkeypatch.setattr(
@@ -644,8 +645,8 @@ def test_deploy_runtime_store_uses_dedicated_backend_with_managed_store(
         return create(*args, **kwargs)
 
     monkeypatch.setattr(client, "create_runtime_store", create_store)
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda *args: False)
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "sp-123")
+    monkeypatch.setattr(AppsClient, "exists", lambda *args: False)
+    monkeypatch.setattr(AppsClient, "service_principal", lambda *args: "sp-123")
     monkeypatch.setattr(deploy_mod, "_grant_store_access", lambda *args, **kwargs: None)
 
     def fake_databricks(args, profile, **kwargs):
@@ -686,8 +687,8 @@ def test_deploy_renames_underlying_app_compute_output(tmp_path: pathlib.Path, mo
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
 
     calls: list[tuple[list[str], dict]] = []
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: False)
-    monkeypatch.setattr(deploy_mod, "_wait_for_running", lambda name, profile: None)
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: False)
+    monkeypatch.setattr(AppsClient, "wait_for_running", lambda self, name, timeout_s=300: None)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
@@ -724,14 +725,14 @@ def test_deploy_reports_app_url(tmp_path: pathlib.Path, monkeypatch):
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
 
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: True)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
         lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
     )
     monkeypatch.setattr(
-        deploy_mod, "_app_url", lambda name, p: "https://myapp-123.databricksapps.com"
+        AppsClient, "url", lambda self, name: "https://myapp-123.databricksapps.com"
     )
     captured: dict = {}
     monkeypatch.setattr(deploy_mod.render, "emit_json", lambda data: captured.update(data))
@@ -763,8 +764,8 @@ def test_deploy_recommends_invoking_deployed_agent(
         (src / "runtime" / "ui.py").write_text("# chat UI\n")
     monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", True)
 
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "sp-123")
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: True)
+    monkeypatch.setattr(AppsClient, "service_principal", lambda *args: "sp-123")
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
@@ -811,7 +812,7 @@ def test_deploy_sync_keeps_directly_edited_agent_manifest(tmp_path: pathlib.Path
         'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "custom"\n'
     )
     calls: list[list[str]] = []
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: True)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
@@ -841,14 +842,14 @@ def test_first_deploy_waits_for_running_before_deploying(tmp_path: pathlib.Path,
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
 
     calls: list[list[str]] = []
-    monkeypatch.setattr(
-        deploy_mod, "_deployment_exists", lambda a, p: False
-    )  # app doesn't exist yet
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: False)  # app doesn't exist yet
     waited = {"called": False}
     monkeypatch.setattr(
-        deploy_mod, "_wait_for_running", lambda name, profile: waited.__setitem__("called", True)
+        AppsClient,
+        "wait_for_running",
+        lambda self, name, timeout_s=300: waited.__setitem__("called", True),
     )
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
+    monkeypatch.setattr(AppsClient, "service_principal", lambda self, name: None)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
@@ -872,12 +873,14 @@ def test_redeploy_waits_for_running_and_skips_create(tmp_path: pathlib.Path, mon
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
 
     calls: list[list[str]] = []
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)  # already exists
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: True)  # already exists
     waited = {"called": False}
     monkeypatch.setattr(
-        deploy_mod, "_wait_for_running", lambda name, profile: waited.__setitem__("called", True)
+        AppsClient,
+        "wait_for_running",
+        lambda self, name, timeout_s=300: waited.__setitem__("called", True),
     )
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
+    monkeypatch.setattr(AppsClient, "service_principal", lambda self, name: None)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
@@ -893,21 +896,6 @@ def test_redeploy_waits_for_running_and_skips_create(tmp_path: pathlib.Path, mon
     assert waited["called"], "re-deploy must also wait for compute"
 
 
-def test_wait_for_running_returns_when_compute_active(monkeypatch):
-    monkeypatch.setattr(deploy_mod, "_app_compute_state", lambda name, p: "ACTIVE")
-    deploy_mod._wait_for_running("app", "prof", timeout_s=1)  # returns without raising
-
-
-def test_wait_for_running_times_out(monkeypatch):
-    monkeypatch.setattr(deploy_mod, "_app_compute_state", lambda name, p: "STARTING")
-    monkeypatch.setattr(deploy_mod.time, "sleep", lambda s: None)  # don't actually wait
-    try:
-        deploy_mod._wait_for_running("app", "prof", timeout_s=0)
-        raise AssertionError("expected AgentCliError on timeout")
-    except AgentCliError:
-        pass
-
-
 def test_deploy_injects_store_env(tmp_path: pathlib.Path, monkeypatch):
     # The runtime reads stores from env, never agent.toml: deploy wires the resolved memory id
     # (AGENT_MEMORY_STORE — the entries API is keyed by id) and the session name (AGENT_SESSION_STORE)
@@ -918,13 +906,13 @@ def test_deploy_injects_store_env(tmp_path: pathlib.Path, monkeypatch):
     _write_agent_manifest(src, memory="mem", session="sessions")
     monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", True)
 
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: True)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
         lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
     )
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "sp-123")
+    monkeypatch.setattr(AppsClient, "service_principal", lambda *args: "sp-123")
 
     result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
 
@@ -944,7 +932,7 @@ def test_deploy_wires_tracing_env_and_grants_experiment_resource(
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
 
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: True)
     monkeypatch.setattr(
         deploy_mod,
         "get_or_create_trace_experiment",
@@ -985,7 +973,7 @@ def test_deploy_grants_uc_trace_tables_for_uc_backed_experiment(tmp_path, monkey
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
 
     tables = MLflowTraceTables(spans="cat.schema.otel_spans", logs="cat.schema.otel_logs")
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: True)
     monkeypatch.setattr(
         deploy_mod,
         "get_or_create_trace_experiment",
@@ -1018,7 +1006,7 @@ def test_deploy_grants_managed_experiment_with_no_uc_tables(tmp_path, monkeypatc
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
 
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: True)
     monkeypatch.setattr(
         deploy_mod,
         "get_or_create_trace_experiment",
@@ -1046,7 +1034,7 @@ def test_deploy_proceeds_when_trace_grant_fails(tmp_path, monkeypatch):
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
 
     tables = MLflowTraceTables(spans="cat.schema.otel_spans")
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: True)
     monkeypatch.setattr(
         deploy_mod,
         "get_or_create_trace_experiment",
@@ -1079,7 +1067,7 @@ def test_deploy_reconciles_trace_resources_even_when_unbound(tmp_path, monkeypat
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
 
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: True)
     # the autouse fixture already stubs get_or_create_trace_experiment -> None (unbound)
     trace_grant = mock.Mock(return_value=None)
     monkeypatch.setattr(deploy_mod, "apply_trace_resources", trace_grant)
@@ -1111,7 +1099,7 @@ def test_deploy_rebind_uc_to_uc_reconciles_to_the_new_table_set(tmp_path, monkey
         annotations="old.schema.otel_annotations",
     )
     new_tables = MLflowTraceTables(spans="new.schema.otel_spans", logs="new.schema.otel_logs")
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: True)
     monkeypatch.setattr(
         deploy_mod,
         "get_or_create_trace_experiment",
@@ -1144,7 +1132,7 @@ def test_deploy_proceeds_when_tracing_provisioning_raises(tmp_path: pathlib.Path
     def _boom(*a, **k):
         raise RuntimeError("mlflow create_experiment blew up")
 
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: True)
     monkeypatch.setattr(deploy_mod, "get_or_create_trace_experiment", _boom)
     monkeypatch.setattr(
         deploy_mod,
@@ -1166,7 +1154,7 @@ def test_deploy_notifies_when_tracing_unbound(tmp_path: pathlib.Path, monkeypatc
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: True)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
@@ -1256,8 +1244,8 @@ def test_deploy_resolves_existing_memory_store_by_display_name(tmp_path: pathlib
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     _agent_toml(src, memory="mem")
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: True)
+    monkeypatch.setattr(AppsClient, "service_principal", lambda self, name: None)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
@@ -1277,7 +1265,7 @@ def test_deploy_creates_missing_declared_store(tmp_path: pathlib.Path, monkeypat
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     _agent_toml(src, memory="ghost")
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: True)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
@@ -1362,7 +1350,7 @@ def test_resolve_trace_experiment_get_or_creates_by_name_each_run(
 
 
 def _run_deploy(src, monkeypatch, extra_args):
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: True)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
@@ -1400,7 +1388,7 @@ class _JsonCtx(_FakeCtx):
 
 
 def test_lifecycle_commands_honor_json_output(monkeypatch):
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "sp-123")
+    monkeypatch.setattr(AppsClient, "service_principal", lambda *args: "sp-123")
     # start/stop/delete must emit JSON (not the Rich success panel) under --output json.
     monkeypatch.setattr(
         deploy_mod,
@@ -1465,7 +1453,7 @@ def test_deploy_writes_deployment_name_to_toml(tmp_path: pathlib.Path, monkeypat
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     _agent_toml(src)  # a project with no deployment_name yet
 
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: True)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
@@ -1485,7 +1473,7 @@ def test_deploy_reads_deployment_name_from_toml_when_omitted(tmp_path: pathlib.P
     _agent_toml(src, deployment_name="stored")
 
     calls: list[list[str]] = []
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: True)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
@@ -1547,7 +1535,7 @@ def test_deploy_creates_declared_but_missing_store_without_writing_agent_toml(
     _agent_toml(src, memory="declared-mem", session="declared-sess", deployment_name="myapp")
     before = (src / "agent.toml").read_text()
 
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: True)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
@@ -1569,13 +1557,13 @@ def test_deploy_grants_bound_store(tmp_path: pathlib.Path, monkeypatch):
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     _agent_toml(src, session="bound-sess")
 
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(AppsClient, "exists", lambda self, name: True)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
         lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
     )
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, profile: "sp-123")
+    monkeypatch.setattr(AppsClient, "service_principal", lambda self, name: "sp-123")
     grant_args: dict = {}
     monkeypatch.setattr(
         deploy_mod,

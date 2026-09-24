@@ -7,13 +7,14 @@ from unittest import mock
 import pytest
 from click.testing import CliRunner
 
+from databricks_mason.apps_client import AppsClient
 from databricks_mason.cli import deploy as deploy_mod
 from databricks_mason.errors import AgentCliError
 
 
 @pytest.fixture(autouse=True)
 def _managed_runtime_store(monkeypatch):
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "sp-123")
+    monkeypatch.setattr(AppsClient, "service_principal", lambda *args: "sp-123")
     monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", True)
 
 
@@ -188,7 +189,7 @@ def test_managed_delete_rejects_an_unexpected_resource_name(monkeypatch):
 
 
 def test_managed_delete_cannot_skip_cleanup_when_identity_lookup_fails(monkeypatch):
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: None)
+    monkeypatch.setattr(AppsClient, "service_principal", lambda *args: None)
     cli = mock.Mock()
     monkeypatch.setattr(deploy_mod, "_databricks", cli)
     ctx = types.SimpleNamespace(profile="prof", output="text", client=mock.Mock())

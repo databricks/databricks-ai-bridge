@@ -10,7 +10,8 @@ from uuid import uuid4
 import click
 
 from databricks_mason._api_client import _workspace_client
-from databricks_mason.cli.deploy import _app_url, _prefixed_name
+from databricks_mason.apps_client import AppsClient
+from databricks_mason.cli.deploy import _prefixed_name
 from databricks_mason.cli.endpoint_output import SsePrinter, render_response
 from databricks_mason.cli.endpoint_request import build_request
 from databricks_mason.cli.endpoint_transport import HttpSession
@@ -34,7 +35,7 @@ def _resolve_endpoint(
             hint="Use --url http://localhost:8000 when running the agent locally.",
         )
     app_name = _prefixed_name(app)
-    resolved_url = _app_url(app_name, profile)
+    resolved_url = AppsClient(profile).url(app_name)
     if not resolved_url:
         raise AgentCliError(f"Could not resolve a URL for Databricks App {app_name!r}.")
     return resolved_url.rstrip("/"), True
