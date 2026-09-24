@@ -172,6 +172,7 @@ def test_apply_trace_resources_uc_experiment_adds_one_table_resource_per_table(m
     tables = [
         TraceTable("spans", "cat.schema.otel_spans"),
         TraceTable("logs", "cat.schema.otel_logs"),
+        TraceTable("metrics", "cat.schema.otel_metrics"),
     ]
     assert sa.apply_trace_resources("app", "exp-uc", tables, "prof") is None
     payload = json.loads(captured["args"][captured["args"].index("--json") + 1])
@@ -180,6 +181,7 @@ def test_apply_trace_resources_uc_experiment_adds_one_table_resource_per_table(m
         "mason-trace-experiment",
         "mason-trace-table-spans",
         "mason-trace-table-logs",
+        "mason-trace-table-metrics",
     ]
     assert written[0]["experiment"] == {"experiment_id": "exp-uc", "permission": "CAN_EDIT"}
     assert [r["uc_securable"] for r in written[1:]] == [
@@ -190,6 +192,11 @@ def test_apply_trace_resources_uc_experiment_adds_one_table_resource_per_table(m
         },
         {
             "securable_full_name": "cat.schema.otel_logs",
+            "securable_type": "TABLE",
+            "permission": "MODIFY",
+        },
+        {
+            "securable_full_name": "cat.schema.otel_metrics",
             "securable_type": "TABLE",
             "permission": "MODIFY",
         },

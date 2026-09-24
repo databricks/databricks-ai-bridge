@@ -125,6 +125,10 @@ _UC_TRACE_UNIFIED_TAG = "mlflow.experiment.databricksTraceStorageTable"
 _UC_TRACE_SPAN_TAG = "mlflow.experiment.databricksTraceSpanStorageTable"
 _UC_TRACE_LOG_TAG = "mlflow.experiment.databricksTraceLogStorageTable"
 _UC_TRACE_ANNOTATION_TAG = "mlflow.experiment.databricksTraceAnnotationStorageTable"
+# MLflow does NOT emit a metrics storage tag today, but read it if present (it takes precedence over
+# the destination-path derivation below), so mason picks the metrics table up automatically if MLflow
+# starts tagging it.
+_UC_TRACE_METRIC_TAG = "mlflow.experiment.databricksTraceMetricStorageTable"
 
 
 @dataclass(frozen=True)
@@ -137,11 +141,15 @@ class TraceTable:
 
 @dataclass(frozen=True)
 class MLflowTraceTables:
-    """The UC OTEL base tables backing a UC experiment's traces (fully-qualified names; None when absent)."""
+    """The UC OTEL base tables backing a UC experiment's traces (fully-qualified names; None when absent).
+
+    The base tables are spans, logs, annotations, and metrics - all four are granted MODIFY.
+    """
 
     spans: Optional[str] = None
     logs: Optional[str] = None
     annotations: Optional[str] = None
+    metrics: Optional[str] = None
 
     def otel_tables(self) -> list[TraceTable]:
         """Present TraceTable entries in a stable order, for grants + resource naming."""
@@ -151,6 +159,7 @@ class MLflowTraceTables:
                 ("spans", self.spans),
                 ("logs", self.logs),
                 ("annotations", self.annotations),
+                ("metrics", self.metrics),
             )
             if name
         ]
@@ -159,18 +168,37 @@ class MLflowTraceTables:
         return bool(self.otel_tables())
 
 
+def _metrics_table_from_destination(tags: dict) -> Optional[str]:
+    """The ``_otel_metrics`` base table, derived from the destination path.
+
+    MLflow creates a fourth OTEL base table (metrics) but, unlike spans/logs/annotations, does not emit
+    a per-kind storage tag for it - so its name is derived from the destination path
+    (``databricksTraceDestinationPath``) by the same ``<...>_otel_metrics`` convention used for the
+    other tables. It's granted because Databricks requires MODIFY on every OTEL base table to export
+    traces, even though the agent-tracing export path does not write metrics rows today (a MODIFY grant
+    on an unwritten - or absent - table is harmless). Returns None when there's no destination path.
+    """
+    parts = (tags.get(_UC_TRACE_TAG) or "").split(".")
+    if len(parts) == 3:
+        return f"{'.'.join(parts)}_otel_metrics"
+    if len(parts) == 2:
+        return f"{'.'.join(parts)}.mlflow_experiment_trace_otel_metrics"
+    return None
+
+
 def uc_trace_tables(experiment) -> MLflowTraceTables:
     """The UC OTEL base tables backing a UC experiment's traces; empty when managed.
 
     A UC-backed experiment stores traces in Unity Catalog base tables the deployed app must be granted
-    MODIFY on (spans, logs, annotations). MLflow records each as a per-kind storage-table tag whose
-    value is the fully-qualified ``<catalog>.<schema>.<table>`` - those tags are the source of truth
-    (the ``UnityCatalog`` entity only surfaces spans/logs, so reading tags is what catches the
-    annotations table). Reading these three specific tags naturally excludes the "unified"
+    MODIFY on (spans, logs, annotations, metrics). MLflow records spans/logs/annotations as per-kind
+    storage-table tags whose value is the fully-qualified ``<catalog>.<schema>.<table>`` - those tags
+    are the source of truth (the ``UnityCatalog`` entity only surfaces spans/logs, so reading tags is
+    what catches the annotations table). Reading these specific tags naturally excludes the "unified"
     ``databricksTraceStorageTable`` tag, which names a read-side VIEW, not a writable table; the
-    modeling is intentionally explicit per kind, so a new OTEL kind would be a new field, not another
-    discovered tag. Falls back to deriving names from the destination path when the per-kind tags are
-    absent. Returns an empty ``MLflowTraceTables`` for a managed experiment.
+    modeling is intentionally explicit per kind. The metrics table is always derived from the
+    destination path because MLflow does not emit a per-kind tag for it (see
+    ``_metrics_table_from_destination``). Falls back to deriving all names from the destination path
+    when the per-kind tags are absent. Returns an empty ``MLflowTraceTables`` for a managed experiment.
     """
     tags = getattr(experiment, "tags", None) or {}
     if _UC_TRACE_TAG not in tags:
@@ -179,8 +207,12 @@ def uc_trace_tables(experiment) -> MLflowTraceTables:
         spans=tags.get(_UC_TRACE_SPAN_TAG) or None,
         logs=tags.get(_UC_TRACE_LOG_TAG) or None,
         annotations=tags.get(_UC_TRACE_ANNOTATION_TAG) or None,
+        metrics=tags.get(_UC_TRACE_METRIC_TAG) or _metrics_table_from_destination(tags),
     )
-    if tables:
+    # Gate on the TAGGED base tables (not metrics, which is always derived from the destination path):
+    # when any per-kind tag is present, that's the authoritative layout; otherwise fall through to
+    # deriving all base names from the destination path.
+    if tables.spans or tables.logs or tables.annotations:
         return tables
     # Fallback: derive from the destination path (`<catalog>.<schema>[.<table_prefix>]`) when the
     # per-kind storage tags aren't present.
@@ -191,6 +223,7 @@ def uc_trace_tables(experiment) -> MLflowTraceTables:
             spans=f"{prefix}_otel_spans",
             logs=f"{prefix}_otel_logs",
             annotations=f"{prefix}_otel_annotations",
+            metrics=f"{prefix}_otel_metrics",
         )
     if len(parts) == 2:
         base = ".".join(parts)
@@ -198,6 +231,7 @@ def uc_trace_tables(experiment) -> MLflowTraceTables:
             spans=f"{base}.mlflow_experiment_trace_otel_spans",
             logs=f"{base}.mlflow_experiment_trace_otel_logs",
             annotations=f"{base}.mlflow_experiment_trace_otel_annotations",
+            metrics=f"{base}.mlflow_experiment_trace_otel_metrics",
         )
     return MLflowTraceTables()
 

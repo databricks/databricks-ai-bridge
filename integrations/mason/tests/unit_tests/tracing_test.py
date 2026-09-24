@@ -145,6 +145,7 @@ def test_create_experiment_idempotent_returns_uc_tables():
             spans="cat.schema.pfx_otel_spans",
             logs="cat.schema.pfx_otel_logs",
             annotations="cat.schema.pfx_otel_annotations",
+            metrics="cat.schema.pfx_otel_metrics",
         ),
     )
     client.ensure_workspace_dir.assert_not_called()  # existing experiment -> no dir work
@@ -184,15 +185,19 @@ def test_uc_trace_tables_reads_all_base_table_tags_excluding_unified_view():
     assert tables.spans == "cat.schema.pfx_otel_spans"
     assert tables.logs == "cat.schema.pfx_otel_logs"
     assert tables.annotations == "cat.schema.pfx_otel_annotations"
+    # metrics has no per-kind tag; it's derived from the destination path (cat.schema.pfx).
+    assert tables.metrics == "cat.schema.pfx_otel_metrics"
     assert tables.otel_tables() == [
         tracing_mod.TraceTable("spans", "cat.schema.pfx_otel_spans"),
         tracing_mod.TraceTable("logs", "cat.schema.pfx_otel_logs"),
         tracing_mod.TraceTable("annotations", "cat.schema.pfx_otel_annotations"),
+        tracing_mod.TraceTable("metrics", "cat.schema.pfx_otel_metrics"),
     ]
 
 
-def test_uc_trace_tables_reads_span_and_log_only_layout():
-    # An older UC experiment with just spans + logs (no annotations tag) still excludes the unified tag.
+def test_uc_trace_tables_reads_span_log_and_derived_metrics_layout():
+    # An older UC experiment with just spans + logs tags (no annotations tag) still excludes the unified
+    # tag; metrics is derived from the destination path even without a per-kind tag.
     experiment = _uc_experiment(
         **{
             _SPAN_TAG: "cat.schema.pfx_otel_spans",
@@ -202,9 +207,11 @@ def test_uc_trace_tables_reads_span_and_log_only_layout():
     )
     tables = tracing_mod.uc_trace_tables(experiment)
     assert tables.annotations is None
+    assert tables.metrics == "cat.schema.pfx_otel_metrics"
     assert tables.otel_tables() == [
         tracing_mod.TraceTable("spans", "cat.schema.pfx_otel_spans"),
         tracing_mod.TraceTable("logs", "cat.schema.pfx_otel_logs"),
+        tracing_mod.TraceTable("metrics", "cat.schema.pfx_otel_metrics"),
     ]
 
 
@@ -215,6 +222,7 @@ def test_uc_trace_tables_falls_back_to_derived_names_for_three_part_path():
         spans="cat.schema.pfx_otel_spans",
         logs="cat.schema.pfx_otel_logs",
         annotations="cat.schema.pfx_otel_annotations",
+        metrics="cat.schema.pfx_otel_metrics",
     )
 
 
@@ -227,6 +235,7 @@ def test_uc_trace_tables_falls_back_to_legacy_fixed_names_for_two_part_path():
         spans="cat.schema.mlflow_experiment_trace_otel_spans",
         logs="cat.schema.mlflow_experiment_trace_otel_logs",
         annotations="cat.schema.mlflow_experiment_trace_otel_annotations",
+        metrics="cat.schema.mlflow_experiment_trace_otel_metrics",
     )
 
 
