@@ -16,9 +16,6 @@ client -> runtime/main.py -> runtime/adapter.py -> agent/agent.py:run_agent
   `invoke` and `recover`.
 - `runtime/main.py` constructs the server and registers those hooks.
 
-Generated runtime code imports from `databricks_agentkit`, and existing runtime import paths remain
-supported. The AgentKit client uses `databricks_agentkit.AgentKitClient`.
-
 To bring an existing Agents SDK agent, keep its normal execution code in `agent/agent.py`, expose a
 `run_agent` function that returns the native streaming result, and make only the small payload/event
 mapping changes needed in `runtime/adapter.py`.

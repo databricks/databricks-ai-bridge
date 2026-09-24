@@ -15,9 +15,6 @@ client -> runtime/main.py -> runtime/adapter.py -> agent/agent.py:run_agent
   `invoke` and `recover`.
 - `runtime/main.py` constructs the server and registers those hooks.
 
-Generated runtime code imports from `databricks_agentkit`, and existing runtime import paths remain
-supported. The AgentKit client uses `databricks_agentkit.AgentKitClient`.
-
 To bring an existing LangGraph agent, run `ab init --framework langgraph --existing .` in its
 project and follow the generated prompt in your coding agent. The migration skill and this template share
 [AGENTKIT_CONTRACT.md](AGENTKIT_CONTRACT.md), which owns integration requirements. This README owns
