@@ -900,7 +900,7 @@ _Options_
 
 List recent agent traces in an experiment.
 
-An explicit ``--experiment-name`` / ``--experiment-id`` reads that workspace experiment and must name one that exists (errors otherwise, so a typo isn't mistaken for an empty experiment). With neither, this project's experiment is read: the workspace one if it's been provisioned (by `ab deploy`), otherwise the local `ab dev` store (`.agentbricks/mlflow.db`), so a not-yet-deployed dev run's traces still show up here (tagged "(local dev)"). Nothing traced anywhere yet lists nothing.
+An explicit ``--experiment-name`` / ``--experiment-id`` reads that workspace experiment and must name one that exists (errors otherwise, so a typo isn't mistaken for an empty experiment). With neither, this project's experiment is read: the workspace one if it's been provisioned (by `ab deploy`), otherwise the local `ab dev` store (`.agentbricks/mlflow.db`), so a not-yet-deployed dev run's traces still show up here (tagged "(local dev)"). Nothing traced anywhere yet lists nothing. A UC-backed experiment is read through a SQL warehouse (``--warehouse``).
 
 ```
 ab tracing list [options]
@@ -913,6 +913,7 @@ _Options_
 | --- | --- | --- | --- | --- |
 | `--experiment-name <EXPERIMENT_NAME>` | string | - | no | MLflow experiment name to read (an absolute workspace path). Default: this project's experiment. |
 | `--experiment-id <EXPERIMENT_ID>` | string | - | no | MLflow experiment id to read (e.g. from the experiment URL). Mutually exclusive with --experiment-name. |
+| `--warehouse <WAREHOUSE_ID>` | string | - | no | SQL warehouse id used to read traces from a UC-backed experiment (required for UC experiments; ignored for managed). Falls back to the MLFLOW_TRACING_SQL_WAREHOUSE_ID env var. |
 | `--limit <LIMIT>` | integer | `20` | no | - |
 | `--source <SOURCE>` | path | `.` | no | Project directory to resolve the default experiment from (default: current dir). |
 
@@ -920,7 +921,7 @@ _Options_
 
 Get a single trace by id (status, latency, span count, previews).
 
-Reads from the same place as `ab tracing list`: an explicit ``--experiment-name`` / ``--experiment-id`` targets that workspace store and must name one that exists (errors otherwise); otherwise this project's workspace experiment if provisioned, else its local `ab dev` store.
+Reads from the same place as `ab tracing list`: an explicit ``--experiment-name`` / ``--experiment-id`` targets that workspace store and must name one that exists (errors otherwise); otherwise this project's workspace experiment if provisioned, else its local `ab dev` store. A UC-backed experiment is read through a SQL warehouse (``--warehouse``).
 
 ```
 ab tracing get TRACE_ID [options]
@@ -939,6 +940,7 @@ _Options_
 | --- | --- | --- | --- | --- |
 | `--experiment-name <EXPERIMENT_NAME>` | string | - | no | MLflow experiment name to read (an absolute workspace path). Default: this project's experiment. |
 | `--experiment-id <EXPERIMENT_ID>` | string | - | no | MLflow experiment id to read (e.g. from the experiment URL). Mutually exclusive with --experiment-name. |
+| `--warehouse <WAREHOUSE_ID>` | string | - | no | SQL warehouse id used to read traces from a UC-backed experiment (required for UC experiments; ignored for managed). Falls back to the MLFLOW_TRACING_SQL_WAREHOUSE_ID env var. |
 | `--source <SOURCE>` | path | `.` | no | Project directory to resolve the experiment from (default: current dir). |
 
 ### `ab deploy`

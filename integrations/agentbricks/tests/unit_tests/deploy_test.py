@@ -13,6 +13,7 @@ from click.testing import CliRunner
 
 from databricks_agentbricks.agent_project import AgentProject, ToolSpec
 from databricks_agentbricks.cli import deploy as deploy_mod
+from databricks_agentbricks.cli.tracing import MLflowTraceTables, ResolvedTraceExperiment
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.project_config import write_project_metadata
 
@@ -32,6 +33,7 @@ def _compute_active(monkeypatch):
 def _no_tracing_by_default(monkeypatch):
     # Tracing is on by default and would create an MLflow experiment (a live workspace op); stub the
     # provisioning off so non-tracing deploy tests stay hermetic. Tracing tests override this.
+    # (The trace-resource reconcile is stubbed dir-wide by conftest.py's autouse fixture.)
     monkeypatch.setattr(deploy_mod, "get_or_create_trace_experiment", lambda *a, **k: None)
 
 
@@ -85,6 +87,29 @@ def test_upsert_manifest_env_preserves_unrelated_entries_and_replaces_value_from
 
     doc = yaml.safe_load((tmp_path / "app.yaml").read_text())
     assert doc["env"] == [unrelated, {"name": "AGENT_MEMORY_STORE", "value": "new"}]
+
+
+def test_upsert_manifest_env_removes_named_entries(tmp_path: pathlib.Path):
+    # `removals` drops named entries (e.g. the MLFLOW_* keys on unbind) while upsert still applies and
+    # unrelated entries are preserved.
+    (tmp_path / "app.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "command": ["x"],
+                "env": [
+                    {"name": "KEEP", "value": "1"},
+                    {"name": "MLFLOW_TRACKING_URI", "value": "databricks"},
+                    {"name": "MLFLOW_EXPERIMENT_ID", "value": "123"},
+                ],
+            }
+        )
+    )
+    scaffolded = deploy_mod._upsert_manifest_env(
+        tmp_path, {"OTHER": "z"}, removals=["MLFLOW_TRACKING_URI", "MLFLOW_EXPERIMENT_ID"]
+    )
+    assert scaffolded is False
+    doc = yaml.safe_load((tmp_path / "app.yaml").read_text())
+    assert doc["env"] == [{"name": "KEEP", "value": "1"}, {"name": "OTHER", "value": "z"}]
 
 
 def test_managed_runtime_store_is_an_internal_disabled_rollout_switch():
@@ -495,6 +520,8 @@ def test_deploy_custom_server_skips_runtime_store_provisioning_and_binding(
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda app, profile: False)
     monkeypatch.setattr(_FakeClient, "create_runtime_store", create)
+    # the trace-resource reconcile issues its own create-update and is out of scope here
+    monkeypatch.setattr(deploy_mod, "apply_trace_resources", mock.Mock(return_value=None))
     monkeypatch.setattr(deploy_mod, "_databricks", fake_databricks)
 
     result = CliRunner().invoke(
@@ -958,12 +985,18 @@ def test_deploy_wires_tracing_env_and_grants_experiment_resource(
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(deploy_mod, "get_or_create_trace_experiment", lambda *a, **k: "exp-42")
+    monkeypatch.setattr(
+        deploy_mod,
+        "get_or_create_trace_experiment",
+        lambda *a, **k: deploy_mod.ResolvedTraceExperiment("exp-42", MLflowTraceTables()),
+    )
     granted: dict = {}
     monkeypatch.setattr(
         deploy_mod,
-        "apply_experiment_resource",
-        lambda app, experiment_id, profile: granted.update(app=app, experiment_id=experiment_id),
+        "apply_trace_resources",
+        lambda app, experiment_id, tables, profile: granted.update(
+            app=app, experiment_id=experiment_id, tables=tables
+        ),
     )
     monkeypatch.setattr(
         deploy_mod,
@@ -977,14 +1010,177 @@ def test_deploy_wires_tracing_env_and_grants_experiment_resource(
     env = {e["name"]: e["value"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
     assert env["MLFLOW_EXPERIMENT_ID"] == "exp-42"
     assert env["MLFLOW_TRACKING_URI"] == "databricks"
-    # the experiment is granted to the app's SP as an app resource (no manual SQL grant)
-    assert granted == {"app": "agent-bricks-myapp", "experiment_id": "exp-42"}
+    # the experiment is granted to the app's SP as an app resource (no manual SQL grant); a managed
+    # experiment carries no UC tables
+    assert granted == {"app": "agent-bricks-myapp", "experiment_id": "exp-42", "tables": []}
     assert "Deployed without tracing" not in result.output  # bound -> no unbound notice
+
+
+def test_deploy_grants_uc_trace_tables_for_uc_backed_experiment(tmp_path, monkeypatch):
+    # A bound experiment that resolves UC-backed: deploy grants the experiment (CAN_EDIT) AND MODIFY
+    # on its UC OTEL tables in ONE trace-resource write - the experiment grant alone does not
+    # propagate to the UC tables the app exports traces to.
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    tables = MLflowTraceTables(spans="cat.schema.otel_spans", logs="cat.schema.otel_logs")
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "get_or_create_trace_experiment",
+        lambda *a, **k: deploy_mod.ResolvedTraceExperiment("exp-uc", tables),
+    )
+    trace_grant = mock.Mock(return_value=None)
+    monkeypatch.setattr(deploy_mod, "apply_trace_resources", trace_grant)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code == 0, result.output
+    # deploy hands the grant the (kind, table) pairs from the resolved tables
+    trace_grant.assert_called_once_with(
+        "agent-bricks-myapp", "exp-uc", tables.otel_tables(), "prof"
+    )
+    env = {e["name"]: e["value"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
+    assert env["MLFLOW_EXPERIMENT_ID"] == "exp-uc"
+    # the success line is the same for UC and managed experiments (they converge)
+    out = " ".join(result.output.replace("│", " ").split())
+    assert "granted to agent runtime service principal" in out
+
+
+def test_deploy_grants_managed_experiment_with_no_uc_tables(tmp_path, monkeypatch):
+    # A managed experiment has no UC tables: the single trace-resource grant gets an empty table
+    # tuple (which also converges away any stale table resources from a prior UC binding).
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "get_or_create_trace_experiment",
+        lambda *a, **k: deploy_mod.ResolvedTraceExperiment("exp-42", MLflowTraceTables()),
+    )
+    trace_grant = mock.Mock(return_value=None)
+    monkeypatch.setattr(deploy_mod, "apply_trace_resources", trace_grant)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code == 0, result.output
+    trace_grant.assert_called_once_with("agent-bricks-myapp", "exp-42", [], "prof")
+
+
+def test_deploy_proceeds_when_trace_grant_fails(tmp_path, monkeypatch):
+    # The trace grant is best-effort: a failure surfaces as next-step guidance but never aborts
+    # the deploy.
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    tables = MLflowTraceTables(spans="cat.schema.otel_spans")
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "get_or_create_trace_experiment",
+        lambda *a, **k: deploy_mod.ResolvedTraceExperiment("exp-uc", tables),
+    )
+    monkeypatch.setattr(
+        deploy_mod,
+        "apply_trace_resources",
+        mock.Mock(return_value="denied: needs MANAGE on the catalog"),
+    )
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code == 0, result.output  # deploy still succeeded
+    # the panel wraps long lines behind │ borders; strip them so wrapped phrases still match
+    out = " ".join(result.output.replace("│", " ").split())
+    assert "needs write access to its trace experiment" in out  # grant-failure guidance shown
+    assert "denied: needs MANAGE on the catalog" in out  # the cause is surfaced
+
+
+def test_deploy_reconciles_trace_resources_even_when_unbound(tmp_path, monkeypatch):
+    # Unbound (ab tracing unbind): deploy still reconciles the agentbricks-owned trace set - passing
+    # experiment_id=None prunes stale agentbricks-trace-* resources left by a previously bound deploy.
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    # the autouse fixture already stubs get_or_create_trace_experiment -> None (unbound)
+    trace_grant = mock.Mock(return_value=None)
+    monkeypatch.setattr(deploy_mod, "apply_trace_resources", trace_grant)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code == 0, result.output
+    trace_grant.assert_called_once_with("agent-bricks-myapp", None, [], "prof")
+
+
+def test_deploy_rebind_uc_to_uc_reconciles_to_the_new_table_set(tmp_path, monkeypatch):
+    # UC -> UC rebind: the redeploy resolves the NEW experiment's tables and reconciles to them, so
+    # the old experiment's agentbricks-trace-table-* resources are dropped in the same write (convergence
+    # itself is apply_trace_resources' job; here we guard that deploy passes the new set through).
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    # the app currently carries the OLD experiment's 3 table resources (documentation only - the
+    # app state itself is apply_trace_resources' concern, stubbed here)
+    old_tables = MLflowTraceTables(
+        spans="old.schema.otel_spans",
+        logs="old.schema.otel_logs",
+        annotations="old.schema.otel_annotations",
+    )
+    new_tables = MLflowTraceTables(spans="new.schema.otel_spans", logs="new.schema.otel_logs")
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "get_or_create_trace_experiment",
+        lambda *a, **k: deploy_mod.ResolvedTraceExperiment("exp-new", new_tables),
+    )
+    trace_grant = mock.Mock(return_value=None)
+    monkeypatch.setattr(deploy_mod, "apply_trace_resources", trace_grant)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code == 0, result.output
+    assert len(old_tables.otel_tables()) != len(new_tables.otel_tables())  # the table count changed
+    trace_grant.assert_called_once_with(
+        "agent-bricks-myapp", "exp-new", new_tables.otel_tables(), "prof"
+    )
 
 
 def test_deploy_proceeds_when_tracing_provisioning_raises(tmp_path: pathlib.Path, monkeypatch):
     # Tracing provisioning is best-effort: a non-AgentCliError (e.g. MLflow/network) must not abort
-    # the deploy — it proceeds without tracing.
+    # the deploy — it proceeds without tracing. Crucially, a resolve FAILURE must NOT prune the
+    # agentbricks-owned trace resources: we don't know the intended state, so a flaky/offline deploy of a
+    # still-bound experiment must not silently revoke the SP's grants the way an unbind does.
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
@@ -994,6 +1190,8 @@ def test_deploy_proceeds_when_tracing_provisioning_raises(tmp_path: pathlib.Path
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(deploy_mod, "get_or_create_trace_experiment", _boom)
+    trace_grant = mock.Mock(return_value=None)
+    monkeypatch.setattr(deploy_mod, "apply_trace_resources", trace_grant)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
@@ -1006,6 +1204,7 @@ def test_deploy_proceeds_when_tracing_provisioning_raises(tmp_path: pathlib.Path
     out = " ".join(result.output.split())
     assert "Deployed without tracing" in out and "ab tracing bind" in out  # guidance shown
     assert "mlflow create_experiment blew up" in out  # the cause is surfaced
+    trace_grant.assert_not_called()  # resolve errored -> reconcile skipped, grants left intact
 
 
 def test_deploy_notifies_when_tracing_unbound(tmp_path: pathlib.Path, monkeypatch):
@@ -1026,6 +1225,38 @@ def test_deploy_notifies_when_tracing_unbound(tmp_path: pathlib.Path, monkeypatc
     assert "Deployed without tracing" in out
     assert "ab tracing bind" in out  # points at the (parameter-free) enable command
     assert "Tracing setup failed" not in out  # unbound is not an error, so no cause suffix
+
+
+def test_deploy_prunes_stale_trace_env_from_manifest_on_unbind(tmp_path: pathlib.Path, monkeypatch):
+    # A previously-bound app.yaml carries the MLFLOW_* trace env. On a CLEAN unbind (autouse fixture
+    # stubs resolve -> None with no setup error), deploy prunes those keys so the manifest stops
+    # pointing the runtime at an experiment whose grant was just pruned; unrelated env is preserved.
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "command": ["x"],
+                "env": [
+                    {"name": "KEEP", "value": "1"},
+                    {"name": deploy_mod.TRACES_TRACKING_URI_ENV, "value": "databricks"},
+                    {"name": deploy_mod.TRACES_EXPERIMENT_ID_ENV, "value": "old-exp"},
+                ],
+            }
+        )
+    )
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+    assert result.exit_code == 0, result.output
+    names = {e["name"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
+    assert deploy_mod.TRACES_TRACKING_URI_ENV not in names  # stale trace env pruned
+    assert deploy_mod.TRACES_EXPERIMENT_ID_ENV not in names
+    assert "KEEP" in names  # unrelated env preserved
 
 
 def test_resolve_memory_store_pages_at_100_and_matches_display_name():
@@ -1172,9 +1403,12 @@ def test_resolve_trace_experiment_get_or_creates_bound_name(tmp_path: pathlib.Pa
     monkeypatch.setattr(
         deploy_mod,
         "create_experiment_idempotent",
-        lambda profile, client, name: created.update(name=name) or "id-b",
+        lambda profile, client, name: created.update(name=name)
+        or ResolvedTraceExperiment("id-b", MLflowTraceTables()),
     )
-    assert _REAL_RESOLVE_TRACE(tmp_path, _FakeClient(), None) == "id-b"
+    assert _REAL_RESOLVE_TRACE(tmp_path, _FakeClient(), None) == deploy_mod.ResolvedTraceExperiment(
+        "id-b", MLflowTraceTables()
+    )
     assert created["name"] == "/Shared/agentbricks_traces/bound"
     from databricks_agentbricks.agent_project import AgentProject
 
@@ -1194,10 +1428,15 @@ def test_resolve_trace_experiment_get_or_creates_by_name_each_run(
     monkeypatch.setattr(
         deploy_mod,
         "create_experiment_idempotent",
-        lambda profile, client, name: calls.append(name) or "made-id",
+        lambda profile, client, name: calls.append(name)
+        or ResolvedTraceExperiment("made-id", MLflowTraceTables()),
     )
-    assert _REAL_RESOLVE_TRACE(tmp_path, _FakeClient(), None) == "made-id"
-    assert _REAL_RESOLVE_TRACE(tmp_path, _FakeClient(), None) == "made-id"
+    assert _REAL_RESOLVE_TRACE(tmp_path, _FakeClient(), None) == deploy_mod.ResolvedTraceExperiment(
+        "made-id", MLflowTraceTables()
+    )
+    assert _REAL_RESOLVE_TRACE(tmp_path, _FakeClient(), None) == deploy_mod.ResolvedTraceExperiment(
+        "made-id", MLflowTraceTables()
+    )
     assert calls == ["/Shared/agentbricks_traces/bound", "/Shared/agentbricks_traces/bound"]
 
 

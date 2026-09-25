@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import pathlib
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -28,8 +29,8 @@ import databricks_agentbricks.lakebase_runtime_store as managed_runtime_store
 import databricks_agentbricks.legacy_lakebase_runtime_store as legacy_runtime_store
 from databricks_agentbricks import render
 from databricks_agentbricks.app_resources import (
-    apply_experiment_resource,
     apply_postgres_resources,
+    apply_trace_resources,
 )
 from databricks_agentbricks.cli.app_auth import (
     apply_app_user_scope_update,
@@ -42,6 +43,8 @@ from databricks_agentbricks.cli.tracing import (
     TRACES_EXPERIMENT_ID_ENV,
     TRACES_TRACKING_URI_ENV,
     TRACING_BIND_COMMAND,
+    MLflowTraceTables,
+    ResolvedTraceExperiment,
     create_experiment_idempotent,
     experiment_url,
 )
@@ -189,8 +192,15 @@ def _wait_for_running(name: str, profile: Optional[str], timeout_s: int = 300) -
 def _upsert_manifest_env(
     source: pathlib.Path,
     updates: dict[str, str],
+    removals: Sequence[str] = (),
 ) -> bool:
-    """Reconcile env entries in <source>/app.yaml. Returns True if it scaffolded a new file."""
+    """Reconcile env entries in <source>/app.yaml: upsert ``updates``, drop any named in ``removals``.
+
+    Returns True if it scaffolded a new file. ``removals`` lets an unbind clear stale agentbricks-managed env
+    (e.g. the ``MLFLOW_*`` keys when tracing is unbound) so the manifest stops pointing the deployed
+    runtime at a resource whose grant has just been pruned; without it, the upsert-only merge would
+    leave the stale entry behind. ``updates`` and ``removals`` are expected to be disjoint.
+    """
     app_yaml = source / "app.yaml"
     if app_yaml.exists():
         loaded = yaml.safe_load(app_yaml.read_text())
@@ -210,6 +220,9 @@ def _upsert_manifest_env(
             by_name[name].pop("valueFrom", None)
         else:
             env.append({"name": name, "value": value})
+    if removals:
+        drop = set(removals)
+        env = [e for e in env if e.get("name") not in drop]
     doc["env"] = env
     app_yaml.write_text(yaml.safe_dump(doc, sort_keys=False))
     return scaffolded
@@ -374,9 +387,11 @@ def _reconcile_declared_stores(
     return memory_store_id
 
 
-def get_or_create_trace_experiment(source: pathlib.Path, client, profile) -> Optional[str]:
-    """Get-or-create this project's bound MLflow experiment in the ``profile``'s workspace and return
-    its id, or None when tracing is unbound (no ``experiment_name`` in agent.toml).
+def get_or_create_trace_experiment(
+    source: pathlib.Path, client, profile
+) -> Optional[ResolvedTraceExperiment]:
+    """Get-or-create this project's bound MLflow experiment in the ``profile``'s workspace, or None
+    when tracing is unbound (no ``experiment_name`` in agent.toml).
 
     Resolves by experiment **name**, never a stored id. ``source`` locates agent.toml. Nothing is
     written back to agent.toml. Raises if the experiment can't be created.
@@ -395,7 +410,8 @@ def get_or_create_trace_experiment(source: pathlib.Path, client, profile) -> Opt
     # Show progress while the experiment is get-or-created (a workspace round-trip), matching the
     # memory/session store reconcile spinners so deploy isn't silent about tracing.
     with render.status(f"Reconciling tracing experiment '{name}'…"):
-        return create_experiment_idempotent(profile, client, name)
+        resolved = create_experiment_idempotent(profile, client, name)
+    return resolved
 
 
 @dataclass(frozen=True)
@@ -580,29 +596,36 @@ def deploy(
     #    experiment NAME from agent.toml and wire the two env vars the runtime reads. Resolved by name,
     #    never a stored id, and nothing is written back to agent.toml. (`ab dev` traces to a local
     #    MLflow server instead and never touches this workspace experiment.) The app's SP is granted
-    #    write access to it in step 5 (an experiment app resource). Best-effort: if it can't be set up
+    #    write access to it in step 5 (an experiment app resource, plus MODIFY on its UC OTEL tables
+    #    when UC-backed). Best-effort: if it can't be set up
     #    (no mlflow, offline, permission), the deploy still proceeds without tracing.
-    trace_experiment_id: Optional[str] = None
+    trace_provision: Optional[ResolvedTraceExperiment] = None
     trace_setup_error: Optional[str] = None
     try:
-        trace_experiment_id = get_or_create_trace_experiment(source_dir, client, obj.profile)
+        trace_provision = get_or_create_trace_experiment(source_dir, client, obj.profile)
     except Exception as exc:  # noqa: BLE001 - tracing is best-effort; never block a deploy
         trace_setup_error = str(exc)
+    trace_experiment_id = trace_provision.experiment_id if trace_provision else None
+    trace_tables = trace_provision.tables if trace_provision else MLflowTraceTables()
     env_updates: dict[str, str] = {}
     provisioned: dict[str, Any] = {}
     if memory_store:
         provisioned["Memory store"] = memory_store
     if session_store:
         provisioned["Session store"] = session_store
+    # Trace env: set it when bound; on a CLEAN unbind (tracing resolved to None, no setup error) remove
+    # the stale MLFLOW_* keys so the manifest stops pointing the runtime at an experiment whose grant
+    # was just pruned. On a resolve ERROR (trace_setup_error) we touch neither the env nor the trace
+    # resources - a transient failure must not look like an unbind. (Store env is still upsert-only, a
+    # separate follow-up.)
+    trace_env_removals: list[str] = []
     if trace_experiment_id:
         env_updates.update(mlflow_tracing_config(trace_experiment_id).env())
         provisioned["Traces"] = (
             experiment_url(client.host, trace_experiment_id) or trace_experiment_id
         )
-    # Known caveat (pre-existing): `_upsert_manifest_env` is upsert-only, so unbinding tracing and
-    # redeploying leaves the previous MLFLOW_EXPERIMENT_ID in app.yaml - deploy adds env but never
-    # prunes it. A fresh (never-bound) deploy is clean; pruning stale resource env on redeploy is a
-    # separate follow-up.
+    elif trace_setup_error is None:
+        trace_env_removals = list(mlflow_tracing_config("").env())  # the MLFLOW_* keys to prune
     if memory_store_id:
         env_updates[MEMORY_STORE_ENV] = memory_store_id
     if session_store:
@@ -628,8 +651,8 @@ def deploy(
     # 3. Patch app.yaml before creating the app. The managed Runtime Store fields are added after
     #    app creation because that API requires the app's service principal.
     scaffolded = False
-    if env_updates:
-        scaffolded = _upsert_manifest_env(source_dir, env_updates)
+    if env_updates or trace_env_removals:
+        scaffolded = _upsert_manifest_env(source_dir, env_updates, trace_env_removals)
 
     # 4. Ensure the app exists and its compute is active. Create only when new; the compute wait
     #    runs every deploy.
@@ -716,7 +739,8 @@ def deploy(
     # 6. Grant the app's service principal what it needs to run (best-effort):
     #    - stores: grant the SP read/write via the managed store API (the store service does the
     #      underlying Lakebase grant, so no store ownership / Lakebase MANAGE is required here);
-    #    - tracing: bind the experiment as an `experiment` resource (CAN_EDIT) so it can write traces.
+    #    - tracing: bind the experiment as an `experiment` resource (CAN_EDIT) so it can write traces;
+    #      a UC-backed experiment also needs MODIFY on its UC OTEL tables (`uc_securable` resources).
     #    The experiment resource is the platform-managed grant — no manual SQL grant needed.
     grants_stores = bool(session_store or memory_store)
     grant_error: Optional[str] = None
@@ -727,10 +751,20 @@ def deploy(
                 grant_error = "could not resolve the app's service principal."
             else:
                 grant_error = _grant_store_access(client, sp, session_store, memory_store)
+    # Reconcile the agentbricks-owned trace resources whenever tracing resolved cleanly (`trace_setup_error
+    # is None`): a resolved experiment grants that set, and a cleanly-unbound project (experiment_id
+    # None) prunes stale agentbricks-trace-experiment / agentbricks-trace-table-* resources left by an earlier
+    # bound deploy. If resolving the BOUND experiment errored instead (offline / permission /
+    # transient), we don't know the intended state, so we skip the reconcile rather than prune - a
+    # flaky deploy must not silently revoke the SP's trace access the way an unbind does. (Whether
+    # removing a `uc_securable` resource also revokes the underlying UC MODIFY grant is platform
+    # behavior - documented but not yet verified live.)
     trace_grant_error: Optional[str] = None
-    if trace_experiment_id:
-        with render.status("Granting the app access to its trace experiment…"):
-            trace_grant_error = apply_experiment_resource(name, trace_experiment_id, obj.profile)
+    if trace_setup_error is None:
+        with render.status("Granting the agent runtime access to its trace experiment…"):
+            trace_grant_error = apply_trace_resources(
+                name, trace_experiment_id, trace_tables.otel_tables(), obj.profile
+            )
 
     app_url = _app_url(name, obj.profile)
 
@@ -742,6 +776,7 @@ def deploy(
                 "workspace_path": ws_path,
                 "env": env_updates,
                 "trace_experiment_id": trace_experiment_id,
+                "uc_trace_tables": [t.full_name for t in trace_tables.otel_tables()],
                 "trace_setup_error": trace_setup_error,
                 "trace_grant": None
                 if not trace_experiment_id
@@ -792,7 +827,7 @@ def deploy(
     if grants_stores and grant_error is None:
         provisioned["Store access"] = "granted to app service principal"
     if trace_experiment_id and trace_grant_error is None:
-        provisioned["Trace access"] = "granted to app service principal"
+        provisioned["Trace access"] = "granted to agent runtime service principal"
     fields = {"URL": app_url} if app_url else {}
     fields.update({"Workspace path": ws_path, **provisioned})
     render.success(
