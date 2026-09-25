@@ -139,9 +139,12 @@ class DurableAgentServer(FastAPI):
     ) -> JsonValue:
         if not isinstance(invocation_request, dict):
             raise TypeError("invocation request must be an object")
-        session_id = invocation_request.get("session_id")
-        if not isinstance(session_id, str) or "input" not in invocation_request:
-            raise TypeError("invocation request must contain session_id and input")
+        session_id = attempt_context.session_id
+        if session_id is None:
+            legacy_session_id = invocation_request.get("session_id")
+            session_id = legacy_session_id if isinstance(legacy_session_id, str) else None
+        if session_id is None or "input" not in invocation_request:
+            raise TypeError("invocation attempt must contain session_id and input")
         invocation_id = attempt_context.invocation_id
         request_auth = None
         if self.auth_policy.requires_user:

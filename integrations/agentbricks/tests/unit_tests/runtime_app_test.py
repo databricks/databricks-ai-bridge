@@ -152,6 +152,21 @@ async def test_recovery_attempt_uses_recovery_hook() -> None:
 
 
 @pytest.mark.asyncio
+async def test_attempt_context_is_the_source_of_session_identity() -> None:
+    async def invoke(input, context):
+        return context.session_id
+
+    app = make_app(invoke)
+
+    result = await app._execute(
+        {"input": "hello", "session_id": "legacy-session"},
+        InvocationAttemptContext(_RUN_1, 1, session_id="stored-session"),
+    )
+
+    assert result == "stored-session"
+
+
+@pytest.mark.asyncio
 async def test_recovery_attempt_requires_a_recovery_hook() -> None:
     app = make_app()
 

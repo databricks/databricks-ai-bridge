@@ -41,32 +41,96 @@ class MemoryDurableRuntimeStore:
     async def close(self) -> None:
         self.closed = True
 
-    async def accept(self, invocation_id: str, request: JsonValue) -> Invocation:
+    async def accept(
+        self,
+        invocation_id: str,
+        request: JsonValue,
+        *,
+        session_id: str | None = None,
+    ) -> Invocation:
         existing = self.states.get(invocation_id)
         if existing is not None:
-            if existing.request != request:
+            if existing.request != request or existing.session_id != session_id:
                 raise InvocationConflictError(invocation_id)
             return copy.deepcopy(existing)
+        queue_order = None
+        if session_id is not None:
+            queue_order = (
+                max(
+                    (
+                        state.queue_order or 0
+                        for state in self.states.values()
+                        if state.session_id == session_id
+                    ),
+                    default=0,
+                )
+                + 1
+            )
         state = Invocation(
             invocation_id=invocation_id,
             status=InvocationStatus.QUEUED,
             attempt=0,
             request=copy.deepcopy(request),
             response=None,
+            session_id=session_id,
+            queue_order=queue_order,
         )
         self.states[invocation_id] = state
         return copy.deepcopy(state)
 
-    async def get(self, invocation_id: str) -> Invocation | None:
-        state = self.states.get(invocation_id)
+    async def get(
+        self,
+        invocation_id: str | None = None,
+        *,
+        session_id: str | None = None,
+    ) -> Invocation | None:
+        if (invocation_id is None) == (session_id is None):
+            raise ValueError("exactly one of invocation_id or session_id must be provided")
+        if invocation_id is not None:
+            state = self.states.get(invocation_id)
+        else:
+            candidates = [
+                state
+                for state in self.states.values()
+                if state.session_id == session_id
+                and state.status in {InvocationStatus.ACTIVE, InvocationStatus.QUEUED}
+            ]
+            state = min(
+                candidates,
+                key=lambda candidate: (
+                    0 if candidate.status == InvocationStatus.ACTIVE else 1,
+                    candidate.queue_order or 0,
+                ),
+                default=None,
+            )
         return copy.deepcopy(state) if state is not None else None
 
     async def queued_invocation_ids(self) -> list[str]:
-        return [
-            invocation_id
-            for invocation_id, state in self.states.items()
-            if state.status == InvocationStatus.QUEUED
-        ]
+        runnable = []
+        for invocation_id, state in self.states.items():
+            if state.status != InvocationStatus.QUEUED:
+                continue
+            if state.session_id is None:
+                runnable.append(invocation_id)
+                continue
+            session_states = [
+                candidate
+                for candidate in self.states.values()
+                if candidate.session_id == state.session_id
+            ]
+            if any(candidate.status == InvocationStatus.ACTIVE for candidate in session_states):
+                continue
+            head = min(
+                (
+                    candidate
+                    for candidate in session_states
+                    if candidate.status == InvocationStatus.QUEUED
+                ),
+                key=lambda candidate: candidate.queue_order or 0,
+            )
+            if head.invocation_id == invocation_id:
+                runnable.append(invocation_id)
+        return runnable
 
     async def stale_invocation_ids(self, stale_seconds: float) -> list[str]:
         return [
@@ -79,6 +143,24 @@ class MemoryDurableRuntimeStore:
         state = self.states.get(invocation_id)
         if state is None or state.status != InvocationStatus.QUEUED:
             return None
+        if state.session_id is not None:
+            session_states = [
+                candidate
+                for candidate in self.states.values()
+                if candidate.session_id == state.session_id
+            ]
+            if any(candidate.status == InvocationStatus.ACTIVE for candidate in session_states):
+                return None
+            head = min(
+                (
+                    candidate
+                    for candidate in session_states
+                    if candidate.status == InvocationStatus.QUEUED
+                ),
+                key=lambda candidate: candidate.queue_order or 0,
+            )
+            if head.invocation_id != invocation_id:
+                return None
         return self._claim(state)
 
     async def claim_recoverable(
@@ -109,6 +191,8 @@ class MemoryDurableRuntimeStore:
             attempt=state.attempt,
             request=state.request,
             response=copy.deepcopy(response),
+            session_id=state.session_id,
+            queue_order=state.queue_order,
         )
         self._append_event(invocation_id, attempt, {"type": "run.completed"})
         return True
@@ -123,6 +207,8 @@ class MemoryDurableRuntimeStore:
             attempt=state.attempt,
             request=state.request,
             response=None,
+            session_id=state.session_id,
+            queue_order=state.queue_order,
         )
         self._append_event(invocation_id, attempt, {"type": "run.failed"})
         return True
@@ -140,13 +226,21 @@ class MemoryDurableRuntimeStore:
 
     async def events(
         self,
-        invocation_id: str,
+        invocation_id: str | None = None,
         after_sequence: int | None = None,
+        *,
+        session_id: str | None = None,
     ) -> list[InvocationEvent]:
+        if (invocation_id is None) == (session_id is None):
+            raise ValueError("exactly one of invocation_id or session_id must be provided")
         return [
             copy.deepcopy(event)
             for event in self.persisted_events
-            if event.invocation_id == invocation_id
+            if (
+                event.invocation_id == invocation_id
+                if invocation_id is not None
+                else self.states[event.invocation_id].session_id == session_id
+            )
             and (after_sequence is None or event.sequence_number > after_sequence)
         ]
 
@@ -157,6 +251,8 @@ class MemoryDurableRuntimeStore:
         *,
         attempt: int = 1,
         heartbeat_at: datetime | None = None,
+        session_id: str | None = None,
+        queue_order: int | None = None,
     ) -> None:
         self.states[invocation_id] = Invocation(
             invocation_id=invocation_id,
@@ -164,6 +260,8 @@ class MemoryDurableRuntimeStore:
             attempt=attempt,
             request=copy.deepcopy(request),
             response=None,
+            session_id=session_id,
+            queue_order=queue_order,
         )
         self._heartbeat_at[invocation_id] = heartbeat_at or datetime.now(timezone.utc)
 
@@ -174,6 +272,8 @@ class MemoryDurableRuntimeStore:
             attempt=state.attempt + 1,
             request=copy.deepcopy(state.request),
             response=None,
+            session_id=state.session_id,
+            queue_order=state.queue_order,
         )
         self.states[claimed.invocation_id] = claimed
         self._heartbeat_at[claimed.invocation_id] = datetime.now(timezone.utc)
@@ -234,7 +334,13 @@ def make_local_runtime(execute_fn, store=None) -> Runtime:
     )
 
 
-def make_durable_runtime(execute_fn, store=None, *, recover=False) -> Runtime:
+def make_durable_runtime(
+    execute_fn,
+    store=None,
+    *,
+    recover=False,
+    scan_seconds=0.01,
+) -> Runtime:
     runtime_store = MemoryDurableRuntimeStore() if store is None else store
     return Runtime.durable(
         execute_fn,
@@ -242,7 +348,7 @@ def make_durable_runtime(execute_fn, store=None, *, recover=False) -> Runtime:
         recovery_enabled=lambda: recover,
         heartbeat_seconds=0.01,
         stale_seconds=0.05,
-        scan_seconds=0.01,
+        scan_seconds=scan_seconds,
         poll_seconds=0.005,
     )
 
@@ -312,6 +418,157 @@ async def test_invoke_persists_request_and_response() -> None:
     assert state.response == {"output": "hello"}
     assert calls[0][1].attempt == 1
     assert calls[0][1].is_recovery is False
+
+
+@pytest.mark.asyncio
+async def test_local_runtime_drains_a_session_queue_in_order() -> None:
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    execution_order = []
+    contexts = []
+    running = 0
+    max_running = 0
+
+    async def execute(request: dict, context: InvocationAttemptContext) -> dict:
+        nonlocal running, max_running
+        running += 1
+        max_running = max(max_running, running)
+        execution_order.append(request["message"])
+        contexts.append(context)
+        if request["message"] == "one":
+            first_started.set()
+            await release_first.wait()
+        running -= 1
+        return {"output": request["message"]}
+
+    runtime = make_local_runtime(execute)
+    await runtime.start()
+    try:
+        first = await runtime.submit(
+            "invocation-1",
+            {"message": "one"},
+            session_id="session-a",
+        )
+        await asyncio.wait_for(first_started.wait(), timeout=1)
+        second = await runtime.submit(
+            "invocation-2",
+            {"message": "two"},
+            session_id="session-a",
+        )
+        await asyncio.sleep(0.02)
+
+        session_state = await runtime.get_invocation(session_id="session-a")
+        assert session_state is not None
+        assert session_state.invocation_id == "invocation-1"
+        assert execution_order == ["one"]
+
+        release_first.set()
+        assert await runtime.wait("invocation-1") == {"output": "one"}
+        assert await runtime.wait("invocation-2") == {"output": "two"}
+        events = await runtime.get_events(session_id="session-a")
+        assert await runtime.get_invocation(session_id="session-a") is None
+    finally:
+        release_first.set()
+        await runtime.stop()
+
+    assert (first.queue_order, second.queue_order) == (1, 2)
+    assert execution_order == ["one", "two"]
+    assert max_running == 1
+    assert [context.session_id for context in contexts] == ["session-a", "session-a"]
+    assert [event.invocation_id for event in events] == [
+        "invocation-1",
+        "invocation-1",
+        "invocation-2",
+        "invocation-2",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_local_runtime_runs_different_sessions_independently() -> None:
+    both_started = asyncio.Event()
+    release = asyncio.Event()
+    started_sessions = set()
+
+    async def execute(request: dict, context: InvocationAttemptContext) -> dict:
+        assert context.session_id is not None
+        started_sessions.add(context.session_id)
+        if len(started_sessions) == 2:
+            both_started.set()
+        await release.wait()
+        return request
+
+    runtime = make_local_runtime(execute)
+    await runtime.start()
+    try:
+        await runtime.submit("invocation-a", {}, session_id="session-a")
+        await runtime.submit("invocation-b", {}, session_id="session-b")
+        await asyncio.wait_for(both_started.wait(), timeout=1)
+        release.set()
+        await asyncio.gather(
+            runtime.wait("invocation-a"),
+            runtime.wait("invocation-b"),
+        )
+    finally:
+        release.set()
+        await runtime.stop()
+
+    assert started_sessions == {"session-a", "session-b"}
+
+
+@pytest.mark.asyncio
+async def test_durable_runtime_drains_the_next_session_invocation_without_a_scan() -> None:
+    first_started = asyncio.Event()
+    second_started = asyncio.Event()
+    release_first = asyncio.Event()
+    execution_order = []
+
+    async def execute(request: dict, context: InvocationAttemptContext) -> dict:
+        execution_order.append(request["message"])
+        if request["message"] == "one":
+            first_started.set()
+            await release_first.wait()
+        else:
+            second_started.set()
+        return request
+
+    store = MemoryDurableRuntimeStore()
+    runtime = make_durable_runtime(execute, store, scan_seconds=60)
+    await runtime.start()
+    try:
+        await runtime.submit("invocation-1", {"message": "one"}, session_id="session-a")
+        await asyncio.wait_for(first_started.wait(), timeout=1)
+        await runtime.submit("invocation-2", {"message": "two"}, session_id="session-a")
+        await asyncio.sleep(0.02)
+        assert execution_order == ["one"]
+
+        release_first.set()
+        await asyncio.wait_for(second_started.wait(), timeout=1)
+        assert await runtime.wait("invocation-2") == {"message": "two"}
+    finally:
+        release_first.set()
+        await runtime.stop()
+
+    assert execution_order == ["one", "two"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_session_reads_require_exactly_one_selector() -> None:
+    async def execute(request: JsonValue, context: InvocationAttemptContext) -> JsonValue:
+        return request
+
+    runtime = make_local_runtime(execute)
+    await runtime.start()
+    try:
+        with pytest.raises(ValueError, match="exactly one"):
+            await runtime.get_invocation()
+        with pytest.raises(ValueError, match="exactly one"):
+            await runtime.get_invocation("invocation-1", session_id="session-a")
+        with pytest.raises(ValueError, match="exactly one"):
+            await runtime.get_events()
+        with pytest.raises(ValueError, match="exactly one"):
+            await runtime.get_events("invocation-1", session_id="session-a")
+    finally:
+        await runtime.stop()
 
 
 @pytest.mark.asyncio
@@ -409,6 +666,8 @@ async def test_stale_invocation_reuses_request_and_marks_recovery() -> None:
         "session-1",
         {"input": "original"},
         heartbeat_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+        session_id="conversation-1",
+        queue_order=4,
     )
     runtime = make_durable_runtime(execute, store, recover=True)
     await runtime.start()
@@ -422,6 +681,9 @@ async def test_stale_invocation_reuses_request_and_marks_recovery() -> None:
     assert contexts[0][1].invocation_id == "session-1"
     assert contexts[0][1].attempt == 2
     assert contexts[0][1].is_recovery is True
+    assert contexts[0][1].session_id == "conversation-1"
+    recovered = store.states["session-1"]
+    assert (recovered.session_id, recovered.queue_order) == ("conversation-1", 4)
 
 
 @pytest.mark.asyncio

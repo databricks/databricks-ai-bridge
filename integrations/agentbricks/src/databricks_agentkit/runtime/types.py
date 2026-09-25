@@ -40,6 +40,8 @@ class Invocation:
     attempt: int
     request: JsonValue
     response: JsonValue
+    session_id: str | None = None
+    queue_order: int | None = None
 
     @property
     def is_terminal(self) -> bool:
@@ -67,6 +69,7 @@ class InvocationAttemptContext:
     invocation_id: str
     attempt: int
     _emit: InvocationEventEmitter | None = field(default=None, repr=False, compare=False)
+    session_id: str | None = field(default=None, kw_only=True)
 
     @property
     def is_recovery(self) -> bool:
@@ -107,7 +110,7 @@ InvocationHook = Callable[[JsonValue, InvocationContext], Awaitable[JsonValue]]
 
 
 class InvocationConflictError(ValueError):
-    """Raised when an invocation ID is reused with a different request."""
+    """Raised when an invocation ID is reused with a different request or session."""
 
 
 class InvocationNotFoundError(LookupError):
