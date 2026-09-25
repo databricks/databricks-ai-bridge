@@ -432,8 +432,6 @@ ab [-p <profile>] [-o text|json]
   logout
   auth
     connections
-      create NAME --url URL --transport mcp|http --oauth dcr
-                  --principal user|app --parent CATALOG.SCHEMA [--source PATH]
       bind   NAME --uc-connection CATALOG.SCHEMA.CONNECTION
                   --transport mcp|http --principal user|app [--source PATH]
   init         [--framework openai|langgraph] [--server agentbricks|custom]
@@ -557,35 +555,37 @@ ab sessions items append --help
 ## Governed external connections
 
 Agent Bricks agents can call third-party MCP servers and HTTP APIs through Unity Catalog Connections
-without handling provider credentials. Create a DCR-backed Connection or bind an existing one:
+without handling provider credentials. Agent Bricks currently supports binding existing HTTP
+Connections that use the `BEARER_TOKEN` credential type. Create the PAT/bearer Connection in Unity
+Catalog first, then bind it to the project:
 
 ```sh
-ab auth connections create github \
-  --url https://mcp.github.example/mcp \
-  --transport mcp \
-  --oauth dcr \
-  --principal user \
-  --parent main.agent_connections
-
 ab auth connections bind salesforce \
   --uc-connection main.agent_connections.salesforce \
   --transport http \
   --principal app
 ```
 
-Both commands validate the remote Connection and atomically add a typed entry to `agent.toml`:
+The command validates the remote Connection and atomically adds a typed entry to `agent.toml`:
 
 ```toml
 [[connections]]
 name = "github"
 uc_connection = "main.agent_connections.github"
 transport = "mcp"
-principal = "user"
+principal = "app"
 ```
 
 All four fields are required. `name` is the alias used by agent code, `uc_connection` is a
-three-part UC name, `transport` is `mcp` or `http`, and `principal` is `user` or `app`. Existing
-manifests without `[[connections]]` remain valid.
+three-part UC name, `transport` is `mcp` or `http`, and the currently supported `principal` is
+`app`. Existing manifests without `[[connections]]` remain valid.
+
+OAuth-backed UC Connections, including Connections created through dynamic client registration,
+and request-user bindings are rejected during bind. Databricks Apps can issue the granular
+`catalog.connections` user scope, but the UC Connection proxy currently requires the broad
+`unity-catalog` scope; Apps intentionally does not allow that broad scope. For deployed Apps, use an
+existing bearer-token Connection with `--principal app` until the platform contracts are
+reconciled.
 
 Use the credential-free async client from a tool or agent handler:
 
@@ -611,16 +611,14 @@ The client rejects absolute URLs, parent traversal, credentials, cookies, and Da
 headers. It returns status, response headers, and body, but never exposes the Connection's provider
 credentials or the Databricks credential used to reach the proxy.
 
-`principal = "user"` uses the transient identity forwarded by trusted Databricks Apps ingress.
-The caller must consent to the App's `ai-gateway` user scope and have `USE CONNECTION` on the UC
-Connection. The credential remains process-local for the active first attempt and works for both
-foreground and background invocations. A durable replacement attempt fails with
-`MCP_USER_AUTH_RECOVERY_UNSUPPORTED` before agent code or its recovery hook runs, because Agent Bricks does
-not persist the caller credential.
+`principal = "user"` is modeled for the future request-user flow but is not currently accepted by
+`ab auth connections bind`. Both bearer- and OAuth-backed Connections would reach the same
+unsupported Apps-to-proxy OBO scope boundary.
 
-`principal = "app"` uses the App service principal. On deploy, Agent Bricks attaches an Apps
-`uc_securable` resource with `USE_CONNECTION`; the App still needs access to the underlying
-Connection. Restrict App `CAN USE` to callers trusted to exercise that workload identity.
+`principal = "app"` uses the App service principal. On deploy, Agent Bricks directly grants it
+`USE_CATALOG`, `USE_SCHEMA`, and `USE_CONNECTION` on the Connection hierarchy. These grants are
+additive: removing a binding does not revoke a pre-existing privilege that may have been granted by
+an administrator. Restrict App `CAN USE` to callers trusted to exercise that workload identity.
 
 Under `ab dev`, `user` resolves from the active local invocation context and `app` resolves from
 the profile/environment used to start the process. Local development cannot reproduce Apps consent
@@ -690,6 +688,7 @@ Deploy derives Apps user scopes from explicit `auth = "user"` bindings:
 
 | Binding | Requested Apps scopes |
 | --- | --- |
+| Governed UC Connection (`principal = "user"`; currently blocked by the UC proxy scope contract) | `catalog.connections` |
 | Managed MCP (governed ingress) | `ai-gateway` |
 | `system.ai.genie_one_mcp` | `ai-gateway`, `genie` |
 | First-class Genie One or Genie Agent | `genie` |

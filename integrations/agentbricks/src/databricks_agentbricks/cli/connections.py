@@ -1,4 +1,4 @@
-"""Create or bind governed external connections in ``agent.toml``."""
+"""Bind governed external connections in ``agent.toml``."""
 
 from __future__ import annotations
 
@@ -7,11 +7,10 @@ from typing import Any, Literal
 
 import click
 from databricks.sdk.errors import NotFound
-from databricks.sdk.service.catalog import ConnectionInfo, ConnectionType
+from databricks.sdk.service.catalog import ConnectionInfo, ConnectionType, CredentialType
 
 from databricks_agentbricks import render
 from databricks_agentbricks.agent_project import AgentProject, ConnectionSpec
-from databricks_agentbricks.connection_registration import register_connection_via_dcr
 from databricks_agentbricks.errors import AgentCliError
 
 
@@ -33,6 +32,23 @@ def _record(spec: ConnectionSpec) -> dict[str, str]:
 def _validate_connection(info: ConnectionInfo, spec: ConnectionSpec) -> None:
     if info.connection_type != ConnectionType.HTTP:
         raise AgentCliError(f"{spec.uc_connection!r} is not a UC HTTP Connection.")
+    if spec.principal == "user":
+        raise AgentCliError(
+            "Request-user UC Connections are not currently supported by Agent Bricks.",
+            hint="Bind an existing BEARER_TOKEN Connection with --principal app.",
+        )
+    credential = info.credential_type
+    if credential is not None and credential.value.startswith("OAUTH_"):
+        raise AgentCliError(
+            "OAuth UC Connections are not currently supported by Agent Bricks.",
+            hint="Bind an existing BEARER_TOKEN Connection with --principal app.",
+        )
+    if credential != CredentialType.BEARER_TOKEN:
+        rendered = credential.value if credential is not None else "unknown"
+        raise AgentCliError(
+            f"UC Connection {spec.uc_connection!r} uses unsupported credential type {rendered!r}.",
+            hint="Only existing BEARER_TOKEN Connections are currently supported.",
+        )
 
 
 def _existing_connection(workspace_client: Any, spec: ConnectionSpec) -> ConnectionInfo:
@@ -74,7 +90,7 @@ def auth() -> None:
 
 @auth.group()
 def connections() -> None:
-    """Create or bind UC Connections used by agent code."""
+    """Bind existing UC Connections used by agent code."""
 
 
 def _source_option(command):
@@ -90,7 +106,12 @@ def _source_option(command):
 @click.argument("name")
 @click.option("--uc-connection", required=True, help="Existing three-part UC Connection name.")
 @click.option("--transport", required=True, type=click.Choice(["mcp", "http"]))
-@click.option("--principal", required=True, type=click.Choice(["user", "app"]))
+@click.option(
+    "--principal",
+    required=True,
+    type=click.Choice(["user", "app"]),
+    help="Invocation identity. Only app is currently supported; user fails closed.",
+)
 @_source_option
 @click.pass_obj
 def bind_connection(
@@ -110,51 +131,3 @@ def bind_connection(
     if changed:
         project.write()
     _emit(obj, "bound", project, spec)
-
-
-@connections.command("create")
-@click.argument("name")
-@click.option("--url", required=True, help="OAuth-protected HTTPS API or MCP endpoint URL.")
-@click.option("--transport", required=True, type=click.Choice(["mcp", "http"]))
-@click.option("--oauth", required=True, type=click.Choice(["dcr"]))
-@click.option("--principal", required=True, type=click.Choice(["user", "app"]))
-@click.option("--parent", required=True, help="Catalog and schema for the new connection.")
-@_source_option
-@click.pass_obj
-def create_connection(
-    obj: Any,
-    name: str,
-    url: str,
-    transport: Literal["mcp", "http"],
-    oauth: Literal["dcr"],
-    principal: Literal["user", "app"],
-    parent: str,
-    source: pathlib.Path,
-) -> None:
-    """Create a DCR-backed UC HTTP Connection and bind it as NAME."""
-
-    del oauth
-    fqn = f"{parent}.{name}"
-    project = AgentProject.load(source)
-    spec = ConnectionSpec(name, fqn, transport, principal)
-    project.add_connection(spec)
-    workspace = _workspace_client(obj.profile)
-    created = register_connection_via_dcr(
-        workspace,
-        fqn=fqn,
-        url=url,
-        transport=transport,
-    )
-    _validate_connection(created, spec)
-    try:
-        project.write()
-    except AgentCliError as exc:
-        recovery = (
-            f"ab auth connections bind {name} --uc-connection {fqn} "
-            f"--transport {transport} --principal {principal}"
-        )
-        raise AgentCliError(
-            f"UC Connection {fqn!r} was created, but its binding could not be written.",
-            hint=f"The remote connection was left intact. Recover with: {recovery}",
-        ) from exc
-    _emit(obj, "created", project, spec)

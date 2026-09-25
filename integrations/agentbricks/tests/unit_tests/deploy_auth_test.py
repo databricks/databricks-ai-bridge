@@ -148,7 +148,7 @@ def test_required_user_api_scopes_union_only_user_bindings(tmp_path):
 
 
 @pytest.mark.parametrize("transport", ["mcp", "http"])
-def test_user_connection_requires_user_auth_and_ai_gateway(tmp_path, transport):
+def test_user_connection_requires_user_auth_and_catalog_connections(tmp_path, transport):
     from databricks_agentbricks.cli.app_auth import required_user_api_scopes, requires_user_auth
 
     project = AgentProject.create(tmp_path, framework="langgraph", server="agentbricks")
@@ -157,7 +157,7 @@ def test_user_connection_requires_user_auth_and_ai_gateway(tmp_path, transport):
     )
 
     assert requires_user_auth(project) is True
-    assert required_user_api_scopes(project) == {"ai-gateway"}
+    assert required_user_api_scopes(project) == {"catalog.connections"}
 
 
 def test_app_connection_does_not_request_user_auth_or_scopes(tmp_path):

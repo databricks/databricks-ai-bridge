@@ -24,12 +24,10 @@ request state, events, and results; it never contains the forwarded credential. 
 attempt after failure recovery stops before agent code runs because the original credential is no
 longer available.
 
-The same policy applies when any `[[connections]]` entry uses `principal = "user"`. During the
-active invoke hook, agent code can call the governed external API through
-`databricks_agentkit.auth.context.connections`; the request-user context is available to foreground
-and first-attempt background execution. App-principal entries instead use the
-environment-authenticated workspace client. Neither mode exposes raw provider or Databricks
-credentials to agent code.
+The runtime isolation policy is also defined for future `[[connections]]` entries with
+`principal = "user"`, but the CLI currently rejects those bindings until the Apps-to-proxy OBO
+scope contract is reconciled. Supported App-principal entries use the environment-authenticated
+workspace client. Neither mode exposes raw provider or Databricks credentials to agent code.
 
 **Your own server (`server = "custom"`).** Keep your existing HTTP server, or scaffold a minimal
 FastAPI server with `ab init --server custom`. You own the endpoints, request and response
@@ -84,7 +82,7 @@ Governed external APIs are declared separately from managed tools:
 name = "salesforce"
 uc_connection = "main.agent_connections.salesforce"
 transport = "http"
-principal = "user"
+principal = "app"
 ```
 
 Call an HTTP connection with a relative path:
@@ -101,10 +99,11 @@ accounts = response.json()
 
 HTTP permits `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, and `OPTIONS`. MCP permits `GET`,
 `POST`, and `DELETE`, with an empty path or `/`. Direct MCP Connection routing is not a UC MCP
-Service. User-principal deployment requests the Apps `ai-gateway` scope; each caller still needs
-consent and `USE CONNECTION`. App-principal deployment attaches `USE_CONNECTION` to the App service
-principal. In local development, identities come from the active local request and configured
-workspace environment, not from Apps ingress.
+Service. Agent Bricks currently binds only existing `BEARER_TOKEN` Connections with
+`principal = "app"`; OAuth credential types and request-user bindings are rejected because Apps and
+the UC Connection proxy do not yet share an accepted OBO scope. App-principal deployment directly
+grants `USE_CATALOG`, `USE_SCHEMA`, and `USE_CONNECTION` to the App service principal. In local
+development, App identity comes from the configured workspace environment.
 
 Override store names at initialization with `--memory-store` and `--session-store`, or later with
 `ab memory bind <name>` and `ab sessions bind <name>`. Custom-server templates declare these

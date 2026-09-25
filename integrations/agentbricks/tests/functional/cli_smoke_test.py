@@ -83,19 +83,8 @@ def test_installed_wheel_exposes_agentkit_sdk() -> None:
 
 def test_auth_connections_help_is_packaged(run_ab) -> None:
     group = " ".join(run_ab("auth", "connections", "--help").stdout.split())
-    assert "create" in group
     assert "bind" in group
-
-    create = " ".join(run_ab("auth", "connections", "create", "--help").stdout.split())
-    for expected in (
-        "--url",
-        "--transport [mcp|http]",
-        "--oauth [dcr]",
-        "--principal [user|app]",
-        "--parent",
-        "--source",
-    ):
-        assert expected in create
+    assert "create" not in group
 
     bind = " ".join(run_ab("auth", "connections", "bind", "--help").stdout.split())
     for expected in (

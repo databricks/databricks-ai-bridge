@@ -80,7 +80,7 @@ def required_user_api_scopes(project: AgentProject | None) -> set[str]:
     """Return Databricks Apps user API scopes required by request-user bindings."""
     scopes: set[str] = set()
     if project and any(connection.principal == "user" for connection in project.connections):
-        scopes.add("ai-gateway")
+        scopes.add("catalog.connections")
     # TODO: Extend this least-privilege mapping for each supported request-user tool kind/service.
     for tool in project.tools if project else ():
         if tool.auth != "user":

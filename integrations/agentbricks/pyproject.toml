@@ -13,6 +13,7 @@ dependencies = [
     "click>=8.4",
     "databricks-ai-bridge[memory]>=0.22.0",
     "fastapi>=0.129.0",
+    "httpx>=0.28.1",
     "sqlalchemy[asyncio]>=2.0",
     "uvicorn>=0.20.0",
     "databricks-sdk>=0.124.0",

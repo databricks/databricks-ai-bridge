@@ -64,7 +64,7 @@ def test_auth_connections_verbs_are_nested_without_moving_login_logout():
     assert {"connections"} <= set(cli.auth.commands)
     connections = cli.auth.commands["connections"]
     assert isinstance(connections, click.Group)
-    assert {"create", "bind"} == set(connections.commands)
+    assert {"bind"} == set(connections.commands)
 
 
 def test_root_help_describes_the_product_and_links_out():

@@ -102,47 +102,22 @@ Configure authentication and governed external connections.
 
 | Subcommand | Description |
 | --- | --- |
-| [`auth connections`](#ab-auth-connections) | Create or bind UC Connections used by agent code. |
+| [`auth connections`](#ab-auth-connections) | Bind existing UC Connections used by agent code. |
 
 #### `ab auth connections`
 
-Create or bind governed UC HTTP Connections and record a typed alias in `agent.toml`.
+Bind governed UC HTTP Connections and record a typed alias in `agent.toml`.
 
 | Subcommand | Description |
 | --- | --- |
-| [`auth connections create`](#ab-auth-connections-create) | Create a DCR-backed UC HTTP Connection and bind it to the project. |
 | [`auth connections bind`](#ab-auth-connections-bind) | Bind an existing UC HTTP Connection to the project. |
-
-##### `ab auth connections create`
-
-Create a DCR-backed UC HTTP Connection and bind it as `NAME`. The provider must expose OAuth
-protected-resource, authorization-server, and dynamic client registration metadata over HTTPS.
-
-```
-ab auth connections create NAME --url URL --transport mcp|http --oauth dcr --principal user|app --parent CATALOG.SCHEMA [options]
-```
-
-_Arguments_
-
-| Argument | Required | Description |
-| --- | --- | --- |
-| `NAME` | yes | Local alias and UC Connection object name. |
-
-_Options_
-
-| Option | Values | Default | Required | Description |
-| --- | --- | --- | --- | --- |
-| `--url <URL>` | HTTPS URL | - | yes | OAuth-protected API or MCP endpoint URL. |
-| `--transport <mcp\|http>` | `mcp` \| `http` | - | yes | Connection protocol. |
-| `--oauth <dcr>` | `dcr` | - | yes | OAuth registration method. |
-| `--principal <user\|app>` | `user` \| `app` | - | yes | Identity used when agent code invokes the connection. |
-| `--parent <CATALOG.SCHEMA>` | two-part UC name | - | yes | Catalog and schema for the new connection. |
-| `--source <SOURCE>` | path | `.` | no | Project directory containing `agent.toml`. |
 
 ##### `ab auth connections bind`
 
-Validate an existing UC HTTP Connection and bind it as `NAME` without changing the remote
-Connection.
+Validate an existing `BEARER_TOKEN` UC HTTP Connection and bind it as `NAME` without changing the
+remote Connection. The currently supported principal is `app`. OAuth credential types and
+request-user bindings are rejected until the Databricks Apps and UC proxy scope contracts are
+reconciled.
 
 ```
 ab auth connections bind NAME --uc-connection CATALOG.SCHEMA.CONNECTION --transport mcp|http --principal user|app [options]
@@ -160,7 +135,7 @@ _Options_
 | --- | --- | --- | --- | --- |
 | `--uc-connection <CATALOG.SCHEMA.CONNECTION>` | three-part UC name | - | yes | Existing UC HTTP Connection. |
 | `--transport <mcp\|http>` | `mcp` \| `http` | - | yes | Connection protocol. |
-| `--principal <user\|app>` | `user` \| `app` | - | yes | Identity used when agent code invokes the connection. |
+| `--principal <user\|app>` | `user` \| `app` | - | yes | Invocation identity. Only `app` is currently supported; `user` fails closed. |
 | `--source <SOURCE>` | path | `.` | no | Project directory containing `agent.toml`. |
 
 ### `ab init`

@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import pathlib
 import sys
+from argparse import Namespace
+from collections.abc import Callable
+from typing import cast
 
 import pytest
 
@@ -36,9 +40,9 @@ from e2e.connection_matrix import (  # noqa: E402
 def test_matrix_is_exact_cartesian_product() -> None:
     cases = matrix_cases()
 
-    assert len(cases) == 16
-    assert len(set(cases)) == 16
-    assert {case.setup for case in cases} == {"new", "existing"}
+    assert len(cases) == 8
+    assert len(set(cases)) == 8
+    assert {case.setup for case in cases} == {"existing"}
     assert {case.transport for case in cases} == {"mcp", "http"}
     assert {case.framework for case in cases} == {"langgraph", "openai"}
     assert {case.execution for case in cases} == {"foreground", "background"}
@@ -48,25 +52,21 @@ def test_matrix_is_exact_cartesian_product() -> None:
     ("case", "expected"),
     [
         (
-            MatrixCase("new", "mcp", "langgraph", "foreground"),
+            MatrixCase("existing", "mcp", "langgraph", "foreground"),
             [
                 "/venv/bin/ab",
                 "--profile",
                 "workspace",
                 "auth",
                 "connections",
-                "create",
-                "new-mcp",
-                "--url",
-                "https://mcp.example.test/mcp",
+                "bind",
+                "existing-mcp",
+                "--uc-connection",
+                "main.agentbricks_e2e.mcp_fixture",
                 "--transport",
                 "mcp",
-                "--oauth",
-                "dcr",
                 "--principal",
-                "user",
-                "--parent",
-                "main.agentbricks_e2e",
+                "app",
                 "--source",
                 "/tmp/project",
             ],
@@ -86,14 +86,14 @@ def test_matrix_is_exact_cartesian_product() -> None:
                 "--transport",
                 "http",
                 "--principal",
-                "user",
+                "app",
                 "--source",
                 "/tmp/project",
             ],
         ),
     ],
 )
-def test_connection_command_uses_real_create_or_bind_route(
+def test_connection_command_only_binds_existing_bearer_connections(
     case: MatrixCase, expected: list[str]
 ) -> None:
     actual = connection_command(
@@ -101,9 +101,7 @@ def test_connection_command_uses_real_create_or_bind_route(
         ab=pathlib.Path("/venv/bin/ab"),
         profile="workspace",
         project=pathlib.Path("/tmp/project"),
-        parent="main.agentbricks_e2e",
-        urls={"mcp": "https://mcp.example.test/mcp", "http": "https://api.example.test"},
-        aliases={"new:mcp": "new-mcp", "existing:http": "existing-http"},
+        aliases={"existing:mcp": "existing-mcp", "existing:http": "existing-http"},
         existing={
             "mcp": "main.agentbricks_e2e.mcp_fixture",
             "http": "main.agentbricks_e2e.http_fixture",
@@ -119,6 +117,7 @@ def test_background_requires_202_then_polls_terminal_result() -> None:
         [
             Response(202, {"status": "queued", "status_url": "/api/invocations/run-1"}),
             Response(200, {"status": "running"}),
+            Response(200, {"status": "active"}),
             Response(
                 200,
                 {
@@ -146,6 +145,7 @@ def test_background_requires_202_then_polls_terminal_result() -> None:
     assert result["status"] == "completed"
     assert calls == [
         ("POST", "https://agent.example.test/api/invocations"),
+        ("GET", "https://agent.example.test/api/invocations/run-1"),
         ("GET", "https://agent.example.test/api/invocations/run-1"),
         ("GET", "https://agent.example.test/api/invocations/run-1"),
     ]
@@ -208,7 +208,7 @@ def test_evidence_redactor_rejects_seeded_secrets(
 def test_evidence_write_is_atomic_valid_json(tmp_path: pathlib.Path) -> None:
     target = write_evidence(
         tmp_path,
-        rows=[{"status": "pass", "case": "new-http-langgraph-foreground"}],
+        rows=[{"status": "pass", "case": "existing-http-langgraph-foreground"}],
         controls=[{"name": "unknown-alias", "status": "pass"}],
         cleanup=[{"kind": "app", "name": "agent-bricks-cx-run", "status": "deleted"}],
         scanned_text="fixed non-sensitive marker",
@@ -246,12 +246,6 @@ def test_parse_args_requires_complete_live_inputs(tmp_path: pathlib.Path) -> Non
             str(wheel),
             "--output",
             str(tmp_path / "out"),
-            "--parent",
-            "main.agentbricks_e2e",
-            "--mcp-url",
-            "https://mcp.example.test/mcp",
-            "--http-url",
-            "https://api.example.test",
             "--existing-mcp-connection",
             "main.agentbricks_e2e.mcp_fixture",
             "--existing-http-connection",
@@ -267,7 +261,6 @@ def test_parse_args_requires_complete_live_inputs(tmp_path: pathlib.Path) -> Non
 
     assert args.profile == "workspace"
     assert args.app_auth_profile == "workspace-oauth"
-    assert args.parent == "main.agentbricks_e2e"
     assert args.existing_mcp_connection.endswith("mcp_fixture")
 
 
@@ -311,8 +304,6 @@ def test_deployment_cases_group_transport_and_execution_axes() -> None:
     deployments = deployment_cases()
 
     assert deployments == (
-        DeploymentCase("new", "langgraph"),
-        DeploymentCase("new", "openai"),
         DeploymentCase("existing", "langgraph"),
         DeploymentCase("existing", "openai"),
     )
@@ -348,6 +339,159 @@ def test_rendered_probe_files_are_valid_framework_code(framework: Framework) -> 
     assert expected_decorator in files["agent/tools/connection_probe.py"]
 
 
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+def test_rendered_jsonrpc_probe_uses_post_for_both_transports(framework: Framework) -> None:
+    files = render_probe_files(
+        framework,
+        aliases={"mcp": "linear-mcp", "http": "linear-http"},
+        http_path="/unused",
+        mcp_tool="get_user",
+        probe_mode="mcp-jsonrpc",
+        mcp_arguments={"query": "me"},
+    )
+
+    source = files["agent/tools/connection_probe.py"]
+    compile(source, "agent/tools/connection_probe.py", "exec")
+    assert '"Accept": "application/json, text/event-stream"' in source
+    assert '"method": "initialize"' in source
+    assert '"method": "notifications/initialized"' in source
+    assert '"method": "tools/call"' in source
+    assert (
+        source.index('"method": "initialize"')
+        < source.index('"method": "notifications/initialized"')
+        < source.index('"method": "tools/call"')
+    )
+    assert "\"name\": 'get_user'" in source
+    assert "\"arguments\": {'query': 'me'}" in source
+    assert 'client.request(\n            "POST",\n            ""' in source
+
+
+def test_rendered_jsonrpc_probe_decodes_streamable_http_sse() -> None:
+    source = render_probe_files(
+        "langgraph",
+        aliases={"mcp": "github", "http": "github"},
+        http_path="/unused",
+        mcp_tool="get_me",
+        probe_mode="mcp-jsonrpc",
+    )["agent/tools/connection_probe.py"]
+    module = ast.parse(source)
+    helper = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_decode_provider_response"
+    )
+    namespace: dict[str, object] = {"json": json}
+    exec(
+        compile(ast.Module(body=[helper], type_ignores=[]), "<generated-helper>", "exec"), namespace
+    )
+    decode = cast(Callable[[object], object], namespace["_decode_provider_response"])
+
+    class Response:
+        headers = {"content-type": "text/event-stream"}
+        text = 'event: message\ndata: {"jsonrpc":"2.0","result":{"login":"junchoi-db"}}\n\n'
+
+        def json(self):
+            raise json.JSONDecodeError("SSE", self.text, 0)
+
+    assert decode(Response()) == {
+        "jsonrpc": "2.0",
+        "result": {"login": "junchoi-db"},
+    }
+
+    class ProxyResponse:
+        headers = {"content-type": "application/json,text/event-stream"}
+        text = '{"jsonrpc":"2.0","result":{"login":"junchoi-db"}}'
+
+        def json(self):
+            return json.loads(self.text)
+
+    assert decode(ProxyResponse()) == {
+        "jsonrpc": "2.0",
+        "result": {"login": "junchoi-db"},
+    }
+
+
+def test_parse_args_accepts_jsonrpc_probe_options(tmp_path: pathlib.Path) -> None:
+    wheel = tmp_path / "agentbricks.whl"
+    wheel.write_bytes(b"wheel")
+
+    args = parse_args(
+        [
+            "--profile",
+            "workspace",
+            "--app-auth-profile",
+            "workspace-oauth",
+            "--wheel",
+            str(wheel),
+            "--output",
+            str(tmp_path / "out"),
+            "--existing-mcp-connection",
+            "main.agentbricks_e2e.linear",
+            "--existing-http-connection",
+            "main.agentbricks_e2e.linear",
+            "--mcp-marker",
+            "user-id",
+            "--http-marker",
+            "user-id",
+            "--user-marker",
+            "Jun Choi",
+            "--mcp-tool",
+            "get_user",
+            "--mcp-arguments",
+            '{"query":"me"}',
+            "--probe-mode",
+            "mcp-jsonrpc",
+            "--pause-before-invocations",
+        ]
+    )
+
+    assert args.probe_mode == "mcp-jsonrpc"
+    assert args.mcp_arguments == {"query": "me"}
+    assert args.pause_before_invocations is True
+
+
+def test_runner_pauses_after_preparation_before_matrix_cells(tmp_path: pathlib.Path) -> None:
+    events: list[str] = []
+
+    class PausingRunner(MatrixRunner):
+        def __init__(self) -> None:
+            super().__init__(output=tmp_path, keep_resources=False)
+
+        def bootstrap(self) -> None:
+            events.append("bootstrap")
+
+        def prepare_deployment(self, deployment: DeploymentCase) -> str:
+            events.append(f"prepare:{deployment.setup}:{deployment.framework}")
+            return f"https://{deployment.setup}-{deployment.framework}.example.test"
+
+        def after_prepare(self, app_urls: dict[DeploymentCase, str]) -> None:
+            assert len(app_urls) == 2
+            events.append("pause")
+
+        def execute_case(self, case: MatrixCase, app_url: str) -> dict[str, object]:
+            events.append(f"execute:{case.id}")
+            return {"case": case.id, "status": "pass"}
+
+        def execute_controls(self, app_urls: dict[DeploymentCase, str]) -> list[dict[str, object]]:
+            return [
+                {"name": name, "status": "pass"}
+                for name in (
+                    "exact-primary-matrix",
+                    "unknown-alias",
+                    "forbidden-header",
+                    "missing-user-identity",
+                )
+            ]
+
+        def cleanup(self) -> list[dict[str, object]]:
+            return [{"kind": "app", "name": "offline", "status": "deleted"}]
+
+    assert PausingRunner().run() == 0
+    pause_index = events.index("pause")
+    assert all(event.startswith("prepare:") for event in events[1:pause_index])
+    assert events[pause_index + 1].startswith("execute:")
+
+
 def test_cleanup_plan_includes_every_created_resource_once() -> None:
     assert cleanup_plan(
         apps=["agent-bricks-one", "agent-bricks-one", "agent-bricks-two"],
@@ -360,12 +504,21 @@ def test_cleanup_plan_includes_every_created_resource_once() -> None:
     )
 
 
-def test_verify_evidence_requires_16_passes_controls_and_cleanup(tmp_path: pathlib.Path) -> None:
+def test_verify_evidence_requires_8_passes_controls_and_cleanup(tmp_path: pathlib.Path) -> None:
     rows = [{"case": case.id, "status": "pass"} for case in matrix_cases()]
+    controls = [
+        {"name": name, "status": "pass"}
+        for name in (
+            "exact-primary-matrix",
+            "unknown-alias",
+            "forbidden-header",
+            "missing-user-identity",
+        )
+    ]
     target = write_evidence(
         tmp_path,
         rows=rows,
-        controls=[{"name": "unknown-alias", "status": "pass"}],
+        controls=controls,
         cleanup=[{"kind": "app", "name": "one", "status": "deleted"}],
         scanned_text="",
     )
@@ -375,11 +528,100 @@ def test_verify_evidence_requires_16_passes_controls_and_cleanup(tmp_path: pathl
     target = write_evidence(
         tmp_path,
         rows=rows,
-        controls=[{"name": "unknown-alias", "status": "pass"}],
+        controls=controls,
         cleanup=[{"kind": "app", "name": "one", "status": "deleted"}],
         scanned_text="",
     )
     assert verify_evidence(target) == 1
+
+
+def test_verify_evidence_rejects_missing_negative_controls(tmp_path: pathlib.Path) -> None:
+    target = write_evidence(
+        tmp_path,
+        rows=[{"case": case.id, "status": "pass"} for case in matrix_cases()],
+        controls=[
+            {"name": name, "status": "pass"}
+            for name in (
+                "exact-primary-matrix",
+                "unknown-alias",
+                "forbidden-header",
+            )
+        ],
+        cleanup=[{"kind": "app", "name": "one", "status": "deleted"}],
+        scanned_text="",
+    )
+
+    assert verify_evidence(target) == 1
+
+
+def test_deployment_is_registered_for_cleanup_before_deploy(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    args = Namespace(
+        output=tmp_path,
+        keep_resources=False,
+        profile="workspace",
+        existing_mcp_connection="main.agentbricks_e2e.existing_mcp",
+        existing_http_connection="main.agentbricks_e2e.existing_http",
+        existing_mcp_alias="existing-mcp",
+        existing_http_alias="existing-http",
+        http_path="/agentbricks-e2e",
+        mcp_tool="probe",
+        probe_mode="fixture",
+        mcp_arguments={},
+    )
+    from e2e.connection_matrix import LiveMatrixRunner
+
+    runner = LiveMatrixRunner(args)
+    monkeypatch.setattr(runner, "_install_wheel_source", lambda project: None)
+
+    def run(argv, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "deploy-existing-langgraph":
+            assert runner.created_apps == [
+                f"agent-bricks-{runner._deployment_name(DeploymentCase('existing', 'langgraph'))}"
+            ]
+            raise MatrixError("simulated deploy failure")
+        return __import__("subprocess").CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(runner, "_run", run)
+
+    with pytest.raises(MatrixError, match="deploy failure"):
+        runner.prepare_deployment(DeploymentCase("existing", "langgraph"))
+
+
+def test_subprocess_secret_is_rejected_before_log_write(tmp_path: pathlib.Path) -> None:
+    script = tmp_path / "emit_secret.py"
+    script.write_text("print('client_secret=TOPSECRET')\n", encoding="utf-8")
+    args = Namespace(output=tmp_path / "out", keep_resources=False)
+    from e2e.connection_matrix import LiveMatrixRunner
+
+    runner = LiveMatrixRunner(args)
+    with pytest.raises(MatrixError, match="sensitive"):
+        runner._run([sys.executable, str(script)], label="secret-probe")
+
+    assert not (args.output / "logs" / "secret-probe.log").exists()
+
+
+def test_cleanup_treats_missing_candidate_app_as_success(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    args = Namespace(output=tmp_path, keep_resources=False, profile="workspace")
+    from e2e.connection_matrix import LiveMatrixRunner
+
+    runner = LiveMatrixRunner(args)
+    runner.created_apps = ["agent-bricks-candidate"]
+    monkeypatch.setattr(
+        runner,
+        "_run",
+        lambda argv, **kwargs: __import__("subprocess").CompletedProcess(
+            argv, 1, "Error: deployment does not exist", ""
+        ),
+    )
+
+    assert runner.cleanup() == [
+        {"kind": "app", "name": "agent-bricks-candidate", "status": "not_found"}
+    ]
 
 
 def test_runner_executes_all_cells_controls_and_cleanup(tmp_path: pathlib.Path) -> None:
@@ -403,8 +645,16 @@ def test_runner_executes_all_cells_controls_and_cleanup(tmp_path: pathlib.Path) 
             return {"case": case.id, "status": "pass"}
 
         def execute_controls(self, app_urls: dict[DeploymentCase, str]) -> list[dict[str, object]]:
-            assert len(app_urls) == 4
-            return [{"name": "unknown-alias", "status": "pass"}]
+            assert len(app_urls) == 2
+            return [
+                {"name": name, "status": "pass"}
+                for name in (
+                    "exact-primary-matrix",
+                    "unknown-alias",
+                    "forbidden-header",
+                    "missing-user-identity",
+                )
+            ]
 
         def cleanup(self) -> list[dict[str, object]]:
             self.cleaned = True

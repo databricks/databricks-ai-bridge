@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the governed UC Connection setup × transport × framework × execution matrix."""
+"""Run the existing bearer UC Connection transport × framework × execution matrix."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import itertools
 import json
 import os
 import pathlib
+import queue
 import re
 import shlex
 import shutil
@@ -27,23 +28,38 @@ from urllib.parse import urljoin
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import NotFound
-from databricks.sdk.service.catalog import ConnectionType
+from databricks.sdk.service.catalog import ConnectionType, CredentialType
 
-Setup = Literal["new", "existing"]
+Setup = Literal["existing"]
 Transport = Literal["mcp", "http"]
 Framework = Literal["langgraph", "openai"]
 Execution = Literal["foreground", "background"]
+ProbeMode = Literal["fixture", "mcp-jsonrpc"]
 
-SETUPS: tuple[Setup, ...] = ("new", "existing")
+SETUPS: tuple[Setup, ...] = ("existing",)
 TRANSPORTS: tuple[Transport, ...] = ("mcp", "http")
 FRAMEWORKS: tuple[Framework, ...] = ("langgraph", "openai")
 EXECUTIONS: tuple[Execution, ...] = ("foreground", "background")
 
 _SENSITIVE = (
     re.compile(r"SENTINEL-[A-Z0-9_-]+", re.IGNORECASE),
-    re.compile(r"authorization\s*:\s*bearer\s+\S+", re.IGNORECASE),
-    re.compile(r"cookie\s*:\s*\S+", re.IGNORECASE),
-    re.compile(r'"(?:access_token|refresh_token|client_secret)"\s*:', re.IGNORECASE),
+    re.compile(r"authorization[\"']?\s*(?:=|:)\s*[\"']?bearer\s+\S+", re.IGNORECASE),
+    re.compile(r"cookie[\"']?\s*(?:=|:)\s*[\"']?\S+", re.IGNORECASE),
+    re.compile(
+        r"[\"']?(?:access_token|refresh_token|client_secret)[\"']?\s*(?:=|:)\s*[\"']?\S+",
+        re.IGNORECASE,
+    ),
+    re.compile(r"(?:github_pat_|gh[pousr]_)[A-Za-z0-9_]{20,}", re.IGNORECASE),
+    re.compile(r"dapi[a-z0-9]{20,}", re.IGNORECASE),
+)
+
+_REQUIRED_CONTROLS = frozenset(
+    {
+        "exact-primary-matrix",
+        "unknown-alias",
+        "forbidden-header",
+        "missing-user-identity",
+    }
 )
 
 
@@ -76,7 +92,7 @@ class Response:
 
 
 def matrix_cases() -> tuple[MatrixCase, ...]:
-    """Return the exact primary 16-cell matrix in stable order."""
+    """Return the exact primary eight-cell matrix in stable order."""
     return tuple(
         MatrixCase(*values)
         for values in itertools.product(SETUPS, TRANSPORTS, FRAMEWORKS, EXECUTIONS)
@@ -84,7 +100,7 @@ def matrix_cases() -> tuple[MatrixCase, ...]:
 
 
 def deployment_cases() -> tuple[DeploymentCase, ...]:
-    """Group the 16 cells into four setup/framework App deployments."""
+    """Group the eight cells into two framework App deployments."""
     return tuple(DeploymentCase(setup, framework) for setup in SETUPS for framework in FRAMEWORKS)
 
 
@@ -94,6 +110,8 @@ def render_probe_files(
     aliases: Mapping[str, str],
     http_path: str,
     mcp_tool: str,
+    probe_mode: ProbeMode = "fixture",
+    mcp_arguments: Mapping[str, Any] | None = None,
     freshness_marker: str = "agentbricks-connection-e2e",
 ) -> dict[str, str]:
     """Render a deterministic native framework tool and its Agent Bricks adapter."""
@@ -103,29 +121,59 @@ def render_probe_files(
         alias_values[f"user:{transport}"] = user_alias
         alias_values[f"app:{transport}"] = aliases.get(f"app:{transport}", user_alias)
     alias_literal = repr(alias_values)
-    shared_tool = f"""from typing import Any
-
-from databricks_agentkit.auth import context
-
-ALIASES = {alias_literal}
-
-
-async def _connection_probe(
-    transport: str,
-    request_id: str,
-    principal: str = "user",
-    control: str | None = None,
-) -> dict[str, Any]:
-    print({freshness_marker!r}, transport, principal, flush=True)
-    if control == "unknown-alias":
-        context.connections.client("agentbricks-e2e-unknown-alias")
-        raise AssertionError("unknown alias unexpectedly resolved")
-    client = context.connections.client(ALIASES[f"{{principal}}:{{transport}}"])
-    if control == "forbidden-header":
-        method, path = ("POST", "") if transport == "mcp" else ("GET", "/")
-        await client.request(method, path, headers={{"Authorization": "not-a-token"}})
-        raise AssertionError("forbidden header unexpectedly succeeded")
-    if transport == "http":
+    if probe_mode == "mcp-jsonrpc":
+        arguments_literal = repr(dict(mcp_arguments or {}))
+        provider_request = f"""    if transport in {{"mcp", "http"}}:
+        request_headers = {{"Accept": "application/json, text/event-stream"}}
+        initialize = await client.request(
+            "POST",
+            "",
+            headers=request_headers,
+            json={{
+                "jsonrpc": "2.0",
+                "id": f"{{request_id}}-initialize",
+                "method": "initialize",
+                "params": {{
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {{}},
+                    "clientInfo": {{"name": "agentbricks-e2e", "version": "1.0"}},
+                }},
+            }},
+        )
+        initialize.raise_for_status()
+        session_id = initialize.headers.get("mcp-session-id")
+        if session_id:
+            request_headers["Mcp-Session-Id"] = session_id
+        initialized = await client.request(
+            "POST",
+            "",
+            headers=request_headers,
+            json={{
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+                "params": {{}},
+            }},
+        )
+        initialized.raise_for_status()
+        response = await client.request(
+            "POST",
+            "",
+            headers=request_headers,
+            json={{
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": "tools/call",
+                "params": {{
+                    "name": {mcp_tool!r},
+                    "arguments": {arguments_literal},
+                }},
+            }},
+        )
+    else:
+        raise ValueError("transport must be 'mcp' or 'http'")
+"""
+    else:
+        provider_request = f"""    if transport == "http":
         response = await client.request(
             "GET",
             {http_path!r},
@@ -148,11 +196,49 @@ async def _connection_probe(
                 }},
             }},
         )
+"""
+    shared_tool = f"""import json
+from typing import Any
+
+from databricks_agentkit.auth import context
+
+ALIASES = {alias_literal}
+
+
+def _decode_provider_response(response: Any) -> Any:
+    try:
+        return response.json()
+    except json.JSONDecodeError:
+        pass
+    for line in response.text.splitlines():
+        if line.startswith("data:"):
+            payload = line.removeprefix("data:").strip()
+            if payload and payload != "[DONE]":
+                return json.loads(payload)
+    raise ValueError("MCP stream did not contain a JSON-RPC data event")
+
+
+async def _connection_probe(
+    transport: str,
+    request_id: str,
+    principal: str = "app",
+    control: str | None = None,
+) -> dict[str, Any]:
+    print({freshness_marker!r}, transport, principal, flush=True)
+    if control == "unknown-alias":
+        context.connections.client("agentbricks-e2e-unknown-alias")
+        raise AssertionError("unknown alias unexpectedly resolved")
+    client = context.connections.client(ALIASES[f"{{principal}}:{{transport}}"])
+    if control == "forbidden-header":
+        method, path = ("POST", "") if transport == "mcp" else ("GET", "/")
+        await client.request(method, path, headers={{"Authorization": "not-a-token"}})
+        raise AssertionError("forbidden header unexpectedly succeeded")
+{provider_request.rstrip()}
     response.raise_for_status()
     return {{
         "transport": transport,
         "status_code": response.status_code,
-        "provider": response.json(),
+        "provider": _decode_provider_response(response),
         "freshness_marker": {freshness_marker!r},
     }}
 """
@@ -164,7 +250,7 @@ async def _connection_probe(
 async def connection_probe(
     transport: str,
     request_id: str,
-    principal: str = "user",
+    principal: str = "app",
     control: str | None = None,
 ) -> dict[str, Any]:
     """Call the governed connection and return its deterministic fixture marker."""
@@ -189,7 +275,7 @@ async def invoke(value: Any, context: InvocationContext) -> dict[str, Any]:
         {
             "transport": transport,
             "request_id": context.invocation_id,
-            "principal": value.get("principal", "user"),
+            "principal": value.get("principal", "app"),
             "control": value.get("control"),
         }
     )
@@ -208,7 +294,7 @@ async def recover(value: Any, context: InvocationContext) -> dict[str, Any]:
 async def connection_probe(
     transport: str,
     request_id: str,
-    principal: str = "user",
+    principal: str = "app",
     control: str | None = None,
 ) -> dict[str, Any]:
     """Call the governed connection and return its deterministic fixture marker."""
@@ -235,7 +321,7 @@ async def invoke(value: Any, context: InvocationContext) -> dict[str, Any]:
         {
             "transport": transport,
             "request_id": context.invocation_id,
-            "principal": value.get("principal", "user"),
+            "principal": value.get("principal", "app"),
             "control": value.get("control"),
         }
     )
@@ -267,12 +353,10 @@ def connection_command(
     ab: pathlib.Path,
     profile: str,
     project: pathlib.Path,
-    parent: str,
-    urls: Mapping[str, str],
     aliases: Mapping[str, str],
     existing: Mapping[str, str],
 ) -> list[str]:
-    """Build the installed-Agent Bricks create/bind command for a matrix case."""
+    """Build the installed-Agent Bricks bind command for an existing Connection."""
     alias_key = f"{case.setup}:{case.transport}"
     try:
         alias = aliases[alias_key]
@@ -285,28 +369,6 @@ def connection_command(
         "auth",
         "connections",
     ]
-    if case.setup == "new":
-        try:
-            url = urls[case.transport]
-        except KeyError as exc:
-            raise MatrixError(f"Missing {case.transport} provider URL") from exc
-        return [
-            *common,
-            "create",
-            alias,
-            "--url",
-            url,
-            "--transport",
-            case.transport,
-            "--oauth",
-            "dcr",
-            "--principal",
-            "user",
-            "--parent",
-            parent,
-            "--source",
-            str(project),
-        ]
     try:
         fqn = existing[case.transport]
     except KeyError as exc:
@@ -320,7 +382,7 @@ def connection_command(
         "--transport",
         case.transport,
         "--principal",
-        "user",
+        "app",
         "--source",
         str(project),
     ]
@@ -382,7 +444,7 @@ def execute_invocation(
                 break
             if state in {"failed", "cancelled"}:
                 raise MatrixError(f"Background invocation ended in state {state!r}")
-            if state not in {"queued", "running"}:
+            if state not in {"queued", "running", "active"}:
                 raise MatrixError(f"Background invocation returned unknown state {state!r}")
             if time.monotonic() >= deadline:
                 raise MatrixError(f"Background invocation timed out after {timeout:.0f}s")
@@ -434,7 +496,7 @@ def _slug(value: str) -> str:
 
 def resource_name(run_id: str, case: MatrixCase, *, include_execution: bool = False) -> str:
     """Return a stable App/project-safe name for one setup/framework deployment."""
-    setup = {"new": "new", "existing": "ex"}[case.setup]
+    setup = "ex"
     framework = {"langgraph": "lg", "openai": "oa"}[case.framework]
     parts = ["cx", _slug(run_id), setup, case.transport, framework]
     if include_execution:
@@ -462,7 +524,12 @@ def verify_evidence(path: pathlib.Path) -> int:
         and all(row.get("status") == "pass" for row in rows)
     )
     controls = document.get("controls", [])
-    controls_ok = bool(controls) and all(item.get("status") == "pass" for item in controls)
+    control_names = [item.get("name") for item in controls]
+    controls_ok = (
+        len(control_names) == len(_REQUIRED_CONTROLS)
+        and set(control_names) == _REQUIRED_CONTROLS
+        and all(item.get("status") == "pass" for item in controls)
+    )
     cleanup = document.get("cleanup", [])
     cleanup_ok = bool(cleanup) and all(
         item.get("status") in {"deleted", "not_found"} for item in cleanup
@@ -489,6 +556,9 @@ class MatrixRunner:
     def execute_case(self, case: MatrixCase, app_url: str) -> dict[str, Any]:
         raise NotImplementedError
 
+    def after_prepare(self, app_urls: dict[DeploymentCase, str]) -> None:
+        """Run after every deployment is prepared and before invoking matrix cells."""
+
     def execute_controls(self, app_urls: dict[DeploymentCase, str]) -> list[dict[str, Any]]:
         raise NotImplementedError
 
@@ -512,6 +582,9 @@ class MatrixRunner:
                     app_urls[deployment] = self.prepare_deployment(deployment)
                 except Exception as exc:
                     preparation_errors[deployment] = str(exc)
+
+            if not preparation_errors:
+                self.after_prepare(app_urls)
 
             for case in matrix_cases():
                 deployment = DeploymentCase(case.setup, case.framework)
@@ -603,7 +676,6 @@ class LiveMatrixRunner(MatrixRunner):
         self.app_names: dict[DeploymentCase, str] = {}
         self.aliases: dict[tuple[Setup, Framework, Transport], str] = {}
         self.connection_fqns: dict[tuple[Setup, Framework, Transport], str] = {}
-        self.app_aliases: dict[tuple[Setup, Framework, Transport], str] = {}
         self._logs: list[pathlib.Path] = []
         self._freshness_checked: set[str] = set()
 
@@ -622,34 +694,75 @@ class LiveMatrixRunner(MatrixRunner):
         log_path.parent.mkdir(parents=True, exist_ok=True)
         self._logs.append(log_path)
         started = time.monotonic()
-        with log_path.open("w", encoding="utf-8") as log:
-            process = subprocess.Popen(
-                list(argv),
-                cwd=cwd,
-                text=True,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
-            next_tick = 60.0
-            while process.poll() is None:
-                elapsed = time.monotonic() - started
-                if elapsed >= timeout:
-                    process.terminate()
+        output_queue: queue.Queue[str | None] = queue.Queue()
+        output_chunks: list[str] = []
+        process = subprocess.Popen(
+            list(argv),
+            cwd=cwd,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            bufsize=1,
+        )
+
+        def read_output() -> None:
+            assert process.stdout is not None
+            try:
+                for line in process.stdout:
+                    output_queue.put(line)
+            finally:
+                output_queue.put(None)
+
+        reader = threading.Thread(target=read_output, daemon=True)
+        reader.start()
+        next_tick = 60.0
+        try:
+            with log_path.open("w", encoding="utf-8") as log:
+                while True:
+                    elapsed = time.monotonic() - started
+                    if elapsed >= timeout:
+                        raise MatrixError(f"{label} timed out after {timeout:.0f}s")
                     try:
-                        process.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                    raise MatrixError(f"{label} timed out after {timeout:.0f}s")
-                if elapsed >= next_tick:
-                    self.transcript.write(
-                        f"tick {dt.datetime.now(dt.timezone.utc):%H:%M} | {label} | running | "
-                        f"{_last_nonempty_line(log_path)}"
-                    )
-                    next_tick += 60
-                time.sleep(2)
-        output = log_path.read_text(encoding="utf-8", errors="replace")
-        _scan_sensitive(output)
+                        chunk = output_queue.get(timeout=min(2.0, timeout - elapsed))
+                    except queue.Empty:
+                        chunk = ""
+                    if chunk is None:
+                        break
+                    if chunk:
+                        _scan_sensitive(chunk)
+                        log.write(chunk)
+                        log.flush()
+                        output_chunks.append(chunk)
+                    elapsed = time.monotonic() - started
+                    if elapsed >= next_tick:
+                        last_line = next(
+                            (
+                                line.strip()[:300]
+                                for line in reversed("".join(output_chunks).splitlines()[-30:])
+                                if line.strip()
+                            ),
+                            "no output yet",
+                        )
+                        self.transcript.write(
+                            f"tick {dt.datetime.now(dt.timezone.utc):%H:%M} | {label} | running | "
+                            f"{last_line}"
+                        )
+                        next_tick += 60
+            process.wait()
+        except BaseException:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            reader.join(timeout=10)
+            log_path.unlink(missing_ok=True)
+            raise
+        reader.join(timeout=10)
+        output = "".join(output_chunks)
         result = subprocess.CompletedProcess(list(argv), process.returncode, output, "")
         state = "success" if result.returncode == 0 else f"failed:{result.returncode}"
         self.transcript.write(f"tick {dt.datetime.now(dt.timezone.utc):%H:%M} | {label} | {state}")
@@ -696,12 +809,6 @@ class LiveMatrixRunner(MatrixRunner):
         self._validate_existing_connections()
 
     def _validate_inputs(self) -> None:
-        parent_parts = self.args.parent.split(".")
-        if len(parent_parts) != 2 or not all(parent_parts):
-            raise MatrixError("--parent must be a two-part catalog.schema name")
-        for label, value in (("MCP", self.args.mcp_url), ("HTTP", self.args.http_url)):
-            if not value.startswith("https://"):
-                raise MatrixError(f"{label} fixture URL must use HTTPS")
         for value in (
             self.args.existing_mcp_connection,
             self.args.existing_http_connection,
@@ -721,6 +828,13 @@ class LiveMatrixRunner(MatrixRunner):
                 raise MatrixError(f"Existing {transport} UC Connection was not found") from exc
             if info.connection_type != ConnectionType.HTTP:
                 raise MatrixError(f"Existing {transport} binding is not a UC HTTP Connection")
+            if info.credential_type != CredentialType.BEARER_TOKEN:
+                credential = (
+                    info.credential_type.value if info.credential_type is not None else "unknown"
+                )
+                raise MatrixError(
+                    f"Existing {transport} binding must use BEARER_TOKEN, got {credential}"
+                )
 
     def _alias(self, deployment: DeploymentCase, transport: Transport) -> str:
         key = (deployment.setup, deployment.framework, transport)
@@ -733,7 +847,7 @@ class LiveMatrixRunner(MatrixRunner):
         return value
 
     def _deployment_name(self, deployment: DeploymentCase) -> str:
-        setup = "new" if deployment.setup == "new" else "ex"
+        setup = "ex"
         framework = "lg" if deployment.framework == "langgraph" else "oa"
         return _slug(f"cx-{self.run_token}-{setup}-{framework}")[:45].rstrip("-")
 
@@ -767,58 +881,29 @@ class LiveMatrixRunner(MatrixRunner):
                 ab=self.ab,
                 profile=self.args.profile,
                 project=project,
-                parent=self.args.parent,
-                urls={"mcp": self.args.mcp_url, "http": self.args.http_url},
                 aliases={f"{deployment.setup}:{transport}": alias},
                 existing={
                     "mcp": self.args.existing_mcp_connection,
                     "http": self.args.existing_http_connection,
                 },
             )
+            fqn = getattr(self.args, f"existing_{transport}_connection")
             self._run(
                 command,
                 timeout=600,
                 label=f"connection-{deployment.setup}-{transport}-{deployment.framework}",
             )
-            fqn = (
-                f"{self.args.parent}.{alias}"
-                if deployment.setup == "new"
-                else getattr(self.args, f"existing_{transport}_connection")
-            )
             self.connection_fqns[(deployment.setup, deployment.framework, transport)] = fqn
-            if deployment.setup == "new":
-                self.created_connections.append(fqn)
-            app_alias = _slug(f"app-{transport}-{deployment.framework}-{self.run_token}")[:63]
-            self._run(
-                [
-                    str(self.ab),
-                    "--profile",
-                    self.args.profile,
-                    "auth",
-                    "connections",
-                    "bind",
-                    app_alias,
-                    "--uc-connection",
-                    fqn,
-                    "--transport",
-                    transport,
-                    "--principal",
-                    "app",
-                    "--source",
-                    str(project),
-                ],
-                timeout=600,
-                label=f"connection-app-{transport}-{deployment.framework}",
-            )
-            self.app_aliases[(deployment.setup, deployment.framework, transport)] = app_alias
             rendered_aliases[transport] = alias
             rendered_aliases[f"user:{transport}"] = alias
-            rendered_aliases[f"app:{transport}"] = app_alias
+            rendered_aliases[f"app:{transport}"] = alias
         for relative_path, source in render_probe_files(
             deployment.framework,
             aliases=rendered_aliases,
             http_path=self.args.http_path,
             mcp_tool=self.args.mcp_tool,
+            probe_mode=self.args.probe_mode,
+            mcp_arguments=self.args.mcp_arguments,
             freshness_marker=f"agentbricks-connection-e2e-{self.run_token}",
         ).items():
             target = project / relative_path
@@ -826,6 +911,8 @@ class LiveMatrixRunner(MatrixRunner):
             target.write_text(source, encoding="utf-8")
         deployment_name = self._deployment_name(deployment)
         app_name = f"agent-bricks-{deployment_name}"
+        if app_name not in self.created_apps:
+            self.created_apps.append(app_name)
         self._run(
             [
                 str(self.ab),
@@ -841,9 +928,19 @@ class LiveMatrixRunner(MatrixRunner):
             timeout=2700,
             label=f"deploy-{deployment.setup}-{deployment.framework}",
         )
-        self.created_apps.append(app_name)
         self.app_names[deployment] = app_name
         return self._wait_for_app(app_name)
+
+    def after_prepare(self, app_urls: dict[DeploymentCase, str]) -> None:
+        if not self.args.pause_before_invocations:
+            return
+        if not sys.stdin.isatty():
+            raise MatrixError("--pause-before-invocations requires an interactive terminal")
+        for fqn in dict.fromkeys(self.created_connections):
+            self.transcript.write(f"authorize {fqn} | {self.host}/explore/connections/{fqn}")
+        self.transcript.write("authorization | waiting for browser consent")
+        input("Authorize every listed Connection, then press Enter to continue: ")
+        self.transcript.write("authorization | continuing after browser consent")
 
     def _install_wheel_source(self, project: pathlib.Path) -> None:
         vendor = project / "vendor"
@@ -929,7 +1026,7 @@ class LiveMatrixRunner(MatrixRunner):
         invocation_id = str(uuid.uuid4())
         body = {
             "id": invocation_id,
-            "input": {"transport": case.transport},
+            "input": {"transport": case.transport, "principal": "app"},
             "background": case.execution == "background",
         }
         started = time.monotonic()
@@ -1010,12 +1107,12 @@ class LiveMatrixRunner(MatrixRunner):
             {
                 "name": "exact-primary-matrix",
                 "status": status,
-                "expected_cells": 16,
+                "expected_cells": len(expected),
                 "passed_cells": len(actual),
                 "deployed_apps": len(app_urls),
             }
         )
-        control_deployment = DeploymentCase("new", "langgraph")
+        control_deployment = DeploymentCase("existing", "langgraph")
         control_url = app_urls.get(control_deployment)
         if control_url is None:
             rows.append(
@@ -1026,37 +1123,13 @@ class LiveMatrixRunner(MatrixRunner):
                 }
             )
             return rows
-        for transport in TRANSPORTS:
-            invocation_id = str(uuid.uuid4())
-            try:
-                execute_invocation(
-                    "foreground",
-                    f"{control_url}/api/invocations",
-                    {
-                        "id": invocation_id,
-                        "input": {"transport": transport, "principal": "app"},
-                    },
-                    self._request,
-                    expected_marker=getattr(self.args, f"{transport}_marker"),
-                    expected_user_marker=self.args.app_user_marker or self.args.user_marker,
-                )
-            except Exception as exc:
-                rows.append(
-                    {
-                        "name": f"app-principal-{transport}",
-                        "status": "fail",
-                        "error": str(exc),
-                    }
-                )
-            else:
-                rows.append({"name": f"app-principal-{transport}", "status": "pass"})
         for name in ("unknown-alias", "forbidden-header"):
             response = self._request(
                 "POST",
                 f"{control_url}/api/invocations",
                 {
                     "id": str(uuid.uuid4()),
-                    "input": {"transport": "http", "control": name},
+                    "input": {"transport": "http", "principal": "app", "control": name},
                 },
             )
             try:
@@ -1070,7 +1143,7 @@ class LiveMatrixRunner(MatrixRunner):
             f"{control_url}/api/invocations",
             {
                 "id": str(uuid.uuid4()),
-                "input": {"transport": "http"},
+                "input": {"transport": "http", "principal": "app"},
             },
             {},
         )
@@ -1108,7 +1181,14 @@ class LiveMatrixRunner(MatrixRunner):
                     label=f"cleanup-app-{name}",
                     check=False,
                 )
-                status = "deleted" if result.returncode == 0 else "failed"
+                output = result.stdout.casefold()
+                not_found = any(
+                    marker in output
+                    for marker in ("not found", "does not exist", "resource_does_not_exist")
+                )
+                status = (
+                    "deleted" if result.returncode == 0 else "not_found" if not_found else "failed"
+                )
             else:
                 assert self.workspace is not None
                 try:
@@ -1128,7 +1208,7 @@ class LiveMatrixRunner(MatrixRunner):
             "app_auth_profile": self.args.app_auth_profile,
             "wheel": self.args.wheel.name,
             "wheel_sha256": _sha256(self.args.wheel),
-            "parent": self.args.parent,
+            "probe_mode": self.args.probe_mode,
             "matrix_axes": {
                 "setup": list(SETUPS),
                 "transport": list(TRANSPORTS),
@@ -1162,27 +1242,34 @@ def _sha256(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
+def _json_object(value: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError("must be a JSON object") from exc
+    if not isinstance(parsed, dict):
+        raise argparse.ArgumentTypeError("must be a JSON object")
+    return parsed
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile")
     parser.add_argument("--app-auth-profile")
     parser.add_argument("--wheel", type=pathlib.Path)
     parser.add_argument("--output", type=pathlib.Path)
-    parser.add_argument("--parent")
-    parser.add_argument("--mcp-url")
-    parser.add_argument("--http-url")
     parser.add_argument("--existing-mcp-connection")
     parser.add_argument("--existing-http-connection")
-    parser.add_argument("--new-mcp-alias", default="new-mcp")
-    parser.add_argument("--new-http-alias", default="new-http")
     parser.add_argument("--existing-mcp-alias", default="existing-mcp")
     parser.add_argument("--existing-http-alias", default="existing-http")
     parser.add_argument("--mcp-marker")
     parser.add_argument("--http-marker")
     parser.add_argument("--user-marker")
-    parser.add_argument("--app-user-marker")
     parser.add_argument("--mcp-tool", default="agentbricks_connection_probe")
+    parser.add_argument("--mcp-arguments", type=_json_object, default={})
+    parser.add_argument("--probe-mode", choices=("fixture", "mcp-jsonrpc"), default="fixture")
     parser.add_argument("--http-path", default="/agentbricks-e2e")
+    parser.add_argument("--pause-before-invocations", action="store_true")
     parser.add_argument("--keep-resources", action="store_true")
     parser.add_argument("--verify-evidence", type=pathlib.Path)
     args = parser.parse_args(argv)
@@ -1191,9 +1278,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "app_auth_profile",
         "wheel",
         "output",
-        "parent",
-        "mcp_url",
-        "http_url",
         "existing_mcp_connection",
         "existing_http_connection",
         "mcp_marker",

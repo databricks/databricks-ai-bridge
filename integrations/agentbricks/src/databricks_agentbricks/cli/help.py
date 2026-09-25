@@ -36,26 +36,15 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("login",): (("ab login --profile <profile>", "save a profile as your default"),),
     ("logout",): (("ab logout", "forget the saved default profile"),),
-    ("auth",): (
-        ("ab auth connections create --help", "create a governed external connection"),
-        ("ab auth connections bind --help", "bind an existing UC Connection"),
-    ),
+    ("auth",): (("ab auth connections bind --help", "bind an existing UC Connection"),),
     ("auth", "connections"): (
-        ("ab auth connections create --help", "create a DCR-backed UC Connection"),
         ("ab auth connections bind --help", "bind an existing UC Connection"),
-    ),
-    ("auth", "connections", "create"): (
-        (
-            "ab auth connections create github --url https://mcp.example.com/mcp "
-            "--transport mcp --oauth dcr --principal user --parent main.agent_connections",
-            "create and bind an OAuth MCP connection",
-        ),
     ),
     ("auth", "connections", "bind"): (
         (
             "ab auth connections bind github "
-            "--uc-connection main.agent_connections.github --transport mcp --principal user",
-            "bind an existing UC Connection",
+            "--uc-connection main.agent_connections.github --transport mcp --principal app",
+            "bind an existing bearer-token UC Connection",
         ),
     ),
     ("init",): (
