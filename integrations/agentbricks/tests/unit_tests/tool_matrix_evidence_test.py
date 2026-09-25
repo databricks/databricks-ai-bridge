@@ -217,16 +217,17 @@ def _git(repo: pathlib.Path, *args: str) -> str:
 
 def _source_checkout_and_wheel(tmp_path: pathlib.Path) -> tuple[pathlib.Path, str, pathlib.Path]:
     repo = tmp_path / "repo"
-    package = repo / "integrations" / "agentbricks" / "src" / "databricks_agentbricks"
-    (package / "cli").mkdir(parents=True)
+    source_root = repo / "integrations" / "agentbricks" / "src"
     sources = {
+        "databricks_agentkit/_api_client.py": b"WORKSPACE_CLIENT = True\n",
         "databricks_agentbricks/tool_access.py": b"TOOL_ACCESS = True\n",
         "databricks_agentbricks/app_resources.py": b"APP_RESOURCES = True\n",
         "databricks_agentbricks/cli/deploy.py": b"DEPLOY = True\n",
     }
     for member, content in sources.items():
-        relative = pathlib.Path(member).relative_to("databricks_agentbricks")
-        (package / relative).write_bytes(content)
+        path = source_root / member
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
     _git(repo, "init")
     _git(repo, "config", "user.name", "Agent Bricks Test")
     _git(repo, "config", "user.email", "agentbricks-test@example.com")
@@ -249,6 +250,7 @@ def test_source_provenance_ties_wheel_modules_to_claimed_checkout(tmp_path):
     assert provenance["source_dirty"] is False
     assert provenance["wheel_source_matches"] is True
     assert set(provenance["wheel_source_sha256"]) == {
+        "databricks_agentkit/_api_client.py",
         "databricks_agentbricks/tool_access.py",
         "databricks_agentbricks/app_resources.py",
         "databricks_agentbricks/cli/deploy.py",
@@ -273,6 +275,48 @@ def test_source_provenance_rejects_unrelated_claimed_commit(tmp_path):
 
     with pytest.raises(tool_matrix.MatrixError, match="does not match source checkout HEAD"):
         tool_matrix._source_provenance(repo, "f" * 40, wheel)
+
+
+def test_project_runtime_is_pinned_to_vendored_wheel(tmp_path):
+    wheel = tmp_path / "dist" / "databricks_agentbricks-0.2.0-py3-none-any.whl"
+    wheel.parent.mkdir()
+    wheel.write_bytes(b"tested wheel")
+    project = tmp_path / "project"
+    project.mkdir()
+    pyproject = project / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "agent"\n\n[tool.uv]\ndefault-groups = []\n')
+    runner = tool_matrix.Runner("profile", tmp_path / "out", wheel)
+
+    runner._pin_project_wheel(project)
+
+    vendored = project / "agentbricks_e2e_wheels" / wheel.name
+    assert vendored.read_bytes() == wheel.read_bytes()
+    document = tool_matrix.tomli.loads(pyproject.read_text())
+    assert document["tool"]["uv"]["sources"]["databricks-agentbricks"] == {
+        "path": f"agentbricks_e2e_wheels/{wheel.name}"
+    }
+
+
+def test_invoke_with_retry_pins_compatible_ai_gateway_model(monkeypatch, tmp_path):
+    bodies = []
+
+    def fake_http_json(url, body, headers):
+        bodies.append(body)
+        return {"status": "completed"}
+
+    monkeypatch.setattr(tool_matrix, "_http_json", fake_http_json)
+    runner = tool_matrix.Runner("profile", tmp_path / "out", tmp_path / "wheel.whl")
+
+    response = runner._invoke_with_retry("sandbox", "https://app", "prompt", {})
+
+    assert response == {"status": "completed"}
+    assert bodies[0]["input"]["model"] == "system.ai.gpt-5-2"
+
+
+def test_curl_evidence_records_pinned_ai_gateway_model():
+    command = tool_matrix._curl_command("https://app/api/invocations", "prompt", False)
+
+    assert "system.ai.gpt-5-2" in command
 
 
 def test_wait_for_app_deleted_polls_until_not_found(monkeypatch, tmp_path):
@@ -330,9 +374,9 @@ def test_cli_authoring_records_app_auth_for_managed_deployed_tools(tmp_path):
         'schema_version = 1\n\n[agent]\nframework = "langgraph"\nserver = "agentbricks"\n'
     )
     runner = tool_matrix.Runner("profile", tmp_path / "out", tmp_path / "wheel.whl")
-    runner.uc_function = "main.tools.marker"
-    runner.uc_table = "main.tools.matrix_table"
-    runner.uc_volume = "main.tools.matrix_volume"
+    runner.uc_function = "supervisor_agent.mason_agent_tools_e2e.marker"
+    runner.uc_table = "supervisor_agent.mason_agent_tools_e2e.matrix_table"
+    runner.uc_volume = "supervisor_agent.mason_agent_tools_e2e.matrix_volume"
     runner.genie_space_id = "0" * 32
     bindings = []
 
@@ -383,9 +427,9 @@ def test_cli_authoring_includes_temporary_volume_scope(tmp_path):
         'schema_version = 1\n\n[agent]\nframework = "langgraph"\nserver = "agentbricks"\n'
     )
     runner = tool_matrix.Runner("profile", tmp_path / "out", tmp_path / "wheel.whl")
-    runner.uc_function = "main.tools.marker"
-    runner.uc_table = "main.tools.matrix_table"
-    runner.uc_volume = "main.tools.matrix_volume"
+    runner.uc_function = "supervisor_agent.mason_agent_tools_e2e.marker"
+    runner.uc_table = "supervisor_agent.mason_agent_tools_e2e.matrix_table"
+    runner.uc_volume = "supervisor_agent.mason_agent_tools_e2e.matrix_volume"
     runner.genie_space_id = "0" * 32
     commands: list[list[str]] = []
 
@@ -426,16 +470,19 @@ def test_cli_authoring_includes_temporary_volume_scope(tmp_path):
 
     sandbox = next(command for command in commands if "sandbox" in command and "add" in command)
     scopes = [sandbox[index + 1] for index, value in enumerate(sandbox) if value == "--scope"]
-    assert scopes == ["table:main.tools.matrix_table", "volume:main.tools.matrix_volume"]
+    assert scopes == [
+        "table:supervisor_agent.mason_agent_tools_e2e.matrix_table",
+        "volume:supervisor_agent.mason_agent_tools_e2e.matrix_volume",
+    ]
 
 
 def test_direct_authoring_includes_temporary_volume_scope(tmp_path):
     project = tmp_path / "project"
     project.mkdir()
     runner = tool_matrix.Runner("profile", tmp_path / "out", tmp_path / "wheel.whl")
-    runner.uc_function = "main.tools.marker"
-    runner.uc_table = "main.tools.matrix_table"
-    runner.uc_volume = "main.tools.matrix_volume"
+    runner.uc_function = "supervisor_agent.mason_agent_tools_e2e.marker"
+    runner.uc_table = "supervisor_agent.mason_agent_tools_e2e.matrix_table"
+    runner.uc_volume = "supervisor_agent.mason_agent_tools_e2e.matrix_volume"
     runner.genie_space_id = "0" * 32
 
     runner._author_direct(project, "langgraph")
@@ -443,6 +490,12 @@ def test_direct_authoring_includes_temporary_volume_scope(tmp_path):
     manifest = tool_matrix.tomli.loads((project / "agent.toml").read_text())
     sandbox = next(tool for tool in manifest["tools"] if tool["id"] == "sandbox")
     assert sandbox["policy"]["downscope"] == [
-        {"resource": "table:main.tools.matrix_table", "permission": "read_only"},
-        {"resource": "volume:main.tools.matrix_volume", "permission": "read_only"},
+        {
+            "resource": "table:supervisor_agent.mason_agent_tools_e2e.matrix_table",
+            "permission": "read_only",
+        },
+        {
+            "resource": "volume:supervisor_agent.mason_agent_tools_e2e.matrix_volume",
+            "permission": "read_only",
+        },
     ]

@@ -74,6 +74,31 @@ _TRACE_EXPERIMENT_RESOURCE = "agentbricks-trace-experiment"
 _TOOL_RESOURCE_PREFIX = "agentbricks-tool-"
 
 
+def _contains_expected_fields(actual: Any, expected: Any) -> bool:
+    if isinstance(expected, dict):
+        return isinstance(actual, dict) and all(
+            key in actual and _contains_expected_fields(actual[key], value)
+            for key, value in expected.items()
+        )
+    if isinstance(expected, list):
+        return (
+            isinstance(actual, list)
+            and len(actual) == len(expected)
+            and all(
+                _contains_expected_fields(actual_item, expected_item)
+                for actual_item, expected_item in zip(actual, expected, strict=True)
+            )
+        )
+    return actual == expected
+
+
+def _owned_resources_match(actual: Sequence[Any], expected: Sequence[dict[str, Any]]) -> bool:
+    return len(actual) == len(expected) and all(
+        _contains_expected_fields(actual_resource, expected_resource)
+        for actual_resource, expected_resource in zip(actual, expected, strict=True)
+    )
+
+
 def _read_app_resources_strict(
     app: str, profile: Optional[str], *, action: str
 ) -> tuple[list[Any] | None, str | None]:
@@ -160,9 +185,19 @@ def apply_tool_resources(
         )
     ]
     owned = sorted(resources, key=lambda resource: str(resource.get("name", "")))
-    reconciled = [*preserved, *owned]
-    if reconciled == current:
+    current_owned = sorted(
+        (
+            resource
+            for resource in current
+            if isinstance(resource, dict)
+            and isinstance(resource.get("name"), str)
+            and resource["name"].startswith(_TOOL_RESOURCE_PREFIX)
+        ),
+        key=lambda resource: str(resource.get("name", "")),
+    )
+    if _owned_resources_match(current_owned, owned):
         return None
+    reconciled = [*preserved, *owned]
     update = _update_app_resources(app, reconciled, profile)
     if update.returncode != 0:
         return (update.stderr or update.stdout or "").strip() or "unknown error"
@@ -183,7 +218,7 @@ def apply_tool_resources(
         ),
         key=lambda resource: str(resource.get("name", "")),
     )
-    if persisted_owned != owned:
+    if not _owned_resources_match(persisted_owned, owned):
         return "Could not verify App tool resources: Agent Bricks-owned resources do not match"
     return None
 

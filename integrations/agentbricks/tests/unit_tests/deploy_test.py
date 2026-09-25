@@ -194,6 +194,7 @@ class _FakeClient:
     current_user = "me@example.com"
 
     def __init__(self):
+        self.workspace_client = self
         # Seeded with one pre-existing store ("mem", whose id differs from its display name as the
         # real API returns); created stores are appended so deploy's auto-create can then resolve them.
         self._memory_stores = [{"name": "memory-stores/mem-id-123", "display_name": "mem"}]

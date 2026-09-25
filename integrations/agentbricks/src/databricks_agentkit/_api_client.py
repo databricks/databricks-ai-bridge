@@ -157,6 +157,11 @@ class _AgentBricksApiClient:
         return self._w.config.host or "unknown"
 
     @property
+    def workspace_client(self) -> WorkspaceClient:
+        """The SDK client used for workspace-native services."""
+        return self._w
+
+    @property
     def current_user(self) -> str:
         """The authenticated user's name (used to derive the app source workspace path)."""
         return str(self._w.current_user.me().user_name or "unknown")

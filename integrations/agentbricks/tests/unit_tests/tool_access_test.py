@@ -10,7 +10,9 @@ from databricks.sdk.service.catalog import (
     EffectivePrivilege,
     EffectivePrivilegeAssignment,
     Privilege,
+    PrivilegeAssignment,
     SecurableType,
+    UpdatePermissionsResponse,
 )
 from databricks.sdk.service.workspace import (
     ObjectInfo,
@@ -47,7 +49,7 @@ def test_plan_maps_only_explicit_app_auth_resources_to_least_privilege():
                     Scope.workspace("/Workspace/Shared/input", "read_write"),
                 ],
             ),
-            ToolSpec.mcp("search", service="system.ai.web_search"),
+            ToolSpec.mcp("search", service="supervisor_agent.tools.search"),
             ToolSpec.mcp("user-search", service="system.ai.docs", auth="user"),
         ]
     )
@@ -70,10 +72,9 @@ def test_plan_maps_only_explicit_app_auth_resources_to_least_privilege():
         resource["genie_space"] for resource in plan.app_resources if "genie_space" in resource
     ] == [{"name": "genie", "space_id": "0" * 32, "permission": "CAN_RUN"}]
     assert set(plan.uc_grants) == {
-        UcGrant(SecurableType.CATALOG, "system", Privilege.USE_CATALOG),
-        UcGrant(SecurableType.SCHEMA, "system.ai", Privilege.USE_SCHEMA),
-        UcGrant("MCP_SERVICE", "system.ai.sandbox", Privilege.EXECUTE),
-        UcGrant("MCP_SERVICE", "system.ai.web_search", Privilege.EXECUTE),
+        UcGrant(SecurableType.CATALOG, "supervisor_agent", Privilege.USE_CATALOG),
+        UcGrant(SecurableType.SCHEMA, "supervisor_agent.tools", Privilege.USE_SCHEMA),
+        UcGrant("MCP_SERVICE", "supervisor_agent.tools.search", Privilege.EXECUTE),
     }
     assert plan.workspace_grants == (
         WorkspaceGrant(
@@ -123,7 +124,7 @@ def test_plan_deduplicates_targets_and_keeps_strongest_permission():
             permission=WorkspaceObjectPermissionLevel.CAN_EDIT,
         ),
     )
-    assert len(first.uc_grants) == 3
+    assert first.uc_grants == ()
 
 
 def test_plan_ignores_user_auth_and_genie_one_without_an_explicit_resource():
@@ -143,6 +144,30 @@ def test_plan_ignores_user_auth_and_genie_one_without_an_explicit_resource():
     assert plan.app_resources == ()
     assert plan.uc_grants == ()
     assert plan.workspace_grants == ()
+
+
+def test_plan_uses_platform_defaults_for_system_mcp_services():
+    plan = plan_tool_access(
+        [
+            ToolSpec.mcp("search", service="system.ai.web_search"),
+            ToolSpec.sandbox(
+                "sandbox",
+                scopes=[Scope.table("supervisor_agent.tools.rows")],
+            ),
+        ]
+    )
+
+    assert plan.uc_grants == ()
+
+
+def test_plan_grants_external_mcp_service_in_supervisor_agent_catalog():
+    plan = plan_tool_access([ToolSpec.mcp("search", service="supervisor_agent.tools.search")])
+
+    assert set(plan.uc_grants) == {
+        UcGrant(SecurableType.CATALOG, "supervisor_agent", Privilege.USE_CATALOG),
+        UcGrant(SecurableType.SCHEMA, "supervisor_agent.tools", Privilege.USE_SCHEMA),
+        UcGrant("MCP_SERVICE", "supervisor_agent.tools.search", Privilege.EXECUTE),
+    }
 
 
 def _effective(principal: str, privilege: Privilege) -> EffectivePermissionsList:
@@ -202,6 +227,36 @@ def test_uc_grant_adds_missing_privilege_and_verifies_effective_access():
     assert change.as_dict() == {"add": ["USE_SCHEMA"], "principal": "app-sp"}
     assert client.grants.update.call_args.args == ("SCHEMA", "system.ai")
     assert client.grants.get_effective.call_count == 2
+
+
+def test_uc_grant_uses_update_response_when_effective_access_is_unreadable():
+    client = Mock()
+    client.grants.get_effective.side_effect = PermissionDenied(
+        "User does not have READ METADATA on Catalog 'system'."
+    )
+    client.grants.update.return_value = UpdatePermissionsResponse(
+        privilege_assignments=[
+            PrivilegeAssignment(principal="app-sp", privileges=[Privilege.USE_CATALOG])
+        ]
+    )
+    grant = UcGrant(SecurableType.CATALOG, "system", Privilege.USE_CATALOG)
+
+    _ensure_uc_grant(client, "app-sp", grant)
+
+    change = client.grants.update.call_args.kwargs["changes"][0]
+    assert change.as_dict() == {"add": ["USE_CATALOG"], "principal": "app-sp"}
+
+
+def test_uc_grant_fails_closed_when_update_response_omits_unreadable_grant():
+    client = Mock()
+    client.grants.get_effective.side_effect = PermissionDenied(
+        "User does not have READ METADATA on Catalog 'system'."
+    )
+    client.grants.update.return_value = UpdatePermissionsResponse(privilege_assignments=[])
+    grant = UcGrant(SecurableType.CATALOG, "system", Privilege.USE_CATALOG)
+
+    with pytest.raises(AgentCliError, match="did not confirm"):
+        _ensure_uc_grant(client, "app-sp", grant)
 
 
 def test_uc_grant_follows_empty_effective_permission_pages():
@@ -360,7 +415,7 @@ def test_reconcile_tool_access_applies_apps_uc_and_workspace_in_order(monkeypatc
     )
     plan = plan_tool_access(
         [
-            ToolSpec.mcp("search", service="system.ai.web_search"),
+            ToolSpec.mcp("search", service="supervisor_agent.tools.search"),
             ToolSpec.sandbox(
                 "sandbox",
                 scopes=[Scope.workspace("/Workspace/Shared/input")],
@@ -396,7 +451,7 @@ def test_reconcile_tool_access_additive_failure_does_not_replace_apps_resources(
     monkeypatch.setattr(ta, "_ensure_workspace_grant", ensure_workspace)
     plan = plan_tool_access(
         [
-            ToolSpec.mcp("search", service="system.ai.web_search"),
+            ToolSpec.mcp("search", service="supervisor_agent.tools.search"),
             ToolSpec.sandbox(
                 "sandbox",
                 scopes=[Scope.workspace("/Workspace/Shared/input")],

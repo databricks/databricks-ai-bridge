@@ -65,12 +65,14 @@ The CLI path first verifies that an unavailable MCP service is rejected without 
 deployed tool matrix exercises valid managed tools.
 
 The deployed cases do not pre-grant the temporary UC function. They require `ab deploy` to create
-the function/table/volume/Genie Apps resources and effective MCP service/catalog/schema grants,
-then inspect those permissions before invoking the App. The temporary declared function calls a
-second, undeclared function: the harness proves Agent Bricks did not grant that transitive
-function, applies and verifies its required direct manual grant, and only then invokes the declared
-function. The CLI-authored deployment is repeated to prove grant idempotency and preservation of
-unrelated App resources.
+create the function/table/volume/Genie Apps resources, then inspect those permissions before
+invoking the App. Built-in `system.ai` MCP services use platform-managed access defaults and are
+validated through live Sandbox and web-search calls rather than direct grant inspection. External
+MCP services still receive direct service/catalog/schema grants. The temporary declared function
+calls a second, undeclared function: the harness proves Agent Bricks did not
+grant that transitive function, applies and verifies its required direct manual grant, and only
+then invokes the declared function. The CLI-authored deployment is repeated to prove grant
+idempotency and preservation of unrelated App resources.
 
 ## Verify existing evidence
 

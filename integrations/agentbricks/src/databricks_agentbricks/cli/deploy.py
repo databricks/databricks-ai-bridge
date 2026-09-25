@@ -704,7 +704,7 @@ def deploy(
         tool_principal = _app_service_principal(name, obj.profile)
         with render.status("Granting the app access to its explicit tool resources…"):
             reconcile_tool_access(
-                client,
+                client.workspace_client,
                 name,
                 tool_principal,
                 tool_access_plan,

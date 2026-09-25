@@ -206,6 +206,48 @@ def test_apply_tool_resources_fails_when_readback_is_missing_desired_resource(mo
     assert reads == 2
 
 
+def test_apply_tool_resources_accepts_server_enriched_readback(monkeypatch):
+    desired = [
+        {
+            "name": "mason-tool-table",
+            "uc_securable": {
+                "securable_full_name": "main.data.rows",
+                "securable_type": "TABLE",
+                "permission": "SELECT",
+            },
+        }
+    ]
+    reads = 0
+
+    def fake_db(args, profile, **kw):
+        nonlocal reads
+        if args[:2] == ["apps", "get"]:
+            reads += 1
+            resources = (
+                []
+                if reads == 1
+                else [
+                    {
+                        **desired[0],
+                        "uc_securable": {
+                            **desired[0]["uc_securable"],
+                            "securable_kind": "TABLE_DELTA",
+                        },
+                    }
+                ]
+            )
+            return types.SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"resources": resources}),
+                stderr="",
+            )
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(sa, "_databricks", fake_db)
+
+    assert sa.apply_tool_resources("app", desired, "prof") is None
+
+
 def test_apply_tool_resources_fails_closed_when_readback_fails(monkeypatch):
     reads = 0
 

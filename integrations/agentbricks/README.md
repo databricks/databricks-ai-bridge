@@ -598,7 +598,8 @@ user's permissions instead of the App service principal.
 | Sandbox table scope | Apps `uc_securable`: `TABLE` / `SELECT` or `MODIFY` |
 | Sandbox volume scope | Apps `uc_securable`: `VOLUME` / `READ_VOLUME` or `WRITE_VOLUME` |
 | Sandbox Workspace path | Workspace ACL: `CAN_READ` or `CAN_EDIT` |
-| Managed MCP service, including `system.ai.sandbox` and `system.ai.genie_one_mcp` | Unity Catalog: effective `EXECUTE` plus `USE_SCHEMA` and `USE_CATALOG` on its named parents |
+| External MCP service | Unity Catalog: effective `EXECUTE` plus `USE_SCHEMA` and `USE_CATALOG` on its named parents |
+| Built-in `system.ai` MCP service, including Sandbox and Genie One | Platform-managed access defaults; Agent Bricks does not mutate system securables |
 
 Native Genie One has no resource identifier in its binding, so it does not add a resource-specific
 grant. Use a Genie Agent binding when the App identity should be scoped to one explicit Genie Space.
