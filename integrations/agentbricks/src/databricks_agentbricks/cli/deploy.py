@@ -52,6 +52,7 @@ from databricks_agentbricks.project_config import (
 )
 from databricks_agentbricks.project_types import AgentServer
 from databricks_agentbricks.render import field
+from databricks_agentbricks.tool_access import plan_tool_access, reconcile_tool_access
 from databricks_agentkit import timefmt
 from databricks_agentkit.runtime.store import (
     RUNTIME_STORE_DATABASE_ENV,
@@ -61,7 +62,6 @@ from databricks_agentkit.runtime.store import (
     RUNTIME_STORE_USERNAME_ENV,
 )
 from databricks_agentkit.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
-from databricks_agentbricks.tool_access import plan_tool_access, reconcile_tool_access
 
 # TEMPORARY: the Apps build environment currently can't reach the internal pypi proxy, so builds
 # time out installing dependencies. Point the build at public PyPI (sanctioned interim workaround)

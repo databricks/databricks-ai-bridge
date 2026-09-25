@@ -133,12 +133,12 @@ def test_runtime_store_resource_coexists_with_a_second_managed_resource(monkeypa
 def test_apply_tool_resources_replaces_complete_owned_subset_and_preserves_unrelated(monkeypatch):
     resources: list[dict[str, Any]] = [
         {"name": "user-owned", "secret": {"scope": "keep"}},
-        {"name": "mason-tool-stale", "uc_securable": {"permission": "SELECT"}},
-        {"name": "mason-tool-replaced", "uc_securable": {"permission": "SELECT"}},
+        {"name": "agentbricks-tool-stale", "uc_securable": {"permission": "SELECT"}},
+        {"name": "agentbricks-tool-replaced", "uc_securable": {"permission": "SELECT"}},
     ]
     desired = [
         {
-            "name": "mason-tool-replaced",
+            "name": "agentbricks-tool-replaced",
             "uc_securable": {
                 "securable_full_name": "main.data.rows",
                 "securable_type": "TABLE",
@@ -146,7 +146,7 @@ def test_apply_tool_resources_replaces_complete_owned_subset_and_preserves_unrel
             },
         },
         {
-            "name": "mason-tool-new",
+            "name": "agentbricks-tool-new",
             "genie_space": {"name": "genie", "space_id": "0" * 32, "permission": "CAN_RUN"},
         },
     ]
@@ -184,7 +184,7 @@ def test_apply_tool_resources_replaces_complete_owned_subset_and_preserves_unrel
 
 
 def test_apply_tool_resources_fails_when_readback_is_missing_desired_resource(monkeypatch):
-    desired = [{"name": "mason-tool-new", "uc_securable": {"permission": "SELECT"}}]
+    desired = [{"name": "agentbricks-tool-new", "uc_securable": {"permission": "SELECT"}}]
     reads = 0
 
     def fake_db(args, profile, **kw):
@@ -202,14 +202,14 @@ def test_apply_tool_resources_fails_when_readback_is_missing_desired_resource(mo
 
     error = sa.apply_tool_resources("app", desired, "prof")
 
-    assert error == "Could not verify App tool resources: Mason-owned resources do not match"
+    assert error == "Could not verify App tool resources: Agent Bricks-owned resources do not match"
     assert reads == 2
 
 
 def test_apply_tool_resources_accepts_server_enriched_readback(monkeypatch):
     desired = [
         {
-            "name": "mason-tool-table",
+            "name": "agentbricks-tool-table",
             "uc_securable": {
                 "securable_full_name": "main.data.rows",
                 "securable_type": "TABLE",
@@ -266,14 +266,16 @@ def test_apply_tool_resources_fails_closed_when_readback_fails(monkeypatch):
 
     monkeypatch.setattr(sa, "_databricks", fake_db)
 
-    error = sa.apply_tool_resources("app", [{"name": "mason-tool-new", "uc_securable": {}}], "prof")
+    error = sa.apply_tool_resources(
+        "app", [{"name": "agentbricks-tool-new", "uc_securable": {}}], "prof"
+    )
 
     assert error == "Could not verify App tool resources: readback denied"
     assert reads == 2
 
 
 def test_apply_tool_resources_unchanged_state_reads_once_without_update(monkeypatch):
-    desired = [{"name": "mason-tool-current", "uc_securable": {"permission": "EXECUTE"}}]
+    desired = [{"name": "agentbricks-tool-current", "uc_securable": {"permission": "EXECUTE"}}]
     calls = []
 
     def fake_db(args, profile, **kw):
@@ -293,7 +295,7 @@ def test_apply_tool_resources_unchanged_state_reads_once_without_update(monkeypa
 def test_apply_tool_resources_prunes_owned_resources_and_skips_unchanged_update(monkeypatch):
     resources: list[dict[str, Any]] = [
         {"name": "user-owned", "secret": {}},
-        {"name": "mason-tool-stale", "uc_securable": {}},
+        {"name": "agentbricks-tool-stale", "uc_securable": {}},
     ]
     updates = []
 
@@ -323,7 +325,9 @@ def test_apply_tool_resources_reports_failure(monkeypatch):
 
     monkeypatch.setattr(sa, "_databricks", fake_db)
 
-    error = sa.apply_tool_resources("app", [{"name": "mason-tool-new", "uc_securable": {}}], "prof")
+    error = sa.apply_tool_resources(
+        "app", [{"name": "agentbricks-tool-new", "uc_securable": {}}], "prof"
+    )
 
     assert error == "denied: needs MANAGE"
 
@@ -337,7 +341,9 @@ def test_apply_tool_resources_read_failure_is_fail_closed(monkeypatch):
 
     monkeypatch.setattr(sa, "_databricks", fake_db)
 
-    error = sa.apply_tool_resources("app", [{"name": "mason-tool-new", "uc_securable": {}}], "prof")
+    error = sa.apply_tool_resources(
+        "app", [{"name": "agentbricks-tool-new", "uc_securable": {}}], "prof"
+    )
 
     assert error == "Could not read existing App resources: cannot read app"
     assert calls == [["apps", "get", "app", "-o", "json"]]
