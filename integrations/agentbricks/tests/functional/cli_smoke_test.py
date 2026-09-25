@@ -12,6 +12,7 @@ Everything runs with an isolated HOME and no Databricks config, so no workspace 
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -39,6 +40,10 @@ _COMMANDS = (
 def run_agentbricks(tmp_path: pathlib.Path):
     agentbricks = pathlib.Path(sys.executable).with_name("agentbricks")
     if not agentbricks.is_file():
+        if os.environ.get("AGENTBRICKS_WHEEL"):
+            pytest.fail(
+                f"wheel-backed functional tests require the installed script at {agentbricks}"
+            )
         pytest.skip("requires the agentbricks CLI on PATH")
     home = tmp_path / "home"
     home.mkdir()
