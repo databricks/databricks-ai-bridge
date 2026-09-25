@@ -430,6 +430,12 @@ see [`cli.md`](cli.md). The tree below is a quick overview.
 ab [-p <profile>] [-o text|json]
   login        [--profile P]
   logout
+  auth
+    connections
+      create NAME --url URL --transport mcp|http --oauth dcr
+                  --principal user|app --parent CATALOG.SCHEMA [--source PATH]
+      bind   NAME --uc-connection CATALOG.SCHEMA.CONNECTION
+                  --transport mcp|http --principal user|app [--source PATH]
   init         [--framework openai|langgraph] [--server agentbricks|custom]
                [--disable-chat-app]
                [--memory-store NAME] [--session-store NAME]
@@ -547,6 +553,83 @@ ab --help
 ab deploy --help
 ab sessions items append --help
 ```
+
+## Governed external connections
+
+Agent Bricks agents can call third-party MCP servers and HTTP APIs through Unity Catalog Connections
+without handling provider credentials. Create a DCR-backed Connection or bind an existing one:
+
+```sh
+ab auth connections create github \
+  --url https://mcp.github.example/mcp \
+  --transport mcp \
+  --oauth dcr \
+  --principal user \
+  --parent main.agent_connections
+
+ab auth connections bind salesforce \
+  --uc-connection main.agent_connections.salesforce \
+  --transport http \
+  --principal app
+```
+
+Both commands validate the remote Connection and atomically add a typed entry to `agent.toml`:
+
+```toml
+[[connections]]
+name = "github"
+uc_connection = "main.agent_connections.github"
+transport = "mcp"
+principal = "user"
+```
+
+All four fields are required. `name` is the alias used by agent code, `uc_connection` is a
+three-part UC name, `transport` is `mcp` or `http`, and `principal` is `user` or `app`. Existing
+manifests without `[[connections]]` remain valid.
+
+Use the credential-free async client from a tool or agent handler:
+
+```python
+from databricks_agentkit.auth import context
+
+
+async def search_accounts(query: str):
+    response = await context.connections.client("salesforce").request(
+        "GET",
+        "/accounts",
+        params={"query": query},
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()
+```
+
+HTTP connections accept `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, and `OPTIONS` with a
+relative path. Put query parameters in `params`, not in the path. MCP connections accept `GET`,
+`POST`, and `DELETE`, and their path must be empty or `/`; use `POST` for normal JSON-RPC calls.
+The client rejects absolute URLs, parent traversal, credentials, cookies, and Databricks routing
+headers. It returns status, response headers, and body, but never exposes the Connection's provider
+credentials or the Databricks credential used to reach the proxy.
+
+`principal = "user"` uses the transient identity forwarded by trusted Databricks Apps ingress.
+The caller must consent to the App's `ai-gateway` user scope and have `USE CONNECTION` on the UC
+Connection. The credential remains process-local for the active first attempt and works for both
+foreground and background invocations. A durable replacement attempt fails with
+`MCP_USER_AUTH_RECOVERY_UNSUPPORTED` before agent code or its recovery hook runs, because Agent Bricks does
+not persist the caller credential.
+
+`principal = "app"` uses the App service principal. On deploy, Agent Bricks attaches an Apps
+`uc_securable` resource with `USE_CONNECTION`; the App still needs access to the underlying
+Connection. Restrict App `CAN USE` to callers trusted to exercise that workload identity.
+
+Under `ab dev`, `user` resolves from the active local invocation context and `app` resolves from
+the profile/environment used to start the process. Local development cannot reproduce Apps consent
+or forwarded-ingress enforcement, so validate user-principal access after deployment as well.
+
+Both transports use the schema-level UC Connection proxy. The manifest transport controls the
+allowed methods and request shape: MCP is restricted to Streamable HTTP at the proxy root, while
+HTTP may use relative resource paths. This does not create or bind a Unity Catalog MCP Service and
+does not belong in the managed `[[tools]]` MCP-service list.
 
 ## Agent tools
 
