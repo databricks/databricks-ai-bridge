@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 from databricks_agentkit.runtime import mcp_auth
 from databricks_agentkit.runtime.auth import AuthError
-from databricks_agentkit.runtime.tool_manifest import ToolRecord, downscope_wire, load_tools
+from databricks_agentkit.runtime.tool_manifest import ToolRecord, load_tools, sandbox_meta
 from databricks_agentkit.runtime.workspace import workspace_client, workspace_headers
 
 logger = logging.getLogger(__name__)
@@ -106,7 +106,7 @@ def _sandbox_interceptor(
                     result = await session.call_tool(
                         request.name,
                         request.args,
-                        meta={"downscope": downscope_wire(tool)},
+                        meta=sandbox_meta(tool),
                     )
             else:
                 result = await handler(request)
