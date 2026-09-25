@@ -124,6 +124,7 @@ class ToolPolicy:
     """Protected runtime policy for a tool binding."""
 
     downscope: tuple[Scope, ...] = ()
+    include_databricks_token_env: bool = False
 
 
 @dataclass(frozen=True)
@@ -180,6 +181,10 @@ class ToolSpec:
             )
         else:
             raise AgentCliError(f"Unsupported tool source kind {kind!r}.")
+        if kind != "sandbox" and self.policy.include_databricks_token_env:
+            raise AgentCliError(
+                "Only sandbox bindings accept policy.include_databricks_token_env."
+            )
 
     @classmethod
     def sandbox(
@@ -188,11 +193,12 @@ class ToolSpec:
         *,
         scopes: Sequence[Scope],
         auth: Literal["user", "app"] | None = None,
+        include_databricks_token_env: bool = True,
     ) -> "ToolSpec":
         return cls(
             id=tool_id,
             source=ToolSource(kind="sandbox", service="system.ai.sandbox"),
-            policy=ToolPolicy(tuple(scopes)),
+            policy=ToolPolicy(tuple(scopes), include_databricks_token_env),
             auth=auth,
         )
 
@@ -312,6 +318,11 @@ def _tool_from_manifest(value: object) -> ToolSpec:
     downscope_value = policy_value.get("downscope", [])
     if not isinstance(downscope_value, list):
         raise AgentCliError("Tool policy downscope must be an array.")
+    include_databricks_token_env = policy_value.get("include_databricks_token_env", False)
+    if not isinstance(include_databricks_token_env, bool):
+        raise AgentCliError("Tool policy include_databricks_token_env must be a boolean.")
+    if kind != "sandbox" and "include_databricks_token_env" in policy_value:
+        raise AgentCliError("Only sandbox bindings accept policy.include_databricks_token_env.")
     return ToolSpec(
         id=tool_id,
         source=ToolSource(
@@ -320,7 +331,10 @@ def _tool_from_manifest(value: object) -> ToolSpec:
             function=source.get("function") if isinstance(source.get("function"), str) else None,
             space_id=source.get("space_id") if isinstance(source.get("space_id"), str) else None,
         ),
-        policy=ToolPolicy(tuple(_scope_from_manifest(item) for item in downscope_value)),
+        policy=ToolPolicy(
+            tuple(_scope_from_manifest(item) for item in downscope_value),
+            include_databricks_token_env,
+        ),
         auth=value.get("auth"),
     )
 
@@ -351,6 +365,7 @@ def _tool_table(spec: ToolSpec) -> Any:
             )
         policy = tomlkit.inline_table()
         policy["downscope"] = downscope
+        policy["include_databricks_token_env"] = spec.policy.include_databricks_token_env
         table.add("policy", policy)
     return table
 
