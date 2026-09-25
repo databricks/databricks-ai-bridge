@@ -69,7 +69,7 @@
   <text x="504" y="300" font-size="15" font-weight="bold" fill="#1F2A44">Custom</text>
   <rect x="802" y="286" width="104" height="24" rx="12" fill="#EEF0FA" stroke="#C7CDEB" stroke-width="1"/>
   <text x="854" y="302" text-anchor="middle" font-size="11" font-weight="bold" fill="#4A4F9E">full control</text>
-  <text x="504" y="326" font-size="10" font-family="Liberation Mono, monospace" fill="#8A94A6">ab init --server custom</text>
+  <text x="504" y="326" font-size="10" font-family="Liberation Mono, monospace" fill="#8A94A6">agentbricks init --server custom</text>
 
   <rect x="504" y="344" width="390" height="72" rx="9" fill="#FBFCFE" stroke="#CBD6E4" stroke-width="1.3" stroke-dasharray="5 3"/>
   <text x="699" y="376" text-anchor="middle" font-size="13" font-weight="bold" fill="#1F2A44">your own endpoints &amp; protocol</text>

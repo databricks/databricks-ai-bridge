@@ -103,7 +103,7 @@ def test_success_next_steps_render_command_and_description():
     render.success(
         "Logged in",
         next_steps=[
-            ("ab init my-agent", "Scaffold a new agent project"),
+            ("agentbricks init my-agent", "Scaffold a new agent project"),
             "Open http://localhost:8000 to chat with it",
         ],
         con=con,
@@ -112,8 +112,8 @@ def test_success_next_steps_render_command_and_description():
     # Plural heading when there is more than one step.
     assert "Next steps" in out
     # Commands are copy-safe: no `$` prompt prefix, so they paste straight into a shell.
-    assert "ab init my-agent" in out
-    assert "$ ab init my-agent" not in out
+    assert "agentbricks init my-agent" in out
+    assert "$ agentbricks init my-agent" not in out
     assert "$ = run in your terminal" not in out
     assert "Scaffold a new agent project" in out
     # A bare-string step renders as prose (no command accent, no bullet).
@@ -124,7 +124,7 @@ def test_success_single_next_step_uses_singular_heading():
     con, buf = _console()
     render.success(
         "Deployed",
-        next_steps=[("ab deployments logs my-agent", "stream the logs")],
+        next_steps=[("agentbricks deployments logs my-agent", "stream the logs")],
         con=con,
     )
     out = buf.getvalue()

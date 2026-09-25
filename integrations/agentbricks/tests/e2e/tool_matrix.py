@@ -122,7 +122,7 @@ class Runner:
         self.preprovisioned_app_catalog_access = preprovisioned_app_catalog_access
         self.transcript = Transcript(output / "commands.log")
         self.runner_venv = output / "runner-venv"
-        self.agentbricks = self.runner_venv / "bin" / "ab"
+        self.agentbricks = self.runner_venv / "bin" / "agentbricks"
         self.rows: list[EvidenceRow] = []
         self.apps: list[str] = []
         self.uc_function: str | None = None
@@ -390,7 +390,7 @@ class Runner:
         )
         if rejected.returncode == 0 or manifest.read_bytes() != before:
             raise MatrixError(
-                "ab tools add accepted an unavailable MCP service or changed agent.toml"
+                "agentbricks tools add accepted an unavailable MCP service or changed agent.toml"
             )
         if json.loads(rejected.stderr).get("error", {}).get("code") not in {
             "NOT_FOUND",
@@ -410,7 +410,7 @@ class Runner:
         )
         manifest = tomli.loads((project / "agent.toml").read_text())
         if any(tool["id"] == "broken_mcp" for tool in manifest.get("tools", [])):
-            raise MatrixError("ab tools remove left the broken MCP binding in agent.toml")
+            raise MatrixError("agentbricks tools remove left the broken MCP binding in agent.toml")
         commands = [
             ["tools", "add", "sandbox", "--scope", "table:samples.nyctaxi.trips"],
             ["tools", "add", "mcp", "system.ai.web_search"],
@@ -449,7 +449,7 @@ class Runner:
             .replace("__UC_FUNCTION__", self.uc_function or "")
         )
         target = project / "agent.toml"
-        self.transcript.file_step(target, "direct authoring; no ab tools command")
+        self.transcript.file_step(target, "direct authoring; no agentbricks tools command")
         target.write_text(manifest, encoding="utf-8")
 
     def _write_python_marker(self, project: pathlib.Path) -> None:
@@ -542,7 +542,7 @@ class Runner:
     def deploy(self, case: ProjectCase) -> None:
         label = f"deploy-{case.framework}-{case.authoring}"
         log_path = self.output / "logs" / f"{label}.log"
-        # Track the deterministic name before deployment because `ab deploy` can create the App
+        # Track the deterministic name before deployment because `agentbricks deploy` can create the App
         # and then fail while waiting for it. Deleting a name that was never created is harmless.
         if case.app_name not in self.apps:
             self.apps.append(case.app_name)

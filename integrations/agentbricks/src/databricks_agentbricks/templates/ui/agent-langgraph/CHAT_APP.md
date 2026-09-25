@@ -1,6 +1,6 @@
 # LangGraph Chat App Overlay
 
-`ab init --framework langgraph` copies this framework-specific overlay after the base
+`agentbricks init --framework langgraph` copies this framework-specific overlay after the base
 `agent-langgraph` template (it is included by default; `--disable-chat-app` opts out). It is
 intentionally not a post-generation mutation command.
 

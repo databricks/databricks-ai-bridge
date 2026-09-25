@@ -9,9 +9,9 @@ examples. Keep this file as a development map rather than repeating those rules.
 ## Commands
 
 ```bash
-ab dev
+agentbricks dev
 uv run pytest
-ab --profile <profile> deploy <name> --source .
+agentbricks --profile <profile> deploy <name> --source .
 ```
 
 ## Code map

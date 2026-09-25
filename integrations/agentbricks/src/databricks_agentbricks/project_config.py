@@ -20,7 +20,7 @@ _CUSTOM_SERVER_TEMPLATES = frozenset({"custom-agent-langgraph", "custom-agent-op
 
 @dataclass(frozen=True)
 class ProjectMetadata:
-    """Template identity persisted by ``ab init``."""
+    """Template identity persisted by ``agentbricks init``."""
 
     framework: AgentFramework
     template: str | None
@@ -84,7 +84,7 @@ def _infer_legacy_framework(project: pathlib.Path) -> ProjectMetadata:
     if not pyproject.is_file():
         raise AgentCliError(
             f"Could not determine the Agent Bricks framework for {project}.",
-            hint="Run `ab init` to create project metadata or pass `--framework`.",
+            hint="Run `agentbricks init` to create project metadata or pass `--framework`.",
         )
     data = _read_toml(pyproject, "pyproject")
     project_table = data.get("project")
@@ -153,5 +153,5 @@ def require_managed_tool_support(project: pathlib.Path) -> None:
     raise AgentCliError(
         "Managed tool bindings in agent.toml require an Agent Bricks server template.",
         hint="Wire tools directly in agent/agent.py, or create a project with "
-        "`ab init --server agentbricks`.",
+        "`agentbricks init --server agentbricks`.",
     )

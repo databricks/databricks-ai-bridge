@@ -219,17 +219,17 @@ The fundamental assertion: when SP-A calls the agent, it sees SP-A's identity; w
 
 ### 7. Agent Bricks (CLI + AgentKit runtime)
 
-**What the bridge provides:** `databricks-agentbricks` ships the `ab` CLI and AgentKit SDK for scaffolding, running, and deploying custom agents. The integration test covers a full deploy-and-invoke journey.
+**What the bridge provides:** `databricks-agentbricks` ships the `agentbricks` CLI and AgentKit SDK for scaffolding, running, and deploying custom agents. The integration test covers a full deploy-and-invoke journey.
 
 **Test file:**
 
 | Layer | File | What it tests |
 |-------|------|---------------|
-| Agent Bricks | `integrations/agentbricks/tests/integration_tests/test_tool_matrix.py` | Drives `integrations/agentbricks/tests/e2e/tool_matrix.py`: scaffolds LangGraph agents with `ab tools` and a hand-edited `agent.toml`, runs each under `ab dev` and on Databricks Apps, then invokes the sandbox, web-search MCP, a local Python tool, and a temporary UC function. All 16 evidence rows must pass. The CLI and templates come from the built wheel. |
+| Agent Bricks | `integrations/agentbricks/tests/integration_tests/test_tool_matrix.py` | Drives `integrations/agentbricks/tests/e2e/tool_matrix.py`: scaffolds LangGraph agents with `agentbricks tools` and a hand-edited `agent.toml`, runs each under `agentbricks dev` and on Databricks Apps, then invokes the sandbox, web-search MCP, a local Python tool, and a temporary UC function. All 16 evidence rows must pass. The CLI and templates come from the built wheel. |
 
 **Key regressions these tests guard against:**
 - A deployed agent that won't boot — durable-runtime store resolution against real Lakebase (the class of bug that shipped in #550)
-- Tool wiring that works under `ab dev` but breaks once deployed to Apps, or vice versa
+- Tool wiring that works under `agentbricks dev` but breaks once deployed to Apps, or vice versa
 - CLI-authored and direct-`agent.toml` agents diverging at runtime
 - `system.ai.*` tools or UC-function invocation breaking under platform changes
 

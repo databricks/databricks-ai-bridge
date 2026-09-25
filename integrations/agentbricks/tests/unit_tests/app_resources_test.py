@@ -179,9 +179,9 @@ def test_apply_trace_resources_uc_experiment_adds_one_table_resource_per_table(m
     written = payload["app"]["resources"]
     assert [r["name"] for r in written] == [
         "agentbricks-trace-experiment",
-        "agentbricks-trace-table-spans",
-        "agentbricks-trace-table-logs",
-        "agentbricks-trace-table-metrics",
+        "agentbricks-trace-spans",
+        "agentbricks-trace-logs",
+        "agentbricks-trace-metrics",
     ]
     assert written[0]["experiment"] == {"experiment_id": "exp-uc", "permission": "CAN_EDIT"}
     assert [r["uc_securable"] for r in written[1:]] == [
@@ -201,6 +201,35 @@ def test_apply_trace_resources_uc_experiment_adds_one_table_resource_per_table(m
             "permission": "MODIFY",
         },
     ]
+
+
+def test_apply_trace_resources_names_stay_within_databricks_apps_30_char_limit(monkeypatch):
+    # Databricks Apps requires each resource name to be 2-30 chars and rejects the ENTIRE resource
+    # array if any name is too long - which silently drops every trace grant. Guard the experiment +
+    # all four OTEL-table resource names (the longest kind, "annotations", is the tight one).
+    captured = {}
+
+    def fake_db(args, profile, **kw):
+        if args[:2] == ["apps", "get"]:
+            return types.SimpleNamespace(
+                returncode=0, stdout=json.dumps({"resources": []}), stderr=""
+            )
+        captured["args"] = args
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(sa, "_databricks", fake_db)
+    tables = [
+        TraceTable(TraceTableKind.SPANS, "c.s.otel_spans"),
+        TraceTable(TraceTableKind.LOGS, "c.s.otel_logs"),
+        TraceTable(TraceTableKind.ANNOTATIONS, "c.s.otel_annotations"),
+        TraceTable(TraceTableKind.METRICS, "c.s.otel_metrics"),
+    ]
+    assert sa.apply_trace_resources("app", "exp-uc", tables, "prof") is None
+    payload = json.loads(captured["args"][captured["args"].index("--json") + 1])
+    names = [r["name"] for r in payload["app"]["resources"]]
+    assert any(n.endswith("annotations") for n in names)  # the longest name is exercised
+    too_long = [n for n in names if not (2 <= len(n) <= 30)]
+    assert not too_long, f"resource names must be 2-30 chars for Databricks Apps; got {too_long}"
 
 
 def test_apply_trace_resources_converges_when_rebinding_uc_to_managed(monkeypatch):

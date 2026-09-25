@@ -2,7 +2,7 @@
 
 Gated by ``RUN_AGENTBRICKS_INTEGRATION_TESTS=1`` so it never runs in normal pytest or PR CI (matching the
 other suites in this repo). It drives the end-to-end matrix in ``tests/e2e/tool_matrix.py`` against a
-live workspace: it scaffolds LangGraph agents, runs each under ``ab dev`` *and* deploys each to
+live workspace: it scaffolds LangGraph agents, runs each under ``agentbricks dev`` *and* deploys each to
 Databricks Apps, and exercises the sandbox, web search, a local Python tool, and a temporary Unity
 Catalog function -- then asserts every matrix cell passed. Auth comes from ambient Databricks
 environment credentials (the CI service principal), so no ``--profile`` is passed.
