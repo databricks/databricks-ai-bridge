@@ -23,6 +23,7 @@ import tomli
 _COMMANDS = (
     "login",
     "logout",
+    "auth",
     "init",
     "dev",
     "memory",
@@ -78,6 +79,32 @@ def test_installed_wheel_exposes_agentkit_sdk() -> None:
     assert AgentKitClient.__module__ == "databricks_agentkit.client"
     assert MemoryStore.__module__ == "databricks_agentkit.memory_store"
     assert SessionStore.__module__ == "databricks_agentkit.session_store"
+
+
+def test_auth_connections_help_is_packaged(run_ab) -> None:
+    group = " ".join(run_ab("auth", "connections", "--help").stdout.split())
+    assert "create" in group
+    assert "bind" in group
+
+    create = " ".join(run_ab("auth", "connections", "create", "--help").stdout.split())
+    for expected in (
+        "--url",
+        "--transport [mcp|http]",
+        "--oauth [dcr]",
+        "--principal [user|app]",
+        "--parent",
+        "--source",
+    ):
+        assert expected in create
+
+    bind = " ".join(run_ab("auth", "connections", "bind", "--help").stdout.split())
+    for expected in (
+        "--uc-connection",
+        "--transport [mcp|http]",
+        "--principal [user|app]",
+        "--source",
+    ):
+        assert expected in bind
 
 
 @pytest.mark.parametrize(

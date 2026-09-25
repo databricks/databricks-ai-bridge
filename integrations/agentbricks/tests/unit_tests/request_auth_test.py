@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from databricks_agentbricks.agent_project import AgentProject, ConnectionSpec
 from databricks_agentkit.runtime.auth import AuthError, RequestAuthContext
 from databricks_agentkit.runtime.store import RUNTIME_STORE_LOCAL_ENV
 
@@ -95,3 +96,37 @@ def test_agentbricks_dev_uses_local_credentials_when_apps_cli_sets_app_name(monk
 
     assert auth.client_for("user") is local_client
     local_factory.assert_called_once_with()
+
+
+def test_policy_includes_only_user_principal_connections(tmp_path, monkeypatch):
+    from databricks_agentkit.runtime.auth import InvocationAuthPolicy
+
+    project = AgentProject.create(tmp_path, framework="langgraph", server="agentbricks")
+    project.add_connection(ConnectionSpec("github", "main.connections.github", "mcp", "user"))
+    project.add_connection(
+        ConnectionSpec("salesforce", "main.connections.salesforce", "http", "app")
+    )
+    project.write()
+    monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
+
+    policy = InvocationAuthPolicy.from_manifest()
+
+    assert policy.user_tools == ()
+    assert policy.user_connections == ("github",)
+    assert policy.requires_user is True
+
+
+def test_app_principal_connections_do_not_require_request_user(tmp_path, monkeypatch):
+    from databricks_agentkit.runtime.auth import InvocationAuthPolicy
+
+    project = AgentProject.create(tmp_path, framework="openai", server="agentbricks")
+    project.add_connection(
+        ConnectionSpec("salesforce", "main.connections.salesforce", "http", "app")
+    )
+    project.write()
+    monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
+
+    policy = InvocationAuthPolicy.from_manifest()
+
+    assert policy.user_connections == ()
+    assert policy.requires_user is False

@@ -7,6 +7,7 @@ import types
 from typing import Any
 
 from databricks_agentbricks import app_resources as sa
+from databricks_agentbricks.agent_project import ConnectionSpec
 
 
 def _backend(database: str, resource_name: str) -> sa.LakebaseBackend:
@@ -128,3 +129,138 @@ def test_runtime_store_resource_coexists_with_a_second_managed_resource(monkeypa
         "postgres-runtime-store",
         "postgres-other",
     }
+
+
+def test_connection_resources_preserve_unrelated_and_attach_only_app_principal(monkeypatch):
+    resources: list[dict[str, Any]] = [
+        {"name": "owner-resource", "secret": {"scope": "external"}},
+        {
+            "name": "agentbricks-connection-stale",
+            "uc_securable": {"securable_full_name": "main.connections.old"},
+        },
+    ]
+
+    def fake_db(args, profile, **kw):
+        if args[:2] == ["apps", "get"]:
+            return types.SimpleNamespace(
+                returncode=0, stdout=json.dumps({"resources": resources}), stderr=""
+            )
+        payload = json.loads(args[args.index("--json") + 1])
+        resources[:] = payload["app"]["resources"]
+        assert payload["update_mask"] == "resources"
+        assert set(payload["app"]) == {"resources"}
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(sa, "_databricks", fake_db)
+    bindings = [
+        ConnectionSpec("Salesforce_API", "main.connections.salesforce", "http", "app"),
+        ConnectionSpec("github", "main.connections.github", "mcp", "user"),
+    ]
+
+    assert sa.apply_connection_resources("agent", bindings, "profile") is None
+
+    assert [resource["name"] for resource in resources] == [
+        "owner-resource",
+        "agentbricks-connection-salesforce-api",
+    ]
+    assert resources[1]["uc_securable"] == {
+        "securable_full_name": "main.connections.salesforce",
+        "securable_type": "CONNECTION",
+        "permission": "USE_CONNECTION",
+    }
+
+
+def test_connection_resources_remove_stale_binding_when_alias_becomes_user(monkeypatch):
+    resources: list[dict[str, Any]] = [
+        {"name": "owner-resource", "secret": {}},
+        {"name": "agentbricks-connection-provider", "uc_securable": {}},
+    ]
+
+    def fake_db(args, profile, **kw):
+        if args[:2] == ["apps", "get"]:
+            return types.SimpleNamespace(
+                returncode=0, stdout=json.dumps({"resources": resources}), stderr=""
+            )
+        resources[:] = json.loads(args[args.index("--json") + 1])["app"]["resources"]
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(sa, "_databricks", fake_db)
+
+    assert (
+        sa.apply_connection_resources(
+            "agent",
+            [ConnectionSpec("provider", "main.connections.provider", "http", "user")],
+            "profile",
+        )
+        is None
+    )
+    assert resources == [{"name": "owner-resource", "secret": {}}]
+
+
+def test_connection_resource_name_collision_fails_without_update(monkeypatch):
+    updates = []
+
+    def fake_db(args, profile, **kw):
+        if args[:2] == ["apps", "get"]:
+            return types.SimpleNamespace(returncode=0, stdout='{"resources": []}', stderr="")
+        updates.append(args)
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(sa, "_databricks", fake_db)
+    error = sa.apply_connection_resources(
+        "agent",
+        [
+            ConnectionSpec("salesforce.api", "main.connections.first", "http", "app"),
+            ConnectionSpec("salesforce_api", "main.connections.second", "http", "app"),
+        ],
+        "profile",
+    )
+
+    assert error == "Connection aliases resolve to the same Databricks App resource name."
+    assert updates == []
+
+
+def test_connection_resource_failure_is_redacted(monkeypatch):
+    def fake_db(args, profile, **kw):
+        if args[:2] == ["apps", "get"]:
+            return types.SimpleNamespace(returncode=0, stdout='{"resources": []}', stderr="")
+        return types.SimpleNamespace(
+            returncode=1,
+            stdout="SENTINEL-RESPONSE-BODY",
+            stderr="denied with SENTINEL-CLIENT-SECRET",
+        )
+
+    monkeypatch.setattr(sa, "_databricks", fake_db)
+    error = sa.apply_connection_resources(
+        "agent",
+        [ConnectionSpec("provider", "main.connections.provider", "http", "app")],
+        "profile",
+    )
+
+    assert error == "Databricks Apps rejected the UC Connection resource update."
+    assert "SENTINEL" not in error
+
+
+def test_connection_resource_read_failure_never_overwrites_existing_resources(monkeypatch):
+    updates = []
+
+    def fake_db(args, profile, **kw):
+        if args[:2] == ["apps", "get"]:
+            return types.SimpleNamespace(
+                returncode=1,
+                stdout="SENTINEL-EXISTING-RESOURCE",
+                stderr="denied with SENTINEL-TOKEN",
+            )
+        updates.append(args)
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(sa, "_databricks", fake_db)
+    error = sa.apply_connection_resources(
+        "agent",
+        [ConnectionSpec("provider", "main.connections.provider", "http", "app")],
+        "profile",
+    )
+
+    assert error == "Could not safely read existing Databricks App resources."
+    assert updates == []
+    assert "SENTINEL" not in error

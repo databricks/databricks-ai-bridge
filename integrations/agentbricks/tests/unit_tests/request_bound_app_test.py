@@ -1,12 +1,18 @@
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import httpx
 import pytest
 
+from databricks_agentbricks.agent_project import AgentProject, ConnectionSpec
 from databricks_agentkit import DurableAgentServer
+from databricks_agentkit.auth import connections as connections_mod
+from databricks_agentkit.auth import context
+from databricks_agentkit.auth.connections import ConnectionError
 from databricks_agentkit.runtime.auth import AuthError, InvocationAuthPolicy, RequestAuthContext
 from databricks_agentkit.runtime.store import InMemoryRuntimeStore
 from databricks_agentkit.runtime.types import InvocationAttemptContext
@@ -16,6 +22,15 @@ from databricks_agentkit.runtime.types import InvocationAttemptContext
 def deployed(monkeypatch):
     monkeypatch.setenv("DATABRICKS_APP_NAME", "auth-test")
     monkeypatch.setenv("DATABRICKS_HOST", "https://workspace.example")
+
+
+@pytest.fixture
+def connection_project(tmp_path, monkeypatch):
+    project = AgentProject.create(tmp_path, framework="langgraph", server="agentbricks")
+    project.add_connection(ConnectionSpec("provider", "main.connections.provider", "http", "user"))
+    project.write()
+    monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
+    return project
 
 
 def headers(subject="user-a", token="token-sentinel"):
@@ -158,6 +173,65 @@ async def test_request_user_auth_composes_with_existing_runtime_background_mode(
     assert len(contexts) == 1
     with pytest.raises(AuthError):
         contexts[0].request_auth.client_for("user")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("background", [False, True], ids=["foreground", "background"])
+async def test_user_connection_sdk_is_bound_for_first_attempt_execution(
+    deployed, connection_project, monkeypatch, background
+):
+    proxy_calls = []
+    user_workspace = SimpleNamespace(name="request-user-workspace")
+    monkeypatch.setattr("databricks.sdk.WorkspaceClient", MagicMock(return_value=user_workspace))
+
+    def proxy(workspace, **kwargs):
+        proxy_calls.append((workspace, kwargs))
+        return SimpleNamespace(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            content=b'{"provider_marker":"connected"}',
+        )
+
+    monkeypatch.setattr(connections_mod, "_perform_request", proxy)
+
+    async def handler(value, invocation_context):
+        response = await context.connections.client("provider").request(
+            "GET", "/accounts", params={"query": value}
+        )
+        return response.json()
+
+    app = DurableAgentServer(
+        runtime_store=InMemoryRuntimeStore(),
+        auth_policy=InvocationAuthPolicy(user_connections=("provider",)),
+    )
+    app.invoke(handler)
+    invocation_id = str(uuid4())
+    body = {
+        "id": invocation_id,
+        "input": "acme",
+        "background": background,
+    }
+
+    async with running_client(app) as client:
+        response = await client.post("/api/invocations", json=body, headers=headers())
+        if background:
+            assert response.status_code == 202
+            for _ in range(100):
+                response = await client.get(f"/api/invocations/{invocation_id}", headers=headers())
+                if response.json().get("status") == "completed":
+                    break
+                await asyncio.sleep(0.005)
+            else:
+                raise AssertionError("connection invocation did not finish")
+
+    assert response.status_code == 200
+    assert response.json()["output"] == {"provider_marker": "connected"}
+    assert len(proxy_calls) == 1
+    assert proxy_calls[0][1]["path"] == (
+        "/api/2.0/unity-catalog/connections/main.connections.provider/proxy/accounts"
+    )
+    with pytest.raises(ConnectionError, match="active request"):
+        await context.connections.client("provider").request("GET", "/accounts")
 
 
 @pytest.mark.asyncio
@@ -421,3 +495,42 @@ async def test_request_user_recovery_fails_before_handlers(deployed):
     assert not app._request_auth
     with pytest.raises(AuthError, match="no longer active"):
         request_auth.client_for("user")
+
+
+@pytest.mark.asyncio
+async def test_user_connection_recovery_fails_before_proxy(deployed, monkeypatch):
+    handler_calls = []
+    proxy_calls = []
+
+    async def invoke(value, invocation_context):
+        handler_calls.append("invoke")
+
+    async def recover(value, invocation_context):
+        handler_calls.append("recover")
+        await context.connections.client("provider").request("GET", "/accounts")
+
+    monkeypatch.setattr(
+        connections_mod,
+        "_perform_request",
+        lambda workspace, **kwargs: proxy_calls.append((workspace, kwargs)),
+    )
+    app = DurableAgentServer(
+        runtime_store=InMemoryRuntimeStore(),
+        auth_policy=InvocationAuthPolicy(user_connections=("provider",)),
+    )
+    app.invoke(invoke)
+    app.recover(recover)
+    invocation_id = str(uuid4())
+    request_auth = RequestAuthContext.from_headers(headers())
+    runtime_invocation_id = request_auth.namespace("invocation", invocation_id)
+    app._request_auth[runtime_invocation_id] = request_auth
+
+    with pytest.raises(AuthError) as caught:
+        await app._execute(
+            {"input": "hello", "session_id": "session-1", "invocation_id": invocation_id},
+            InvocationAttemptContext(runtime_invocation_id, 2),
+        )
+
+    assert caught.value.code == "MCP_USER_AUTH_RECOVERY_UNSUPPORTED"
+    assert handler_calls == []
+    assert proxy_calls == []

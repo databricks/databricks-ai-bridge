@@ -11,6 +11,7 @@ import tomli
 
 from databricks_agentbricks.agent_project import (
     AgentProject,
+    ConnectionSpec,
     Scope,
     ToolPolicy,
     ToolSource,
@@ -113,6 +114,136 @@ def test_agent_project_round_trips_tool_specs_without_losing_comments(tmp_path: 
     assert loaded.tools[0].policy.downscope == (
         Scope(kind="table", value="samples.nyctaxi.trips", permission="read_only"),
     )
+
+
+def test_agent_project_round_trips_connection_specs_without_losing_comments(
+    tmp_path: pathlib.Path,
+):
+    path = _write_manifest(tmp_path)
+    project = AgentProject.load(tmp_path)
+    specs = [
+        ConnectionSpec(
+            name="github",
+            uc_connection="main.agent_connections.github",
+            transport="mcp",
+            principal="user",
+        ),
+        ConnectionSpec(
+            name="salesforce",
+            uc_connection="main.agent_connections.salesforce",
+            transport="http",
+            principal="app",
+        ),
+    ]
+
+    for spec in specs:
+        assert project.add_connection(spec) is True
+    project.write()
+
+    assert "# keep me" in path.read_text(encoding="utf-8")
+    assert AgentProject.load(tmp_path).connections == specs
+    assert tomli.loads(path.read_text(encoding="utf-8"))["connections"] == [
+        {
+            "name": "github",
+            "uc_connection": "main.agent_connections.github",
+            "transport": "mcp",
+            "principal": "user",
+        },
+        {
+            "name": "salesforce",
+            "uc_connection": "main.agent_connections.salesforce",
+            "transport": "http",
+            "principal": "app",
+        },
+    ]
+
+
+def test_connection_add_is_idempotent_and_conflict_does_not_write(tmp_path: pathlib.Path):
+    path = _write_manifest(tmp_path)
+    project = AgentProject.load(tmp_path)
+    spec = ConnectionSpec("github", "main.agent_connections.github", "mcp", "user")
+
+    assert project.add_connection(spec) is True
+    assert project.add_connection(spec) is False
+    project.write()
+    before = path.read_bytes()
+
+    with pytest.raises(AgentCliError, match="already exists"):
+        project.add_connection(
+            ConnectionSpec("github", "main.agent_connections.github_v2", "mcp", "user")
+        )
+
+    assert path.read_bytes() == before
+
+
+def test_remove_connection_is_targeted_and_idempotent(tmp_path: pathlib.Path):
+    project = AgentProject.load(_write_manifest(tmp_path).parent)
+    github = ConnectionSpec("github", "main.agent_connections.github", "mcp", "user")
+    salesforce = ConnectionSpec("salesforce", "main.agent_connections.salesforce", "http", "app")
+    project.add_connection(github)
+    project.add_connection(salesforce)
+
+    assert project.remove_connection("github") is True
+    assert project.remove_connection("github") is False
+    project.write()
+
+    assert AgentProject.load(tmp_path).connections == [salesforce]
+
+
+@pytest.mark.parametrize(
+    ("values", "message"),
+    [
+        (("", "main.agent_connections.github", "mcp", "user"), "name"),
+        (("github", "main.github", "mcp", "user"), "UC Connection"),
+        (("github", "main.agent connections.github", "mcp", "user"), "UC Connection"),
+        (("github", "main.agent_connections.github", "stdio", "user"), "transport"),
+        (("github", "main.agent_connections.github", "mcp", "ambient"), "principal"),
+    ],
+)
+def test_connection_spec_rejects_invalid_values(values, message):
+    with pytest.raises(AgentCliError, match=message):
+        ConnectionSpec(*values)
+
+
+@pytest.mark.parametrize(
+    ("connection_toml", "message"),
+    [
+        ('connections = "github"\n', "array of tables"),
+        ("connections = [1]\n", "connection must be a TOML table"),
+        (
+            '[[connections]]\nname = "github"\nuc_connection = "main.agent_connections.github"\n'
+            'transport = "mcp"\nprincipal = "user"\n'
+            '[[connections]]\nname = "github"\nuc_connection = "main.agent_connections.other"\n'
+            'transport = "http"\nprincipal = "app"\n',
+            "names must be unique",
+        ),
+        (
+            '[[connections]]\nname = "github"\nuc_connection = "main.agent_connections.github"\n'
+            'transport = "smtp"\nprincipal = "user"\n',
+            "transport",
+        ),
+        (
+            '[[connections]]\nname = "github"\nuc_connection = "main.agent_connections.github"\n'
+            'transport = "mcp"\nprincipal = "robot"\n',
+            "principal",
+        ),
+    ],
+)
+def test_connection_manifest_rejects_invalid_entries_without_mutation(
+    tmp_path: pathlib.Path, connection_toml: str, message: str
+):
+    path = _write_manifest(
+        tmp_path,
+        "schema_version = 1\n# keep me\n\n"
+        + connection_toml
+        + '\n[agent]\nframework = "langgraph"\nserver = "agentbricks"\n',
+    )
+    before = path.read_bytes()
+
+    with pytest.raises(AgentCliError, match=message):
+        AgentProject.load(tmp_path)
+
+    assert path.read_bytes() == before
 
 
 def test_add_same_tool_is_idempotent(tmp_path: pathlib.Path):
