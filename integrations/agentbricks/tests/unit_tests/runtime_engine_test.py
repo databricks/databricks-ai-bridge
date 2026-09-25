@@ -394,7 +394,8 @@ def test_durable_factory_rejects_local_store() -> None:
 
 
 @pytest.mark.asyncio
-async def test_invoke_persists_request_and_response() -> None:
+@pytest.mark.parametrize("session_id", [None, "conversation-1"])
+async def test_invoke_persists_request_and_response(session_id: str | None) -> None:
     calls = []
 
     async def execute(request: dict, context: InvocationAttemptContext) -> dict:
@@ -404,7 +405,7 @@ async def test_invoke_persists_request_and_response() -> None:
     runtime = make_local_runtime(execute)
     await runtime.start()
     try:
-        response = await runtime.invoke("session-1", {"input": "hello"})
+        response = await runtime.invoke("session-1", {"input": "hello"}, session_id=session_id)
         state = await runtime.get_invocation("session-1")
     finally:
         await runtime.stop()
@@ -413,8 +414,43 @@ async def test_invoke_persists_request_and_response() -> None:
     assert state is not None
     assert state.request == {"input": "hello"}
     assert state.response == {"output": "hello"}
+    assert state.session_id == session_id
+    assert state.queue_order == (1 if session_id is not None else None)
+    assert calls[0][1].session_id == session_id
     assert calls[0][1].attempt == 1
     assert calls[0][1].is_recovery is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("session_kwargs", [{}, {"session_id": None}], ids=["omitted", "none"])
+async def test_invoke_preserves_legacy_submit_override(session_kwargs: dict[str, Any]) -> None:
+    class LegacyRuntime(Runtime):
+        # Existing subclasses may implement the signature from before session-aware submission.
+        async def submit(  # ty: ignore[invalid-method-override]
+            self, invocation_id: str, request: JsonValue
+        ) -> Invocation:
+            return await super().submit(invocation_id, {"wrapped_input": request})
+
+    async def execute(request: JsonValue, context: InvocationAttemptContext) -> JsonValue:
+        assert context.session_id is None
+        return request
+
+    runtime = LegacyRuntime.local(execute, poll_seconds=0.005)
+    await runtime.start()
+    try:
+        response = await runtime.invoke(
+            "invocation-1", {"message": "hello"}, timeout=1, **session_kwargs
+        )
+        state = await runtime.get_invocation("invocation-1")
+    finally:
+        await runtime.stop()
+
+    assert response == {"wrapped_input": {"message": "hello"}}
+    assert state is not None
+    assert state.status == InvocationStatus.COMPLETED
+    assert state.request == state.response == response
+    assert state.session_id is None
+    assert state.queue_order is None
 
 
 @pytest.mark.asyncio

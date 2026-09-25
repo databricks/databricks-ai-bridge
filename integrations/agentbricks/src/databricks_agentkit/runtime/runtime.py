@@ -231,7 +231,11 @@ class Runtime:
         timeout: float | None = None,
     ) -> JsonValue:
         """Accept an invocation and wait for its terminal result."""
-        await self.submit(invocation_id, request, session_id=session_id)
+        # Preserve subclasses that override the pre-session submit signature.
+        if session_id is None:
+            await self.submit(invocation_id, request)
+        else:
+            await self.submit(invocation_id, request, session_id=session_id)
         return await self.wait(invocation_id, timeout=timeout)
 
     async def get_invocation(
