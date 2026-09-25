@@ -28,6 +28,7 @@ import databricks_agentbricks.lakebase_runtime_store as managed_runtime_store
 import databricks_agentbricks.legacy_lakebase_runtime_store as legacy_runtime_store
 from databricks_agentbricks import render
 from databricks_agentbricks.app_resources import (
+    apply_connection_resources,
     apply_experiment_resource,
     apply_postgres_resources,
 )
@@ -539,7 +540,8 @@ def deploy(
     _validate_deployment_name(name)
     if allow_user_scope_update and not user_auth:
         raise AgentCliError(
-            "--allow-user-scope-update requires a managed tool with auth = 'user' in agent.toml."
+            "--allow-user-scope-update requires a managed tool or connection with user auth in "
+            "agent.toml."
         )
     # A request-user tool cannot use OBO until the App forwards request credentials and grants every
     # required user API scope. New Apps are configured automatically. For an existing App, adding a
@@ -695,6 +697,18 @@ def deploy(
         scaffolded = _upsert_manifest_env(source_dir, managed_env) or scaffolded
         env_updates.update(managed_env)
 
+    connection_aliases = [connection.name for connection in project.connections] if project else []
+    if project is not None and project.connections:
+        connection_resource_error = apply_connection_resources(
+            name, project.connections, obj.profile
+        )
+        if connection_resource_error:
+            raise AgentCliError(
+                "Could not attach governed connections to the deployed App.",
+                hint=connection_resource_error,
+            )
+        provisioned["Connections"] = ", ".join(connection_aliases)
+
     # 5. Upload the source and roll out the deployment.
     ws_path = (
         workspace_path or f"/Workspace/Users/{client.current_user}/agentbricks_deployments/{name}"
@@ -740,6 +754,7 @@ def deploy(
                 "deployment": name,
                 "url": app_url,
                 "workspace_path": ws_path,
+                "connections": connection_aliases,
                 "env": env_updates,
                 "trace_experiment_id": trace_experiment_id,
                 "trace_setup_error": trace_setup_error,

@@ -40,6 +40,7 @@ def test_root_registers_supported_commands():
         "deployments",
         "endpoint",
         "tools",
+        "auth",
     } <= names
     assert "mcp" not in names
     assert "durability" not in names
@@ -56,6 +57,14 @@ def test_root_command_name_and_version_default_to_ab():
     assert help_result.output.startswith("Usage: ab ")
     assert version_result.exit_code == 0, version_result.output
     assert version_result.output.startswith("ab, version ")
+
+
+def test_auth_connections_verbs_are_nested_without_moving_login_logout():
+    assert {"login", "logout"} <= set(cli.agentbricks.commands)
+    assert {"connections"} <= set(cli.auth.commands)
+    connections = cli.auth.commands["connections"]
+    assert isinstance(connections, click.Group)
+    assert {"bind"} == set(connections.commands)
 
 
 def test_root_help_describes_the_product_and_links_out():

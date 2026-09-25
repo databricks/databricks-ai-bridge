@@ -24,6 +24,11 @@ request state, events, and results; it never contains the forwarded credential. 
 attempt after failure recovery stops before agent code runs because the original credential is no
 longer available.
 
+The runtime isolation policy is also defined for future `[[connections]]` entries with
+`principal = "user"`, but the CLI currently rejects those bindings until the Apps-to-proxy OBO
+scope contract is reconciled. Supported App-principal entries use the environment-authenticated
+workspace client. Neither mode exposes raw provider or Databricks credentials to agent code.
+
 **Your own server (`server = "custom"`).** Keep your existing HTTP server, or scaffold a minimal
 FastAPI server with `ab init --server custom`. You own the endpoints, request and response
 formats, and execution behavior. `ab dev` and `ab deploy` still run and deploy the project;
@@ -70,6 +75,36 @@ name = "my-agent-session"
 experiment_name = "/Shared/agentbricks_traces/my-agent"
 ```
 
+Governed external APIs are declared separately from managed tools:
+
+```toml
+[[connections]]
+name = "salesforce"
+uc_connection = "main.agent_connections.salesforce"
+transport = "http"
+principal = "app"
+```
+
+Call an HTTP connection with a relative path:
+
+```python
+from databricks_agentkit.auth import context
+
+response = await context.connections.client("salesforce").request(
+    "GET", "/accounts", params={"query": "acme"}
+)
+response.raise_for_status()
+accounts = response.json()
+```
+
+HTTP permits `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, and `OPTIONS`. MCP permits `GET`,
+`POST`, and `DELETE`, with an empty path or `/`. Direct MCP Connection routing is not a UC MCP
+Service. Agent Bricks currently binds only existing `BEARER_TOKEN` Connections with
+`principal = "app"`; OAuth credential types and request-user bindings are rejected because Apps and
+the UC Connection proxy do not yet share an accepted OBO scope. App-principal deployment directly
+grants `USE_CATALOG`, `USE_SCHEMA`, and `USE_CONNECTION` to the App service principal. In local
+development, App identity comes from the configured workspace environment.
+
 Override store names at initialization with `--memory-store` and `--session-store`, or later with
 `ab memory bind <name>` and `ab sessions bind <name>`. Custom-server templates declare these
 stores only when explicitly requested. Tracing is bound by experiment **name** (its presence turns
@@ -94,6 +129,9 @@ connect framework-native agent loops to the managed runtime.
   execution. It receives the original input and a recovery context. Restore a framework checkpoint
   from the Session Store, or replay the input if that is safe for your agent. Request-user recovery
   stops with `MCP_USER_AUTH_RECOVERY_UNSUPPORTED` before this handler runs.
+
+That recovery limitation covers request-user tools and request-user connections alike. A durable
+replacement cannot reuse the original user identity, and Agent Bricks never falls back to the App identity.
 
 The client chooses `background` and `stream` on each request; separate agent handlers are not
 needed. Registering a recovery hook enables automatic recovery when the Runtime uses a persistent

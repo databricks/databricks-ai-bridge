@@ -11,7 +11,7 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
-from databricks_agentbricks.agent_project import AgentProject, ToolSpec
+from databricks_agentbricks.agent_project import AgentProject, ConnectionSpec, ToolSpec
 from databricks_agentbricks.cli import deploy as deploy_mod
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.project_config import write_project_metadata
@@ -366,6 +366,111 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
     env_entries = yaml.safe_load((src / "app.yaml").read_text()).get("env") or []
     env = {e["name"]: e["value"] for e in env_entries}
     assert env.get("AGENT_MEMORY_STORE") == "mem-id-123"
+
+
+def test_deploy_reconciles_connection_resources_before_source_rollout(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    project = AgentProject.create(src, framework="openai", server="custom")
+    binding = ConnectionSpec("provider", "main.connections.provider", "http", "app")
+    project.add_connection(binding)
+    project.write()
+    events = []
+    attach = mock.Mock(side_effect=lambda *args: events.append("connections"))
+    monkeypatch.setattr(deploy_mod, "apply_connection_resources", attach, raising=False)
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda *args: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_wait_for_running",
+        lambda *args: events.append("active"),
+    )
+
+    def databricks(args, profile, **kwargs):
+        if args[0] in {"sync", "apps"} and args[:2] != ["apps", "get"]:
+            events.append("deploy" if args[:2] == ["apps", "deploy"] else args[0])
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(deploy_mod, "_databricks", databricks)
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src)],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    attach.assert_called_once_with("agent-bricks-myapp", [binding], "prof")
+    assert events.index("active") < events.index("connections") < events.index("sync")
+    assert events.index("connections") < events.index("deploy")
+    assert "Connections" in result.output
+    assert "provider" in result.output
+    assert "main.connections.provider" not in result.output
+
+
+def test_connection_resource_failure_stops_source_rollout(tmp_path: pathlib.Path, monkeypatch):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    project = AgentProject.create(src, framework="openai", server="custom")
+    project.add_connection(ConnectionSpec("provider", "main.connections.provider", "mcp", "app"))
+    project.write()
+    calls = []
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda *args: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "apply_connection_resources",
+        lambda *args: "Databricks Apps rejected the UC Connection resource update.",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kwargs: (
+            calls.append(args) or types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        ),
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src)],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code != 0
+    assert "Could not attach governed connections" in result.output
+    assert not any(args[0] == "sync" for args in calls)
+    assert not any(args[:2] == ["apps", "deploy"] for args in calls)
+
+
+def test_json_deploy_summary_lists_connection_aliases_only(tmp_path: pathlib.Path, monkeypatch):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    project = AgentProject.create(src, framework="langgraph", server="custom")
+    project.add_connection(ConnectionSpec("provider", "main.connections.provider", "http", "app"))
+    project.write()
+    captured = {}
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda *args: True)
+    monkeypatch.setattr(deploy_mod, "apply_connection_resources", lambda *args: None, raising=False)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda *args, **kwargs: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    monkeypatch.setattr(deploy_mod.render, "emit_json", lambda data: captured.update(data))
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src)],
+        obj=_JsonCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["connections"] == ["provider"]
+    assert "main.connections.provider" not in repr(captured)
 
 
 def test_deploy_creates_with_instance_count(tmp_path: pathlib.Path, monkeypatch):

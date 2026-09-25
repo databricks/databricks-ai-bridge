@@ -36,6 +36,17 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("login",): (("ab login --profile <profile>", "save a profile as your default"),),
     ("logout",): (("ab logout", "forget the saved default profile"),),
+    ("auth",): (("ab auth connections bind --help", "bind an existing UC Connection"),),
+    ("auth", "connections"): (
+        ("ab auth connections bind --help", "bind an existing UC Connection"),
+    ),
+    ("auth", "connections", "bind"): (
+        (
+            "ab auth connections bind github "
+            "--uc-connection main.agent_connections.github --transport mcp --principal app",
+            "bind an existing bearer-token UC Connection",
+        ),
+    ),
     ("init",): (
         ("ab init my-agent", "scaffold a new agent project"),
         (

@@ -4,6 +4,23 @@ def test_public_package_import() -> None:
     assert databricks_agentkit.__doc__
 
 
+def test_connection_sdk_public_surface() -> None:
+    from databricks_agentkit.auth import (
+        ConnectionClient,
+        ConnectionError,
+        ConnectionHTTPError,
+        ConnectionResponse,
+        ConnectionTimeoutError,
+        context,
+    )
+
+    assert context.connections
+    assert ConnectionClient.__name__ == "ConnectionClient"
+    assert ConnectionResponse.__name__ == "ConnectionResponse"
+    assert issubclass(ConnectionHTTPError, ConnectionError)
+    assert issubclass(ConnectionTimeoutError, ConnectionError)
+
+
 def test_public_surface() -> None:
     import databricks_agentkit
 

@@ -14,6 +14,7 @@ needs runtime wiring as well as manifest configuration.
 | --- | --- |
 | `dev`, `deploy` | Installable dependencies and an `app.yaml` command starting the application |
 | `tools add mcp`, `uc-function`, `genie`, `sandbox` | Load bindings into model definitions and tool execution |
+| `auth connections bind` | Call the declared bearer-token alias through `databricks_agentkit.auth.context` inside an active Agent Bricks invocation |
 | `sessions bind` | Select the bound checkpointer and supply session/actor identity |
 | `memory bind` | Include bound, actor-scoped memory tools in definitions and execution |
 | `tracing bind`, `tracing unbind` | Initialize tracing and open a root span from resolved config |
@@ -43,6 +44,19 @@ belong in source; the template discovers `BaseTool` objects through
 Feed selected tools into both model definitions and graph execution while preserving approval
 policy. New bindings must become effective on the next graph construction or restart without
 another source edit.
+
+### Governed external connections
+
+Entries in `[[connections]]` are agent-owned HTTP or MCP dependencies, not framework tool
+definitions. Import `context` with `from databricks_agentkit.auth import context` and call
+`context.connections.client(alias).request(...)` inside graph nodes or tools. HTTP requests use a
+relative path; MCP requests use an empty path or `/`. Do not accept or forward raw provider tokens,
+Databricks authorization headers, cookies, or absolute provider URLs.
+
+Request-user Connection bindings are reserved for a future platform scope reconciliation and are
+rejected by the CLI today. `principal = "app"` uses the App service principal and deploy grants it
+`USE_CATALOG`, `USE_SCHEMA`, and `USE_CONNECTION`. Direct UC Connection MCP routing is not a UC MCP
+Service and must not be added to `mcp_tools()`.
 
 ### Sessions and memory
 

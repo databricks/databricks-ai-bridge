@@ -8,7 +8,7 @@ from click.testing import CliRunner
 from databricks.sdk.errors import NotFound, PermissionDenied
 from databricks.sdk.service.apps import App
 
-from databricks_agentbricks.agent_project import AgentProject, Scope, ToolSpec
+from databricks_agentbricks.agent_project import AgentProject, ConnectionSpec, Scope, ToolSpec
 from databricks_agentbricks.cli import deploy as deploy_mod
 from databricks_agentbricks.errors import AgentCliError
 
@@ -145,6 +145,39 @@ def test_required_user_api_scopes_union_only_user_bindings(tmp_path):
     project.add_tool(ToolSpec.mcp("genie", service="system.ai.genie_one_mcp", auth="user"))
     project.add_tool(ToolSpec.genie_one("first_class", auth="user"))
     assert required_user_api_scopes(project) == {"ai-gateway", "genie"}
+
+
+@pytest.mark.parametrize("transport", ["mcp", "http"])
+def test_user_connection_requires_user_auth_and_catalog_connections(tmp_path, transport):
+    from databricks_agentbricks.cli.app_auth import required_user_api_scopes, requires_user_auth
+
+    project = AgentProject.create(tmp_path, framework="langgraph", server="agentbricks")
+    project.add_connection(
+        ConnectionSpec("provider", "main.connections.provider", transport, "user")
+    )
+
+    assert requires_user_auth(project) is True
+    assert required_user_api_scopes(project) == {"catalog.connections"}
+
+
+def test_app_connection_does_not_request_user_auth_or_scopes(tmp_path):
+    from databricks_agentbricks.cli.app_auth import required_user_api_scopes, requires_user_auth
+
+    project = AgentProject.create(tmp_path, framework="openai", server="custom")
+    project.add_connection(ConnectionSpec("provider", "main.connections.provider", "http", "app"))
+
+    assert requires_user_auth(project) is False
+    assert required_user_api_scopes(project) == set()
+
+
+def test_user_connection_requires_agentbricks_server(tmp_path):
+    from databricks_agentbricks.cli.app_auth import requires_user_auth
+
+    project = AgentProject.create(tmp_path, framework="openai", server="custom")
+    project.add_connection(ConnectionSpec("provider", "main.connections.provider", "http", "user"))
+
+    with pytest.raises(AgentCliError, match="server = 'agentbricks'"):
+        requires_user_auth(project)
 
 
 @pytest.mark.parametrize(

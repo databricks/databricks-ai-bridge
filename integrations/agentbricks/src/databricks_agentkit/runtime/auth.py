@@ -38,15 +38,17 @@ class InvocationAuthPolicy:
     """Whether an invocation needs credentials scoped to its active execution attempt."""
 
     user_tools: tuple[str, ...] = ()
+    user_connections: tuple[str, ...] = ()
 
     @property
     def requires_user(self) -> bool:
-        return bool(self.user_tools)
+        return bool(self.user_tools or self.user_connections)
 
     @classmethod
     def from_manifest(cls, *, allow_missing: bool = False) -> InvocationAuthPolicy:
         """Infer request-user tools from ``agent.toml`` in the active project."""
-        from databricks_agentkit.runtime.tool_manifest import load_tools, project_root, tomllib
+        from databricks_agentbricks.agent_project import AgentProject
+        from databricks_agentkit.runtime.tool_manifest import project_root
 
         try:
             root = project_root()
@@ -54,10 +56,15 @@ class InvocationAuthPolicy:
             if allow_missing and not os.getenv("AGENTBRICKS_PROJECT_ROOT"):
                 return cls()
             raise
-        with (root / "agent.toml").open("rb") as source:
-            document = tomllib.load(source)
-        tools = load_tools(expected_framework=document.get("agent", {}).get("framework", ""))
-        return cls(tuple(tool.id for tool in tools if tool.auth == "user"))
+        project = AgentProject.load(root)
+        return cls(
+            user_tools=tuple(tool.id for tool in project.tools if tool.auth == "user"),
+            user_connections=tuple(
+                connection.name
+                for connection in project.connections
+                if connection.principal == "user"
+            ),
+        )
 
 
 class RequestAuthContext:

@@ -39,18 +39,20 @@ def _validate_implicit_identity_scopes(app: App) -> None:
 
 
 def requires_user_auth(project: AgentProject | None) -> bool:
-    """Infer request-user auth from tool bindings before any deployment mutation."""
-    if project is None or not project.tools:
+    """Infer request-user auth from tool and connection bindings before deployment mutation."""
+    if project is None:
         return False
     managed = [
         tool
         for tool in project.tools
         if tool.source.kind in ("mcp", "sandbox", "genie_one", "genie_agent")
     ]
-    user_auth = any(tool.auth == "user" for tool in managed)
+    user_auth = any(tool.auth == "user" for tool in managed) or any(
+        connection.principal == "user" for connection in project.connections
+    )
     if user_auth and project.server != AgentServer.AGENTBRICKS:
         raise AgentCliError(
-            "Managed tools with auth = 'user' require [agent].server = 'agentbricks'.",
+            "Request-user tools and connections require [agent].server = 'agentbricks'.",
             hint="Migrate to the request-auth-aware Agent Bricks DurableAgentServer template before enabling user "
             "auth. Failure recovery is unsupported for request-user attempts because the credential "
             "is transient.",
@@ -75,8 +77,10 @@ class AppUserScopeUpdatePlan:
 
 
 def required_user_api_scopes(project: AgentProject | None) -> set[str]:
-    """Return Databricks Apps user API scopes required by request-user tools."""
+    """Return Databricks Apps user API scopes required by request-user bindings."""
     scopes: set[str] = set()
+    if project and any(connection.principal == "user" for connection in project.connections):
+        scopes.add("catalog.connections")
     # TODO: Extend this least-privilege mapping for each supported request-user tool kind/service.
     for tool in project.tools if project else ():
         if tool.auth != "user":

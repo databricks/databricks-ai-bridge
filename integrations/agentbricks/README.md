@@ -430,6 +430,10 @@ see [`cli.md`](cli.md). The tree below is a quick overview.
 ab [-p <profile>] [-o text|json]
   login        [--profile P]
   logout
+  auth
+    connections
+      bind   NAME --uc-connection CATALOG.SCHEMA.CONNECTION
+                  --transport mcp|http --principal user|app [--source PATH]
   init         [--framework openai|langgraph] [--server agentbricks|custom]
                [--disable-chat-app]
                [--memory-store NAME] [--session-store NAME]
@@ -548,6 +552,83 @@ ab deploy --help
 ab sessions items append --help
 ```
 
+## Governed external connections
+
+Agent Bricks agents can call third-party MCP servers and HTTP APIs through Unity Catalog Connections
+without handling provider credentials. Agent Bricks currently supports binding existing HTTP
+Connections that use the `BEARER_TOKEN` credential type. Create the PAT/bearer Connection in Unity
+Catalog first, then bind it to the project:
+
+```sh
+ab auth connections bind salesforce \
+  --uc-connection main.agent_connections.salesforce \
+  --transport http \
+  --principal app
+```
+
+The command validates the remote Connection and atomically adds a typed entry to `agent.toml`:
+
+```toml
+[[connections]]
+name = "github"
+uc_connection = "main.agent_connections.github"
+transport = "mcp"
+principal = "app"
+```
+
+All four fields are required. `name` is the alias used by agent code, `uc_connection` is a
+three-part UC name, `transport` is `mcp` or `http`, and the currently supported `principal` is
+`app`. Existing manifests without `[[connections]]` remain valid.
+
+OAuth-backed UC Connections, including Connections created through dynamic client registration,
+and request-user bindings are rejected during bind. Databricks Apps can issue the granular
+`catalog.connections` user scope, but the UC Connection proxy currently requires the broad
+`unity-catalog` scope; Apps intentionally does not allow that broad scope. For deployed Apps, use an
+existing bearer-token Connection with `--principal app` until the platform contracts are
+reconciled.
+
+Use the credential-free async client from a tool or agent handler:
+
+```python
+from databricks_agentkit.auth import context
+
+
+async def search_accounts(query: str):
+    response = await context.connections.client("salesforce").request(
+        "GET",
+        "/accounts",
+        params={"query": query},
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()
+```
+
+HTTP connections accept `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, and `OPTIONS` with a
+relative path. Put query parameters in `params`, not in the path. MCP connections accept `GET`,
+`POST`, and `DELETE`, and their path must be empty or `/`; use `POST` for normal JSON-RPC calls.
+The client rejects absolute URLs, parent traversal, credentials, cookies, and Databricks routing
+headers. It returns status, response headers, and body, but never exposes the Connection's provider
+credentials or the Databricks credential used to reach the proxy.
+
+`principal = "user"` is modeled for the future request-user flow but is not currently accepted by
+`ab auth connections bind`. Both bearer- and OAuth-backed Connections would reach the same
+unsupported Apps-to-proxy OBO scope boundary.
+
+`principal = "app"` uses the App service principal. On deploy, Agent Bricks directly grants it
+`USE_CATALOG`, `USE_SCHEMA`, and `USE_CONNECTION` on the Connection hierarchy. These grants are
+additive: removing a binding does not revoke a pre-existing privilege that may have been granted by
+an administrator. Restrict App `CAN USE` to callers trusted to exercise that workload identity.
+
+Under `ab dev`, `user` resolves from the active local invocation context and `app` resolves from
+the profile/environment used to start the process. Local development cannot reproduce Apps consent
+or forwarded-ingress enforcement, so validate user-principal access after deployment as well.
+
+Both transports use the schema-level UC Connection proxy. The manifest transport controls the
+allowed methods and request shape: MCP is restricted to Streamable HTTP at the proxy root, while
+HTTP may use relative resource paths. This does not create or bind a Unity Catalog MCP Service and
+does not belong in the managed `[[tools]]` MCP-service list.
+
 ## Agent tools
 
 For projects with `[agent].server = "agentbricks"` (the default from `ab init`), `agent.toml` is the
@@ -607,6 +688,7 @@ Deploy derives Apps user scopes from explicit `auth = "user"` bindings:
 
 | Binding | Requested Apps scopes |
 | --- | --- |
+| Governed UC Connection (`principal = "user"`; currently blocked by the UC proxy scope contract) | `catalog.connections` |
 | Managed MCP (governed ingress) | `ai-gateway` |
 | `system.ai.genie_one_mcp` | `ai-gateway`, `genie` |
 | First-class Genie One or Genie Agent | `genie` |

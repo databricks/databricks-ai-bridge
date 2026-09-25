@@ -66,3 +66,62 @@ uv run python tests/e2e/tool_matrix.py \
 
 Success is exactly `16 passed, 0 failed, 0 skipped`. Temporary Apps and the UC function are deleted
 after a successful run. Pass `--keep-resources` while debugging.
+
+## Governed external connection matrix
+
+`connection_matrix.py` is a separate exact eight-cell suite for existing bearer-token UC
+Connections:
+
+| Axis | Values |
+| --- | --- |
+| Setup | existing through `ab auth connections bind` |
+| Transport | MCP, HTTP |
+| Framework | LangGraph, OpenAI Agents |
+| Execution | foreground, background |
+
+The primary matrix holds `principal = "app"` constant. Two Apps group the framework axis; each App
+declares both transports and runs foreground and background invocations. Generated native framework
+tools call only `from databricks_agentkit.auth import context`. Focused controls additionally exercise
+unknown aliases, forbidden authorization headers, and missing request identity.
+
+Both existing UC HTTP Connections must use the `BEARER_TOKEN` credential type. The HTTP provider
+receives `GET <http-path>` with `request_id` and `marker` query parameters. The MCP provider receives
+a JSON-RPC `tools/call` for `<mcp-tool>` with the same arguments. Each response must contain its
+configured provider marker and the expected identity marker.
+
+```bash
+cd integrations/agentbricks
+uv build --wheel --out-dir /tmp/agentbricks-connection-dist
+uv run python tests/e2e/connection_matrix.py \
+  --profile <workspace-profile> \
+  --app-auth-profile <oauth-profile-on-the-same-workspace> \
+  --wheel /tmp/agentbricks-connection-dist/databricks_agentbricks-*.whl \
+  --output /tmp/agentbricks-connection-e2e \
+  --existing-mcp-connection main.agentbricks_connection_e2e.existing_mcp \
+  --existing-http-connection main.agentbricks_connection_e2e.existing_http \
+  --mcp-marker AGENTBRICKS_MCP_OK \
+  --http-marker AGENTBRICKS_HTTP_OK \
+  --user-marker <expected-user-identity>
+```
+
+Optional fixture-shape flags are `--mcp-tool` (default `agentbricks_connection_probe`) and
+`--http-path` (default `/agentbricks-e2e`). For a provider that exposes both transports through MCP
+JSON-RPC, pass `--probe-mode mcp-jsonrpc`, `--mcp-tool <tool>`, and optional
+`--mcp-arguments '<json-object>'`. Alias flags customize the local binding names.
+
+The harness copies the wheel into each deployment source so Apps build the exact artifact under
+test. It emits one-minute deploy/status ticks, scans subprocess output before persisting it, never
+records authorization or provider credentials, atomically writes `evidence.json`, and attempts
+cleanup for every candidate App. Existing UC Connections are never mutated or deleted.
+`--keep-resources` intentionally makes final verification fail and is only for diagnosis.
+
+Verify already-written evidence without workspace inputs:
+
+```bash
+uv run python tests/e2e/connection_matrix.py \
+  --verify-evidence /tmp/agentbricks-connection-e2e/evidence.json
+```
+
+Success requires eight unique passing rows, the exact four controls (matrix cardinality, unknown
+alias, forbidden header, and missing identity), a clean sensitive-data scan, and
+every cleanup entry marked `deleted` or `not_found`.

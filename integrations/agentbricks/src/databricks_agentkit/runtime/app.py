@@ -177,7 +177,13 @@ class DurableAgentServer(FastAPI):
             if function is None:
                 handler = "@app.recover" if context.is_recovery else "@app.invoke"
                 raise RuntimeError(f"no {handler} handler is registered")
-            return await function(copy.deepcopy(invocation_request["input"]), context)
+            handler_input = copy.deepcopy(invocation_request["input"])
+            if request_auth is None:
+                return await function(handler_input, context)
+            from databricks_agentkit.auth.context import _bind_request_auth
+
+            with _bind_request_auth(request_auth):
+                return await function(handler_input, context)
         finally:
             if request_auth is not None:
                 request_auth.close()

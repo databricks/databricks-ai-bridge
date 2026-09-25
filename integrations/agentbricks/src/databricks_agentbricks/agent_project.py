@@ -236,6 +236,25 @@ class ToolSpec:
         )
 
 
+@dataclass(frozen=True)
+class ConnectionSpec:
+    """One governed external connection binding from ``agent.toml``."""
+
+    name: str
+    uc_connection: str
+    transport: Literal["mcp", "http"]
+    principal: Literal["user", "app"]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not _TOOL_ID.fullmatch(self.name):
+            raise AgentCliError(f"Invalid connection name {self.name!r}.")
+        _three_part_name(self.uc_connection, "UC Connection")
+        if self.transport not in ("mcp", "http"):
+            raise AgentCliError("Connection transport must be 'mcp' or 'http'.")
+        if self.principal not in ("user", "app"):
+            raise AgentCliError("Connection principal must be 'user' or 'app'.")
+
+
 def _required_string(value: object, description: str) -> str:
     if not isinstance(value, str) or not value:
         raise AgentCliError(f"agent.toml must declare {description}.")
@@ -325,6 +344,24 @@ def _tool_from_manifest(value: object) -> ToolSpec:
     )
 
 
+def _connection_from_manifest(value: object) -> ConnectionSpec:
+    if not isinstance(value, Mapping):
+        raise AgentCliError("Each agent.toml connection must be a TOML table.")
+    value = cast(Mapping[str, Any], value)
+    return ConnectionSpec(
+        name=_required_string(value.get("name"), "a connection name"),
+        uc_connection=_required_string(value.get("uc_connection"), "a UC Connection"),
+        transport=cast(
+            Literal["mcp", "http"],
+            _required_string(value.get("transport"), "a connection transport"),
+        ),
+        principal=cast(
+            Literal["user", "app"],
+            _required_string(value.get("principal"), "a connection principal"),
+        ),
+    )
+
+
 def _inline_table(values: Mapping[str, str]) -> Any:
     table = tomlkit.inline_table()
     for key, value in values.items():
@@ -355,6 +392,15 @@ def _tool_table(spec: ToolSpec) -> Any:
     return table
 
 
+def _connection_table(spec: ConnectionSpec) -> Any:
+    table = tomlkit.table()
+    table.add("name", spec.name)
+    table.add("uc_connection", spec.uc_connection)
+    table.add("transport", spec.transport)
+    table.add("principal", spec.principal)
+    return table
+
+
 class AgentProject:
     """Loaded mutable view of a project's canonical agent manifest."""
 
@@ -365,6 +411,7 @@ class AgentProject:
         framework: AgentFramework,
         server: AgentServer,
         tools: list[ToolSpec],
+        connections: list[ConnectionSpec] | None = None,
         memory_store: str | None = None,
         session_store: str | None = None,
         memory_store_id: str | None = None,
@@ -379,6 +426,7 @@ class AgentProject:
         # the source of truth for whether Agent Bricks provisions and wires a Runtime Store.
         self.server = server
         self.tools = tools
+        self.connections = connections or []
         # Managed store bindings declared in agent.toml; None = unbound. memory_store_id is the bare
         # store id the runtime needs for the entries API (the display name can't be used there).
         self.memory_store = memory_store
@@ -435,6 +483,13 @@ class AgentProject:
         ids = [tool.id for tool in tools]
         if len(ids) != len(set(ids)):
             raise AgentCliError("agent.toml tool ids must be unique.")
+        raw_connections = document.get("connections", [])
+        if not isinstance(raw_connections, list):
+            raise AgentCliError("agent.toml connections must be an array of tables.")
+        connections = [_connection_from_manifest(item) for item in raw_connections]
+        connection_names = [connection.name for connection in connections]
+        if len(connection_names) != len(set(connection_names)):
+            raise AgentCliError("agent.toml connection names must be unique.")
         memory_store = _store_name_from_manifest(
             document.get(MEMORY_STORE_TABLE), MEMORY_STORE_TABLE
         )
@@ -455,6 +510,7 @@ class AgentProject:
             framework,
             server,
             tools,
+            connections,
             memory_store,
             session_store,
             memory_store_id,
@@ -546,6 +602,40 @@ class AgentProject:
             raise AgentCliError("agent.toml tools must be an array of tables.")
         del raw_tools[index]
         del self.tools[index]
+        return True
+
+    def add_connection(self, spec: ConnectionSpec) -> bool:
+        for existing in self.connections:
+            if existing.name != spec.name:
+                continue
+            if existing == spec:
+                return False
+            raise AgentCliError(
+                f"Connection name {spec.name!r} already exists with a different configuration.",
+                hint="Use a different name or remove the existing connection from agent.toml first.",
+            )
+        raw_connections = self._document.get("connections")
+        if raw_connections is None:
+            raw_connections = tomlkit.aot()
+            self._document.append("connections", raw_connections)
+        elif not hasattr(raw_connections, "append"):
+            raise AgentCliError("agent.toml connections must be an array of tables.")
+        raw_connections.append(_connection_table(spec))
+        self.connections.append(spec)
+        return True
+
+    def remove_connection(self, name: str) -> bool:
+        index = next(
+            (index for index, connection in enumerate(self.connections) if connection.name == name),
+            None,
+        )
+        if index is None:
+            return False
+        raw_connections = self._document.get("connections")
+        if not isinstance(raw_connections, list):
+            raise AgentCliError("agent.toml connections must be an array of tables.")
+        del raw_connections[index]
+        del self.connections[index]
         return True
 
     def bind_memory_store(self, name: str, store_id: str | None = None) -> bool:

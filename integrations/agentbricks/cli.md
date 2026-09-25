@@ -59,6 +59,7 @@ These options apply to every command. Pass them before the command name, for exa
 | --- | --- |
 | [`login`](#ab-login) | Authenticate and save a default profile |
 | [`logout`](#ab-logout) | Forget the saved default profile |
+| [`auth`](#ab-auth) | Configure authentication and governed external connections |
 | [`init`](#ab-init) | Scaffold a new agent project |
 | [`dev`](#ab-dev) | Run the agent locally with a chat UI |
 | [`memory`](#ab-memory) | Manage an agent's long-term memory |
@@ -94,6 +95,48 @@ Forget the saved profile selection without deleting its credentials.
 ```
 ab logout
 ```
+
+### `ab auth`
+
+Configure authentication and governed external connections.
+
+| Subcommand | Description |
+| --- | --- |
+| [`auth connections`](#ab-auth-connections) | Bind existing UC Connections used by agent code. |
+
+#### `ab auth connections`
+
+Bind governed UC HTTP Connections and record a typed alias in `agent.toml`.
+
+| Subcommand | Description |
+| --- | --- |
+| [`auth connections bind`](#ab-auth-connections-bind) | Bind an existing UC HTTP Connection to the project. |
+
+##### `ab auth connections bind`
+
+Validate an existing `BEARER_TOKEN` UC HTTP Connection and bind it as `NAME` without changing the
+remote Connection. The currently supported principal is `app`. OAuth credential types and
+request-user bindings are rejected until the Databricks Apps and UC proxy scope contracts are
+reconciled.
+
+```
+ab auth connections bind NAME --uc-connection CATALOG.SCHEMA.CONNECTION --transport mcp|http --principal user|app [options]
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `NAME` | yes | Local alias recorded in the project. |
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--uc-connection <CATALOG.SCHEMA.CONNECTION>` | three-part UC name | - | yes | Existing UC HTTP Connection. |
+| `--transport <mcp\|http>` | `mcp` \| `http` | - | yes | Connection protocol. |
+| `--principal <user\|app>` | `user` \| `app` | - | yes | Invocation identity. Only `app` is currently supported; `user` fails closed. |
+| `--source <SOURCE>` | path | `.` | no | Project directory containing `agent.toml`. |
 
 ### `ab init`
 
