@@ -34,6 +34,7 @@ def test_root_registers_supported_commands():
         "init",
         "dev",
         "memory",
+        "dreamer",
         "sessions",
         "tracing",
         "deploy",

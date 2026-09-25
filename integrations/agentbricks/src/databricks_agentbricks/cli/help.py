@@ -17,7 +17,7 @@ CommandPath = tuple[str, ...]
 # `_group.AgentBricksGroup`).
 _COMMAND_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("SETUP", ("login", "logout", "init")),
-    ("DEVELOP", ("dev", "tools", "memory", "sessions", "tracing")),
+    ("DEVELOP", ("dev", "tools", "memory", "sessions", "dreamer", "tracing")),
     ("SHIP", ("deploy", "deployments")),
 )
 
@@ -104,6 +104,31 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("memory", "entries", "delete"): (
         ("ab memory entries delete --store <store> <entry>", "delete an entry"),
     ),
+    ("dreamer",): (
+        (
+            "ab dreamer create --memory-store agent-memory --session-store agent-sessions "
+            "--model system.ai.gpt-5-6-sol",
+            "create a cross-session memory pipeline",
+        ),
+        ("ab dreamer list", "list memory pipelines"),
+    ),
+    ("dreamer", "create"): (
+        (
+            "ab dreamer create --memory-store agent-memory --session-store agent-sessions "
+            "--model system.ai.gpt-5-6-sol",
+            "create a memory pipeline",
+        ),
+    ),
+    ("dreamer", "list"): (("ab dreamer list", "list memory pipelines"),),
+    ("dreamer", "get"): (("ab dreamer get <pipeline>", "show one memory pipeline"),),
+    ("dreamer", "update"): (
+        (
+            'ab dreamer update <pipeline> --instructions "Keep durable preferences"',
+            "edit a memory pipeline",
+        ),
+    ),
+    ("dreamer", "delete"): (("ab dreamer delete <pipeline>", "delete a memory pipeline"),),
+    ("dreamer", "run"): (("ab dreamer run <pipeline>", "start a Dreamer run"),),
     ("sessions",): (
         ("ab sessions stores create --name agent-sessions", "create a session store"),
         ("ab sessions bind agent-sessions", "bind it to the agent (wired in on dev / deploy)"),
