@@ -14,6 +14,7 @@ from databricks_agentbricks import errors
 from databricks_agentbricks.cli.auth import load_default_profile, login, logout
 from databricks_agentbricks.cli.deploy import deploy, deployments
 from databricks_agentbricks.cli.dev import dev
+from databricks_agentbricks.cli.dreamer import dreamer
 from databricks_agentbricks.cli.endpoint import endpoint
 from databricks_agentbricks.cli.help import configure_help
 from databricks_agentbricks.cli.init import init
@@ -90,6 +91,7 @@ agentbricks.add_command(logout)
 agentbricks.add_command(init)
 agentbricks.add_command(dev)
 agentbricks.add_command(memory)
+agentbricks.add_command(dreamer)
 agentbricks.add_command(sessions)
 agentbricks.add_command(tracing)
 agentbricks.add_command(deploy)

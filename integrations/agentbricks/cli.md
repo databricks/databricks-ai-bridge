@@ -62,6 +62,7 @@ These options apply to every command. Pass them before the command name, for exa
 | [`init`](#ab-init) | Scaffold a new agent project |
 | [`dev`](#ab-dev) | Run the agent locally with a chat UI |
 | [`memory`](#ab-memory) | Manage an agent's long-term memory |
+| [`dreamer`](#ab-dreamer) | Manage pipelines that distill session history into long-term memory. |
 | [`mcp`](#ab-mcp) | Discover managed MCP services |
 | [`sessions`](#ab-sessions) | Manage an agent's conversation sessions |
 | [`tracing`](#ab-tracing) | Set up and inspect agent tracing |
@@ -474,6 +475,90 @@ _Options_
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--schema <SCHEMA>` | string | `system.ai` | no | Two-part Unity Catalog schema containing MCP Services. |
+
+### `ab dreamer`
+
+Manage pipelines that distill session history into long-term memory.
+
+| Subcommand | Description |
+| --- | --- |
+| [`dreamer create`](#ab-dreamer-create) | Create a Dreamer memory pipeline. |
+| [`dreamer list`](#ab-dreamer-list) | List Dreamer memory pipelines in the workspace. |
+| [`dreamer get`](#ab-dreamer-get) | Get a Dreamer memory pipeline by id or resource name. |
+| [`dreamer update`](#ab-dreamer-update) | Update a pipeline's display name, instructions, or enabled state. |
+| [`dreamer delete`](#ab-dreamer-delete) | Delete a Dreamer memory pipeline and its backing job. |
+| [`dreamer run`](#ab-dreamer-run) | Manually run a Dreamer memory pipeline. |
+
+#### `ab dreamer create`
+
+```text
+ab dreamer create --memory-store TEXT --session-store TEXT [options]
+```
+
+| Option | Type | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--memory-store` | string | - | yes | Memory store name or resource name. |
+| `--session-store` | string | - | yes | Session store name or resource name. |
+| `--model` | string | - | no | Model service used for Dreamer distillation. |
+| `--display-name` | string | - | no | Optional human-readable pipeline name. |
+| `--instructions` | string | - | no | Instructions steering distillation. |
+
+```bash
+ab dreamer create --memory-store agent-memory --session-store agent-sessions \
+  --model system.ai.gpt-5-6-sol
+```
+
+#### `ab dreamer list`
+
+```text
+ab dreamer list [options]
+```
+
+| Option | Type | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--page-size` | integer | 25 | no | Maximum number of pipelines to return. |
+| `--page-token` | string | - | no | Token from a previous page. |
+
+#### `ab dreamer get`
+
+```text
+ab dreamer get NAME
+```
+
+`NAME` is a pipeline id or full `memory-pipelines/<id>` resource name.
+
+#### `ab dreamer update`
+
+```text
+ab dreamer update NAME [options]
+```
+
+| Option | Type | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--display-name` | string | - | no | New human-readable pipeline name. |
+| `--instructions` | string | - | no | New distillation instructions. |
+| `--enable` | flag | - | no | Enable the Dreamer engine. |
+| `--disable` | flag | - | no | Disable the Dreamer engine. |
+
+#### `ab dreamer delete`
+
+```text
+ab dreamer delete NAME [options]
+```
+
+| Option | Type | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--yes`, `-y` | flag | false | no | Skip the confirmation prompt. |
+
+#### `ab dreamer run`
+
+Trigger the pipeline's Dreamer engine and return the newly created run.
+
+```text
+ab dreamer run NAME
+```
+
+`NAME` is a pipeline id or full `memory-pipelines/<id>` resource name.
 
 ### `ab sessions`
 
