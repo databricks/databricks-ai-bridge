@@ -1,6 +1,6 @@
-"""Unit tests for `ab init`: template mapping, destination guard, scaffold flow.
+"""Unit tests for `agentbricks init`: template mapping, destination guard, scaffold flow.
 
-Templates ship inside the package; `ab init` copies them via `_copy_packaged_template`, which is
+Templates ship inside the package; `agentbricks init` copies them via `_copy_packaged_template`, which is
 stubbed here so tests don't touch the real bundled templates.
 """
 

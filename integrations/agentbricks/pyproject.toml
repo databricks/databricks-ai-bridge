@@ -49,7 +49,7 @@ openai = [
 ]
 
 [project.scripts]
-ab = "databricks_agentbricks.cli:main"
+agentbricks = "databricks_agentbricks.cli:main"
 
 [dependency-groups]
 dev = [

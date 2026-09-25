@@ -13,9 +13,9 @@ from databricks_agentbricks.cli import deploy as deploy_mod
 def _hermetic_trace_reconcile(monkeypatch):
     """Keep the deploy-time trace-resource reconcile hermetic for every deploy-command test.
 
-    `ab deploy` reconciles the agentbricks-owned trace app-resources on EVERY deploy (so an `ab tracing
-    unbind` + redeploy prunes the stale grants). That reconcile shells out to the `databricks` CLI via
-    `app_resources` - NOT the `deploy_mod._databricks` these tests patch - so an un-stubbed
+    `agentbricks deploy` reconciles the agentbricks-owned trace app-resources on EVERY deploy (so an
+    `agentbricks tracing unbind` + redeploy prunes stale grants). That reconcile shells out to the
+    `databricks` CLI via `app_resources` - NOT the `deploy_mod._databricks` these tests patch - so an un-stubbed
     deploy-command test would invoke the real CLI, which isn't present in CI (uncaught
     ``FileNotFoundError`` -> the deploy command fails). Stubbing it here (autouse, dir-wide) keeps every
     deploy-command test module hermetic without each one re-stubbing it. Tests that assert on the
