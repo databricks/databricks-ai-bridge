@@ -42,7 +42,7 @@ The runner executes 8 parallel jobs nightly (and on-demand via `workflow_dispatc
 | `fmapi-tool-calling-tests` | 60 min | `RUN_FMAPI_TOOL_CALLING_TESTS` |
 | `lakebase-tests` | 20 min | `LAKEBASE_INTEGRATION_TESTS` |
 | `obo-credential-tests` | 30 min | `RUN_OBO_INTEGRATION_TESTS` |
-| `mason-tests` | 60 min | `RUN_MASON_INTEGRATION_TESTS` |
+| `agentbricks-tests` | 75 min | `RUN_AGENTBRICKS_INTEGRATION_TESTS` |
 | `obo-redeploy-serving` *(weekly)* | -- | *(separate workflow)* |
 
 If any job fails, an alert fires identifying which jobs broke and linking to the run.
@@ -217,23 +217,23 @@ The fundamental assertion: when SP-A calls the agent, it sees SP-A's identity; w
 
 **Weekly redeploy (`deploy_serving_agent.py`):** The Model Serving endpoint must run on the latest SDK versions (`databricks-openai`, `databricks-ai-bridge`, `databricks-sdk`, `mlflow`) because pip requirements are frozen at model log time. A separate weekly CI workflow re-logs the model with current package versions and redeploys. The App fixture does not need this because its dependencies resolve from `pyproject.toml` at deploy time.
 
-### 7. Mason (agent CLI + runtime)
+### 7. Agent Bricks (CLI + AgentKit runtime)
 
-**What the bridge provides:** `databricks-mason` — the CLI and runtime for scaffolding, running, and deploying Databricks custom agents (`mason init` / `dev` / `deploy`, managed tool bindings, the durable runtime, and session/memory stores). Unlike the other areas, mason is a developer tool plus a runtime, not a wrapper over one platform API — so the test that matters most is a full deploy-and-invoke customer journey.
+**What the bridge provides:** `databricks-agentbricks` ships the `ab` CLI and AgentKit SDK for scaffolding, running, and deploying custom agents. The integration test covers a full deploy-and-invoke journey.
 
 **Test file:**
 
 | Layer | File | What it tests |
 |-------|------|---------------|
-| Mason | `integrations/mason/tests/integration_tests/test_tool_matrix.py` | Drives the end-to-end matrix in `integrations/mason/tests/e2e/tool_matrix.py`: scaffolds LangGraph agents two ways (the `mason tools` CLI and a hand-edited `agent.toml`), runs each under `mason dev` **and** deploys each to a real Databricks App, then invokes each and checks four tools actually execute — the sandbox, `system.ai.web_search` (MCP), a local Python tool, and a temporary UC function. 16 evidence rows; all must pass. The test installs the built wheel, so it also exercises the shipped artifact. |
+| Agent Bricks | `integrations/agentbricks/tests/integration_tests/test_tool_matrix.py` | Drives `integrations/agentbricks/tests/e2e/tool_matrix.py`: scaffolds LangGraph agents with `ab tools` and a hand-edited `agent.toml`, runs each under `ab dev` and on Databricks Apps, then invokes the sandbox, web-search MCP, a local Python tool, and a temporary UC function. All 16 evidence rows must pass. The CLI and templates come from the built wheel. |
 
 **Key regressions these tests guard against:**
 - A deployed agent that won't boot — durable-runtime store resolution against real Lakebase (the class of bug that shipped in #550)
-- Tool wiring that works under `mason dev` but breaks once deployed to Apps, or vice versa
+- Tool wiring that works under `ab dev` but breaks once deployed to Apps, or vice versa
 - CLI-authored and direct-`agent.toml` agents diverging at runtime
 - `system.ai.*` tools or UC-function invocation breaking under platform changes
 
-**Infrastructure:** Databricks Apps enabled with the CI service principal able to create and delete apps; `system.ai.sandbox` and `system.ai.web_search`; a SQL warehouse; and a scratch UC schema (`MASON_INTEGRATION_UC_SCHEMA`) where the SP can create a temporary function. Because it **deploys real Apps**, this job runs longer than the API suites and deletes the apps and function after a successful run.
+**Infrastructure:** Databricks Apps enabled with the CI service principal able to create and delete apps; `system.ai.sandbox` and `system.ai.web_search`; a SQL warehouse; and a scratch UC schema (`AGENTBRICKS_INTEGRATION_UC_SCHEMA`) where the SP can create a temporary function. The test cleans up its Apps and function after success or failure, with a bounded grace period on timeout.
 
 ---
 
@@ -297,14 +297,14 @@ cd integrations/openai
 RUN_MCP_INTEGRATION_TESTS=1 uv run python -m pytest tests/integration_tests/test_openai_mcp.py -v
 ```
 
-### Running Mason Integration Tests
+### Running Agent Bricks Integration Tests
 
-Mason's suite deploys real Databricks Apps, so it needs a workspace with Apps enabled, `system.ai.*`
+The suite deploys real Databricks Apps, so it needs a workspace with Apps enabled, `system.ai.*`
 tools, a SQL warehouse, and a scratch UC schema the service principal can create a function in:
 
 ```bash
-cd integrations/mason
-RUN_MASON_INTEGRATION_TESTS=1 MASON_INTEGRATION_UC_SCHEMA=catalog.schema \
+cd integrations/agentbricks
+RUN_AGENTBRICKS_INTEGRATION_TESTS=1 AGENTBRICKS_INTEGRATION_UC_SCHEMA=catalog.schema \
   uv run --group tests python -m pytest tests/integration_tests/ -v
 ```
 
@@ -331,10 +331,11 @@ RUN_MASON_INTEGRATION_TESTS=1 MASON_INTEGRATION_UC_SCHEMA=catalog.schema \
 | `OBO_TEST_CLIENT_SECRET` | OBO | Second SP (end-user) client secret |
 | `OBO_TEST_SERVING_ENDPOINT` | OBO | Pre-deployed Model Serving endpoint |
 | `OBO_TEST_APP_NAME` | OBO | Pre-deployed Databricks App name |
-| `RUN_MASON_INTEGRATION_TESTS` | Mason | Set to `1` to enable |
-| `MASON_INTEGRATION_UC_SCHEMA` | Mason | Two-part `catalog.schema` for the scratch UC function |
-| `MASON_INTEGRATION_WAREHOUSE_ID` | Mason (optional) | SQL warehouse to use instead of auto-discovering one |
-| `MASON_WHEEL` | Mason (optional) | Prebuilt databricks-mason wheel (else one is built during the test) |
+| `RUN_AGENTBRICKS_INTEGRATION_TESTS` | Agent Bricks | Set to `1` to enable |
+| `AGENTBRICKS_INTEGRATION_UC_SCHEMA` | Agent Bricks | Two-part `catalog.schema` for the scratch UC function |
+| `AGENTBRICKS_INTEGRATION_WAREHOUSE_ID` | Agent Bricks (optional) | SQL warehouse to use instead of auto-discovering one |
+| `AGENTBRICKS_INTEGRATION_PREPROVISIONED_APP_CATALOG_ACCESS` | Agent Bricks (optional) | Set to `1` when App identities already have `USE CATALOG` |
+| `AGENTBRICKS_WHEEL` | Agent Bricks (optional) | Prebuilt databricks-agentbricks wheel (else one is built during the test) |
 
 ---
 
