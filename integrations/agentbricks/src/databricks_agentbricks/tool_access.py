@@ -66,7 +66,7 @@ class ToolAccessPlan:
 
 
 def _resource_name(kind: str, identifier: str) -> str:
-    digest = hashlib.sha256(f"{kind}\0{identifier}".encode()).hexdigest()[:16]
+    digest = hashlib.sha256(f"{kind}\0{identifier}".encode()).hexdigest()[:13]
     return f"agentbricks-tool-{digest}"
 
 
