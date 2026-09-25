@@ -334,7 +334,7 @@ jobs:
 
   agentbricks_framework_test:
     runs-on: ubuntu-latest
-    name: "agentbricks_framework_test (python: 3.10, uv: highest)"
+    name: "agentbricks_framework_test (python: 3.11, uv: highest)"
     timeout-minutes: 20
     steps:
       - name: Checkout code
@@ -343,7 +343,8 @@ jobs:
         uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff
         with:
           version: ${{ env.UV_VERSION }}
-          python-version: "3.10"
+          # Generated LangGraph agents require Python 3.11 or newer.
+          python-version: "3.11"
       - name: Run tests with framework dependencies
         working-directory: integrations/agentbricks
         run: |
