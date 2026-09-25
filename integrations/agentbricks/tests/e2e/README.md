@@ -31,7 +31,7 @@ uv build --wheel --out-dir /tmp/agentbricks-tooling-dist
 uv run python tests/e2e/tool_matrix.py \
   --profile df1 \
   --app-auth-profile df1-oauth-mcp \
-  --wheel /tmp/agentbricks-tooling-dist/databricks_agentbricks-0.2.0-py3-none-any.whl \
+  --wheel /tmp/agentbricks-tooling-dist/databricks_agentbricks-0.3.0-py3-none-any.whl \
   --output /tmp/agentbricks-tool-matrix-df1 \
   --uc-schema aifx_benchmarks.agentbricks_agent_tools_e2e \
   --template-repo /absolute/path/to/databricks-ai-bridge \
