@@ -92,7 +92,11 @@ def _read_failed_reason(exc: _AppResourcesReadError) -> str:
 # The app-resource name for the trace experiment (unique across an app's resources, like a store's).
 _TRACE_EXPERIMENT_RESOURCE = "agentbricks-trace-experiment"
 # Prefix for the per-table trace resources (one uc_securable resource per OTEL table).
-_UC_TRACE_TABLE_RESOURCE_PREFIX = "agentbricks-trace-table-"
+# Databricks Apps resource names must be 2-30 characters, so keep the prefix short: the longest
+# resulting name, `agentbricks-trace-annotations` (29), must stay <= 30. `apps create-update` rejects
+# the WHOLE resource array if any name is too long, so an over-length name silently drops every trace
+# grant. (`agentbricks-trace-table-` + `annotations` = 35 chars, which is what regressed.)
+_UC_TRACE_TABLE_RESOURCE_PREFIX = "agentbricks-trace-"
 
 
 def apply_trace_resources(
@@ -106,10 +110,10 @@ def apply_trace_resources(
     The desired set is the `experiment` resource (CAN_EDIT, so the SP can write traces) plus one
     `uc_securable` TABLE resource (MODIFY) per UC OTEL table when the experiment is UC-backed - or
     EMPTY when tracing is unbound (``experiment_id`` is None), so an unbind + redeploy prunes the stale
-    `agentbricks-trace-experiment` / `agentbricks-trace-table-*` resources instead of leaving the SP
+    `agentbricks-trace-experiment` / `agentbricks-trace-*` resources instead of leaving the SP
     with grants on an experiment it no longer uses. ``tables`` are ``TraceTable`` entries (``kind`` and
     ``full_name``, e.g. ``TraceTable(TraceTableKind.SPANS, "cat.schema.pfx_otel_spans")``); each kind
-    names its resource ``agentbricks-trace-table-<kind>``. Writing the complete agentbricks-owned set
+    names its resource ``agentbricks-trace-<kind>``. Writing the complete agentbricks-owned set
     every deploy also converges a UC rebind: a new experiment's tables replace the old ones in the same
     write. MODIFY grants MODIFY+SELECT and Databricks Apps auto-grants USE CATALOG/USE SCHEMA - no
     catalog/schema resource or SQL grant needed. Preserves every resource we don't own. None on
