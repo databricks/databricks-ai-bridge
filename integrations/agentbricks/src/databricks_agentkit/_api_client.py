@@ -78,6 +78,19 @@ def session_store_path(name: str) -> str:
     return f"session-stores/{raw}"
 
 
+def memory_pipeline_path(name: str) -> str:
+    """Normalize a pipeline id or resource name into ``memory-pipelines/{id}``."""
+    raw = (name or "").strip()
+    if raw.startswith("memory-pipelines/"):
+        raw = raw[len("memory-pipelines/") :]
+    raw = raw.strip().strip("/")
+    if not raw:
+        raise AgentCliError("A memory pipeline id or resource name is required.")
+    if "/" in raw:
+        raise AgentCliError(f"Invalid memory pipeline id or resource name: {name!r}")
+    return f"memory-pipelines/{raw}"
+
+
 def memory_entry_path(store: str, entry: str) -> str:
     entry = (entry or "").strip().strip("/")
     if entry.startswith("memory-stores/"):
@@ -481,6 +494,71 @@ class _AgentBricksApiClient:
 
     def delete_session_store(self, name: str) -> dict:
         return self._do("DELETE", f"{_BASE}/{session_store_path(name)}")
+
+    # --- memory pipelines ---------------------------------------------------
+
+    def create_memory_pipeline(
+        self,
+        *,
+        memory_store: str,
+        session_store: str,
+        model: Optional[str] = None,
+        display_name: Optional[str] = None,
+        instructions: Optional[str] = None,
+    ) -> dict:
+        return self._do(
+            "POST",
+            f"{_BASE}/memory-pipelines",
+            body=_body(
+                display_name=display_name,
+                session_store=session_store_path(session_store),
+                memory_store=memory_store_path(memory_store),
+                instructions=instructions,
+                model=model,
+            ),
+        )
+
+    def get_memory_pipeline(self, name: str) -> dict:
+        return self._do("GET", f"{_BASE}/{memory_pipeline_path(name)}")
+
+    def list_memory_pipelines(
+        self, page_size: Optional[int] = None, page_token: Optional[str] = None
+    ) -> dict:
+        return self._do(
+            "GET",
+            f"{_BASE}/memory-pipelines",
+            query=_query(page_size=page_size, page_token=page_token),
+        )
+
+    def update_memory_pipeline(
+        self,
+        name: str,
+        *,
+        display_name: Optional[str] = None,
+        instructions: Optional[str] = None,
+        enabled: Optional[bool] = None,
+    ) -> dict:
+        body = _body(display_name=display_name, instructions=instructions)
+        if enabled is not None:
+            body["dreamer_policy"] = {"enabled": enabled}
+        if not body:
+            raise AgentCliError(
+                "No fields to update. Provide --display-name, --instructions, --enable, or --disable."
+            )
+        body = {"name": memory_pipeline_path(name), **body}
+        update_mask = ",".join(key for key in body if key != "name")
+        return self._do(
+            "PATCH",
+            f"{_BASE}/{memory_pipeline_path(name)}",
+            query={"update_mask": update_mask},
+            body=body,
+        )
+
+    def delete_memory_pipeline(self, name: str) -> dict:
+        return self._do("DELETE", f"{_BASE}/{memory_pipeline_path(name)}")
+
+    def run_memory_pipeline(self, name: str) -> dict:
+        return self._do("POST", f"{_BASE}/{memory_pipeline_path(name)}/run", body={})
 
     # --- store permission grants --------------------------------------------
 

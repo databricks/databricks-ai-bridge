@@ -42,9 +42,21 @@ def test_root_registers_supported_commands():
         "tools",
     } <= names
     assert "mcp" not in names
+    assert "dreamer" not in names
     assert "durability" not in names
     assert "help" not in names
     assert "add-sandbox" not in names
+
+
+def test_dreamer_is_nested_under_memory():
+    assert "dreamer" in cli.memory.commands
+
+    nested = CliRunner().invoke(cli.agentbricks, ["memory", "dreamer", "--help"])
+    root = CliRunner().invoke(cli.agentbricks, ["dreamer", "--help"])
+
+    assert nested.exit_code == 0, nested.output
+    assert "agentbricks memory dreamer" in nested.output
+    assert root.exit_code != 0
 
 
 def test_root_command_name_and_version_default_to_agentbricks():

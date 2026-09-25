@@ -116,6 +116,40 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("memory", "entries", "delete"): (
         ("agentbricks memory entries delete --store <store> <entry>", "delete an entry"),
     ),
+    ("memory", "dreamer"): (
+        (
+            "agentbricks memory dreamer create --memory-store agent-memory "
+            "--session-store agent-sessions "
+            "--model system.ai.gpt-5-6-sol",
+            "create a cross-session memory pipeline",
+        ),
+        ("agentbricks memory dreamer list", "list memory pipelines"),
+    ),
+    ("memory", "dreamer", "create"): (
+        (
+            "agentbricks memory dreamer create --memory-store agent-memory "
+            "--session-store agent-sessions "
+            "--model system.ai.gpt-5-6-sol",
+            "create a memory pipeline",
+        ),
+    ),
+    ("memory", "dreamer", "list"): (("agentbricks memory dreamer list", "list memory pipelines"),),
+    ("memory", "dreamer", "get"): (
+        ("agentbricks memory dreamer get <pipeline>", "show one memory pipeline"),
+    ),
+    ("memory", "dreamer", "update"): (
+        (
+            "agentbricks memory dreamer update <pipeline> "
+            '--instructions "Keep durable preferences"',
+            "edit a memory pipeline",
+        ),
+    ),
+    ("memory", "dreamer", "delete"): (
+        ("agentbricks memory dreamer delete <pipeline>", "delete a memory pipeline"),
+    ),
+    ("memory", "dreamer", "run"): (
+        ("agentbricks memory dreamer run <pipeline>", "start a Dreamer run"),
+    ),
     ("sessions",): (
         ("agentbricks sessions stores create --name agent-sessions", "create a session store"),
         (

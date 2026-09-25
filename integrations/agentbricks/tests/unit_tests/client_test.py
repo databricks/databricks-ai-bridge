@@ -199,6 +199,61 @@ def test_list_memory_stores_query(workspace_client):
 
 
 @mock.patch("databricks.sdk.WorkspaceClient")
+def test_memory_pipeline_crud_uses_v2_resource_contract(workspace_client):
+    c, do = _client(workspace_client)
+    assert hasattr(c, "create_memory_pipeline"), "transport must expose memory-pipeline CRUD"
+
+    c.create_memory_pipeline(
+        memory_store="support-memory",
+        session_store="support-sessions",
+        model="system.ai.gpt-5-6-sol",
+    )
+    c.get_memory_pipeline("p-123")
+    c.list_memory_pipelines(page_size=10, page_token="next")
+    c.update_memory_pipeline("p-123", instructions="Only durable facts.", enabled=False)
+    c.delete_memory_pipeline("memory-pipelines/p-123")
+    assert hasattr(c, "run_memory_pipeline"), "transport must expose the pipeline run method"
+    c.run_memory_pipeline("p-123")
+
+    assert do.call_args_list == [
+        mock.call(
+            "POST",
+            "/api/2.0/agents/memory-pipelines",
+            query=None,
+            body={
+                "memory_store": "memory-stores/support-memory",
+                "session_store": "session-stores/support-sessions",
+                "model": "system.ai.gpt-5-6-sol",
+            },
+        ),
+        mock.call("GET", "/api/2.0/agents/memory-pipelines/p-123", query=None, body=None),
+        mock.call(
+            "GET",
+            "/api/2.0/agents/memory-pipelines",
+            query={"page_size": 10, "page_token": "next"},
+            body=None,
+        ),
+        mock.call(
+            "PATCH",
+            "/api/2.0/agents/memory-pipelines/p-123",
+            query={"update_mask": "instructions,dreamer_policy"},
+            body={
+                "name": "memory-pipelines/p-123",
+                "instructions": "Only durable facts.",
+                "dreamer_policy": {"enabled": False},
+            },
+        ),
+        mock.call("DELETE", "/api/2.0/agents/memory-pipelines/p-123", query=None, body=None),
+        mock.call(
+            "POST",
+            "/api/2.0/agents/memory-pipelines/p-123/run",
+            query=None,
+            body={},
+        ),
+    ]
+
+
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_list_mcp_services_query(workspace_client):
     c, do = _client(workspace_client)
 
