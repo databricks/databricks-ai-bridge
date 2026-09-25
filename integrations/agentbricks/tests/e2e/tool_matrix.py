@@ -926,7 +926,7 @@ class Runner:
                     raise MatrixError("Sandbox table marker was not created.")
                 prompt = (
                     "You must call the sandbox tool. In the sandbox, use Python and Spark SQL "
-                    f"to select the sole marker value from table {self.uc_table}. "
+                    f"to run SELECT marker FROM {self.uc_table} and read its sole row. "
                     "Return only the exact value read from the table; do not fabricate it."
                 )
                 expected_marker = self.table_marker
@@ -970,7 +970,7 @@ class Runner:
                     status=status,
                     command=command,
                     expected=expected_marker or EXPECTED[tool_kind],
-                    actual=serialized[:6000],
+                    actual=_evidence_excerpt(serialized, expected_marker),
                     duration_seconds=round(time.monotonic() - started, 3),
                     artifact_paths=[str(log_path)],
                     app_name=app_name,
@@ -1315,6 +1315,21 @@ def _assert_semantics(tool_kind: str, serialized: str, expected_marker: str | No
             raise MatrixError(f"Missing Genie execution/result evidence: {serialized[:2000]}")
         return
     raise MatrixError(f"No semantic assertion is defined for tool kind {tool_kind!r}.")
+
+
+def _evidence_excerpt(serialized: str, required_marker: str | None) -> str:
+    limit = 6000
+    if len(serialized) <= limit:
+        return serialized
+    head_length = limit // 2
+    head = serialized[:head_length]
+    if required_marker is None or required_marker in head:
+        tail = serialized[-head_length:]
+    else:
+        marker_offset = serialized.find(required_marker)
+        start = max(head_length, marker_offset - head_length // 2)
+        tail = serialized[start : start + head_length]
+    return f"{head}\n... response truncated ...\n{tail}"
 
 
 def _curl_command(invocation_url: str, prompt: str, authenticated: bool) -> str:
