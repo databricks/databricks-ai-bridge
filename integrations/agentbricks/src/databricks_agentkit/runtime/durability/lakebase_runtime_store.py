@@ -49,6 +49,20 @@ def _validate_invocation_id(invocation_id: str) -> None:
         raise ValueError("invocation_id must not be empty")
 
 
+def _validate_session_id(session_id: str) -> None:
+    if not session_id:
+        raise ValueError("session_id must not be empty")
+
+
+def _validate_read_scope(invocation_id: str | None, session_id: str | None) -> None:
+    if (invocation_id is None) == (session_id is None):
+        raise ValueError("exactly one of invocation_id or session_id must be provided")
+    if invocation_id is not None:
+        _validate_invocation_id(invocation_id)
+    if session_id is not None:
+        _validate_session_id(session_id)
+
+
 class _AppsPostgresLakebase:
     """SQLAlchemy connection for a Databricks Apps Postgres resource.
 
@@ -261,6 +275,8 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                     f"""
                     CREATE TABLE IF NOT EXISTS {self._table} (
                         invocation_id TEXT PRIMARY KEY,
+                        session_id TEXT,
+                        queue_order BIGINT,
                         status TEXT NOT NULL,
                         attempt INTEGER NOT NULL DEFAULT 0,
                         heartbeat_at TIMESTAMPTZ,
@@ -268,6 +284,15 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                         response JSONB,
                         CHECK (status IN ('QUEUED', 'ACTIVE', 'COMPLETED', 'FAILED'))
                     )
+                    """
+                )
+            )
+            await connection.execute(
+                text(
+                    f"""
+                    ALTER TABLE {self._table}
+                    ADD COLUMN IF NOT EXISTS session_id TEXT,
+                    ADD COLUMN IF NOT EXISTS queue_order BIGINT
                     """
                 )
             )
@@ -282,6 +307,24 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                         event JSONB NOT NULL,
                         CHECK (jsonb_typeof(event) = 'object')
                     )
+                    """
+                )
+            )
+            await connection.execute(
+                text(
+                    f"""
+                    CREATE UNIQUE INDEX IF NOT EXISTS invocations_session_queue_order_idx
+                    ON {self._table} (session_id, queue_order)
+                    WHERE session_id IS NOT NULL
+                    """
+                )
+            )
+            await connection.execute(
+                text(
+                    f"""
+                    CREATE UNIQUE INDEX IF NOT EXISTS invocations_active_session_idx
+                    ON {self._table} (session_id)
+                    WHERE session_id IS NOT NULL AND status='ACTIVE'
                     """
                 )
             )
@@ -306,26 +349,57 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
     async def close(self) -> None:
         await self._engine.dispose()
 
-    async def accept(self, invocation_id: str, request: JsonValue) -> Invocation:
+    async def accept(
+        self,
+        invocation_id: str,
+        request: JsonValue,
+        session_id: str | None = None,
+    ) -> Invocation:
         _validate_invocation_id(invocation_id)
+        if session_id is not None:
+            _validate_session_id(session_id)
         serialized_request = _serialize_json_value(request)
         async with self._engine.begin() as connection:
+            queue_order = None
+            if session_id is not None:
+                await self._lock_session(connection, session_id)
+                queue_order = int(
+                    (
+                        await connection.execute(
+                            text(
+                                f"""
+                                SELECT COALESCE(MAX(queue_order), 0) + 1
+                                FROM {self._table}
+                                WHERE session_id=:session_id
+                                """
+                            ),
+                            {"session_id": session_id},
+                        )
+                    ).scalar_one()
+                )
             await connection.execute(
                 text(
                     f"""
-                    INSERT INTO {self._table} (invocation_id, status, request)
-                    VALUES (:invocation_id, 'QUEUED', CAST(:request AS JSONB))
+                    INSERT INTO {self._table}
+                        (invocation_id, session_id, queue_order, status, request)
+                    VALUES
+                        (:invocation_id, :session_id, :queue_order, 'QUEUED', CAST(:request AS JSONB))
                     ON CONFLICT (invocation_id) DO NOTHING
                     """
                 ),
-                {"invocation_id": invocation_id, "request": serialized_request},
+                {
+                    "invocation_id": invocation_id,
+                    "session_id": session_id,
+                    "queue_order": queue_order,
+                    "request": serialized_request,
+                },
             )
             row = (
                 (
                     await connection.execute(
                         text(
                             f"""
-                        SELECT invocation_id, status, attempt,
+                        SELECT invocation_id, session_id, queue_order, status, attempt,
                                request::TEXT AS request_json,
                                response::TEXT AS response_json
                         FROM {self._table}
@@ -340,28 +414,46 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
             )
 
         state = self._to_invocation(row)
-        if state.request != request:
+        if state.request != request or state.session_id != session_id:
             raise InvocationConflictError(
-                f"invocation {invocation_id!r} was already accepted with a different request"
+                f"invocation {invocation_id!r} was already accepted with a different session "
+                "or request"
             )
         return state
 
-    async def get(self, invocation_id: str) -> Invocation | None:
-        _validate_invocation_id(invocation_id)
+    async def get(
+        self,
+        invocation_id: str | None = None,
+        session_id: str | None = None,
+    ) -> Invocation | None:
+        _validate_read_scope(invocation_id, session_id)
+        if invocation_id is not None:
+            predicate = "invocation_id=:invocation_id"
+            parameters = {"invocation_id": invocation_id}
+            ordering = ""
+        else:
+            predicate = "session_id=:session_id AND status IN ('ACTIVE', 'QUEUED')"
+            parameters = {"session_id": session_id}
+            ordering = """
+                ORDER BY CASE WHEN status='ACTIVE' THEN 0 ELSE 1 END,
+                         queue_order
+                LIMIT 1
+            """
         async with self._engine.connect() as connection:
             row = (
                 (
                     await connection.execute(
                         text(
                             f"""
-                        SELECT invocation_id, status, attempt,
+                        SELECT invocation_id, session_id, queue_order, status, attempt,
                                request::TEXT AS request_json,
                                response::TEXT AS response_json
                         FROM {self._table}
-                        WHERE invocation_id=:invocation_id
+                        WHERE {predicate}
+                        {ordering}
                         """
                         ),
-                        {"invocation_id": invocation_id},
+                        parameters,
                     )
                 )
                 .mappings()
@@ -377,9 +469,29 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                         text(
                             f"""
                         SELECT invocation_id
-                        FROM {self._table}
-                        WHERE status='QUEUED'
-                        ORDER BY invocation_id
+                        FROM {self._table} AS candidate
+                        WHERE candidate.status='QUEUED'
+                          AND (
+                              candidate.session_id IS NULL
+                              OR (
+                                  NOT EXISTS (
+                                      SELECT 1
+                                      FROM {self._table} AS active
+                                      WHERE active.session_id=candidate.session_id
+                                        AND active.status='ACTIVE'
+                                  )
+                                  AND NOT EXISTS (
+                                      SELECT 1
+                                      FROM {self._table} AS earlier
+                                      WHERE earlier.session_id=candidate.session_id
+                                        AND earlier.status='QUEUED'
+                                        AND earlier.queue_order < candidate.queue_order
+                                  )
+                              )
+                          )
+                        ORDER BY candidate.session_id NULLS FIRST,
+                                 candidate.queue_order NULLS FIRST,
+                                 candidate.invocation_id
                         """
                         )
                     )
@@ -432,27 +544,61 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
         stale_seconds: float | None,
     ) -> Invocation | None:
         _validate_invocation_id(invocation_id)
-        eligibility = "status='QUEUED'"
+        eligibility = """
+            target.status='QUEUED' AND (
+                target.session_id IS NULL
+                OR (
+                    NOT EXISTS (
+                        SELECT 1
+                        FROM {table} AS active
+                        WHERE active.session_id=target.session_id
+                          AND active.status='ACTIVE'
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM {table} AS earlier
+                        WHERE earlier.session_id=target.session_id
+                          AND earlier.status='QUEUED'
+                          AND earlier.queue_order < target.queue_order
+                    )
+                )
+            )
+        """.format(table=self._table)
         parameters: dict[str, str | float] = {"invocation_id": invocation_id}
         if stale_seconds is not None:
             eligibility = """
-                status='ACTIVE' AND (
-                    heartbeat_at IS NULL
-                    OR heartbeat_at < NOW() - (:stale * INTERVAL '1 second')
+                target.status='ACTIVE' AND (
+                    target.heartbeat_at IS NULL
+                    OR target.heartbeat_at < NOW() - (:stale * INTERVAL '1 second')
                 )
             """
             parameters["stale"] = stale_seconds
         async with self._engine.begin() as connection:
+            session_id = (
+                await connection.execute(
+                    text(
+                        f"""
+                        SELECT session_id
+                        FROM {self._table}
+                        WHERE invocation_id=:invocation_id
+                        """
+                    ),
+                    {"invocation_id": invocation_id},
+                )
+            ).scalar_one_or_none()
+            if session_id is not None:
+                await self._lock_session(connection, str(session_id))
             row = (
                 (
                     await connection.execute(
                         text(
                             f"""
-                        UPDATE {self._table}
+                        UPDATE {self._table} AS target
                         SET status='ACTIVE', attempt=attempt+1, heartbeat_at=NOW()
-                        WHERE invocation_id=:invocation_id
+                        WHERE target.invocation_id=:invocation_id
                           AND ({eligibility})
-                        RETURNING invocation_id, status, attempt,
+                        RETURNING target.invocation_id, target.session_id, target.queue_order,
+                                  target.status, target.attempt,
                                   request::TEXT AS request_json,
                                   response::TEXT AS response_json
                         """
@@ -581,15 +727,17 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
             result = await connection.execute(
                 text(
                     f"""
-                    INSERT INTO {self._events_table} (invocation_id, attempt, event)
-                    SELECT :invocation_id, :attempt, CAST(:event AS JSONB)
-                    WHERE EXISTS (
+                    WITH owned_invocation AS (
                         SELECT 1
                         FROM {self._table}
                         WHERE invocation_id=:invocation_id
                           AND attempt=:attempt
                           AND status='ACTIVE'
+                        FOR UPDATE
                     )
+                    INSERT INTO {self._events_table} (invocation_id, attempt, event)
+                    SELECT :invocation_id, :attempt, CAST(:event AS JSONB)
+                    FROM owned_invocation
                     RETURNING sequence_number
                     """
                 ),
@@ -604,27 +752,39 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
 
     async def events(
         self,
-        invocation_id: str,
+        invocation_id: str | None = None,
         after_sequence: int | None = None,
+        session_id: str | None = None,
     ) -> list[InvocationEvent]:
-        """Return ordered events for one invocation after an optional cursor."""
-        _validate_invocation_id(invocation_id)
+        """Return ordered events for one invocation or session after an optional cursor."""
+        _validate_read_scope(invocation_id, session_id)
+        if invocation_id is not None:
+            predicate = "event.invocation_id=:invocation_id"
+            parameters: dict[str, str | int | None] = {
+                "invocation_id": invocation_id,
+                "after_sequence": after_sequence,
+            }
+        else:
+            predicate = "invocation.session_id=:session_id"
+            parameters = {"session_id": session_id, "after_sequence": after_sequence}
         async with self._engine.connect() as connection:
             result = await connection.execute(
                 text(
                     f"""
-                    SELECT sequence_number, invocation_id, attempt,
-                           event::TEXT AS event_json
-                    FROM {self._events_table}
-                    WHERE invocation_id=:invocation_id
-                      AND (:after_sequence IS NULL OR sequence_number > :after_sequence)
-                    ORDER BY sequence_number
+                    SELECT event.sequence_number, event.invocation_id, event.attempt,
+                           event.event::TEXT AS event_json
+                    FROM {self._events_table} AS event
+                    JOIN {self._table} AS invocation
+                      ON invocation.invocation_id=event.invocation_id
+                    WHERE {predicate}
+                      AND (
+                          CAST(:after_sequence AS BIGINT) IS NULL
+                          OR event.sequence_number > :after_sequence
+                      )
+                    ORDER BY event.sequence_number
                     """
                 ),
-                {
-                    "invocation_id": invocation_id,
-                    "after_sequence": after_sequence,
-                },
+                parameters,
             )
             rows = result.mappings().all()
         return [
@@ -645,4 +805,12 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
             attempt=int(row["attempt"]),
             request=json.loads(row["request_json"]),
             response=json.loads(row["response_json"]) if row["response_json"] else None,
+            session_id=str(row["session_id"]) if row["session_id"] is not None else None,
+            queue_order=int(row["queue_order"]) if row["queue_order"] is not None else None,
+        )
+
+    async def _lock_session(self, connection: Any, session_id: str) -> None:
+        await connection.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:session_lock_key, 0))"),
+            {"session_lock_key": f"{self._table}:{session_id}"},
         )

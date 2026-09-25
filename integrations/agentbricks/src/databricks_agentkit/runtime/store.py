@@ -30,6 +30,20 @@ def _validate_invocation_id(invocation_id: str) -> None:
         raise ValueError("invocation_id must not be empty")
 
 
+def _validate_session_id(session_id: str) -> None:
+    if not session_id:
+        raise ValueError("session_id must not be empty")
+
+
+def _validate_read_scope(invocation_id: str | None, session_id: str | None) -> None:
+    if (invocation_id is None) == (session_id is None):
+        raise ValueError("exactly one of invocation_id or session_id must be provided")
+    if invocation_id is not None:
+        _validate_invocation_id(invocation_id)
+    if session_id is not None:
+        _validate_session_id(session_id)
+
+
 class RuntimeStore(Protocol):
     """Invocation state operations shared by local and durable Runtime Stores."""
 
@@ -41,15 +55,25 @@ class RuntimeStore(Protocol):
         """Release the store's connections and other resources."""
         ...
 
-    async def accept(self, invocation_id: str, request: JsonValue) -> Invocation:
+    async def accept(
+        self,
+        invocation_id: str,
+        request: JsonValue,
+        session_id: str | None = None,
+    ) -> Invocation:
         """Create an invocation or return the identical request accepted for this ID.
 
-        Reusing an invocation ID with a different request raises :class:`InvocationConflictError`.
+        Reusing an invocation ID with a different request or session raises
+        :class:`InvocationConflictError`.
         """
         ...
 
-    async def get(self, invocation_id: str) -> Invocation | None:
-        """Return the latest invocation state, or ``None`` for an unknown ID."""
+    async def get(
+        self,
+        invocation_id: str | None = None,
+        session_id: str | None = None,
+    ) -> Invocation | None:
+        """Return state for one invocation or the active/next invocation in a session."""
         ...
 
     async def claim(self, invocation_id: str) -> Invocation | None:
@@ -80,10 +104,11 @@ class RuntimeStore(Protocol):
 
     async def events(
         self,
-        invocation_id: str,
+        invocation_id: str | None = None,
         after_sequence: int | None = None,
+        session_id: str | None = None,
     ) -> list[InvocationEvent]:
-        """Return invocation events after the optional exclusive replay cursor."""
+        """Return invocation or session events after the optional exclusive replay cursor."""
         ...
 
 
@@ -101,28 +126,70 @@ class InMemoryRuntimeStore(RuntimeStore):
     async def close(self) -> None:
         pass
 
-    async def accept(self, invocation_id: str, request: JsonValue) -> Invocation:
+    async def accept(
+        self,
+        invocation_id: str,
+        request: JsonValue,
+        session_id: str | None = None,
+    ) -> Invocation:
         _validate_invocation_id(invocation_id)
+        if session_id is not None:
+            _validate_session_id(session_id)
         async with self._lock:
             existing = self.states.get(invocation_id)
             if existing is not None:
-                if existing.request != request:
+                if existing.request != request or existing.session_id != session_id:
                     raise InvocationConflictError(invocation_id)
                 return copy.deepcopy(existing)
+            queue_order = None
+            if session_id is not None:
+                queue_order = (
+                    max(
+                        (
+                            state.queue_order or 0
+                            for state in self.states.values()
+                            if state.session_id == session_id
+                        ),
+                        default=0,
+                    )
+                    + 1
+                )
             state = Invocation(
                 invocation_id=invocation_id,
                 status=InvocationStatus.QUEUED,
                 attempt=0,
                 request=copy.deepcopy(request),
                 response=None,
+                session_id=session_id,
+                queue_order=queue_order,
             )
             self.states[invocation_id] = state
             return copy.deepcopy(state)
 
-    async def get(self, invocation_id: str) -> Invocation | None:
-        _validate_invocation_id(invocation_id)
+    async def get(
+        self,
+        invocation_id: str | None = None,
+        session_id: str | None = None,
+    ) -> Invocation | None:
+        _validate_read_scope(invocation_id, session_id)
         async with self._lock:
-            state = self.states.get(invocation_id)
+            if invocation_id is not None:
+                state = self.states.get(invocation_id)
+            else:
+                candidates = [
+                    state
+                    for state in self.states.values()
+                    if state.session_id == session_id
+                    and state.status in {InvocationStatus.ACTIVE, InvocationStatus.QUEUED}
+                ]
+                state = min(
+                    candidates,
+                    key=lambda candidate: (
+                        0 if candidate.status == InvocationStatus.ACTIVE else 1,
+                        candidate.queue_order or 0,
+                    ),
+                    default=None,
+                )
             return copy.deepcopy(state) if state is not None else None
 
     async def claim(self, invocation_id: str) -> Invocation | None:
@@ -131,12 +198,30 @@ class InMemoryRuntimeStore(RuntimeStore):
             state = self.states.get(invocation_id)
             if state is None or state.status != InvocationStatus.QUEUED:
                 return None
+            if state.session_id is not None:
+                session_states = [
+                    candidate
+                    for candidate in self.states.values()
+                    if candidate.session_id == state.session_id
+                ]
+                if any(candidate.status == InvocationStatus.ACTIVE for candidate in session_states):
+                    return None
+                queued = [
+                    candidate
+                    for candidate in session_states
+                    if candidate.status == InvocationStatus.QUEUED
+                ]
+                next_queued = min(queued, key=lambda candidate: candidate.queue_order or 0)
+                if next_queued.invocation_id != invocation_id:
+                    return None
             claimed = Invocation(
                 invocation_id=invocation_id,
                 status=InvocationStatus.ACTIVE,
                 attempt=state.attempt + 1,
                 request=copy.deepcopy(state.request),
                 response=None,
+                session_id=state.session_id,
+                queue_order=state.queue_order,
             )
             self.states[invocation_id] = claimed
             self._append_event(invocation_id, claimed.attempt, {"type": "run.started"})
@@ -153,6 +238,8 @@ class InMemoryRuntimeStore(RuntimeStore):
                 attempt=state.attempt,
                 request=state.request,
                 response=copy.deepcopy(response),
+                session_id=state.session_id,
+                queue_order=state.queue_order,
             )
             self._append_event(invocation_id, attempt, {"type": "run.completed"})
             return True
@@ -168,6 +255,8 @@ class InMemoryRuntimeStore(RuntimeStore):
                 attempt=state.attempt,
                 request=state.request,
                 response=None,
+                session_id=state.session_id,
+                queue_order=state.queue_order,
             )
             self._append_event(invocation_id, attempt, {"type": "run.failed"})
             return True
@@ -187,15 +276,20 @@ class InMemoryRuntimeStore(RuntimeStore):
 
     async def events(
         self,
-        invocation_id: str,
+        invocation_id: str | None = None,
         after_sequence: int | None = None,
+        session_id: str | None = None,
     ) -> list[InvocationEvent]:
-        _validate_invocation_id(invocation_id)
+        _validate_read_scope(invocation_id, session_id)
         async with self._lock:
             return [
                 copy.deepcopy(event)
                 for event in self.persisted_events
-                if event.invocation_id == invocation_id
+                if (
+                    event.invocation_id == invocation_id
+                    if invocation_id is not None
+                    else self.states[event.invocation_id].session_id == session_id
+                )
                 and (after_sequence is None or event.sequence_number > after_sequence)
             ]
 

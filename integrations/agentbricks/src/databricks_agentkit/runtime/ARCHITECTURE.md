@@ -14,7 +14,7 @@ DurableAgentServer
 Runtime
   submit, wait/poll, and event replay
   ├── RuntimeStore
-  │     accept/get/claim/complete/fail/events
+  │     session-aware accept/get/claim/complete/fail/events
   │     ├── InMemoryRuntimeStore
   │     └── LakebaseDurableRuntimeStore
   └── InvocationExecutor
@@ -39,8 +39,18 @@ determines the execution mode:
 `RuntimeStore` deliberately has no heartbeat operation or heartbeat state. Those lease details are
 owned by `DurableRuntimeStore` and its Lakebase implementation.
 
-`RuntimeStore.accept(invocation_id, request)` defines idempotency. The same ID and request returns
-the existing invocation; the same ID and different request raises `InvocationConflictError`.
+`RuntimeStore.accept(invocation_id, request, session_id=...)` defines idempotency. Existing callers
+may omit the session. When supplied, the store assigns a queue position and returns the existing
+invocation only when its ID, session, and request all match.
+
+Invocations in one session execute serially. A claim succeeds only for the earliest queued
+invocation when that session has no active invocation. Recovery claims the same stale active
+invocation and preserves its queue position. Invocation and event reads can target either one
+invocation or one session; session state returns the active invocation, then the earliest queued
+invocation, or `None`. Each claimed attempt receives the saved session ID in its execution context.
+
+All workers sharing a Runtime Store must support session-aware claims before callers start supplying
+session IDs. An older worker does not enforce session order and can claim a later queued invocation.
 
 The durable executor always scans for persisted `QUEUED` invocations, including after process
 restart, and starts their first attempt through `@app.invoke`. Reads also schedule queued work as a

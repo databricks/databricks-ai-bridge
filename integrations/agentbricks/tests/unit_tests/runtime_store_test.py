@@ -56,6 +56,13 @@ def mapping_result(value):
     return result
 
 
+def scalar_result(value):
+    result = MagicMock()
+    result.scalar_one.return_value = value
+    result.scalar_one_or_none.return_value = value
+    return result
+
+
 def test_environment_store_is_local_without_an_attached_resource(monkeypatch):
     monkeypatch.delenv(RUNTIME_STORE_LOCAL_ENV, raising=False)
     monkeypatch.delenv(RUNTIME_STORE_LAKEBASE_BRANCH_ENV, raising=False)
@@ -281,6 +288,8 @@ def test_environment_store_local_marker_overrides_attached_resource(monkeypatch)
 def invocation_row(**overrides):
     row = {
         "invocation_id": "session-1",
+        "session_id": None,
+        "queue_order": None,
         "status": "QUEUED",
         "attempt": 0,
         "request_json": '{"input": "hello"}',
@@ -300,12 +309,17 @@ async def test_initialize_creates_invocation_and_event_tables():
     sql = " ".join(str(call.args[0]) for call in connection.execute.await_args_list)
     assert "databricks_agentkit_runtime.invocations" in sql
     assert "invocation_id TEXT PRIMARY KEY" in sql
+    assert "ADD COLUMN IF NOT EXISTS session_id TEXT" in sql
+    assert "ADD COLUMN IF NOT EXISTS queue_order BIGINT" in sql
     assert "request JSONB NOT NULL" in sql
     assert "response JSONB" in sql
     assert "jsonb_typeof(request)" not in sql
     assert "jsonb_typeof(response)" not in sql
     assert "databricks_agentkit_runtime.invocation_events" in sql
     assert "sequence_number BIGSERIAL PRIMARY KEY" in sql
+    assert "invocations_session_queue_order_idx" in sql
+    assert "invocations_active_session_idx" in sql
+    assert "WHERE session_id IS NOT NULL AND status='ACTIVE'" in sql
     lakebase.create_schema.assert_awaited_once()
 
 
@@ -333,9 +347,50 @@ async def test_accept_rejects_same_id_with_different_request():
 
 
 @pytest.mark.asyncio
+async def test_accept_assigns_queue_order_while_holding_the_session_lock():
+    lakebase, connection = mock_lakebase()
+    connection.execute.side_effect = [
+        MagicMock(),
+        scalar_result(4),
+        MagicMock(),
+        mapping_result(
+            invocation_row(
+                invocation_id="invocation-2",
+                session_id="session-1",
+                queue_order=4,
+            )
+        ),
+    ]
+    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
+
+    state = await store.accept(
+        "invocation-2",
+        {"input": "hello"},
+        session_id="session-1",
+    )
+
+    assert state.session_id == "session-1"
+    assert state.queue_order == 4
+    lock_query = str(connection.execute.await_args_list[0].args[0])
+    allocation_query = str(connection.execute.await_args_list[1].args[0])
+    insert_parameters = connection.execute.await_args_list[2].args[1]
+    assert "pg_advisory_xact_lock" in lock_query
+    assert "MAX(queue_order)" in allocation_query
+    assert insert_parameters["session_id"] == "session-1"
+    assert insert_parameters["queue_order"] == 4
+    assert connection.execute.await_args_list[0].args[1] == {
+        "session_lock_key": "databricks_agentkit_runtime.invocations:session-1"
+    }
+
+
+@pytest.mark.asyncio
 async def test_claim_returns_request_and_incremented_attempt():
     lakebase, connection = mock_lakebase()
-    connection.execute.return_value = mapping_result(invocation_row(status="ACTIVE", attempt=2))
+    connection.execute.side_effect = [
+        scalar_result(None),
+        mapping_result(invocation_row(status="ACTIVE", attempt=2)),
+        MagicMock(),
+    ]
     store = LakebaseDurableRuntimeStore(lakebase=lakebase)
 
     state = await store.claim_recoverable("session-1", 10)
@@ -343,10 +398,75 @@ async def test_claim_returns_request_and_incremented_attempt():
     assert state is not None
     assert state.attempt == 2
     assert state.request == {"input": "hello"}
-    claim_parameters = connection.execute.await_args_list[0].args[1]
+    claim_parameters = connection.execute.await_args_list[1].args[1]
     assert claim_parameters == {"invocation_id": "session-1", "stale": 10}
-    event_parameters = connection.execute.await_args_list[1].args[1]
+    event_parameters = connection.execute.await_args_list[2].args[1]
     assert event_parameters["event"] == '{"type": "run.started"}'
+
+
+@pytest.mark.asyncio
+async def test_claim_serializes_session_work_and_rechecks_fifo_eligibility():
+    lakebase, connection = mock_lakebase()
+    connection.execute.side_effect = [
+        scalar_result("session-1"),
+        MagicMock(),
+        mapping_result(
+            invocation_row(
+                invocation_id="invocation-2",
+                session_id="session-1",
+                queue_order=2,
+                status="ACTIVE",
+                attempt=1,
+            )
+        ),
+        MagicMock(),
+    ]
+    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
+
+    state = await store.claim("invocation-2")
+
+    assert state is not None
+    assert state.session_id == "session-1"
+    assert state.queue_order == 2
+    assert "pg_advisory_xact_lock" in str(connection.execute.await_args_list[1].args[0])
+    claim_query = str(connection.execute.await_args_list[2].args[0])
+    assert "active.status='ACTIVE'" in claim_query
+    assert "earlier.status='QUEUED'" in claim_query
+    assert "earlier.queue_order < target.queue_order" in claim_query
+
+
+@pytest.mark.asyncio
+async def test_recovery_preserves_session_and_queue_order():
+    lakebase, connection = mock_lakebase()
+    connection.execute.side_effect = [
+        scalar_result("session-1"),
+        MagicMock(),
+        mapping_result(
+            invocation_row(
+                invocation_id="invocation-1",
+                session_id="session-1",
+                queue_order=1,
+                status="ACTIVE",
+                attempt=3,
+            )
+        ),
+        MagicMock(),
+    ]
+    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
+
+    state = await store.claim_recoverable("invocation-1", 10)
+
+    assert state is not None
+    assert (state.session_id, state.queue_order, state.attempt) == ("session-1", 1, 3)
+    claim_query = str(connection.execute.await_args_list[2].args[0])
+    assert "target.status='ACTIVE'" in claim_query
+    assert "heartbeat_at <" in claim_query
+    assert (
+        "session_id=" not in claim_query.split("SET", maxsplit=1)[1].split("WHERE", maxsplit=1)[0]
+    )
+    assert (
+        "queue_order=" not in claim_query.split("SET", maxsplit=1)[1].split("WHERE", maxsplit=1)[0]
+    )
 
 
 @pytest.mark.asyncio
@@ -362,6 +482,9 @@ async def test_queued_invocation_query_only_selects_queued_work():
     query = str(connection.execute.await_args.args[0])
     assert "status='QUEUED'" in query
     assert "heartbeat_at" not in query
+    assert "active.status='ACTIVE'" in query
+    assert "earlier.status='QUEUED'" in query
+    assert "earlier.queue_order < candidate.queue_order" in query
 
 
 @pytest.mark.asyncio
@@ -415,6 +538,46 @@ async def test_get_decodes_any_cached_json_response(response_json):
 
 
 @pytest.mark.asyncio
+async def test_get_by_session_prefers_active_then_earliest_queued_invocation():
+    lakebase, connection = mock_lakebase()
+    connection.execute.return_value = mapping_result(
+        invocation_row(
+            invocation_id="invocation-2",
+            session_id="session-1",
+            queue_order=2,
+            status="ACTIVE",
+            attempt=1,
+        )
+    )
+    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
+
+    state = await store.get(session_id="session-1")
+
+    assert state is not None
+    assert state.invocation_id == "invocation-2"
+    query = str(connection.execute.await_args.args[0])
+    assert "status IN ('ACTIVE', 'QUEUED')" in query
+    assert "CASE WHEN status='ACTIVE' THEN 0 ELSE 1 END" in query
+    assert "queue_order" in query
+    assert "LIMIT 1" in query
+
+
+@pytest.mark.asyncio
+async def test_reads_require_exactly_one_invocation_or_session_selector():
+    lakebase, _ = mock_lakebase()
+    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
+
+    with pytest.raises(ValueError, match="exactly one"):
+        await store.get()
+    with pytest.raises(ValueError, match="exactly one"):
+        await store.get("invocation-1", session_id="session-1")
+    with pytest.raises(ValueError, match="exactly one"):
+        await store.events()
+    with pytest.raises(ValueError, match="exactly one"):
+        await store.events("invocation-1", session_id="session-1")
+
+
+@pytest.mark.asyncio
 async def test_complete_persists_response_and_lifecycle_event_atomically():
     lakebase, connection = mock_lakebase()
     connection.execute.return_value = MagicMock(rowcount=1)
@@ -463,6 +626,10 @@ async def test_append_event_returns_replay_cursor_for_owned_attempt():
         "attempt": 2,
         "event": '{"type": "progress", "step": 1}',
     }
+    query = str(connection.execute.await_args.args[0])
+    assert "status='ACTIVE'" in query
+    assert "attempt=:attempt" in query
+    assert "FOR UPDATE" in query
 
 
 @pytest.mark.asyncio
@@ -486,6 +653,52 @@ async def test_events_returns_ordered_replay_data():
     assert events[0].sequence_number == 8
     assert events[0].attempt == 2
     assert events[0].event == {"type": "progress", "step": 2}
+
+
+@pytest.mark.asyncio
+async def test_events_supports_legacy_positional_cursor():
+    lakebase, connection = mock_lakebase()
+    connection.execute.return_value = mapping_result([])
+    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
+
+    await store.events("invocation-1", 7)
+
+    assert connection.execute.await_args.args[1] == {
+        "invocation_id": "invocation-1",
+        "after_sequence": 7,
+    }
+
+
+@pytest.mark.asyncio
+async def test_events_casts_an_empty_cursor_for_postgres_type_inference():
+    lakebase, connection = mock_lakebase()
+    connection.execute.return_value = mapping_result([])
+    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
+
+    await store.events("invocation-1")
+
+    query = str(connection.execute.await_args.args[0])
+    assert "CAST(:after_sequence AS BIGINT) IS NULL" in query
+    assert connection.execute.await_args.args[1]["after_sequence"] is None
+
+
+@pytest.mark.asyncio
+async def test_events_by_session_span_invocations_in_replay_order():
+    lakebase, connection = mock_lakebase()
+    connection.execute.return_value = mapping_result([])
+    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
+
+    await store.events(session_id="session-1", after_sequence=7)
+
+    query = str(connection.execute.await_args.args[0])
+    assert "invocation.session_id=:session_id" in query
+    assert "invocation.invocation_id=event.invocation_id" in query
+    assert "event.sequence_number > :after_sequence" in query
+    assert "ORDER BY event.sequence_number" in query
+    assert connection.execute.await_args.args[1] == {
+        "session_id": "session-1",
+        "after_sequence": 7,
+    }
 
 
 def test_schema_name_is_validated():
