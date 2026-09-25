@@ -1,12 +1,12 @@
-"""`ab deploy` and the `ab deployments` group — manage agent deployments.
+"""`agentbricks deploy` and the `agentbricks deployments` group — manage agent deployments.
 
-`ab deploy` is the integrated entry point: it provisions the memory/session stores
+`agentbricks deploy` is the integrated entry point: it provisions the memory/session stores
 bound in `agent.toml`, grants the app's service principal access to them, then rolls out
 the deployment. Agent Bricks Runtime deployments receive a persistent Runtime Store; a temporary rollout
 switch chooses between the legacy per-app Lakebase project and the service-managed database.
 `agent.toml` is the CLI's authoring source, resolved here into the `AGENT_MEMORY_STORE` /
 `AGENT_SESSION_STORE` env vars written into `app.yaml` — the runtime reads those, never
-`agent.toml`. `ab deployments` covers the lifecycle verbs
+`agent.toml`. `agentbricks deployments` covers the lifecycle verbs
 (`list`/`get`/`logs`/`start`/`stop`/`delete`).
 
 Deployments run on the Databricks Apps runtime, which this module drives via the
@@ -182,7 +182,7 @@ def _wait_for_running(name: str, profile: Optional[str], timeout_s: int = 300) -
         time.sleep(5)
     raise AgentCliError(
         f"App '{name}' did not reach a running state within {timeout_s}s.",
-        hint=f"Check `ab deployments get {name}`, then re-run deploy once it's running.",
+        hint=f"Check `agentbricks deployments get {name}`, then re-run deploy once it's running.",
     )
 
 
@@ -331,7 +331,7 @@ def resource_bindings(
 ) -> tuple[Optional[str], Optional[str], Optional[str]]:
     """The (memory store, session store, tracing experiment) bound in agent.toml.
 
-    agent.toml is the single source of truth for an agent's resources. Both `ab dev` and `ab deploy`
+    agent.toml is the single source of truth for an agent's resources. Both `agentbricks dev` and `agentbricks deploy`
     resolve through here so the resource env/notices AND the deploy-time provisioning honor the
     same bindings. A missing agent.toml means nothing is bound; an invalid manifest fails with a clear
     error.
@@ -349,7 +349,7 @@ def resource_bindings(
 def _resolve_deployment_name(project, name: Optional[str]) -> str:
     """The deployment's base name: the NAME arg if given, else agent.toml's [agent].deployment_name.
 
-    Errors when neither is available, pointing the user at the one-time `ab deploy <name>`.
+    Errors when neither is available, pointing the user at the one-time `agentbricks deploy <name>`.
     """
     if name is not None and name.strip():
         return name.strip()
@@ -357,7 +357,7 @@ def _resolve_deployment_name(project, name: Optional[str]) -> str:
         return str(project.deployment_name)
     raise AgentCliError(
         "No deployment name given and none recorded in agent.toml.",
-        hint="Run `ab deploy <name>` once to name the agent; later `ab deploy` can omit it.",
+        hint="Run `agentbricks deploy <name>` once to name the agent; later `agentbricks deploy` can omit it.",
     )
 
 
@@ -366,8 +366,8 @@ def _reconcile_declared_stores(
 ) -> Optional[str]:
     """Create any store DECLARED in agent.toml that doesn't exist yet; return the memory store's id.
 
-    `ab deploy` is the only verb that provisions stores. It reconciles to the names declared in
-    agent.toml (by `ab init` or `ab memory/sessions bind`) — never inventing a name and never
+    `agentbricks deploy` is the only verb that provisions stores. It reconciles to the names declared in
+    agent.toml (by `agentbricks init` or `agentbricks memory/sessions bind`) — never inventing a name and never
     writing bindings back into the manifest. A store created here gets a one-line notice. The memory
     store's bare id is returned so the caller can wire AGENT_MEMORY_STORE (the entries API is keyed
     by id, not display name); session stores resolve by name and need nothing here.
@@ -419,7 +419,7 @@ class MlflowTracingConfig:
     """The MLflow config that binds a deployed agent to its workspace experiment.
 
     The agent enables tracing when it sees both a destination (the workspace tracking uri) and an
-    experiment id; ``env`` renders them as the two env vars wired into app.yaml. (`ab dev` builds
+    experiment id; ``env`` renders them as the two env vars wired into app.yaml. (`agentbricks dev` builds
     its own local tracing env instead - see ``cli.tracing.start_local_tracing_server``.)
     """
 
@@ -463,7 +463,7 @@ def _grant_store_access(
     return None
 
 
-# --- ab deploy -----------------------------------------------------------
+# --- agentbricks deploy -----------------------------------------------------------
 
 
 @click.command()
@@ -515,11 +515,11 @@ def deploy(
     app's own identity — no model keys to configure — and `deploy` also reconciles the stores declared
     in agent.toml and wires in any tracing.
 
-    NAME is recorded in agent.toml on the first deploy, so a later `ab deploy` from the project
+    NAME is recorded in agent.toml on the first deploy, so a later `agentbricks deploy` from the project
     directory can omit it (passing NAME again updates the recorded name). New apps are named
-    `agent-bricks-<name>`. Use the full app name with the `ab deployments` commands.
+    `agent-bricks-<name>`. Use the full app name with the `agentbricks deployments` commands.
 
-    Any memory/session store declared in agent.toml (for example, by `ab memory/sessions bind`)
+    Any memory/session store declared in agent.toml (for example, by `agentbricks memory/sessions bind`)
     is created if it doesn't exist yet; agent.toml itself is never modified for stores.
 
     Scaling to multiple instances (--instances) uses best-effort sticky routing, so a browser
@@ -580,21 +580,21 @@ def deploy(
         if deployment_exists is None:
             deployment_exists = user_scope_plan.existing_scopes is not None
         apply_app_user_scope_update(user_scope_plan, instances=instances)
-    # Persist the base name so a later `ab deploy` (no NAME) resolves to the same app.
+    # Persist the base name so a later `agentbricks deploy` (no NAME) resolves to the same app.
     if project is not None and project.set_deployment_name(base_name):
         project.write()
     instance_args = _instance_args(instances)
     client = obj.client()
     use_managed_runtime_store = _USE_MANAGED_RUNTIME_STORE
 
-    # 1. Reconcile the stores DECLARED in agent.toml: create any that don't exist yet. `ab deploy`
+    # 1. Reconcile the stores DECLARED in agent.toml: create any that don't exist yet. `agentbricks deploy`
     #    is the only reconcile-to-cloud verb; agent.toml is the source of truth and is never rewritten.
     memory_store, session_store, _ = resource_bindings(source_dir)
     memory_store_id = _reconcile_declared_stores(memory_store, session_store, client)
 
-    # 2. Provision tracing when bound (`ab init` binds a default experiment): get-or-create the
+    # 2. Provision tracing when bound (`agentbricks init` binds a default experiment): get-or-create the
     #    experiment NAME from agent.toml and wire the two env vars the runtime reads. Resolved by name,
-    #    never a stored id, and nothing is written back to agent.toml. (`ab dev` traces to a local
+    #    never a stored id, and nothing is written back to agent.toml. (`agentbricks dev` traces to a local
     #    MLflow server instead and never touches this workspace experiment.) The app's SP is granted
     #    write access to it in step 5 (an experiment app resource, plus MODIFY on its UC OTEL tables
     #    when UC-backed). Best-effort: if it can't be set up
@@ -791,8 +791,8 @@ def deploy(
         return
 
     steps: list[str | tuple[str, str]] = [
-        (f"ab deployments get {name}", "Check its status and URL"),
-        (f"ab deployments logs {name}", "Tail its logs"),
+        (f"agentbricks deployments get {name}", "Check its status and URL"),
+        (f"agentbricks deployments logs {name}", "Tail its logs"),
     ]
     if app_url:
         steps.insert(0, f"Open the deployed agent: {app_url}")
@@ -809,7 +809,7 @@ def deploy(
         )
     if trace_experiment_id is None:
         # Deployed without tracing - either unbound, or a bound experiment that couldn't be set up.
-        # Tell the developer (in case it wasn't intended) and point at `ab tracing bind`; append the
+        # Tell the developer (in case it wasn't intended) and point at `agentbricks tracing bind`; append the
         # cause when setup actually failed.
         step = (
             "Deployed without tracing. "
@@ -840,7 +840,7 @@ def deploy(
     )
 
 
-# --- ab deployments <lifecycle> ------------------------------------------
+# --- agentbricks deployments <lifecycle> ------------------------------------------
 
 
 @click.group()

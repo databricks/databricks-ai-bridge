@@ -9,9 +9,9 @@ examples. Keep this file as a development map rather than repeating those rules.
 ## Commands
 
 ```bash
-ab dev
+agentbricks dev
 uv run pytest
-ab --profile <profile> deploy <name> --source .
+agentbricks --profile <profile> deploy <name> --source .
 ```
 
 ## Request contract
@@ -58,10 +58,10 @@ Agents SDK does not expose checkpoint continuation.
 
 ## State and recovery
 
-- Invocation state/events: in-memory in `ab dev`; Lakebase when `ab deploy` attaches a Runtime
+- Invocation state/events: in-memory in `agentbricks dev`; Lakebase when `agentbricks deploy` attaches a Runtime
   Store.
-- Conversation transcript: in-process in `ab dev`; managed Session Store when bound, on `ab deploy`.
-- Long-term memory: off in `ab dev`; managed Memory Store when bound, on `ab deploy`.
+- Conversation transcript: in-process in `agentbricks dev`; managed Session Store when bound, on `agentbricks deploy`.
+- Long-term memory: off in `agentbricks dev`; managed Memory Store when bound, on `agentbricks deploy`.
 - OpenAI HITL `RunState`: process-local even with Session Store; it does not survive worker loss.
 - Recovery: replay the persisted application input against the same session.
 

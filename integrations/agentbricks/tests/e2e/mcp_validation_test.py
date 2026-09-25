@@ -22,12 +22,12 @@ pytestmark = pytest.mark.skipif(
 def test_mcp_registration_validates_before_writing(tmp_path: pathlib.Path, framework: str):
     profile = os.environ["AGENTBRICKS_E2E_PROFILE"]
     service = os.environ.get("AGENTBRICKS_E2E_MCP_SERVICE", "system.ai.web_search")
-    ab = pathlib.Path(sys.executable).with_name("ab")
-    assert ab.is_file(), "Install the Agent Bricks CLI into the test environment first."
+    agentbricks = pathlib.Path(sys.executable).with_name("agentbricks")
+    assert agentbricks.is_file(), "Install the Agent Bricks CLI into the test environment first."
     project = tmp_path / f"agent-{framework}"
 
     def run(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-        command = [str(ab), "--profile", profile, "--output", "json", *args]
+        command = [str(agentbricks), "--profile", profile, "--output", "json", *args]
         result = subprocess.run(command, capture_output=True, text=True, timeout=90)
         sys.stdout.write(
             f"$ {' '.join(command)}\nexit={result.returncode}\n{result.stdout}{result.stderr}\n"

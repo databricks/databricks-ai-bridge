@@ -24,7 +24,7 @@ _REAL_RESOLVE_TRACE = deploy_mod.get_or_create_trace_experiment
 
 @pytest.fixture(autouse=True)
 def _compute_active(monkeypatch):
-    # `ab deploy` now waits for compute on every deploy; report ACTIVE so the wait returns
+    # `agentbricks deploy` now waits for compute on every deploy; report ACTIVE so the wait returns
     # immediately. Tests that exercise _wait_for_running directly override _app_compute_state.
     monkeypatch.setattr(deploy_mod, "_app_compute_state", lambda name, profile: "ACTIVE")
 
@@ -818,17 +818,19 @@ def test_deploy_recommends_invoking_deployed_agent(
     )
 
     assert result.exit_code == 0, result.output
-    commands = [line for line in result.output.splitlines() if line.startswith("ab endpoint")]
+    commands = [
+        line for line in result.output.splitlines() if line.startswith("agentbricks endpoint")
+    ]
     assert len(commands) == 1, result.output
     command = commands[0]
     path = "/api/invocations" if server == "agentbricks" else "/invocations"
-    assert f"ab endpoint invoke agent-bricks-myapp --path {path} --json " in command
+    assert f"agentbricks endpoint invoke agent-bricks-myapp --path {path} --json " in command
     assert "│" not in command
     assert ("$(uuidgen)" in command) is (server == "agentbricks")
     panel, example = result.output.split("Invoke with Agent Bricks\n")
     assert panel.splitlines()[-1].startswith("╰")
     assert example.splitlines() == [command]
-    for existing_command in ("ab deployments get", "ab deployments logs"):
+    for existing_command in ("agentbricks deployments get", "agentbricks deployments logs"):
         assert any(line.startswith("│") and existing_command in line for line in panel.splitlines())
     assert "Runtime Store" not in result.output
     assert "runtime-agent-bricks-myapp-550e8400-e29b-41d4-a716-446655440000" not in result.output
@@ -1115,7 +1117,7 @@ def test_deploy_proceeds_when_trace_grant_fails(tmp_path, monkeypatch):
 
 
 def test_deploy_reconciles_trace_resources_even_when_unbound(tmp_path, monkeypatch):
-    # Unbound (ab tracing unbind): deploy still reconciles the agentbricks-owned trace set - passing
+    # Unbound (agentbricks tracing unbind): deploy still reconciles the agentbricks-owned trace set - passing
     # experiment_id=None prunes stale agentbricks-trace-* resources left by a previously bound deploy.
     src = tmp_path / "app"
     src.mkdir()
@@ -1201,8 +1203,8 @@ def test_deploy_proceeds_when_tracing_provisioning_raises(tmp_path: pathlib.Path
     assert result.exit_code == 0, result.output  # deploy still succeeded
     env_entries = yaml.safe_load((src / "app.yaml").read_text()).get("env") or []
     assert not any(e["name"].startswith("MLFLOW") for e in env_entries)  # tracing skipped
-    out = " ".join(result.output.split())
-    assert "Deployed without tracing" in out and "ab tracing bind" in out  # guidance shown
+    out = " ".join(result.output.replace("│", " ").split())
+    assert "Deployed without tracing" in out and "agentbricks tracing bind" in out  # guidance shown
     assert "mlflow create_experiment blew up" in out  # the cause is surfaced
     trace_grant.assert_not_called()  # resolve errored -> reconcile skipped, grants left intact
 
@@ -1221,9 +1223,9 @@ def test_deploy_notifies_when_tracing_unbound(tmp_path: pathlib.Path, monkeypatc
     )
     result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
     assert result.exit_code == 0, result.output
-    out = " ".join(result.output.split())
+    out = " ".join(result.output.replace("│", " ").split())
     assert "Deployed without tracing" in out
-    assert "ab tracing bind" in out  # points at the (parameter-free) enable command
+    assert "agentbricks tracing bind" in out  # points at the (parameter-free) enable command
     assert "Tracing setup failed" not in out  # unbound is not an error, so no cause suffix
 
 
@@ -1684,7 +1686,7 @@ def test_deploy_creates_declared_but_missing_store_without_writing_agent_toml(
 
 
 def test_deploy_grants_bound_store(tmp_path: pathlib.Path, monkeypatch):
-    # `ab sessions bind` then plain `ab deploy`: the binding must drive both the
+    # `agentbricks sessions bind` then plain `agentbricks deploy`: the binding must drive both the
     # app.yaml env AND the SP access grant, or the deployed app can't reach its durable store.
     src = tmp_path / "app"
     src.mkdir()

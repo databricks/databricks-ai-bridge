@@ -11,7 +11,7 @@ from databricks_agentbricks._group import apply_group_class, dim
 
 CommandPath = tuple[str, ...]
 
-# Root commands grouped by intent, so the top-level `ab --help` reads as a workflow instead of a
+# Root commands grouped by intent, so the top-level `agentbricks --help` reads as a workflow instead of a
 # flat alphabetical dump. Ordered SETUP → DEVELOP → SHIP, matching the
 # getting-started path. Any command missing here still lists under "Other commands" (see
 # `_group.AgentBricksGroup`).
@@ -28,223 +28,253 @@ Example = str | tuple[str, str]
 
 _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     (): (
-        ("ab login --profile <profile>", "authenticate and save a default profile"),
-        ("ab init my-agent", "scaffold a new agent project"),
+        ("agentbricks login --profile <profile>", "authenticate and save a default profile"),
+        ("agentbricks init my-agent", "scaffold a new agent project"),
         ("cd my-agent", "enter the project directory"),
-        ("ab dev", "run the agent locally with a chat UI"),
-        ("ab deploy my-agent", "deploy the agent to Databricks Apps"),
+        ("agentbricks dev", "run the agent locally with a chat UI"),
+        ("agentbricks deploy my-agent", "deploy the agent to Databricks Apps"),
     ),
-    ("login",): (("ab login --profile <profile>", "save a profile as your default"),),
-    ("logout",): (("ab logout", "forget the saved default profile"),),
+    ("login",): (("agentbricks login --profile <profile>", "save a profile as your default"),),
+    ("logout",): (("agentbricks logout", "forget the saved default profile"),),
     ("init",): (
-        ("ab init my-agent", "scaffold a new agent project"),
+        ("agentbricks init my-agent", "scaffold a new agent project"),
         (
-            "ab init --framework langgraph --existing .",
+            "agentbricks init --framework langgraph --existing .",
             "prepare a coding-agent migration bundle for an existing agent",
         ),
     ),
-    ("dev",): (("ab dev", "run the agent locally with a chat UI"),),
+    ("dev",): (("agentbricks dev", "run the agent locally with a chat UI"),),
     ("memory",): (
-        ("ab memory stores create --display-name agent-memory", "create a memory store"),
-        ("ab memory bind agent-memory", "bind it to the agent (wired in on dev / deploy)"),
+        ("agentbricks memory stores create --display-name agent-memory", "create a memory store"),
+        ("agentbricks memory bind agent-memory", "bind it to the agent (wired in on dev / deploy)"),
         (
-            "ab memory entries create --store <store> --actor-id alice "
+            "agentbricks memory entries create --store <store> --actor-id alice "
             '--path /preferences/style.md --content "Terse, code first."',
             "add a memory entry for an actor (--store takes the store id)",
         ),
         (
-            'ab memory entries search --store <store> --actor-id alice --query "style"',
+            'agentbricks memory entries search --store <store> --actor-id alice --query "style"',
             "search an actor's entries",
         ),
     ),
     ("memory", "bind"): (
-        ("ab memory bind agent-memory --source .", "declare a memory store in agent.toml"),
+        ("agentbricks memory bind agent-memory --source .", "declare a memory store in agent.toml"),
     ),
     ("memory", "unbind"): (
-        ("ab memory unbind --source .", "remove the memory store binding from agent.toml"),
+        ("agentbricks memory unbind --source .", "remove the memory store binding from agent.toml"),
     ),
-    ("memory", "stores"): (("ab memory stores list", "list managed memory stores"),),
+    ("memory", "stores"): (("agentbricks memory stores list", "list managed memory stores"),),
     ("memory", "stores", "create"): (
-        ("ab memory stores create --display-name agent-memory", "create a memory store"),
+        ("agentbricks memory stores create --display-name agent-memory", "create a memory store"),
     ),
-    ("memory", "stores", "list"): (("ab memory stores list", "list managed memory stores"),),
-    ("memory", "stores", "get"): (("ab memory stores get <store>", "show one store's details"),),
+    ("memory", "stores", "list"): (
+        ("agentbricks memory stores list", "list managed memory stores"),
+    ),
+    ("memory", "stores", "get"): (
+        ("agentbricks memory stores get <store>", "show one store's details"),
+    ),
     ("memory", "stores", "update"): (
-        ('ab memory stores update <store> --description "Agent memory"', "edit a store"),
+        ('agentbricks memory stores update <store> --description "Agent memory"', "edit a store"),
     ),
-    ("memory", "stores", "delete"): (("ab memory stores delete <store>", "delete a store"),),
+    ("memory", "stores", "delete"): (
+        ("agentbricks memory stores delete <store>", "delete a store"),
+    ),
     ("memory", "entries"): (
-        ("ab memory entries list --store <store> --actor-id alice", "list an actor's entries"),
+        (
+            "agentbricks memory entries list --store <store> --actor-id alice",
+            "list an actor's entries",
+        ),
     ),
     ("memory", "entries", "create"): (
         (
-            "ab memory entries create --store <store> --actor-id alice "
+            "agentbricks memory entries create --store <store> --actor-id alice "
             '--path /preferences/style.md --content "Terse, code first."',
             "add a memory entry for an actor",
         ),
     ),
     ("memory", "entries", "get"): (
-        ("ab memory entries get --store <store> <entry>", "show one entry"),
+        ("agentbricks memory entries get --store <store> <entry>", "show one entry"),
     ),
     ("memory", "entries", "list"): (
-        ("ab memory entries list --store <store> --actor-id alice", "list an actor's entries"),
+        (
+            "agentbricks memory entries list --store <store> --actor-id alice",
+            "list an actor's entries",
+        ),
     ),
     ("memory", "entries", "search"): (
         (
-            'ab memory entries search --store <store> --actor-id alice --query "style"',
+            'agentbricks memory entries search --store <store> --actor-id alice --query "style"',
             "search an actor's entries",
         ),
     ),
     ("memory", "entries", "update"): (
         (
-            'ab memory entries update --store <store> <entry> --content "Concise"',
+            'agentbricks memory entries update --store <store> <entry> --content "Concise"',
             "edit an entry",
         ),
     ),
     ("memory", "entries", "delete"): (
-        ("ab memory entries delete --store <store> <entry>", "delete an entry"),
+        ("agentbricks memory entries delete --store <store> <entry>", "delete an entry"),
     ),
     ("sessions",): (
-        ("ab sessions stores create --name agent-sessions", "create a session store"),
-        ("ab sessions bind agent-sessions", "bind it to the agent (wired in on dev / deploy)"),
+        ("agentbricks sessions stores create --name agent-sessions", "create a session store"),
         (
-            "ab sessions create --store agent-sessions --actor-id alice",
+            "agentbricks sessions bind agent-sessions",
+            "bind it to the agent (wired in on dev / deploy)",
+        ),
+        (
+            "agentbricks sessions create --store agent-sessions --actor-id alice",
             "start a session for an actor",
         ),
         (
-            "ab sessions items append --store agent-sessions --session-id <session-id> "
+            "agentbricks sessions items append --store agent-sessions --session-id <session-id> "
             '--data \'{"role":"user","content":"Hello"}\'',
             "append an item to the session",
         ),
         (
-            "ab sessions items list --store agent-sessions --session-id <session-id>",
+            "agentbricks sessions items list --store agent-sessions --session-id <session-id>",
             "list the session's items",
         ),
     ),
     ("sessions", "bind"): (
-        ("ab sessions bind agent-sessions --source .", "declare a session store in agent.toml"),
+        (
+            "agentbricks sessions bind agent-sessions --source .",
+            "declare a session store in agent.toml",
+        ),
     ),
     ("sessions", "unbind"): (
-        ("ab sessions unbind --source .", "remove the session store binding from agent.toml"),
+        (
+            "agentbricks sessions unbind --source .",
+            "remove the session store binding from agent.toml",
+        ),
     ),
-    ("sessions", "stores"): (("ab sessions stores list", "list managed session stores"),),
+    ("sessions", "stores"): (("agentbricks sessions stores list", "list managed session stores"),),
     ("sessions", "stores", "create"): (
-        ("ab sessions stores create --name agent-sessions", "create a session store"),
+        ("agentbricks sessions stores create --name agent-sessions", "create a session store"),
     ),
-    ("sessions", "stores", "list"): (("ab sessions stores list", "list managed session stores"),),
+    ("sessions", "stores", "list"): (
+        ("agentbricks sessions stores list", "list managed session stores"),
+    ),
     ("sessions", "stores", "get"): (
-        ("ab sessions stores get agent-sessions", "show one store's details"),
+        ("agentbricks sessions stores get agent-sessions", "show one store's details"),
     ),
     ("sessions", "stores", "update"): (
         (
-            'ab sessions stores update agent-sessions --description "Agent sessions"',
+            'agentbricks sessions stores update agent-sessions --description "Agent sessions"',
             "edit a store",
         ),
     ),
     ("sessions", "stores", "delete"): (
-        ("ab sessions stores delete agent-sessions", "delete a store"),
+        ("agentbricks sessions stores delete agent-sessions", "delete a store"),
     ),
     ("sessions", "items"): (
         (
-            "ab sessions items list --store agent-sessions --session-id <session-id>",
+            "agentbricks sessions items list --store agent-sessions --session-id <session-id>",
             "list a session's items",
         ),
     ),
     ("sessions", "items", "list"): (
         (
-            "ab sessions items list --store agent-sessions --session-id <session-id>",
+            "agentbricks sessions items list --store agent-sessions --session-id <session-id>",
             "list a session's items",
         ),
     ),
     ("sessions", "items", "append"): (
         (
-            "ab sessions items append --store agent-sessions --session-id <session-id> "
+            "agentbricks sessions items append --store agent-sessions --session-id <session-id> "
             '--data \'{"role":"user","content":"Hello"}\'',
             "append an item to a session",
         ),
     ),
     ("sessions", "items", "pop"): (
         (
-            "ab sessions items pop --store agent-sessions --session-id <session-id>",
+            "agentbricks sessions items pop --store agent-sessions --session-id <session-id>",
             "remove the last item",
         ),
     ),
     ("sessions", "items", "clear"): (
         (
-            "ab sessions items clear --store agent-sessions --session-id <session-id>",
+            "agentbricks sessions items clear --store agent-sessions --session-id <session-id>",
             "remove all items",
         ),
     ),
     ("sessions", "create"): (
-        ("ab sessions create --store agent-sessions --actor-id alice", "start a new session"),
+        (
+            "agentbricks sessions create --store agent-sessions --actor-id alice",
+            "start a new session",
+        ),
     ),
     ("sessions", "list"): (
-        ("ab sessions list --store agent-sessions", "list sessions in a store"),
+        ("agentbricks sessions list --store agent-sessions", "list sessions in a store"),
     ),
     ("sessions", "get"): (
-        ("ab sessions get <session-id> --store agent-sessions", "show one session"),
+        ("agentbricks sessions get <session-id> --store agent-sessions", "show one session"),
     ),
     ("sessions", "update"): (
         (
-            "ab sessions update <session-id> --store agent-sessions "
+            "agentbricks sessions update <session-id> --store agent-sessions "
             '--metadata \'{"status":"reviewed"}\'',
             "edit a session's metadata",
         ),
     ),
     ("sessions", "delete"): (
-        ("ab sessions delete <session-id> --store agent-sessions", "delete a session"),
+        ("agentbricks sessions delete <session-id> --store agent-sessions", "delete a session"),
     ),
     ("sessions", "fork"): (
         (
-            "ab sessions fork --store agent-sessions --source-session-id <session-id> "
+            "agentbricks sessions fork --store agent-sessions --source-session-id <session-id> "
             "--actor-id alice",
             "copy a session into a new one",
         ),
     ),
     ("tracing",): (
         (
-            "ab tracing bind --experiment-name /Shared/agentbricks_traces/my-agent",
+            "agentbricks tracing bind --experiment-name /Shared/agentbricks_traces/my-agent",
             "bind tracing to an experiment by name",
         ),
-        ("ab tracing bind --experiment-id 12345", "or by experiment id"),
-        ("ab tracing unbind", "turn tracing off"),
+        ("agentbricks tracing bind --experiment-id 12345", "or by experiment id"),
+        ("agentbricks tracing unbind", "turn tracing off"),
     ),
     ("tracing", "bind"): (
         (
-            "ab tracing bind --experiment-name /Shared/agentbricks_traces/my-agent",
+            "agentbricks tracing bind --experiment-name /Shared/agentbricks_traces/my-agent",
             "trace to a specific experiment by name",
         ),
-        ("ab tracing bind --experiment-id 12345", "or by experiment id"),
+        ("agentbricks tracing bind --experiment-id 12345", "or by experiment id"),
     ),
-    ("tracing", "unbind"): (("ab tracing unbind", "turn tracing off"),),
+    ("tracing", "unbind"): (("agentbricks tracing unbind", "turn tracing off"),),
     ("tracing", "list"): (
         (
-            "ab tracing list --experiment-name /Shared/agentbricks_traces/my-agent",
+            "agentbricks tracing list --experiment-name /Shared/agentbricks_traces/my-agent",
             "list a specific experiment's traces",
         ),
-        ("ab tracing list --experiment-id 12345", "or by experiment id"),
+        ("agentbricks tracing list --experiment-id 12345", "or by experiment id"),
     ),
-    ("tracing", "get"): (("ab tracing get <trace-id>", "show one trace"),),
+    ("tracing", "get"): (("agentbricks tracing get <trace-id>", "show one trace"),),
     ("deploy",): (
-        ("ab deploy my-agent", "deploy the agent"),
-        ("ab deploy my-agent --instances 2", "deploy with two instances"),
+        ("agentbricks deploy my-agent", "deploy the agent"),
+        ("agentbricks deploy my-agent --instances 2", "deploy with two instances"),
     ),
-    ("deployments",): (("ab deployments list", "list agent deployments"),),
-    ("deployments", "list"): (("ab deployments list", "list agent deployments"),),
-    ("deployments", "get"): (("ab deployments get agent-bricks-my-agent", "show one deployment"),),
+    ("deployments",): (("agentbricks deployments list", "list agent deployments"),),
+    ("deployments", "list"): (("agentbricks deployments list", "list agent deployments"),),
+    ("deployments", "get"): (
+        ("agentbricks deployments get agent-bricks-my-agent", "show one deployment"),
+    ),
     ("deployments", "logs"): (
-        ("ab deployments logs agent-bricks-my-agent", "stream a deployment's logs"),
+        ("agentbricks deployments logs agent-bricks-my-agent", "stream a deployment's logs"),
     ),
     ("deployments", "start"): (
-        ("ab deployments start agent-bricks-my-agent", "start a deployment"),
+        ("agentbricks deployments start agent-bricks-my-agent", "start a deployment"),
     ),
-    ("deployments", "stop"): (("ab deployments stop agent-bricks-my-agent", "stop a deployment"),),
+    ("deployments", "stop"): (
+        ("agentbricks deployments stop agent-bricks-my-agent", "stop a deployment"),
+    ),
     ("deployments", "delete"): (
-        ("ab deployments delete agent-bricks-my-agent", "delete a deployment"),
+        ("agentbricks deployments delete agent-bricks-my-agent", "delete a deployment"),
     ),
     ("endpoint",): (
         (
-            "ab endpoint invoke agent-bricks-my-agent --path /api/invocations "
+            "agentbricks endpoint invoke agent-bricks-my-agent --path /api/invocations "
             "--json "
             '\'{"id":"00000000-0000-4000-8000-000000000001",'
             '"input":[{"role":"user","content":"Hello"}]}\'',
@@ -253,53 +283,70 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("endpoint", "invoke"): (
         (
-            "ab endpoint invoke agent-bricks-my-agent --path /api/invocations "
+            "agentbricks endpoint invoke agent-bricks-my-agent --path /api/invocations "
             "--json "
             '\'{"id":"00000000-0000-4000-8000-000000000001",'
             '"input":[{"role":"user","content":"Hello"}]}\'',
             "invoke a deployed HTTP agent",
         ),
         (
-            "ab endpoint invoke --url http://localhost:8000 --path /custom/run "
+            "agentbricks endpoint invoke --url http://localhost:8000 --path /custom/run "
             '--json \'{"input":"hello"}\'',
             "invoke a local or arbitrary HTTP server",
         ),
     ),
     ("tools",): (
-        ("ab tools add --help", "see all tool types you can add"),
-        ("ab tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
-        ("ab tools add mcp system.ai.web_search", "add a managed MCP tool"),
-        ("ab tools remove mcp system.ai.web_search", "remove a tool binding"),
-        ("ab tools list", "browse available integrations to add"),
+        ("agentbricks tools add --help", "see all tool types you can add"),
+        (
+            "agentbricks tools add sandbox --scope table:samples.nyctaxi.trips",
+            "add a data sandbox tool",
+        ),
+        ("agentbricks tools add mcp system.ai.web_search", "add a managed MCP tool"),
+        ("agentbricks tools remove mcp system.ai.web_search", "remove a tool binding"),
+        ("agentbricks tools list", "browse available integrations to add"),
     ),
     ("tools", "add"): (
-        ("ab tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
-        ("ab tools add mcp system.ai.web_search", "add a managed MCP tool"),
-        ("ab tools add uc-function catalog.schema.lookup_ticket", "add a UC function tool"),
-        ("ab tools add genie-one", "add workspace-wide Genie One tools"),
-        ("ab tools add genie-agent SPACE_ID", "add tools for one Genie Space"),
+        (
+            "agentbricks tools add sandbox --scope table:samples.nyctaxi.trips",
+            "add a data sandbox tool",
+        ),
+        ("agentbricks tools add mcp system.ai.web_search", "add a managed MCP tool"),
+        (
+            "agentbricks tools add uc-function catalog.schema.lookup_ticket",
+            "add a UC function tool",
+        ),
+        ("agentbricks tools add genie-one", "add workspace-wide Genie One tools"),
+        ("agentbricks tools add genie-agent SPACE_ID", "add tools for one Genie Space"),
     ),
     ("tools", "add", "sandbox"): (
-        ("ab tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
+        (
+            "agentbricks tools add sandbox --scope table:samples.nyctaxi.trips",
+            "add a data sandbox tool",
+        ),
     ),
-    ("tools", "add", "mcp"): (("ab tools add mcp system.ai.web_search", "add a managed MCP tool"),),
+    ("tools", "add", "mcp"): (
+        ("agentbricks tools add mcp system.ai.web_search", "add a managed MCP tool"),
+    ),
     ("tools", "add", "uc-function"): (
-        ("ab tools add uc-function catalog.schema.lookup_ticket", "add a UC function tool"),
+        (
+            "agentbricks tools add uc-function catalog.schema.lookup_ticket",
+            "add a UC function tool",
+        ),
     ),
     ("tools", "remove"): (
-        ("ab tools remove mcp system.ai.web_search", "remove an MCP tool by service"),
-        ("ab tools remove web_search", "remove a tool by id"),
+        ("agentbricks tools remove mcp system.ai.web_search", "remove an MCP tool by service"),
+        ("agentbricks tools remove web_search", "remove a tool by id"),
     ),
     ("tools", "list"): (
-        ("ab tools list", "browse built-in recipes and system.ai MCP Services"),
-        ("ab tools list --kind mcp", "discover MCP Services in system.ai"),
+        ("agentbricks tools list", "browse built-in recipes and system.ai MCP Services"),
+        ("agentbricks tools list --kind mcp", "discover MCP Services in system.ai"),
         (
-            "ab tools list --kind mcp --schema main.tools",
+            "agentbricks tools list --kind mcp --schema main.tools",
             "replace the default MCP schema",
         ),
-        ("ab tools list --kind sandbox", "show the local recipe without authentication"),
-        ("ab tools list --kind genie-one", "show the Genie One add recipe"),
-        ("ab tools list --kind genie-agent", "show the Genie Agent add recipe"),
+        ("agentbricks tools list --kind sandbox", "show the local recipe without authentication"),
+        ("agentbricks tools list --kind genie-one", "show the Genie One add recipe"),
+        ("agentbricks tools list --kind genie-agent", "show the Genie Agent add recipe"),
     ),
 }
 
@@ -308,7 +355,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
 _INLINE_COMMENT_MAX = 46
 
 # Where to send a reader who wants more than the help text — best-practice CLI help links out to
-# docs and a support/issues path. Shown only on the root `ab --help`, so subcommand help stays
+# docs and a support/issues path. Shown only on the root `agentbricks --help`, so subcommand help stays
 # uncluttered.
 _DOCS_URL = "https://github.com/databricks/databricks-ai-bridge/tree/main/integrations/agentbricks"
 _ISSUES_URL = "https://github.com/databricks/databricks-ai-bridge/issues"
@@ -406,7 +453,7 @@ def _root_epilog() -> str:
             "\b",
             "Not authenticated yet? Create a profile with the Databricks CLI first:",
             "  databricks auth login --profile <profile>",
-            "Then `ab login --profile <profile>` saves it as your default.",
+            "Then `agentbricks login --profile <profile>` saves it as your default.",
         ]
     )
     links = "\n".join(["\b", f"Docs:   {_DOCS_URL}", f"Issues: {_ISSUES_URL}"])

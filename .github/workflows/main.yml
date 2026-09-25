@@ -345,7 +345,7 @@ jobs:
           python-version: "3.12"
       # Build the wheel and run the functional tier from a venv it's installed into, so the tests
       # exercise the shipped artifact (a packaging gap fails here) rather than an editable source
-      # tree. `ab` on PATH is the wheel's console script; AGENTBRICKS_WHEEL pins the scaffolded agent's
+      # tree. `agentbricks` on PATH is the wheel's console script; AGENTBRICKS_WHEEL pins the scaffolded agent's
       # databricks-agentbricks at the same wheel.
       - name: Build and install the Agent Bricks wheel
         working-directory: integrations/agentbricks
