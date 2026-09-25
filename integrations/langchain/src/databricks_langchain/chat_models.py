@@ -1442,11 +1442,6 @@ def _convert_message_to_dict(message: BaseMessage) -> dict:
                 else block
                 for block in content
             ]
-            if content != message.content:
-                print(  # noqa: T201 - temporary E2E freshness marker
-                    "[freshness-check toolmessage-e2e-20260925] normalized rich tool content",
-                    flush=True,
-                )
         return {
             "role": "tool",
             "tool_call_id": message.tool_call_id,
