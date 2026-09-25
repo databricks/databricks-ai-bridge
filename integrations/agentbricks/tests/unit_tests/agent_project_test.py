@@ -113,9 +113,10 @@ def test_agent_project_round_trips_tool_specs_without_losing_comments(tmp_path: 
     assert loaded.tools[0].policy.downscope == (
         Scope(kind="table", value="samples.nyctaxi.trips", permission="read_only"),
     )
-    assert loaded.tools[0].policy.include_databricks_token_env is True
+    assert loaded.tools[0].policy.databricks_access_token_included is True
     assert (
-        tomli.loads(path.read_text())["tools"][0]["policy"]["include_databricks_token_env"] is True
+        tomli.loads(path.read_text())["tools"][0]["policy"]["databricks_access_token_included"]
+        is True
     )
 
 
@@ -137,7 +138,7 @@ policy = { downscope = [{ resource = "workspace:/Workspace/Shared" }] }
 
     tool = AgentProject.load(tmp_path).tools[0]
 
-    assert tool.policy.include_databricks_token_env is False
+    assert tool.policy.databricks_access_token_included is False
 
 
 @pytest.mark.parametrize("value", ['"true"', "1", "[]"])
@@ -153,11 +154,11 @@ server = "agentbricks"
 [[tools]]
 id = "sandbox"
 source = {{ kind = "sandbox", service = "system.ai.sandbox" }}
-policy = {{ downscope = [{{ resource = "workspace:/Workspace/Shared" }}], include_databricks_token_env = {value} }}
+policy = {{ downscope = [{{ resource = "workspace:/Workspace/Shared" }}], databricks_access_token_included = {value} }}
 """,
     )
 
-    with pytest.raises(AgentCliError, match="include_databricks_token_env"):
+    with pytest.raises(AgentCliError, match="databricks_access_token_included"):
         AgentProject.load(tmp_path)
 
 

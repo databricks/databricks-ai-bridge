@@ -108,7 +108,7 @@ def add_sandbox_to_manifest(
     *,
     tool_id: str = "sandbox",
     auth: Literal["user", "app"] = "user",
-    include_databricks_token_env: bool = True,
+    databricks_access_token_included: bool = True,
 ) -> None:
     """Shared implementation for the nested command and compatibility alias."""
     parsed: list[Scope] = []
@@ -126,7 +126,7 @@ def add_sandbox_to_manifest(
             tool_id,
             scopes=parsed,
             auth=auth,
-            include_databricks_token_env=include_databricks_token_env,
+            databricks_access_token_included=databricks_access_token_included,
         ),
     )
 
@@ -195,7 +195,7 @@ def _source_option(function):
 @click.option("--name", "tool_id", default="sandbox", show_default=True)
 @click.option("--auth", type=click.Choice(["user", "app"]), default="user", show_default=True)
 @click.option(
-    "--include-databricks-token-env/--no-include-databricks-token-env",
+    "--databricks-access-token-included/--no-databricks-access-token-included",
     default=True,
     show_default=True,
     help="Expose the selected Databricks credential to sandbox code.",
@@ -209,7 +209,7 @@ def add_sandbox(
     tool_id: str,
     source: pathlib.Path,
     auth: Literal["user", "app"],
-    include_databricks_token_env: bool,
+    databricks_access_token_included: bool,
 ) -> None:
     """Add a data sandbox tool (system.ai.sandbox), scoped to specific Unity Catalog resources.
 
@@ -222,7 +222,7 @@ def add_sandbox(
         permission,
         tool_id=tool_id,
         auth=auth,
-        include_databricks_token_env=include_databricks_token_env,
+        databricks_access_token_included=databricks_access_token_included,
     )
 
 

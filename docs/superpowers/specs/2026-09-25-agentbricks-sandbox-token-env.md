@@ -10,10 +10,10 @@ the already-minted Databricks credential. New `ab tools add sandbox` bindings op
 New bindings write the protected policy next to their fixed downscope:
 
 ```toml
-policy = { downscope = [{ resource = "workspace:/Workspace/Shared", permission = "read_only" }], include_databricks_token_env = true }
+policy = { downscope = [{ resource = "workspace:/Workspace/Shared", permission = "read_only" }], databricks_access_token_included = true }
 ```
 
-- `--no-include-databricks-token-env` creates a binding with the policy set to `false`.
+- `--no-databricks-access-token-included` creates a binding with the policy set to `false`.
 - Existing manifests that omit the field continue to parse as `false`.
 - The field is valid only for `source.kind = "sandbox"` and must be a TOML boolean.
 
@@ -24,7 +24,7 @@ Both the LangGraph and OpenAI adapters add protected MCP metadata on every sandb
 ```json
 {
   "downscope": {"workspace_paths": [{"path": "/Workspace/Shared", "permission": "read_only"}]},
-  "include_databricks_token_env": true
+  "databricks_access_token_included": true
 }
 ```
 

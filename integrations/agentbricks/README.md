@@ -451,7 +451,7 @@ ab [-p <profile>] [-o text|json]
     list | get [--experiment-name NAME | --experiment-id ID] [--source PATH]
   tools
     add sandbox      --scope SCOPE [--scope SCOPE ...]
-                     [--no-include-databricks-token-env] [--source PATH]
+                     [--no-databricks-access-token-included] [--source PATH]
     add mcp          SERVICE [--name NAME] [--source PATH]
     add uc-function  FUNCTION [--name NAME] [--source PATH]
     add genie-one    [--name NAME] [--auth user|app] [--source PATH]
@@ -746,15 +746,15 @@ Databricks credential to sandbox code:
 id = "sandbox"
 auth = "user"
 source = { kind = "sandbox", service = "system.ai.sandbox" }
-policy = { downscope = [{ resource = "workspace:/Workspace/Shared", permission = "read_only" }], include_databricks_token_env = true }
+policy = { downscope = [{ resource = "workspace:/Workspace/Shared", permission = "read_only" }], databricks_access_token_included = true }
 ```
 
-With `include_databricks_token_env = true`, the sandbox receives `DATABRICKS_HOST`, a short-lived
+With `databricks_access_token_included = true`, the sandbox receives `DATABRICKS_HOST`, a short-lived
 `DATABRICKS_TOKEN`, and `DATABRICKS_AUTH_TYPE`, so code such as
 `WorkspaceClient().current_user.me()` can call workspace APIs. This policy does not choose the
 identity: `auth = "user"` uses the request user's OBO credential, while `auth = "app"` uses the
-Databricks App service principal. Use `--no-include-databricks-token-env` when adding a sandbox that
-does not need workspace API access. Existing manifests that omit `include_databricks_token_env`
+Databricks App service principal. Use `--no-databricks-access-token-included` when adding a sandbox that
+does not need workspace API access. Existing manifests that omit `databricks_access_token_included`
 remain disabled until explicitly updated.
 
 ### Genie tools

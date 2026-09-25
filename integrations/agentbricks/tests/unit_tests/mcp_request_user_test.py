@@ -79,7 +79,7 @@ def tool(
     name="search",
     *,
     downscope=(),
-    include_databricks_token_env=False,
+    databricks_access_token_included=False,
 ):
     return SimpleNamespace(
         id=name,
@@ -88,7 +88,7 @@ def tool(
         service="system.ai.search",
         function="main.tools.lookup",
         downscope=downscope,
-        include_databricks_token_env=include_databricks_token_env,
+        databricks_access_token_included=databricks_access_token_included,
     )
 
 
@@ -200,14 +200,14 @@ def test_sandbox_metadata_protects_token_env_policy_for_both_identities(adapter,
         downscope=(
             SimpleNamespace(kind="workspace", value="/Workspace/Shared", permission="read_only"),
         ),
-        include_databricks_token_env=True,
+        databricks_access_token_included=True,
     )
     expected_meta = {
         "trace_id": "123",
         "downscope": {
             "workspace_paths": [{"path": "/Workspace/Shared", "permission": "read_only"}]
         },
-        "include_databricks_token_env": True,
+        "databricks_access_token_included": True,
     }
     server = adapter._server_from_tool(sandbox, workspace_client_for=resolver)
     assert server.workspace_client is (user if auth == "user" else app)
@@ -224,7 +224,7 @@ def test_sandbox_metadata_protects_token_env_policy_for_both_identities(adapter,
                     meta={
                         "trace_id": "123",
                         "downscope": {"workspace_paths": []},
-                        "include_databricks_token_env": False,
+                        "databricks_access_token_included": False,
                     },
                 )
             )

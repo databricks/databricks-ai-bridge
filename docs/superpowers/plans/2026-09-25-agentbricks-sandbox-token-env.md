@@ -4,7 +4,7 @@
 
 **Goal:** Make new Agent Bricks sandbox bindings expose the selected App or request-user Databricks credential to sandbox code by default, while preserving legacy manifest behavior.
 
-**Architecture:** Extend the protected sandbox policy in `agent.toml` with a boolean `include_databricks_token_env`. Parse it in both CLI and runtime models, then have both framework adapters emit one shared protected metadata shape. Identity continues to be selected by the existing `auth` field and workspace-client resolver.
+**Architecture:** Extend the protected sandbox policy in `agent.toml` with a boolean `databricks_access_token_included`. Parse it in both CLI and runtime models, then have both framework adapters emit one shared protected metadata shape. Identity continues to be selected by the existing `auth` field and workspace-client resolver.
 
 **Tech Stack:** Python 3.10+, dataclasses, Click, tomlkit/tomllib, pytest, LangGraph MCP adapter, OpenAI Agents MCP adapter, Databricks Agent Bricks CLI.
 
@@ -12,8 +12,8 @@
 
 ## Global Constraints
 
-- New `ab tools add sandbox` bindings default `include_databricks_token_env` to `true`.
-- `--no-include-databricks-token-env` opts a new binding out.
+- New `ab tools add sandbox` bindings default `databricks_access_token_included` to `true`.
+- `--no-databricks-access-token-included` opts a new binding out.
 - Legacy manifests that omit the field parse as `false`.
 - Only sandbox policies accept the field, and it must be a TOML boolean.
 - LangGraph and OpenAI adapters must prevent caller metadata from overriding protected policy.
@@ -31,9 +31,9 @@
 - Test: `integrations/agentbricks/tests/unit_tests/tools_test.py`
 
 **Interfaces:**
-- Produces: `ToolPolicy.include_databricks_token_env: bool`
-- Produces: `ToolSpec.sandbox(..., include_databricks_token_env: bool = True)`
-- Produces: CLI flag pair `--include-databricks-token-env/--no-include-databricks-token-env`
+- Produces: `ToolPolicy.databricks_access_token_included: bool`
+- Produces: `ToolSpec.sandbox(..., databricks_access_token_included: bool = True)`
+- Produces: CLI flag pair `--databricks-access-token-included/--no-databricks-access-token-included`
 
 - [x] **Step 1: Write failing manifest and CLI tests**
 
@@ -41,8 +41,8 @@ Add cases that independently assert: the default CLI writes `true`; the negative
 `false`; a manifest with the key omitted loads as `false`; and explicit true/false round-trips.
 
 ```python
-assert loaded.tools[0].policy.include_databricks_token_env is True
-assert "include_databricks_token_env = true" in manifest.read_text()
+assert loaded.tools[0].policy.databricks_access_token_included is True
+assert "databricks_access_token_included = true" in manifest.read_text()
 ```
 
 - [x] **Step 2: Run tests to verify RED**
@@ -82,8 +82,8 @@ git commit -m "feat(agentbricks): default sandbox token env on"
 - Test: `integrations/agentbricks/tests/unit_tests/mcp_request_user_test.py`
 
 **Interfaces:**
-- Consumes: `policy.include_databricks_token_env`
-- Produces: `ToolRecord.include_databricks_token_env: bool`
+- Consumes: `policy.databricks_access_token_included`
+- Produces: `ToolRecord.databricks_access_token_included: bool`
 - Produces: `sandbox_meta(tool: ToolRecord) -> dict[str, Any]`
 
 - [x] **Step 1: Write failing runtime and adapter tests**
@@ -96,7 +96,7 @@ conflicting caller value and assert the protected `true` wins.
 ```python
 assert kwargs["meta"] == {
     "downscope": {"workspace_paths": [{"path": "/Workspace/Shared", "permission": "read_only"}]},
-    "include_databricks_token_env": True,
+    "databricks_access_token_included": True,
 }
 ```
 
