@@ -579,7 +579,9 @@ def test_exercise_reads_table_and_volume_without_disclosing_markers(tmp_path):
     prompts: dict[str, str] = {}
 
     responses = {
-        "sandbox_table": {"output": runner.table_marker},
+        "sandbox_table": {
+            "output": "AnalysisException: initial incorrect query\n" * 200 + runner.table_marker
+        },
         "sandbox_volume": {"output": runner.volume_marker},
         "mcp": {
             "output": "web_search returned Databricks Model Context Protocol documentation "
@@ -609,7 +611,8 @@ def test_exercise_reads_table_and_volume_without_disclosing_markers(tmp_path):
     }
     assert set(sandbox_rows) == {"sandbox_table", "sandbox_volume"}
     assert {row.status for row in sandbox_rows.values()} == {"pass"}
-    assert runner.uc_table in prompts["sandbox_table"]
+    assert runner.table_marker in sandbox_rows["sandbox_table"].actual
+    assert f"SELECT marker FROM {runner.uc_table}" in prompts["sandbox_table"]
     assert runner.volume_file_path in prompts["sandbox_volume"]
     assert all(runner.table_marker not in prompt for prompt in prompts.values())
     assert all(runner.volume_marker not in prompt for prompt in prompts.values())
