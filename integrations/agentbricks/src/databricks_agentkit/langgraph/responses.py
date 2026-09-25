@@ -51,36 +51,30 @@ async def collect_response(
     This preserves the message-oriented template's response format. It does not reconcile gaps
     between graph checkpoints and Runtime Store events or promise exactly-once event delivery.
     """
-    outputs = [
-        {"type": "message", "message": message.model_dump()} for message in restored_messages
-    ]
-    async for event in _serialize_events(events):
-        await emit(event)
-        if event.get("type") in ("message", "interrupt"):
-            outputs.append(event)
-
-    interrupted = bool(outputs and outputs[-1].get("type") == "interrupt")
-    return {
-        "output": [event["message"] if event["type"] == "message" else event for event in outputs],
-        "status": "interrupted" if interrupted else "completed",
-    }
-
-
-async def _serialize_events(events: AsyncIterator[Any]) -> AsyncIterator[dict[str, Any]]:
+    output = [message.model_dump() for message in restored_messages]
+    status = "completed"
     async for mode, payload in events:
         if mode == "updates":
             if interrupts := payload.get("__interrupt__"):
                 for item in interrupts:
-                    yield {"type": "interrupt", "id": item.id, "value": item.value}
+                    event = {"type": "interrupt", "id": item.id, "value": item.value}
+                    await emit(event)
+                    output.append(event)
+                status = "interrupted"
                 continue
             for node_data in payload.values():
                 messages = node_data.get("messages", []) if isinstance(node_data, dict) else []
                 for message in messages:
-                    yield {"type": "message", "message": message.model_dump()}
+                    value = message.model_dump()
+                    await emit({"type": "message", "message": value})
+                    output.append(value)
+                    status = "completed"
         elif mode == "messages":
             try:
                 chunk = payload[0]
-                if isinstance(chunk, AIMessageChunk) and (content := chunk.content):
-                    yield {"type": "delta", "content": content, "id": chunk.id}
+                content = chunk.content if isinstance(chunk, AIMessageChunk) else None
             except (KeyError, IndexError, TypeError):
                 continue
+            if content:
+                await emit({"type": "delta", "content": content, "id": chunk.id})
+    return {"output": output, "status": status}

@@ -127,7 +127,6 @@ async def _invoke_agent(
         restored_messages,
     )
 
-    return {
-        **response,
-        **({"session_id": session_id} if not user_auth or payload.get("session_id") else {}),
-    }
+    if not user_auth or payload.get("session_id"):
+        response["session_id"] = session_id
+    return response
