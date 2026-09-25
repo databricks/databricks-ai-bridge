@@ -305,9 +305,9 @@ jobs:
           uv run --resolution ${{ matrix.uv-resolution }} \
             --exact --group tests pytest --cov --cov-report=term tests/unit_tests
 
-  mason_test:
+  agentbricks_test:
     runs-on: ubuntu-latest
-    name: "mason_test (python: ${{ matrix.python-version }}, uv: ${{ matrix.uv-resolution }})"
+    name: "agentbricks_test (python: ${{ matrix.python-version }}, uv: ${{ matrix.uv-resolution }})"
     strategy:
       matrix:
         python-version: ["3.10"]
@@ -322,14 +322,14 @@ jobs:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ matrix.python-version }}
       - name: Run tests
-        working-directory: integrations/mason
+        working-directory: integrations/agentbricks
         run: |
           uv run --resolution ${{ matrix.uv-resolution }} \
             --exact --group tests pytest tests/unit_tests
 
-  mason_dev_functional:
+  agentbricks_dev_functional:
     runs-on: ${{ matrix.os }}
-    name: "mason_dev_functional (${{ matrix.os }})"
+    name: "agentbricks_dev_functional (${{ matrix.os }})"
     strategy:
       fail-fast: false
       matrix:
@@ -345,10 +345,10 @@ jobs:
           python-version: "3.12"
       # Build the wheel and run the functional tier from a venv it's installed into, so the tests
       # exercise the shipped artifact (a packaging gap fails here) rather than an editable source
-      # tree. `mason` on PATH is the wheel's console script; MASON_WHEEL pins the scaffolded agent's
+      # tree. `ab` on PATH is the wheel's console script; AGENTBRICKS_WHEEL pins the scaffolded agent's
       # databricks-agentbricks at the same wheel.
-      - name: Build and install the mason wheel
-        working-directory: integrations/mason
+      - name: Build and install the Agent Bricks wheel
+        working-directory: integrations/agentbricks
         run: |
           uv build --wheel --out-dir dist ../..
           uv build --wheel --out-dir dist
@@ -356,9 +356,9 @@ jobs:
           uv pip install --python .venv-functional/bin/python --no-sources \
             "$(ls dist/databricks_ai_bridge-*.whl)" \
             "$(ls dist/databricks_agentbricks-*.whl)" --group tests
-      - name: Run mason functional tests against the wheel
-        working-directory: integrations/mason
+      - name: Run Agent Bricks functional tests against the wheel
+        working-directory: integrations/agentbricks
         run: |
           AI_BRIDGE_WHEEL="$(ls "$PWD"/dist/databricks_ai_bridge-*.whl)" \
-          MASON_WHEEL="$(ls "$PWD"/dist/databricks_agentbricks-*.whl)" \
+          AGENTBRICKS_WHEEL="$(ls "$PWD"/dist/databricks_agentbricks-*.whl)" \
             .venv-functional/bin/pytest tests/functional/

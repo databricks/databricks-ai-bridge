@@ -30,7 +30,7 @@ jobs:
       url: ${{ inputs.production && 'https://pypi.org/p/databricks-agentbricks' || 'https://test.pypi.org/p/databricks-agentbricks' }}
     defaults:
       run:
-        working-directory: integrations/mason
+        working-directory: integrations/agentbricks
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
@@ -74,12 +74,12 @@ jobs:
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
         with:
           name: dist-databricks-agentbricks
-          path: integrations/mason/dist/
+          path: integrations/agentbricks/dist/
 
       - uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd
         if: inputs.production
         with:
-          artifacts: "integrations/mason/dist/*.whl,integrations/mason/dist/*.tar.gz"
+          artifacts: "integrations/agentbricks/dist/*.whl,integrations/agentbricks/dist/*.tar.gz"
           draft: true
           generateReleaseNotes: true
 
@@ -87,14 +87,14 @@ jobs:
         if: inputs.production
         uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e
         with:
-          packages-dir: integrations/mason/dist/
+          packages-dir: integrations/agentbricks/dist/
 
       - name: Publish to Test PyPI
         if: github.event_name == 'push' || !inputs.production
         uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e
         with:
           repository-url: https://test.pypi.org/legacy/
-          packages-dir: integrations/mason/dist/
+          packages-dir: integrations/agentbricks/dist/
 
       - name: Wait for package to be available
         run: sleep 10
