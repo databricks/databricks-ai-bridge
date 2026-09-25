@@ -8,6 +8,7 @@ import concurrent.futures
 import dataclasses
 import datetime as dt
 import hashlib
+import io
 import json
 import os
 import pathlib
@@ -34,14 +35,12 @@ from databricks.sdk.service.catalog import SecurableType
 FRAMEWORKS = ("langgraph",)
 AUTHORING_PATHS = ("cli", "direct")
 RUNTIMES = ("dev", "deploy")
-TOOL_KINDS = ("sandbox", "mcp", "python", "uc_function", "genie")
+TOOL_KINDS = ("sandbox_table", "sandbox_volume", "mcp", "python", "uc_function", "genie")
 E2E_MODEL = "system.ai.gpt-5-2"
 
 PROMPTS = {
-    "sandbox": (
-        "You must call the sandbox tool and run Python code "
-        "print('AGENTBRICKS_SANDBOX_OK'). Return the exact stdout marker."
-    ),
+    "sandbox_table": "",
+    "sandbox_volume": "",
     "mcp": (
         "You must use a tool from the configured system.ai.web_search MCP server. "
         "Search official Databricks documentation for Model Context Protocol, then return the "
@@ -58,7 +57,8 @@ PROMPTS = {
 }
 
 EXPECTED = {
-    "sandbox": "AGENTBRICKS_SANDBOX_OK",
+    "sandbox_table": "the exact hidden marker read from the temporary UC table",
+    "sandbox_volume": "the exact hidden marker read from the temporary UC volume file",
     "python": "AGENTBRICKS_PYTHON_OK",
     "uc_function": "AGENTBRICKS_UC_OK:matrix",
     "mcp": "a web-search tool call and a non-empty https result",
@@ -162,6 +162,9 @@ class Runner:
         self.transitive_uc_function: str | None = None
         self.uc_table: str | None = None
         self.uc_volume: str | None = None
+        self.table_marker: str | None = None
+        self.volume_marker: str | None = None
+        self.volume_file_path: str | None = None
         self.warehouse_id: str | None = None
         self.host: str | None = None
         self.headers: dict[str, str] = {}
@@ -380,10 +383,22 @@ class Runner:
         self.uc_function = f"{catalog}.{schema_name}.{function_name}"
         table_name = f"agentbricks_table_{suffix}"
         self.uc_table = f"{catalog}.{schema_name}.{table_name}"
-        self.sql(f"CREATE TABLE `{catalog}`.`{schema_name}`.`{table_name}` AS SELECT 1 AS marker")
+        self.table_marker = f"AGENTBRICKS_TABLE_{uuid.uuid4().hex}"
+        self.sql(
+            f"CREATE TABLE `{catalog}`.`{schema_name}`.`{table_name}` "
+            f"AS SELECT '{self.table_marker}' AS marker"
+        )
         volume_name = f"agentbricks_volume_{suffix}"
         self.uc_volume = f"{catalog}.{schema_name}.{volume_name}"
         self.sql(f"CREATE VOLUME `{catalog}`.`{schema_name}`.`{volume_name}`")
+        self.volume_marker = f"AGENTBRICKS_VOLUME_{uuid.uuid4().hex}"
+        self.volume_file_path = f"/Volumes/{catalog}/{schema_name}/{volume_name}/marker.txt"
+        WorkspaceClient(profile=self.profile).files.upload(
+            self.volume_file_path,
+            io.BytesIO(self.volume_marker.encode()),
+            overwrite=True,
+        )
+        self.transcript.write(f"# uploaded hidden marker file to {self.volume_file_path}")
         exposed_tool_name = self.uc_function.replace(".", "__")
         if len(exposed_tool_name) > 64:
             raise MatrixError(
@@ -905,7 +920,26 @@ class Runner:
         for tool_kind in TOOL_KINDS:
             started = time.monotonic()
             prompt = PROMPTS[tool_kind]
-            if tool_kind == "uc_function":
+            expected_marker: str | None = None
+            if tool_kind == "sandbox_table":
+                if self.uc_table is None or self.table_marker is None:
+                    raise MatrixError("Sandbox table marker was not created.")
+                prompt = (
+                    "You must call the sandbox tool. In the sandbox, use Python and Spark SQL "
+                    f"to select the sole marker value from table {self.uc_table}. "
+                    "Return only the exact value read from the table; do not fabricate it."
+                )
+                expected_marker = self.table_marker
+            elif tool_kind == "sandbox_volume":
+                if self.volume_file_path is None or self.volume_marker is None:
+                    raise MatrixError("Sandbox volume marker was not created.")
+                prompt = (
+                    "You must call the sandbox tool. In the sandbox, use Python to read the "
+                    f"entire text file at {self.volume_file_path}. Return only its exact contents; "
+                    "do not fabricate them."
+                )
+                expected_marker = self.volume_marker
+            elif tool_kind == "uc_function":
                 if self.uc_function is None:
                     raise MatrixError("UC function was not created.")
                 exposed_tool_name = self.uc_function.replace(".", "__")
@@ -922,7 +956,7 @@ class Runner:
                     headers,
                 )
                 serialized = json.dumps(response, sort_keys=True, default=str)
-                _assert_semantics(tool_kind, serialized)
+                _assert_semantics(tool_kind, serialized, expected_marker)
                 status, error = "pass", None
             except Exception as exc:
                 serialized = ""
@@ -935,7 +969,7 @@ class Runner:
                     tool_kind=tool_kind,
                     status=status,
                     command=command,
-                    expected=EXPECTED[tool_kind],
+                    expected=expected_marker or EXPECTED[tool_kind],
                     actual=serialized[:6000],
                     duration_seconds=round(time.monotonic() - started, 3),
                     artifact_paths=[str(log_path)],
@@ -1030,6 +1064,9 @@ class Runner:
             "transitive_uc_function": self.transitive_uc_function,
             "uc_table": self.uc_table,
             "uc_volume": self.uc_volume,
+            "table_marker": self.table_marker,
+            "volume_marker": self.volume_marker,
+            "volume_file_path": self.volume_file_path,
             "genie_space_id": self.genie_space_id,
             "warehouse_id": self.warehouse_id,
             "grant_checks": self.grant_checks,
@@ -1126,6 +1163,25 @@ class Runner:
                 )
         if self.uc_volume:
             catalog, schema, volume_name = self.uc_volume.split(".")
+            if self.volume_file_path:
+                try:
+                    WorkspaceClient(profile=self.profile).files.delete(self.volume_file_path)
+                    self.cleanup_results.append(
+                        {"resource": f"file:{self.volume_file_path}", "status": "deleted"}
+                    )
+                except NotFound:
+                    self.cleanup_results.append(
+                        {"resource": f"file:{self.volume_file_path}", "status": "deleted"}
+                    )
+                except Exception as exc:
+                    self.transcript.write(f"cleanup warning | UC volume file | {exc}")
+                    self.cleanup_results.append(
+                        {
+                            "resource": f"file:{self.volume_file_path}",
+                            "status": "failed",
+                            "detail": str(exc),
+                        }
+                    )
             try:
                 self.sql(f"DROP VOLUME IF EXISTS `{catalog}`.`{schema}`.`{volume_name}`")
                 self.cleanup_results.append(
@@ -1231,9 +1287,17 @@ def _http_json(url: str, body: dict[str, Any], headers: dict[str, str]) -> dict[
     return value
 
 
-def _assert_semantics(tool_kind: str, serialized: str) -> None:
+def _assert_semantics(tool_kind: str, serialized: str, expected_marker: str | None = None) -> None:
     lowered = serialized.lower()
-    if tool_kind in {"sandbox", "python", "uc_function"}:
+    if tool_kind in {"sandbox_table", "sandbox_volume"}:
+        if expected_marker is None:
+            raise MatrixError(f"No hidden marker was provided for {tool_kind!r}.")
+        if expected_marker not in serialized:
+            raise MatrixError(
+                f"Missing exact hidden marker {expected_marker!r}: {serialized[:2000]}"
+            )
+        return
+    if tool_kind in {"python", "uc_function"}:
         marker = EXPECTED[tool_kind]
         if marker not in serialized:
             raise MatrixError(f"Missing semantic marker {marker!r}: {serialized[:2000]}")
@@ -1436,6 +1500,29 @@ def verify_evidence(path: pathlib.Path, *, require_cleanup: bool = True) -> int:
         if duplicates:
             sys.stdout.write(f"duplicate rows: {duplicates}\n")
         return 1
+    sandbox_markers = {
+        "sandbox_table": document.get("table_marker"),
+        "sandbox_volume": document.get("volume_marker"),
+    }
+    volume_file_path = document.get("volume_file_path")
+    if (
+        any(not isinstance(marker, str) or not marker for marker in sandbox_markers.values())
+        or sandbox_markers["sandbox_table"] == sandbox_markers["sandbox_volume"]
+        or not isinstance(volume_file_path, str)
+        or not volume_file_path.startswith("/Volumes/")
+    ):
+        sys.stdout.write("sandbox evidence: hidden marker provenance is missing or invalid\n")
+        return 1
+    for tool_kind, marker in sandbox_markers.items():
+        matching_rows = [row for row in rows if row.get("tool_kind") == tool_kind]
+        if any(
+            row.get("expected") != marker or marker not in str(row.get("actual", ""))
+            for row in matching_rows
+        ):
+            sys.stdout.write(
+                f"sandbox evidence: exact hidden marker proof failed for {tool_kind}\n"
+            )
+            return 1
     expected_deployments = len(FRAMEWORKS) * len(AUTHORING_PATHS)
     if len(grant_checks) != expected_deployments:
         sys.stdout.write(

@@ -21,6 +21,8 @@ _SPEC.loader.exec_module(tool_matrix)
 
 
 def _evidence(*, cleanup_required: bool, cleanup_status: str = "deleted") -> dict:
+    table_marker = "AGENTBRICKS_TABLE_0123456789abcdef"
+    volume_marker = "AGENTBRICKS_VOLUME_fedcba9876543210"
     rows = [
         {
             "framework": framework,
@@ -28,6 +30,14 @@ def _evidence(*, cleanup_required: bool, cleanup_status: str = "deleted") -> dic
             "runtime": runtime,
             "tool_kind": tool,
             "status": "pass",
+            "expected": {
+                "sandbox_table": table_marker,
+                "sandbox_volume": volume_marker,
+            }.get(tool, "semantic result"),
+            "actual": {
+                "sandbox_table": json.dumps({"output": table_marker}),
+                "sandbox_volume": json.dumps({"output": volume_marker}),
+            }.get(tool, json.dumps({"output": "semantic result"})),
         }
         for framework in tool_matrix.FRAMEWORKS
         for authoring in tool_matrix.AUTHORING_PATHS
@@ -73,6 +83,11 @@ def _evidence(*, cleanup_required: bool, cleanup_status: str = "deleted") -> dic
             "uv": "uv 0.8",
             "python": "Python 3.12",
         },
+        "table_marker": table_marker,
+        "volume_marker": volume_marker,
+        "volume_file_path": (
+            "/Volumes/supervisor_agent/mason_agent_tools_e2e/matrix_volume/marker.txt"
+        ),
         "cleanup_required": cleanup_required,
         "cleanup_complete": cleanup_required and cleanup_status == "deleted",
         "cleanup": [
@@ -141,6 +156,16 @@ def test_verify_evidence_requires_direct_manual_transitive_grant(tmp_path):
     path = tmp_path / "evidence.json"
     evidence = _evidence(cleanup_required=False)
     evidence["grant_checks"][0]["post_manual_transitive_grant"]["direct_privileges"] = []
+    path.write_text(json.dumps(evidence))
+
+    assert tool_matrix.verify_evidence(path) == 1
+
+
+def test_verify_evidence_requires_exact_sandbox_markers(tmp_path):
+    path = tmp_path / "evidence.json"
+    evidence = _evidence(cleanup_required=False)
+    sandbox_volume = next(row for row in evidence["rows"] if row["tool_kind"] == "sandbox_volume")
+    sandbox_volume["actual"] = json.dumps({"output": "volume read succeeded"})
     path.write_text(json.dumps(evidence))
 
     assert tool_matrix.verify_evidence(path) == 1
@@ -499,3 +524,172 @@ def test_direct_authoring_includes_temporary_volume_scope(tmp_path):
             "permission": "read_only",
         },
     ]
+
+
+def test_create_uc_function_seeds_hidden_table_and_volume_markers(monkeypatch, tmp_path):
+    wheel = tmp_path / "wheel.whl"
+    wheel.write_bytes(b"wheel")
+    runner = tool_matrix.Runner("profile", tmp_path / "out", wheel)
+    statements: list[str] = []
+    uploads: list[tuple[str, bytes, bool | None]] = []
+
+    runner.sql = lambda statement: statements.append(statement) or {}
+
+    class Files:
+        def upload(self, path, contents, *, overwrite=None):
+            uploads.append((path, contents.read(), overwrite))
+
+    client = type("Client", (), {"files": Files()})()
+    monkeypatch.setattr(tool_matrix, "WorkspaceClient", lambda profile: client)
+
+    runner.create_uc_function("supervisor_agent.mason_agent_tools_e2e")
+
+    assert runner.table_marker
+    assert runner.volume_marker
+    assert runner.table_marker != runner.volume_marker
+    table_statement = next(
+        statement for statement in statements if statement.startswith("CREATE TABLE")
+    )
+    assert f"SELECT '{runner.table_marker}' AS marker" in table_statement
+    assert uploads == [
+        (
+            runner.volume_file_path,
+            runner.volume_marker.encode(),
+            True,
+        )
+    ]
+    assert runner.volume_file_path == (
+        f"/Volumes/supervisor_agent/mason_agent_tools_e2e/"
+        f"{runner.uc_volume.rsplit('.', 1)[-1]}/marker.txt"
+    )
+
+
+def test_exercise_reads_table_and_volume_without_disclosing_markers(tmp_path):
+    wheel = tmp_path / "wheel.whl"
+    wheel.write_bytes(b"wheel")
+    runner = tool_matrix.Runner("profile", tmp_path / "out", wheel)
+    runner.uc_function = "supervisor_agent.mason_agent_tools_e2e.marker"
+    runner.uc_table = "supervisor_agent.mason_agent_tools_e2e.matrix_table"
+    runner.uc_volume = "supervisor_agent.mason_agent_tools_e2e.matrix_volume"
+    runner.table_marker = "AGENTBRICKS_TABLE_0123456789abcdef"
+    runner.volume_marker = "AGENTBRICKS_VOLUME_fedcba9876543210"
+    runner.volume_file_path = (
+        "/Volumes/supervisor_agent/mason_agent_tools_e2e/matrix_volume/marker.txt"
+    )
+    prompts: dict[str, str] = {}
+
+    responses = {
+        "sandbox_table": {"output": runner.table_marker},
+        "sandbox_volume": {"output": runner.volume_marker},
+        "mcp": {
+            "output": "web_search returned Databricks Model Context Protocol documentation "
+            "at https://docs.databricks.com/"
+        },
+        "python": {"output": "AGENTBRICKS_PYTHON_OK"},
+        "uc_function": {"output": "AGENTBRICKS_UC_OK:matrix"},
+        "genie": {
+            "output": "genie_ask returned a conversation_id and a sufficiently detailed "
+            "description of the configured data source"
+        },
+    }
+
+    def invoke(label, url, prompt, headers):
+        tool_kind = label.rsplit("-", 1)[-1]
+        prompts[tool_kind] = prompt
+        return responses[tool_kind]
+
+    runner._invoke_with_retry = invoke
+    runner._write_evidence = lambda: None
+    case = tool_matrix.ProjectCase("langgraph", "cli", tmp_path, "agent-bricks-test")
+
+    runner._exercise(case, "dev", "http://localhost:8400", {}, tmp_path / "dev.log")
+
+    sandbox_rows = {
+        row.tool_kind: row for row in runner.rows if row.tool_kind.startswith("sandbox_")
+    }
+    assert set(sandbox_rows) == {"sandbox_table", "sandbox_volume"}
+    assert {row.status for row in sandbox_rows.values()} == {"pass"}
+    assert runner.uc_table in prompts["sandbox_table"]
+    assert runner.volume_file_path in prompts["sandbox_volume"]
+    assert all(runner.table_marker not in prompt for prompt in prompts.values())
+    assert all(runner.volume_marker not in prompt for prompt in prompts.values())
+
+
+def test_exercise_rejects_sandbox_response_without_exact_hidden_marker(tmp_path):
+    wheel = tmp_path / "wheel.whl"
+    wheel.write_bytes(b"wheel")
+    runner = tool_matrix.Runner("profile", tmp_path / "out", wheel)
+    runner.uc_function = "supervisor_agent.mason_agent_tools_e2e.marker"
+    runner.uc_table = "supervisor_agent.mason_agent_tools_e2e.matrix_table"
+    runner.uc_volume = "supervisor_agent.mason_agent_tools_e2e.matrix_volume"
+    runner.table_marker = "AGENTBRICKS_TABLE_0123456789abcdef"
+    runner.volume_marker = "AGENTBRICKS_VOLUME_fedcba9876543210"
+    runner.volume_file_path = (
+        "/Volumes/supervisor_agent/mason_agent_tools_e2e/matrix_volume/marker.txt"
+    )
+
+    def invoke(label, url, prompt, headers):
+        tool_kind = label.rsplit("-", 1)[-1]
+        if tool_kind == "sandbox_table":
+            return {"output": runner.table_marker}
+        if tool_kind == "sandbox_volume":
+            return {"output": "volume read succeeded"}
+        if tool_kind == "mcp":
+            return {
+                "output": "web_search returned a Databricks result at "
+                "https://docs.databricks.com/ with enough response detail"
+            }
+        if tool_kind == "python":
+            return {"output": "AGENTBRICKS_PYTHON_OK"}
+        if tool_kind == "uc_function":
+            return {"output": "AGENTBRICKS_UC_OK:matrix"}
+        return {
+            "output": "genie_ask returned a conversation_id and a sufficiently detailed "
+            "description of the configured data source"
+        }
+
+    runner._invoke_with_retry = invoke
+    runner._write_evidence = lambda: None
+    case = tool_matrix.ProjectCase("langgraph", "cli", tmp_path, "agent-bricks-test")
+
+    runner._exercise(case, "dev", "http://localhost:8400", {}, tmp_path / "dev.log")
+
+    rows = {row.tool_kind: row for row in runner.rows}
+    assert rows["sandbox_table"].status == "pass"
+    assert rows["sandbox_volume"].status == "fail"
+    assert runner.volume_marker in rows["sandbox_volume"].error
+
+
+def test_cleanup_deletes_volume_marker_file_before_dropping_volume(monkeypatch, tmp_path):
+    wheel = tmp_path / "wheel.whl"
+    wheel.write_bytes(b"wheel")
+    runner = tool_matrix.Runner("profile", tmp_path / "out", wheel)
+    runner.uc_volume = "supervisor_agent.mason_agent_tools_e2e.matrix_volume"
+    runner.volume_file_path = (
+        "/Volumes/supervisor_agent/mason_agent_tools_e2e/matrix_volume/marker.txt"
+    )
+    events: list[tuple[str, str]] = []
+
+    class Files:
+        def delete(self, path):
+            events.append(("file", path))
+
+    client = type("Client", (), {"files": Files()})()
+    monkeypatch.setattr(tool_matrix, "WorkspaceClient", lambda profile: client)
+    runner.sql = lambda statement: events.append(("sql", statement)) or {}
+    runner._write_evidence = lambda: None
+
+    runner.cleanup()
+
+    assert events == [
+        ("file", runner.volume_file_path),
+        (
+            "sql",
+            "DROP VOLUME IF EXISTS `supervisor_agent`.`mason_agent_tools_e2e`.`matrix_volume`",
+        ),
+    ]
+    assert runner.cleanup_results == [
+        {"resource": f"file:{runner.volume_file_path}", "status": "deleted"},
+        {"resource": f"volume:{runner.uc_volume}", "status": "deleted"},
+    ]
+    assert runner.cleanup_complete is True
