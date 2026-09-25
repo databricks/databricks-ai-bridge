@@ -67,7 +67,10 @@ def test_kind_mcp_replaces_default_scope(monkeypatch):
     payload = json.loads(result.stdout)
     assert payload["mcp_schema"] == "main.tools"
     assert [tool["name"] for tool in payload["available_tools"]] == ["main.tools.search"]
-    assert payload["available_tools"][0]["add_command"] == "agentbricks tools add mcp main.tools.search"
+    assert (
+        payload["available_tools"][0]["add_command"]
+        == "agentbricks tools add mcp main.tools.search"
+    )
     assert client.calls == [("main.tools", None)]
 
 

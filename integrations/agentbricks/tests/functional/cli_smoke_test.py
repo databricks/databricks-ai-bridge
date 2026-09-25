@@ -54,7 +54,12 @@ def run_agentbricks(tmp_path: pathlib.Path):
 
     def run(*args: str, check: bool = True) -> subprocess.CompletedProcess:
         result = subprocess.run(
-            [str(agentbricks), *args], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60
+            [str(agentbricks), *args],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
         )
         if check:
             assert result.returncode == 0, (
@@ -96,7 +101,9 @@ def test_init_scaffolds(run_agentbricks, tmp_path: pathlib.Path, extra) -> None:
     assert (dest / "agent.toml").is_file()
 
 
-def test_existing_init_includes_migration_skill_from_wheel(run_agentbricks, tmp_path: pathlib.Path) -> None:
+def test_existing_init_includes_migration_skill_from_wheel(
+    run_agentbricks, tmp_path: pathlib.Path
+) -> None:
     project = tmp_path / "existing-agent"
     project.mkdir()
 
@@ -219,7 +226,9 @@ def test_tools_help_and_removed_configured_route(run_agentbricks):
     assert run_agentbricks("mcp", "--help", check=False).returncode != 0
 
 
-def test_mcp_add_without_auth_does_not_change_manifest(run_agentbricks, tmp_path: pathlib.Path) -> None:
+def test_mcp_add_without_auth_does_not_change_manifest(
+    run_agentbricks, tmp_path: pathlib.Path
+) -> None:
     project = tmp_path / "agent"
     run_agentbricks("init", "--framework", "langgraph", str(project))
     manifest = project / "agent.toml"
@@ -242,7 +251,9 @@ def test_mcp_add_without_auth_does_not_change_manifest(run_agentbricks, tmp_path
     assert manifest.read_bytes() == before
 
 
-def test_tracing_unbind_then_bind_requires_an_experiment(run_agentbricks, tmp_path: pathlib.Path) -> None:
+def test_tracing_unbind_then_bind_requires_an_experiment(
+    run_agentbricks, tmp_path: pathlib.Path
+) -> None:
     project = tmp_path / "agent"
     run_agentbricks("init", "--framework", "langgraph", str(project))
     # unbind removes the default binding `agentbricks init` wrote - a pure agent.toml edit, no workspace.

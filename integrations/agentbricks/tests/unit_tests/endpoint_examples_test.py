@@ -34,7 +34,9 @@ def test_printed_invoke_command_is_shell_copyable(
     monkeypatch.setattr(render, "_stdout", Console(file=buf, width=width, no_color=True))
     print_agent_invoke_command(target, uses_runtime_api=uses_runtime_api)
     # Copy the whole line, without removing borders, stripping padding, or joining wrapped lines.
-    commands = [line for line in buf.getvalue().splitlines() if line.startswith("agentbricks endpoint")]
+    commands = [
+        line for line in buf.getvalue().splitlines() if line.startswith("agentbricks endpoint")
+    ]
     assert len(commands) == 1, buf.getvalue()
     command = commands[0]
     path = "/api/invocations" if uses_runtime_api else "/invocations"

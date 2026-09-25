@@ -432,11 +432,15 @@ def test_dev_prints_standalone_invoke_for_each_template(tmp_path, framework, ser
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
 
     assert result.exit_code == 0, result.output
-    commands = [line for line in result.output.splitlines() if line.startswith("agentbricks endpoint")]
+    commands = [
+        line for line in result.output.splitlines() if line.startswith("agentbricks endpoint")
+    ]
     assert len(commands) == 1, result.output
     command = commands[0]
     path = "/api/invocations" if server == "agentbricks" else "/invocations"
-    assert f"agentbricks endpoint invoke --url http://localhost:8000 --path {path} --json " in command
+    assert (
+        f"agentbricks endpoint invoke --url http://localhost:8000 --path {path} --json " in command
+    )
     assert "│" not in command
     assert ("$(uuidgen)" in command) is (server == "agentbricks")
     panel, example = result.output.split("Invoke with Agent Bricks\n")
@@ -444,7 +448,9 @@ def test_dev_prints_standalone_invoke_for_each_template(tmp_path, framework, ser
     assert example.splitlines() == [command]
     assert any(line.startswith("│") and "agentbricks deploy" in line for line in panel.splitlines())
     if server == "agentbricks":
-        assert any(line.startswith("│") and "agentbricks tools add" in line for line in panel.splitlines())
+        assert any(
+            line.startswith("│") and "agentbricks tools add" in line for line in panel.splitlines()
+        )
     if not chat_ui:
         assert "curl -X POST" in panel  # preserve the existing API-only next step
 

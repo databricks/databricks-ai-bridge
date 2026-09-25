@@ -302,7 +302,9 @@ def test_scaffolded_agent_boots_and_answers_locally(
             _announce_local_url(project, app_port, AgentServer(server_kind))
             (tmp_path / "next-steps.txt").write_text(buf.getvalue())
             commands = [
-                line for line in buf.getvalue().splitlines() if line.startswith("agentbricks endpoint")
+                line
+                for line in buf.getvalue().splitlines()
+                if line.startswith("agentbricks endpoint")
             ]
             assert len(commands) == 1, buf.getvalue()
             cli_env = {**boot_env, "PATH": f"{agentbricks.parent}:/usr/bin:/bin"}

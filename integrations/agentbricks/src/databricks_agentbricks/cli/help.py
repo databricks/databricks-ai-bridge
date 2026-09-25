@@ -67,14 +67,23 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("memory", "stores", "create"): (
         ("agentbricks memory stores create --display-name agent-memory", "create a memory store"),
     ),
-    ("memory", "stores", "list"): (("agentbricks memory stores list", "list managed memory stores"),),
-    ("memory", "stores", "get"): (("agentbricks memory stores get <store>", "show one store's details"),),
+    ("memory", "stores", "list"): (
+        ("agentbricks memory stores list", "list managed memory stores"),
+    ),
+    ("memory", "stores", "get"): (
+        ("agentbricks memory stores get <store>", "show one store's details"),
+    ),
     ("memory", "stores", "update"): (
         ('agentbricks memory stores update <store> --description "Agent memory"', "edit a store"),
     ),
-    ("memory", "stores", "delete"): (("agentbricks memory stores delete <store>", "delete a store"),),
+    ("memory", "stores", "delete"): (
+        ("agentbricks memory stores delete <store>", "delete a store"),
+    ),
     ("memory", "entries"): (
-        ("agentbricks memory entries list --store <store> --actor-id alice", "list an actor's entries"),
+        (
+            "agentbricks memory entries list --store <store> --actor-id alice",
+            "list an actor's entries",
+        ),
     ),
     ("memory", "entries", "create"): (
         (
@@ -87,7 +96,10 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("agentbricks memory entries get --store <store> <entry>", "show one entry"),
     ),
     ("memory", "entries", "list"): (
-        ("agentbricks memory entries list --store <store> --actor-id alice", "list an actor's entries"),
+        (
+            "agentbricks memory entries list --store <store> --actor-id alice",
+            "list an actor's entries",
+        ),
     ),
     ("memory", "entries", "search"): (
         (
@@ -106,7 +118,10 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("sessions",): (
         ("agentbricks sessions stores create --name agent-sessions", "create a session store"),
-        ("agentbricks sessions bind agent-sessions", "bind it to the agent (wired in on dev / deploy)"),
+        (
+            "agentbricks sessions bind agent-sessions",
+            "bind it to the agent (wired in on dev / deploy)",
+        ),
         (
             "agentbricks sessions create --store agent-sessions --actor-id alice",
             "start a session for an actor",
@@ -122,16 +137,24 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ),
     ),
     ("sessions", "bind"): (
-        ("agentbricks sessions bind agent-sessions --source .", "declare a session store in agent.toml"),
+        (
+            "agentbricks sessions bind agent-sessions --source .",
+            "declare a session store in agent.toml",
+        ),
     ),
     ("sessions", "unbind"): (
-        ("agentbricks sessions unbind --source .", "remove the session store binding from agent.toml"),
+        (
+            "agentbricks sessions unbind --source .",
+            "remove the session store binding from agent.toml",
+        ),
     ),
     ("sessions", "stores"): (("agentbricks sessions stores list", "list managed session stores"),),
     ("sessions", "stores", "create"): (
         ("agentbricks sessions stores create --name agent-sessions", "create a session store"),
     ),
-    ("sessions", "stores", "list"): (("agentbricks sessions stores list", "list managed session stores"),),
+    ("sessions", "stores", "list"): (
+        ("agentbricks sessions stores list", "list managed session stores"),
+    ),
     ("sessions", "stores", "get"): (
         ("agentbricks sessions stores get agent-sessions", "show one store's details"),
     ),
@@ -176,7 +199,10 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ),
     ),
     ("sessions", "create"): (
-        ("agentbricks sessions create --store agent-sessions --actor-id alice", "start a new session"),
+        (
+            "agentbricks sessions create --store agent-sessions --actor-id alice",
+            "start a new session",
+        ),
     ),
     ("sessions", "list"): (
         ("agentbricks sessions list --store agent-sessions", "list sessions in a store"),
@@ -231,14 +257,18 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("deployments",): (("agentbricks deployments list", "list agent deployments"),),
     ("deployments", "list"): (("agentbricks deployments list", "list agent deployments"),),
-    ("deployments", "get"): (("agentbricks deployments get agent-bricks-my-agent", "show one deployment"),),
+    ("deployments", "get"): (
+        ("agentbricks deployments get agent-bricks-my-agent", "show one deployment"),
+    ),
     ("deployments", "logs"): (
         ("agentbricks deployments logs agent-bricks-my-agent", "stream a deployment's logs"),
     ),
     ("deployments", "start"): (
         ("agentbricks deployments start agent-bricks-my-agent", "start a deployment"),
     ),
-    ("deployments", "stop"): (("agentbricks deployments stop agent-bricks-my-agent", "stop a deployment"),),
+    ("deployments", "stop"): (
+        ("agentbricks deployments stop agent-bricks-my-agent", "stop a deployment"),
+    ),
     ("deployments", "delete"): (
         ("agentbricks deployments delete agent-bricks-my-agent", "delete a deployment"),
     ),
@@ -267,24 +297,41 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("tools",): (
         ("agentbricks tools add --help", "see all tool types you can add"),
-        ("agentbricks tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
+        (
+            "agentbricks tools add sandbox --scope table:samples.nyctaxi.trips",
+            "add a data sandbox tool",
+        ),
         ("agentbricks tools add mcp system.ai.web_search", "add a managed MCP tool"),
         ("agentbricks tools remove mcp system.ai.web_search", "remove a tool binding"),
         ("agentbricks tools list", "browse available integrations to add"),
     ),
     ("tools", "add"): (
-        ("agentbricks tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
+        (
+            "agentbricks tools add sandbox --scope table:samples.nyctaxi.trips",
+            "add a data sandbox tool",
+        ),
         ("agentbricks tools add mcp system.ai.web_search", "add a managed MCP tool"),
-        ("agentbricks tools add uc-function catalog.schema.lookup_ticket", "add a UC function tool"),
+        (
+            "agentbricks tools add uc-function catalog.schema.lookup_ticket",
+            "add a UC function tool",
+        ),
         ("agentbricks tools add genie-one", "add workspace-wide Genie One tools"),
         ("agentbricks tools add genie-agent SPACE_ID", "add tools for one Genie Space"),
     ),
     ("tools", "add", "sandbox"): (
-        ("agentbricks tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
+        (
+            "agentbricks tools add sandbox --scope table:samples.nyctaxi.trips",
+            "add a data sandbox tool",
+        ),
     ),
-    ("tools", "add", "mcp"): (("agentbricks tools add mcp system.ai.web_search", "add a managed MCP tool"),),
+    ("tools", "add", "mcp"): (
+        ("agentbricks tools add mcp system.ai.web_search", "add a managed MCP tool"),
+    ),
     ("tools", "add", "uc-function"): (
-        ("agentbricks tools add uc-function catalog.schema.lookup_ticket", "add a UC function tool"),
+        (
+            "agentbricks tools add uc-function catalog.schema.lookup_ticket",
+            "add a UC function tool",
+        ),
     ),
     ("tools", "remove"): (
         ("agentbricks tools remove mcp system.ai.web_search", "remove an MCP tool by service"),

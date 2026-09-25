@@ -221,7 +221,9 @@ def test_group_comment_layout_is_uniform():
         )
     )
     # no command line carries a trailing inline comment
-    assert not any(ln.strip().startswith("agentbricks") and " # " in ln for ln in epilog.splitlines())
+    assert not any(
+        ln.strip().startswith("agentbricks") and " # " in ln for ln in epilog.splitlines()
+    )
 
 
 def test_memory_search_uses_canonical_page_size_option():
