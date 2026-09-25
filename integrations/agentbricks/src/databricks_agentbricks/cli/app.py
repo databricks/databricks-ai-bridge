@@ -12,6 +12,7 @@ import click
 
 from databricks_agentbricks import errors
 from databricks_agentbricks.cli.auth import load_default_profile, login, logout
+from databricks_agentbricks.cli.connections import auth
 from databricks_agentbricks.cli.deploy import deploy, deployments
 from databricks_agentbricks.cli.dev import dev
 from databricks_agentbricks.cli.endpoint import endpoint
@@ -87,6 +88,7 @@ def agentbricks(ctx: click.Context, profile: Optional[str], output: str) -> None
 
 agentbricks.add_command(login)
 agentbricks.add_command(logout)
+agentbricks.add_command(auth)
 agentbricks.add_command(init)
 agentbricks.add_command(dev)
 agentbricks.add_command(memory)

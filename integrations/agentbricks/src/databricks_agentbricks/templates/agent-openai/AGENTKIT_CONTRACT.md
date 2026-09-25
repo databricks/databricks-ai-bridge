@@ -14,6 +14,7 @@ needs runtime wiring as well as manifest configuration.
 | --- | --- |
 | `dev`, `deploy` | Installable dependencies and an `app.yaml` command starting the application |
 | `tools add mcp`, `uc-function`, `genie`, `sandbox` | Load bindings into agent tool lists and tool execution |
+| `auth connections create`, `auth connections bind` | Call the declared alias through `databricks_agentkit.auth.context` inside an active Agent Bricks invocation |
 | `sessions bind` | Select the bound session store and supply session/actor identity |
 | `memory bind` | Include bound, actor-scoped memory tools in the agent tool list |
 | `tracing bind`, `tracing unbind` | Initialize tracing and open a root span from resolved config |
@@ -51,6 +52,21 @@ Feed selected tools into the agent's tool list while preserving approval policy.
 approval declare `needs_approval=True` and appear in the template's `REQUIRE_APPROVAL` set so
 pending calls surface as interrupts. New bindings must become effective on the next agent
 construction or restart without another source edit.
+
+### Governed external connections
+
+Entries in `[[connections]]` are agent-owned HTTP or MCP dependencies, not framework tool
+definitions. Import `context` with `from databricks_agentkit.auth import context` and call
+`context.connections.client(alias).request(...)` inside an `@function_tool` or agent hook. HTTP
+requests use a relative path; MCP requests use an empty path or `/`. Do not accept or forward raw
+provider tokens, Databricks authorization headers, cookies, or absolute provider URLs.
+
+`principal = "user"` requires the trusted request-auth context supplied by `DurableAgentServer` and
+works during foreground and first-attempt background execution. The caller needs Apps consent and
+`USE CONNECTION`. Recovery fails before agent code runs because the credential is intentionally not
+persisted; never fall back to App identity. `principal = "app"` uses the App service principal and
+deploy grants it `USE_CONNECTION`. Direct UC Connection MCP routing is not a UC MCP Service and must
+not be added to `mcp_servers()`.
 
 ### Sessions and memory
 

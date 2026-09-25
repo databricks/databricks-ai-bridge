@@ -1,7 +1,8 @@
 """Lakebase/Apps resource plumbing for a deployed app.
 
 Binds Databricks Apps resources onto an app so its service principal gets platform-managed grants:
-a `postgres` resource for the legacy per-app Runtime Store and the tracing `experiment` resource.
+a `postgres` resource for the legacy per-app Runtime Store, the tracing `experiment` resource, and
+app-principal Unity Catalog Connections.
 The service-managed Runtime Store path grants database access through Conversation Store instead.
 
 Managed-store (session/memory) table access is NOT granted here. The deployed app reaches those
@@ -12,10 +13,13 @@ server-side (see `deploy._grant_store_access`), so no direct Lakebase grant is n
 from __future__ import annotations
 
 import json
+import re
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Optional
 
+from databricks_agentbricks.agent_project import ConnectionSpec
 from databricks_agentbricks.databricks_cli import _databricks
 
 
@@ -69,6 +73,66 @@ def _current_app_resources(app: str, profile: Optional[str]) -> list[dict]:
 
 # The app-resource name for the trace experiment (unique across an app's resources, like a store's).
 _TRACE_EXPERIMENT_RESOURCE = "agentbricks-trace-experiment"
+_CONNECTION_RESOURCE_PREFIX = "agentbricks-connection-"
+
+
+def _connection_resource_name(alias: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "-", alias.lower()).strip("-")
+    return f"{_CONNECTION_RESOURCE_PREFIX}{normalized}"
+
+
+def _connection_current_app_resources(app: str, profile: Optional[str]) -> list[dict] | None:
+    """Read resources strictly so a failed read can never become an empty overwrite."""
+    result = _databricks(["apps", "get", app, "-o", "json"], profile, capture=True, check=False)
+    if result.returncode != 0:
+        return None
+    try:
+        resources = json.loads(result.stdout or "{}").get("resources", [])
+    except (json.JSONDecodeError, AttributeError):
+        return None
+    if not isinstance(resources, list) or not all(
+        isinstance(resource, dict) for resource in resources
+    ):
+        return None
+    return resources
+
+
+def apply_connection_resources(
+    app: str, bindings: Sequence[ConnectionSpec], profile: Optional[str]
+) -> Optional[str]:
+    """Reconcile app-principal UC Connections while preserving unrelated resources."""
+    app_bindings = [binding for binding in bindings if binding.principal == "app"]
+    ours = [
+        {
+            "name": _connection_resource_name(binding.name),
+            "uc_securable": {
+                "securable_full_name": binding.uc_connection,
+                "securable_type": "CONNECTION",
+                "permission": "USE_CONNECTION",
+            },
+        }
+        for binding in app_bindings
+    ]
+    our_names = [resource["name"] for resource in ours]
+    if len(our_names) != len(set(our_names)):
+        return "Connection aliases resolve to the same Databricks App resource name."
+
+    current = _connection_current_app_resources(app, profile)
+    if current is None:
+        return "Could not safely read existing Databricks App resources."
+    preserved = [
+        resource
+        for resource in current
+        if isinstance(resource, dict)
+        and not str(resource.get("name", "")).startswith(_CONNECTION_RESOURCE_PREFIX)
+    ]
+    desired = preserved + ours
+    if desired == current:
+        return None
+    result = _update_app_resources(app, desired, profile)
+    if result.returncode == 0:
+        return None
+    return "Databricks Apps rejected the UC Connection resource update."
 
 
 def apply_experiment_resource(
