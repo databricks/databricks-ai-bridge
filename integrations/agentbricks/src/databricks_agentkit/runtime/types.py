@@ -69,7 +69,7 @@ class InvocationAttemptContext:
     invocation_id: str
     attempt: int
     _emit: InvocationEventEmitter | None = field(default=None, repr=False, compare=False)
-    session_id: str | None = field(default=None, kw_only=True)
+    session_id: str | None = None
 
     @property
     def is_recovery(self) -> bool:

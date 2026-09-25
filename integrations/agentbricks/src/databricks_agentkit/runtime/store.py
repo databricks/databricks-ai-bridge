@@ -59,7 +59,6 @@ class RuntimeStore(Protocol):
         self,
         invocation_id: str,
         request: JsonValue,
-        *,
         session_id: str | None = None,
     ) -> Invocation:
         """Create an invocation or return the identical request accepted for this ID.
@@ -72,7 +71,6 @@ class RuntimeStore(Protocol):
     async def get(
         self,
         invocation_id: str | None = None,
-        *,
         session_id: str | None = None,
     ) -> Invocation | None:
         """Return state for one invocation or the active/next invocation in a session."""
@@ -108,7 +106,6 @@ class RuntimeStore(Protocol):
         self,
         invocation_id: str | None = None,
         after_sequence: int | None = None,
-        *,
         session_id: str | None = None,
     ) -> list[InvocationEvent]:
         """Return invocation or session events after the optional exclusive replay cursor."""
@@ -133,7 +130,6 @@ class InMemoryRuntimeStore(RuntimeStore):
         self,
         invocation_id: str,
         request: JsonValue,
-        *,
         session_id: str | None = None,
     ) -> Invocation:
         _validate_invocation_id(invocation_id)
@@ -173,7 +169,6 @@ class InMemoryRuntimeStore(RuntimeStore):
     async def get(
         self,
         invocation_id: str | None = None,
-        *,
         session_id: str | None = None,
     ) -> Invocation | None:
         _validate_read_scope(invocation_id, session_id)
@@ -283,7 +278,6 @@ class InMemoryRuntimeStore(RuntimeStore):
         self,
         invocation_id: str | None = None,
         after_sequence: int | None = None,
-        *,
         session_id: str | None = None,
     ) -> list[InvocationEvent]:
         _validate_read_scope(invocation_id, session_id)

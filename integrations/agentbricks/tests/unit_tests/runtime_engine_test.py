@@ -45,7 +45,6 @@ class MemoryDurableRuntimeStore:
         self,
         invocation_id: str,
         request: JsonValue,
-        *,
         session_id: str | None = None,
     ) -> Invocation:
         existing = self.states.get(invocation_id)
@@ -81,7 +80,6 @@ class MemoryDurableRuntimeStore:
     async def get(
         self,
         invocation_id: str | None = None,
-        *,
         session_id: str | None = None,
     ) -> Invocation | None:
         if (invocation_id is None) == (session_id is None):
@@ -228,7 +226,6 @@ class MemoryDurableRuntimeStore:
         self,
         invocation_id: str | None = None,
         after_sequence: int | None = None,
-        *,
         session_id: str | None = None,
     ) -> list[InvocationEvent]:
         if (invocation_id is None) == (session_id is None):

@@ -199,7 +199,6 @@ class Runtime:
         self,
         invocation_id: str,
         request: JsonValue,
-        *,
         session_id: str | None = None,
     ) -> Invocation:
         """Accept an idempotent invocation and schedule it on this worker.
@@ -228,7 +227,6 @@ class Runtime:
         self,
         invocation_id: str,
         request: JsonValue,
-        *,
         session_id: str | None = None,
         timeout: float | None = None,
     ) -> JsonValue:
@@ -239,7 +237,6 @@ class Runtime:
     async def get_invocation(
         self,
         invocation_id: str | None = None,
-        *,
         session_id: str | None = None,
     ) -> Invocation | None:
         """Return invocation or session state and schedule queued first-attempt work."""
@@ -283,7 +280,6 @@ class Runtime:
     async def get_events(
         self,
         invocation_id: str | None = None,
-        *,
         session_id: str | None = None,
         after_sequence: int | None = None,
     ) -> list[InvocationEvent]:

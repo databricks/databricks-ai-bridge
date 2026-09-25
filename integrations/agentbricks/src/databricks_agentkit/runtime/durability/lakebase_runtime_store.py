@@ -353,7 +353,6 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
         self,
         invocation_id: str,
         request: JsonValue,
-        *,
         session_id: str | None = None,
     ) -> Invocation:
         _validate_invocation_id(invocation_id)
@@ -425,7 +424,6 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
     async def get(
         self,
         invocation_id: str | None = None,
-        *,
         session_id: str | None = None,
     ) -> Invocation | None:
         _validate_read_scope(invocation_id, session_id)
@@ -756,7 +754,6 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
         self,
         invocation_id: str | None = None,
         after_sequence: int | None = None,
-        *,
         session_id: str | None = None,
     ) -> list[InvocationEvent]:
         """Return ordered events for one invocation or session after an optional cursor."""
