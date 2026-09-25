@@ -1,9 +1,9 @@
-"""Lakebase/Apps resource plumbing for a deployed app.
+"""Masked Apps resource reconciliation for a deployed app.
 
 Binds Databricks Apps resources onto an app so its service principal gets platform-managed grants:
 a `postgres` resource for the legacy per-app Runtime Store, the tracing `experiment` resource, and
-`uc_securable` TABLE resources granting MODIFY on a UC-backed experiment's OTEL trace tables.
-The service-managed Runtime Store path grants database access through Conversation Store instead.
+`uc_securable` TABLE resources for tracing and direct tools declared in `agent.toml`. The
+service-managed Runtime Store path grants database access through Conversation Store instead.
 
 Managed-store (session/memory) table access is NOT granted here. The deployed app reaches those
 stores over the conversation-store REST API, which grants the app's service principal read/write
@@ -16,7 +16,7 @@ import json
 import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 from databricks_agentbricks.databricks_cli import _databricks
 from databricks_agentbricks.trace_tables import TraceTable
@@ -91,12 +91,54 @@ def _read_failed_reason(exc: _AppResourcesReadError) -> str:
 
 # The app-resource name for the trace experiment (unique across an app's resources, like a store's).
 _TRACE_EXPERIMENT_RESOURCE = "agentbricks-trace-experiment"
+_TOOL_RESOURCE_PREFIX = "agentbricks-tool-"
 # Prefix for the per-table trace resources (one uc_securable resource per OTEL table).
 # Databricks Apps resource names must be 2-30 characters, so keep the prefix short: the longest
 # resulting name, `agentbricks-trace-annotations` (29), must stay <= 30. `apps create-update` rejects
 # the WHOLE resource array if any name is too long, so an over-length name silently drops every trace
 # grant. (`agentbricks-trace-table-` + `annotations` = 35 chars, which is what regressed.)
 _UC_TRACE_TABLE_RESOURCE_PREFIX = "agentbricks-trace-"
+
+
+def _contains_expected_fields(actual: Any, expected: Any) -> bool:
+    if isinstance(expected, dict):
+        return isinstance(actual, dict) and all(
+            key in actual and _contains_expected_fields(actual[key], value)
+            for key, value in expected.items()
+        )
+    if isinstance(expected, list):
+        return (
+            isinstance(actual, list)
+            and len(actual) == len(expected)
+            and all(
+                _contains_expected_fields(actual_item, expected_item)
+                for actual_item, expected_item in zip(actual, expected, strict=True)
+            )
+        )
+    return actual == expected
+
+
+def _owned_resources_match(actual: Sequence[Any], expected: Sequence[dict[str, Any]]) -> bool:
+    return len(actual) == len(expected) and all(
+        _contains_expected_fields(actual_resource, expected_resource)
+        for actual_resource, expected_resource in zip(actual, expected, strict=True)
+    )
+
+
+def _read_app_resources_strict(
+    app: str, profile: Optional[str], *, action: str
+) -> tuple[list[Any] | None, str | None]:
+    result = _databricks(["apps", "get", app, "-o", "json"], profile, capture=True, check=False)
+    if result.returncode != 0:
+        reason = (result.stderr or result.stdout or "").strip() or "unknown error"
+        return None, f"{action}: {reason}"
+    try:
+        resources = json.loads(result.stdout or "{}").get("resources", [])
+    except (json.JSONDecodeError, AttributeError):
+        return None, f"{action}: invalid Apps response"
+    if not isinstance(resources, list):
+        return None, f"{action}: invalid resources array"
+    return resources, None
 
 
 def apply_trace_resources(
@@ -177,6 +219,65 @@ def apply_postgres_resources(
     if result.returncode == 0:
         return None
     return (result.stderr or result.stdout or "").strip() or "unknown error"
+
+
+def apply_tool_resources(
+    app: str, resources: Sequence[dict[str, Any]], profile: Optional[str]
+) -> Optional[str]:
+    """Replace Agent Bricks-owned tool resources while preserving unrelated App resources."""
+    current, read_error = _read_app_resources_strict(
+        app, profile, action="Could not read existing App resources"
+    )
+    if read_error is not None:
+        return read_error
+    assert current is not None
+
+    preserved = [
+        resource
+        for resource in current
+        if not (
+            isinstance(resource, dict)
+            and isinstance(resource.get("name"), str)
+            and resource["name"].startswith(_TOOL_RESOURCE_PREFIX)
+        )
+    ]
+    owned = sorted(resources, key=lambda resource: str(resource.get("name", "")))
+    current_owned = sorted(
+        (
+            resource
+            for resource in current
+            if isinstance(resource, dict)
+            and isinstance(resource.get("name"), str)
+            and resource["name"].startswith(_TOOL_RESOURCE_PREFIX)
+        ),
+        key=lambda resource: str(resource.get("name", "")),
+    )
+    if _owned_resources_match(current_owned, owned):
+        return None
+    reconciled = [*preserved, *owned]
+    update = _update_app_resources(app, reconciled, profile)
+    if update.returncode != 0:
+        return (update.stderr or update.stdout or "").strip() or "unknown error"
+
+    persisted, verify_error = _read_app_resources_strict(
+        app, profile, action="Could not verify App tool resources"
+    )
+    if verify_error is not None:
+        return verify_error
+    assert persisted is not None
+    persisted_owned = sorted(
+        (
+            resource
+            for resource in persisted
+            if isinstance(resource, dict)
+            and isinstance(resource.get("name"), str)
+            and resource["name"].startswith(_TOOL_RESOURCE_PREFIX)
+        ),
+        key=lambda resource: str(resource.get("name", "")),
+    )
+    if not _owned_resources_match(persisted_owned, owned):
+        return "Could not verify App tool resources: Agent Bricks-owned resources do not match"
+    return None
 
 
 def _update_app_resources(

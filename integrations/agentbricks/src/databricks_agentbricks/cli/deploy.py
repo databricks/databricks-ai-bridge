@@ -55,6 +55,7 @@ from databricks_agentbricks.project_config import (
 )
 from databricks_agentbricks.project_types import AgentServer
 from databricks_agentbricks.render import field
+from databricks_agentbricks.tool_access import plan_tool_access, reconcile_tool_access
 from databricks_agentkit import timefmt
 from databricks_agentkit.runtime.store import (
     RUNTIME_STORE_DATABASE_ENV,
@@ -718,7 +719,37 @@ def deploy(
         scaffolded = _upsert_manifest_env(source_dir, managed_env) or scaffolded
         env_updates.update(managed_env)
 
-    # 5. Upload the source and roll out the deployment.
+    # 5. Reconcile direct tool access before uploading any source. Apps-backed grants track the
+    #    complete Agent Bricks-owned subset, while MCP and Workspace grants are additive because
+    #    those APIs do not expose ownership metadata that would make automatic removal safe.
+    tool_access_plan = plan_tool_access(project.tools) if project is not None else None
+    if tool_access_plan is not None:
+        tool_principal = _app_service_principal(name, obj.profile)
+        with render.status("Granting the app access to its explicit tool resources…"):
+            reconcile_tool_access(
+                client.workspace_client,
+                name,
+                tool_principal,
+                tool_access_plan,
+                obj.profile,
+            )
+        tool_target_count = (
+            len(tool_access_plan.app_resources)
+            + len(tool_access_plan.uc_grants)
+            + len(tool_access_plan.workspace_grants)
+        )
+        if tool_target_count:
+            additive_note = (
+                "; UC/Workspace grants are additive"
+                if tool_access_plan.uc_grants or tool_access_plan.workspace_grants
+                else ""
+            )
+            provisioned["Tool access"] = (
+                f"{tool_target_count} explicit grant target"
+                f"{'s' if tool_target_count != 1 else ''} reconciled{additive_note}"
+            )
+
+    # 6. Upload the source and roll out the deployment.
     ws_path = (
         workspace_path or f"/Workspace/Users/{client.current_user}/agentbricks_deployments/{name}"
     )
@@ -736,7 +767,7 @@ def deploy(
         action=f"Could not deploy '{name}'.",
     )
 
-    # 6. Grant the app's service principal what it needs to run (best-effort):
+    # 7. Grant the app's service principal what it needs to run (best-effort):
     #    - stores: grant the SP read/write via the managed store API (the store service does the
     #      underlying Lakebase grant, so no store ownership / Lakebase MANAGE is required here);
     #    - tracing: bind the experiment as an `experiment` resource (CAN_EDIT) so it can write traces;
@@ -786,6 +817,17 @@ def deploy(
                 if not grants_stores
                 else ("granted" if grant_error is None else "failed"),
                 "store_grant_error": grant_error,
+                "tool_access": None
+                if tool_access_plan is None
+                else {
+                    "app_resources": len(tool_access_plan.app_resources),
+                    "uc_grants": len(tool_access_plan.uc_grants),
+                    "workspace_grants": len(tool_access_plan.workspace_grants),
+                    "direct_resources_only": True,
+                    "uc_workspace_grants_additive": bool(
+                        tool_access_plan.uc_grants or tool_access_plan.workspace_grants
+                    ),
+                },
             }
         )
         return
