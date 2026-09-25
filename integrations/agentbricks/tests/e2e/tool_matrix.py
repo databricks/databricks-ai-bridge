@@ -155,7 +155,7 @@ class Runner:
         self.versions: dict[str, str] = {}
         self.transcript = Transcript(output / "commands.log")
         self.runner_venv = output / "runner-venv"
-        self.agentbricks = self.runner_venv / "bin" / "ab"
+        self.agentbricks = self.runner_venv / "bin" / "agentbricks"
         self.rows: list[EvidenceRow] = []
         self.apps: list[str] = []
         self.uc_function: str | None = None
@@ -495,7 +495,7 @@ class Runner:
         )
         if rejected.returncode == 0 or manifest.read_bytes() != before:
             raise MatrixError(
-                "ab tools add accepted an unavailable MCP service or changed agent.toml"
+                "agentbricks tools add accepted an unavailable MCP service or changed agent.toml"
             )
         if json.loads(rejected.stderr).get("error", {}).get("code") not in {
             "NOT_FOUND",
@@ -515,7 +515,7 @@ class Runner:
         )
         manifest = tomli.loads((project / "agent.toml").read_text())
         if any(tool["id"] == "broken_mcp" for tool in manifest.get("tools", [])):
-            raise MatrixError("ab tools remove left the broken MCP binding in agent.toml")
+            raise MatrixError("agentbricks tools remove left the broken MCP binding in agent.toml")
         commands = [
             [
                 "tools",
@@ -584,7 +584,7 @@ class Runner:
             .replace("__UC_VOLUME__", self.uc_volume)
         )
         target = project / "agent.toml"
-        self.transcript.file_step(target, "direct authoring; no ab tools command")
+        self.transcript.file_step(target, "direct authoring; no agentbricks tools command")
         target.write_text(manifest, encoding="utf-8")
 
     def _write_python_marker(self, project: pathlib.Path) -> None:

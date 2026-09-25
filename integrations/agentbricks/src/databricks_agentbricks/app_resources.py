@@ -2,8 +2,8 @@
 
 Binds Databricks Apps resources onto an app so its service principal gets platform-managed grants:
 a `postgres` resource for the legacy per-app Runtime Store, the tracing `experiment` resource, and
-the Agent Bricks-owned direct tool resources declared in `agent.toml`. The service-managed Runtime Store
-path grants database access through Conversation Store instead.
+`uc_securable` TABLE resources for tracing and direct tools declared in `agent.toml`. The
+service-managed Runtime Store path grants database access through Conversation Store instead.
 
 Managed-store (session/memory) table access is NOT granted here. The deployed app reaches those
 stores over the conversation-store REST API, which grants the app's service principal read/write
@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from databricks_agentbricks.databricks_cli import _databricks
+from databricks_agentbricks.trace_tables import TraceTable
 
 
 @dataclass(frozen=True)
@@ -57,21 +58,46 @@ class LakebaseBackend:
         }
 
 
+class _AppResourcesReadError(RuntimeError):
+    """The app's current resources couldn't be read.
+
+    Raised (rather than returning None or []) so a failed read is unambiguous: an ``apps get`` error or
+    unparseable output must NOT be mistaken for "no resources", because the resource write is a
+    full-array replace and would then drop every resource the app has. Carries the underlying error so
+    callers can surface it; a returned list (possibly empty) always reflects the app's real state.
+    """
+
+
 def _current_app_resources(app: str, profile: Optional[str]) -> list[dict]:
-    """Read the app's existing resources array (empty list if it can't be read)."""
+    """Read the app's existing resources array; raise ``_AppResourcesReadError`` if the read fails."""
     result = _databricks(["apps", "get", app, "-o", "json"], profile, capture=True, check=False)
     if result.returncode != 0:
-        return []
+        detail = (result.stderr or result.stdout or "").strip() or "apps get failed"
+        raise _AppResourcesReadError(detail)
     try:
         resources = json.loads(result.stdout or "{}").get("resources", [])
-    except (json.JSONDecodeError, AttributeError):
-        return []
+    except (json.JSONDecodeError, AttributeError) as exc:
+        raise _AppResourcesReadError(f"unparseable apps get output: {exc}") from exc
     return resources if isinstance(resources, list) else []
+
+
+def _read_failed_reason(exc: _AppResourcesReadError) -> str:
+    """The non-fatal reason a reconcile skipped its write because current resources couldn't be read."""
+    return (
+        "skipped the resource update to avoid dropping the app's other resources "
+        f"(could not read current resources: {exc})"
+    )
 
 
 # The app-resource name for the trace experiment (unique across an app's resources, like a store's).
 _TRACE_EXPERIMENT_RESOURCE = "agentbricks-trace-experiment"
 _TOOL_RESOURCE_PREFIX = "agentbricks-tool-"
+# Prefix for the per-table trace resources (one uc_securable resource per OTEL table).
+# Databricks Apps resource names must be 2-30 characters, so keep the prefix short: the longest
+# resulting name, `agentbricks-trace-annotations` (29), must stay <= 30. `apps create-update` rejects
+# the WHOLE resource array if any name is too long, so an over-length name silently drops every trace
+# grant. (`agentbricks-trace-table-` + `annotations` = 35 chars, which is what regressed.)
+_UC_TRACE_TABLE_RESOURCE_PREFIX = "agentbricks-trace-"
 
 
 def _contains_expected_fields(actual: Any, expected: Any) -> bool:
@@ -115,27 +141,58 @@ def _read_app_resources_strict(
     return resources, None
 
 
-def apply_experiment_resource(
-    app: str, experiment_id: str, profile: Optional[str]
+def apply_trace_resources(
+    app: str,
+    experiment_id: Optional[str],
+    tables: Sequence[TraceTable],
+    profile: Optional[str],
 ) -> Optional[str]:
-    """Bind the trace experiment as an `experiment` app resource so the SP can write traces.
+    """Reconcile the app's agentbricks-owned trace resources to the desired state in one masked update.
 
-    This is the platform-managed grant: declaring the experiment as a `CAN_EDIT` resource lets the
-    app's service principal log traces to it (no manual SQL grant). Uses the same masked
-    read-modify-write as `apply_postgres_resources`: replace the whole resource array (preserving
-    every resource we don't own) while `update_mask` keeps the write from touching any other app
-    field. Returns None on success or a human-readable reason on failure.
+    The desired set is the `experiment` resource (CAN_EDIT, so the SP can write traces) plus one
+    `uc_securable` TABLE resource (MODIFY) per UC OTEL table when the experiment is UC-backed - or
+    EMPTY when tracing is unbound (``experiment_id`` is None), so an unbind + redeploy prunes the stale
+    `agentbricks-trace-experiment` / `agentbricks-trace-*` resources instead of leaving the SP
+    with grants on an experiment it no longer uses. ``tables`` are ``TraceTable`` entries (``kind`` and
+    ``full_name``, e.g. ``TraceTable(TraceTableKind.SPANS, "cat.schema.pfx_otel_spans")``); each kind
+    names its resource ``agentbricks-trace-<kind>``. Writing the complete agentbricks-owned set
+    every deploy also converges a UC rebind: a new experiment's tables replace the old ones in the same
+    write. MODIFY grants MODIFY+SELECT and Databricks Apps auto-grants USE CATALOG/USE SCHEMA - no
+    catalog/schema resource or SQL grant needed. Preserves every resource we don't own. None on
+    success, else a reason.
     """
-    ours = {
-        "name": _TRACE_EXPERIMENT_RESOURCE,
-        "experiment": {"experiment_id": experiment_id, "permission": "CAN_EDIT"},
-    }
+    ours = (
+        [
+            {
+                "name": _TRACE_EXPERIMENT_RESOURCE,
+                "experiment": {"experiment_id": experiment_id, "permission": "CAN_EDIT"},
+            }
+        ]
+        if experiment_id is not None
+        else []
+    ) + [
+        {
+            "name": f"{_UC_TRACE_TABLE_RESOURCE_PREFIX}{t.kind.value}",
+            "uc_securable": {
+                "securable_full_name": t.full_name,
+                "securable_type": "TABLE",
+                "permission": "MODIFY",
+            },
+        }
+        for t in tables
+    ]
+    try:
+        current = _current_app_resources(app, profile)
+    except _AppResourcesReadError as exc:
+        return _read_failed_reason(exc)
     preserved = [
         r
-        for r in _current_app_resources(app, profile)
-        if isinstance(r, dict) and r.get("name") != _TRACE_EXPERIMENT_RESOURCE
+        for r in current
+        if isinstance(r, dict)
+        and r.get("name") != _TRACE_EXPERIMENT_RESOURCE
+        and not str(r.get("name", "")).startswith(_UC_TRACE_TABLE_RESOURCE_PREFIX)
     ]
-    result = _update_app_resources(app, preserved + [ours], profile)
+    result = _update_app_resources(app, preserved + ours, profile)
     if result.returncode == 0:
         return None
     return (result.stderr or result.stdout or "").strip() or "unknown error"
@@ -153,11 +210,11 @@ def apply_postgres_resources(
     """
     ours = [b.postgres_resource() for b in backends]
     our_names = {r["name"] for r in ours}
-    preserved = [
-        r
-        for r in _current_app_resources(app, profile)
-        if isinstance(r, dict) and r.get("name") not in our_names
-    ]
+    try:
+        current = _current_app_resources(app, profile)
+    except _AppResourcesReadError as exc:
+        return _read_failed_reason(exc)
+    preserved = [r for r in current if isinstance(r, dict) and r.get("name") not in our_names]
     result = _update_app_resources(app, preserved + ours, profile)
     if result.returncode == 0:
         return None

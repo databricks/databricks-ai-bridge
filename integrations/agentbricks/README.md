@@ -1,4 +1,4 @@
-# Agent Bricks CLI (`ab`)
+# Agent Bricks CLI (`agentbricks`)
 
 Agent Bricks CLI is an experimental command-line interface for building and deploying custom
 agents on Databricks. It manages memory, sessions, tracing, and deployments from one authenticated
@@ -25,17 +25,17 @@ invocation protocol to design yourself. Bring your own agent, or start from a te
 
 ![Deployment: from a blank directory to a running service](docs/deployment.svg)
 
-- **Agent project** - `ab init` scaffolds a deployable project from a framework template
+- **Agent project** - `agentbricks init` scaffolds a deployable project from a framework template
   (LangGraph or OpenAI Agents) with the runtime, tests, and an optional chat UI wired up; you edit
   the application code (model, tools, prompts).
 - **`agent.toml`** - the declarative source of truth for the Databricks-managed infrastructure your
   agent depends on: tool bindings (data sandbox, managed MCP services, Unity Catalog functions) and
-  memory, session, and durability resources. `ab deploy` reads it to provision and wire everything
+  memory, session, and durability resources. `agentbricks deploy` reads it to provision and wire everything
   up (detailed under [Agent tools](#agent-tools)).
-- **`ab deploy`** - provisions the bound stores, grants the app's service principal access to
+- **`agentbricks deploy`** - provisions the bound stores, grants the app's service principal access to
   them, provisions the durable-runtime database when durability is on, configures tracing, and rolls
-  out the app. `ab deployments` covers the lifecycle (list, get, logs, start, stop, delete).
-- **`ab dev`** - runs your agent from the same manifest the deployment uses, so local behavior
+  out the app. `agentbricks deployments` covers the lifecycle (list, get, logs, start, stop, delete).
+- **`agentbricks dev`** - runs your agent from the same manifest the deployment uses, so local behavior
   matches what ships.
 
 **Runtime**
@@ -48,28 +48,28 @@ The two ways to run an agent:
   invocation contract (synchronous, streaming, background). Enable the durable runtime so
   long-running and background work survives restarts, redeploys, and crashes. The framework
   templates are thin layers over `DurableAgentServer` (HTTP contract detailed under [Runtime](#runtime)).
-- **Custom server - generic, full control.** `ab init --server custom` scaffolds a minimal FastAPI
+- **Custom server - generic, full control.** `agentbricks init --server custom` scaffolds a minimal FastAPI
   server with no `DurableAgentServer`: you define your own endpoints, request/response shapes, and protocol.
-  `ab dev` and `ab deploy` run and ship it the same way.
+  `agentbricks dev` and `agentbricks deploy` run and ship it the same way.
 
 ## Prerequisites
 
-- **Python ≥3.10** — the `ab` CLI installs and runs on any Python 3.10+. The
-  `memory`, `sessions`, `tools`, and `ab tracing bind`/`unbind` commands need nothing else.
+- **Python ≥3.10** — the `agentbricks` CLI installs and runs on any Python 3.10+. The
+  `memory`, `sessions`, `tools`, and `agentbricks tracing bind`/`unbind` commands need nothing else.
 - **[`uv`](https://docs.astral.sh/uv/)** — needed to scaffold, run, and deploy an
-  agent (`ab init` → `ab dev` → `ab deploy`): the scaffolded project builds
+  agent (`agentbricks init` → `agentbricks dev` → `agentbricks deploy`): the scaffolded project builds
   its environment and launches with `uv run`, both locally and in the deployed Apps
-  runtime. The store/session/tools commands and `ab tracing bind`/`unbind` don't need it;
-  `ab tracing list`/`get` do, to read `ab dev`'s local trace store.
+  runtime. The store/session/tools commands and `agentbricks tracing bind`/`unbind` don't need it;
+  `agentbricks tracing list`/`get` do, to read `agentbricks dev`'s local trace store.
 - **[Databricks CLI](https://docs.databricks.com/dev-tools/cli/)** — needed for
-  browser-based `ab login`. If a profile is already authenticated, the CLI uses it
+  browser-based `agentbricks login`. If a profile is already authenticated, the CLI uses it
   directly and the Databricks CLI is optional.
 
 ## Installation
 
 From PyPI:
 
-The `databricks-agentbricks` Python distribution installs the `ab` command and AgentKit.
+The `databricks-agentbricks` Python distribution installs the `agentbricks` command and AgentKit.
 
 ```sh
 pip install databricks-agentbricks
@@ -87,7 +87,7 @@ declare their framework dependencies automatically.
 ## Shell completion
 Add this to `~/.zshrc`:
 ```sh
-eval "$(_AB_COMPLETE=zsh_source ab)"
+eval "$(_AGENTBRICKS_COMPLETE=zsh_source agentbricks)"
 ```
 
 ## Authentication
@@ -96,57 +96,57 @@ Agent Bricks CLI uses [Databricks authentication](https://docs.databricks.com/aw
 Ask the CLI to authenticate and remember a named profile:
 
 ```sh
-ab login --profile <profile>
-ab sessions stores list
+agentbricks login --profile <profile>
+agentbricks sessions stores list
 ```
 
-`ab login` validates existing credentials first. If credentials are missing or rejected in
+`agentbricks login` validates existing credentials first. If credentials are missing or rejected in
 an interactive terminal, the CLI runs `databricks auth login --profile <profile>`, revalidates the
 profile, and stores the selection in the existing `~/.agentbricks/config.json` state file. This
 browser-based setup requires the Databricks CLI. In non-interactive environments, authenticate the
-profile before running `ab`. `ab logout` forgets the saved selection without revoking the underlying
+profile before running `agentbricks`. `agentbricks logout` forgets the saved selection without revoking the underlying
 credentials.
 
-If Databricks SDK default authentication is already configured, you can skip `ab login`.
+If Databricks SDK default authentication is already configured, you can skip `agentbricks login`.
 You can also pass the global `--profile/-p` option before an individual command, for example
-`ab --profile <profile> tools list`. Use `--output json` for scripting.
+`agentbricks --profile <profile> tools list`. Use `--output json` for scripting.
 
 ## Quickstart
 
 The shortest path from a blank directory to a running and deployed agent:
 
 ```sh
-ab login --profile <profile>
-ab init my-agent
+agentbricks login --profile <profile>
+agentbricks init my-agent
 cd my-agent
-ab dev                 # run locally
-ab deploy my-agent     # deploy to Databricks
+agentbricks dev                 # run locally
+agentbricks deploy my-agent     # deploy to Databricks
 ```
 
-`ab dev` runs the agent locally on `http://localhost:8000`, wrapping the Databricks Apps
+`agentbricks dev` runs the agent locally on `http://localhost:8000`, wrapping the Databricks Apps
 local runtime so local behavior matches a deployment.
 
-`ab deploy my-agent` deploys a Databricks App named `agent-bricks-my-agent`, provisions the
+`agentbricks deploy my-agent` deploys a Databricks App named `agent-bricks-my-agent`, provisions the
 stores declared in `agent.toml`, and grants the app's service principal access to the stores and
-direct App-auth tool resources declared there. Use `ab deployments list` to find deployed apps,
-and `ab deployments get agent-bricks-my-agent` to print an app's URL and status.
+direct App-auth tool resources declared there. Use `agentbricks deployments list` to find deployed
+apps, and `agentbricks deployments get agent-bricks-my-agent` to print an app's URL and status.
 
-`ab init` declares default memory and session stores in `agent.toml`, so the deployed agent has
+`agentbricks init` declares default memory and session stores in `agent.toml`, so the deployed agent has
 long-term memory and durable conversation history. It creates `<name>-<6-letter-token>-memory` and
 `<name>-<6-letter-token>-sessions`, and records both names in `agent.toml`.
-`ab deploy` creates them if they don't exist yet. Point the agent at stores you already have with
-`ab memory bind <name>` / `ab sessions bind <name>`, or scaffold without stores using
-`ab init --server custom` (see [Initialize the chat app demo](#initialize-the-chat-app-demo)).
+`agentbricks deploy` creates them if they don't exist yet. Point the agent at stores you already have with
+`agentbricks memory bind <name>` / `agentbricks sessions bind <name>`, or scaffold without stores using
+`agentbricks init --server custom` (see [Initialize the chat app demo](#initialize-the-chat-app-demo)).
 
-To exercise the agent (locally under `ab dev` or once deployed), `ab endpoint invoke` sends
-it an HTTP request. MLflow tracing is on by default (`ab init` binds a default
-`/Shared/agentbricks_traces/<project>` experiment): `ab dev` traces to a local MLflow server under
-`.agentbricks/` and `ab deploy` to the bound workspace experiment; `ab tracing list` shows the
+To exercise the agent (locally under `agentbricks dev` or once deployed), `agentbricks endpoint invoke` sends
+it an HTTP request. MLflow tracing is on by default (`agentbricks init` binds a default
+`/Shared/agentbricks_traces/<project>` experiment): `agentbricks dev` traces to a local MLflow server under
+`.agentbricks/` and `agentbricks deploy` to the bound workspace experiment; `agentbricks tracing list` shows the
 available traces.
 
 ## Public names
 
-Use `ab` for the CLI and `AgentKitClient` from `databricks_agentkit` for the Python SDK. New
+Use `agentbricks` for the CLI and `AgentKitClient` from `databricks_agentkit` for the Python SDK. New
 projects store local state under `.agentbricks/` and `~/.agentbricks/`, use
 `server = "agentbricks"` in `agent.toml`, and deploy apps with the `agent-bricks-` prefix.
 
@@ -213,11 +213,11 @@ and return a JSON result. You can also add your own FastAPI endpoints.
 Start from a template, edit the agent code in `agent/`, and run it locally before deploying:
 
 ```sh
-ab init my-agent --framework langgraph --server agentbricks --profile <profile>
+agentbricks init my-agent --framework langgraph --server agentbricks --profile <profile>
 cd my-agent
-ab dev
+agentbricks dev
 # Stop the local server when ready to deploy.
-ab --profile <profile> deploy my-agent
+agentbricks --profile <profile> deploy my-agent
 ```
 
 Use `--framework openai` for OpenAI Agents. Templates keep agent code separate from the runtime
@@ -243,8 +243,8 @@ Each managed run is an **invocation**. Send a client-generated UUID `id` and you
 The UUID also acts as an idempotency key: repeating the same request reuses the existing invocation
 while its record is retained; using the ID for a different request returns `409`.
 
-`ab dev` keeps execution state in process and loses it on restart. For projects with
-`[agent].server = "agentbricks"`, `ab deploy` provisions a persistent Runtime Store for requests,
+`agentbricks dev` keeps execution state in process and loses it on restart. For projects with
+`[agent].server = "agentbricks"`, `agentbricks deploy` provisions a persistent Runtime Store for requests,
 status, events, and results. Register `@app.recover` to restart interrupted app-auth work after
 worker failures. Recovery is at-least-once, so external side effects must be idempotent. Session
 and Memory Stores separately preserve the state used by your agent.
@@ -254,7 +254,7 @@ workspace's shared Lakebase project and give the app SP ownership. The managed r
 tables; no manual Lakebase grant or Postgres app-resource attachment is needed. Backend selection
 is an internal rollout detail, not a user-facing setting; the current implementation retains the legacy
 per-app Lakebase project by default. Once enabled, redeploy reads the stored backend and verifies
-the app identity, and `ab deployments delete` removes the managed store before deleting the app.
+the app identity, and `agentbricks deployments delete` removes the managed store before deleting the app.
 The switch does not migrate existing deployments between backends. Managed cleanup errors retain
 the app for retry. Direct app deletion bypasses managed store cleanup.
 
@@ -265,7 +265,7 @@ is never written to the Runtime Store. A replacement attempt after failure recov
 
 Use `server = "custom"` to deploy your own HTTP server without provisioning a Runtime Store.
 Changing the server type of an existing deployment is not supported. To use a different server,
-scaffold a new project with the desired `ab init --server` option and deploy it under a new name.
+scaffold a new project with the desired `agentbricks init --server` option and deploy it under a new name.
 See the [runtime guide](src/databricks_agentkit/runtime/README.md) for agent hooks, full API examples,
 and recovery behavior.
 
@@ -284,7 +284,7 @@ fully managed store for each, both backed by Lakebase and usable from agents bui
   later, separate conversations, retrieved by semantic search.
 
 The examples below use the [`AgentKitClient` Python SDK](#agentkit-sdk); the same operations are available
-as `ab sessions` / `ab memory` CLI commands.
+as `agentbricks sessions` / `agentbricks memory` CLI commands.
 
 ![Sessions and memory: the agent reads and appends one conversation's transcript in the session store, and recalls and saves durable facts in the memory store, which outlive any single conversation.](docs/sessions_and_memory.png)
 
@@ -380,8 +380,8 @@ directly.
 In an agent configured with `server = "agentbricks"`, add the memory tools so the model can read and write memory during a run.
 `memory_tools(actor)` exposes `remember` and `recall` bound to one actor's partition; it resolves the
 store from the `[memory_store]` binding, carried to the runtime by the `AGENT_MEMORY_STORE` env var
-that `ab deploy` injects, and returns no tools when no store is set, so the agent runs unchanged.
-That "no store set" path is also how it runs under `ab dev`, which runs locally: memory is off
+that `agentbricks deploy` injects, and returns no tools when no store is set, so the agent runs unchanged.
+That "no store set" path is also how it runs under `agentbricks dev`, which runs locally: memory is off
 there (the store is provisioned and used only at deploy). The OpenAI Agents adapter exposes the same as
 `memory_tools()`:
 
@@ -396,27 +396,27 @@ agent = create_agent(model=..., tools=[*your_tools, *memory_tools(actor)])
 > actor's entries. For strict isolation between tenants or users, use a separate store per boundary.
 > Grant another principal — such as your app's service principal — access with
 > `session_store.grant_permission(principal_id)` or `memory_store.grant_permission(principal_id)`;
-> `ab deploy` does this for the deployed app automatically.
+> `agentbricks deploy` does this for the deployed app automatically.
 
 ### Declaring and provisioning stores
 
-For a deployed agent, `agent.toml` declares which stores it uses and `ab deploy` provisions them —
-you don't create stores by hand. `ab init` declares a default memory and session store named from
+For a deployed agent, `agent.toml` declares which stores it uses and `agentbricks deploy` provisions them —
+you don't create stores by hand. `agentbricks init` declares a default memory and session store named from
 the project; override those names, point at stores you already have, or let `deploy` create them:
 
 ```sh
 # Scaffold a project with default memory and session stores declared in agent.toml.
-ab init my-agent
+agentbricks init my-agent
 
 # Override the declared store names at init time.
-ab init my-agent --memory-store support-agent-memory --session-store support-agent-sessions
+agentbricks init my-agent --memory-store support-agent-memory --session-store support-agent-sessions
 
 # Or point an existing project at specific stores (edits agent.toml only; creates nothing).
-ab sessions bind support-agent-sessions
-ab memory bind support-agent-memory
+agentbricks sessions bind support-agent-sessions
+agentbricks memory bind support-agent-memory
 
 # deploy creates any declared-but-missing store and grants the app's service principal access.
-ab deploy my-agent
+agentbricks deploy my-agent
 ```
 
 Memory and session stores are independent resources: deleting one never affects the other.
@@ -427,7 +427,7 @@ For the full command reference - every command, subcommand, argument, and option
 see [`cli.md`](cli.md). The tree below is a quick overview.
 
 ```text
-ab [-p <profile>] [-o text|json]
+agentbricks [-p <profile>] [-o text|json]
   login        [--profile P]
   logout
   init         [--framework openai|langgraph] [--server agentbricks|custom]
@@ -469,8 +469,8 @@ ab [-p <profile>] [-o text|json]
 From the existing project, prepare a migration for your coding agent:
 
 ```sh
-ab init --framework langgraph --existing .
-ab init --framework openai --existing .
+agentbricks init --framework langgraph --existing .
+agentbricks init --framework openai --existing .
 ```
 
 This writes `agent-bricks-migrate/` containing a skill, a prompt to paste into your coding agent,
@@ -501,17 +501,17 @@ application. Migration supports LangGraph and the OpenAI Agents SDK with the man
 
 ## Invoke HTTP endpoints
 
-`ab endpoint invoke` is a low-level HTTP command. It resolves and authenticates a deployed
+`agentbricks endpoint invoke` is a low-level HTTP command. It resolves and authenticates a deployed
 Databricks App, or targets localhost and arbitrary servers through `--url`. It does not assume an
 agent protocol: provide the method, path, query parameters, and complete JSON body required by the
 server.
 
 ```sh
-ab --profile <profile> endpoint invoke agent-bricks-my-agent \
+agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
   --path /api/invocations \
   --json '{"id":"00000000-0000-4000-8000-000000000001","input":[{"role":"user","content":"Hello"}]}'
 
-ab endpoint invoke --url http://localhost:8000 \
+agentbricks endpoint invoke --url http://localhost:8000 \
   --path /api/invocations \
   --json '{"id":"00000000-0000-4000-8000-000000000001","input":[{"role":"user","content":"Hello"}]}'
 ```
@@ -522,11 +522,11 @@ a client-generated invocation ID, and streaming servers require their own stream
 
 ```sh
 INVOCATION_ID=$(uuidgen)
-ab --profile <profile> endpoint invoke agent-bricks-my-agent \
+agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
   --path /api/invocations \
   --json "{\"id\":\"$INVOCATION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Run the report\"}]}"
 
-ab --profile <profile> endpoint invoke agent-bricks-my-agent \
+agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
   --path /api/invocations \
   --sse \
   --json "{\"id\":\"$INVOCATION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"stream\":true}"
@@ -543,33 +543,33 @@ Use the conventional help flag at any command level. Every command's help includ
 examples:
 
 ```sh
-ab --help
-ab deploy --help
-ab sessions items append --help
+agentbricks --help
+agentbricks deploy --help
+agentbricks sessions items append --help
 ```
 
 ## Agent tools
 
-For projects with `[agent].server = "agentbricks"` (the default from `ab init`), `agent.toml` is the
+For projects with `[agent].server = "agentbricks"` (the default from `agentbricks init`), `agent.toml` is the
 declarative source of truth for Databricks-managed infrastructure: the Runtime Store, sandbox,
-managed MCP, Genie and Unity Catalog function bindings, plus memory and session resources. `ab tools
+managed MCP, Genie and Unity Catalog function bindings, plus memory and session resources. `agentbricks tools
 add` updates only this file; direct TOML edits have the same behavior. Both managed-server framework
 adapters read the managed bindings at runtime without generating or patching agent source:
 
 ```sh
-ab tools add sandbox --scope table:samples.nyctaxi.trips
-ab tools add mcp system.ai.web_search
-ab tools add uc-function catalog.schema.lookup_ticket
-ab tools add genie-one
-ab tools add genie-agent SPACE_ID
-ab tools remove mcp system.ai.web_search
-ab tools list
+agentbricks tools add sandbox --scope table:samples.nyctaxi.trips
+agentbricks tools add mcp system.ai.web_search
+agentbricks tools add uc-function catalog.schema.lookup_ticket
+agentbricks tools add genie-one
+agentbricks tools add genie-agent SPACE_ID
+agentbricks tools remove mcp system.ai.web_search
+agentbricks tools list
 ```
 
 ### Managed tool identity and migration
 
-`ab tools add mcp`, `ab tools add sandbox`, `ab tools add genie-one`, and
-`ab tools add genie-agent` write explicit `auth = "user"` by default.
+`agentbricks tools add mcp`, `agentbricks tools add sandbox`, `agentbricks tools add genie-one`, and
+`agentbricks tools add genie-agent` write explicit `auth = "user"` by default.
 Use `--auth app` for the App service principal instead. This field is on the tool entry, not
 inside `source` or `policy`:
 
@@ -587,7 +587,7 @@ never silently upgraded to user identity.
 
 ### Automatic App-identity access on deploy
 
-`ab deploy` reconciles least-privilege access for resources explicitly declared by App/default
+`agentbricks deploy` reconciles least-privilege access for resources explicitly declared by App/default
 identity tool bindings. It skips every `auth = "user"` binding because those calls use the request
 user's permissions instead of the App service principal.
 
@@ -645,8 +645,8 @@ Deploy derives Apps user scopes from explicit `auth = "user"` bindings:
 For example, bind Genie tools in a current project with `server = "agentbricks"`:
 
 ```sh
-ab tools add mcp system.ai.genie_one_mcp --auth user
-ab tools add genie-agent SPACE_ID --auth user
+agentbricks tools add mcp system.ai.genie_one_mcp --auth user
+agentbricks tools add genie-agent SPACE_ID --auth user
 ```
 
 Mixed bindings request the union. App-auth and legacy bindings add no user scopes. These are
@@ -659,7 +659,7 @@ initial typed SDK create request before uploading source. An existing App that i
 scope needs one-time explicit permission:
 
 ```sh
-ab --profile my-workspace deploy my-agent --allow-user-scope-update
+agentbricks --profile my-workspace deploy my-agent --allow-user-scope-update
 ```
 
 The `system.ai.dbsql` managed MCP additionally requests the Apps `sql` user scope. This is full SQL
@@ -696,32 +696,32 @@ for **all** App-auth tools, or deploy those tools separately. Models, custom MCP
 Memory/Session Stores, and tracing keep their existing credentials.
 
 For MCP services, the remove command accepts the same service name as the add command. You can also
-remove any binding by its `id` in `agent.toml`, for example `ab tools remove web_search`.
+remove any binding by its `id` in `agent.toml`, for example `agentbricks tools remove web_search`.
 Every successful add (including an already-configured no-op) points you to the target project's
 `agent.toml` to review configured managed tools and MCP bindings. With `--source`, the message
 points to that project's file. JSON add output includes its path in `manifest`.
 
-`ab tools list` discovers **available integrations to add**, not configured bindings. By default
+`agentbricks tools list` discovers **available integrations to add**, not configured bindings. By default
 it shows built-in add recipes and caller-visible MCP Services in `system.ai`. A recipe may still
 need your resources: sandbox scopes, a concrete UC function name, or a Genie Space ID. Genie One
 needs no additional argument. `system.ai.sandbox` is represented by its scoped recipe rather than
 a second unscoped add command. The list does not enumerate every workspace schema, individual
 operations inside MCP services, or custom Python tools.
 
-`ab tools add mcp` looks up the service in the selected workspace before writing `agent.toml`.
-Use `ab --profile <profile> tools add mcp <service>` to select a workspace. A missing service or
+`agentbricks tools add mcp` looks up the service in the selected workspace before writing `agent.toml`.
+Use `agentbricks --profile <profile> tools add mcp <service>` to select a workspace. A missing service or
 failed lookup (including authentication or permission errors) leaves the project unchanged. This
 checks service metadata access, not whether every tool can be executed at runtime. Removing local
 bindings does not require workspace access.
 
 ```sh
-ab tools list
-ab tools list --kind mcp
-ab tools list --kind mcp --schema main.tools
-ab tools list --kind sandbox
-ab tools list --kind genie-one
-ab tools list --kind genie-agent
-ab --output json tools list
+agentbricks tools list
+agentbricks tools list --kind mcp
+agentbricks tools list --kind mcp --schema main.tools
+agentbricks tools list --kind sandbox
+agentbricks tools list --kind genie-one
+agentbricks tools list --kind genie-agent
+agentbricks --output json tools list
 ```
 
 No agent project is required for discovery. MCP discovery uses your Databricks profile; the
@@ -735,9 +735,9 @@ runtime execution permissions.
 Read `agent.toml` (its `[[tools]]` entries) to inspect configured bindings. Discovery JSON uses
 `schema_version: 2`, with `available_tools` (`name`, `kind`, `add_command`), `mcp_schema` (null for
 local-only recipes), `complete`, and `errors`. Replace old scripts that read configured-list JSON
-with TOML inspection. Replace `ab mcp list [--schema catalog.schema]` with
-`ab tools list --kind mcp [--schema catalog.schema]`; the former command is removed. Use
-`ab tools list --help` for the new discovery contract.
+with TOML inspection. Replace `agentbricks mcp list [--schema catalog.schema]` with
+`agentbricks tools list --kind mcp [--schema catalog.schema]`; the former command is removed. Use
+`agentbricks tools list --help` for the new discovery contract.
 
 Read-only live discovery can be checked against the installed wheel without creating a project
 or deploying an agent:
@@ -758,11 +758,11 @@ code in `agent/mcps.py` and are joined with the managed bindings by `mcp_tools(.
 `mcp_servers(...)`.
 
 Projects created with `--server custom` do not auto-discover `agent/tools/` or load managed tool
-bindings from `agent.toml`, so `ab tools add` rejects those projects. Wire framework-native Python
+bindings from `agent.toml`, so `agentbricks tools add` rejects those projects. Wire framework-native Python
 tools and MCP servers directly in `agent/agent.py` instead.
 
 If a manifest with `server = "agentbricks"` contains `source = { kind = "python", ... }`, remove that
-`[[tools]]` entry; the decorated tool in `agent/tools/` remains active. `ab dev` and `ab deploy`
+`[[tools]]` entry; the decorated tool in `agent/tools/` remains active. `agentbricks dev` and `agentbricks deploy`
 do not generate or patch Python tool code, and do not alter the manifest's `[[tools]]` bindings.
 
 Sandbox scopes default to read-only access. Repeat `--scope` to allow more than one resource, use
@@ -777,12 +777,12 @@ Installing the current `databricks-agentbricks` distribution does not configure 
 capabilities your agent needs:
 
 ```sh
-ab tools add genie-one --name genie_one --auth user
-ab tools add genie-agent SPACE_ID --name genie_agent --auth user
-ab tools list --kind genie-one
-ab tools list --kind genie-agent
-ab tools remove genie_one
-ab tools remove genie_agent
+agentbricks tools add genie-one --name genie_one --auth user
+agentbricks tools add genie-agent SPACE_ID --name genie_agent --auth user
+agentbricks tools list --kind genie-one
+agentbricks tools list --kind genie-agent
+agentbricks tools remove genie_one
+agentbricks tools remove genie_agent
 ```
 
 `--name` is optional and defaults to `genie_one` or `genie_agent`, respectively. `--auth` defaults
@@ -791,7 +791,7 @@ without `auth` preserve App/default identity. Both add commands and `remove` acc
 to select a project instead of the current directory. Discovery needs no project; read that
 project's `agent.toml` to inspect configured bindings. For scripted output, put the global
 `-o json` option before `tools`, as in
-`ab -o json tools add genie-one --source ./my-agent`. Adding a binding is offline: it updates
+`agentbricks -o json tools add genie-one --source ./my-agent`. Adding a binding is offline: it updates
 `agent.toml` without contacting Genie or checking permissions. The corresponding sources are:
 
 ```toml
@@ -852,11 +852,11 @@ It is included by default for `--framework langgraph`; pass `--disable-chat-app`
 API-only backend instead.
 
 ```sh
-ab init --framework langgraph \
+agentbricks init --framework langgraph \
   --profile <profile> \
   ./my-agent
 cd ./my-agent
-ab dev
+agentbricks dev
 ```
 
 The chat app includes synchronous, SSE streaming, background polling, Session Store, Memory Store,
@@ -866,14 +866,14 @@ and HITL resume UI. The framework-specific overlay adds `ui/`, `runtime/ui.py`, 
 For the full deployed demo, bind both managed stores, then deploy:
 
 ```sh
-ab sessions bind agent-bricks-demo-sessions
-ab memory bind agent-bricks-demo-memory
-ab --profile <profile> deploy agent-bricks-agent-demo --source .
+agentbricks sessions bind agent-bricks-demo-sessions
+agentbricks memory bind agent-bricks-demo-memory
+agentbricks --profile <profile> deploy agent-bricks-agent-demo --source .
 ```
 
-(`bind` declares the store name in `agent.toml`; `ab deploy` creates any declared-but-missing
+(`bind` declares the store name in `agent.toml`; `agentbricks deploy` creates any declared-but-missing
 store and grants the app's service principal access to it. The memory store id flows to the runtime
-via the `AGENT_MEMORY_STORE` env var that `deploy` injects; `ab dev` runs locally with memory off
+via the `AGENT_MEMORY_STORE` env var that `deploy` injects; `agentbricks dev` runs locally with memory off
 and does not inject it. The id is not persisted in `agent.toml`.)
 
 The chat UI generates a stable application session UUID in browser local storage, places it inside
@@ -888,6 +888,6 @@ sync/streaming/background transport selector is manual.
 
 ## Contributing
 
-Developing Agent Bricks CLI (`ab`), AgentKit, the runtime, and templates - plus the local dev loop and how to
-test unreleased changes on `ab dev` and `ab deploy`, is covered in
+Developing Agent Bricks CLI (`agentbricks`), AgentKit, the runtime, and templates - plus the local dev loop and how to
+test unreleased changes on `agentbricks dev` and `agentbricks deploy`, is covered in
 [CONTRIBUTING.md](CONTRIBUTING.md).

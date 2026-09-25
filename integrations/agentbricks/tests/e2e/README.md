@@ -2,7 +2,7 @@
 
 ## MCP registration validation
 
-For a focused check of `ab tools add mcp`, install the current `databricks-agentbricks` wheel and pytest
+For a focused check of `agentbricks tools add mcp`, install the current `databricks-agentbricks` wheel and pytest
 into a virtual environment, then run:
 
 ```bash
@@ -19,7 +19,7 @@ remotely; no tools are invoked and no workspace resources are created.
 ## Full runtime matrix
 
 This suite proves that CLI edits and direct `agent.toml` edits reach the same runtime code.
-It creates two LangGraph projects (CLI/direct), runs each with `ab dev`, deploys each to
+It creates two LangGraph projects (CLI/direct), runs each with `agentbricks dev`, deploys each to
 Databricks Apps, and semantically exercises separate Sandbox table and volume reads,
 `system.ai.web_search`, a local Python tool, a temporary Unity Catalog function, and a configured
 Genie Agent space. It also verifies automatic Apps resources for the temporary Sandbox table and
@@ -52,11 +52,13 @@ Deployed Databricks Apps accept programmatic calls under `/api/*` with OAuth Bea
 workspace profile uses a PAT, pass an OAuth profile for the same workspace with
 `--app-auth-profile`.
 `--source-root` ties the claimed commit to the checkout's HEAD and byte-compares the changed Agent
-Bricks modules in the wheel against that checkout. The template repo/ref flags make `ab init` read
-an explicit template source; provide both or omit both to use the verified installed wheel template.
+Bricks modules in the wheel against that checkout. The template repo/ref flags make
+`agentbricks init` read the exact checkout under test and avoid remote clone throttling; provide
+both or omit both to use the verified installed wheel template.
 
-Direct authoring does not call `ab tools add`: it replaces `agent.toml` with
-`fixtures/direct_agent.toml`. CLI authoring invokes four managed `ab tools add ...` commands.
+Direct authoring does not call `agentbricks tools add`: it replaces `agent.toml` with
+`fixtures/direct_agent.toml`. CLI authoring invokes four managed `agentbricks tools add ...`
+commands.
 Both paths then create the same user-owned, framework-native Python tool file with no Python entry
 in `agent.toml`. Every exact command and code-authoring step is captured in `commands.log`.
 
@@ -64,7 +66,7 @@ The CLI path first verifies that an unavailable MCP service is rejected without 
 `agent.toml`, then checks that removing the absent binding is harmless. The subsequent dev and
 deployed tool matrix exercises valid managed tools.
 
-The deployed cases do not pre-grant the temporary UC function. They require `ab deploy` to create
+The deployed cases do not pre-grant the temporary UC function. They require `agentbricks deploy` to
 create the function/table/volume/Genie Apps resources, then inspect those permissions before
 invoking the App. Built-in `system.ai` MCP services use platform-managed access defaults and are
 validated through live Sandbox and web-search calls rather than direct grant inspection. External
