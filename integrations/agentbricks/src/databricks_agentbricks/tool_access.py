@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from databricks.sdk.errors import DatabricksError
+from databricks.sdk.errors import DatabricksError, PermissionDenied
 from databricks.sdk.service.catalog import PermissionsChange, Privilege, SecurableType
 from databricks.sdk.service.workspace import (
     ObjectType,
@@ -82,6 +82,8 @@ def _uc_app_resource(securable_type: str, full_name: str, permission: str) -> di
 
 
 def _mcp_grants(service: str) -> set[UcGrant]:
+    if service.lower().startswith("system.ai."):
+        return set()
     catalog, schema, _ = service.split(".")
     return {
         UcGrant(SecurableType.CATALOG, catalog, Privilege.USE_CATALOG),
@@ -192,6 +194,8 @@ def _effective_uc_privileges(client: Any, principal: str, grant: UcGrant) -> set
             page_token = response.next_page_token
             if not page_token:
                 return privileges
+    except PermissionDenied:
+        raise
     except DatabricksError as exc:
         raise AgentCliError(
             f"Could not read effective {grant.privilege.value} access on "
@@ -199,12 +203,9 @@ def _effective_uc_privileges(client: Any, principal: str, grant: UcGrant) -> set
         ) from exc
 
 
-def _ensure_uc_grant(client: Any, principal: str, grant: UcGrant) -> None:
-    """Add one missing UC privilege and require it to become effective."""
-    if grant.privilege in _effective_uc_privileges(client, principal, grant):
-        return
+def _update_uc_grant(client: Any, principal: str, grant: UcGrant) -> Any:
     try:
-        client.grants.update(
+        return client.grants.update(
             _securable_type_value(grant.securable_type),
             grant.full_name,
             changes=[PermissionsChange(principal=principal, add=[grant.privilege])],
@@ -215,6 +216,32 @@ def _ensure_uc_grant(client: Any, principal: str, grant: UcGrant) -> None:
             f"{_securable_type_value(grant.securable_type)} {grant.full_name!r} "
             "to the App service principal."
         ) from exc
+
+
+def _direct_uc_privileges(response: Any, principal: str) -> set[Privilege]:
+    privileges: set[Privilege] = set()
+    for assignment in response.privilege_assignments or ():
+        if assignment.principal == principal:
+            privileges.update(assignment.privileges or ())
+    return privileges
+
+
+def _ensure_uc_grant(client: Any, principal: str, grant: UcGrant) -> None:
+    """Add one missing UC privilege and require the Grants API to confirm it."""
+    try:
+        effective = _effective_uc_privileges(client, principal, grant)
+    except PermissionDenied:
+        response = _update_uc_grant(client, principal, grant)
+        if grant.privilege not in _direct_uc_privileges(response, principal):
+            raise AgentCliError(
+                f"The Grants API did not confirm {grant.privilege.value} on "
+                f"{_securable_type_value(grant.securable_type)} {grant.full_name!r} "
+                "for the App service principal."
+            ) from None
+        return
+    if grant.privilege in effective:
+        return
+    _update_uc_grant(client, principal, grant)
     if grant.privilege not in _effective_uc_privileges(client, principal, grant):
         raise AgentCliError(
             f"{grant.privilege.value} on {_securable_type_value(grant.securable_type)} "

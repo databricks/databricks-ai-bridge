@@ -12,6 +12,7 @@ import json
 import os
 import pathlib
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -25,6 +26,7 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 import tomli
+import tomlkit
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import DatabricksError, NotFound
 from databricks.sdk.service.catalog import SecurableType
@@ -33,6 +35,7 @@ FRAMEWORKS = ("langgraph",)
 AUTHORING_PATHS = ("cli", "direct")
 RUNTIMES = ("dev", "deploy")
 TOOL_KINDS = ("sandbox", "mcp", "python", "uc_function", "genie")
+E2E_MODEL = "system.ai.gpt-5-2"
 
 PROMPTS = {
     "sandbox": (
@@ -63,6 +66,7 @@ EXPECTED = {
 }
 
 _WHEEL_SOURCE_FILES = (
+    "databricks_agentkit/_api_client.py",
     "databricks_agentbricks/tool_access.py",
     "databricks_agentbricks/app_resources.py",
     "databricks_agentbricks/cli/deploy.py",
@@ -424,6 +428,7 @@ class Runner:
                     init_args,
                     timeout=600,
                 )
+                self._pin_project_wheel(project)
                 if authoring == "cli":
                     self._author_cli(project)
                 else:
@@ -432,6 +437,23 @@ class Runner:
                 app_name = f"agent-bricks-t-{framework[:2]}-{authoring[:2]}-{run_suffix}"
                 cases.append(ProjectCase(framework, authoring, project, app_name))
         return cases
+
+    def _pin_project_wheel(self, project: pathlib.Path) -> None:
+        vendor_dir = project / "agentbricks_e2e_wheels"
+        vendor_dir.mkdir()
+        vendored_wheel = vendor_dir / self.wheel.name
+        shutil.copy2(self.wheel, vendored_wheel)
+        pyproject = project / "pyproject.toml"
+        document = tomlkit.parse(pyproject.read_text(encoding="utf-8"))
+        tool = document.setdefault("tool", {})
+        uv = tool.setdefault("uv", {})
+        sources = uv.setdefault("sources", {})
+        sources["databricks-agentbricks"] = {"path": vendored_wheel.relative_to(project).as_posix()}
+        self.transcript.file_step(
+            pyproject,
+            f"pin databricks-agentbricks runtime to {vendored_wheel.relative_to(project)}",
+        )
+        pyproject.write_text(tomlkit.dumps(document), encoding="utf-8")
 
     def _author_cli(self, project: pathlib.Path) -> None:
         if self.uc_table is None or self.uc_volume is None:
@@ -791,22 +813,6 @@ class Runner:
             )
 
         client = WorkspaceClient(profile=self.profile)
-        direct_targets = (
-            (SecurableType.CATALOG, "system", "USE_CATALOG"),
-            (SecurableType.SCHEMA, "system.ai", "USE_SCHEMA"),
-            (SecurableType.MCP_SERVICE, "system.ai.sandbox", "EXECUTE"),
-            (SecurableType.MCP_SERVICE, "system.ai.web_search", "EXECUTE"),
-        )
-        uc_effective: dict[str, list[str]] = {}
-        for securable_type, full_name, expected_privilege in direct_targets:
-            privileges = _effective_privileges(client, securable_type, full_name, str(principal))
-            uc_effective[f"{securable_type.value}:{full_name}"] = privileges
-            if expected_privilege not in privileges:
-                raise MatrixError(
-                    f"{expected_privilege} is not effective on {securable_type.value} "
-                    f"{full_name} for {principal}: {privileges}"
-                )
-
         transitive_direct = _direct_privileges(
             client,
             SecurableType.FUNCTION,
@@ -841,7 +847,7 @@ class Runner:
             "checked_at": dt.datetime.now(dt.timezone.utc).isoformat(),
             "tool_resources": tool_resources,
             "unrelated_resources": unrelated_resources,
-            "uc_effective": uc_effective,
+            "uc_effective": {},
             "transitive_resource": self.transitive_uc_function,
             "transitive_direct_privileges": transitive_direct,
             "transitive_effective_privileges": transitive_effective,
@@ -949,6 +955,7 @@ class Runner:
             "id": invocation_id,
             "input": {
                 "session_id": invocation_id,
+                "model": E2E_MODEL,
                 "messages": [{"role": "user", "content": prompt}],
             },
         }
@@ -1253,6 +1260,7 @@ def _curl_command(invocation_url: str, prompt: str, authenticated: bool) -> str:
             "id": "<client-generated-uuid>",
             "input": {
                 "session_id": "<stable-session-id>",
+                "model": E2E_MODEL,
                 "messages": [{"role": "user", "content": prompt}],
             },
         }

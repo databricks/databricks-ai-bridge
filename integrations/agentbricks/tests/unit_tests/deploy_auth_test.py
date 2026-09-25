@@ -490,7 +490,9 @@ def test_app_only_tools_keep_deployment_path(tmp_path, monkeypatch, auth, _no_re
         return SimpleNamespace(returncode=0, stdout="{}", stderr="")
 
     monkeypatch.setattr(deploy_mod, "_databricks", databricks)
-    client = SimpleNamespace(host="https://workspace", current_user="user@example.com")
+    client = SimpleNamespace(
+        host="https://workspace", current_user="user@example.com", workspace_client=object()
+    )
     result = CliRunner().invoke(
         deploy_mod.deploy,
         ["test", "--source", str(tmp_path)],
@@ -533,7 +535,9 @@ def test_user_deploy_creates_scoped_app_and_runtime_store_before_source(
         calls.append(("runtime-store", args)),
         runtime_backend,
     )[1]
-    client = SimpleNamespace(host="https://workspace", current_user="user@example.com")
+    client = SimpleNamespace(
+        host="https://workspace", current_user="user@example.com", workspace_client=object()
+    )
     result = CliRunner().invoke(
         deploy_mod.deploy,
         ["test", "--source", str(tmp_path), "--instances", "2"],
@@ -563,7 +567,9 @@ def test_user_deploy_creates_scoped_app_and_runtime_store_before_source(
 def test_app_auth_reconciles_explicit_access_before_source_rollout(
     tmp_path, monkeypatch, _no_tool_access_reconciliation
 ):
-    _project(tmp_path, auth="app")
+    project = _project(tmp_path, auth="app")
+    project.add_tool(ToolSpec.mcp("external", service="supervisor_agent.tools.search"))
+    project.write()
     events = []
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda *args: True)
     monkeypatch.setattr(deploy_mod, "_wait_for_running", lambda *args: events.append("app-running"))
@@ -579,18 +585,24 @@ def test_app_auth_reconciles_explicit_access_before_source_rollout(
 
     def reconcile(client, app, principal, plan, profile):
         events.append("tool-access")
+        assert client is workspace_client
         assert app == "agent-mason-test"
         assert principal == "app-sp"
         assert profile == "selected"
         assert {grant.full_name for grant in plan.uc_grants} == {
-            "system",
-            "system.ai",
-            "system.ai.web_search",
+            "supervisor_agent",
+            "supervisor_agent.tools",
+            "supervisor_agent.tools.search",
         }
         return plan
 
     _no_tool_access_reconciliation.side_effect = reconcile
-    client = SimpleNamespace(host="https://workspace", current_user="user@example.com")
+    workspace_client = object()
+    client = SimpleNamespace(
+        host="https://workspace",
+        current_user="user@example.com",
+        workspace_client=workspace_client,
+    )
 
     result = CliRunner().invoke(
         deploy_mod.deploy,
@@ -607,7 +619,9 @@ def test_app_auth_reconciles_explicit_access_before_source_rollout(
 def test_deploy_json_labels_only_uc_workspace_grants_as_additive(
     tmp_path, monkeypatch, _no_tool_access_reconciliation
 ):
-    _project(tmp_path, auth="app")
+    project = _project(tmp_path, auth="app")
+    project.add_tool(ToolSpec.mcp("external", service="supervisor_agent.tools.search"))
+    project.write()
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda *args: True)
     monkeypatch.setattr(deploy_mod, "_wait_for_running", lambda *args: None)
     monkeypatch.setattr(
@@ -617,7 +631,9 @@ def test_deploy_json_labels_only_uc_workspace_grants_as_additive(
     )
     captured = {}
     monkeypatch.setattr(deploy_mod.render, "emit_json", lambda value: captured.update(value))
-    client = SimpleNamespace(host="https://workspace", current_user="user@example.com")
+    client = SimpleNamespace(
+        host="https://workspace", current_user="user@example.com", workspace_client=object()
+    )
 
     result = CliRunner().invoke(
         deploy_mod.deploy,
@@ -645,7 +661,9 @@ def test_tool_access_failure_stops_before_source_rollout(
         ),
     )
     _no_tool_access_reconciliation.side_effect = AgentCliError("tool grant denied")
-    client = SimpleNamespace(host="https://workspace", current_user="user@example.com")
+    client = SimpleNamespace(
+        host="https://workspace", current_user="user@example.com", workspace_client=object()
+    )
 
     result = CliRunner().invoke(
         deploy_mod.deploy,

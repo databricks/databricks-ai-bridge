@@ -44,6 +44,14 @@ def test_client_wraps_workspace_client(api_client, client_class):
     assert client.session_stores._api is api_client.return_value
 
 
+def test_private_api_client_exposes_its_workspace_client():
+    workspace_client = mock.Mock()
+
+    client = _MasonApiClient(workspace_client=workspace_client)
+
+    assert client.workspace_client is workspace_client
+
+
 @mock.patch("databricks.sdk.WorkspaceClient")
 def test_create_memory_store_uses_transitional_request(workspace_client):
     c, do = _client(workspace_client)
