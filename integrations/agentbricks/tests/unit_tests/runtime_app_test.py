@@ -22,6 +22,7 @@ from databricks_agentkit.runtime.store import (
 from databricks_agentkit.runtime.types import (
     Invocation,
     InvocationAttemptContext,
+    InvocationEvent,
     InvocationStatus,
 )
 
@@ -216,6 +217,88 @@ async def test_foreground_stream_returns_sse() -> None:
     assert "event: run.started" in response.text
     assert 'event: delta\ndata: {"type": "delta", "content": "hello"}' in response.text
     assert "event: run.completed" in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("background", [False, True])
+@pytest.mark.parametrize("fail", [False, True])
+async def test_stream_includes_events_committed_after_event_read(background, fail) -> None:
+    snapshot_taken = asyncio.Event()
+    release_snapshot = asyncio.Event()
+
+    class PausingEventReadStore(InMemoryRuntimeStore):
+        async def events(
+            self, invocation_id: str, after_sequence: int | None = None
+        ) -> list[InvocationEvent]:
+            events = await super().events(invocation_id, after_sequence)
+            if not snapshot_taken.is_set():
+                # Keep a real event snapshot while the handler commits its terminal state.
+                snapshot_taken.set()
+                await release_snapshot.wait()
+            return events
+
+    store = PausingEventReadStore()
+    app = DurableAgentServer(runtime_store=store)
+
+    @app.invoke
+    async def invoke(input, context):
+        await snapshot_taken.wait()
+        await context.emit({"type": "delta", "content": input})
+        if fail:
+            raise RuntimeError("intentional execution failure")
+        return input
+
+    async with running_client(app) as client:
+        if background:
+            accepted = await client.post(
+                "/api/invocations",
+                json={"id": _RUN_1, "input": "hello", "background": True},
+            )
+            assert accepted.status_code == 202
+            request = asyncio.create_task(client.get(f"/api/invocations/{_RUN_1}/events"))
+        else:
+            request = asyncio.create_task(
+                client.post(
+                    "/api/invocations",
+                    json={"id": _RUN_1, "input": "hello", "stream": True},
+                )
+            )
+        try:
+            await asyncio.wait_for(snapshot_taken.wait(), 2)
+            completed = await poll(client, _RUN_1)
+            release_snapshot.set()
+            response = await asyncio.wait_for(request, 2)
+        finally:
+            release_snapshot.set()
+            if not request.done():
+                request.cancel()
+            await asyncio.gather(request, return_exceptions=True)
+        events = await store.events(_RUN_1)
+        replay = await client.get(
+            f"/api/invocations/{_RUN_1}/events?after={events[-2].sequence_number}"
+        )
+        past_terminal = await client.get(
+            f"/api/invocations/{_RUN_1}/events?after={events[-1].sequence_number}"
+        )
+
+    terminal_type = "run.failed" if fail else "run.completed"
+    assert completed["status"] == ("failed" if fail else "completed")
+    if not fail:
+        assert completed["output"] == "hello"
+    assert response.status_code == 200
+    assert [line[7:] for line in response.text.splitlines() if line.startswith("event: ")] == [
+        "run.started",
+        "delta",
+        terminal_type,
+    ]
+    assert [int(line[4:]) for line in response.text.splitlines() if line.startswith("id: ")] == [
+        event.sequence_number for event in events
+    ]
+    assert replay.text == (
+        f"id: {events[-1].sequence_number}\nevent: {terminal_type}\n"
+        f'data: {{"type": "{terminal_type}"}}\n\n'
+    )
+    assert past_terminal.text == ""
 
 
 @pytest.mark.asyncio

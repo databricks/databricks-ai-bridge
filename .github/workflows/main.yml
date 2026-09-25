@@ -206,9 +206,9 @@ jobs:
       matrix:
         python-version: ["3.10"]
         version:
-          - { ref: "databricks-ai-v0.5.0", name: "v0.5.0", mlflow: "mlflow<3" }
-          - { ref: "databricks-ai-v0.4.0", name: "v0.4.0", mlflow: "mlflow<3" }
-          - { ref: "databricks-ai-v0.3.0", name: "v0.3.0", mlflow: "mlflow<3" }
+          - { ref: "databricks-ai-v0.5.0", name: "v0.5.0" }
+          - { ref: "databricks-ai-v0.4.0", name: "v0.4.0" }
+          - { ref: "databricks-ai-v0.3.0", name: "v0.3.0" }
     timeout-minutes: 20
     steps:
       - name: Checkout code
@@ -232,9 +232,14 @@ jobs:
           cp -r older-version/integrations/openai integrations/
       - name: Install openai dependency
         run: |
-          pip install .
-          pip install integrations/openai --group dev
-          pip install "${{ matrix.version.mlflow }}"
+          pip install . integrations/openai --group dev
+          pip check
+      - name: Update legacy MLflow test helper
+        run: |
+          # Keep the historical assertions with the tracing API required by current core.
+          legacy_test=integrations/openai/tests/unit_tests/test_vector_search_retriever_tool.py
+          test "$(grep -Fxc '    trace = mlflow.get_last_active_trace()' "$legacy_test")" -eq 1
+          sed -i 's/^    trace = mlflow\.get_last_active_trace()$/    mlflow.flush_trace_async_logging()\n    trace = mlflow.get_trace(mlflow.get_last_active_trace_id())/' "$legacy_test"
       - name: Run tests
         run: |
           # Only testing initialization since functionality can change
@@ -326,6 +331,25 @@ jobs:
         run: |
           uv run --resolution ${{ matrix.uv-resolution }} \
             --exact --group tests pytest tests/unit_tests
+
+  agentbricks_framework_test:
+    runs-on: ubuntu-latest
+    name: "agentbricks_framework_test (python: 3.11, uv: highest)"
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff
+        with:
+          version: ${{ env.UV_VERSION }}
+          # Generated LangGraph agents require Python 3.11 or newer.
+          python-version: "3.11"
+      - name: Run tests with framework dependencies
+        working-directory: integrations/agentbricks
+        run: |
+          uv run --resolution highest \
+            --exact --group tests --extra langgraph pytest tests/unit_tests
 
   agentbricks_dev_functional:
     runs-on: ${{ matrix.os }}

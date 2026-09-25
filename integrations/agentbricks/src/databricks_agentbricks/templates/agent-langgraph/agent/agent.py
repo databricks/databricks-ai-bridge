@@ -6,6 +6,7 @@ from databricks.sdk import WorkspaceClient
 from databricks_langchain import ChatDatabricks
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langgraph.checkpoint.base import get_checkpoint_id
 
 from agent.mcps import build_mcp_servers
 
@@ -136,6 +137,37 @@ async def recovery_input(
     return None if current_invocation_checkpointed else agent_input
 
 
+async def _checkpointed_updates(
+    graph, config: dict, invocation_id: str
+) -> AsyncGenerator[Any, None]:
+    """Replay outputs of steps already committed by this invocation, not earlier turns."""
+    child = None
+    updates = []
+    async for state in graph.aget_state_history(config):
+        if child is not None:
+            if get_checkpoint_id(state.config) != get_checkpoint_id(child.parent_config):
+                continue
+            # A parent's task results are the writes committed in its child checkpoint. The
+            # latest checkpoint's pending tasks are left to astream, which resumes them below.
+            if child.metadata and child.metadata.get("source") == "loop":
+                updates.append(
+                    [
+                        (
+                            "updates",
+                            {task.name: task.result, "__metadata__": {"checkpointed": True}},
+                        )
+                        for task in state.tasks
+                        if task.name != "__start__" and task.result is not None
+                    ]
+                )
+        if invocation_id_from_metadata(state.metadata) != invocation_id or not state.parent_config:
+            break
+        child = state
+    for step in reversed(updates):
+        for event in step:
+            yield event
+
+
 async def run_agent(
     agent_input: Any,
     *,
@@ -158,6 +190,11 @@ async def run_agent(
 
     last_update: Any = None
     with start_trace(name="invoke", inputs=agent_input, session_id=session_id) as span:
+        if agent_input is None and invocation_id:
+            # Resuming a completed graph emits nothing. Restore its committed response before
+            # continuing any unfinished steps, without replaying model calls or tool actions.
+            async for event in _checkpointed_updates(graph, config, invocation_id):
+                yield event
         async for event in graph.astream(
             input=agent_input,
             config=config,
