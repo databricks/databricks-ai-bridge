@@ -1432,10 +1432,20 @@ def _convert_message_to_dict(message: BaseMessage) -> dict:
     elif isinstance(message, SystemMessage):
         return {"role": "system", **message_dict}
     elif isinstance(message, ToolMessage):
+        content = message.content
+        if isinstance(content, list):
+            content = [
+                {"type": "text", "text": block["text"]}
+                if isinstance(block, dict)
+                and block.get("type") == "text"
+                and isinstance(block.get("text"), str)
+                else block
+                for block in content
+            ]
         return {
             "role": "tool",
             "tool_call_id": message.tool_call_id,
-            **message_dict,
+            "content": content,
         }
     elif isinstance(message, FunctionMessage) or "function_call" in message.additional_kwargs:
         raise ValueError(
