@@ -114,9 +114,9 @@ def test_agent_project_round_trips_tool_specs_without_losing_comments(tmp_path: 
         Scope(kind="table", value="samples.nyctaxi.trips", permission="read_only"),
     )
     assert loaded.tools[0].policy.include_databricks_token_env is True
-    assert tomli.loads(path.read_text())["tools"][0]["policy"][
-        "include_databricks_token_env"
-    ] is True
+    assert (
+        tomli.loads(path.read_text())["tools"][0]["policy"]["include_databricks_token_env"] is True
+    )
 
 
 def test_agent_project_defaults_legacy_sandbox_token_env_policy_to_false(tmp_path: pathlib.Path):

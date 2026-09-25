@@ -182,9 +182,7 @@ class ToolSpec:
         else:
             raise AgentCliError(f"Unsupported tool source kind {kind!r}.")
         if kind != "sandbox" and self.policy.include_databricks_token_env:
-            raise AgentCliError(
-                "Only sandbox bindings accept policy.include_databricks_token_env."
-            )
+            raise AgentCliError("Only sandbox bindings accept policy.include_databricks_token_env.")
 
     @classmethod
     def sandbox(

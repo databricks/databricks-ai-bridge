@@ -450,7 +450,8 @@ ab [-p <profile>] [-o text|json]
     unbind     [--source PATH]
     list | get [--experiment-name NAME | --experiment-id ID] [--source PATH]
   tools
-    add sandbox      --scope SCOPE [--scope SCOPE ...] [--source PATH]
+    add sandbox      --scope SCOPE [--scope SCOPE ...]
+                     [--no-include-databricks-token-env] [--source PATH]
     add mcp          SERVICE [--name NAME] [--source PATH]
     add uc-function  FUNCTION [--name NAME] [--source PATH]
     add genie-one    [--name NAME] [--auth user|app] [--source PATH]
@@ -737,7 +738,24 @@ do not generate or patch Python tool code, and do not alter the manifest's `[[to
 Sandbox scopes default to read-only access. Repeat `--scope` to allow more than one resource, use
 `volume:` or `workspace:` for those resource types, and use `--permission read_write` only when the
 agent needs writes. Every sandbox call carries this fixed downscope in MCP `_meta`, outside the tool
-arguments controlled by the model.
+arguments controlled by the model. New sandbox bindings also default to exposing the selected
+Databricks credential to sandbox code:
+
+```toml
+[[tools]]
+id = "sandbox"
+auth = "user"
+source = { kind = "sandbox", service = "system.ai.sandbox" }
+policy = { downscope = [{ resource = "workspace:/Workspace/Shared", permission = "read_only" }], include_databricks_token_env = true }
+```
+
+With `include_databricks_token_env = true`, the sandbox receives `DATABRICKS_HOST`, a short-lived
+`DATABRICKS_TOKEN`, and `DATABRICKS_AUTH_TYPE`, so code such as
+`WorkspaceClient().current_user.me()` can call workspace APIs. This policy does not choose the
+identity: `auth = "user"` uses the request user's OBO credential, while `auth = "app"` uses the
+Databricks App service principal. Use `--no-include-databricks-token-env` when adding a sandbox that
+does not need workspace API access. Existing manifests that omit `include_databricks_token_env`
+remain disabled until explicitly updated.
 
 ### Genie tools
 

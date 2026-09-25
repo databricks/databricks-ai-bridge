@@ -1174,6 +1174,7 @@ _Options_
 | `--permission <read_only|read_write>` | `read_only` \| `read_write` | `read_only` | no | - |
 | `--name <TOOL_ID>` | string | `sandbox` | no | - |
 | `--auth <user|app>` | `user` \| `app` | `user` | no | - |
+| `--include-databricks-token-env`, `--no-include-databricks-token-env` | boolean flag | `--include-databricks-token-env` | no | Expose the selected Databricks credential to sandbox code. |
 | `--source <SOURCE>` | path | `.` | no | Agent project containing agent.toml. |
 
 ##### `ab tools add mcp`
