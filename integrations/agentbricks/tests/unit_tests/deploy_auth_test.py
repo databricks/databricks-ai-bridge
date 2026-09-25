@@ -586,7 +586,7 @@ def test_app_auth_reconciles_explicit_access_before_source_rollout(
     def reconcile(client, app, principal, plan, profile):
         events.append("tool-access")
         assert client is workspace_client
-        assert app == "agent-mason-test"
+        assert app == "agent-bricks-test"
         assert principal == "app-sp"
         assert profile == "selected"
         assert {grant.full_name for grant in plan.uc_grants} == {

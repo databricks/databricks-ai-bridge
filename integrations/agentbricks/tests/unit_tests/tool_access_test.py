@@ -83,8 +83,7 @@ def test_plan_maps_only_explicit_app_auth_resources_to_least_privilege():
         ),
     )
     assert all(
-        re.fullmatch(r"agentbricks-tool-[0-9a-f]{16}", r["name"])
-        for r in plan.app_resources
+        re.fullmatch(r"agentbricks-tool-[0-9a-f]{16}", r["name"]) for r in plan.app_resources
     )
 
 

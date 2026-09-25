@@ -47,7 +47,7 @@ def test_client_wraps_workspace_client(api_client, client_class):
 def test_private_api_client_exposes_its_workspace_client():
     workspace_client = mock.Mock()
 
-    client = _MasonApiClient(workspace_client=workspace_client)
+    client = _AgentBricksApiClient(workspace_client=workspace_client)
 
     assert client.workspace_client is workspace_client
 
