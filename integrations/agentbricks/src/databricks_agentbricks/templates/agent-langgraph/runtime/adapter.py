@@ -1,13 +1,14 @@
 """Translate between Agent Bricks invocations and the framework-native agent entrypoint."""
 
-from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any
 
+from agent import agent as agent_module
 from agent.agent import recovery_input, run_agent
-from langchain.messages import AIMessageChunk
 from langgraph.types import Command
 
 from databricks_agentkit import InvocationContext
+from databricks_agentkit.langgraph.responses import checkpointed_messages, collect_response
+from databricks_agentkit.langgraph.session_store import thread_config
 from databricks_agentkit.runtime.auth import AuthError
 
 
@@ -93,23 +94,18 @@ async def _invoke_agent(
     )
     actor = auth.namespace("actor", actor) if auth else actor
     user_auth = auth is not None
-    auth_kwargs = {"workspace_client_for": auth.client_for} if user_auth else {}
+    run_kwargs = {"workspace_client_for": auth.client_for} if user_auth else {}
     model = payload.get("model")
-    outputs = []
-    async for event in _serialize_events(
-        run_agent(
-            agent_input,
-            session_id=internal_session_id,
-            actor=actor,
-            model=model if isinstance(model, str) else None,
-            invocation_id=context.invocation_id,
-            **auth_kwargs,
+    model = model if isinstance(model, str) else None
+    restored_messages = []
+    if agent_input is None:
+        graph = await agent_module.create_agent_graph(actor, model, **run_kwargs)
+        restored_messages = await checkpointed_messages(
+            graph, thread_config(internal_session_id, actor), context.invocation_id
         )
-    ):
-        if event.get("type") == "checkpointed_message":
-            # Restored messages may already be in the event log.
-            outputs.append({"type": "message", "message": event["message"]})
-            continue
+        run_kwargs["graph"] = graph
+
+    async def emit(event):
         if user_auth and event.get("type") == "interrupt":
             raise AuthError(
                 "MCP_USER_AUTH_HITL_UNSUPPORTED",
@@ -117,37 +113,21 @@ async def _invoke_agent(
                 400,
             )
         await context.emit(event)
-        if event.get("type") in ("message", "interrupt"):
-            outputs.append(event)
 
-    interrupted = bool(outputs and outputs[-1].get("type") == "interrupt")
+    response = await collect_response(
+        run_agent(
+            agent_input,
+            session_id=internal_session_id,
+            actor=actor,
+            model=model,
+            invocation_id=context.invocation_id,
+            **run_kwargs,
+        ),
+        emit,
+        restored_messages,
+    )
+
     return {
-        "output": [event["message"] if event["type"] == "message" else event for event in outputs],
+        **response,
         **({"session_id": session_id} if not user_auth or payload.get("session_id") else {}),
-        "status": "interrupted" if interrupted else "completed",
     }
-
-
-async def _serialize_events(async_stream: AsyncIterator[Any]) -> AsyncGenerator[dict, None]:
-    async for mode, payload in async_stream:
-        if mode == "updates":
-            if interrupts := payload.get("__interrupt__"):
-                for item in interrupts:
-                    yield {"type": "interrupt", "id": item.id, "value": item.value}
-                continue
-            for node_data in payload.values():
-                messages = node_data.get("messages", []) if isinstance(node_data, dict) else []
-                for message in messages:
-                    event_type = (
-                        "checkpointed_message"
-                        if payload.get("__metadata__", {}).get("checkpointed")
-                        else "message"
-                    )
-                    yield {"type": event_type, "message": message.model_dump()}
-        elif mode == "messages":
-            try:
-                chunk = payload[0]
-                if isinstance(chunk, AIMessageChunk) and (content := chunk.content):
-                    yield {"type": "delta", "content": content, "id": chunk.id}
-            except (KeyError, IndexError, TypeError):
-                continue

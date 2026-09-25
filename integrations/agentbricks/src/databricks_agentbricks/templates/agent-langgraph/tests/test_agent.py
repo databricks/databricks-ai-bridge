@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock
 import pytest
 from agent.tools import all_tools
 from langchain_core.tools import BaseTool
-from runtime.adapter import _serialize_events
 
+from databricks_agentkit.langgraph.responses import collect_response
 from databricks_agentkit.langgraph.session_store import (
     checkpointer,
     invocation_metadata,
@@ -47,11 +47,17 @@ async def _aiter(events):
 
 
 @pytest.mark.asyncio
-async def test_serialize_events_relays_interrupt_as_native_event():
+async def test_collect_response_relays_interrupt_as_native_event():
     hitl = {"action_requests": [{"name": "send_message", "args": {"recipient": "x", "body": "y"}}]}
     stream = _aiter([("updates", {"__interrupt__": (_FakeInterrupt(hitl, "int-1"),)})])
-    events = [e async for e in _serialize_events(stream)]
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    response = await collect_response(stream, emit)
     assert events == [{"type": "interrupt", "id": "int-1", "value": hitl}]
+    assert response == {"output": events, "status": "interrupted"}
 
 
 def test_configure_raises_clear_error_without_auth(monkeypatch):
@@ -155,9 +161,21 @@ async def test_recovery_replays_input_without_current_checkpoint(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_adapter_calls_same_run_agent_for_invoke_and_recovery(monkeypatch):
+    import agent.agent as agent_module
     import runtime.adapter as adapter
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.graph import END, START, MessagesState, StateGraph
 
     calls = []
+    builder = StateGraph(MessagesState)
+    builder.add_node("answer", lambda state: {"messages": []})
+    builder.add_edge(START, "answer")
+    builder.add_edge("answer", END)
+    graph = builder.compile(checkpointer=InMemorySaver())
+
+    # Replace external model/tool construction, keeping checkpoint reads real.
+    create_graph = AsyncMock(return_value=graph)
+    monkeypatch.setattr(agent_module, "create_agent_graph", create_graph)
 
     async def fake_run_agent(agent_input, **kwargs):
         calls.append((agent_input, kwargs))
@@ -181,7 +199,8 @@ async def test_adapter_calls_same_run_agent_for_invoke_and_recovery(monkeypatch)
 
     assert calls[0][0] == {"messages": payload["messages"]}
     assert calls[1][0] is None
-    assert calls[0][1] == calls[1][1]
+    assert calls[1][1] == {**calls[0][1], "graph": graph}
+    create_graph.assert_awaited_once_with("session-1", None)
 
 
 def _has_workspace_auth() -> bool:

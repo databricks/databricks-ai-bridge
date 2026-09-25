@@ -302,6 +302,33 @@ async def test_stream_includes_events_committed_after_event_read(background, fai
 
 
 @pytest.mark.asyncio
+async def test_stream_closes_when_invocation_disappears() -> None:
+    store = InMemoryRuntimeStore()
+    app = DurableAgentServer(runtime_store=store)
+
+    @app.invoke
+    async def invoke(input, context):
+        await context.emit({"type": "delta", "content": input})
+        store.states.pop(context.invocation_id)
+        return input
+
+    async with running_client(app) as client:
+        response = await asyncio.wait_for(
+            client.post(
+                "/api/invocations",
+                json={"id": _RUN_1, "input": "hello", "stream": True},
+            ),
+            2,
+        )
+
+    assert response.status_code == 200
+    assert [line[7:] for line in response.text.splitlines() if line.startswith("event: ")] == [
+        "run.started",
+        "delta",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_background_stream_returns_202_with_polling_urls() -> None:
     app = make_app()
     async with running_client(app) as client:

@@ -138,6 +138,129 @@ async def test_completed_recovery_restores_only_current_invocation(template, ear
 
 
 @pytest.mark.asyncio
+async def test_completed_recovery_preserves_tool_and_intermediate_messages(template):
+    from langchain_core.messages import AIMessage, ToolMessage
+    from langgraph.graph import END, START
+
+    adapter, install_graph = template
+    calls = []
+
+    def request_tool(state):
+        prompt = state["messages"][-1].content
+        calls.append(("request", prompt))
+        return {
+            "messages": [
+                AIMessage(
+                    content=f"checking:{prompt}",
+                    id=f"request-{prompt}",
+                    tool_calls=[
+                        {"name": "lookup", "args": {"query": prompt}, "id": f"lookup-{prompt}"}
+                    ],
+                )
+            ]
+        }
+
+    def lookup(state):
+        tool_call = state["messages"][-1].tool_calls[0]
+        prompt = tool_call["args"]["query"]
+        calls.append(("lookup", prompt))
+        return {
+            "messages": [
+                ToolMessage(
+                    content=f"lookup:{prompt}",
+                    id=f"tool-{prompt}",
+                    tool_call_id=tool_call["id"],
+                    name="lookup",
+                )
+            ]
+        }
+
+    def answer(state):
+        prompt = state["messages"][-1].tool_call_id.removeprefix("lookup-")
+        calls.append(("answer", prompt))
+        return {"messages": [AIMessage(content=f"answer:{prompt}", id=f"answer-{prompt}")]}
+
+    graph = messages_graph()
+    graph.add_node("request", request_tool)
+    graph.add_node("lookup", lookup)
+    graph.add_node("answer", answer)
+    graph.add_edge(START, "request")
+    graph.add_edge("request", "lookup")
+    graph.add_edge("lookup", "answer")
+    graph.add_edge("answer", END)
+    install_graph(graph)
+    await adapter.invoke(message_input("earlier"), context("previous"))
+
+    payload = message_input("current")
+    original = await adapter.invoke(payload, context("current"))
+    assert [(item["type"], item["content"]) for item in original["output"]] == [
+        ("ai", "checking:current"),
+        ("tool", "lookup:current"),
+        ("ai", "answer:current"),
+    ]
+    assert original["output"][0]["tool_calls"][0]["id"] == "lookup-current"
+    assert original["output"][1]["tool_call_id"] == "lookup-current"
+    for _attempt in range(2):
+        recovered_context = context("current")
+        assert await adapter.recover(payload, recovered_context) == original
+        assert recovered_context.events == []
+    assert calls == [
+        (stage, prompt)
+        for prompt in ("earlier", "current")
+        for stage in ("request", "lookup", "answer")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_completed_recovery_preserves_updates_replaced_by_message_reducer(template):
+    from langchain_core.messages import AIMessage
+    from langgraph.graph import END, START
+
+    from databricks_agentkit.langgraph import thread_config
+
+    adapter, install_graph = template
+    calls = []
+
+    def draft(state):
+        prompt = state["messages"][-1].content
+        calls.append(("draft", prompt))
+        return {"messages": [AIMessage(content=f"draft:{prompt}", id="answer")]}
+
+    def revise(state):
+        prompt = state["messages"][-1].content.removeprefix("draft:")
+        calls.append(("final", prompt))
+        return {"messages": [AIMessage(content=f"final:{prompt}", id="answer")]}
+
+    builder = messages_graph()
+    builder.add_node("draft", draft)
+    builder.add_node("revise", revise)
+    builder.add_edge(START, "draft")
+    builder.add_edge("draft", "revise")
+    builder.add_edge("revise", END)
+    graph = install_graph(builder)
+    await adapter.invoke(message_input("earlier"), context("previous"))
+
+    payload = message_input("current")
+    original = await adapter.invoke(payload, context("current"))
+    assert [(item["id"], item["content"]) for item in original["output"]] == [
+        ("answer", "draft:current"),
+        ("answer", "final:current"),
+    ]
+    state = await graph.aget_state(thread_config("conversation", "conversation"))
+    # The reduced snapshot loses the draft; recovery must preserve the emitted response instead.
+    assert [message.content for message in state.values["messages"] if message.id == "answer"] == [
+        "final:current"
+    ]
+    for _attempt in range(2):
+        recovered_context = context("current")
+        assert await adapter.recover(payload, recovered_context) == original
+        assert recovered_context.events == []
+    assert calls == [
+        (stage, prompt) for prompt in ("earlier", "current") for stage in ("draft", "final")
+    ]
+
+
+@pytest.mark.asyncio
 async def test_partial_recovery_keeps_checkpointed_and_new_output(template):
     from langchain_core.messages import AIMessage
     from langgraph.graph import END, START

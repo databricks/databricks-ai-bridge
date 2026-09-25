@@ -68,8 +68,9 @@ For the managed invocation protocol, construct `DurableAgentServer` in [runtime/
 and register [runtime/adapter.py](runtime/adapter.py) hooks. Keep framework-native execution in
 [agent/agent.py](agent/agent.py), independent of runtime request/context types.
 
-The invoke hook translates opaque application input, runs the graph, translates native events,
-calls `await context.emit(event)`, and returns JSON output. DurableAgentServer owns foreground/background
+The invoke hook translates opaque application input and runs the graph. The shared
+`databricks_agentkit.langgraph.responses.collect_response` helper translates native events, emits
+them through `context.emit`, and builds the JSON response. DurableAgentServer owns foreground/background
 transport, polling, and replay. Invocation UUIDs differ from stable application session IDs; the
 routing cookie is not the application session.
 
@@ -87,10 +88,11 @@ Register recovery when intended. Resume a checkpoint only when metadata associat
 current invocation; otherwise replay original input. Use synchronous checkpoint durability before
 acknowledging progress. Recovery is at least once, so side effects must tolerate replay.
 
-Recovery restores this invocation's committed message outputs from checkpoint history before
-continuing unfinished graph steps. Restored messages are included in the returned response, not
-emitted again to the Runtime Store. Keep checkpoint history and task writes available while an
-invocation can be recovered; a completed graph must not rerun just to reconstruct its response.
+Recovery uses the shared `checkpointed_messages` helper to restore this invocation's committed
+outputs, then resumes the same graph. Pass those messages to `collect_response`; they seed the
+returned response without becoming stream events. `run_agent` continues to yield only native
+LangGraph events. Keep checkpoint history and task writes available while an invocation can recover.
+This restores the response; it does not make checkpoint and Runtime Store event writes atomic.
 
 ## Optional chat app
 
