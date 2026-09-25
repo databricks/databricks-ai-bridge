@@ -106,6 +106,10 @@ async def _invoke_agent(
             **auth_kwargs,
         )
     ):
+        if event.get("type") == "checkpointed_message":
+            # Restored messages may already be in the event log.
+            outputs.append({"type": "message", "message": event["message"]})
+            continue
         if user_auth and event.get("type") == "interrupt":
             raise AuthError(
                 "MCP_USER_AUTH_HITL_UNSUPPORTED",
@@ -134,7 +138,12 @@ async def _serialize_events(async_stream: AsyncIterator[Any]) -> AsyncGenerator[
             for node_data in payload.values():
                 messages = node_data.get("messages", []) if isinstance(node_data, dict) else []
                 for message in messages:
-                    yield {"type": "message", "message": message.model_dump()}
+                    event_type = (
+                        "checkpointed_message"
+                        if payload.get("__metadata__", {}).get("checkpointed")
+                        else "message"
+                    )
+                    yield {"type": event_type, "message": message.model_dump()}
         elif mode == "messages":
             try:
                 chunk = payload[0]

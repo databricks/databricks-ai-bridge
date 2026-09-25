@@ -87,6 +87,11 @@ Register recovery when intended. Resume a checkpoint only when metadata associat
 current invocation; otherwise replay original input. Use synchronous checkpoint durability before
 acknowledging progress. Recovery is at least once, so side effects must tolerate replay.
 
+Recovery restores this invocation's committed message outputs from checkpoint history before
+continuing unfinished graph steps. Restored messages are included in the returned response, not
+emitted again to the Runtime Store. Keep checkpoint history and task writes available while an
+invocation can be recovered; a completed graph must not rerun just to reconstruct its response.
+
 ## Optional chat app
 
 No CLI command requires the chat UI. The default overlay supplies it; `--disable-chat-app` omits
