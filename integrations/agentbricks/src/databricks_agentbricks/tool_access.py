@@ -66,11 +66,13 @@ class ToolAccessPlan:
 
 
 def _resource_name(kind: str, identifier: str) -> str:
+    """Return a stable Apps resource name for one securable identifier."""
     digest = hashlib.sha256(f"{kind}\0{identifier}".encode()).hexdigest()[:13]
     return f"agentbricks-tool-{digest}"
 
 
 def _uc_app_resource(securable_type: str, full_name: str, permission: str) -> dict[str, Any]:
+    """Build an Apps UC-resource declaration for one securable."""
     return {
         "name": _resource_name(securable_type, full_name),
         "uc_securable": {
@@ -82,6 +84,7 @@ def _uc_app_resource(securable_type: str, full_name: str, permission: str) -> di
 
 
 def _mcp_grants(service: str) -> set[UcGrant]:
+    """Return the UC grants needed to invoke an external MCP service."""
     if service.lower().startswith("system.ai."):
         return set()
     catalog, schema, _ = service.split(".")
@@ -93,17 +96,19 @@ def _mcp_grants(service: str) -> set[UcGrant]:
 
 
 def _securable_type_value(securable_type: SecurableType | str) -> str:
+    """Normalize an SDK securable type or forward-compatible string value."""
     return securable_type.value if isinstance(securable_type, SecurableType) else securable_type
 
 
 def plan_tool_access(tools: Sequence[ToolSpec]) -> ToolAccessPlan:
-    """Plan grants for direct App/default-auth resources without transitive discovery."""
+    """Plan grants for explicit App-auth resources without transitive discovery."""
     app_resources: dict[tuple[str, str], dict[str, Any]] = {}
     genie_names: dict[str, str] = {}
     uc_grants: set[UcGrant] = set()
     workspace_grants: dict[str, WorkspaceObjectPermissionLevel] = {}
 
     def add_uc_resource(securable_type: str, full_name: str, permission: str) -> None:
+        """Keep the strongest requested Apps permission for one UC securable."""
         key = (securable_type, full_name)
         current = app_resources.get(key)
         if current is not None:
@@ -120,7 +125,11 @@ def plan_tool_access(tools: Sequence[ToolSpec]) -> ToolAccessPlan:
             add_uc_resource("FUNCTION", tool.source.function or "", "EXECUTE")
         elif kind == "genie_agent":
             space_id = tool.source.space_id or ""
-            genie_names[space_id] = min(tool.id, genie_names.get(space_id, tool.id))
+            current_name = genie_names.get(space_id)
+            # Multiple tool IDs can reference one space. Pick the lexical minimum so the
+            # deduplicated Apps resource is independent of agent.toml declaration order.
+            if current_name is None or tool.id < current_name:
+                genie_names[space_id] = tool.id
         elif kind == "mcp":
             uc_grants.update(_mcp_grants(tool.source.service or ""))
         elif kind == "sandbox":
@@ -172,10 +181,16 @@ def plan_tool_access(tools: Sequence[ToolSpec]) -> ToolAccessPlan:
 
 
 def _effective_uc_privileges(client: Any, principal: str, grant: UcGrant) -> set[Privilege]:
+    """Read every effective-privilege page for one principal and securable.
+
+    The Grants API may return an empty page with a continuation token, so only the
+    absence of ``next_page_token`` marks the end of the result set.
+    """
     privileges: set[Privilege] = set()
     page_token: str | None = None
+    has_more_pages = True
     try:
-        while True:
+        while has_more_pages:
             response = client.grants.get_effective(
                 _securable_type_value(grant.securable_type),
                 grant.full_name,
@@ -192,8 +207,8 @@ def _effective_uc_privileges(client: Any, principal: str, grant: UcGrant) -> set
                     if effective.privilege is not None
                 )
             page_token = response.next_page_token
-            if not page_token:
-                return privileges
+            has_more_pages = bool(page_token)
+        return privileges
     except PermissionDenied:
         raise
     except DatabricksError as exc:
@@ -204,6 +219,7 @@ def _effective_uc_privileges(client: Any, principal: str, grant: UcGrant) -> set
 
 
 def _update_uc_grant(client: Any, principal: str, grant: UcGrant) -> Any:
+    """Add one UC privilege and return the Grants API confirmation."""
     try:
         return client.grants.update(
             _securable_type_value(grant.securable_type),
@@ -219,6 +235,7 @@ def _update_uc_grant(client: Any, principal: str, grant: UcGrant) -> Any:
 
 
 def _direct_uc_privileges(response: Any, principal: str) -> set[Privilege]:
+    """Extract one principal's direct privileges from a Grants API response."""
     privileges: set[Privilege] = set()
     for assignment in response.privilege_assignments or ():
         if assignment.principal == principal:
@@ -252,6 +269,7 @@ def _ensure_uc_grant(client: Any, principal: str, grant: UcGrant) -> None:
 def _has_workspace_permission(
     permissions: Any, principal: str, required: WorkspaceObjectPermissionLevel
 ) -> bool:
+    """Return whether a principal has the required or a stronger Workspace ACL."""
     required_strength = _WORKSPACE_PERMISSION_STRENGTH[required]
     for access_control in permissions.access_control_list or ():
         if access_control.service_principal_name != principal:
