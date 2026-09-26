@@ -121,7 +121,7 @@ def test_scope_update_plan_uses_exact_required_scopes(monkeypatch):
     [
         (
             ToolSpec.sandbox("volume", scopes=[Scope.volume("cat.sch.vol")], auth="user"),
-            {"ai-gateway", "files"},
+            {"ai-gateway", "files", "workspace.workspace"},
         ),
         (
             ToolSpec.sandbox(
@@ -131,6 +131,15 @@ def test_scope_update_plan_uses_exact_required_scopes(monkeypatch):
         ),
         (
             ToolSpec.sandbox("table", scopes=[Scope.table("cat.sch.tbl")], auth="user"),
+            {"ai-gateway", "workspace.workspace"},
+        ),
+        (
+            ToolSpec.sandbox(
+                "table-no-token",
+                scopes=[Scope.table("cat.sch.tbl")],
+                auth="user",
+                databricks_access_token_included=False,
+            ),
             {"ai-gateway"},
         ),
         (ToolSpec.sandbox("volume", scopes=[Scope.volume("cat.sch.vol")], auth="app"), set()),

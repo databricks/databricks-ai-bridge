@@ -93,14 +93,14 @@ def required_user_api_scopes(project: AgentProject | None) -> set[str]:
         if tool.source.service == "system.ai.genie_one_mcp":
             scopes.add("genie")
         if tool.source.kind == "sandbox":
-            if any(scope.kind == "volume" for scope in tool.policy.downscope):
-                scopes.add("files")
-            if any(scope.kind == "workspace" for scope in tool.policy.downscope):
-                print(
+            if tool.policy.databricks_access_token_included:
+                print(  # noqa: T201 - temporary e2e freshness marker
                     "[freshness-check workspace-scope-e2e] required_user_api_scopes",
                     file=sys.stderr,
                 )
                 scopes.add("workspace.workspace")
+            if any(scope.kind == "volume" for scope in tool.policy.downscope):
+                scopes.add("files")
     return scopes
 
 

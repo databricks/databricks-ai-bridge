@@ -611,9 +611,9 @@ Deploy derives Apps user scopes from explicit `auth = "user"` bindings:
 | Managed MCP (governed ingress) | `ai-gateway` |
 | `system.ai.genie_one_mcp` | `ai-gateway`, `genie` |
 | First-class Genie One or Genie Agent | `genie` |
-| Table-only sandbox | `ai-gateway` |
-| Sandbox with a Volume downscope | `ai-gateway`, `files` |
-| Sandbox with a workspace-path downscope | `ai-gateway`, `workspace.workspace` |
+| Table-only sandbox with token injection | `ai-gateway`, `workspace.workspace` |
+| Sandbox with a Volume downscope and token injection | `ai-gateway`, `files`, `workspace.workspace` |
+| Sandbox with token injection disabled | `ai-gateway` (plus `files` for a Volume) |
 
 For example, bind Genie tools in a current project with `server = "agentbricks"`:
 
@@ -639,13 +639,14 @@ The `system.ai.dbsql` managed MCP additionally requests the Apps `sql` user scop
 API consent, not `sql:restricted-query`; read-only enforcement remains the service policy plus the
 requesting user's Unity Catalog grants. DBSQL does not use Databricks Connect.
 
-A sandbox binding with a Volume downscope additionally requests the Apps `files` user scope.
+When a user-auth sandbox has `databricks_access_token_included = true`, it requests the Apps
+`workspace.workspace` user scope so the injected credential can call workspace APIs. A sandbox
+binding with a Volume downscope additionally requests the Apps `files` user scope.
 OAuth consent does not grant Volume access: the requesting user still needs the corresponding
-Unity Catalog privileges, and the sandbox downscope remains authoritative. Table-only sandbox
-bindings request `ai-gateway` but do not request `files`. A sandbox binding with a workspace-path
-downscope additionally requests the Apps `workspace.workspace` user scope, which is required for the sandbox
-credential to access workspace APIs. Databricks Apps names this scope `workspace.workspace` (the
-legacy bare `workspace` scope is rejected). These resource-derived scopes are requested only for
+Unity Catalog privileges, and the sandbox downscope remains authoritative. A sandbox binding with
+token injection disabled does not request `workspace.workspace`; its other resource-derived scopes
+still apply. Databricks Apps names this scope `workspace.workspace` (the legacy bare `workspace`
+scope is rejected). These scopes are requested only for
 `auth = "user"`; `auth = "app"` uses the App service principal's permissions instead.
 
 Review the target App's scopes and coordinate with its other owners before allowing the update. Once
