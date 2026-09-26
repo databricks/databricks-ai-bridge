@@ -613,7 +613,7 @@ Deploy derives Apps user scopes from explicit `auth = "user"` bindings:
 | First-class Genie One or Genie Agent | `genie` |
 | Table-only sandbox | `ai-gateway` |
 | Sandbox with a Volume downscope | `ai-gateway`, `files` |
-| Sandbox with a workspace-path downscope | `ai-gateway`, `workspace` |
+| Sandbox with a workspace-path downscope | `ai-gateway`, `workspace.workspace` |
 
 For example, bind Genie tools in a current project with `server = "agentbricks"`:
 
@@ -643,8 +643,9 @@ A sandbox binding with a Volume downscope additionally requests the Apps `files`
 OAuth consent does not grant Volume access: the requesting user still needs the corresponding
 Unity Catalog privileges, and the sandbox downscope remains authoritative. Table-only sandbox
 bindings request `ai-gateway` but do not request `files`. A sandbox binding with a workspace-path
-downscope additionally requests the Apps `workspace` user scope, which is required for the sandbox
-credential to access workspace APIs. These resource-derived scopes are requested only for
+downscope additionally requests the Apps `workspace.workspace` user scope, which is required for the sandbox
+credential to access workspace APIs. Databricks Apps names this scope `workspace.workspace` (the
+legacy bare `workspace` scope is rejected). These resource-derived scopes are requested only for
 `auth = "user"`; `auth = "app"` uses the App service principal's permissions instead.
 
 Review the target App's scopes and coordinate with its other owners before allowing the update. Once

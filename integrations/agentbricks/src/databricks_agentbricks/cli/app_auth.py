@@ -100,7 +100,7 @@ def required_user_api_scopes(project: AgentProject | None) -> set[str]:
                     "[freshness-check workspace-scope-e2e] required_user_api_scopes",
                     file=sys.stderr,
                 )
-                scopes.add("workspace")
+                scopes.add("workspace.workspace")
     return scopes
 
 
