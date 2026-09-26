@@ -302,7 +302,7 @@ def test_genie_one_uses_workspace_mcp_url_and_timeout(
     monkeypatch.setattr(mcp_adapter, "workspace_client", sdk[1])
     if framework == "langgraph":
         monkeypatch.setattr(
-            mcp_adapter, "workspace_headers", lambda: {"x-databricks-workspace-id": "123"}
+            mcp_adapter, "mcp_headers", lambda: {"x-databricks-workspace-id": "123"}
         )
     servers = mcp_adapter._declared_servers()
     assert len(servers) == 1

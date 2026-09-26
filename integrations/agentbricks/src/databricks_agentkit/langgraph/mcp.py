@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 from databricks_agentkit.runtime import mcp_auth
 from databricks_agentkit.runtime.auth import AuthError
 from databricks_agentkit.runtime.tool_manifest import ToolRecord, downscope_wire, load_tools
-from databricks_agentkit.runtime.workspace import workspace_client, workspace_headers
+from databricks_agentkit.runtime.workspace import mcp_headers, workspace_client
 
 logger = logging.getLogger(__name__)
 _auth_error = mcp_auth.mcp_auth_error
@@ -52,7 +52,7 @@ def _server_from_tool(
         return DatabricksMCPServer(
             name=tool.id,
             url=url,
-            headers=workspace_headers() or None,
+            headers=mcp_headers() or None,
             workspace_client=client,
             timeout=120.0,
         )
@@ -63,7 +63,7 @@ def _server_from_tool(
             schema=schema,
             function_name=function_name,
             name=tool.id,
-            headers=workspace_headers() or None,
+            headers=mcp_headers() or None,
             workspace_client=client,
             timeout=120.0,
         )

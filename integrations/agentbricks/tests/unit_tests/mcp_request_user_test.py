@@ -123,6 +123,20 @@ def test_legacy_and_local_default_identity_remain_supported(adapter):
         )
 
 
+def test_mas_traffic_id_is_forwarded_only_to_mcp_connections(adapter, monkeypatch):
+    monkeypatch.delenv("DATABRICKS_WORKSPACE_ID", raising=False)
+    monkeypatch.setenv("DATABRICKS_MAS_TRAFFIC_ID", " testenv://liteswap/mas-sandbox-scope ")
+    monkeypatch.setenv("DATABRICKS_TRAFFIC_ID", "must-not-forward")
+
+    server = adapter._server_from_tool(tool())
+    if adapter.__name__.endswith("langgraph.mcp"):
+        headers = server.kwargs["headers"]
+    else:
+        headers = server.kwargs["params"]["headers"]
+
+    assert headers == {"x-databricks-traffic-id": "testenv://liteswap/mas-sandbox-scope"}
+
+
 def test_extra_servers_are_not_resolved_or_modified(adapter):
     extra = FakeServer("customer", "https://customer.example/mcp", object())
     resolver = Mock(side_effect=AssertionError("must not resolve customer credentials"))
