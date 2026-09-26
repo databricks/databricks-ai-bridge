@@ -386,6 +386,18 @@ class Runner:
             "langgraph": ("databricks-langchain", "integrations/langchain"),
             "openai": ("databricks-openai", "integrations/openai"),
         }[framework]
+        source = pyproject.read_text(encoding="utf-8")
+        dependencies_needle = "dependencies = [\n"
+        if dependencies_needle not in source:
+            raise MatrixError(f"Could not find dependency list in {pyproject}.")
+        pyproject.write_text(
+            source.replace(
+                dependencies_needle,
+                dependencies_needle + f'    "{framework_package}",\n',
+                1,
+            ),
+            encoding="utf-8",
+        )
         with pyproject.open("a", encoding="utf-8") as output:
             output.write(
                 "\n[tool.uv.sources]\n"
