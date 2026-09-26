@@ -349,6 +349,30 @@ def test_web_search_evidence_accepts_openai_post_tool_answer():
     assert matrix._has_completed_search_tool_call(response) is True
 
 
+def test_web_search_evidence_accepts_runtime_output_envelope():
+    matrix = _load_matrix_module()
+    response = {
+        "id": "invocation-id",
+        "status": "completed",
+        "output": {
+            "status": "completed",
+            "output": [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"name": "web_search", "args": {"query": "OAuth scopes"}}],
+                },
+                {
+                    "role": "assistant",
+                    "content": "https://docs.databricks.com/api/workspace/scopes",
+                },
+            ],
+        },
+    }
+
+    assert matrix._has_completed_search_tool_call(response) is True
+
+
 def test_web_search_evidence_rejects_call_without_result():
     matrix = _load_matrix_module()
     response = {

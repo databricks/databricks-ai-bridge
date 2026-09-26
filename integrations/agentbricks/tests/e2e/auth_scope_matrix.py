@@ -774,6 +774,8 @@ def _last_error_line(path: pathlib.Path) -> str:
 def _has_completed_search_tool_call(response: dict[str, Any]) -> bool:
     called_at: dict[str, int] = {}
     output = response.get("output")
+    if isinstance(output, dict):
+        output = output.get("output")
     if not isinstance(output, list):
         return False
     for index, raw_message in enumerate(output):
