@@ -80,7 +80,10 @@ def _sdk(monkeypatch, existing=None):
 @pytest.mark.parametrize(
     ("binding", "expected"),
     [
-        (ToolSpec.mcp("search", service="system.ai.web_search", auth="user"), {"ai-gateway"}),
+        (
+            ToolSpec.mcp("search", service="system.ai.web_search", auth="user"),
+            {"ai-gateway"},
+        ),
         (
             ToolSpec.mcp("dbsql", service="system.ai.dbsql", auth="user"),
             {"ai-gateway", "sql"},
@@ -90,7 +93,10 @@ def _sdk(monkeypatch, existing=None):
             {"ai-gateway", "genie"},
         ),
         (ToolSpec.genie_one(auth="user"), {"genie"}),
-        (ToolSpec.genie_agent("space", space_id="0" * 32, auth="user"), {"genie"}),
+        (
+            ToolSpec.genie_agent("space", space_id="0" * 32, auth="user"),
+            {"genie"},
+        ),
         (ToolSpec.mcp("dbsql", service="system.ai.dbsql", auth="app"), set()),
         (ToolSpec.mcp("dbsql", service="system.ai.dbsql"), set()),
         (ToolSpec.mcp("genie", service="system.ai.genie_one_mcp", auth="app"), set()),
@@ -121,16 +127,25 @@ def test_scope_update_plan_uses_exact_required_scopes(monkeypatch):
     [
         (
             ToolSpec.sandbox("volume", scopes=[Scope.volume("cat.sch.vol")], auth="user"),
-            {"ai-gateway", "files"},
+            {"ai-gateway", "files", "workspace.workspace"},
         ),
         (
             ToolSpec.sandbox("table", scopes=[Scope.table("cat.sch.tbl")], auth="user"),
+            {"ai-gateway", "workspace.workspace"},
+        ),
+        (
+            ToolSpec.sandbox(
+                "table-no-token",
+                scopes=[Scope.table("cat.sch.tbl")],
+                auth="user",
+                include_databricks_token_env=False,
+            ),
             {"ai-gateway"},
         ),
         (ToolSpec.sandbox("volume", scopes=[Scope.volume("cat.sch.vol")], auth="app"), set()),
     ],
 )
-def test_volume_downscope_requests_files_scope(tmp_path, binding, expected):
+def test_sandbox_policy_requests_resource_and_token_scopes(tmp_path, binding, expected):
     from databricks_agentbricks.cli.app_auth import required_user_api_scopes
 
     project = AgentProject.create(tmp_path, framework="langgraph", server="agentbricks")
@@ -144,7 +159,10 @@ def test_required_user_api_scopes_union_only_user_bindings(tmp_path):
     project = _project(tmp_path)
     project.add_tool(ToolSpec.mcp("genie", service="system.ai.genie_one_mcp", auth="user"))
     project.add_tool(ToolSpec.genie_one("first_class", auth="user"))
-    assert required_user_api_scopes(project) == {"ai-gateway", "genie"}
+    assert required_user_api_scopes(project) == {
+        "ai-gateway",
+        "genie",
+    }
 
 
 @pytest.mark.parametrize(

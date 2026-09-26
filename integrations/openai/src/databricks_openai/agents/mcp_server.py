@@ -1,5 +1,5 @@
 from contextlib import AbstractAsyncContextManager
-from typing import Any
+from typing import Any, cast
 
 import mlflow
 from agents.mcp import MCPServerStreamableHttp, MCPServerStreamableHttpParams
@@ -10,6 +10,22 @@ from mcp.client.streamable_http import GetSessionIdCallback, streamablehttp_clie
 from mcp.shared.message import SessionMessage
 from mcp.types import CallToolResult
 from mlflow.entities import SpanType
+
+
+def _databricks_oauth_provider(
+    workspace_client: WorkspaceClient, server_url: str
+) -> DatabricksOAuthClientProvider:
+    """Create a provider and bind it to the MCP resource it will authenticate."""
+    try:
+        provider = cast(Any, DatabricksOAuthClientProvider)(workspace_client, server_url=server_url)
+    except TypeError as error:
+        if "server_url" not in str(error):
+            raise
+        # Keep this compatible with databricks-mcp releases before the constructor accepted
+        # ``server_url`` while still satisfying MCP protected-resource validation.
+        provider = DatabricksOAuthClientProvider(workspace_client)
+    provider.context.server_url = server_url
+    return provider
 
 
 class McpServer(MCPServerStreamableHttp):
@@ -295,7 +311,7 @@ class McpServer(MCPServerStreamableHttp):
     ]:
         url: str = self.params["url"]
         headers: dict[str, str] | None = self.params.get("headers", None)
-        auth = DatabricksOAuthClientProvider(self.workspace_client)
+        auth = _databricks_oauth_provider(self.workspace_client, url)
 
         timeout = self.params.get("timeout", 5)
         sse_read_timeout = self.params.get("sse_read_timeout", 60 * 5)

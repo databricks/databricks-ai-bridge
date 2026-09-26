@@ -15,21 +15,25 @@ Unlike a fetch-once tool list, these are connection objects: open them for the l
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from databricks_openai.agents import McpServer
+
+if TYPE_CHECKING:
+    from agents.mcp import MCPServerStreamableHttpParams
 
 from databricks_agentkit.runtime import mcp_auth
 from databricks_agentkit.runtime.auth import AuthError
 from databricks_agentkit.runtime.tool_manifest import (
     ToolRecord,
-    downscope_wire,
     load_tools,
+    sandbox_meta,
 )
-from databricks_agentkit.runtime.workspace import workspace_client, workspace_headers
+from databricks_agentkit.runtime.workspace import mcp_headers, workspace_client
 
 _FRAMEWORK = "openai"
 _auth_error = mcp_auth.mcp_auth_error
+_auth_error_for_server = mcp_auth.mcp_auth_error_for_server
 _tool_error = mcp_auth.mcp_tool_error
 
 
@@ -38,12 +42,17 @@ class _ConfiguredMcpServer(McpServer):
 
     def __init__(self, *args: Any, request_user: bool, **kwargs: Any) -> None:
         self._agentbricks_request_user = request_user
+        server_url = kwargs.get("url")
+        params = kwargs.get("params")
+        if not isinstance(server_url, str) and isinstance(params, dict):
+            server_url = params.get("url")
+        self._agentbricks_server_url = server_url if isinstance(server_url, str) else ""
         if request_user:
             kwargs["failure_error_function"] = self._raise_tool_error
         super().__init__(*args, **kwargs)
 
     def _raise_tool_error(self, context: Any, error: Exception) -> str:
-        raise _auth_error(error, self.name) or AuthError(
+        raise _auth_error_for_server(error, self.name, self._agentbricks_server_url) or AuthError(
             "MCP_TOOL_FAILED", "The configured MCP tool failed.", 502, self.name
         ) from None
 
@@ -53,7 +62,9 @@ class _ConfiguredMcpServer(McpServer):
         try:
             return await super().connect()
         except Exception as error:
-            raise _auth_error(error, self.name) or AuthError(
+            raise _auth_error_for_server(
+                error, self.name, self._agentbricks_server_url
+            ) or AuthError(
                 "MCP_TOOL_FAILED",
                 "Could not connect to the configured MCP service.",
                 502,
@@ -66,7 +77,9 @@ class _ConfiguredMcpServer(McpServer):
         try:
             return await super().list_tools(*args, **kwargs)
         except Exception as error:
-            raise _auth_error(error, self.name) or AuthError(
+            raise _auth_error_for_server(
+                error, self.name, self._agentbricks_server_url
+            ) or AuthError(
                 "MCP_TOOL_FAILED", "Could not discover configured MCP tools.", 502, self.name
             ) from None
 
@@ -77,28 +90,32 @@ class _ConfiguredMcpServer(McpServer):
             call = getattr(McpServer.call_tool, "__wrapped__", McpServer.call_tool)
             result = await call(self, tool_name, arguments, **kwargs)
         except Exception as error:
-            raise _auth_error(error, self.name) or AuthError(
+            raise _auth_error_for_server(
+                error, self.name, self._agentbricks_server_url
+            ) or AuthError(
                 "MCP_TOOL_FAILED", "The configured MCP tool failed.", 502, self.name
             ) from None
-        if getattr(result, "isError", False) and (error := _tool_error(result, self.name)):
+        if getattr(result, "isError", False) and (
+            error := _tool_error(result, self.name, self._agentbricks_server_url)
+        ):
             raise error
         return result
 
 
 class _DownscopedMcpServer(_ConfiguredMcpServer):
-    """An ``McpServer`` that injects a sandbox downscope into every ``call_tool``.
+    """An ``McpServer`` that injects protected sandbox policy into every ``call_tool``.
 
-    The Databricks sandbox MCP applies the downscope from the call's ``_meta``; the Agents SDK does
-    not surface a per-call hook, so bind the manifest's downscope to the server and add it on each
-    invocation. Only sandbox bindings need this — plain MCP / UC-function servers use the base class.
+    The Databricks sandbox MCP applies policy from the call's ``_meta``; the Agents SDK does not
+    surface a per-call hook, so bind the manifest policy to the server and add it on each invocation.
+    Only sandbox bindings need this — plain MCP / UC-function servers use the base class.
     """
 
-    def __init__(self, *args: Any, downscope: dict[str, Any], **kwargs: Any) -> None:
+    def __init__(self, *args: Any, protected_meta: dict[str, Any], **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._downscope = downscope
+        self._protected_meta = protected_meta
 
     async def call_tool(self, tool_name, arguments, **kwargs):
-        meta = {**(kwargs.pop("meta", None) or {}), "downscope": self._downscope}
+        meta = {**(kwargs.pop("meta", None) or {}), **self._protected_meta}
         return await super().call_tool(tool_name, arguments, meta=meta, **kwargs)
 
 
@@ -114,6 +131,10 @@ def _server_from_tool(
         mode, tool.id, workspace_client_for, workspace_client
     )
     host = client.config.host.rstrip("/")
+    headers = mcp_headers()
+    mcp_params: MCPServerStreamableHttpParams | None = (
+        {"url": "", "headers": headers} if headers else None
+    )
     if tool.kind in {"sandbox", "mcp", "genie_one"}:
         url = (
             f"{host}/api/2.0/mcp/genie"
@@ -126,7 +147,8 @@ def _server_from_tool(
                 name=tool.id,
                 workspace_client=client,
                 timeout=120.0,
-                downscope=downscope_wire(tool),
+                params=mcp_params,
+                protected_meta=sandbox_meta(tool),
                 request_user=mode == "user",
             )
         if tool.kind == "genie_one":
@@ -134,7 +156,7 @@ def _server_from_tool(
                 name=tool.id,
                 workspace_client=client,
                 timeout=120.0,
-                params={"url": url, "headers": workspace_headers()},
+                params={"url": url, "headers": headers},
                 request_user=mode == "user",
             )
         return _ConfiguredMcpServer(
@@ -142,6 +164,7 @@ def _server_from_tool(
             name=tool.id,
             workspace_client=client,
             timeout=120.0,
+            params=mcp_params,
             request_user=mode == "user",
         )
     if tool.kind == "uc_function":
@@ -153,6 +176,7 @@ def _server_from_tool(
             name=tool.id,
             workspace_client=client,
             timeout=120.0,
+            params=mcp_params,
             request_user=mode == "user",
         )
     return None

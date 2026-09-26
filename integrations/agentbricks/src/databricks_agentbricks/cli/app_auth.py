@@ -95,6 +95,8 @@ def required_user_api_scopes(project: AgentProject | None) -> set[str]:
             scope.kind == "volume" for scope in tool.policy.downscope
         ):
             scopes.add("files")
+        if tool.source.kind == "sandbox" and tool.policy.include_databricks_token_env:
+            scopes.add("workspace.workspace")
     return scopes
 
 

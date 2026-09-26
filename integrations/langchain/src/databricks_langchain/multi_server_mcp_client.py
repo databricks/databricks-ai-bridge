@@ -1,5 +1,5 @@
 from datetime import timedelta
-from typing import Any, Callable, Union
+from typing import Any, Callable, Union, cast
 
 import httpx
 from databricks.sdk import WorkspaceClient
@@ -7,6 +7,22 @@ from databricks_mcp.oauth_provider import DatabricksOAuthClientProvider
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.sessions import McpHttpClientFactory, StreamableHttpConnection
 from pydantic import BaseModel, ConfigDict, Field
+
+
+def _databricks_oauth_provider(
+    workspace_client: WorkspaceClient, server_url: str
+) -> DatabricksOAuthClientProvider:
+    """Create a provider and bind it to the MCP resource it will authenticate."""
+    try:
+        provider = cast(Any, DatabricksOAuthClientProvider)(workspace_client, server_url=server_url)
+    except TypeError as error:
+        if "server_url" not in str(error):
+            raise
+        # Keep this compatible with databricks-mcp releases before the constructor accepted
+        # ``server_url`` while still satisfying MCP protected-resource validation.
+        provider = DatabricksOAuthClientProvider(workspace_client)
+    provider.context.server_url = server_url
+    return provider
 
 
 class DatabricksMcpHttpClientFactory(McpHttpClientFactory):
@@ -25,7 +41,7 @@ class DatabricksMcpHttpClientFactory(McpHttpClientFactory):
             return httpx.AsyncClient(
                 headers=headers,
                 timeout=timeout,
-                auth=DatabricksOAuthClientProvider(auth.workspace_client),
+                auth=_databricks_oauth_provider(auth.workspace_client, auth.context.server_url),
             )
         else:
             return httpx.AsyncClient(
@@ -258,7 +274,7 @@ class DatabricksMCPServer(MCPServer):
             self.workspace_client = WorkspaceClient()
 
         # Store the auth provider internally
-        self._auth_provider = DatabricksOAuthClientProvider(self.workspace_client)
+        self._auth_provider = _databricks_oauth_provider(self.workspace_client, self.url)
 
     def to_connection_dict(self) -> StreamableHttpConnection:
         """

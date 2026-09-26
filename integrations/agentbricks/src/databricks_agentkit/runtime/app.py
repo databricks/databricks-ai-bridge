@@ -223,6 +223,14 @@ class DurableAgentServer(FastAPI):
         except InvocationConflictError as exc:
             raise HTTPException(409, "id was already used for another request") from exc
         except InvocationFailedError as exc:
+            state = await self._runtime.get_invocation(runtime_invocation_id)
+            if state is not None:
+                auth_failure = self._auth_failure_response(state)
+                if auth_failure is not None:
+                    return JSONResponse(
+                        {"error": auth_failure[0]},
+                        status_code=auth_failure[1],
+                    )
             raise HTTPException(500, "agent invocation failed") from exc
         finally:
             if registered_auth and not execution_owns_auth and request_auth is not None:
@@ -288,8 +296,27 @@ class DurableAgentServer(FastAPI):
         if state.status == InvocationStatus.COMPLETED:
             payload["output"] = copy.deepcopy(state.response)
         elif state.status == InvocationStatus.FAILED:
-            payload["error"] = "agent invocation failed"
+            auth_failure = DurableAgentServer._auth_failure_response(state)
+            payload["error"] = (
+                copy.deepcopy(auth_failure[0])
+                if auth_failure is not None
+                else "agent invocation failed"
+            )
         return payload
+
+    @staticmethod
+    def _auth_failure_response(state: Invocation) -> tuple[JsonObject, int] | None:
+        if state.status != InvocationStatus.FAILED or not isinstance(state.response, dict):
+            return None
+        error = state.response.get("error")
+        status_code = state.response.get("status_code")
+        if not isinstance(error, dict) or not isinstance(status_code, int):
+            return None
+        if not isinstance(error.get("code"), str) or not isinstance(error.get("message"), str):
+            return None
+        if status_code < 400 or status_code > 599:
+            return None
+        return copy.deepcopy(error), status_code
 
     def _runtime_invocation_id(self, request: Request, invocation_id: str) -> str:
         if not self.auth_policy.requires_user:

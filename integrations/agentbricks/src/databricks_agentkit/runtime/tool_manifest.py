@@ -38,6 +38,7 @@ class ToolRecord:
     service: str | None = None
     function: str | None = None
     downscope: tuple[ScopeRecord, ...] = ()
+    include_databricks_token_env: bool = False
     space_id: str | None = None
     auth: str | None = None
 
@@ -131,6 +132,11 @@ def _tool(value: object) -> ToolRecord:
     if not isinstance(raw_downscope, list):
         raise RuntimeError("agent.toml policy.downscope must be an array.")
     kind = _required_string(source.get("kind"), "a tool source kind")
+    include_databricks_token_env = policy.get("include_databricks_token_env", False)
+    if not isinstance(include_databricks_token_env, bool):
+        raise RuntimeError("agent.toml policy.include_databricks_token_env must be a boolean.")
+    if kind != "sandbox" and "include_databricks_token_env" in policy:
+        raise RuntimeError("Only sandbox bindings accept policy.include_databricks_token_env.")
     tool_id = _required_string(value.get("id"), "a tool id")
     validate_genie_source(tool_id, source, has_downscope="downscope" in policy)
     auth = value.get("auth")
@@ -150,6 +156,7 @@ def _tool(value: object) -> ToolRecord:
         function=source.get("function") if isinstance(source.get("function"), str) else None,
         space_id=source.get("space_id") if isinstance(source.get("space_id"), str) else None,
         downscope=tuple(_scope(item) for item in raw_downscope),
+        include_databricks_token_env=include_databricks_token_env,
         auth=auth,
     )
     if record.kind == "sandbox" and (record.service != "system.ai.sandbox" or not record.downscope):
@@ -221,3 +228,11 @@ def downscope_wire(tool: ToolRecord) -> dict[str, list[dict[str, str]]]:
         group, field = fields[scope.kind]
         result.setdefault(group, []).append({field: scope.value, "permission": scope.permission})
     return result
+
+
+def sandbox_meta(tool: ToolRecord) -> dict[str, Any]:
+    """Build the protected MCP metadata for a configured sandbox binding."""
+    return {
+        "downscope": downscope_wire(tool),
+        "include_databricks_token_env": tool.include_databricks_token_env,
+    }

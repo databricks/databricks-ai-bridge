@@ -537,20 +537,30 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                 )
         return result.rowcount == 1
 
-    async def fail(self, invocation_id: str, attempt: int) -> bool:
+    async def fail(
+        self,
+        invocation_id: str,
+        attempt: int,
+        response: JsonValue = None,
+    ) -> bool:
         _validate_invocation_id(invocation_id)
+        serialized_response = _serialize_json_value(response)
         async with self._engine.begin() as connection:
             result = await connection.execute(
                 text(
                     f"""
                     UPDATE {self._table}
-                    SET status='FAILED'
+                    SET status='FAILED', response=CAST(:response AS JSONB)
                     WHERE invocation_id=:invocation_id
                       AND attempt=:attempt
                       AND status='ACTIVE'
                     """
                 ),
-                {"invocation_id": invocation_id, "attempt": attempt},
+                {
+                    "invocation_id": invocation_id,
+                    "attempt": attempt,
+                    "response": serialized_response,
+                },
             )
             if result.rowcount == 1:
                 await connection.execute(

@@ -529,15 +529,16 @@ class TestDatabricksMcpHttpClientFactoryAuth:
         request calls workspace_client.config.authenticate() independently.
         """
         import httpx
-        from databricks_mcp import DatabricksOAuthClientProvider
 
         from databricks_langchain.multi_server_mcp_client import (
             DatabricksMcpHttpClientFactory,
+            _databricks_oauth_provider,
         )
 
         # A user would never import this factory directly, but still tests the internal factory logic
         factory = DatabricksMcpHttpClientFactory()
-        original_auth = DatabricksOAuthClientProvider(workspace_client)
+        server_url = "https://example.databricks.com/mcp"
+        original_auth = _databricks_oauth_provider(workspace_client, server_url)
 
         client_1 = factory(timeout=httpx.Timeout(10), auth=original_auth)
         client_2 = factory(timeout=httpx.Timeout(10), auth=original_auth)
@@ -548,3 +549,5 @@ class TestDatabricksMcpHttpClientFactoryAuth:
         assert client_1.auth is not client_2.auth, (
             "Each factory call should produce a distinct auth provider instance"
         )
+        assert client_1.auth.context.server_url == server_url
+        assert client_2.auth.context.server_url == server_url

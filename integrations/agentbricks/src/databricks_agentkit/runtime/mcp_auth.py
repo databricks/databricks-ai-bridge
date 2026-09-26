@@ -5,12 +5,25 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import quote, urlsplit
 
 from databricks.sdk import WorkspaceClient
 
 from databricks_agentkit.runtime.auth import AuthError
 
 WorkspaceClientResolver = Callable[[str], WorkspaceClient]
+
+
+def mcp_service_login_url(server_url: str) -> str | None:
+    """Build the browser URL for first-time authorization of a managed MCP service."""
+    parsed = urlsplit(server_url)
+    marker = "/mcp-services/"
+    if not parsed.scheme or not parsed.netloc or marker not in parsed.path:
+        return None
+    service = parsed.path.split(marker, 1)[1].strip("/")
+    if not service:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}/mcp-service-login?name={quote(service, safe='')}"
 
 
 def resolve_mcp_workspace_client(
@@ -59,6 +72,16 @@ def mcp_auth_error(
             if error.integration_id
             else AuthError(error.code, str(error), error.status_code, integration_id)
         )
+    if (
+        error.__class__.__module__.startswith("mcp.")
+        and error.__class__.__name__ == "OAuthRegistrationError"
+    ):
+        return AuthError(
+            "MCP_AUTHORIZATION_REQUIRED",
+            "Authorize the configured service in Databricks before retrying.",
+            401,
+            integration_id,
+        )
     nested_errors = [
         *getattr(error, "exceptions", ()),
         error.__cause__,
@@ -90,7 +113,26 @@ def mcp_auth_error(
     return None
 
 
-def mcp_tool_error(result: Any, integration_id: str) -> AuthError | None:
+def mcp_auth_error_for_server(
+    error: BaseException, integration_id: str, server_url: str
+) -> AuthError | None:
+    """Classify an MCP error and attach a browser consent URL when applicable."""
+    classified = mcp_auth_error(error, integration_id)
+    if classified is None or classified.code != "MCP_AUTHORIZATION_REQUIRED":
+        return classified
+    authorization_url = mcp_service_login_url(server_url)
+    if authorization_url is None:
+        return classified
+    return AuthError(
+        classified.code,
+        str(classified),
+        classified.status_code,
+        classified.integration_id,
+        authorization_url,
+    )
+
+
+def mcp_tool_error(result: Any, integration_id: str, server_url: str = "") -> AuthError | None:
     """Classify structured MCP authorization failures returned as tool results."""
     structured = getattr(result, "structuredContent", None)
     detail = structured.get("error", structured) if isinstance(structured, dict) else {}
@@ -105,10 +147,12 @@ def mcp_tool_error(result: Any, integration_id: str) -> AuthError | None:
             integration_id,
         )
     if code == -32042:
+        authorization_url = mcp_service_login_url(server_url)
         return AuthError(
             "MCP_AUTHORIZATION_REQUIRED",
             "Authorize the configured service in Databricks.",
             401,
             integration_id,
+            authorization_url,
         )
     return None

@@ -13,6 +13,20 @@ def workspace_headers() -> dict[str, str]:
     return {"X-Databricks-Org-Id": workspace_id} if workspace_id else {}
 
 
+def mcp_headers() -> dict[str, str]:
+    """Return MCP headers, including opt-in test routing for MAS LiteSwap.
+
+    ``DATABRICKS_MAS_TRAFFIC_ID`` is intentionally scoped to MCP requests. It is a test-only
+    escape hatch for routing managed MCP calls to a MAS LiteSwap unit; arbitrary environment
+    variables are never forwarded.
+    """
+    headers = workspace_headers()
+    traffic_id = os.getenv("DATABRICKS_MAS_TRAFFIC_ID", "").strip()
+    if traffic_id:
+        headers["x-databricks-traffic-id"] = traffic_id
+    return headers
+
+
 def workspace_client() -> WorkspaceClient:
     """Return the environment-authenticated client for the active workspace.
 

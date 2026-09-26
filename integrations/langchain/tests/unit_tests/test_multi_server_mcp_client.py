@@ -13,6 +13,7 @@ from databricks_langchain.multi_server_mcp_client import (
     DatabricksMCPServer,
     DatabricksMultiServerMCPClient,
     MCPServer,
+    _databricks_oauth_provider,
 )
 
 
@@ -101,7 +102,9 @@ class TestDatabricksMCPServer:
             # Should have created WorkspaceClient
             mock_ws.assert_called_once()
             # Should have created auth provider
-            mock_auth.assert_called_once_with(mock_ws_instance)
+            mock_auth.assert_called_once_with(
+                mock_ws_instance, server_url="https://databricks.com/mcp"
+            )
 
     def test_databricks_server_with_workspace_client(self):
         """Test DatabricksMCPServer uses provided WorkspaceClient."""
@@ -120,7 +123,9 @@ class TestDatabricksMCPServer:
             )
 
             # Should have used provided client
-            mock_auth.assert_called_once_with(mock_workspace_client)
+            mock_auth.assert_called_once_with(
+                mock_workspace_client, server_url="https://databricks.com/mcp"
+            )
             assert server.workspace_client is mock_workspace_client
 
             connection_dict = server.to_connection_dict()
@@ -173,6 +178,19 @@ class TestDatabricksMCPServer:
             assert isinstance(
                 connection_dict["httpx_client_factory"], DatabricksMcpHttpClientFactory
             )
+
+    def test_http_factory_preserves_server_url_for_oauth_resource_validation(self):
+        import httpx
+        from databricks_mcp import DatabricksOAuthClientProvider
+
+        workspace_client = MagicMock()
+        server_url = "https://test.databricks.com/ai-gateway/mcp-services/system.ai.slack"
+        original_auth = _databricks_oauth_provider(workspace_client, server_url)
+
+        client = DatabricksMcpHttpClientFactory()(timeout=httpx.Timeout(10), auth=original_auth)
+
+        assert isinstance(client.auth, DatabricksOAuthClientProvider)
+        assert client.auth.context.server_url == server_url
 
 
 class TestDatabricksMultiServerMCPClient:
