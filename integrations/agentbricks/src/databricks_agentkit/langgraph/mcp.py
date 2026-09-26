@@ -89,14 +89,17 @@ def _sandbox_interceptor(
     tools: tuple[ToolRecord, ...],
     *,
     workspace_client_for: mcp_auth.WorkspaceClientResolver | None = None,
+    server_urls: dict[str, str] | None = None,
 ):
     declared = {tool.id: tool for tool in tools}
+    configured_server_urls = server_urls or {}
 
     async def interceptor(request: Any, handler: Any) -> Any:
         tool = declared.get(request.server_name)
         if tool is None:
             return await handler(request)
         request_user = tool.auth == "user"
+        server_url = configured_server_urls.get(tool.id, "")
         try:
             if tool.kind == "sandbox":
                 server = _server_from_tool(tool, workspace_client_for=workspace_client_for)
@@ -113,14 +116,19 @@ def _sandbox_interceptor(
                 result = await handler(request)
         except Exception as error:
             if request_user:
-                raise _auth_error(error, tool.id) or AuthError(
+                classified = (
+                    _auth_error_for_server(error, tool.id, server_url)
+                    if server_url
+                    else _auth_error(error, tool.id)
+                )
+                raise classified or AuthError(
                     "MCP_TOOL_FAILED", "The configured MCP tool failed.", 502, tool.id
                 ) from None
             raise
         if (
             request_user
             and getattr(result, "isError", False)
-            and (error := _tool_error(result, tool.id))
+            and (error := _tool_error(result, tool.id, server_url))
         ):
             raise error
         return result
@@ -142,7 +150,13 @@ def mcp_client(
     """
     snapshot = tuple(load_tools(expected_framework="langgraph")) if tools is None else tools
     interceptors = (
-        [_sandbox_interceptor(snapshot, workspace_client_for=workspace_client_for)]
+        [
+            _sandbox_interceptor(
+                snapshot,
+                workspace_client_for=workspace_client_for,
+                server_urls={server.name: server.url for server in servers},
+            )
+        ]
         if snapshot
         else []
     )

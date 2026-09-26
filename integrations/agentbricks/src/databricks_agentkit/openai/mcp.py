@@ -95,7 +95,9 @@ class _ConfiguredMcpServer(McpServer):
             ) or AuthError(
                 "MCP_TOOL_FAILED", "The configured MCP tool failed.", 502, self.name
             ) from None
-        if getattr(result, "isError", False) and (error := _tool_error(result, self.name)):
+        if getattr(result, "isError", False) and (
+            error := _tool_error(result, self.name, self._agentbricks_server_url)
+        ):
             raise error
         return result
 

@@ -361,6 +361,60 @@ def test_tool_result_permission_errors_are_not_model_results(adapter, monkeypatc
     assert "secret" not in str(raised.value)
 
 
+def test_tool_result_authorization_challenge_includes_browser_login_url(adapter, monkeypatch):
+    from databricks_agentkit.runtime.auth import AuthError
+
+    result = SimpleNamespace(
+        isError=True,
+        structuredContent={"error": {"code": -32042, "message": "secret"}},
+    )
+    if adapter.__name__.endswith("openai.mcp"):
+        monkeypatch.setattr(FakeServer, "call_tool", AsyncMock(return_value=result))
+        invoke = adapter._server_from_tool(tool("user")).call_tool("search", {})
+    else:
+        server = adapter._server_from_tool(tool("user"))
+        client = adapter.mcp_client([server], tools=(tool("user"),))
+        request = SimpleNamespace(server_name="search", name="search", args={})
+        invoke = client.interceptors[0](request, AsyncMock(return_value=result))
+
+    with pytest.raises(AuthError) as raised:
+        asyncio.run(invoke)
+
+    assert raised.value.code == "MCP_AUTHORIZATION_REQUIRED"
+    assert raised.value.payload()["authorization_url"] == (
+        "https://workspace/mcp-service-login?name=system.ai.search"
+    )
+    assert "secret" not in str(raised.value)
+
+
+def test_langgraph_call_time_authorization_failure_includes_browser_login_url(adapter, monkeypatch):
+    if not adapter.__name__.endswith("langgraph.mcp"):
+        pytest.skip("LangGraph interceptor")
+    from databricks_agentkit.runtime.auth import AuthError
+
+    oauth_registration_error = type(
+        "OAuthRegistrationError",
+        (RuntimeError,),
+        {"__module__": "mcp.client.auth.exceptions"},
+    )
+    server = adapter._server_from_tool(tool("user"))
+    client = adapter.mcp_client([server], tools=(tool("user"),))
+    request = SimpleNamespace(server_name="search", name="search", args={})
+    invoke = client.interceptors[0](
+        request,
+        AsyncMock(side_effect=oauth_registration_error("Registration failed: secret")),
+    )
+
+    with pytest.raises(AuthError) as raised:
+        asyncio.run(invoke)
+
+    assert raised.value.code == "MCP_AUTHORIZATION_REQUIRED"
+    assert raised.value.payload()["authorization_url"] == (
+        "https://workspace/mcp-service-login?name=system.ai.search"
+    )
+    assert "secret" not in str(raised.value)
+
+
 def test_app_tool_result_permission_errors_remain_model_results(adapter, monkeypatch):
     result = SimpleNamespace(
         isError=True,

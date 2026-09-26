@@ -132,7 +132,7 @@ def mcp_auth_error_for_server(
     )
 
 
-def mcp_tool_error(result: Any, integration_id: str) -> AuthError | None:
+def mcp_tool_error(result: Any, integration_id: str, server_url: str = "") -> AuthError | None:
     """Classify structured MCP authorization failures returned as tool results."""
     structured = getattr(result, "structuredContent", None)
     detail = structured.get("error", structured) if isinstance(structured, dict) else {}
@@ -147,10 +147,12 @@ def mcp_tool_error(result: Any, integration_id: str) -> AuthError | None:
             integration_id,
         )
     if code == -32042:
+        authorization_url = mcp_service_login_url(server_url)
         return AuthError(
             "MCP_AUTHORIZATION_REQUIRED",
             "Authorize the configured service in Databricks.",
             401,
             integration_id,
+            authorization_url,
         )
     return None
