@@ -11,6 +11,7 @@ import sys
 from types import ModuleType, SimpleNamespace
 
 import pytest
+import tomli
 
 
 def _load_matrix_module() -> ModuleType:
@@ -108,6 +109,43 @@ def _generated_sql_tool(tmp_path: pathlib.Path):
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return matrix, module
+
+
+@pytest.mark.parametrize(
+    ("framework", "package", "subdirectory"),
+    [
+        ("langgraph", "databricks-langchain", "integrations/langchain"),
+        ("openai", "databricks-openai", "integrations/openai"),
+    ],
+)
+def test_runtime_source_pins_include_framework_package(
+    tmp_path: pathlib.Path, framework: str, package: str, subdirectory: str
+):
+    matrix = _load_matrix_module()
+    runner = matrix.Runner.__new__(matrix.Runner)
+    runner.source_repo = "https://github.com/example/databricks-ai-bridge.git"
+    runner.source_ref = "a" * 40
+    runner.transcript = matrix.Transcript(tmp_path / "commands.log")
+    project = tmp_path / framework
+    project.mkdir()
+    (project / "pyproject.toml").write_text("[project]\nname = 'matrix'\n", encoding="utf-8")
+
+    runner._pin_runtime_source(project, framework)
+
+    sources = tomli.loads((project / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["uv"][
+        "sources"
+    ]
+    expected_common = {
+        "git": runner.source_repo,
+        "rev": runner.source_ref,
+    }
+    assert sources == {
+        "databricks-agentbricks": {
+            **expected_common,
+            "subdirectory": "integrations/agentbricks",
+        },
+        package: {**expected_common, "subdirectory": subdirectory},
+    }
 
 
 def test_auth_scope_matrix_accepts_complete_redacted_evidence(tmp_path: pathlib.Path):

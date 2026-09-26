@@ -362,7 +362,7 @@ class Runner:
                         ],
                         timeout=180,
                     )
-                self._pin_runtime_source(project)
+                self._pin_runtime_source(project, framework)
                 self._write_auth_scope_tool(project, framework)
                 self._patch_agent(project, framework)
                 manifest = (project / "agent.toml").read_text(encoding="utf-8")
@@ -379,15 +379,21 @@ class Runner:
         with manifest.open("a", encoding="utf-8") as output:
             output.write('\n[auth.user]\nrequired = true\nadditional_api_scopes = ["sql"]\n')
 
-    def _pin_runtime_source(self, project: pathlib.Path) -> None:
+    def _pin_runtime_source(self, project: pathlib.Path, framework: str) -> None:
         pyproject = project / "pyproject.toml"
         self.transcript.file_step(pyproject, f"pin runtime to pushed SHA {self.source_ref}")
+        framework_package, framework_subdirectory = {
+            "langgraph": ("databricks-langchain", "integrations/langchain"),
+            "openai": ("databricks-openai", "integrations/openai"),
+        }[framework]
         with pyproject.open("a", encoding="utf-8") as output:
             output.write(
                 "\n[tool.uv.sources]\n"
                 "databricks-agentbricks = { "
                 f'git = "{self.source_repo}", rev = "{self.source_ref}", '
                 'subdirectory = "integrations/agentbricks" }\n'
+                f'{framework_package} = {{ git = "{self.source_repo}", '
+                f'rev = "{self.source_ref}", subdirectory = "{framework_subdirectory}" }}\n'
             )
 
     def _write_auth_scope_tool(self, project: pathlib.Path, framework: str) -> None:
