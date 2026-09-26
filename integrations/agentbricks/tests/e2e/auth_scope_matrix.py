@@ -37,6 +37,14 @@ class MatrixError(RuntimeError):
     """A reproducible setup or execution failure."""
 
 
+class InvocationHTTPError(MatrixError):
+    """An HTTP failure returned by a deployed App invocation."""
+
+    def __init__(self, status_code: int, detail: str):
+        self.status_code = status_code
+        super().__init__(f"HTTP {status_code} from /api/invocations: {detail}")
+
+
 @dataclasses.dataclass(frozen=True)
 class ProjectCase:
     framework: str
@@ -605,11 +613,12 @@ def auth_scope_tools(
             },
         }
         url = f"{base_url}/api/invocations"
-        response, status = _monitored(
+        response, status = _invoke_with_readiness_retry(
             label,
             lambda: _http_json(url, body, self.headers),
             self.transcript,
             timeout=360,
+            retry_interval=15,
         )
         return response, status
 
@@ -784,7 +793,7 @@ def _http_json(
             status = response.status
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode(errors="replace")
-        raise MatrixError(f"HTTP {exc.code} from /api/invocations: {detail}") from exc
+        raise InvocationHTTPError(exc.code, detail) from exc
     try:
         value = json.loads(payload)
     except json.JSONDecodeError as exc:
@@ -792,6 +801,44 @@ def _http_json(
     if not isinstance(value, dict):
         raise MatrixError("Expected an object response from /api/invocations.")
     return value, status
+
+
+def _invoke_with_readiness_retry(
+    label: str,
+    operation: Callable[[], tuple[dict[str, Any], int]],
+    transcript: Transcript,
+    *,
+    timeout: float,
+    retry_interval: float,
+) -> tuple[dict[str, Any], int]:
+    started = time.monotonic()
+    next_tick = 60.0
+    attempt = 0
+    while True:
+        elapsed = time.monotonic() - started
+        remaining = timeout - elapsed
+        if remaining <= 0:
+            raise MatrixError(f"{label} did not become ready within {timeout:.0f}s")
+        attempt += 1
+        transcript.write(f"attempt {attempt} | {label} | request")
+        try:
+            return _monitored(label, operation, transcript, timeout=remaining)
+        except InvocationHTTPError as exc:
+            if exc.status_code not in {502, 503}:
+                raise
+            elapsed = time.monotonic() - started
+            remaining = timeout - elapsed
+            if remaining <= 0:
+                raise MatrixError(f"{label} did not become ready within {timeout:.0f}s") from exc
+            transcript.write(f"attempt {attempt} | HTTP {exc.status_code} | retrying")
+            if elapsed >= next_tick:
+                transcript.write(
+                    f"tick {dt.datetime.now(dt.timezone.utc):%H:%M} | {label} | "
+                    f"waiting for App route | {elapsed:.0f}s"
+                )
+                while elapsed >= next_tick:
+                    next_tick += 60.0
+            time.sleep(min(retry_interval, remaining))
 
 
 def _sha256(path: pathlib.Path) -> str:
