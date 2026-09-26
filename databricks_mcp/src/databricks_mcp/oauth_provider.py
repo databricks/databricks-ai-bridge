@@ -36,15 +36,16 @@ class DatabricksOAuthClientProvider(OAuthClientProvider):
 
             from databricks_mcp.oauth_provider import DatabricksOAuthClientProvider
 
-            # Initialize the Databricks workspace client
+            # Initialize the Databricks workspace client and MCP resource URL
             workspace_client = WorkspaceClient()
+            server_url = "https://mcp-server-url"
 
             async with httpx2.AsyncClient(
-                auth=DatabricksOAuthClientProvider(workspace_client),
+                auth=DatabricksOAuthClientProvider(workspace_client, server_url=server_url),
                 follow_redirects=True,
             ) as http_client:
                 async with Client(
-                    streamable_http_client("https://mcp-server-url", http_client=http_client)
+                    streamable_http_client(server_url, http_client=http_client)
                 ) as session:
                     tools = await session.list_tools()
 
@@ -57,9 +58,10 @@ class DatabricksOAuthClientProvider(OAuthClientProvider):
 
             from databricks_mcp.oauth_provider import DatabricksOAuthClientProvider
 
+            server_url = "https://mcp-server-url"
             async with streamablehttp_client(
-                url="https://mcp-server-url",
-                auth=DatabricksOAuthClientProvider(workspace_client),
+                url=server_url,
+                auth=DatabricksOAuthClientProvider(workspace_client, server_url=server_url),
             ) as (read_stream, write_stream, _):
                 async with ClientSession(read_stream, write_stream) as session:
                     await session.initialize()
@@ -69,7 +71,7 @@ class DatabricksOAuthClientProvider(OAuthClientProvider):
         server_url (str): The MCP server URL used to validate protected-resource metadata.
     """
 
-    def __init__(self, workspace_client: WorkspaceClient, server_url: str = ""):
+    def __init__(self, workspace_client: WorkspaceClient, server_url: str):
         self.workspace_client = workspace_client
         self.databricks_token_storage = DatabricksTokenStorage(workspace_client)
 

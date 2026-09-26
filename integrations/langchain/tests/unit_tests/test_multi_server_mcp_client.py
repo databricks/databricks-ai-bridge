@@ -101,7 +101,9 @@ class TestDatabricksMCPServer:
             # Should have created WorkspaceClient
             mock_ws.assert_called_once()
             # Should have created auth provider
-            mock_auth.assert_called_once_with(mock_ws_instance)
+            mock_auth.assert_called_once_with(
+                mock_ws_instance, server_url="https://databricks.com/mcp"
+            )
 
     def test_databricks_server_with_workspace_client(self):
         """Test DatabricksMCPServer uses provided WorkspaceClient."""
@@ -120,7 +122,9 @@ class TestDatabricksMCPServer:
             )
 
             # Should have used provided client
-            mock_auth.assert_called_once_with(mock_workspace_client)
+            mock_auth.assert_called_once_with(
+                mock_workspace_client, server_url="https://databricks.com/mcp"
+            )
             assert server.workspace_client is mock_workspace_client
 
             connection_dict = server.to_connection_dict()

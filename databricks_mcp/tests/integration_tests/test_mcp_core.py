@@ -29,7 +29,7 @@ async def raw_mcp_session(url, workspace_client):
     """
     from databricks_mcp import DatabricksOAuthClientProvider
 
-    auth = DatabricksOAuthClientProvider(workspace_client)
+    auth = DatabricksOAuthClientProvider(workspace_client, server_url=url)
 
     try:
         from mcp import Client  # present only in mcp >= 2.0.0

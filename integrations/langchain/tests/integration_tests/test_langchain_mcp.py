@@ -538,6 +538,7 @@ class TestDatabricksMcpHttpClientFactoryAuth:
         # A user would never import this factory directly, but still tests the internal factory logic
         factory = DatabricksMcpHttpClientFactory()
         original_auth = DatabricksOAuthClientProvider(workspace_client)
+        original_auth.context.server_url = "https://example.databricks.com/mcp"
 
         client_1 = factory(timeout=httpx.Timeout(10), auth=original_auth)
         client_2 = factory(timeout=httpx.Timeout(10), auth=original_auth)

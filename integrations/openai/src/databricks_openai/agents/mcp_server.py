@@ -1,5 +1,5 @@
 from contextlib import AbstractAsyncContextManager
-from typing import Any
+from typing import Any, cast
 
 import mlflow
 from agents.mcp import MCPServerStreamableHttp, MCPServerStreamableHttpParams
@@ -16,9 +16,14 @@ def _databricks_oauth_provider(
     workspace_client: WorkspaceClient, server_url: str
 ) -> DatabricksOAuthClientProvider:
     """Create a provider and bind it to the MCP resource it will authenticate."""
-    provider = DatabricksOAuthClientProvider(workspace_client)
-    # Keep this compatible with databricks-mcp releases before the constructor accepted
-    # ``server_url`` while still satisfying MCP protected-resource validation.
+    try:
+        provider = cast(Any, DatabricksOAuthClientProvider)(workspace_client, server_url=server_url)
+    except TypeError as error:
+        if "server_url" not in str(error):
+            raise
+        # Keep this compatible with databricks-mcp releases before the constructor accepted
+        # ``server_url`` while still satisfying MCP protected-resource validation.
+        provider = DatabricksOAuthClientProvider(workspace_client)
     provider.context.server_url = server_url
     return provider
 
