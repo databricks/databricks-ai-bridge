@@ -19,6 +19,7 @@ from databricks_agentbricks.agent_project import (
 )
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.project_types import AgentFramework, AgentServer
+from databricks_agentkit.runtime import tool_manifest
 from databricks_agentkit.runtime.tool_manifest import ToolManifestError, load_tools
 
 
@@ -93,6 +94,96 @@ def _write_manifest(root: pathlib.Path, body: str | None = None) -> pathlib.Path
         encoding="utf-8",
     )
     return path
+
+
+def test_user_auth_defaults_match_across_cli_and_runtime(tmp_path, monkeypatch):
+    _write_manifest(tmp_path)
+    monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
+
+    project = AgentProject.load(tmp_path)
+    runtime_config = tool_manifest.load_user_auth()
+
+    assert project.user_auth.required is False
+    assert project.user_auth.additional_api_scopes == ()
+    assert runtime_config.required is False
+    assert runtime_config.additional_api_scopes == ()
+
+
+def test_user_auth_scopes_deduplicate_and_preserve_comments(tmp_path, monkeypatch):
+    manifest = _write_manifest(
+        tmp_path,
+        """schema_version = 1
+
+[agent]
+framework = "langgraph"
+server = "agentbricks"
+
+# keep auth comment
+[auth.user]
+required = true
+additional_api_scopes = ["sql", "ai-gateway", "sql"]
+""",
+    )
+    monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
+
+    project = AgentProject.load(tmp_path)
+    runtime_config = tool_manifest.load_user_auth()
+    project.write()
+
+    assert project.user_auth.required is True
+    assert project.user_auth.additional_api_scopes == ("sql", "ai-gateway")
+    assert runtime_config == project.user_auth
+    assert "# keep auth comment" in manifest.read_text(encoding="utf-8")
+    assert AgentProject.load(tmp_path).user_auth == project.user_auth
+
+
+@pytest.mark.parametrize("reader", ["project", "runtime"])
+@pytest.mark.parametrize(
+    ("auth_body", "message"),
+    [
+        ('auth = "user"', "auth must be a table"),
+        ('[auth]\nuser = "required"', "auth.user must be a table"),
+        ("[auth.user]\nunknown = true", "unsupported fields"),
+        ('[auth.user]\nrequired = "true"', "required must be a boolean"),
+        ('[auth.user]\nrequired = true\nadditional_api_scopes = "sql"', "must be an array"),
+        ("[auth.user]\nrequired = true\nadditional_api_scopes = [1]", "must contain strings"),
+        ('[auth.user]\nrequired = true\nadditional_api_scopes = [""]', "non-empty"),
+        ('[auth.user]\nrequired = true\nadditional_api_scopes = [" sql"]', "whitespace"),
+        (
+            '[auth.user]\nrequired = true\nadditional_api_scopes = ["sql\\u0001"]',
+            "control characters",
+        ),
+        (
+            '[auth.user]\nrequired = false\nadditional_api_scopes = ["sql"]',
+            "requires auth.user.required = true",
+        ),
+    ],
+)
+def test_user_auth_validation_matches_across_cli_and_runtime(
+    tmp_path, monkeypatch, reader, auth_body, message
+):
+    prefix = "schema_version = 1\n"
+    if auth_body == 'auth = "user"':
+        prefix += auth_body + "\n\n"
+        auth_body = ""
+    manifest = _write_manifest(
+        tmp_path,
+        prefix
+        + '\n[agent]\nframework = "langgraph"\nserver = "agentbricks"\n\n'
+        + auth_body
+        + "\n",
+    )
+    before = manifest.read_bytes()
+    monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
+    error_type = AgentCliError if reader == "project" else ToolManifestError
+
+    with pytest.raises(error_type, match=message):
+        if reader == "project":
+            AgentProject.load(tmp_path)
+        else:
+            tool_manifest.load_user_auth()
+
+    assert manifest.read_bytes() == before
 
 
 def test_agent_project_round_trips_tool_specs_without_losing_comments(tmp_path: pathlib.Path):

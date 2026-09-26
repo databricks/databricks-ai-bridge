@@ -25,6 +25,14 @@ class ToolManifestError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class UserAuthConfig:
+    """Request-user authentication declared for code-first consumers."""
+
+    required: bool = False
+    additional_api_scopes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class ScopeRecord:
     kind: str
     value: str
@@ -93,6 +101,75 @@ def project_root() -> pathlib.Path:
     raise RuntimeError(
         "Could not locate agent.toml; set AGENTBRICKS_PROJECT_ROOT to the project root."
     )
+
+
+def parse_user_auth(document: Mapping[str, Any]) -> UserAuthConfig:
+    """Parse the shared ``[auth.user]`` contract from a manifest document."""
+    raw_auth = document.get("auth")
+    if raw_auth is None:
+        return UserAuthConfig()
+    if not isinstance(raw_auth, Mapping):
+        raise ToolManifestError("agent.toml auth must be a table.")
+    raw_user = raw_auth.get("user")
+    if raw_user is None:
+        return UserAuthConfig()
+    if not isinstance(raw_user, Mapping):
+        raise ToolManifestError("agent.toml auth.user must be a table.")
+
+    unexpected = set(raw_user) - {"required", "additional_api_scopes"}
+    if unexpected:
+        raise ToolManifestError(
+            "agent.toml auth.user has unsupported fields: "
+            f"{', '.join(sorted(str(field) for field in unexpected))}."
+        )
+
+    required = raw_user.get("required", False)
+    if not isinstance(required, bool):
+        raise ToolManifestError("agent.toml auth.user.required must be a boolean.")
+    raw_scopes = raw_user.get("additional_api_scopes", [])
+    if not isinstance(raw_scopes, list):
+        raise ToolManifestError("agent.toml auth.user.additional_api_scopes must be an array.")
+
+    scopes: list[str] = []
+    for scope in raw_scopes:
+        if not isinstance(scope, str):
+            raise ToolManifestError(
+                "agent.toml auth.user.additional_api_scopes must contain strings."
+            )
+        if not scope:
+            raise ToolManifestError(
+                "agent.toml auth.user.additional_api_scopes must contain non-empty scope names."
+            )
+        if scope != scope.strip():
+            raise ToolManifestError(
+                "agent.toml auth.user.additional_api_scopes cannot contain surrounding whitespace."
+            )
+        if any(ord(character) < 32 or ord(character) == 127 for character in scope):
+            raise ToolManifestError(
+                "agent.toml auth.user.additional_api_scopes cannot contain control characters."
+            )
+        scopes.append(scope)
+
+    additional_api_scopes = tuple(dict.fromkeys(scopes))
+    if additional_api_scopes and not required:
+        raise ToolManifestError(
+            "agent.toml auth.user.additional_api_scopes requires auth.user.required = true."
+        )
+    return UserAuthConfig(
+        required=required,
+        additional_api_scopes=additional_api_scopes,
+    )
+
+
+def load_user_auth() -> UserAuthConfig:
+    """Load declarative user auth from the active project's manifest."""
+    path = project_root() / "agent.toml"
+    try:
+        with path.open("rb") as source:
+            document: dict[str, Any] = tomllib.load(source)
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise ToolManifestError(f"Could not read {path}: {exc}") from exc
+    return parse_user_auth(document)
 
 
 def _required_string(value: object, description: str) -> str:
