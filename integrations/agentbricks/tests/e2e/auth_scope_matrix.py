@@ -22,7 +22,7 @@ import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, cast
 
 from databricks.sdk import WorkspaceClient
 
@@ -772,14 +772,14 @@ def _last_error_line(path: pathlib.Path) -> str:
 
 
 def _has_completed_search_tool_call(response: dict[str, Any]) -> bool:
-    called: set[str] = set()
-    completed: set[str] = set()
+    called_at: dict[str, int] = {}
     output = response.get("output")
     if not isinstance(output, list):
         return False
-    for message in output:
-        if not isinstance(message, dict):
+    for index, raw_message in enumerate(output):
+        if not isinstance(raw_message, dict):
             continue
+        message = cast(dict[str, Any], raw_message)
         tool_calls = message.get("tool_calls")
         if isinstance(tool_calls, list):
             for tool_call in tool_calls:
@@ -787,11 +787,26 @@ def _has_completed_search_tool_call(response: dict[str, Any]) -> bool:
                     continue
                 name = tool_call.get("name")
                 if isinstance(name, str) and "search" in name.lower():
-                    called.add(name)
+                    called_at.setdefault(name, index)
+        if not called_at:
+            continue
+        content = json.dumps(message.get("content"), default=str).lower()
+        if "https://" not in content:
+            continue
+        message_type = message.get("role") or message.get("type")
         name = message.get("name")
-        if message.get("role") == "tool" and isinstance(name, str) and "search" in name.lower():
-            completed.add(name)
-    return bool(called & completed)
+        if (
+            message_type == "tool"
+            and isinstance(name, str)
+            and name in called_at
+            and index > called_at[name]
+        ):
+            return True
+        if message_type in {"assistant", "ai"} and any(
+            index > call_index for call_index in called_at.values()
+        ):
+            return True
+    return False
 
 
 def _monitored(

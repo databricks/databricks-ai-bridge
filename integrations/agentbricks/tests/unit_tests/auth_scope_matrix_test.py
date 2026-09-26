@@ -302,6 +302,69 @@ def test_web_search_evidence_accepts_completed_search_tool_call():
     assert matrix._has_completed_search_tool_call(response) is True
 
 
+def test_web_search_evidence_accepts_langgraph_native_tool_result():
+    matrix = _load_matrix_module()
+    response = {
+        "status": "completed",
+        "output": [
+            {
+                "type": "ai",
+                "content": "",
+                "tool_calls": [{"name": "web_search", "args": {"query": "OAuth scopes"}}],
+            },
+            {
+                "type": "tool",
+                "name": "web_search",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "https://docs.databricks.com/api/workspace/scopes",
+                        "id": "framework-metadata",
+                    }
+                ],
+            },
+        ],
+    }
+
+    assert matrix._has_completed_search_tool_call(response) is True
+
+
+def test_web_search_evidence_accepts_openai_post_tool_answer():
+    matrix = _load_matrix_module()
+    response = {
+        "status": "completed",
+        "output": [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"name": "web_search", "args": {"query": "OAuth scopes"}}],
+            },
+            {
+                "role": "assistant",
+                "content": "https://docs.databricks.com/api/workspace/scopes",
+            },
+        ],
+    }
+
+    assert matrix._has_completed_search_tool_call(response) is True
+
+
+def test_web_search_evidence_rejects_call_without_result():
+    matrix = _load_matrix_module()
+    response = {
+        "status": "completed",
+        "output": [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"name": "web_search", "args": {"query": "OAuth scopes"}}],
+            }
+        ],
+    }
+
+    assert matrix._has_completed_search_tool_call(response) is False
+
+
 def test_invocation_readiness_retries_502_and_503(tmp_path: pathlib.Path):
     matrix = _load_matrix_module()
     outcomes = iter(
