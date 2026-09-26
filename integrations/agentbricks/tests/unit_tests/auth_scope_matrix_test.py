@@ -69,21 +69,24 @@ def _run_evidence_verifier(
 
 
 class _StatementExecution:
-    def __init__(self, error: Exception | None = None):
+    def __init__(self, error: Exception | None = None, data_array=None):
         self.error = error
+        self.data_array = [["AGENTBRICKS_USER_SQL_OK"]] if data_array is None else data_array
+        self.statements = []
 
-    def execute_statement(self, **_kwargs):
+    def execute_statement(self, **kwargs):
+        self.statements.append(kwargs["statement"])
         if self.error is not None:
             raise self.error
         return SimpleNamespace(
             status=SimpleNamespace(state="SUCCEEDED"),
-            result=SimpleNamespace(data_array=[["AGENTBRICKS_USER_SQL_OK"]]),
+            result=SimpleNamespace(data_array=self.data_array),
         )
 
 
 class _WorkspaceClient:
-    def __init__(self, error: Exception | None = None):
-        self.statement_execution = _StatementExecution(error)
+    def __init__(self, error: Exception | None = None, data_array=None):
+        self.statement_execution = _StatementExecution(error, data_array)
 
 
 def _generated_sql_tool(tmp_path: pathlib.Path):
@@ -198,12 +201,10 @@ def test_generated_sql_tool_rejects_non_permission_app_failure(tmp_path: pathlib
         tool.invoke({})
 
 
-def test_generated_sql_tool_accepts_permission_denied_control(tmp_path: pathlib.Path):
-    from databricks.sdk.errors import PermissionDenied
-
+def test_generated_sql_tool_accepts_identity_filtered_app_control(tmp_path: pathlib.Path):
     _, generated = _generated_sql_tool(tmp_path)
     clients = {
-        "app": _WorkspaceClient(PermissionDenied("denied")),
+        "app": _WorkspaceClient(data_array=[]),
         "user": _WorkspaceClient(),
     }
     tool = generated.auth_scope_tools(clients.get)[0]
@@ -211,7 +212,10 @@ def test_generated_sql_tool_accepts_permission_denied_control(tmp_path: pathlib.
     result = tool.invoke({})
 
     assert "AGENTBRICKS_USER_SQL_OK" in result
-    assert "AGENTBRICKS_APP_SQL_DENIED:PermissionDenied" in result
+    assert "AGENTBRICKS_APP_SQL_DENIED:empty-result" in result
+    assert clients["app"].statement_execution.statements == [
+        "SELECT marker FROM `catalog`.`schema`.`table` WHERE owner = current_user()"
+    ]
 
 
 def test_web_search_evidence_rejects_text_without_tool_execution():

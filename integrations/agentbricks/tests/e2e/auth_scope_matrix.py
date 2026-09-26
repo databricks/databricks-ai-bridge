@@ -315,7 +315,7 @@ class Runner:
         self.sql(f"CREATE SCHEMA IF NOT EXISTS `{catalog}`.`{schema}`")
         self.sql(
             f"CREATE TABLE `{catalog}`.`{schema}`.`{table}` USING DELTA AS "
-            f"SELECT '{USER_SQL_MARKER}' AS marker"
+            f"SELECT '{USER_SQL_MARKER}' AS marker, current_user() AS owner"
         )
         return f"{catalog}.{schema}.{table}"
 
@@ -397,11 +397,13 @@ class Runner:
             else "from agents import function_tool"
         )
         decorator = "tool" if framework == "langgraph" else "function_tool"
-        query = f"SELECT marker FROM `{self.catalog}`.`{self.schema}`.`{self.table_name}`"
+        query = (
+            f"SELECT marker FROM `{self.catalog}`.`{self.schema}`.`{self.table_name}` "
+            "WHERE owner = current_user()"
+        )
         source = f'''from collections.abc import Callable
 
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.errors import PermissionDenied
 {decorator_import}
 
 FRESHNESS_MARKER = {self.freshness_marker!r}
@@ -409,7 +411,7 @@ SQL_QUERY = {query!r}
 WAREHOUSE_ID = {self.warehouse_id!r}
 
 
-def _read_marker(client: WorkspaceClient) -> str:
+def _read_marker(client: WorkspaceClient) -> str | None:
     response = client.statement_execution.execute_statement(
         warehouse_id=WAREHOUSE_ID,
         statement=SQL_QUERY,
@@ -420,7 +422,7 @@ def _read_marker(client: WorkspaceClient) -> str:
         raise RuntimeError(f"SQL statement failed with state {{state or 'UNKNOWN'}}")
     data = getattr(getattr(response, "result", None), "data_array", None)
     if not data or not data[0]:
-        raise RuntimeError("SQL statement returned no marker")
+        return None
     return str(data[0][0])
 
 
@@ -433,16 +435,12 @@ def auth_scope_tools(
         if workspace_client_for is None:
             raise RuntimeError("request-user client resolver is missing")
         print(FRESHNESS_MARKER, flush=True)
-        try:
-            _read_marker(workspace_client_for("app"))
-        except PermissionDenied as error:
-            denial_type = type(error).__name__
-        else:
+        if _read_marker(workspace_client_for("app")) is not None:
             raise RuntimeError("App principal unexpectedly read the user-only SQL asset")
         marker = _read_marker(workspace_client_for("user"))
         if marker != {USER_SQL_MARKER!r}:
             raise RuntimeError("User SQL marker did not match")
-        return f"{{FRESHNESS_MARKER}}|{{marker}}|{APP_SQL_DENIED_MARKER}:{{denial_type}}"
+        return f"{{FRESHNESS_MARKER}}|{{marker}}|{APP_SQL_DENIED_MARKER}:empty-result"
 
     return [verify_sql_auth_scope]
 '''
