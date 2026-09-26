@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import time
 from dataclasses import dataclass
 from datetime import timedelta
@@ -95,6 +96,10 @@ def required_user_api_scopes(project: AgentProject | None) -> set[str]:
             if any(scope.kind == "volume" for scope in tool.policy.downscope):
                 scopes.add("files")
             if any(scope.kind == "workspace" for scope in tool.policy.downscope):
+                print(
+                    "[freshness-check workspace-scope-e2e] required_user_api_scopes",
+                    file=sys.stderr,
+                )
                 scopes.add("workspace")
     return scopes
 
