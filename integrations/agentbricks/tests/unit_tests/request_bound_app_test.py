@@ -324,8 +324,14 @@ async def test_request_user_auth_error_is_safe_and_closes_credentials(deployed):
             "/api/invocations", json={"id": str(uuid4())}, headers=headers()
         )
 
-    assert response.status_code == 500
-    assert response.json() == {"detail": "agent invocation failed"}
+    assert response.status_code == 403
+    assert response.json() == {
+        "error": {
+            "code": "MCP_PERMISSION_DENIED",
+            "message": "Permission denied",
+            "integration_id": "sandbox",
+        }
+    }
     assert "token-sentinel" not in response.text
     with pytest.raises(AuthError):
         contexts[0].request_auth.client_for("user")
