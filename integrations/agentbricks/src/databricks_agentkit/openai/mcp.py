@@ -15,10 +15,12 @@ Unlike a fetch-once tool list, these are connection objects: open them for the l
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from agents.mcp import MCPServerStreamableHttpParams
 from databricks_openai.agents import McpServer
+
+if TYPE_CHECKING:
+    from agents.mcp import MCPServerStreamableHttpParams
 
 from databricks_agentkit.runtime import mcp_auth
 from databricks_agentkit.runtime.auth import AuthError
