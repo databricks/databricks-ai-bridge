@@ -242,16 +242,12 @@ def _tool(value: object) -> ToolRecord:
     return record
 
 
-def load_tools(*, expected_framework: str) -> tuple[ToolRecord, ...]:
-    """Load a fresh immutable view so direct manifest edits apply on the next request."""
-    path = project_root() / "agent.toml"
-    try:
-        with path.open("rb") as input_file:
-            document: dict[str, Any] = tomllib.load(input_file)
-    except (OSError, tomllib.TOMLDecodeError) as exc:
-        raise RuntimeError(f"Could not read {path}: {exc}") from exc
+def parse_tools(
+    document: Mapping[str, Any], *, expected_framework: str
+) -> tuple[ToolRecord, ...]:
+    """Parse managed bindings from an already loaded manifest snapshot."""
     if document.get("schema_version") != 1:
-        raise RuntimeError(f"Unsupported agent.toml schema in {path}; expected schema_version = 1.")
+        raise RuntimeError("Unsupported agent.toml schema; expected schema_version = 1.")
     agent = document.get("agent")
     if not isinstance(agent, dict) or agent.get("framework") != expected_framework:
         actual = agent.get("framework") if isinstance(agent, dict) else None
@@ -266,6 +262,17 @@ def load_tools(*, expected_framework: str) -> tuple[ToolRecord, ...]:
     if len(ids) != len(set(ids)):
         raise RuntimeError("agent.toml tool ids must be unique.")
     return tools
+
+
+def load_tools(*, expected_framework: str) -> tuple[ToolRecord, ...]:
+    """Load a fresh immutable view so direct manifest edits apply on the next request."""
+    path = project_root() / "agent.toml"
+    try:
+        with path.open("rb") as input_file:
+            document: dict[str, Any] = tomllib.load(input_file)
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise RuntimeError(f"Could not read {path}: {exc}") from exc
+    return parse_tools(document, expected_framework=expected_framework)
 
 
 def resolve_memory_store(explicit: str | None = None) -> str | None:

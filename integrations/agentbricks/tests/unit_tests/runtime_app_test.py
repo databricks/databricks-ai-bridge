@@ -397,11 +397,33 @@ def test_durable_agent_server_infers_request_user_policy_from_manifest(
     project.add_tool(ToolSpec.mcp("search", service="system.ai.web_search", auth="user"))
     project.add_tool(ToolSpec.mcp("docs", service="system.ai.docs", auth="app"))
     project.write()
+    with project.path.open("a", encoding="utf-8") as manifest:
+        manifest.write(
+            '\n[auth.user]\nrequired = true\nadditional_api_scopes = ["sql"]\n'
+        )
     monkeypatch.chdir(tmp_path)
 
     app = DurableAgentServer(runtime_store=InMemoryRuntimeStore())
 
     assert app.auth_policy.user_tools == ("search",)
+    assert app.auth_policy.user_required is True
+    assert app.auth_policy.requires_user is True
+
+
+def test_durable_agent_server_requires_user_for_code_first_manifest(tmp_path, monkeypatch) -> None:
+    project = AgentProject.create(tmp_path, framework="openai", server="agentbricks")
+    project.write()
+    with project.path.open("a", encoding="utf-8") as manifest:
+        manifest.write(
+            '\n[auth.user]\nrequired = true\nadditional_api_scopes = ["sql"]\n'
+        )
+    monkeypatch.chdir(tmp_path)
+
+    app = DurableAgentServer(runtime_store=InMemoryRuntimeStore())
+
+    assert app.auth_policy.user_tools == ()
+    assert app.auth_policy.user_required is True
+    assert app.auth_policy.requires_user is True
 
 
 def test_state_payload_nests_completed_application_response() -> None:

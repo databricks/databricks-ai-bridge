@@ -113,6 +113,27 @@ async def test_missing_request_user_auth_never_executes(deployed):
 
 
 @pytest.mark.asyncio
+async def test_declarative_request_user_auth_never_executes_without_credentials(deployed):
+    seen = []
+
+    async def handler(value, context):
+        seen.append(value)
+
+    app = DurableAgentServer(
+        runtime_store=InMemoryRuntimeStore(),
+        auth_policy=InvocationAuthPolicy(user_required=True),
+    )
+    app.invoke(handler)
+
+    async with running_client(app) as client:
+        response = await client.post("/api/invocations", json={"id": str(uuid4())})
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "MCP_USER_AUTH_REQUIRED"
+    assert not seen
+
+
+@pytest.mark.asyncio
 async def test_request_user_auth_composes_with_existing_runtime_background_mode(deployed):
     contexts = []
 
