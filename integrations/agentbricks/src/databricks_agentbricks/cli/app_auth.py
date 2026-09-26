@@ -81,11 +81,10 @@ def required_user_api_scopes(project: AgentProject | None) -> set[str]:
     for tool in project.tools if project else ():
         if tool.auth != "user":
             continue
-        if tool.source.kind not in ("mcp", "sandbox", "genie_one", "genie_agent"):
-            continue
-        scopes.add("workspace.workspace")
         if tool.source.kind in ("genie_one", "genie_agent"):
             scopes.add("genie")
+            continue
+        if tool.source.kind not in ("mcp", "sandbox"):
             continue
         scopes.add("ai-gateway")
         if tool.source.service == "system.ai.dbsql":
@@ -96,6 +95,8 @@ def required_user_api_scopes(project: AgentProject | None) -> set[str]:
             scope.kind == "volume" for scope in tool.policy.downscope
         ):
             scopes.add("files")
+        if tool.source.kind == "sandbox" and tool.policy.include_databricks_token_env:
+            scopes.add("workspace.workspace")
     return scopes
 
 

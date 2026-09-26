@@ -65,9 +65,7 @@ class RuntimeStore(Protocol):
         """Persist a result when this attempt still owns the active invocation."""
         ...
 
-    async def fail(
-        self, invocation_id: str, attempt: int, response: JsonValue = None
-    ) -> bool:
+    async def fail(self, invocation_id: str, attempt: int, response: JsonValue = None) -> bool:
         """Mark an invocation failed, optionally retaining a safe error response."""
         ...
 
@@ -159,9 +157,7 @@ class InMemoryRuntimeStore(RuntimeStore):
             self._append_event(invocation_id, attempt, {"type": "run.completed"})
             return True
 
-    async def fail(
-        self, invocation_id: str, attempt: int, response: JsonValue = None
-    ) -> bool:
+    async def fail(self, invocation_id: str, attempt: int, response: JsonValue = None) -> bool:
         async with self._lock:
             state = self.states.get(invocation_id)
             if state is None or not self._owns_attempt(state, attempt):

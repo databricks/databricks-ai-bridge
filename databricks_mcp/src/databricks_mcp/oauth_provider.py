@@ -1,6 +1,7 @@
 from databricks.sdk import WorkspaceClient
 from mcp.client.auth import OAuthClientProvider, TokenStorage
 from mcp.shared.auth import OAuthClientMetadata, OAuthToken
+from pydantic import AnyUrl
 
 TOKEN_EXPIRATION_SECONDS = 60
 
@@ -76,7 +77,7 @@ class DatabricksOAuthClientProvider(OAuthClientProvider):
             server_url=server_url,
             client_metadata=OAuthClientMetadata(
                 client_name="databricks-mcp",
-                redirect_uris=["http://localhost"],
+                redirect_uris=[AnyUrl("http://localhost")],
                 token_endpoint_auth_method="none",
             ),
             storage=self.databricks_token_storage,

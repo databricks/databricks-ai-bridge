@@ -188,9 +188,7 @@ class TestMcpServerCreateStreams:
                     assert "httpx_client_factory" not in call_kwargs
 
     def test_create_streams_passes_server_url_to_oauth_provider(self, mock_workspace_client):
-        with patch(
-            "databricks_openai.agents.mcp_server.streamablehttp_client"
-        ) as mock_streamable:
+        with patch("databricks_openai.agents.mcp_server.streamablehttp_client") as mock_streamable:
             from databricks_openai.agents.mcp_server import McpServer
 
             server = McpServer(url="https://test.com/mcp", workspace_client=mock_workspace_client)
