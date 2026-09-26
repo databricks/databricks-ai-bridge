@@ -90,7 +90,22 @@ class _WorkspaceClient:
         self.statement_execution = _StatementExecution(error, data_array)
 
 
-def _generated_sql_tool(tmp_path: pathlib.Path):
+def _generated_sql_tool(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
+    class _FakeTool:
+        def __init__(self, function):
+            self.function = function
+
+        def invoke(self, arguments):
+            assert arguments == {}
+            return self.function()
+
+    langchain_core = ModuleType("langchain_core")
+    langchain_tools = ModuleType("langchain_core.tools")
+    langchain_tools.__dict__["tool"] = _FakeTool
+    langchain_core.__dict__["tools"] = langchain_tools
+    monkeypatch.setitem(sys.modules, "langchain_core", langchain_core)
+    monkeypatch.setitem(sys.modules, "langchain_core.tools", langchain_tools)
+
     matrix = _load_matrix_module()
     runner = matrix.Runner.__new__(matrix.Runner)
     runner.catalog = "catalog"
@@ -237,8 +252,10 @@ def test_auth_scope_matrix_rejects_tampered_evidence(tmp_path: pathlib.Path, cas
     assert result.returncode == 1, result.stdout + result.stderr
 
 
-def test_generated_sql_tool_rejects_non_permission_app_failure(tmp_path: pathlib.Path):
-    _, generated = _generated_sql_tool(tmp_path)
+def test_generated_sql_tool_rejects_non_permission_app_failure(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    _, generated = _generated_sql_tool(tmp_path, monkeypatch)
     clients = {
         "app": _WorkspaceClient(RuntimeError("network unavailable")),
         "user": _WorkspaceClient(),
@@ -249,8 +266,10 @@ def test_generated_sql_tool_rejects_non_permission_app_failure(tmp_path: pathlib
         tool.invoke({})
 
 
-def test_generated_sql_tool_accepts_identity_filtered_app_control(tmp_path: pathlib.Path):
-    _, generated = _generated_sql_tool(tmp_path)
+def test_generated_sql_tool_accepts_identity_filtered_app_control(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    _, generated = _generated_sql_tool(tmp_path, monkeypatch)
     clients = {
         "app": _WorkspaceClient(data_array=[]),
         "user": _WorkspaceClient(),
