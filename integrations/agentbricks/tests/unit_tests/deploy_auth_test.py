@@ -44,9 +44,7 @@ def _project_with_user_auth(root, *, server="agentbricks", scopes=("sql",)):
     rendered_scopes = ", ".join(f'"{scope}"' for scope in scopes)
     with project.path.open("a", encoding="utf-8") as manifest:
         manifest.write(
-            "\n[auth.user]\n"
-            "required = true\n"
-            f"additional_api_scopes = [{rendered_scopes}]\n"
+            f"\n[auth.user]\nrequired = true\nadditional_api_scopes = [{rendered_scopes}]\n"
         )
     return AgentProject.load(root)
 

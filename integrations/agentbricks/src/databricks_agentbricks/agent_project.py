@@ -370,7 +370,7 @@ class AgentProject:
         memory_store_id: str | None = None,
         deployment_name: str | None = None,
         trace_experiment_name: str | None = None,
-        user_auth: tool_manifest.UserAuthConfig = tool_manifest.UserAuthConfig(),
+        user_auth: tool_manifest.UserAuthConfig | None = None,
     ) -> None:
         self.root = root
         self.path = root / "agent.toml"
@@ -392,7 +392,7 @@ class AgentProject:
         # unbound, i.e. off. Storing a name (not an id) keeps the binding valid across workspaces and
         # profiles, since an id is workspace-local. `agentbricks init` bootstraps a default name.
         self.trace_experiment_name = trace_experiment_name
-        self.user_auth = user_auth
+        self.user_auth = user_auth or tool_manifest.UserAuthConfig()
 
     @classmethod
     def load(cls, root: pathlib.Path | str | None = None) -> "AgentProject":

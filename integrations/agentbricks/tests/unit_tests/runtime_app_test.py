@@ -398,9 +398,7 @@ def test_durable_agent_server_infers_request_user_policy_from_manifest(
     project.add_tool(ToolSpec.mcp("docs", service="system.ai.docs", auth="app"))
     project.write()
     with project.path.open("a", encoding="utf-8") as manifest:
-        manifest.write(
-            '\n[auth.user]\nrequired = true\nadditional_api_scopes = ["sql"]\n'
-        )
+        manifest.write('\n[auth.user]\nrequired = true\nadditional_api_scopes = ["sql"]\n')
     monkeypatch.chdir(tmp_path)
 
     app = DurableAgentServer(runtime_store=InMemoryRuntimeStore())
@@ -414,9 +412,7 @@ def test_durable_agent_server_requires_user_for_code_first_manifest(tmp_path, mo
     project = AgentProject.create(tmp_path, framework="openai", server="agentbricks")
     project.write()
     with project.path.open("a", encoding="utf-8") as manifest:
-        manifest.write(
-            '\n[auth.user]\nrequired = true\nadditional_api_scopes = ["sql"]\n'
-        )
+        manifest.write('\n[auth.user]\nrequired = true\nadditional_api_scopes = ["sql"]\n')
     monkeypatch.chdir(tmp_path)
 
     app = DurableAgentServer(runtime_store=InMemoryRuntimeStore())

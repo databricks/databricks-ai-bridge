@@ -554,9 +554,7 @@ def deploy(
         deployment_exists = new_name_exists
     _validate_deployment_name(name)
     if allow_user_scope_update and not user_auth:
-        raise AgentCliError(
-            "--allow-user-scope-update requires request-user auth in agent.toml."
-        )
+        raise AgentCliError("--allow-user-scope-update requires request-user auth in agent.toml.")
     # A request-user tool cannot use OBO until the App forwards request credentials and grants every
     # required user API scope. New Apps are configured automatically. For an existing App, adding a
     # missing scope requires --allow-user-scope-update; already-configured Apps need no flag.
