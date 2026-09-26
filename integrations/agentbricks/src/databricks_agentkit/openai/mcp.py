@@ -23,13 +23,14 @@ from databricks_agentkit.runtime import mcp_auth
 from databricks_agentkit.runtime.auth import AuthError
 from databricks_agentkit.runtime.tool_manifest import (
     ToolRecord,
-    downscope_wire,
     load_tools,
+    sandbox_meta,
 )
 from databricks_agentkit.runtime.workspace import mcp_headers, workspace_client
 
 _FRAMEWORK = "openai"
 _auth_error = mcp_auth.mcp_auth_error
+_auth_error_for_server = mcp_auth.mcp_auth_error_for_server
 _tool_error = mcp_auth.mcp_tool_error
 
 
@@ -43,7 +44,7 @@ class _ConfiguredMcpServer(McpServer):
         super().__init__(*args, **kwargs)
 
     def _raise_tool_error(self, context: Any, error: Exception) -> str:
-        raise _auth_error(error, self.name) or AuthError(
+        raise _auth_error_for_server(error, self.name, self.url) or AuthError(
             "MCP_TOOL_FAILED", "The configured MCP tool failed.", 502, self.name
         ) from None
 
@@ -53,7 +54,7 @@ class _ConfiguredMcpServer(McpServer):
         try:
             return await super().connect()
         except Exception as error:
-            raise _auth_error(error, self.name) or AuthError(
+            raise _auth_error_for_server(error, self.name, self.url) or AuthError(
                 "MCP_TOOL_FAILED",
                 "Could not connect to the configured MCP service.",
                 502,
@@ -66,7 +67,7 @@ class _ConfiguredMcpServer(McpServer):
         try:
             return await super().list_tools(*args, **kwargs)
         except Exception as error:
-            raise _auth_error(error, self.name) or AuthError(
+            raise _auth_error_for_server(error, self.name, self.url) or AuthError(
                 "MCP_TOOL_FAILED", "Could not discover configured MCP tools.", 502, self.name
             ) from None
 
@@ -77,7 +78,7 @@ class _ConfiguredMcpServer(McpServer):
             call = getattr(McpServer.call_tool, "__wrapped__", McpServer.call_tool)
             result = await call(self, tool_name, arguments, **kwargs)
         except Exception as error:
-            raise _auth_error(error, self.name) or AuthError(
+            raise _auth_error_for_server(error, self.name, self.url) or AuthError(
                 "MCP_TOOL_FAILED", "The configured MCP tool failed.", 502, self.name
             ) from None
         if getattr(result, "isError", False) and (error := _tool_error(result, self.name)):
@@ -86,19 +87,19 @@ class _ConfiguredMcpServer(McpServer):
 
 
 class _DownscopedMcpServer(_ConfiguredMcpServer):
-    """An ``McpServer`` that injects a sandbox downscope into every ``call_tool``.
+    """An ``McpServer`` that injects protected sandbox policy into every ``call_tool``.
 
-    The Databricks sandbox MCP applies the downscope from the call's ``_meta``; the Agents SDK does
-    not surface a per-call hook, so bind the manifest's downscope to the server and add it on each
-    invocation. Only sandbox bindings need this — plain MCP / UC-function servers use the base class.
+    The Databricks sandbox MCP applies policy from the call's ``_meta``; the Agents SDK does not
+    surface a per-call hook, so bind the manifest policy to the server and add it on each invocation.
+    Only sandbox bindings need this — plain MCP / UC-function servers use the base class.
     """
 
-    def __init__(self, *args: Any, downscope: dict[str, Any], **kwargs: Any) -> None:
+    def __init__(self, *args: Any, protected_meta: dict[str, Any], **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._downscope = downscope
+        self._protected_meta = protected_meta
 
     async def call_tool(self, tool_name, arguments, **kwargs):
-        meta = {**(kwargs.pop("meta", None) or {}), "downscope": self._downscope}
+        meta = {**(kwargs.pop("meta", None) or {}), **self._protected_meta}
         return await super().call_tool(tool_name, arguments, meta=meta, **kwargs)
 
 
@@ -129,7 +130,7 @@ def _server_from_tool(
                 workspace_client=client,
                 timeout=120.0,
                 params=mcp_params,
-                downscope=downscope_wire(tool),
+                protected_meta=sandbox_meta(tool),
                 request_user=mode == "user",
             )
         if tool.kind == "genie_one":

@@ -227,7 +227,7 @@ class DatabricksMCPClient:
     async def _get_tools_async(self) -> List[Tool]:
         """Fetch tools from the MCP endpoint asynchronously."""
         async with _open_mcp_session(
-            self.server_url, DatabricksOAuthClientProvider(self.client)
+            self.server_url, DatabricksOAuthClientProvider(self.client, server_url=self.server_url)
         ) as session:
             return (await session.list_tools()).tools
 
@@ -238,7 +238,7 @@ class DatabricksMCPClient:
     ) -> CallToolResult:
         """Call the tool with the given name and input."""
         async with _open_mcp_session(
-            self.server_url, DatabricksOAuthClientProvider(self.client)
+            self.server_url, DatabricksOAuthClientProvider(self.client, server_url=self.server_url)
         ) as session:
             return await session.call_tool(tool_name, arguments)
 

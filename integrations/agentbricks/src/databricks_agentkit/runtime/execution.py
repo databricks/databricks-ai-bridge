@@ -8,6 +8,7 @@ import json
 import logging
 from typing import Protocol, cast
 
+from databricks_agentkit.runtime.auth import AuthError
 from databricks_agentkit.runtime.store import RuntimeStore
 from databricks_agentkit.runtime.types import (
     Invocation,
@@ -97,14 +98,24 @@ class AttemptExecution:
                 )
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as error:
             logger.exception(
                 "Invocation execution failed: %s attempt=%d",
                 invocation_id,
                 claimed.attempt,
             )
             try:
-                await self._runtime_store.fail(invocation_id, claimed.attempt)
+                failure_response: JsonValue = None
+                if isinstance(error, AuthError):
+                    failure_response = {
+                        "error": error.payload(),
+                        "status_code": error.status_code,
+                    }
+                await self._runtime_store.fail(
+                    invocation_id,
+                    claimed.attempt,
+                    failure_response,
+                )
             except Exception:
                 logger.exception(
                     "Failed to persist invocation failure: %s attempt=%d",

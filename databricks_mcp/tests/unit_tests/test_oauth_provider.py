@@ -19,6 +19,31 @@ async def test_oauth_provider():
 
 
 @pytest.mark.asyncio
+async def test_oauth_provider_uses_mcp_server_url_for_resource_validation():
+    workspace_client = WorkspaceClient(host="https://test-databricks.com", token="test-token")
+    server_url = "https://test-databricks.com/ai-gateway/mcp-services/system.ai.slack"
+
+    with patch.object(workspace_client.current_user, "me", return_value=MagicMock()):
+        provider = DatabricksOAuthClientProvider(
+            workspace_client=workspace_client,
+            server_url=server_url,
+        )
+
+    assert provider.context.server_url == server_url
+
+
+@pytest.mark.asyncio
+async def test_oauth_provider_initializes_client_metadata_for_mcp_130():
+    workspace_client = WorkspaceClient(host="https://test-databricks.com", token="test-token")
+
+    with patch.object(workspace_client.current_user, "me", return_value=MagicMock()):
+        provider = DatabricksOAuthClientProvider(workspace_client=workspace_client)
+
+    assert provider.context.client_metadata is not None
+    assert provider.context.client_metadata.redirect_uris
+
+
+@pytest.mark.asyncio
 async def test_authenticate_raises_exception():
     workspace_client = WorkspaceClient(host="https://test-databricks.com", token="test-token")
 

@@ -9,6 +9,17 @@ from langchain_mcp_adapters.sessions import McpHttpClientFactory, StreamableHttp
 from pydantic import BaseModel, ConfigDict, Field
 
 
+def _databricks_oauth_provider(
+    workspace_client: WorkspaceClient, server_url: str
+) -> DatabricksOAuthClientProvider:
+    """Create a provider and bind it to the MCP resource it will authenticate."""
+    provider = DatabricksOAuthClientProvider(workspace_client)
+    # Keep this compatible with databricks-mcp releases before the constructor accepted
+    # ``server_url`` while still satisfying MCP protected-resource validation.
+    provider.context.server_url = server_url
+    return provider
+
+
 class DatabricksMcpHttpClientFactory(McpHttpClientFactory):
     def __call__(
         self,
@@ -25,7 +36,7 @@ class DatabricksMcpHttpClientFactory(McpHttpClientFactory):
             return httpx.AsyncClient(
                 headers=headers,
                 timeout=timeout,
-                auth=DatabricksOAuthClientProvider(auth.workspace_client),
+                auth=_databricks_oauth_provider(auth.workspace_client, auth.context.server_url),
             )
         else:
             return httpx.AsyncClient(
@@ -258,7 +269,7 @@ class DatabricksMCPServer(MCPServer):
             self.workspace_client = WorkspaceClient()
 
         # Store the auth provider internally
-        self._auth_provider = DatabricksOAuthClientProvider(self.workspace_client)
+        self._auth_provider = _databricks_oauth_provider(self.workspace_client, self.url)
 
     def to_connection_dict(self) -> StreamableHttpConnection:
         """

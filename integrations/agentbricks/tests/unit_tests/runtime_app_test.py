@@ -339,6 +339,35 @@ async def test_agent_failure_returns_500_and_failed_event() -> None:
     ]
 
 
+@pytest.mark.asyncio
+async def test_authorization_failure_returns_browser_login_url() -> None:
+    from databricks_agentkit.runtime.auth import AuthError
+
+    async def fail(input, context):
+        raise AuthError(
+            "MCP_AUTHORIZATION_REQUIRED",
+            "Authorize the configured service in Databricks before retrying.",
+            401,
+            "slack_user",
+            "https://workspace.example/mcp-service-login?name=system.ai.slack",
+        )
+
+    app = make_app(fail)
+    async with running_client(app) as client:
+        response = await client.post("/api/invocations", json={"id": _RUN_1})
+        state = await client.get(f"/api/invocations/{_RUN_1}")
+
+    expected_error = {
+        "code": "MCP_AUTHORIZATION_REQUIRED",
+        "message": "Authorize the configured service in Databricks before retrying.",
+        "integration_id": "slack_user",
+        "authorization_url": "https://workspace.example/mcp-service-login?name=system.ai.slack",
+    }
+    assert response.status_code == 401
+    assert response.json() == {"error": expected_error}
+    assert state.json() == {"id": _RUN_1, "status": "failed", "error": expected_error}
+
+
 def test_app_is_asgi_app_with_instance_scoped_decorators() -> None:
     app = DurableAgentServer(runtime_store=InMemoryRuntimeStore())
 

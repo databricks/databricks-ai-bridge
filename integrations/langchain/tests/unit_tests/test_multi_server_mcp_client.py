@@ -174,6 +174,20 @@ class TestDatabricksMCPServer:
                 connection_dict["httpx_client_factory"], DatabricksMcpHttpClientFactory
             )
 
+    def test_http_factory_preserves_server_url_for_oauth_resource_validation(self):
+        import httpx
+        from databricks_mcp import DatabricksOAuthClientProvider
+
+        workspace_client = MagicMock()
+        server_url = "https://test.databricks.com/ai-gateway/mcp-services/system.ai.slack"
+        original_auth = DatabricksOAuthClientProvider(workspace_client)
+        original_auth.context.server_url = server_url
+
+        client = DatabricksMcpHttpClientFactory()(timeout=httpx.Timeout(10), auth=original_auth)
+
+        assert isinstance(client.auth, DatabricksOAuthClientProvider)
+        assert client.auth.context.server_url == server_url
+
 
 class TestDatabricksMultiServerMCPClient:
     """Tests for the DatabricksMultiServerMCPClient class."""

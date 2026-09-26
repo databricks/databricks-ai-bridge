@@ -73,14 +73,15 @@ def adapter(request, monkeypatch):
     sys.modules.pop(module_name, None)
 
 
-def tool(auth=None, kind="mcp", name="search"):
+def tool(auth=None, kind="mcp", name="search", *, downscope=(), include_databricks_token_env=False):
     return SimpleNamespace(
         id=name,
         kind=kind,
         auth=auth,
         service="system.ai.search",
         function="main.tools.lookup",
-        downscope=(),
+        downscope=downscope,
+        include_databricks_token_env=include_databricks_token_env,
     )
 
 
@@ -194,6 +195,66 @@ def test_sandbox_reconnect_captures_resolver_and_manifest(adapter, monkeypatch):
     adapter.workspace_client.assert_not_called()
 
 
+@pytest.mark.parametrize("auth", ["app", "user"])
+def test_sandbox_metadata_protects_token_env_policy_for_both_identities(adapter, monkeypatch, auth):
+    app = SimpleNamespace(config=SimpleNamespace(host="https://workspace"))
+    user = SimpleNamespace(config=SimpleNamespace(host="https://workspace"))
+    resolver = Mock(side_effect=lambda mode: user if mode == "user" else app)
+    sandbox = tool(
+        auth,
+        "sandbox",
+        "sandbox",
+        downscope=(
+            SimpleNamespace(kind="workspace", value="/Workspace/Shared", permission="read_only"),
+        ),
+        include_databricks_token_env=True,
+    )
+    expected_meta = {
+        "downscope": {
+            "workspace_paths": [{"path": "/Workspace/Shared", "permission": "read_only"}]
+        },
+        "include_databricks_token_env": True,
+    }
+    server = adapter._server_from_tool(sandbox, workspace_client_for=resolver)
+    assert server.workspace_client is (user if auth == "user" else app)
+
+    if adapter.__name__.endswith("openai.mcp"):
+        result = SimpleNamespace(isError=False)
+        call_tool = AsyncMock(return_value=result)
+        monkeypatch.setattr(FakeServer, "call_tool", call_tool)
+        assert (
+            asyncio.run(
+                server.call_tool(
+                    "run_code",
+                    {"code": "print('ok')"},
+                    meta={"include_databricks_token_env": False},
+                )
+            )
+            is result
+        )
+        assert call_tool.call_args.kwargs["meta"] == expected_meta
+    else:
+        session = SimpleNamespace(
+            initialize=AsyncMock(), call_tool=AsyncMock(return_value="sandbox-result")
+        )
+
+        @asynccontextmanager
+        async def create_session(connection):
+            yield session
+
+        monkeypatch.setattr(adapter, "create_session", create_session)
+        request = SimpleNamespace(
+            server_name="sandbox", name="run_code", args={"code": "print('ok')"}
+        )
+        result = asyncio.run(
+            adapter._sandbox_interceptor((sandbox,), workspace_client_for=resolver)(
+                request, AsyncMock()
+            )
+        )
+        assert result == "sandbox-result"
+        assert session.call_tool.call_args.kwargs["meta"] == expected_meta
+
+
 @pytest.mark.parametrize("operation", ["connect", "list_tools", "call_tool"])
 @pytest.mark.parametrize("auth", ["user", "app"])
 def test_openai_only_user_permission_errors_are_typed(adapter, monkeypatch, operation, auth):
@@ -240,6 +301,44 @@ def test_sdk_permission_type_is_classified(adapter):
 
     error = adapter._auth_error(PermissionDenied("secret"), "configured")
     assert error.code == "MCP_PERMISSION_DENIED"
+
+
+def test_mcp_oauth_registration_failure_requests_service_authorization(adapter):
+    oauth_registration_error = type(
+        "OAuthRegistrationError",
+        (RuntimeError,),
+        {"__module__": "mcp.client.auth.exceptions"},
+    )
+
+    error = adapter._auth_error(
+        oauth_registration_error("Registration failed: 404"),
+        "slack_user",
+    )
+
+    assert error is not None
+    assert error.code == "MCP_AUTHORIZATION_REQUIRED"
+    assert error.status_code == 401
+    assert error.integration_id == "slack_user"
+    assert str(error) == "Authorize the configured service in Databricks before retrying."
+
+
+def test_mcp_oauth_registration_failure_includes_browser_login_url(adapter):
+    oauth_registration_error = type(
+        "OAuthRegistrationError",
+        (RuntimeError,),
+        {"__module__": "mcp.client.auth.exceptions"},
+    )
+
+    error = adapter._auth_error_for_server(
+        oauth_registration_error("Registration failed: 404"),
+        "slack_user",
+        "https://workspace.example/ai-gateway/mcp-services/system.ai.slack",
+    )
+
+    assert error is not None
+    assert error.payload()["authorization_url"] == (
+        "https://workspace.example/mcp-service-login?name=system.ai.slack"
+    )
 
 
 def test_tool_result_permission_errors_are_not_model_results(adapter, monkeypatch):

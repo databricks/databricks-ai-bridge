@@ -19,17 +19,25 @@ class AuthError(RuntimeError):
     """A credential-free error suitable for returning to the caller."""
 
     def __init__(
-        self, code: str, message: str, status_code: int = 401, integration_id: str | None = None
+        self,
+        code: str,
+        message: str,
+        status_code: int = 401,
+        integration_id: str | None = None,
+        authorization_url: str | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.status_code = status_code
         self.integration_id = integration_id
+        self.authorization_url = authorization_url
 
     def payload(self) -> dict[str, str]:
         result = {"code": self.code, "message": str(self)}
         if self.integration_id is not None:
             result["integration_id"] = self.integration_id
+        if self.authorization_url is not None:
+            result["authorization_url"] = self.authorization_url
         return result
 
 

@@ -1,6 +1,6 @@
 from databricks.sdk import WorkspaceClient
 from mcp.client.auth import OAuthClientProvider, TokenStorage
-from mcp.shared.auth import OAuthToken
+from mcp.shared.auth import OAuthClientMetadata, OAuthToken
 
 TOKEN_EXPIRATION_SECONDS = 60
 
@@ -65,15 +65,20 @@ class DatabricksOAuthClientProvider(OAuthClientProvider):
 
     Args:
         workspace_client (databricks.sdk.WorkspaceClient): The Databricks workspace client used for authentication and requests.
+        server_url (str): The MCP server URL used to validate protected-resource metadata.
     """
 
-    def __init__(self, workspace_client: WorkspaceClient):
+    def __init__(self, workspace_client: WorkspaceClient, server_url: str = ""):
         self.workspace_client = workspace_client
         self.databricks_token_storage = DatabricksTokenStorage(workspace_client)
 
         super().__init__(
-            server_url="",
-            client_metadata=None,  # ty:ignore[invalid-argument-type]: No metadata available
+            server_url=server_url,
+            client_metadata=OAuthClientMetadata(
+                client_name="databricks-mcp",
+                redirect_uris=["http://localhost"],
+                token_endpoint_auth_method="none",
+            ),
             storage=self.databricks_token_storage,
             redirect_handler=None,
             callback_handler=None,

@@ -431,13 +431,16 @@ async def test_complete_persists_response_and_lifecycle_event_atomically():
 
 
 @pytest.mark.asyncio
-async def test_fail_persists_lifecycle_event_atomically():
+async def test_fail_persists_response_and_lifecycle_event_atomically():
     lakebase, connection = mock_lakebase()
     connection.execute.return_value = MagicMock(rowcount=1)
     store = LakebaseDurableRuntimeStore(lakebase=lakebase)
 
-    assert await store.fail("session-1", 2) is True
+    response = {"error": {"code": "MCP_AUTHORIZATION_REQUIRED"}, "status_code": 401}
+    assert await store.fail("session-1", 2, response) is True
 
+    failure_parameters = connection.execute.await_args_list[0].args[1]
+    assert failure_parameters["response"] == json.dumps(response)
     event_parameters = connection.execute.await_args_list[1].args[1]
     assert event_parameters["event"] == '{"type": "run.failed"}'
 

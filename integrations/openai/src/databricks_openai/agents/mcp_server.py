@@ -12,6 +12,17 @@ from mcp.types import CallToolResult
 from mlflow.entities import SpanType
 
 
+def _databricks_oauth_provider(
+    workspace_client: WorkspaceClient, server_url: str
+) -> DatabricksOAuthClientProvider:
+    """Create a provider and bind it to the MCP resource it will authenticate."""
+    provider = DatabricksOAuthClientProvider(workspace_client)
+    # Keep this compatible with databricks-mcp releases before the constructor accepted
+    # ``server_url`` while still satisfying MCP protected-resource validation.
+    provider.context.server_url = server_url
+    return provider
+
+
 class McpServer(MCPServerStreamableHttp):
     """Databricks MCP server implementation that extends MCPServerStreamableHttp.
 
@@ -295,7 +306,7 @@ class McpServer(MCPServerStreamableHttp):
     ]:
         url: str = self.params["url"]
         headers: dict[str, str] | None = self.params.get("headers", None)
-        auth = DatabricksOAuthClientProvider(self.workspace_client)
+        auth = _databricks_oauth_provider(self.workspace_client, url)
 
         timeout = self.params.get("timeout", 5)
         sse_read_timeout = self.params.get("sse_read_timeout", 60 * 5)
