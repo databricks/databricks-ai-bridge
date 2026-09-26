@@ -13,6 +13,7 @@ from databricks_langchain.multi_server_mcp_client import (
     DatabricksMCPServer,
     DatabricksMultiServerMCPClient,
     MCPServer,
+    _databricks_oauth_provider,
 )
 
 
@@ -184,8 +185,7 @@ class TestDatabricksMCPServer:
 
         workspace_client = MagicMock()
         server_url = "https://test.databricks.com/ai-gateway/mcp-services/system.ai.slack"
-        original_auth = DatabricksOAuthClientProvider(workspace_client)
-        original_auth.context.server_url = server_url
+        original_auth = _databricks_oauth_provider(workspace_client, server_url)
 
         client = DatabricksMcpHttpClientFactory()(timeout=httpx.Timeout(10), auth=original_auth)
 
