@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import pathlib
 import subprocess
 import sys
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -22,7 +23,7 @@ def _load_matrix_module() -> ModuleType:
     return module
 
 
-def test_auth_scope_matrix_accepts_complete_redacted_evidence(tmp_path: pathlib.Path):
+def _complete_evidence() -> dict:
     source_sha = "a" * 40
     marker = f"AUTH_SCOPE_E2E_{source_sha[:12]}"
     rows = []
@@ -44,27 +45,70 @@ def test_auth_scope_matrix_accepts_complete_redacted_evidence(tmp_path: pathlib.
                     "freshness_marker": marker,
                 }
             )
-    evidence = tmp_path / "evidence.json"
-    evidence.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "source_sha": source_sha,
-                "wheel_sha256": "b" * 64,
-                "rows": rows,
-                "cleanup": {"apps_deleted": True, "sql_asset_deleted": True},
-            }
-        ),
-        encoding="utf-8",
-    )
-    script = pathlib.Path(__file__).parents[1] / "e2e" / "auth_scope_matrix.py"
+    return {
+        "schema_version": 1,
+        "source_sha": source_sha,
+        "wheel_sha256": "b" * 64,
+        "rows": rows,
+        "cleanup": {"apps_deleted": True, "sql_asset_deleted": True},
+    }
 
-    result = subprocess.run(
+
+def _run_evidence_verifier(
+    tmp_path: pathlib.Path, document: dict
+) -> subprocess.CompletedProcess[str]:
+    evidence = tmp_path / "evidence.json"
+    evidence.write_text(json.dumps(document), encoding="utf-8")
+    script = pathlib.Path(__file__).parents[1] / "e2e" / "auth_scope_matrix.py"
+    return subprocess.run(
         [sys.executable, str(script), "--verify-evidence", str(evidence)],
         text=True,
         capture_output=True,
         timeout=30,
     )
+
+
+class _StatementExecution:
+    def __init__(self, error: Exception | None = None):
+        self.error = error
+
+    def execute_statement(self, **_kwargs):
+        if self.error is not None:
+            raise self.error
+        return SimpleNamespace(
+            status=SimpleNamespace(state="SUCCEEDED"),
+            result=SimpleNamespace(data_array=[["AGENTBRICKS_USER_SQL_OK"]]),
+        )
+
+
+class _WorkspaceClient:
+    def __init__(self, error: Exception | None = None):
+        self.statement_execution = _StatementExecution(error)
+
+
+def _generated_sql_tool(tmp_path: pathlib.Path):
+    matrix = _load_matrix_module()
+    runner = matrix.Runner.__new__(matrix.Runner)
+    runner.catalog = "catalog"
+    runner.schema = "schema"
+    runner.table_name = "table"
+    runner.warehouse_id = "warehouse"
+    runner.freshness_marker = "AUTH_SCOPE_E2E_aaaaaaaaaaaa"
+    runner.transcript = matrix.Transcript(tmp_path / "commands.log")
+    project = tmp_path / "project"
+    (project / "agent").mkdir(parents=True)
+    runner._write_auth_scope_tool(project, "langgraph")
+    generated = project / "agent" / "auth_scope_tools.py"
+    spec = importlib.util.spec_from_file_location("generated_auth_scope_tools", generated)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return matrix, module
+
+
+def test_auth_scope_matrix_accepts_complete_redacted_evidence(tmp_path: pathlib.Path):
+    result = _run_evidence_verifier(tmp_path, _complete_evidence())
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "4 passed, 0 failed, 0 skipped" in result.stdout
@@ -95,6 +139,115 @@ def test_auth_scope_matrix_rejects_missing_negative_control(tmp_path: pathlib.Pa
 
     assert result.returncode == 1
     assert "4 skipped" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "configured_scopes",
+        "effective_scopes",
+        "user_marker",
+        "app_denial",
+        "freshness",
+        "duplicate_cell",
+        "unexpected_cell",
+        "source_sha",
+        "wheel_sha",
+        "cleanup",
+    ],
+)
+def test_auth_scope_matrix_rejects_tampered_evidence(tmp_path: pathlib.Path, case: str):
+    document = _complete_evidence()
+    if case == "configured_scopes":
+        document["rows"][0]["configured_scopes"] = []
+    elif case == "effective_scopes":
+        document["rows"][0]["effective_scopes"] = ["iam.current-user:read"]
+    elif case == "user_marker":
+        document["rows"][0]["user_sql_marker"] = ""
+    elif case == "app_denial":
+        document["rows"][0]["app_sql_denied"] = False
+    elif case == "freshness":
+        document["rows"][0]["freshness_marker"] = "AUTH_SCOPE_E2E_stale"
+    elif case == "duplicate_cell":
+        document["rows"].append(copy.deepcopy(document["rows"][0]))
+    elif case == "unexpected_cell":
+        unexpected = copy.deepcopy(document["rows"][0])
+        unexpected["framework"] = "unexpected"
+        document["rows"].append(unexpected)
+    elif case == "source_sha":
+        document["source_sha"] = "short"
+    elif case == "wheel_sha":
+        document["wheel_sha256"] = "short"
+    elif case == "cleanup":
+        document["cleanup"]["apps_deleted"] = False
+
+    result = _run_evidence_verifier(tmp_path, document)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+
+
+def test_generated_sql_tool_rejects_non_permission_app_failure(tmp_path: pathlib.Path):
+    _, generated = _generated_sql_tool(tmp_path)
+    clients = {
+        "app": _WorkspaceClient(RuntimeError("network unavailable")),
+        "user": _WorkspaceClient(),
+    }
+    tool = generated.auth_scope_tools(clients.get)[0]
+
+    with pytest.raises(RuntimeError, match="network unavailable"):
+        tool.invoke({})
+
+
+def test_generated_sql_tool_accepts_permission_denied_control(tmp_path: pathlib.Path):
+    from databricks.sdk.errors import PermissionDenied
+
+    _, generated = _generated_sql_tool(tmp_path)
+    clients = {
+        "app": _WorkspaceClient(PermissionDenied("denied")),
+        "user": _WorkspaceClient(),
+    }
+    tool = generated.auth_scope_tools(clients.get)[0]
+
+    result = tool.invoke({})
+
+    assert "AGENTBRICKS_USER_SQL_OK" in result
+    assert "AGENTBRICKS_APP_SQL_DENIED:PermissionDenied" in result
+
+
+def test_web_search_evidence_rejects_text_without_tool_execution():
+    matrix = _load_matrix_module()
+    response = {
+        "status": "completed",
+        "output": [
+            {
+                "role": "assistant",
+                "content": "Search result: https://docs.databricks.com/security/auth/oauth.html",
+            }
+        ],
+    }
+
+    assert matrix._has_completed_search_tool_call(response) is False
+
+
+def test_web_search_evidence_accepts_completed_search_tool_call():
+    matrix = _load_matrix_module()
+    response = {
+        "status": "completed",
+        "output": [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"name": "web_search", "args": {"query": "OAuth scopes"}}],
+            },
+            {
+                "role": "tool",
+                "name": "web_search",
+                "content": "https://docs.databricks.com/security/auth/oauth.html",
+            },
+        ],
+    }
+
+    assert matrix._has_completed_search_tool_call(response) is True
 
 
 def test_invocation_readiness_retries_502_and_503(tmp_path: pathlib.Path):

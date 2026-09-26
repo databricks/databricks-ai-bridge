@@ -401,6 +401,7 @@ class Runner:
         source = f'''from collections.abc import Callable
 
 from databricks.sdk import WorkspaceClient
+from databricks.sdk.errors import PermissionDenied
 {decorator_import}
 
 FRESHNESS_MARKER = {self.freshness_marker!r}
@@ -434,7 +435,7 @@ def auth_scope_tools(
         print(FRESHNESS_MARKER, flush=True)
         try:
             _read_marker(workspace_client_for("app"))
-        except Exception as error:
+        except PermissionDenied as error:
             denial_type = type(error).__name__
         else:
             raise RuntimeError("App principal unexpectedly read the user-only SQL asset")
@@ -550,8 +551,8 @@ def auth_scope_tools(
                 web_serialized = json.dumps(web_response, sort_keys=True, default=str).lower()
                 web_verified = (
                     web_response.get("status") == "completed"
+                    and _has_completed_search_tool_call(web_response)
                     and "https" in web_serialized
-                    and "search" in web_serialized
                 )
                 if not web_verified:
                     raise MatrixError(
@@ -752,6 +753,29 @@ def _last_error_line(path: pathlib.Path) -> str:
         if re.search(r"ERROR|FAIL|Traceback|panic|exit code [1-9]", line, re.IGNORECASE):
             return line.strip()[:300]
     return ""
+
+
+def _has_completed_search_tool_call(response: dict[str, Any]) -> bool:
+    called: set[str] = set()
+    completed: set[str] = set()
+    output = response.get("output")
+    if not isinstance(output, list):
+        return False
+    for message in output:
+        if not isinstance(message, dict):
+            continue
+        tool_calls = message.get("tool_calls")
+        if isinstance(tool_calls, list):
+            for tool_call in tool_calls:
+                if not isinstance(tool_call, dict):
+                    continue
+                name = tool_call.get("name")
+                if isinstance(name, str) and "search" in name.lower():
+                    called.add(name)
+        name = message.get("name")
+        if message.get("role") == "tool" and isinstance(name, str) and "search" in name.lower():
+            completed.add(name)
+    return bool(called & completed)
 
 
 def _monitored(
