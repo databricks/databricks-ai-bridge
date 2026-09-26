@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import time
 from dataclasses import dataclass
 from datetime import timedelta
@@ -91,10 +92,15 @@ def required_user_api_scopes(project: AgentProject | None) -> set[str]:
             scopes.add("sql")
         if tool.source.service == "system.ai.genie_one_mcp":
             scopes.add("genie")
-        if tool.source.kind == "sandbox" and any(
-            scope.kind == "volume" for scope in tool.policy.downscope
-        ):
-            scopes.add("files")
+        if tool.source.kind == "sandbox":
+            if tool.policy.databricks_access_token_included:
+                print(  # noqa: T201 - temporary e2e freshness marker
+                    "[freshness-check workspace-scope-e2e] required_user_api_scopes",
+                    file=sys.stderr,
+                )
+                scopes.add("workspace.workspace")
+            if any(scope.kind == "volume" for scope in tool.policy.downscope):
+                scopes.add("files")
     return scopes
 
 

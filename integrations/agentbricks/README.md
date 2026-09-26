@@ -450,7 +450,8 @@ agentbricks [-p <profile>] [-o text|json]
     unbind     [--source PATH]
     list | get [--experiment-name NAME | --experiment-id ID] [--source PATH]
   tools
-    add sandbox      --scope SCOPE [--scope SCOPE ...] [--source PATH]
+    add sandbox      --scope SCOPE [--scope SCOPE ...]
+                     [--no-databricks-access-token-included] [--source PATH]
     add mcp          SERVICE [--name NAME] [--source PATH]
     add uc-function  FUNCTION [--name NAME] [--source PATH]
     add genie-one    [--name NAME] [--auth user|app] [--source PATH]
@@ -610,6 +611,9 @@ Deploy derives Apps user scopes from explicit `auth = "user"` bindings:
 | Managed MCP (governed ingress) | `ai-gateway` |
 | `system.ai.genie_one_mcp` | `ai-gateway`, `genie` |
 | First-class Genie One or Genie Agent | `genie` |
+| Table-only sandbox with token injection | `ai-gateway`, `workspace.workspace` |
+| Sandbox with a Volume downscope and token injection | `ai-gateway`, `files`, `workspace.workspace` |
+| Sandbox with token injection disabled | `ai-gateway` (plus `files` for a Volume) |
 
 For example, bind Genie tools in a current project with `server = "agentbricks"`:
 
@@ -635,10 +639,15 @@ The `system.ai.dbsql` managed MCP additionally requests the Apps `sql` user scop
 API consent, not `sql:restricted-query`; read-only enforcement remains the service policy plus the
 requesting user's Unity Catalog grants. DBSQL does not use Databricks Connect.
 
-A sandbox binding with a Volume downscope additionally requests the Apps `files` user scope.
+When a user-auth sandbox has `databricks_access_token_included = true`, it requests the Apps
+`workspace.workspace` user scope so the injected credential can call workspace APIs. A sandbox
+binding with a Volume downscope additionally requests the Apps `files` user scope.
 OAuth consent does not grant Volume access: the requesting user still needs the corresponding
-Unity Catalog privileges, and the sandbox downscope remains authoritative. Table-only sandbox
-bindings request `ai-gateway` but do not request `files`.
+Unity Catalog privileges, and the sandbox downscope remains authoritative. A sandbox binding with
+token injection disabled does not request `workspace.workspace`; its other resource-derived scopes
+still apply. Databricks Apps names this scope `workspace.workspace` (the legacy bare `workspace`
+scope is rejected). These scopes are requested only for
+`auth = "user"`; `auth = "app"` uses the App service principal's permissions instead.
 
 Review the target App's scopes and coordinate with its other owners before allowing the update. Once
 those scopes are present, later deploys do not need the flag. The CLI preserves unrelated scopes,
@@ -737,7 +746,24 @@ do not generate or patch Python tool code, and do not alter the manifest's `[[to
 Sandbox scopes default to read-only access. Repeat `--scope` to allow more than one resource, use
 `volume:` or `workspace:` for those resource types, and use `--permission read_write` only when the
 agent needs writes. Every sandbox call carries this fixed downscope in MCP `_meta`, outside the tool
-arguments controlled by the model.
+arguments controlled by the model. New sandbox bindings also default to exposing the selected
+Databricks credential to sandbox code:
+
+```toml
+[[tools]]
+id = "sandbox"
+auth = "user"
+source = { kind = "sandbox", service = "system.ai.sandbox" }
+policy = { downscope = [{ resource = "workspace:/Workspace/Shared", permission = "read_only" }], databricks_access_token_included = true }
+```
+
+With `databricks_access_token_included = true`, the sandbox receives `DATABRICKS_HOST`, a short-lived
+`DATABRICKS_TOKEN`, and `DATABRICKS_AUTH_TYPE`, so code such as
+`WorkspaceClient().current_user.me()` can call workspace APIs. This policy does not choose the
+identity: `auth = "user"` uses the request user's OBO credential, while `auth = "app"` uses the
+Databricks App service principal. Use `--no-databricks-access-token-included` when adding a sandbox that
+does not need workspace API access. Existing manifests that omit `databricks_access_token_included`
+remain disabled until explicitly updated.
 
 ### Genie tools
 

@@ -93,7 +93,32 @@ def test_add_sandbox_only_updates_manifest(tmp_path: pathlib.Path):
     loaded = AgentProject.load(project)
     assert loaded.tools[0].source.kind == "sandbox"
     assert loaded.tools[0].policy.downscope[0].resource == "table:samples.nyctaxi.trips"
+    assert loaded.tools[0].policy.databricks_access_token_included is True
+    assert "databricks_access_token_included = true" in (project / "agent.toml").read_text()
     assert (project / "agent" / "mcps.py").read_text(encoding="utf-8") == "ORIGINAL = True\n"
+
+
+def test_add_sandbox_can_disable_databricks_access_token(tmp_path: pathlib.Path):
+    project = _project(tmp_path)
+
+    result = CliRunner().invoke(
+        tools,
+        [
+            "add",
+            "sandbox",
+            "--scope",
+            "workspace:/Workspace/Shared",
+            "--no-databricks-access-token-included",
+            "--source",
+            str(project),
+        ],
+        obj=_Ctx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    loaded = AgentProject.load(project)
+    assert loaded.tools[0].policy.databricks_access_token_included is False
+    assert "databricks_access_token_included = false" in (project / "agent.toml").read_text()
 
 
 def test_generic_mcp_rejects_sandbox_scope(tmp_path: pathlib.Path):

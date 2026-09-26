@@ -73,14 +73,22 @@ def adapter(request, monkeypatch):
     sys.modules.pop(module_name, None)
 
 
-def tool(auth=None, kind="mcp", name="search"):
+def tool(
+    auth=None,
+    kind="mcp",
+    name="search",
+    *,
+    downscope=(),
+    databricks_access_token_included=False,
+):
     return SimpleNamespace(
         id=name,
         kind=kind,
         auth=auth,
         service="system.ai.search",
         function="main.tools.lookup",
-        downscope=(),
+        downscope=downscope,
+        databricks_access_token_included=databricks_access_token_included,
     )
 
 
@@ -178,6 +186,73 @@ def test_sandbox_reconnect_captures_resolver_and_manifest(adapter, monkeypatch):
         assert asyncio.run(clients[0].interceptors[0](request, AsyncMock())) == "ok"
     assert [connection["workspace_client"] for connection in connections] == [user, user]
     adapter.workspace_client.assert_not_called()
+
+
+@pytest.mark.parametrize("auth", ["app", "user"])
+def test_sandbox_metadata_protects_token_env_policy_for_both_identities(adapter, monkeypatch, auth):
+    app = SimpleNamespace(config=SimpleNamespace(host="https://workspace"))
+    user = SimpleNamespace(config=SimpleNamespace(host="https://workspace"))
+    resolver = Mock(side_effect=lambda mode: user if mode == "user" else app)
+    sandbox = tool(
+        auth,
+        "sandbox",
+        "sandbox",
+        downscope=(
+            SimpleNamespace(kind="workspace", value="/Workspace/Shared", permission="read_only"),
+        ),
+        databricks_access_token_included=True,
+    )
+    expected_meta = {
+        "trace_id": "123",
+        "downscope": {
+            "workspace_paths": [{"path": "/Workspace/Shared", "permission": "read_only"}]
+        },
+        "databricks_access_token_included": True,
+    }
+    server = adapter._server_from_tool(sandbox, workspace_client_for=resolver)
+    assert server.workspace_client is (user if auth == "user" else app)
+
+    if adapter.__name__.endswith("openai.mcp"):
+        result = SimpleNamespace(isError=False)
+        call_tool = AsyncMock(return_value=result)
+        monkeypatch.setattr(FakeServer, "call_tool", call_tool)
+        assert (
+            asyncio.run(
+                server.call_tool(
+                    "run_code",
+                    {"code": "print('ok')"},
+                    meta={
+                        "trace_id": "123",
+                        "downscope": {"workspace_paths": []},
+                        "databricks_access_token_included": False,
+                    },
+                )
+            )
+            is result
+        )
+        assert call_tool.call_args.kwargs["meta"] == expected_meta
+    else:
+        session = SimpleNamespace(
+            initialize=AsyncMock(), call_tool=AsyncMock(return_value="sandbox-result")
+        )
+
+        @asynccontextmanager
+        async def create_session(connection):
+            yield session
+
+        monkeypatch.setattr(adapter, "create_session", create_session)
+        request = SimpleNamespace(
+            server_name="sandbox", name="run_code", args={"code": "print('ok')"}
+        )
+        result = asyncio.run(
+            adapter._sandbox_interceptor((sandbox,), workspace_client_for=resolver)(
+                request, AsyncMock()
+            )
+        )
+        assert result == "sandbox-result"
+        assert session.call_tool.call_args.kwargs["meta"] == {
+            key: value for key, value in expected_meta.items() if key != "trace_id"
+        }
 
 
 @pytest.mark.parametrize("operation", ["connect", "list_tools", "call_tool"])

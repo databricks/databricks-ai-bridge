@@ -108,6 +108,7 @@ def add_sandbox_to_manifest(
     *,
     tool_id: str = "sandbox",
     auth: Literal["user", "app"] = "user",
+    databricks_access_token_included: bool = True,
 ) -> None:
     """Shared implementation for the nested command and compatibility alias."""
     parsed: list[Scope] = []
@@ -118,7 +119,16 @@ def add_sandbox_to_manifest(
         if identity not in seen:
             parsed.append(scope)
             seen.add(identity)
-    _add_spec(obj, source, ToolSpec.sandbox(tool_id, scopes=parsed, auth=auth))
+    _add_spec(
+        obj,
+        source,
+        ToolSpec.sandbox(
+            tool_id,
+            scopes=parsed,
+            auth=auth,
+            databricks_access_token_included=databricks_access_token_included,
+        ),
+    )
 
 
 @click.group()
@@ -184,6 +194,12 @@ def _source_option(function):
 )
 @click.option("--name", "tool_id", default="sandbox", show_default=True)
 @click.option("--auth", type=click.Choice(["user", "app"]), default="user", show_default=True)
+@click.option(
+    "--databricks-access-token-included/--no-databricks-access-token-included",
+    default=True,
+    show_default=True,
+    help="Expose the selected Databricks credential to sandbox code.",
+)
 @_source_option
 @click.pass_obj
 def add_sandbox(
@@ -193,12 +209,21 @@ def add_sandbox(
     tool_id: str,
     source: pathlib.Path,
     auth: Literal["user", "app"],
+    databricks_access_token_included: bool,
 ) -> None:
     """Add a data sandbox tool (system.ai.sandbox), scoped to specific Unity Catalog resources.
 
     Review the target project's agent.toml to check configured managed tools and MCP bindings.
     """
-    add_sandbox_to_manifest(obj, source.resolve(), scopes, permission, tool_id=tool_id, auth=auth)
+    add_sandbox_to_manifest(
+        obj,
+        source.resolve(),
+        scopes,
+        permission,
+        tool_id=tool_id,
+        auth=auth,
+        databricks_access_token_included=databricks_access_token_included,
+    )
 
 
 @add.command("mcp")
