@@ -38,6 +38,73 @@ def _project(root, *, auth="user", legacy=False):
     return project
 
 
+def _project_with_user_auth(root, *, server="agentbricks", scopes=("sql",)):
+    project = AgentProject.create(root, framework="langgraph", server=server)
+    project.write()
+    rendered_scopes = ", ".join(f'"{scope}"' for scope in scopes)
+    with project.path.open("a", encoding="utf-8") as manifest:
+        manifest.write(
+            f"\n[auth.user]\nrequired = true\nadditional_api_scopes = [{rendered_scopes}]\n"
+        )
+    return AgentProject.load(root)
+
+
+def test_declarative_user_auth_requires_no_managed_binding(tmp_path):
+    from databricks_agentbricks.cli.app_auth import (
+        required_user_api_scopes,
+        requires_user_auth,
+    )
+
+    project = _project_with_user_auth(tmp_path)
+
+    assert requires_user_auth(project) is True
+    assert required_user_api_scopes(project) == {"sql"}
+
+
+def test_declarative_scopes_union_with_managed_inference(tmp_path):
+    from databricks_agentbricks.cli.app_auth import required_user_api_scopes
+
+    project = _project_with_user_auth(tmp_path, scopes=("sql", "ai-gateway", "sql"))
+    project.add_tool(ToolSpec.mcp("search", service="system.ai.web_search", auth="user"))
+
+    assert required_user_api_scopes(project) == {"sql", "ai-gateway"}
+
+
+def test_declarative_user_auth_requires_agentbricks_server(tmp_path):
+    from databricks_agentbricks.cli.app_auth import requires_user_auth
+
+    project = _project_with_user_auth(tmp_path, server="custom")
+
+    with pytest.raises(AgentCliError, match="server = 'agentbricks'"):
+        requires_user_auth(project)
+
+
+def test_scope_update_flag_accepts_declarative_user_auth(tmp_path, monkeypatch):
+    _project_with_user_auth(tmp_path)
+    _, apps, _ = _sdk(
+        monkeypatch,
+        App(
+            name="agent-bricks-test",
+            user_api_scopes=["sql"],
+            effective_user_api_scopes=["sql"],
+            forward_user_access_token=False,
+        ),
+    )
+    client = Mock()
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["agent-bricks-test", "--source", str(tmp_path), "--allow-user-scope-update"],
+        obj=SimpleNamespace(profile="selected", output="text", client=client),
+    )
+
+    assert result.exit_code != 0
+    assert "forward_user_access_token" in result.output
+    assert "requires a managed tool" not in result.output
+    apps.get.assert_called_once_with("agent-bricks-test")
+    client.assert_not_called()
+
+
 def test_user_auth_requires_explicit_auth_on_every_managed_binding(tmp_path, monkeypatch):
     _project(tmp_path, legacy=True, auth="user")
     client = Mock()

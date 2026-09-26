@@ -495,8 +495,8 @@ def _grant_store_access(
 @click.option(
     "--allow-user-scope-update",
     is_flag=True,
-    help="Allow Agent Bricks to add missing user API scopes to an existing App for tools configured with "
-    "auth = 'user'. Once added, later deploys do not need this flag.",
+    help="Allow Agent Bricks to add missing user API scopes to an existing App for declarative user "
+    "auth. Once added, later deploys do not need this flag.",
 )
 @click.pass_obj
 def deploy(
@@ -554,9 +554,7 @@ def deploy(
         deployment_exists = new_name_exists
     _validate_deployment_name(name)
     if allow_user_scope_update and not user_auth:
-        raise AgentCliError(
-            "--allow-user-scope-update requires a managed tool with auth = 'user' in agent.toml."
-        )
+        raise AgentCliError("--allow-user-scope-update requires request-user auth in agent.toml.")
     # A request-user tool cannot use OBO until the App forwards request credentials and grants every
     # required user API scope. New Apps are configured automatically. For an existing App, adding a
     # missing scope requires --allow-user-scope-update; already-configured Apps need no flag.

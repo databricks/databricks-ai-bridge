@@ -585,9 +585,47 @@ Managed-tool add commands write the selected identity to `agent.toml`; inspect t
 review configured bindings. Missing legacy auth continues to mean App identity at runtime; it is
 never silently upgraded to user identity.
 
-`DurableAgentServer` derives its request-auth policy directly from the managed tool bindings in `agent.toml`.
-Projects do not maintain a separate request-auth contract marker: the presence of any managed tool
-with `auth = "user"` makes the invocation require a transient request-user credential.
+`DurableAgentServer` derives its request-auth policy from `agent.toml`. A managed tool with
+`auth = "user"` makes the invocation require a transient request-user credential. Code-first tools
+can declare the same requirement and any API scopes that Agent Bricks cannot infer from Python:
+
+```toml
+[auth.user]
+required = true
+additional_api_scopes = ["sql"]
+```
+
+`additional_api_scopes` is additive: deploy unions it with scopes inferred from managed bindings,
+deduplicates the result, and preserves unrelated scopes already configured on the App. Scope names
+are not restricted to a client-side allowlist; Databricks Apps validates whether a requested scope
+is supported. Entries must be non-empty strings without surrounding whitespace or control
+characters, and a non-empty list requires `required = true`. This request-auth contract is supported
+only with `[agent].server = "agentbricks"`.
+
+Generated framework adapters pass the request-bound resolver to agent construction. A code-first
+tool should obtain its user client from that resolver inside the active invocation rather than
+creating or persisting a user credential:
+
+```python
+from langchain_core.tools import tool
+
+
+def sql_tools(workspace_client_for):
+    @tool
+    def run_statement(statement: str) -> str:
+        client = workspace_client_for("user")
+        response = client.statement_execution.execute_statement(
+            warehouse_id="...",
+            statement=statement,
+        )
+        return str(response.result)
+
+    return [run_statement]
+```
+
+The resolver is request-bound and closes after the attempt. Agent Bricks does not inject it into
+arbitrary auto-discovered decorated tools; build those tools from the resolver passed to the
+generated request-aware agent function.
 
 Request-user invocations use the same synchronous, streaming, background, status, event-replay,
 and idempotency APIs as app-auth invocations. The Runtime Store records only token-free request
@@ -603,12 +641,15 @@ upgrade copied Python adapter code. Outdated adapters fail closed rather than si
 identity. App-only legacy projects and generic bring-your-own source directories keep the existing
 path.
 
-Deploy derives Apps user scopes from explicit `auth = "user"` bindings:
+Deploy derives Apps user scopes from explicit `auth = "user"` bindings and unions them with
+`[auth.user].additional_api_scopes`:
 
 | Binding | Requested Apps scopes |
 | --- | --- |
 | Managed MCP (governed ingress) | `ai-gateway` |
+| `system.ai.dbsql` | `ai-gateway`, `sql` |
 | `system.ai.genie_one_mcp` | `ai-gateway`, `genie` |
+| Sandbox with a Volume downscope | `ai-gateway`, `files` |
 | First-class Genie One or Genie Agent | `genie` |
 
 For example, bind Genie tools in a current project with `server = "agentbricks"`:
@@ -618,7 +659,8 @@ agentbricks tools add mcp system.ai.genie_one_mcp --auth user
 agentbricks tools add genie-agent SPACE_ID --auth user
 ```
 
-Mixed bindings request the union. App-auth and legacy bindings add no user scopes. These are
+Mixed bindings and explicit additions request the union. App-auth and legacy bindings add no user
+scopes. These are
 explicit service-consent scopes, not a claim that gateway access alone authorizes the downstream
 resource. OAuth consent does not grant Unity Catalog privileges: the user still needs access to
 the configured Genie Space and its underlying data.

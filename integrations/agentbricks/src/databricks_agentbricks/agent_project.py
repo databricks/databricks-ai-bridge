@@ -370,6 +370,7 @@ class AgentProject:
         memory_store_id: str | None = None,
         deployment_name: str | None = None,
         trace_experiment_name: str | None = None,
+        user_auth: tool_manifest.UserAuthConfig | None = None,
     ) -> None:
         self.root = root
         self.path = root / "agent.toml"
@@ -391,6 +392,7 @@ class AgentProject:
         # unbound, i.e. off. Storing a name (not an id) keeps the binding valid across workspaces and
         # profiles, since an id is workspace-local. `agentbricks init` bootstraps a default name.
         self.trace_experiment_name = trace_experiment_name
+        self.user_auth = user_auth or tool_manifest.UserAuthConfig()
 
     @classmethod
     def load(cls, root: pathlib.Path | str | None = None) -> "AgentProject":
@@ -423,6 +425,10 @@ class AgentProject:
             raise AgentCliError("agent.toml must declare an [agent] table.")
         framework = parse_framework(_required_string(agent.get("framework"), "agent.framework"))
         server = parse_server(_required_string(agent.get("server"), "agent.server"))
+        try:
+            user_auth = tool_manifest.parse_user_auth(document)
+        except tool_manifest.ToolManifestError as exc:
+            raise AgentCliError(str(exc)) from exc
         deployment_name = agent.get("deployment_name")
         if deployment_name is not None and not (
             isinstance(deployment_name, str) and deployment_name
@@ -460,6 +466,7 @@ class AgentProject:
             memory_store_id,
             str(deployment_name) if deployment_name is not None else None,
             trace_experiment_name,
+            user_auth,
         )
 
     @classmethod
