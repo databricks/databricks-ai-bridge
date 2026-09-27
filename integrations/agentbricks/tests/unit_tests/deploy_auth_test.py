@@ -138,7 +138,7 @@ def test_scope_update_plan_uses_exact_required_scopes(monkeypatch):
                 "table-no-token",
                 scopes=[Scope.table("cat.sch.tbl")],
                 auth="user",
-                include_databricks_token_env=False,
+                databricks_access_token_included=False,
             ),
             {"ai-gateway"},
         ),

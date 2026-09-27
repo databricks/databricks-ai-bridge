@@ -24,7 +24,7 @@ server = "agentbricks"
 [[tools]]
 id = "sandbox"
 source = { kind = "sandbox", service = "system.ai.sandbox" }
-policy = { downscope = [{ resource = "table:samples.nyctaxi.trips", permission = "read_only" }], include_databricks_token_env = true }
+policy = { downscope = [{ resource = "table:samples.nyctaxi.trips", permission = "read_only" }], databricks_access_token_included = true }
 
 [[tools]]
 id = "web"
@@ -137,7 +137,9 @@ def test_langgraph_runtime_loads_direct_manifest_and_protects_sandbox_meta(
     mcp = _reload_mcp()
     monkeypatch.setattr(mcp, "workspace_client", _FakeWorkspaceClient)
 
-    assert mcp.load_tools(expected_framework="langgraph")[0].include_databricks_token_env is True
+    assert (
+        mcp.load_tools(expected_framework="langgraph")[0].databricks_access_token_included is True
+    )
 
     # _declared_servers() builds one server per manifest tool, with the right URLs.
     monkeypatch.setattr(mcp, "workspace_client", _FakeWorkspaceClient)
@@ -171,29 +173,31 @@ def test_langgraph_runtime_loads_direct_manifest_and_protects_sandbox_meta(
     assert arguments == {"code": 'print("ok")'}
     assert kwargs["meta"] == {
         "downscope": {"tables": [{"name": "samples.nyctaxi.trips", "permission": "read_only"}]},
-        "include_databricks_token_env": True,
+        "databricks_access_token_included": True,
     }
 
 
-def test_runtime_manifest_defaults_legacy_sandbox_token_env_policy_to_false(
+def test_runtime_manifest_defaults_sandbox_token_policy_to_false(
     tmp_path: pathlib.Path, monkeypatch
 ):
     project = tmp_path / "legacy"
     project.mkdir()
     _write_direct_manifest(project)
     manifest = project / "agent.toml"
-    manifest.write_text(manifest.read_text().replace(", include_databricks_token_env = true", ""))
+    manifest.write_text(
+        manifest.read_text().replace(", databricks_access_token_included = true", "")
+    )
     monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(project))
 
     record = importlib.import_module("databricks_agentkit.runtime.tool_manifest").load_tools(
         expected_framework="langgraph"
     )[0]
 
-    assert record.include_databricks_token_env is False
+    assert record.databricks_access_token_included is False
 
 
 @pytest.mark.parametrize("value", ['"true"', "1", "[]"])
-def test_runtime_manifest_rejects_non_boolean_sandbox_token_env_policy(
+def test_runtime_manifest_rejects_non_boolean_sandbox_token_policy(
     tmp_path: pathlib.Path, monkeypatch, value
 ):
     project = tmp_path / "invalid"
@@ -203,7 +207,7 @@ def test_runtime_manifest_rejects_non_boolean_sandbox_token_env_policy(
     manifest.write_text(manifest.read_text().replace("true }", f"{value} }}"))
     monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(project))
 
-    with pytest.raises(RuntimeError, match="include_databricks_token_env"):
+    with pytest.raises(RuntimeError, match="databricks_access_token_included"):
         importlib.import_module("databricks_agentkit.runtime.tool_manifest").load_tools(
             expected_framework="langgraph"
         )
