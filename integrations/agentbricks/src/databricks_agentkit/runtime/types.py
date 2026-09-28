@@ -41,7 +41,7 @@ class Invocation:
     request: JsonValue
     response: JsonValue
     session_id: str | None = None
-    queue_order: int | None = None
+    session_sequence_number: int | None = None  # Immutable acceptance order, not an event cursor.
 
     @property
     def is_terminal(self) -> bool:

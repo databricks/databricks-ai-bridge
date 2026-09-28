@@ -7,7 +7,7 @@ from databricks_agentkit.runtime.types import InvocationConflictError, Invocatio
 
 
 @pytest.mark.asyncio
-async def test_accept_assigns_queue_order_within_each_session() -> None:
+async def test_accept_assigns_session_sequence_number_within_each_session() -> None:
     store = InMemoryRuntimeStore()
 
     first = await store.accept("invocation-1", {"message": "one"}, session_id="session-a")
@@ -15,10 +15,10 @@ async def test_accept_assigns_queue_order_within_each_session() -> None:
     second = await store.accept("invocation-3", {"message": "two"}, session_id="session-a")
     sessionless = await store.accept("invocation-4", {"message": "standalone"})
 
-    assert (first.session_id, first.queue_order) == ("session-a", 1)
-    assert (second.session_id, second.queue_order) == ("session-a", 2)
-    assert (other.session_id, other.queue_order) == ("session-b", 1)
-    assert (sessionless.session_id, sessionless.queue_order) == (None, None)
+    assert (first.session_id, first.session_sequence_number) == ("session-a", 1)
+    assert (second.session_id, second.session_sequence_number) == ("session-a", 2)
+    assert (other.session_id, other.session_sequence_number) == ("session-b", 1)
+    assert (sessionless.session_id, sessionless.session_sequence_number) == (None, None)
 
 
 @pytest.mark.asyncio
@@ -64,24 +64,24 @@ async def test_session_claims_are_fifo_and_session_reads_return_current_work() -
 
     active = await store.claim("invocation-1")
     assert active is not None
-    assert (active.session_id, active.queue_order) == ("session-a", 1)
+    assert (active.session_id, active.session_sequence_number) == ("session-a", 1)
     assert await store.get(session_id="session-a") == active
     assert await store.claim("invocation-2") is None
 
     assert await store.complete("invocation-1", active.attempt, {"answer": "one"})
     completed = await store.get("invocation-1")
     assert completed is not None
-    assert (completed.session_id, completed.queue_order) == ("session-a", 1)
+    assert (completed.session_id, completed.session_sequence_number) == ("session-a", 1)
     next_queued = await store.get(session_id="session-a")
     assert next_queued is not None
-    assert (next_queued.invocation_id, next_queued.queue_order) == ("invocation-2", 2)
+    assert (next_queued.invocation_id, next_queued.session_sequence_number) == ("invocation-2", 2)
 
     next_active = await store.claim("invocation-2")
     assert next_active is not None
     assert await store.fail("invocation-2", next_active.attempt)
     failed = await store.get("invocation-2")
     assert failed is not None
-    assert (failed.session_id, failed.queue_order) == ("session-a", 2)
+    assert (failed.session_id, failed.session_sequence_number) == ("session-a", 2)
     assert await store.get(session_id="session-a") is None
 
 

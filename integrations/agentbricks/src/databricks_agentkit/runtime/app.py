@@ -208,20 +208,26 @@ class DurableAgentServer(FastAPI):
             invocation_request["invocation_id"] = invocation_id
         try:
             if body.background:
-                state = await self._runtime.submit(runtime_invocation_id, invocation_request)
+                state = await self._runtime.submit(
+                    runtime_invocation_id, invocation_request, session_id=session_id
+                )
                 execution_owns_auth = registered_auth and state.status == InvocationStatus.QUEUED
                 return JSONResponse(
                     self._accepted_payload(state, stream=body.stream, invocation_id=invocation_id),
                     status_code=202,
                 )
             if body.stream:
-                state = await self._runtime.submit(runtime_invocation_id, invocation_request)
+                state = await self._runtime.submit(
+                    runtime_invocation_id, invocation_request, session_id=session_id
+                )
                 execution_owns_auth = registered_auth and state.status == InvocationStatus.QUEUED
                 return StreamingResponse(
                     self._event_stream(runtime_invocation_id),
                     media_type="text/event-stream",
                 )
-            output = await self._runtime.invoke(runtime_invocation_id, invocation_request)
+            output = await self._runtime.invoke(
+                runtime_invocation_id, invocation_request, session_id=session_id
+            )
             return JSONResponse({"id": invocation_id, "status": "completed", "output": output})
         except InvocationConflictError as exc:
             raise HTTPException(409, "id was already used for another request") from exc
