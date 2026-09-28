@@ -3,7 +3,7 @@
 import json
 import time
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 from unittest.mock import Mock, patch
 
 import mlflow  # noqa: F401
@@ -23,6 +23,7 @@ from langchain_core.messages import (
     ToolMessage,
     ToolMessageChunk,
 )
+from langchain_core.messages.content import create_text_block
 from langchain_core.messages.tool import ToolCallChunk
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables import RunnableBinding, RunnableMap
@@ -764,6 +765,20 @@ def test_convert_tool_message() -> None:
     assert isinstance(converted_back, ToolMessage)
     assert converted_back.content == tool_message.content
     assert converted_back.tool_call_id == tool_message.tool_call_id
+
+
+def test_convert_tool_message_strips_text_block_metadata() -> None:
+    content = cast(list[str | dict[Any, Any]], [create_text_block(text="slack result")])
+    tool_message = ToolMessage(content=content, tool_call_id="call_123")
+
+    result = _convert_message_to_dict(tool_message)
+
+    assert result == {
+        "role": "tool",
+        "content": [{"type": "text", "text": "slack result"}],
+        "tool_call_id": "call_123",
+    }
+    assert tool_message.content == content
 
 
 @pytest.mark.parametrize(
