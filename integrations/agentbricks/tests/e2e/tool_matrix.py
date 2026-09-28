@@ -320,7 +320,8 @@ class Runner:
         if not separator or not catalog or not schema_name or "." in schema_name:
             raise MatrixError("--uc-schema must be a two-part catalog.schema name.")
         self.sql(f"CREATE SCHEMA IF NOT EXISTS `{catalog}`.`{schema_name}`")
-        function_name = f"agentbricks_uc_{uuid.uuid4().hex[:8]}"
+        # Leave room for catalog and schema in the 64-character MCP tool name.
+        function_name = f"ab_uc_{uuid.uuid4().hex[:8]}"
         self.uc_function = f"{catalog}.{schema_name}.{function_name}"
         exposed_tool_name = self.uc_function.replace(".", "__")
         if len(exposed_tool_name) > 64:
