@@ -223,27 +223,13 @@ jobs:
           ref: ${{ matrix.version.ref }}
           fetch-depth: 1
           path: older-version
-      - name: Replace openai with older version
+      - name: Install current core and historical OpenAI integration
         run: |
-          # Remove current openai if it exists to avoid conflicts
-          rm -rf integrations/openai
-
-          # Copy older version of openai to the main repo
-          cp -r older-version/integrations/openai integrations/
-      - name: Install openai dependency
-        run: |
-          pip install . integrations/openai --group dev
+          pip install . older-version/integrations/openai --group dev
           pip check
-      - name: Update legacy MLflow test helper
+      - name: Run maintained compatibility tests
         run: |
-          # Keep the historical assertions with the tracing API required by current core.
-          legacy_test=integrations/openai/tests/unit_tests/test_vector_search_retriever_tool.py
-          test "$(grep -Fxc '    trace = mlflow.get_last_active_trace()' "$legacy_test")" -eq 1
-          sed -i 's/^    trace = mlflow\.get_last_active_trace()$/    mlflow.flush_trace_async_logging()\n    trace = mlflow.get_trace(mlflow.get_last_active_trace_id())/' "$legacy_test"
-      - name: Run tests
-        run: |
-          # Only testing initialization since functionality can change
-          pytest integrations/openai/tests/unit_tests/test_vector_search_retriever_tool.py::test_vector_search_retriever_tool_init
+          pytest -c pyproject.toml integrations/openai/tests/compatibility
 
   llamaindex_test:
     runs-on: ubuntu-latest
