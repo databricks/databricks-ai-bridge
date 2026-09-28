@@ -255,12 +255,13 @@ class DurableAgentServer(FastAPI):
     async def _event_stream(self, invocation_id: str, after: int = 0) -> AsyncIterator[str]:
         cursor = after
         while True:
+            # Read state first so a terminal snapshot's committed events are drained below.
+            state = await self._runtime.get_invocation(invocation_id)
             for event in await self._runtime.get_events(invocation_id, after_sequence=cursor):
                 cursor = event.sequence_number
                 event_type = event.event.get("type", "message")
                 yield f"id: {cursor}\nevent: {event_type}\ndata: {json.dumps(event.event)}\n\n"
 
-            state = await self._runtime.get_invocation(invocation_id)
             if state is None or state.is_terminal:
                 return
             await asyncio.sleep(self._runtime.poll_seconds)
