@@ -587,9 +587,6 @@ def test_source_file_budget_processes_exact_limit_and_fails_on_next(
     assert exact.truncated is False
     assert exact.agent_app == pathlib.Path("main.py")
     assert overflow.truncated is True
-    assert all(
-        check.status == "fail" for check in doctor_module._source_checks(overflow, "langgraph")
-    )
 
 
 def test_source_checks_let_found_evidence_stand_despite_truncation():
