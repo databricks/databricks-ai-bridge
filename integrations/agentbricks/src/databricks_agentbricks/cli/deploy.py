@@ -22,11 +22,11 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 import click
-import yaml
 
 import databricks_agentbricks.lakebase_runtime_store as managed_runtime_store
 import databricks_agentbricks.legacy_lakebase_runtime_store as legacy_runtime_store
 from databricks_agentbricks import render
+from databricks_agentbricks.app_manifest import AppManifest
 from databricks_agentbricks.app_resources import (
     apply_postgres_resources,
     apply_trace_resources,
@@ -150,28 +150,14 @@ def _upsert_manifest_env(
     """
     app_yaml = source / "app.yaml"
     if app_yaml.exists():
-        loaded = yaml.safe_load(app_yaml.read_text())
-        doc: dict[str, Any] = loaded if isinstance(loaded, dict) else {}
+        manifest = AppManifest.parse_lenient(app_yaml.read_text())
         scaffolded = False
     else:
-        doc = {"command": ["# TODO: set your run command, e.g. ['uvicorn', 'app:app']"], "env": []}
+        manifest = AppManifest.scaffold()
         scaffolded = True
 
-    raw_env = doc.get("env")
-    candidates = raw_env if isinstance(raw_env, list) else []
-    env: list[dict[str, Any]] = [entry for entry in candidates if isinstance(entry, dict)]
-    by_name = {e.get("name"): e for e in env if isinstance(e, dict)}
-    for name, value in updates.items():
-        if name in by_name:
-            by_name[name]["value"] = value
-            by_name[name].pop("valueFrom", None)
-        else:
-            env.append({"name": name, "value": value})
-    if removals:
-        drop = set(removals)
-        env = [e for e in env if e.get("name") not in drop]
-    doc["env"] = env
-    app_yaml.write_text(yaml.safe_dump(doc, sort_keys=False))
+    manifest.upsert_env(updates, removals)
+    app_yaml.write_text(manifest.to_yaml())
     return scaffolded
 
 
