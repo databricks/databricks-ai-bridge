@@ -88,6 +88,31 @@ def _run_matrix(argv: list[str]) -> tuple[subprocess.CompletedProcess[str], bool
         return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr), True
 
 
+def _runtime_log_tails(output: pathlib.Path) -> str:
+    log_dir = output / "logs"
+    paths = sorted(log_dir.glob("dev-*.log")) + sorted(log_dir.glob("deploy-*.log"))
+    if not paths:
+        return "(no runtime logs written)"
+
+    excerpts = []
+    for path in paths[:6]:
+        try:
+            with path.open("rb") as log_file:
+                log_file.seek(0, os.SEEK_END)
+                log_file.seek(max(0, log_file.tell() - 6000))
+                tail = log_file.read().decode("utf-8", errors="replace")
+        except OSError as exc:
+            tail = f"(could not read log: {exc})"
+        for credential_name in ("DATABRICKS_CLIENT_SECRET", "DATABRICKS_TOKEN"):
+            credential = os.environ.get(credential_name)
+            if credential:
+                tail = tail.replace(credential, "<redacted>")
+        excerpts.append(f"{path.name} (tail):\n{tail}")
+    if len(paths) > 6:
+        excerpts.append(f"({len(paths) - 6} more logs omitted)")
+    return "\n\n".join(excerpts)
+
+
 def test_tool_matrix_deploy_and_invoke(tmp_path: pathlib.Path) -> None:
     output = tmp_path / "matrix"
     argv = [
@@ -123,5 +148,6 @@ def test_tool_matrix_deploy_and_invoke(tmp_path: pathlib.Path) -> None:
             f"tool_matrix {outcome}\n"
             f"STDOUT (tail):\n{result.stdout[-4000:]}\n"
             f"STDERR (tail):\n{result.stderr[-4000:]}\n"
-            f"evidence (head):\n{detail[:4000]}"
+            f"evidence (head):\n{detail[:4000]}\n"
+            f"runtime logs:\n{_runtime_log_tails(output)}"
         )

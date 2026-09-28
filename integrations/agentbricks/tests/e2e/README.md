@@ -69,3 +69,5 @@ uv run python tests/e2e/tool_matrix.py \
 
 Success is exactly `16 passed, 0 failed, 0 skipped`. Temporary Apps and the UC function receive
 best-effort cleanup even on failure. Pass `--keep-resources` while debugging.
+If the gated nightly test fails, its pytest output includes bounded tails of the dev and deploy
+logs so runtime exceptions are visible without accessing the runner's temporary files.
