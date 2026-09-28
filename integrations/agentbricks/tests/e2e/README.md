@@ -38,7 +38,9 @@ uv run python tests/e2e/tool_matrix.py \
 
 The profile must identify a workspace with Databricks Apps, `system.ai.sandbox`,
 `system.ai.web_search`, and permission to create a schema/function. The suite discovers and starts
-a SQL warehouse. Override its defaults with `--warehouse-id` or `--uc-schema catalog.schema`.
+a SQL warehouse. The dev identity and the deployed Apps must also be able to call the template's
+Unity Gateway model without hitting a blocking budget. Override the suite's defaults with
+`--warehouse-id` or `--uc-schema catalog.schema`.
 Deployed Databricks Apps accept programmatic calls under `/api/*` with OAuth Bearer tokens. If the
 workspace profile uses a PAT, pass an OAuth profile for the same workspace with
 `--app-auth-profile`.
@@ -70,4 +72,6 @@ uv run python tests/e2e/tool_matrix.py \
 Success is exactly `16 passed, 0 failed, 0 skipped`. Temporary Apps and the UC function receive
 best-effort cleanup even on failure. Pass `--keep-resources` while debugging.
 If the gated nightly test fails, its pytest output includes bounded tails of the dev and deploy
-logs so runtime exceptions are visible without accessing the runner's temporary files.
+logs so runtime exceptions are visible without accessing the runner's temporary files. For failed
+deployed cases, the matrix fetches the App's recent runtime logs before deleting it and records
+their paths in `evidence.json`; the pytest failure prioritizes those App log tails.

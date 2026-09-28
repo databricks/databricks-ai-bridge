@@ -42,6 +42,21 @@ def test_runtime_log_tails_bounds_number_of_logs(tmp_path: pathlib.Path) -> None
     assert "(1 more logs omitted)" in tails
 
 
+def test_runtime_log_tails_prioritizes_deployed_app_errors(tmp_path: pathlib.Path) -> None:
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    for index in range(7):
+        (logs / f"dev-{index}.log").write_text(f"dev log {index}\n", encoding="utf-8")
+    (logs / "deploy-runtime-langgraph-cli.log").write_text(
+        "App invocation traceback\n", encoding="utf-8"
+    )
+
+    tails = _runtime_log_tails(tmp_path)
+
+    assert "deploy-runtime-langgraph-cli.log (tail):" in tails
+    assert "App invocation traceback" in tails
+
+
 def test_runtime_log_tails_redacts_workspace_secret(tmp_path: pathlib.Path, monkeypatch) -> None:
     monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "synthetic-test-secret")
     logs = tmp_path / "logs"

@@ -568,6 +568,50 @@ class Runner:
             self._exercise(case, "deploy", url, self.headers, log_path, app_name=case.app_name)
         except Exception as exc:
             self._record_runtime_failure(case, "deploy", exc, log_path, case.app_name)
+        finally:
+            failed_rows = [
+                row
+                for row in self.rows
+                if row.framework == case.framework
+                and row.authoring == case.authoring
+                and row.runtime == "deploy"
+                and row.status == "fail"
+            ]
+            if failed_rows:
+                app_log_path = self._capture_app_logs(case)
+                if app_log_path is not None:
+                    for row in failed_rows:
+                        row.artifact_paths.append(str(app_log_path))
+                    self._write_evidence()
+
+    def _capture_app_logs(self, case: ProjectCase) -> pathlib.Path | None:
+        log_path = self.output / "logs" / f"deploy-runtime-{case.framework}-{case.authoring}.log"
+        try:
+            result = self.run(
+                [
+                    "databricks",
+                    "apps",
+                    "logs",
+                    case.app_name,
+                    "--tail-lines",
+                    "200",
+                    *self._profile_args(),
+                ],
+                timeout=120,
+                log=False,
+                check=False,
+            )
+            content = result.stdout if result.returncode == 0 else result.stderr or result.stdout
+        except Exception as exc:
+            content = f"Could not retrieve App logs: {exc}\n"
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text(content, encoding="utf-8")
+        except OSError as exc:
+            self.transcript.write(f"App runtime log capture warning for {case.app_name}: {exc}")
+            return None
+        self.transcript.write(f"App runtime logs captured: {log_path}")
+        return log_path
 
     def _wait_for_app(self, name: str) -> dict[str, Any]:
         started = time.monotonic()

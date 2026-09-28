@@ -90,7 +90,12 @@ def _run_matrix(argv: list[str]) -> tuple[subprocess.CompletedProcess[str], bool
 
 def _runtime_log_tails(output: pathlib.Path) -> str:
     log_dir = output / "logs"
-    paths = sorted(log_dir.glob("dev-*.log")) + sorted(log_dir.glob("deploy-*.log"))
+    app_logs = sorted(log_dir.glob("deploy-runtime-*.log"))
+    paths = (
+        app_logs
+        + sorted(log_dir.glob("dev-*.log"))
+        + [path for path in sorted(log_dir.glob("deploy-*.log")) if path not in app_logs]
+    )
     if not paths:
         return "(no runtime logs written)"
 
