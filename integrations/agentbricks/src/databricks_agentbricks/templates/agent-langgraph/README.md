@@ -119,9 +119,7 @@ When deployment provisions a dedicated Runtime Store, only the app-owned
 deployments use their own default schema.
 
 To pin a session to one app replica, send the session id in the `X-Routing-Key` request header on
-every call; PoP-proxy routes on it and it takes precedence over the legacy
-`__Host-databricks-app-router` cookie. It is not authentication and is not used as the template's
-application session ID.
+every call. It is not authentication and is not used as the template's application session ID.
 
 # Request-user authorization
 

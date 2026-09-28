@@ -159,6 +159,18 @@ def test_demo_ui_routes(monkeypatch):
     assert "/api/demo/sessions/${encodeURIComponent(sessionId)}/open" in app_script.text
     assert "session_id: sessionId" in app_script.text
     assert 'fetch("/api/invocations"' in app_script.text
+    # Routing key: a shared helper composed into both the submit POST and the background poll
+    # GET, so every replica-scoped request is pinned to the session that started it.
+    assert "function routingHeaders()" in app_script.text
+    assert 'if (state.sessionId) headers["X-Routing-Key"] = state.sessionId;' in app_script.text
+    assert 'return { "Content-Type": "application/json", ...routingHeaders() };' in app_script.text
+    assert (
+        "fetch(`/api/invocations/${encodeURIComponent(invocationId)}`, {\n"
+        '      cache: "no-store",\n'
+        '      credentials: "same-origin",\n'
+        "      headers: routingHeaders(),\n"
+        "    })"
+    ) in app_script.text
     styles = client.get("/ui-assets/styles.css").text
     assert "@media (min-width: 1181px)" in styles
     assert "scrollbar-gutter: stable" in styles

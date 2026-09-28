@@ -592,14 +592,15 @@ function handleOutput(output) {
   }
 }
 
-function invocationHeaders() {
-  const headers = {
-    "Content-Type": "application/json",
-  };
-  // PoP-proxy pins a request to one app replica via this header; omit it rather than
-  // send a blank value, which PoP-proxy rejects with 400.
+function routingHeaders() {
+  const headers = {};
+  // Populate the session_id as the routing key for sticky routing
   if (state.sessionId) headers["X-Routing-Key"] = state.sessionId;
   return headers;
+}
+
+function invocationHeaders() {
+  return { "Content-Type": "application/json", ...routingHeaders() };
 }
 
 function invocationPayload(payload, transport = {}) {
@@ -1033,6 +1034,7 @@ async function pollBackground(invocationId) {
     const response = await fetch(`/api/invocations/${encodeURIComponent(invocationId)}`, {
       cache: "no-store",
       credentials: "same-origin",
+      headers: routingHeaders(),
     });
     const result = await jsonResponse(response);
     addEvent("background.poll", result);

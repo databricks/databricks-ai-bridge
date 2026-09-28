@@ -37,7 +37,7 @@ drops the configured default. Transient list failures are retried in
 The UI reads local history from the LangGraph checkpoint and managed history from Session Store
 items. It keeps a stable application session UUID in browser local storage, includes it inside
 every durable invocation's `input`, and sends it on every call in the `X-Routing-Key` request
-header so PoP-proxy can pin the session to one app replica; each turn gets a separate invocation
+header to ensure sticky routing; each turn gets a separate invocation
 UUID.
 
 The Sessions card creates new session UUIDs in the browser. With a managed Session Store,
