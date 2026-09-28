@@ -1,7 +1,7 @@
 # OpenAI Agents template
 
 An OpenAI Agents SDK agent served by `databricks_agentkit.DurableAgentServer`. The managed runtime keeps invocation state and
-events in memory during `ab dev`. Deployment attaches a persistent Runtime Store, so invocation
+events in memory during `agentbricks dev`. Deployment attaches a persistent Runtime Store, so invocation
 state and events survive process loss and interrupted work can be recovered.
 
 The generated project separates portable agent execution from the managed HTTP protocol:
@@ -23,7 +23,7 @@ mapping changes needed in `runtime/adapter.py`.
 ## Run locally
 
 ```bash
-ab dev
+agentbricks dev
 ```
 
 The API is available at `http://localhost:8000/api/invocations`. Every request supplies a UUID `id`.
@@ -101,19 +101,19 @@ remain at-least-once and must be idempotent.
 
 The browser UI is included by default. It generates a stable application session ID in local
 storage, places it inside each invocation's `input`, and generates a fresh invocation UUID per turn.
-Use `ab init --framework openai --disable-chat-app` for API-only output.
+Use `agentbricks init --framework openai --disable-chat-app` for API-only output.
 
 ## Configure and deploy
 
 - Change the model, instructions, tools, and framework-native execution in `agent/agent.py`.
 - Change `runtime/adapter.py` only to map a different application input/output contract.
 - Add local tools under `agent/tools/`; modules are auto-discovered.
-- Add MCP servers in `agent/mcps.py` or with `ab tools add mcp`.
-- Bind long-term memory with `ab memory bind <store>`.
-- Bind durable transcript history with `ab sessions bind <store>`.
+- Add MCP servers in `agent/mcps.py` or with `agentbricks tools add mcp`.
+- Bind long-term memory with `agentbricks memory bind <store>`.
+- Bind durable transcript history with `agentbricks sessions bind <store>`.
 
 ```bash
-ab --profile <profile> deploy agent-openai --source .
+agentbricks --profile <profile> deploy agent-openai --source .
 ```
 
 When deployment provisions a dedicated Runtime Store, only the app-owned

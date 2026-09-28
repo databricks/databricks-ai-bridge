@@ -1,4 +1,4 @@
-"""`ab` — the Databricks CLI for agent deployment, memory, and sessions.
+"""`agentbricks` — the Databricks CLI for agent deployment, memory, and sessions.
 
 Root Click group. Global `--profile` and `--output` flow to every subcommand via
 `CliContext` on `ctx.obj`; subcommands build an authenticated API client on demand.
@@ -38,7 +38,7 @@ class CliContext:
         return self._client
 
 
-@click.group(name="ab", context_settings={"help_option_names": ["-h", "--help"]})
+@click.group(name="agentbricks", context_settings={"help_option_names": ["-h", "--help"]})
 @click.option(
     "--profile", "-p", default=None, help="~/.databrickscfg profile to authenticate with."
 )
@@ -63,7 +63,7 @@ def agentbricks(ctx: click.Context, profile: Optional[str], output: str) -> None
     authenticated command.
 
     New here? The examples below take you from an empty directory to a deployed agent. Agent Bricks
-    authenticates with a Databricks profile: run `ab login` once to save a default, or pass
+    authenticates with a Databricks profile: run `agentbricks login` once to save a default, or pass
     --profile / -p (without one, the Databricks SDK's default authentication is used).
 
     Agents built with Agent Bricks combine the platform's capabilities:
@@ -78,7 +78,7 @@ def agentbricks(ctx: click.Context, profile: Optional[str], output: str) -> None
       Tracing      MLflow traces in Unity Catalog to debug and evaluate runs.
       Deployment   Hosting on Databricks Apps, with scaling and sticky routing.
 
-    `ab deploy` provisions and wires these into a single agent hosted on Databricks Apps.
+    `agentbricks deploy` provisions and wires these into a single agent hosted on Databricks Apps.
     """
     # Let errors render to match the selected output mode (JSON errors for -o json).
     errors.set_output_mode(output)
@@ -100,7 +100,7 @@ configure_help(agentbricks)
 
 
 def main() -> None:
-    # Click derives the display name from argv[0] so the `ab` script is shown in help output.
+    # Click derives the display name from argv[0] so the `agentbricks` script is shown in help output.
     agentbricks()
 
 

@@ -148,8 +148,8 @@ class _AgentBricksApiClient:
         except Exception as exc:  # noqa: BLE001 - surfaced as a clean CLI error
             raise AgentCliError(
                 f"Could not initialize Databricks auth: {exc}",
-                hint="Select an existing profile with `ab --profile <name> <command>` "
-                "or authenticate and save it with `ab login --profile <name>`.",
+                hint="Select an existing profile with `agentbricks --profile <name> <command>` "
+                "or authenticate and save it with `agentbricks login --profile <name>`.",
             ) from exc
 
     @property

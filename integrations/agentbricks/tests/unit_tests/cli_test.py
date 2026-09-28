@@ -1,4 +1,4 @@
-"""Unit tests for the ab command tree and its help-discovery contract."""
+"""Unit tests for the agentbricks command tree and its help-discovery contract."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ def _command_paths(group: click.Group, prefix: tuple[str, ...] = ()):
 
 def test_sessions_verbs_are_flat_no_redundant_subgroup():
     names = set(cli.sessions.commands)
-    # Session verbs are direct subcommands of `sessions` (no `ab sessions sessions`).
+    # Session verbs are direct subcommands of `sessions` (no `agentbricks sessions sessions`).
     assert {"create", "list", "get", "update", "delete", "fork"} <= names
     assert "sessions" not in names
     # Sub-resources remain their own groups.
@@ -47,15 +47,15 @@ def test_root_registers_supported_commands():
     assert "add-sandbox" not in names
 
 
-def test_root_command_name_and_version_default_to_ab():
+def test_root_command_name_and_version_default_to_agentbricks():
     runner = CliRunner()
     help_result = runner.invoke(cli.agentbricks, ["--help"])
     version_result = runner.invoke(cli.agentbricks, ["--version"])
 
     assert help_result.exit_code == 0, help_result.output
-    assert help_result.output.startswith("Usage: ab ")
+    assert help_result.output.startswith("Usage: agentbricks ")
     assert version_result.exit_code == 0, version_result.output
-    assert version_result.output.startswith("ab, version ")
+    assert version_result.output.startswith("agentbricks, version ")
 
 
 def test_root_help_describes_the_product_and_links_out():
@@ -90,10 +90,10 @@ def test_nested_command_help_shows_usage_options_and_examples():
     result = CliRunner().invoke(cli.agentbricks, ["tools", "add", "sandbox", "--help"])
 
     assert result.exit_code == 0, result.output
-    assert "Usage: ab tools add sandbox [OPTIONS]" in result.output
+    assert "Usage: agentbricks tools add sandbox [OPTIONS]" in result.output
     assert "--scope TEXT" in result.output
     assert "EXAMPLES" in result.output
-    assert "ab tools add sandbox --scope table:samples.nyctaxi.trips" in result.output
+    assert "agentbricks tools add sandbox --scope table:samples.nyctaxi.trips" in result.output
 
 
 def test_tools_help_explains_add_workflow():
@@ -105,9 +105,9 @@ def test_tools_help_explains_add_workflow():
     # written directly in the project — see #509 upstream — so they are not a `tools add` type).
     for tool_type in ("sandbox", "mcp", "uc-function"):
         assert tool_type in result.output
-    assert "ab tools add --help" in result.output
-    assert "ab tools add mcp system.ai.web_search" in result.output
-    assert "ab tools remove mcp system.ai.web_search" in result.output
+    assert "agentbricks tools add --help" in result.output
+    assert "agentbricks tools add mcp system.ai.web_search" in result.output
+    assert "agentbricks tools remove mcp system.ai.web_search" in result.output
     assert "system.ai.python_exec" not in result.output
 
 
@@ -115,10 +115,10 @@ def test_tools_remove_help_shows_id_and_project_targeting():
     result = CliRunner().invoke(cli.agentbricks, ["tools", "remove", "--help"])
 
     assert result.exit_code == 0, result.output
-    assert "Usage: ab tools remove [OPTIONS] TOOL_ID [MCP_SERVICE]" in result.output
+    assert "Usage: agentbricks tools remove [OPTIONS] TOOL_ID [MCP_SERVICE]" in result.output
     assert "--source DIRECTORY" in result.output
-    assert "ab tools remove mcp system.ai.web_search" in result.output
-    assert "ab tools remove web_search" in result.output
+    assert "agentbricks tools remove mcp system.ai.web_search" in result.output
+    assert "agentbricks tools remove web_search" in result.output
     assert "system.ai.python_exec" not in result.output
 
 
@@ -129,15 +129,15 @@ def test_tools_add_help_explains_types_and_project_targeting():
     assert "Subcommands target the current directory by default" in result.output
     assert "Pass --source PATH to target another project." in result.output
     for example in (
-        "ab tools add sandbox --scope table:samples.nyctaxi.trips",
-        "ab tools add mcp system.ai.web_search",
-        "ab tools add uc-function catalog.schema.lookup_ticket",
+        "agentbricks tools add sandbox --scope table:samples.nyctaxi.trips",
+        "agentbricks tools add mcp system.ai.web_search",
+        "agentbricks tools add uc-function catalog.schema.lookup_ticket",
     ):
         assert example in result.output
     assert "system.ai.python_exec" not in result.output
-    # `ab tools add python` was removed (Python tools are code-first); the subcommand must not be
+    # `agentbricks tools add python` was removed (Python tools are code-first); the subcommand must not be
     # advertised. Checked as the command invocation, not a bare "python" substring.
-    assert "ab tools add python" not in result.output
+    assert "agentbricks tools add python" not in result.output
     assert "\n  python " not in result.output  # no `python` row in the add-group command list
 
 
@@ -145,19 +145,19 @@ def test_help_examples_recommend_the_default_happy_path():
     runner = CliRunner()
     expected_examples = {
         (): (
-            "ab login --profile <profile>",
-            "ab init my-agent",
+            "agentbricks login --profile <profile>",
+            "agentbricks init my-agent",
             "cd my-agent",
-            "ab dev",
-            "ab deploy my-agent",
+            "agentbricks dev",
+            "agentbricks deploy my-agent",
         ),
-        ("init",): ("ab init my-agent",),
-        ("dev",): ("ab dev",),
+        ("init",): ("agentbricks init my-agent",),
+        ("dev",): ("agentbricks dev",),
         ("memory",): (
-            "ab memory stores create --display-name agent-memory",
-            "ab memory bind agent-memory",
+            "agentbricks memory stores create --display-name agent-memory",
+            "agentbricks memory bind agent-memory",
         ),
-        ("deploy",): ("ab deploy my-agent",),
+        ("deploy",): ("agentbricks deploy my-agent",),
     }
 
     for path, examples in expected_examples.items():
@@ -184,10 +184,10 @@ def test_root_examples_render_inline_comments():
     result = CliRunner().invoke(cli.agentbricks, ["--help"])
 
     assert result.exit_code == 0, result.output
-    assert "ab init my-agent" in result.output
+    assert "agentbricks init my-agent" in result.output
     assert "# scaffold a new agent project" in result.output
     # inline: command and its comment on the same line
-    line = next(ln for ln in result.output.splitlines() if "ab init my-agent" in ln)
+    line = next(ln for ln in result.output.splitlines() if "agentbricks init my-agent" in ln)
     assert "# scaffold a new agent project" in line
 
 
@@ -203,25 +203,27 @@ def test_inline_comments_are_column_aligned():
 def test_long_commands_stack_the_comment_above():
     # A command too long to inline puts its comment on the preceding line so nothing wraps.
     epilog = help_mod._example_epilog(
-        (("ab x " + "y" * help_mod._INLINE_COMMENT_MAX, "does a long thing"),)
+        (("agentbricks x " + "y" * help_mod._INLINE_COMMENT_MAX, "does a long thing"),)
     )
     lines = [click.unstyle(ln) for ln in epilog.splitlines()]  # drop the graying color codes
     comment_i = next(i for i, ln in enumerate(lines) if "# does a long thing" in ln)
     # comment sits on its own line, immediately above the command
     assert lines[comment_i].strip() == "# does a long thing"
-    assert lines[comment_i + 1].strip().startswith("ab x")
+    assert lines[comment_i + 1].strip().startswith("agentbricks x")
 
 
 def test_group_comment_layout_is_uniform():
     # If any command in a group must stack, the whole group stacks (no mixed inline/stacked).
     epilog = help_mod._example_epilog(
         (
-            ("ab short", "inline-able"),
-            ("ab " + "z" * help_mod._INLINE_COMMENT_MAX, "forces stacking"),
+            ("agentbricks short", "inline-able"),
+            ("agentbricks " + "z" * help_mod._INLINE_COMMENT_MAX, "forces stacking"),
         )
     )
     # no command line carries a trailing inline comment
-    assert not any(ln.strip().startswith("ab") and " # " in ln for ln in epilog.splitlines())
+    assert not any(
+        ln.strip().startswith("agentbricks") and " # " in ln for ln in epilog.splitlines()
+    )
 
 
 def test_memory_search_uses_canonical_page_size_option():
@@ -252,9 +254,9 @@ def test_unknown_command_suggests_close_match():
 
 
 def test_doubled_invocation_is_named_directly():
-    result = CliRunner().invoke(cli.agentbricks, ["ab", "login"])
+    result = CliRunner().invoke(cli.agentbricks, ["agentbricks", "login"])
     assert result.exit_code != 0
-    assert "you typed `ab` twice" in result.output
+    assert "you typed `agentbricks` twice" in result.output
 
 
 def test_unknown_nested_command_suggests_within_group():
@@ -273,23 +275,23 @@ def test_bad_option_uses_diagnostic_grammar():
     # assert on the parts we own: the `error:` keyword, the offending option, and the `help:` line.
     assert "error: No such option" in result.output
     assert "--nope" in result.output
-    assert "help: run `ab init --help`" in result.output
+    assert "help: run `agentbricks init --help`" in result.output
     # Not Click's default framing.
-    assert "Try 'ab" not in result.output
+    assert "Try 'agentbricks" not in result.output
 
 
 def test_missing_argument_uses_diagnostic_grammar():
     result = CliRunner().invoke(cli.agentbricks, ["memory", "stores", "get"])
     assert result.exit_code != 0
     assert "error: Missing argument" in result.output
-    assert "help: run `ab memory stores get --help`" in result.output
+    assert "help: run `agentbricks memory stores get --help`" in result.output
 
 
 def test_unknown_command_without_close_match_points_to_help():
     result = CliRunner().invoke(cli.agentbricks, ["zzzzz"])
     assert result.exit_code != 0
     assert "unknown command `zzzzz`" in result.output
-    assert "ab --help" in result.output
+    assert "agentbricks --help" in result.output
 
 
 def test_root_help_shows_numbered_getting_started_path():
@@ -302,9 +304,9 @@ def test_root_help_shows_numbered_getting_started_path():
     block = block[: block.index("Not authenticated")]
     numbered = [ln.strip() for ln in block.splitlines() if ln.strip()[:1].isdigit()]
     # The path is numbered and ordered: login (1) → init (2) → cd (3) → dev (4) → deploy (5).
-    assert numbered[0].startswith("1") and "ab login --profile" in numbered[0]
-    assert numbered[1].startswith("2") and "ab init my-agent" in numbered[1]
-    assert numbered[4].startswith("5") and "ab deploy my-agent" in numbered[4]
+    assert numbered[0].startswith("1") and "agentbricks login --profile" in numbered[0]
+    assert numbered[1].startswith("2") and "agentbricks init my-agent" in numbered[1]
+    assert numbered[4].startswith("5") and "agentbricks deploy my-agent" in numbered[4]
 
 
 def test_help_dims_headings_and_descriptions_not_names():
@@ -312,7 +314,7 @@ def test_help_dims_headings_and_descriptions_not_names():
     # while command/option names keep full intensity. Assert on the raw ANSI (color forced on).
     import click
 
-    ctx = cli.agentbricks.make_context("ab", [], resilient_parsing=True)
+    ctx = cli.agentbricks.make_context("agentbricks", [], resilient_parsing=True)
     ctx.color = True
     raw = cli.agentbricks.get_help(ctx)
     dim = "\x1b[2m"  # SGR 2 = faint/dim, adaptive to the terminal's own foreground
@@ -343,14 +345,14 @@ def test_epilog_headings_align_flush_left_with_sections():
         line = next(ln for ln in lines if ln.strip() == name)
         assert indent(line) == 0, (name, line)
     # A numbered getting-started row aligns with an OPTIONS/command row at column 2.
-    row = next(ln for ln in lines if ln.strip().startswith("1  ab login"))
+    row = next(ln for ln in lines if ln.strip().startswith("1  agentbricks login"))
     assert indent(row) == 2, row
 
 
 def test_root_help_dims_capability_descriptions_but_not_labels_or_prose():
     import click
 
-    ctx = cli.agentbricks.make_context("ab", [], resilient_parsing=True)
+    ctx = cli.agentbricks.make_context("agentbricks", [], resilient_parsing=True)
     ctx.color = True
     raw = cli.agentbricks.get_help(ctx)
     dim = "\x1b[2m"

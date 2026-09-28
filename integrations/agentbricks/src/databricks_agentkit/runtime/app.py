@@ -48,7 +48,7 @@ class _InvocationRequest(BaseModel):
 class DurableAgentServer(FastAPI):
     """Expose agent handlers through the Agent Bricks invocation HTTP protocol.
 
-    ``ab dev`` selects a process-local Runtime Store. A deployed Agent Bricks server receives a
+    ``agentbricks dev`` selects a process-local Runtime Store. A deployed Agent Bricks server receives a
     Lakebase-backed Runtime Store, which preserves invocation state and can recover stale work when
     a handler is registered with :meth:`recover`.
     """
@@ -258,12 +258,13 @@ class DurableAgentServer(FastAPI):
     async def _event_stream(self, invocation_id: str, after: int = 0) -> AsyncIterator[str]:
         cursor = after
         while True:
+            # Read state first so a terminal snapshot's committed events are drained below.
+            state = await self._runtime.get_invocation(invocation_id)
             for event in await self._runtime.get_events(invocation_id, after_sequence=cursor):
                 cursor = event.sequence_number
                 event_type = event.event.get("type", "message")
                 yield f"id: {cursor}\nevent: {event_type}\ndata: {json.dumps(event.event)}\n\n"
 
-            state = await self._runtime.get_invocation(invocation_id)
             if state is None or state.is_terminal:
                 return
             await asyncio.sleep(self._runtime.poll_seconds)

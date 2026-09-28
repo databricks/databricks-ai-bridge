@@ -751,7 +751,7 @@ function renderMemoryCards(entries, query) {
 
 async function loadMemory() {
   if (!state.config?.memory.enabled) {
-    memoryMessage("Connect a Memory Store to browse entries: ab memory bind <store-name>");
+    memoryMessage("Connect a Memory Store to browse entries: agentbricks memory bind <store-name>");
     return;
   }
   const query = memoryState.query.trim();
@@ -1239,7 +1239,7 @@ async function loadConfig() {
       config.session.managed
         ? `Connected to Session Store "${config.session.store}" for actor ${config.session.actor}. State is durable and shareable.`
         : "Session state is kept in process and resets when the app restarts.",
-      config.session.managed ? null : "ab sessions bind <store-name>",
+      config.session.managed ? null : "agentbricks sessions bind <store-name>",
     );
     setCapability(
       elements.memoryStatus,
@@ -1247,7 +1247,7 @@ async function loadConfig() {
       config.memory.enabled
         ? `Connected to ${config.memory.store} for actor ${config.memory.actor}.`
         : "No long-term memory is connected.",
-      config.memory.enabled ? null : "ab memory bind <store-name>",
+      config.memory.enabled ? null : "agentbricks memory bind <store-name>",
     );
     elements.tracingMode.textContent = config.tracing?.enabled ? "Connected" : "Not configured";
     setCapability(
@@ -1256,7 +1256,7 @@ async function loadConfig() {
       config.tracing?.enabled
         ? "Every run is traced to an MLflow experiment."
         : "Tracing is off. Set an MLflow destination and experiment to record traces.",
-      config.tracing?.enabled ? null : "ab tracing bind --experiment-name <path>",
+      config.tracing?.enabled ? null : "agentbricks tracing bind --experiment-name <path>",
       config.tracing?.enabled && config.tracing?.url
         ? { href: config.tracing.url, label: "View traces in MLflow" }
         : null,

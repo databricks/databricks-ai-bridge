@@ -1,4 +1,4 @@
-"""`ab memory` — manage workspace-scoped managed memory stores and entries."""
+"""`agentbricks memory` — manage workspace-scoped managed memory stores and entries."""
 
 from __future__ import annotations
 
@@ -62,7 +62,7 @@ def memory() -> None:
 
     Memory is what an agent remembers across separate conversations — durable facts and
     preferences (for example "prefers concise answers", or a saved profile detail), as opposed to
-    the turn-by-turn history of a single conversation (that is `ab sessions`).
+    the turn-by-turn history of a single conversation (that is `agentbricks sessions`).
 
     A memory store is the managed store that holds this memory; each entry is a small document (a
     path plus its content) partitioned by actor, so one store keeps every user's memories separate.
@@ -99,7 +99,7 @@ def _source_option(function):
 def memory_bind(obj, store: str, source: pathlib.Path) -> None:
     """Bind memory STORE to the agent by declaring it in agent.toml.
 
-    This only edits agent.toml — it does not create the store. `ab deploy` creates any declared
+    This only edits agent.toml — it does not create the store. `agentbricks deploy` creates any declared
     store that doesn't exist yet and grants the deployed app's service principal access to it.
     """
     from databricks_agentbricks.agent_project import AgentProject
@@ -115,11 +115,11 @@ def memory_bind(obj, store: str, source: pathlib.Path) -> None:
         fields={"agent.toml": str(project.path)},
         next_steps=[
             (
-                f"ab memory stores create --name {store}",
+                f"agentbricks memory stores create --name {store}",
                 "Create the store now without deploying",
             ),
-            ("ab dev", "Re-run to pick up the store locally"),
-            ("ab deploy <name>", "Create it if missing and grant the app access"),
+            ("agentbricks dev", "Re-run to pick up the store locally"),
+            ("agentbricks deploy <name>", "Create it if missing and grant the app access"),
         ],
     )
 
@@ -131,7 +131,7 @@ def memory_unbind(obj, source: pathlib.Path) -> None:
     """Remove the memory store binding from the agent's agent.toml.
 
     Only edits agent.toml; the managed store itself is untouched (delete it with
-    `ab memory stores delete`).
+    `agentbricks memory stores delete`).
     """
     from databricks_agentbricks.agent_project import AgentProject
 
@@ -163,9 +163,9 @@ curl -X POST "{obj.client().host}/api/2.0/agents/{name}/entries" \\
             "agentbricks",
             "bash",
             f"""
-ab memory entries create --store {store_id} \\
+agentbricks memory entries create --store {store_id} \\
   --actor-id alice --path /preferences/style.md --content "Terse, code first."
-ab memory entries search --store {store_id} --actor-id alice --query "style"
+agentbricks memory entries search --store {store_id} --actor-id alice --query "style"
 """,
         ),
     ]
@@ -223,12 +223,12 @@ def stores_create(obj, display_name, description) -> None:
         fields={"Store ID": store_id, "Name": field(data, "name")},
         next_steps=[
             (
-                f"ab memory entries create --store {store_id} --actor-id <id> --path </p>",
+                f"agentbricks memory entries create --store {store_id} --actor-id <id> --path </p>",
                 "Add a memory entry for an actor",
             ),
-            (f"ab memory stores get {store_id}", "View this store's details"),
+            (f"agentbricks memory stores get {store_id}", "View this store's details"),
             (
-                f"ab memory bind {display_name}",
+                f"agentbricks memory bind {display_name}",
                 "Bind this store to the agent (wired in on dev/deploy)",
             ),
         ],

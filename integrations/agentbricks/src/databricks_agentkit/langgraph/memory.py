@@ -32,7 +32,7 @@ def memory_tools(actor: str, store: str | None = None) -> list[BaseTool]:
     """The long-term-memory tools for ``actor`` when a memory store is configured, else none.
 
     The store resolves ``store`` arg → ``AGENT_MEMORY_STORE`` env → the ``[memory_store]`` binding in
-    agent.toml (`ab memory bind`) → none (no tools). ``actor`` partitions the store; it is captured
+    agent.toml (`agentbricks memory bind`) → none (no tools). ``actor`` partitions the store; it is captured
     in the tools' closures (not exposed to the model). Call this per request with the identity whose
     memory to use (e.g. the signed-in user).
     """

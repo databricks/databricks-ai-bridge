@@ -48,7 +48,7 @@ def session_store(
 
     In-memory ``SQLiteSession`` by default; a durable ``DatabricksSessionStore`` when a managed store
     is configured. The store name resolves ``store`` arg → ``AGENT_SESSION_STORE`` env → the
-    ``[session_store]`` binding in agent.toml (`ab sessions bind`) → none. ``actor`` partitions the
+    ``[session_store]`` binding in agent.toml (`agentbricks sessions bind`) → none. ``actor`` partitions the
     durable store — the caller supplies it (typically the signed-in user), so each user's transcripts
     stay separate; it defaults to ``session_id`` and is ignored by the in-memory store.
     """

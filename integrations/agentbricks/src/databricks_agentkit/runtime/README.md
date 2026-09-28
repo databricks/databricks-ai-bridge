@@ -25,29 +25,29 @@ attempt after failure recovery stops before agent code runs because the original
 longer available.
 
 **Your own server (`server = "custom"`).** Keep your existing HTTP server, or scaffold a minimal
-FastAPI server with `ab init --server custom`. You own the endpoints, request and response
-formats, and execution behavior. `ab dev` and `ab deploy` still run and deploy the project;
+FastAPI server with `agentbricks init --server custom`. You own the endpoints, request and response
+formats, and execution behavior. `agentbricks dev` and `agentbricks deploy` still run and deploy the project;
 the managed runtime does not provision a Runtime Store for it.
 
 ## From a new agent to a deployed endpoint
 
 ```bash
-ab init my-agent --framework langgraph --server agentbricks --profile <profile>
+agentbricks init my-agent --framework langgraph --server agentbricks --profile <profile>
 cd my-agent
-ab dev
+agentbricks dev
 # Stop the local server when ready to deploy.
-ab --profile <profile> deploy my-agent
+agentbricks --profile <profile> deploy my-agent
 ```
 
 Use `--framework openai` for OpenAI Agents. Managed-server templates include a chat UI and tests;
 pass `--disable-chat-app` for an API-only project.
 
-1. **Initialize:** `ab init` generates the agent code and runtime adapter separately. It records
+1. **Initialize:** `agentbricks init` generates the agent code and runtime adapter separately. It records
    the server choice and default `my-agent-memory` / `my-agent-session` bindings in `agent.toml`.
-2. **Develop:** Edit your model, prompts, and tools in `agent/`. `ab dev` runs the project locally.
+2. **Develop:** Edit your model, prompts, and tools in `agent/`. `agentbricks dev` runs the project locally.
    Synchronous, streaming, and background requests use the same Runtime for both authorization
    policies.
-3. **Deploy:** `ab deploy` creates or reuses the declared Session and Memory Stores, grants the
+3. **Deploy:** `agentbricks deploy` creates or reuses the declared Session and Memory Stores, grants the
    app's service principal access, configures tracing, and deploys the app. For a managed server,
    it also creates or reuses the deployment's Runtime Store.
 
@@ -71,12 +71,12 @@ experiment_name = "/Shared/agentbricks_traces/my-agent"
 ```
 
 Override store names at initialization with `--memory-store` and `--session-store`, or later with
-`ab memory bind <name>` and `ab sessions bind <name>`. Custom-server templates declare these
+`agentbricks memory bind <name>` and `agentbricks sessions bind <name>`. Custom-server templates declare these
 stores only when explicitly requested. Tracing is bound by experiment **name** (its presence turns
-tracing on); rebind or clear it with `ab tracing bind --experiment-name <path>` / `ab tracing
+tracing on); rebind or clear it with `agentbricks tracing bind --experiment-name <path>` / `agentbricks tracing
 unbind`.
 
-Use `ab deployments list`, `get`, `logs`, `start`, `stop`, and `delete` to manage deployed apps.
+Use `agentbricks deployments list`, `get`, `logs`, `start`, `stop`, and `delete` to manage deployed apps.
 See the [CLI documentation](../../../README.md#commands) for command options.
 
 ## Connect your agent to the runtime
@@ -154,13 +154,13 @@ flowchart LR
 
 ### Local development
 
-`ab dev` supports the same invocation APIs with an **In-process Runtime Store**. Run state,
+`agentbricks dev` supports the same invocation APIs with an **In-process Runtime Store**. Run state,
 events, and results are lost when the serving process exits. Interrupted work is not automatically
 restarted. Session and Memory Store persistence is separate from this local execution state.
 
 ### Deployed execution
 
-`ab deploy` provisions a dedicated PostgreSQL database for each deployment with `server = "agentbricks"` and
+`agentbricks deploy` provisions a dedicated PostgreSQL database for each deployment with `server = "agentbricks"` and
 reuses it on redeployment. Results and events survive worker restarts, and any replica can serve
 polling and stream-reconnection requests. With a recovery handler registered, the runtime detects stale
 heartbeats and starts a replacement attempt on an available worker.
@@ -178,7 +178,7 @@ create or bind it separately. Session and Memory Stores are independently named 
 can be shared intentionally between agents.
 
 Changing the server type of an existing deployment is not supported. Scaffold a new project with
-the desired `ab init --server` option and deploy it under a new name. `agent.toml` remains editable,
+the desired `agentbricks init --server` option and deploy it under a new name. `agent.toml` remains editable,
 but changing its `server` field does not convert application code or clean up deployment resources.
 
 For runtime contributors, see the [architecture and code map](ARCHITECTURE.md).

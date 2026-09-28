@@ -1,7 +1,7 @@
-"""`ab init` — scaffold a local agent project from an Agent Bricks template.
+"""`agentbricks init` — scaffold a local agent project from an Agent Bricks template.
 
 Copies one template bundled in the databricks_agentbricks package into a local target directory, ready
-for `ab deploy --source <dir>`. Because the template ships with the package, the scaffold always
+for `agentbricks deploy --source <dir>`. Because the template ships with the package, the scaffold always
 matches the installed CLI; to try a fork or branch, install that agentbricks and re-run init.
 
 The Agent Bricks server provisions its Runtime Store at deployment. Use `--server custom` for a minimal
@@ -37,7 +37,7 @@ from databricks_agentbricks.project_types import (
     parse_server,
 )
 
-# Templates ship inside this package (databricks_agentbricks/templates/), so `ab init` always copies
+# Templates ship inside this package (databricks_agentbricks/templates/), so `agentbricks init` always copies
 # the one for the installed CLI — the scaffold can't drift from the databricks-agentbricks it runs
 # against. For an editable install `resources.files` resolves to the source tree, so an Agent Bricks
 # developer's uncommitted template edits are scaffolded too.
@@ -122,7 +122,7 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
 
     Returns True if a `.env` was written. Skips if `.env` already exists (never clobbers). The
     template reads DATABRICKS_CONFIG_PROFILE for local model auth, so this makes the scaffolded
-    project runnable with `ab dev` without a manual `cp .env.example .env` step.
+    project runnable with `agentbricks dev` without a manual `cp .env.example .env` step.
     """
     env_path = dest / ".env"
     if env_path.exists():
@@ -319,8 +319,8 @@ def _prepare_migration(
 @click.option(
     "--profile",
     default=None,
-    help="Seed a local .env with this DATABRICKS_CONFIG_PROFILE so `ab dev` works "
-    "immediately (defaults to the profile from -p / `ab login`).",
+    help="Seed a local .env with this DATABRICKS_CONFIG_PROFILE so `agentbricks dev` works "
+    "immediately (defaults to the profile from -p / `agentbricks login`).",
 )
 @click.option(
     "--disable-chat-app",
@@ -364,10 +364,10 @@ def init(
 
     DIRECTORY is the target path to create (defaults to the template's own name). The
     directory must not already exist unless --existing is supplied. Once scaffolded, deploy it with
-    `ab deploy <name> --source <directory>`.
+    `agentbricks deploy <name> --source <directory>`.
 
-    Pass --profile (or set a default via `ab login` / -p) to seed a local `.env` so the
-    scaffolded project runs with `ab dev` right away.
+    Pass --profile (or set a default via `agentbricks login` / -p) to seed a local `.env` so the
+    scaffolded project runs with `agentbricks dev` right away.
 
     The scaffold is preconfigured to call Databricks model serving through the AI Gateway using
     that profile, so it can talk to a model with no separate endpoint or API key to set up.
@@ -487,10 +487,12 @@ def init(
         # than burying it, since running locally fails without a Databricks profile.
         steps += [
             ("cp .env.example .env", "Create your local env file"),
-            "Set DATABRICKS_CONFIG_PROFILE in .env (or re-run `ab init --profile <profile>`)",
+            "Set DATABRICKS_CONFIG_PROFILE in .env (or re-run `agentbricks init --profile <profile>`)",
         ]
-    steps.append(("ab dev", "Run the agent locally"))
+    steps.append(("agentbricks dev", "Run the agent locally"))
     if chat_app_enabled:
         steps.append("Open http://localhost:8000 to chat with it")
-    steps.append((f"ab deploy {dest.name}", "Deploy it to Databricks (from the project dir)"))
+    steps.append(
+        (f"agentbricks deploy {dest.name}", "Deploy it to Databricks (from the project dir)")
+    )
     render.success(f"Scaffolded '{template_name}'", fields=fields, next_steps=steps)

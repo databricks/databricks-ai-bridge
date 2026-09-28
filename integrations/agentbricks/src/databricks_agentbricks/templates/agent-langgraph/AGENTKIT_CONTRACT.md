@@ -87,6 +87,11 @@ Register recovery when intended. Resume a checkpoint only when metadata associat
 current invocation; otherwise replay original input. Use synchronous checkpoint durability before
 acknowledging progress. Recovery is at least once, so side effects must tolerate replay.
 
+Recovery uses `databricks_agentkit.langgraph.responses.checkpointed_messages` to restore this
+invocation's committed outputs, then resumes the same graph. Saved messages seed the response
+without being emitted again. Keep checkpoint history and task writes available during recovery.
+Checkpoint and Runtime Store event writes are not atomic.
+
 ## Optional chat app
 
 No CLI command requires the chat UI. The default overlay supplies it; `--disable-chat-app` omits

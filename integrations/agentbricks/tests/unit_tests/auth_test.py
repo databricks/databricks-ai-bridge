@@ -1,4 +1,4 @@
-"""Unit tests for `ab login` / `logout` and the saved-profile helpers.
+"""Unit tests for `agentbricks login` / `logout` and the saved-profile helpers.
 
 `AGENTBRICKS_CONFIG_HOME` redirects the config file into a tmp dir, and `_AgentBricksApiClient`
 is stubbed so login never touches the network.
