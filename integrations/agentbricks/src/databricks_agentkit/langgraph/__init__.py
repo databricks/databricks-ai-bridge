@@ -25,9 +25,6 @@ LangGraph already has, so migrating an existing agent is a graft, not a rewrite:
 These need the agent stack (databricks-langchain, langgraph, langchain, fastapi, mlflow), so they sit
 behind the ``[langgraph]`` extra to keep a plain ``databricks-agentbricks`` installation independent of agent frameworks.
 
-The ``responses`` module collects streamed invocation responses and restores committed outputs
-during checkpoint recovery; generated agents only wire it to their graph and runtime emitter.
-
 ``__all__`` is the curated surface. Other entry points (``mcp_client``, ``DatabricksSessionStoreSaver``)
 are reachable by their submodule paths but not re-exported here.
 """

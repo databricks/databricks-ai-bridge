@@ -1,13 +1,15 @@
 """Translate between Agent Bricks invocations and the framework-native agent entrypoint."""
 
+from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any
 
 from agent import agent as agent_module
 from agent.agent import recovery_input, run_agent
+from langchain.messages import AIMessageChunk
 from langgraph.types import Command
 
 from databricks_agentkit import InvocationContext
-from databricks_agentkit.langgraph.responses import checkpointed_messages, collect_response
+from databricks_agentkit.langgraph.responses import checkpointed_messages
 from databricks_agentkit.langgraph.session_store import thread_config
 from databricks_agentkit.runtime.auth import AuthError
 
@@ -97,24 +99,17 @@ async def _invoke_agent(
     run_kwargs = {"workspace_client_for": auth.client_for} if user_auth else {}
     model = payload.get("model")
     model = model if isinstance(model, str) else None
-    restored_messages = []
+    outputs = []
     if agent_input is None:
         graph = await agent_module.create_agent_graph(actor, model, **run_kwargs)
-        restored_messages = await checkpointed_messages(
-            graph, thread_config(internal_session_id, actor), context.invocation_id
-        )
-        run_kwargs["graph"] = graph
-
-    async def emit(event):
-        if user_auth and event.get("type") == "interrupt":
-            raise AuthError(
-                "MCP_USER_AUTH_HITL_UNSUPPORTED",
-                "Request-user invocations do not support paused approvals.",
-                400,
+        outputs = [
+            {"type": "message", "message": message.model_dump()}
+            for message in await checkpointed_messages(
+                graph, thread_config(internal_session_id, actor), context.invocation_id
             )
-        await context.emit(event)
-
-    response = await collect_response(
+        ]
+        run_kwargs["graph"] = graph
+    async for event in _serialize_events(
         run_agent(
             agent_input,
             session_id=internal_session_id,
@@ -122,11 +117,41 @@ async def _invoke_agent(
             model=model,
             invocation_id=context.invocation_id,
             **run_kwargs,
-        ),
-        emit,
-        restored_messages,
-    )
+        )
+    ):
+        if user_auth and event.get("type") == "interrupt":
+            raise AuthError(
+                "MCP_USER_AUTH_HITL_UNSUPPORTED",
+                "Request-user invocations do not support paused approvals.",
+                400,
+            )
+        await context.emit(event)
+        if event.get("type") in ("message", "interrupt"):
+            outputs.append(event)
 
-    if not user_auth or payload.get("session_id"):
-        response["session_id"] = session_id
-    return response
+    interrupted = bool(outputs and outputs[-1].get("type") == "interrupt")
+    return {
+        "output": [event["message"] if event["type"] == "message" else event for event in outputs],
+        **({"session_id": session_id} if not user_auth or payload.get("session_id") else {}),
+        "status": "interrupted" if interrupted else "completed",
+    }
+
+
+async def _serialize_events(async_stream: AsyncIterator[Any]) -> AsyncGenerator[dict, None]:
+    async for mode, payload in async_stream:
+        if mode == "updates":
+            if interrupts := payload.get("__interrupt__"):
+                for item in interrupts:
+                    yield {"type": "interrupt", "id": item.id, "value": item.value}
+                continue
+            for node_data in payload.values():
+                messages = node_data.get("messages", []) if isinstance(node_data, dict) else []
+                for message in messages:
+                    yield {"type": "message", "message": message.model_dump()}
+        elif mode == "messages":
+            try:
+                chunk = payload[0]
+                if isinstance(chunk, AIMessageChunk) and (content := chunk.content):
+                    yield {"type": "delta", "content": content, "id": chunk.id}
+            except (KeyError, IndexError, TypeError):
+                continue

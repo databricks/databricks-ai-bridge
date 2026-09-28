@@ -1,6 +1,5 @@
 """The v0.3-v0.5 OpenAI retriever contract against the current core package."""
 
-import json
 from importlib.metadata import version
 from unittest.mock import MagicMock, Mock, patch
 
@@ -97,8 +96,6 @@ def test_vector_search_retriever_tool_init(
     assert trace is not None
     spans = trace.search_spans(name=tool_name or index_name, span_type=SpanType.RETRIEVER)
     assert len(spans) == 1
-    attributes = trace.to_dict()["data"]["spans"][0]["attributes"]
-    inputs = json.loads(attributes["mlflow.spanInputs"])
-    assert inputs["query"] == "Databricks Agent Framework"
-    outputs = json.loads(attributes["mlflow.spanOutputs"])
-    assert sorted(document["page_content"] for document in outputs) == sorted(INPUT_TEXTS)
+    span = spans[0]
+    assert span.inputs["query"] == "Databricks Agent Framework"
+    assert sorted(document["page_content"] for document in span.outputs) == sorted(INPUT_TEXTS)

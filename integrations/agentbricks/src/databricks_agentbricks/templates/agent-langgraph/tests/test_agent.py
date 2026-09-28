@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock
 import pytest
 from agent.tools import all_tools
 from langchain_core.tools import BaseTool
+from runtime.adapter import _serialize_events
 
-from databricks_agentkit.langgraph.responses import collect_response
 from databricks_agentkit.langgraph.session_store import (
     checkpointer,
     invocation_metadata,
@@ -47,17 +47,11 @@ async def _aiter(events):
 
 
 @pytest.mark.asyncio
-async def test_collect_response_relays_interrupt_as_native_event():
+async def test_serialize_events_relays_interrupt_as_native_event():
     hitl = {"action_requests": [{"name": "send_message", "args": {"recipient": "x", "body": "y"}}]}
     stream = _aiter([("updates", {"__interrupt__": (_FakeInterrupt(hitl, "int-1"),)})])
-    events = []
-
-    async def emit(event):
-        events.append(event)
-
-    response = await collect_response(stream, emit)
+    events = [e async for e in _serialize_events(stream)]
     assert events == [{"type": "interrupt", "id": "int-1", "value": hitl}]
-    assert response == {"output": events, "status": "interrupted"}
 
 
 def test_configure_raises_clear_error_without_auth(monkeypatch):
