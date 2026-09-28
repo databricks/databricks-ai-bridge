@@ -74,7 +74,7 @@ _PIP_INDEX_ENVS = ("PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDEX")
 _AGENT_COMPUTE_OUTPUT = ("App compute", "Agent compute")
 # Internal rollout switch. Backend selection is intentionally not part of the user-facing CLI or
 # process environment; flip this only in an Agent Bricks release after the managed API is fully deployed.
-_USE_MANAGED_RUNTIME_STORE = False
+_USE_MANAGED_RUNTIME_STORE = True
 
 # Agent Bricks deployments use one public prefix for creation and listing.
 _DEPLOYMENT_PREFIX = "agent-bricks-"

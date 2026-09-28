@@ -1,6 +1,6 @@
 [project]
 name = "databricks-agentbricks"
-version = "0.2.0"
+version = "0.3.0"
 description = "Agent Bricks CLI and AgentKit SDK for custom agents on Databricks"
 authors = [
     { name="Databricks", email="agent-feedback@databricks.com" },

@@ -112,8 +112,8 @@ def test_upsert_manifest_env_removes_named_entries(tmp_path: pathlib.Path):
     assert doc["env"] == [{"name": "KEEP", "value": "1"}, {"name": "OTHER", "value": "z"}]
 
 
-def test_managed_runtime_store_is_an_internal_disabled_rollout_switch():
-    assert deploy_mod._USE_MANAGED_RUNTIME_STORE is False
+def test_managed_runtime_store_is_the_internal_default():
+    assert deploy_mod._USE_MANAGED_RUNTIME_STORE is True
 
 
 def test_ensure_session_store_reuses_on_already_exists():
