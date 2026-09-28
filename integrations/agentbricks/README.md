@@ -533,7 +533,7 @@ agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
 ```
 
 `--session-id` preserves one application session across calls by sending it in the `X-Routing-Key`
-request header, which PoP-proxy uses to pin the session to one app replica. This also works with a
+request header, which pins the session to one app replica. This also works with a
 direct App URL and with the generated runtime on localhost. OAuth and session headers are managed by
 the runtime; arbitrary custom request headers are intentionally not exposed by this command.
 
@@ -847,9 +847,8 @@ and does not inject it. The id is not persisted in `agent.toml`.)
 
 The chat UI generates a stable application session UUID in browser local storage, places it inside
 the invocation's opaque `input`, and creates a fresh invocation UUID per turn. The chat app also
-sends this session UUID in the `X-Routing-Key` request header, which PoP-proxy uses verbatim to pin
-the session to one app replica (it must be non-blank and no more than 128 UTF-8 bytes, and takes
-precedence over the legacy `__Host-databricks-app-router` cookie). The header is neither
+sends this session UUID in the `X-Routing-Key` request header, which is used verbatim to pin
+the session to one app replica (it must be non-blank and no more than 128 UTF-8 bytes). The header is neither
 authentication nor the template's application session state; it is independent sticky-routing
 plumbing.
 
