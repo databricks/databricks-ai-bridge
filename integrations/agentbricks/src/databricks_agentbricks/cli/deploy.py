@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import pathlib
-import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -32,6 +31,7 @@ from databricks_agentbricks.app_resources import (
     apply_postgres_resources,
     apply_trace_resources,
 )
+from databricks_agentbricks.apps_client import AppsClient
 from databricks_agentbricks.cli.app_auth import (
     apply_app_user_scope_update,
     plan_app_user_scope_update,
@@ -85,43 +85,6 @@ _MAX_DEPLOYMENT_NAME_LEN = 30  # Databricks Apps name limit
 # --- databricks CLI plumbing (the deployment runtime) -----------------------
 
 
-def _deployment_exists(name: str, profile: Optional[str]) -> bool:
-    return _databricks(["apps", "get", name], profile, capture=True, check=False).returncode == 0
-
-
-def _app_service_principal(name: str, profile: Optional[str]) -> Optional[str]:
-    """The app's service principal client id (its Postgres role identity), or None if unavailable."""
-    result = _databricks(["apps", "get", name, "-o", "json"], profile, capture=True, check=False)
-    if result.returncode != 0:
-        return None
-    try:
-        return json.loads(result.stdout).get("service_principal_client_id")
-    except json.JSONDecodeError:
-        return None
-
-
-def _app_url(name: str, profile: Optional[str]) -> Optional[str]:
-    """The deployed app's browsable URL, or None if it can't be read."""
-    result = _databricks(["apps", "get", name, "-o", "json"], profile, capture=True, check=False)
-    if result.returncode != 0:
-        return None
-    try:
-        return json.loads(result.stdout).get("url") or None
-    except json.JSONDecodeError:
-        return None
-
-
-def _app_compute_state(name: str, profile: Optional[str]) -> Optional[str]:
-    """The app's compute state (e.g. RUNNING), or None if it can't be read."""
-    result = _databricks(["apps", "get", name, "-o", "json"], profile, capture=True, check=False)
-    if result.returncode != 0:
-        return None
-    try:
-        return json.loads(result.stdout).get("compute_status", {}).get("state")
-    except json.JSONDecodeError:
-        return None
-
-
 def _validate_deployment_name(name: str, *, check_length: bool = True) -> str:
     """Reject an empty or unsafe deployment name before it reaches a URL / workspace path."""
     if (
@@ -167,23 +130,6 @@ def _confirm_destroy(target: str, *, assume_yes: bool) -> None:
         return
     if not click.confirm(f"{target}? This cannot be undone.", default=False):
         raise click.Abort()
-
-
-def _wait_for_running(name: str, profile: Optional[str], timeout_s: int = 300) -> None:
-    """Block until a just-created app's compute is ACTIVE (or raise on timeout).
-
-    `apps create` returns before compute is provisioned, but `apps deploy` requires the app to be
-    ACTIVE — so a first deploy races without this wait.
-    """
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        if _app_compute_state(name, profile) == "ACTIVE":
-            return
-        time.sleep(5)
-    raise AgentCliError(
-        f"App '{name}' did not reach a running state within {timeout_s}s.",
-        hint=f"Check `agentbricks deployments get {name}`, then re-run deploy once it's running.",
-    )
 
 
 # --- app.yaml manifest handling ---------------------------------------------
@@ -548,9 +494,9 @@ def deploy(
         and project.deployment_name
         and not base_name.startswith(_DEPLOYMENT_PREFIX)
     ):
-        new_name_exists = len(name) <= _MAX_DEPLOYMENT_NAME_LEN and _deployment_exists(
-            name, obj.profile
-        )
+        new_name_exists = len(name) <= _MAX_DEPLOYMENT_NAME_LEN and AppsClient(
+            obj.profile, runner=_databricks
+        ).exists(name)
         deployment_exists = new_name_exists
     _validate_deployment_name(name)
     if allow_user_scope_update and not user_auth:
@@ -585,6 +531,7 @@ def deploy(
         project.write()
     instance_args = _instance_args(instances)
     client = obj.client()
+    apps = AppsClient(obj.profile, runner=_databricks)
     use_managed_runtime_store = _USE_MANAGED_RUNTIME_STORE
 
     # 1. Reconcile the stores DECLARED in agent.toml: create any that don't exist yet. `agentbricks deploy`
@@ -661,7 +608,7 @@ def deploy(
     #    its output to relabel "App compute" → "Agent compute", so nothing streams meanwhile. Wrap it
     #    in progress (persistent line + spinner) so the CLI isn't silent for the whole provision.
     if deployment_exists is None:
-        deployment_exists = _deployment_exists(name, obj.profile)
+        deployment_exists = apps.exists(name)
     if user_scope_plan is None and not deployment_exists:
         with render.progress(
             "Creating the agent and starting its compute (this can take a few minutes)…"
@@ -693,7 +640,7 @@ def deploy(
     # `apps deploy` requires the app's compute to be ACTIVE — a just-created app may still be
     # starting, and an existing one may be STOPPED — so wait either way. Returns immediately when
     with render.progress("Waiting for agent compute to start (this can take a few minutes)…"):
-        _wait_for_running(name, obj.profile)
+        apps.wait_for_running(name)
 
     if legacy_runtime_backend is not None:
         resource_error = apply_postgres_resources(name, [legacy_runtime_backend], obj.profile)
@@ -703,7 +650,7 @@ def deploy(
                 hint=resource_error,
             )
     elif project is not None and project.server == AgentServer.AGENTBRICKS:
-        app_service_principal_id = _app_service_principal(name, obj.profile)
+        app_service_principal_id = apps.service_principal(name)
         with render.status("Reconciling Runtime Store…"):
             runtime_backend = managed_runtime_store.get_or_create_backend(
                 client, name, app_service_principal_id
@@ -746,7 +693,7 @@ def deploy(
     grant_error: Optional[str] = None
     if grants_stores:
         with render.status("Granting the app access to its stores…"):
-            sp = _app_service_principal(name, obj.profile)
+            sp = apps.service_principal(name)
             if sp is None:
                 grant_error = "could not resolve the app's service principal."
             else:
@@ -766,7 +713,7 @@ def deploy(
                 name, trace_experiment_id, trace_tables.otel_tables(), obj.profile
             )
 
-    app_url = _app_url(name, obj.profile)
+    app_url = apps.url(name)
 
     if obj.output == "json":
         render.emit_json(
@@ -972,7 +919,9 @@ def deployments_delete(obj, name, yes) -> None:
     )
     _confirm_destroy(target, assume_yes=yes)
     if use_managed_runtime_store:
-        app_service_principal_id = _app_service_principal(name, obj.profile)
+        app_service_principal_id = AppsClient(obj.profile, runner=_databricks).service_principal(
+            name
+        )
         if not app_service_principal_id:
             raise AgentCliError(
                 "Could not resolve the app's service principal for Runtime Store cleanup.",
