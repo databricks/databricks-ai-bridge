@@ -141,12 +141,12 @@ class InMemoryRuntimeStore(RuntimeStore):
                 if existing.request != request or existing.session_id != session_id:
                     raise InvocationConflictError(invocation_id)
                 return copy.deepcopy(existing)
-            session_sequence_number = None
+            queue_order = None
             if session_id is not None:
-                session_sequence_number = (
+                queue_order = (
                     max(
                         (
-                            state.session_sequence_number or 0
+                            state.queue_order or 0
                             for state in self.states.values()
                             if state.session_id == session_id
                         ),
@@ -161,7 +161,7 @@ class InMemoryRuntimeStore(RuntimeStore):
                 request=copy.deepcopy(request),
                 response=None,
                 session_id=session_id,
-                session_sequence_number=session_sequence_number,
+                queue_order=queue_order,
             )
             self.states[invocation_id] = state
             return copy.deepcopy(state)
@@ -186,7 +186,7 @@ class InMemoryRuntimeStore(RuntimeStore):
                     candidates,
                     key=lambda candidate: (
                         0 if candidate.status == InvocationStatus.ACTIVE else 1,
-                        candidate.session_sequence_number or 0,
+                        candidate.queue_order or 0,
                     ),
                     default=None,
                 )
@@ -211,9 +211,7 @@ class InMemoryRuntimeStore(RuntimeStore):
                     for candidate in session_states
                     if candidate.status == InvocationStatus.QUEUED
                 ]
-                next_queued = min(
-                    queued, key=lambda candidate: candidate.session_sequence_number or 0
-                )
+                next_queued = min(queued, key=lambda candidate: candidate.queue_order or 0)
                 if next_queued.invocation_id != invocation_id:
                     return None
             claimed = Invocation(
@@ -223,7 +221,7 @@ class InMemoryRuntimeStore(RuntimeStore):
                 request=copy.deepcopy(state.request),
                 response=None,
                 session_id=state.session_id,
-                session_sequence_number=state.session_sequence_number,
+                queue_order=state.queue_order,
             )
             self.states[invocation_id] = claimed
             self._append_event(invocation_id, claimed.attempt, {"type": "run.started"})
@@ -241,7 +239,7 @@ class InMemoryRuntimeStore(RuntimeStore):
                 request=state.request,
                 response=copy.deepcopy(response),
                 session_id=state.session_id,
-                session_sequence_number=state.session_sequence_number,
+                queue_order=state.queue_order,
             )
             self._append_event(invocation_id, attempt, {"type": "run.completed"})
             return True
@@ -258,7 +256,7 @@ class InMemoryRuntimeStore(RuntimeStore):
                 request=state.request,
                 response=None,
                 session_id=state.session_id,
-                session_sequence_number=state.session_sequence_number,
+                queue_order=state.queue_order,
             )
             self._append_event(invocation_id, attempt, {"type": "run.failed"})
             return True

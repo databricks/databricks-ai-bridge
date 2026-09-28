@@ -439,9 +439,8 @@ def test_dev_prints_standalone_invoke_for_each_template(tmp_path, framework, ser
     command = commands[0]
     path = "/api/invocations" if server == "agentbricks" else "/invocations"
     assert (
-        f"agentbricks endpoint invoke --url http://localhost:8000 --path {path} "
-        "--session-id example-session --json "
-    ) in command
+        f"agentbricks endpoint invoke --url http://localhost:8000 --path {path} --json " in command
+    )
     assert "│" not in command
     assert ("$(uuidgen)" in command) is (server == "agentbricks")
     panel, example = result.output.split("Invoke with Agent Bricks\n")
@@ -454,7 +453,6 @@ def test_dev_prints_standalone_invoke_for_each_template(tmp_path, framework, ser
         )
     if not chat_ui:
         assert "curl -X POST" in panel  # preserve the existing API-only next step
-        assert "X-Databricks-Session-Id:" in panel
 
 
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])

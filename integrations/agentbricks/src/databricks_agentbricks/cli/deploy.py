@@ -526,11 +526,8 @@ def deploy(
     session automatically stays on one instance.
 
     \b
-    API clients that need sticky routing may resend a stable UUID in this cookie:
+    API clients that need it must resend a stable UUID in this cookie every request:
       __Host-databricks-app-router=<uuid>
-
-    This routing cookie does not identify a conversation. Managed invocation requests require
-    X-Databricks-Session-Id (or `agentbricks endpoint invoke --session-id`) independently of routing.
     """
     source_dir = pathlib.Path(source)
     project = _load_project(source_dir)

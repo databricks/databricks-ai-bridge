@@ -113,31 +113,13 @@ An **invocation** is one managed agent run. The client-supplied UUID `id` acts a
 while its Runtime record is retained. Request-user invocation IDs are internally namespaced by the
 forwarded principal so users cannot collide with each other.
 
-Every POST requires one nonblank `X-Databricks-Session-Id` header. Reuse the value across turns in
-one conversation and choose a new invocation UUID for each turn. The header cannot contain commas,
-surrounding whitespace, or control characters; commas can represent proxy-combined duplicate headers.
-Same-session invocations queue
-in durable acceptance order; different sessions can run concurrently. Completion or failure
-releases the next turn; stale active work is recovered first. Steering is not supported.
-
-The server passes the header identity to Runtime and persists it with the invocation. Managed
-templates use only `context.session_id` for conversation state, including recovery. Request-user
-sessions are namespaced once by authenticated owner before submission. There is no body, cookie,
-or invocation-ID fallback. Existing HTTP clients must migrate to the header; direct Python Runtime
-callers may still omit `session_id` for independent, sessionless execution.
-
-Before upgrading, drain older HTTP work without persisted session metadata and stop experimental
-workers that use the old `queue_order` column. Startup renames that column without changing its
-values. See [Session queueing](ARCHITECTURE.md) for the coordinated-upgrade requirements.
-
 - **Synchronous:** Wait for the result in the POST response.
 - **Streaming (`stream: true`):** Receive progress events as Server-Sent Events (SSE).
 - **Background (`background: true`):** Return immediately with `202`, then poll for the result.
   Add `stream: true` to include an events URL in the response.
 - **Reconnect:** Read stored events with `GET .../events?after=<last-event-id>`.
 
-Every POST example below uses `X-Databricks-Session-Id: conversation-1`. These examples use an agent
-that returns `{"answer":"Hello"}` and emits `delta` events. The input,
+These examples use an agent that returns `{"answer":"Hello"}` and emits `delta` events. The input,
 output, and application event payloads are defined by your agent or framework adapter.
 
 | API endpoint | Request | Response |

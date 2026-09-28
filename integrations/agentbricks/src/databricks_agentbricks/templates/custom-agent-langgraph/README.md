@@ -15,12 +15,8 @@ Call its single foreground endpoint:
 ```bash
 curl -sS http://localhost:8000/invocations \
   -H 'Content-Type: application/json' \
-  -H 'X-Databricks-Session-Id: example-session' \
   -d '{"input":[{"role":"user","content":"Hello"}]}'
 ```
-
-The session header is optional here: this custom server is stateless and does not use it.
-It does not provide the managed server's session queueing or persistence.
 
 Edit `runtime/main.py` to define your own HTTP contract. Edit `agent/agent.py` to change the model
 or agent behavior. Deploy with `agentbricks --profile <profile> deploy custom-agent-langgraph`.

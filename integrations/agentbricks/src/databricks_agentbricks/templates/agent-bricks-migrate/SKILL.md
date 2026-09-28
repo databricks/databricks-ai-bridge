@@ -55,11 +55,9 @@ State and durability semantics differ by framework; handle the ones that apply:
   identity. The reference separates invocation UUIDs, application session IDs, and the routing
   cookie. Map existing IDs explicitly, including reopening sessions. Derive actor identity from
   the trusted application context; do not blindly trust a caller field or adopt a shared
-  fallback. For the managed HTTP protocol, migrate clients to send the stable session ID in
-  `X-Databricks-Session-Id` and read `context.session_id` in the adapter; body fields and cookies
-  do not select the session. If the existing server used a different request/response shape
-  (e.g. a `{conversation_id, message}` body), map the message explicitly to `input.messages`
-  and preserve response fields clients depend on.
+  fallback. If the existing server used a different request/response shape (e.g. a
+  `{conversation_id, message}` body), map it explicitly in `runtime/adapter.py` to the runtime's
+  `input.session_id` / `input.messages`, and preserve response fields clients depend on.
 - **Recovery and durability:** Distinguish Runtime Store invocation recovery from Session Store
   persistence. Address at-least-once side effects and retain stronger existing guarantees. Do not
   silently enable replay of non-idempotent tools.

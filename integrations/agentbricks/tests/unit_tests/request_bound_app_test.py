@@ -11,8 +11,6 @@ from databricks_agentkit.runtime.auth import AuthError, InvocationAuthPolicy, Re
 from databricks_agentkit.runtime.store import InMemoryRuntimeStore
 from databricks_agentkit.runtime.types import InvocationAttemptContext
 
-_SESSION_HEADER = "X-Databricks-Session-Id"
-
 
 @pytest.fixture
 def deployed(monkeypatch):
@@ -20,12 +18,8 @@ def deployed(monkeypatch):
     monkeypatch.setenv("DATABRICKS_HOST", "https://workspace.example")
 
 
-def headers(subject="user-a", token="token-sentinel", session_id="test-session"):
-    return {
-        "x-forwarded-user": subject,
-        "x-forwarded-access-token": token,
-        _SESSION_HEADER: session_id,
-    }
+def headers(subject="user-a", token="token-sentinel"):
+    return {"x-forwarded-user": subject, "x-forwarded-access-token": token}
 
 
 def make_app(handler):
@@ -50,9 +44,7 @@ async def running_client(app: DurableAgentServer) -> AsyncIterator[httpx.AsyncCl
     await app._runtime.start()
     try:
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app),
-            base_url="https://test",
-            headers={_SESSION_HEADER: "test-session"},
+            transport=httpx.ASGITransport(app), base_url="https://test"
         ) as client:
             yield client
     finally:
@@ -81,11 +73,6 @@ async def test_request_user_sync_uses_runtime_without_persisting_auth(deployed):
         second = await client.post(
             "/api/invocations", json=body, headers=headers(token="refreshed")
         )
-        conflict = await client.post(
-            "/api/invocations",
-            json=body,
-            headers=headers(token="refreshed", session_id="another-session"),
-        )
 
     assert first.status_code == second.status_code == 200
     assert (
@@ -98,18 +85,12 @@ async def test_request_user_sync_uses_runtime_without_persisting_auth(deployed):
         }
     )
     assert status.status_code == events.status_code == 200
-    assert conflict.status_code == 409
     assert status.json() == first.json()
     assert 'event: delta\ndata: {"type": "delta", "content": "one"}' in events.text
     assert 'event: delta\ndata: {"type": "delta", "content": "two"}' in events.text
     assert len(contexts) == 1
-    assert not app._request_auth
     store = app._runtime.runtime_store
     assert isinstance(store, InMemoryRuntimeStore)
-    state = next(iter(store.states.values()))
-    assert state.session_id == contexts[0].session_id
-    assert state.session_id == contexts[0].request_auth.namespace("session", "test-session")
-    assert state.request == {"input": "hello", "invocation_id": invocation_id}
     assert_auth_not_persisted(store)
     with pytest.raises(AuthError):
         contexts[0].request_auth.client_for("user")
@@ -214,7 +195,9 @@ async def test_request_user_streams_ordered_persisted_events(deployed):
         "output": {"ignored": "stream output"},
     }
     assert events.text == response.text
-    assert contexts[0].session_id == contexts[0].request_auth.namespace("session", "test-session")
+    assert contexts[0].session_id == contexts[0].request_auth.namespace(
+        "session", "routing-session"
+    )
     with pytest.raises(AuthError):
         contexts[0].request_auth.client_for("user")
 
@@ -378,8 +361,7 @@ async def test_cancelled_request_closes_auth_and_handler(deployed):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("same_cookie", [False, True])
-async def test_concurrent_request_users_have_isolated_auth_and_sessions(deployed, same_cookie):
+async def test_concurrent_request_users_have_isolated_auth_and_sessions(deployed):
     contexts = []
     both_entered = asyncio.Event()
 
@@ -393,20 +375,10 @@ async def test_concurrent_request_users_have_isolated_auth_and_sessions(deployed
     app = make_app(handler)
     body = {"id": str(uuid4())}
     async with running_client(app) as client:
-        if same_cookie:
-            client.cookies.set("__Host-databricks-app-router", "same-routing-cookie")
         first, second = await asyncio.wait_for(
             asyncio.gather(
-                client.post(
-                    "/api/invocations",
-                    json=body,
-                    headers=headers("user-a", session_id="shared-public-session"),
-                ),
-                client.post(
-                    "/api/invocations",
-                    json=body,
-                    headers=headers("user-b", session_id="shared-public-session"),
-                ),
+                client.post("/api/invocations", json=body, headers=headers("user-a")),
+                client.post("/api/invocations", json=body, headers=headers("user-b")),
             ),
             2,
         )
@@ -414,73 +386,6 @@ async def test_concurrent_request_users_have_isolated_auth_and_sessions(deployed
     assert first.status_code == second.status_code == 200
     assert first.json()["output"] != second.json()["output"]
     assert contexts[0].request_auth is not contexts[1].request_auth
-    store = app._runtime.runtime_store
-    assert isinstance(store, InMemoryRuntimeStore)
-    assert len({state.session_id for state in store.states.values()}) == 2
-    assert {state.session_sequence_number for state in store.states.values()} == {1}
-    assert "shared-public-session" not in {state.session_id for state in store.states.values()}
-    for context in contexts:
-        assert context.session_id == context.request_auth.namespace(
-            "session", "shared-public-session"
-        )
-    assert_auth_not_persisted(store)
-
-
-@pytest.mark.asyncio
-async def test_request_user_session_queue_preserves_auth_for_waiting_turn(deployed):
-    entered = asyncio.Event()
-    release = asyncio.Event()
-    contexts = []
-
-    async def handler(value, context):
-        contexts.append(context)
-        if value == "first":
-            entered.set()
-            await release.wait()
-        assert repr(context.request_auth) == "RequestAuthContext(closed=False)"
-        return value
-
-    app = make_app(handler)
-    first_id, second_id = str(uuid4()), str(uuid4())
-    async with running_client(app) as client:
-        first = await client.post(
-            "/api/invocations",
-            json={
-                "id": first_id,
-                "input": "first",
-                "background": True,
-            },
-            headers=headers(session_id="conversation"),
-        )
-        assert first.status_code == 202
-        await asyncio.wait_for(entered.wait(), 2)
-        second = await client.post(
-            "/api/invocations",
-            json={
-                "id": second_id,
-                "input": "second",
-                "background": True,
-            },
-            headers=headers(session_id="conversation"),
-        )
-        assert second.status_code == 202
-        assert second.json()["status"] == "queued"
-        assert len(contexts) == 1
-        release.set()
-        for _ in range(100):
-            status = await client.get(f"/api/invocations/{second_id}", headers=headers())
-            if status.json()["status"] == "completed":
-                break
-            await asyncio.sleep(0.005)
-
-    assert status.json()["output"] == "second"
-    assert len(contexts) == 2
-    assert contexts[0].session_id == contexts[1].session_id != "conversation"
-    assert not app._request_auth
-    store = app._runtime.runtime_store
-    assert isinstance(store, InMemoryRuntimeStore)
-    assert {state.session_sequence_number for state in store.states.values()} == {1, 2}
-    assert_auth_not_persisted(store)
 
 
 @pytest.mark.asyncio
@@ -506,12 +411,8 @@ async def test_request_user_recovery_fails_before_handlers(deployed):
 
     with pytest.raises(AuthError) as caught:
         await app._execute(
-            {"input": "hello", "invocation_id": invocation_id},
-            InvocationAttemptContext(
-                runtime_invocation_id,
-                2,
-                session_id=request_auth.namespace("session", "session-1"),
-            ),
+            {"input": "hello", "session_id": "session-1", "invocation_id": invocation_id},
+            InvocationAttemptContext(runtime_invocation_id, 2),
         )
 
     assert caught.value.code == "MCP_USER_AUTH_RECOVERY_UNSUPPORTED"

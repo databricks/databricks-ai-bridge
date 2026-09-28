@@ -52,12 +52,12 @@ class MemoryDurableRuntimeStore:
             if existing.request != request or existing.session_id != session_id:
                 raise InvocationConflictError(invocation_id)
             return copy.deepcopy(existing)
-        session_sequence_number = None
+        queue_order = None
         if session_id is not None:
-            session_sequence_number = (
+            queue_order = (
                 max(
                     (
-                        state.session_sequence_number or 0
+                        state.queue_order or 0
                         for state in self.states.values()
                         if state.session_id == session_id
                     ),
@@ -72,7 +72,7 @@ class MemoryDurableRuntimeStore:
             request=copy.deepcopy(request),
             response=None,
             session_id=session_id,
-            session_sequence_number=session_sequence_number,
+            queue_order=queue_order,
         )
         self.states[invocation_id] = state
         return copy.deepcopy(state)
@@ -97,7 +97,7 @@ class MemoryDurableRuntimeStore:
                 candidates,
                 key=lambda candidate: (
                     0 if candidate.status == InvocationStatus.ACTIVE else 1,
-                    candidate.session_sequence_number or 0,
+                    candidate.queue_order or 0,
                 ),
                 default=None,
             )
@@ -124,7 +124,7 @@ class MemoryDurableRuntimeStore:
                     for candidate in session_states
                     if candidate.status == InvocationStatus.QUEUED
                 ),
-                key=lambda candidate: candidate.session_sequence_number or 0,
+                key=lambda candidate: candidate.queue_order or 0,
             )
             if head.invocation_id == invocation_id:
                 runnable.append(invocation_id)
@@ -155,7 +155,7 @@ class MemoryDurableRuntimeStore:
                     for candidate in session_states
                     if candidate.status == InvocationStatus.QUEUED
                 ),
-                key=lambda candidate: candidate.session_sequence_number or 0,
+                key=lambda candidate: candidate.queue_order or 0,
             )
             if head.invocation_id != invocation_id:
                 return None
@@ -190,7 +190,7 @@ class MemoryDurableRuntimeStore:
             request=state.request,
             response=copy.deepcopy(response),
             session_id=state.session_id,
-            session_sequence_number=state.session_sequence_number,
+            queue_order=state.queue_order,
         )
         self._append_event(invocation_id, attempt, {"type": "run.completed"})
         return True
@@ -206,7 +206,7 @@ class MemoryDurableRuntimeStore:
             request=state.request,
             response=None,
             session_id=state.session_id,
-            session_sequence_number=state.session_sequence_number,
+            queue_order=state.queue_order,
         )
         self._append_event(invocation_id, attempt, {"type": "run.failed"})
         return True
@@ -249,7 +249,7 @@ class MemoryDurableRuntimeStore:
         attempt: int = 1,
         heartbeat_at: datetime | None = None,
         session_id: str | None = None,
-        session_sequence_number: int | None = None,
+        queue_order: int | None = None,
     ) -> None:
         self.states[invocation_id] = Invocation(
             invocation_id=invocation_id,
@@ -258,7 +258,7 @@ class MemoryDurableRuntimeStore:
             request=copy.deepcopy(request),
             response=None,
             session_id=session_id,
-            session_sequence_number=session_sequence_number,
+            queue_order=queue_order,
         )
         self._heartbeat_at[invocation_id] = heartbeat_at or datetime.now(timezone.utc)
 
@@ -270,7 +270,7 @@ class MemoryDurableRuntimeStore:
             request=copy.deepcopy(state.request),
             response=None,
             session_id=state.session_id,
-            session_sequence_number=state.session_sequence_number,
+            queue_order=state.queue_order,
         )
         self.states[claimed.invocation_id] = claimed
         self._heartbeat_at[claimed.invocation_id] = datetime.now(timezone.utc)
@@ -415,7 +415,7 @@ async def test_invoke_persists_request_and_response(session_id: str | None) -> N
     assert state.request == {"input": "hello"}
     assert state.response == {"output": "hello"}
     assert state.session_id == session_id
-    assert state.session_sequence_number == (1 if session_id is not None else None)
+    assert state.queue_order == (1 if session_id is not None else None)
     assert calls[0][1].session_id == session_id
     assert calls[0][1].attempt == 1
     assert calls[0][1].is_recovery is False
@@ -450,7 +450,7 @@ async def test_invoke_preserves_legacy_submit_override(session_kwargs: dict[str,
     assert state.status == InvocationStatus.COMPLETED
     assert state.request == state.response == response
     assert state.session_id is None
-    assert state.session_sequence_number is None
+    assert state.queue_order is None
 
 
 @pytest.mark.asyncio
@@ -504,7 +504,7 @@ async def test_local_runtime_drains_a_session_queue_in_order() -> None:
         release_first.set()
         await runtime.stop()
 
-    assert (first.session_sequence_number, second.session_sequence_number) == (1, 2)
+    assert (first.queue_order, second.queue_order) == (1, 2)
     assert execution_order == ["one", "two"]
     assert max_running == 1
     assert [context.session_id for context in contexts] == ["session-a", "session-a"]
@@ -700,7 +700,7 @@ async def test_stale_invocation_reuses_request_and_marks_recovery() -> None:
         {"input": "original"},
         heartbeat_at=datetime.now(timezone.utc) - timedelta(minutes=1),
         session_id="conversation-1",
-        session_sequence_number=4,
+        queue_order=4,
     )
     runtime = make_durable_runtime(execute, store, recover=True)
     await runtime.start()
@@ -716,7 +716,7 @@ async def test_stale_invocation_reuses_request_and_marks_recovery() -> None:
     assert contexts[0][1].is_recovery is True
     assert contexts[0][1].session_id == "conversation-1"
     recovered = store.states["session-1"]
-    assert (recovered.session_id, recovered.session_sequence_number) == ("conversation-1", 4)
+    assert (recovered.session_id, recovered.queue_order) == ("conversation-1", 4)
 
 
 @pytest.mark.asyncio

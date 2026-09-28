@@ -91,7 +91,7 @@ const state = {
 };
 
 function ensureSessionId() {
-  if (!state.sessionId) throw new Error("The application session is not initialized yet.");
+  if (!state.sessionId) throw new Error("The routing session is not initialized yet.");
   return state.sessionId;
 }
 
@@ -104,11 +104,10 @@ function setSessionId(value) {
   elements.sessionId.textContent = state.sessionId;
 }
 
-function demoFetch(path, options = {}) {
-  return fetch(path, {
-    ...options,
-    headers: { ...options.headers, "X-Databricks-Session-Id": ensureSessionId() },
-  });
+function demoUrl(path) {
+  const url = new URL(path, window.location.origin);
+  url.searchParams.set("session_id", ensureSessionId());
+  return `${url.pathname}${url.search}`;
 }
 
 function setStatus(label, type = "ready") {
@@ -596,13 +595,13 @@ function handleOutput(output) {
 function invocationHeaders() {
   return {
     "Content-Type": "application/json",
-    "X-Databricks-Session-Id": ensureSessionId(),
   };
 }
 
 function invocationPayload(payload, transport = {}) {
   const sessionId = ensureSessionId();
   const input = {
+    session_id: sessionId,
     actor: state.config?.session.actor || sessionId,
     ...payload,
   };
@@ -761,15 +760,15 @@ async function loadMemory() {
   try {
     let entries;
     if (query) {
-      const response = await demoFetch("/api/demo/memory/search", {
+      const response = await fetch(demoUrl("/api/demo/memory/search"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query, limit: 50, actor: actor || undefined }),
       });
       entries = memoryEntries(await jsonResponse(response));
     } else {
-      const url = "/api/demo/memory/entries" + (actor ? `?actor=${encodeURIComponent(actor)}` : "");
-      const response = await demoFetch(url, { cache: "no-store" });
+      const url = demoUrl("/api/demo/memory/entries") + (actor ? `&actor=${encodeURIComponent(actor)}` : "");
+      const response = await fetch(url, { cache: "no-store" });
       entries = memoryEntries(await jsonResponse(response));
     }
     renderMemoryCards(entries, query);
@@ -917,7 +916,7 @@ async function ensureManagedSession() {
   const sessionId = ensureSessionId();
   if (state.managedSessionId === sessionId) return sessionId;
   stateMessage(elements.sessionItems, "Connecting managed session…", "loading");
-  const response = await demoFetch("/api/demo/sessions", {
+  const response = await fetch(demoUrl("/api/demo/sessions"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: "{}",
@@ -935,7 +934,7 @@ async function refreshSession({ hydrateChat = false } = {}) {
   }
   try {
     const sessionId = state.config.session.managed ? await ensureManagedSession() : ensureSessionId();
-    const response = await demoFetch("/api/demo/session/items", { cache: "no-store" });
+    const response = await fetch(demoUrl("/api/demo/session/items"), { cache: "no-store" });
     const result = await jsonResponse(response);
     const items = sessionItems(result);
     renderSessionItems(items);
@@ -953,7 +952,7 @@ async function refreshSession({ hydrateChat = false } = {}) {
 async function refreshSessions() {
   stateMessage(elements.sessionList, "Loading sessions…", "loading");
   try {
-    const response = await demoFetch("/api/demo/sessions", { cache: "no-store" });
+    const response = await fetch(demoUrl("/api/demo/sessions"), { cache: "no-store" });
     const result = await jsonResponse(response);
     renderSessions(sessions(result));
     addEvent("sessions.list", result);
@@ -1089,7 +1088,7 @@ async function sendText(text, mode = state.mode) {
 async function resume(decision) {
   if (state.busy) return;
   if (!state.pendingInterrupt && !state.config?.session.durable) {
-    appendError(new Error("No paused run is loaded for the current application session."));
+    appendError(new Error("No paused run is loaded for the current routing session."));
     return;
   }
   const payload =
@@ -1148,7 +1147,7 @@ async function openSession(sessionId) {
   if (state.busy || !sessionId || sessionId === state.sessionId) return;
   setBusy(true, "Opening session");
   try {
-    const response = await demoFetch(`/api/demo/sessions/${encodeURIComponent(sessionId)}/open`, {
+    const response = await fetch(demoUrl(`/api/demo/sessions/${encodeURIComponent(sessionId)}/open`), {
       method: "POST",
       credentials: "same-origin",
     });
@@ -1202,13 +1201,13 @@ function sizeModelSelect() {
 }
 
 async function loadModels() {
-  const response = await demoFetch("/api/demo/models", { cache: "no-store" });
+  const response = await fetch(demoUrl("/api/demo/models"), { cache: "no-store" });
   renderModels(await jsonResponse(response));
 }
 
 async function loadConfig() {
   try {
-    const response = await demoFetch("/api/ui/config", { cache: "no-store" });
+    const response = await fetch(demoUrl("/api/ui/config"), { cache: "no-store" });
     const config = await jsonResponse(response);
     state.config = config;
     state.instanceId = config.instance_id;

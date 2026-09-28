@@ -33,11 +33,7 @@ class InvocationStatus(str, Enum):
 
 @dataclass(frozen=True)
 class Invocation:
-    """A Runtime Store snapshot for one idempotent invocation and its owning attempt.
-
-    ``session_sequence_number`` is its fixed admission order within the session, not its
-    current queue position or an event replay cursor. Sessionless invocations leave it unset.
-    """
+    """A Runtime Store snapshot for one idempotent invocation and its owning attempt."""
 
     invocation_id: str
     status: InvocationStatus
@@ -45,7 +41,7 @@ class Invocation:
     request: JsonValue
     response: JsonValue
     session_id: str | None = None
-    session_sequence_number: int | None = None
+    queue_order: int | None = None
 
     @property
     def is_terminal(self) -> bool:

@@ -824,10 +824,7 @@ def test_deploy_recommends_invoking_deployed_agent(
     assert len(commands) == 1, result.output
     command = commands[0]
     path = "/api/invocations" if server == "agentbricks" else "/invocations"
-    assert (
-        f"agentbricks endpoint invoke agent-bricks-myapp --path {path} "
-        "--session-id example-session --json "
-    ) in command
+    assert f"agentbricks endpoint invoke agent-bricks-myapp --path {path} --json " in command
     assert "│" not in command
     assert ("$(uuidgen)" in command) is (server == "agentbricks")
     panel, example = result.output.split("Invoke with Agent Bricks\n")

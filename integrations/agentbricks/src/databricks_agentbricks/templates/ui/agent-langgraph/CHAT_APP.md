@@ -35,16 +35,13 @@ drops the configured default. Transient list failures are retried in
 `databricks_agentkit.runtime.model_services` before the fallback applies.
 
 The UI reads local history from the LangGraph checkpoint and managed history from Session Store
-items. It keeps a stable application session UUID in browser local storage and sends it in
-the required `X-Databricks-Session-Id` header; each turn gets a separate invocation UUID.
-The runtime queues simultaneous submissions for the same session. The router cookie is independent
-and may still provide sticky replica routing.
+items. It keeps a stable application session UUID in browser local storage and includes it inside
+every durable invocation's `input`; each turn gets a separate invocation UUID. The router cookie is
+independent and may still provide sticky replica routing.
 
 The Sessions card creates new session UUIDs in the browser. With a managed Session Store,
 `GET /api/demo/sessions` lists the most recent sessions for the signed-in actor and each Open action
-calls `POST /api/demo/sessions/{session_id}/open`. Session-state requests carry the current session
-in the same header; body fields, query parameters, and cookies are not session inputs.
-Opening a session verifies ownership and reloads
+calls `POST /api/demo/sessions/{session_id}/open`. Opening a session verifies ownership and reloads
 its transcript and pending LangGraph state. In local in-memory mode only the current browser session
 can be listed because there is no shared session index.
 

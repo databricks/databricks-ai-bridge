@@ -45,7 +45,7 @@ class RequestAuth:
 
 
 @pytest.mark.asyncio
-async def test_adapter_uses_context_session_and_namespaces_untrusted_actor(template, monkeypatch):
+async def test_adapter_namespaces_session_and_untrusted_actor(template, monkeypatch):
     framework, adapter, _agent = template
     calls = []
 
@@ -64,18 +64,15 @@ async def test_adapter_uses_context_session_and_namespaces_untrusted_actor(templ
     for owner in ("alice", "bob"):
         auth = RequestAuth(owner)
         context = SimpleNamespace(
-            request_auth=auth,
-            session_id=f"private:{owner}:session:header-session",
-            invocation_id="run",
-            emit=AsyncMock(),
+            request_auth=auth, session_id="cookie", invocation_id="run", emit=AsyncMock()
         )
         response = await adapter.invoke(payload, context)
         kwargs = calls[0][1]
-        assert kwargs["session_id"] == f"private:{owner}:session:header-session"
+        assert kwargs["session_id"] == f"private:{owner}:session:public"
         assert kwargs["actor"] == f"private:{owner}:actor:victim"
         assert kwargs["workspace_client_for"] is auth.client_for
         assert "request_auth" not in kwargs
-        assert "session_id" not in response
+        assert response["session_id"] == "public"
         assert "private:" not in repr(response)
         calls.clear()
 
@@ -140,16 +137,6 @@ async def test_context_session_is_already_private(template, monkeypatch):
     assert "session_id" not in response
 
 
-@pytest.mark.parametrize("context_session", [None, ""])
-@pytest.mark.asyncio
-async def test_adapter_does_not_fall_back_to_body_session(template, context_session):
-    _framework, adapter, _agent = template
-    context = SimpleNamespace(session_id=context_session, invocation_id="run", emit=AsyncMock())
-
-    with pytest.raises(ValueError, match="session_id must be a non-empty string"):
-        await adapter.invoke({"session_id": "body-session", "messages": []}, context)
-
-
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
 @pytest.mark.parametrize("user_auth", [False, True])
 @pytest.mark.asyncio
@@ -172,9 +159,7 @@ async def test_ui_runtime_capabilities_ignore_tool_auth_policy(framework, user_a
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
-        config = (
-            await client.get("/api/ui/config", headers={"X-Databricks-Session-Id": "public"})
-        ).json()
+        config = (await client.get("/api/ui/config?session_id=public")).json()
     assert config["background"] == {
         "enabled": True,
         "persistent": True,
