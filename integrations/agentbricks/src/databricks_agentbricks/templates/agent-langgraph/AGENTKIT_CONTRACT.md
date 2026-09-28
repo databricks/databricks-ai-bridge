@@ -71,7 +71,7 @@ and register [runtime/adapter.py](runtime/adapter.py) hooks. Keep framework-nati
 The invoke hook translates opaque application input, runs the graph, translates native events,
 calls `await context.emit(event)`, and returns JSON output. DurableAgentServer owns foreground/background
 transport, polling, and replay. Invocation UUIDs differ from stable application session IDs; the
-routing cookie is not the application session.
+`X-Routing-Key` sticky-routing header is not the application session.
 
 The example assumes `messages` state and message/update events. Custom state, outputs, and
 interrupts require explicit mappings and must not be discarded to fit the example.

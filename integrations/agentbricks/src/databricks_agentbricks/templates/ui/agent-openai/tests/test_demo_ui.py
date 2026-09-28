@@ -130,7 +130,7 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
     app.recover(invoke_handler)
     ui.install_ui(app)
     client = TestClient(app, base_url="https://testserver")
-    client.cookies.set("__Host-databricks-app-router", session_id)
+    client.headers["X-Routing-Key"] = session_id
     if configured:
         # The actor is the signed-in user from this forwarded-identity header (ui._request_actor);
         # unconfigured requests have no header and fall back to the "agent" actor.

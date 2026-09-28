@@ -955,7 +955,7 @@ Any memory/session store declared in agent.toml (for example, by `agentbricks me
 
 Scaling to multiple instances (--instances) uses best-effort sticky routing, so a browser session automatically stays on one instance.
 
-API clients that need it must resend a stable UUID in this cookie every request: __Host-databricks-app-router=<uuid>
+API clients that need it must resend a stable UUID in this request header every request: X-Routing-Key: <uuid>
 
 ```
 agentbricks deploy [NAME] [options]

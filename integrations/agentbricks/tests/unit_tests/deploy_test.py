@@ -490,7 +490,7 @@ def test_deploy_help_exposes_instances_and_sticky_routing():
     assert "--min-instances" not in result.output
     assert "--max-instances" not in result.output
     assert "sticky routing" in result.output
-    assert "__Host-databricks-app-router" in result.output
+    assert "X-Routing-Key" in result.output
     assert "Databricks Apps instances" not in result.output
 
 

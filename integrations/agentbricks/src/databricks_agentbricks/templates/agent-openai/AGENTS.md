@@ -34,8 +34,9 @@ Use only `/api/invocations`. The transport body is:
 
 `id` is the invocation identifier and idempotency key. `background` and `stream` are transport
 fields. Everything framework-specific belongs inside `input`. The browser generates a stable
-session ID in local storage; API clients should do the same. The Apps router cookie is only for
-sticky routing and is not authentication or application session state.
+session ID in local storage and sends it on every call in the `X-Routing-Key` request header, which
+PoP-proxy uses to pin the session to one app replica; API clients should do the same. That header is
+only for sticky routing and is not authentication or application session state.
 
 ## Code map
 

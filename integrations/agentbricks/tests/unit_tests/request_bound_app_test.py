@@ -172,11 +172,10 @@ async def test_request_user_streams_ordered_persisted_events(deployed):
     app = make_app(handler)
     invocation_id = str(uuid4())
     async with running_client(app) as client:
-        client.cookies.set("__Host-databricks-app-router", "routing-session")
         response = await client.post(
             "/api/invocations",
             json={"id": invocation_id, "input": "hello", "stream": True},
-            headers=headers(),
+            headers={**headers(), "x-routing-key": "routing-session"},
         )
         status = await client.get(f"/api/invocations/{invocation_id}", headers=headers())
         events = await client.get(f"/api/invocations/{invocation_id}/events", headers=headers())

@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import urllib.error
+import uuid
 
 import pytest
 from click.testing import CliRunner
@@ -150,7 +151,7 @@ def test_invoke_deployed_app_resolves_oauth_and_generated_session(monkeypatch):
     request = captured["request"]
     assert request.url == "https://app.example/api/invocations"
     assert request.headers["Authorization"] == "Bearer token"
-    assert request.headers["Cookie"].startswith("__Host-databricks-app-router=")
+    assert uuid.UUID(request.headers["X-Routing-Key"])
     assert request.body == {"input": []}
 
 
@@ -183,7 +184,7 @@ def test_invoke_url_uses_explicit_routing_session_without_auth(monkeypatch):
     assert result.exit_code == 0, result.output
     request = captured["request"]
     assert "Authorization" not in request.headers
-    assert request.headers["Cookie"] == "__Host-databricks-app-router=local-session"
+    assert request.headers["X-Routing-Key"] == "local-session"
 
 
 def test_url_can_explicitly_request_oauth(monkeypatch):

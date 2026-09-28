@@ -16,7 +16,7 @@ from databricks_agentbricks.cli.endpoint_transport import HttpSession
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentkit._api_client import _workspace_client
 
-_ROUTING_COOKIE = "__Host-databricks-app-router"
+_ROUTING_KEY_HEADER = "X-Routing-Key"
 
 
 def _resolve_endpoint(
@@ -68,7 +68,7 @@ def _platform_headers(
     if authenticate:
         headers["Authorization"] = _authorization_header(profile)
     if session_id:
-        headers["Cookie"] = f"{_ROUTING_COOKIE}={session_id}"
+        headers[_ROUTING_KEY_HEADER] = session_id
     return headers
 
 

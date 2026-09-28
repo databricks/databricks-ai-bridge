@@ -32,7 +32,7 @@ from databricks_agentkit.runtime.types import (
 
 logger = logging.getLogger(__name__)
 
-_ROUTING_COOKIE = "__Host-databricks-app-router"
+_ROUTING_KEY_HEADER = "x-routing-key"
 _API_ROOT = "/api/invocations"
 
 
@@ -126,10 +126,10 @@ class DurableAgentServer(FastAPI):
         return function
 
     async def _bind_session(self, request: Request, call_next) -> Response:
-        # TODO: Read the standard session header once Databricks Apps supports one. The Apps proxy
-        # currently consumes its routing cookie before forwarding deployed requests, so the
-        # invocation ID becomes the deterministic session fallback in _invoke_request.
-        request.state.session_id = request.cookies.get(_ROUTING_COOKIE)
+        # PoP-proxy forwards the standard sticky-routing header, X-Routing-Key, to the app - unlike
+        # the routing cookie, which the Apps proxy consumes before forwarding - so we read it here.
+        # The invocation ID remains the deterministic session fallback in _invoke_request.
+        request.state.session_id = request.headers.get(_ROUTING_KEY_HEADER)
         return await call_next(request)
 
     async def _execute(

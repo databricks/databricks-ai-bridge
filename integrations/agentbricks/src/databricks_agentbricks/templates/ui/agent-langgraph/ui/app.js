@@ -593,9 +593,13 @@ function handleOutput(output) {
 }
 
 function invocationHeaders() {
-  return {
+  const headers = {
     "Content-Type": "application/json",
   };
+  // PoP-proxy pins a request to one app replica via this header; omit it rather than
+  // send a blank value, which PoP-proxy rejects with 400.
+  if (state.sessionId) headers["X-Routing-Key"] = state.sessionId;
+  return headers;
 }
 
 function invocationPayload(payload, transport = {}) {
