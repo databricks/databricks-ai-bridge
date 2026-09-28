@@ -1,4 +1,4 @@
-"""Unit tests for `ab memory entries create --content-file`."""
+"""Unit tests for `agentbricks memory entries create --content-file`."""
 
 from __future__ import annotations
 

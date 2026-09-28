@@ -361,7 +361,7 @@ async def test_initialize_serializes_schema_changes_for_each_runtime_store(schem
 
     first_call = connection.execute.await_args_list[0]
     assert "pg_advisory_xact_lock" in str(first_call.args[0])
-    assert first_call.args[1] == {"schema_lock_key": f"{schema}.invocations:schema"}
+    assert first_call.args[1] == {"schema_lock_key": f"schema:{schema}.invocations"}
     assert "CREATE TABLE IF NOT EXISTS" in str(connection.execute.await_args_list[1].args[0])
 
 

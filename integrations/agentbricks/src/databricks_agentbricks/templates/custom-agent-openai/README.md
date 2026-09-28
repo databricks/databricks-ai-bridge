@@ -3,11 +3,11 @@
 This template shows how to serve an OpenAI Agents SDK agent with an ordinary FastAPI application.
 It does not use the managed `DurableAgentServer` HTTP server or durable runtime.
 
-This template does not load managed tool bindings from `agent.toml`, so `ab tools add` is not
+This template does not load managed tool bindings from `agent.toml`, so `agentbricks tools add` is not
 supported. Wire framework-native Python tools and MCP servers directly in `agent/agent.py`.
 
 ```bash
-ab dev
+agentbricks dev
 ```
 
 Call its single foreground endpoint:
@@ -23,4 +23,4 @@ The session header is optional here: this custom server is stateless and does no
 It does not provide the managed server's session queueing or persistence.
 
 Edit `runtime/main.py` to define your own HTTP contract. Edit `agent/agent.py` to change the model
-or agent behavior. Deploy with `ab --profile <profile> deploy custom-agent-openai`.
+or agent behavior. Deploy with `agentbricks --profile <profile> deploy custom-agent-openai`.

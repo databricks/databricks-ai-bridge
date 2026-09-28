@@ -71,5 +71,5 @@ def _list_services(client: Any, schema: str) -> list[dict[str, str]]:
 
 def _add_command(service: str) -> str:
     if service == "system.ai.sandbox":
-        return "ab tools add sandbox --scope table:catalog.schema.table"
-    return f"ab tools add mcp {service}"
+        return "agentbricks tools add sandbox --scope table:catalog.schema.table"
+    return f"agentbricks tools add mcp {service}"

@@ -297,7 +297,7 @@ class Runner:
             snapshot = await complete_all(*(self.state(body["id"]) for body in bodies))
             active = [row for row in snapshot if row["status"] == "ACTIVE"]
             queued = [row for row in snapshot if row["status"] == "QUEUED"]
-            require(len(active) <= 1, "snapshot observed multiple active turns in one session")
+            # These GETs are separate snapshots. Use committed events below to prove exclusivity.
             if active and queued:
                 self.current["active_and_queued_snapshot"] = snapshot
                 break

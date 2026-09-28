@@ -23,11 +23,11 @@ from databricks_agentbricks.project_types import (
 )
 from databricks_agentkit.runtime import tool_manifest
 
-# agent.toml resource-table names, read by the manifest parsing below (and by `ab dev`/`deploy`).
+# agent.toml resource-table names, read by the manifest parsing below (and by `agentbricks dev`/`deploy`).
 MEMORY_STORE_TABLE = "memory_store"
 SESSION_STORE_TABLE = "session_store"
-# The tracing binding (`ab tracing bind` / `unbind`): the `experiment_name` key under [tracing] is
-# the bound MLflow experiment. Its presence means tracing is on; an absent binding means off. `ab
+# The tracing binding (`agentbricks tracing bind` / `unbind`): the `experiment_name` key under [tracing] is
+# the bound MLflow experiment. Its presence means tracing is on; an absent binding means off. `agentbricks
 # init` bootstraps a default name.
 TRACING_TABLE = "tracing"
 EXPERIMENT_NAME_KEY = "experiment_name"
@@ -389,7 +389,7 @@ class AgentProject:
         # Tracing config: the MLflow experiment NAME to trace to (a workspace path). Its presence IS
         # the enable switch: a bound name means tracing is on (deploy get-or-creates it); None means
         # unbound, i.e. off. Storing a name (not an id) keeps the binding valid across workspaces and
-        # profiles, since an id is workspace-local. `ab init` bootstraps a default name.
+        # profiles, since an id is workspace-local. `agentbricks init` bootstraps a default name.
         self.trace_experiment_name = trace_experiment_name
 
     @classmethod
@@ -408,7 +408,7 @@ class AgentProject:
         except FileNotFoundError as exc:
             raise AgentCliError(
                 f"Could not find agent.toml in {project_root}.",
-                hint="This command needs an Agent Bricks project. Run `ab init` to create one, "
+                hint="This command needs an Agent Bricks project. Run `agentbricks init` to create one, "
                 "or point at an existing project with --source <dir>.",
             ) from exc
         except (OSError, ParseError) as exc:
@@ -551,7 +551,7 @@ class AgentProject:
     def bind_memory_store(self, name: str, store_id: str | None = None) -> bool:
         """Declare the memory store binding in agent.toml. Returns True if it changed.
 
-        ``store_id`` is the bare store id (``memory-stores/<id>`` minus the prefix). `ab deploy`
+        ``store_id`` is the bare store id (``memory-stores/<id>`` minus the prefix). `agentbricks deploy`
         resolves the id fresh and injects it via ``AGENT_MEMORY_STORE``; the field is only recorded for
         legacy/hand-written bindings that pin the id in the manifest.
         """

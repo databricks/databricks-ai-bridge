@@ -1,4 +1,4 @@
-"""Agent Bricks CLI: the ``ab`` command and its subcommands.
+"""Agent Bricks CLI: the ``agentbricks`` command and its subcommands.
 
 The console entrypoint (``project.scripts``) is ``databricks_agentbricks.cli:main``, re-exported here from
 ``databricks_agentbricks.cli.app`` (the command tree) so that path stays stable. The entry function is named

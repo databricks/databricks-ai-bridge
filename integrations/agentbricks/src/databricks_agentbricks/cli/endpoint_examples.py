@@ -20,7 +20,8 @@ def agent_invoke_command(target: str, *, uses_runtime_api: bool) -> str:
     else:
         json_arg = shlex.quote(body)
     return (
-        f"ab endpoint invoke {target} --path {path} --session-id example-session --json {json_arg}"
+        f"agentbricks endpoint invoke {target} --path {path} "
+        f"--session-id example-session --json {json_arg}"
     )
 
 

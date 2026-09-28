@@ -2,7 +2,7 @@
 
 ## MCP registration validation
 
-For a focused check of `ab tools add mcp`, install the current `databricks-agentbricks` wheel and pytest
+For a focused check of `agentbricks tools add mcp`, install the current `databricks-agentbricks` wheel and pytest
 into a virtual environment, then run:
 
 ```bash
@@ -19,7 +19,7 @@ remotely; no tools are invoked and no workspace resources are created.
 ## Full runtime matrix
 
 This suite proves that CLI edits and direct `agent.toml` edits reach the same runtime code.
-It creates two LangGraph projects (CLI/direct), runs each with `ab dev`, deploys each to
+It creates two LangGraph projects (CLI/direct), runs each with `agentbricks dev`, deploys each to
 Databricks Apps, and semantically exercises sandbox, `system.ai.web_search`, a local Python tool,
 and a temporary Unity Catalog function. The result is 16 evidence rows.
 
@@ -31,7 +31,7 @@ uv build --wheel --out-dir /tmp/agentbricks-tooling-dist
 uv run python tests/e2e/tool_matrix.py \
   --profile df1 \
   --app-auth-profile df1-oauth-mcp \
-  --wheel /tmp/agentbricks-tooling-dist/databricks_agentbricks-0.2.0-py3-none-any.whl \
+  --wheel /tmp/agentbricks-tooling-dist/databricks_agentbricks-0.3.0-py3-none-any.whl \
   --output /tmp/agentbricks-tool-matrix-df1 \
   --uc-schema aifx_benchmarks.agentbricks_agent_tools_e2e \
   --template-repo /absolute/path/to/databricks-ai-bridge \
@@ -44,11 +44,11 @@ a SQL warehouse. Override its defaults with `--warehouse-id` or `--uc-schema cat
 Deployed Databricks Apps accept programmatic calls under `/api/*` with OAuth Bearer tokens. If the
 workspace profile uses a PAT, pass an OAuth profile for the same workspace with
 `--app-auth-profile`.
-The template repo/ref flags make `ab init` read the exact checkout under test and avoid remote
+The template repo/ref flags make `agentbricks init` read the exact checkout under test and avoid remote
 clone throttling; provide both or omit both to test the default upstream template.
 
-Direct authoring does not call `ab tools add`: it replaces `agent.toml` with
-`fixtures/direct_agent.toml`. CLI authoring invokes the three managed `ab tools add ...`
+Direct authoring does not call `agentbricks tools add`: it replaces `agent.toml` with
+`fixtures/direct_agent.toml`. CLI authoring invokes the three managed `agentbricks tools add ...`
 commands. Both paths then create the same user-owned, framework-native Python tool file with no
 Python entry in `agent.toml`. Every exact command and code-authoring step is captured in
 `commands.log`.

@@ -1,4 +1,4 @@
-"""`ab login` / `logout` — remember an optional Databricks profile.
+"""`agentbricks login` / `logout` — remember an optional Databricks profile.
 
 `login` validates a named profile and persists the selection; when credentials are missing or
 rejected in an interactive terminal, it delegates setup to `databricks auth login` and retries.
@@ -31,7 +31,7 @@ def _config_file() -> pathlib.Path:
 
 
 def load_default_profile() -> Optional[str]:
-    """The profile saved by `ab login`, or None if the user never logged in."""
+    """The profile saved by `agentbricks login`, or None if the user never logged in."""
     try:
         return json.loads(_config_file().read_text()).get("profile")
     except (OSError, json.JSONDecodeError):
@@ -61,7 +61,7 @@ def _run_databricks_login(profile: str) -> None:
     except FileNotFoundError as exc:
         raise AgentCliError(
             "Could not configure Databricks authentication: the `databricks` CLI was not found.",
-            hint=f"Install the Databricks CLI, then retry `ab login --profile {profile}`.",
+            hint=f"Install the Databricks CLI, then retry `agentbricks login --profile {profile}`.",
         ) from exc
     if result.returncode != 0:
         raise AgentCliError(
@@ -113,7 +113,7 @@ def login(obj, profile) -> None:
     if not profile:
         raise AgentCliError(
             "No profile to save.",
-            hint="Pass one to remember, e.g. `ab login --profile <profile>`.",
+            hint="Pass one to remember, e.g. `agentbricks login --profile <profile>`.",
         )
     client, user = _authenticate_profile(profile)
     _save_default_profile(profile)
@@ -124,7 +124,7 @@ def login(obj, profile) -> None:
         f"Logged in as {user}",
         fields={"Profile": profile, "Host": client.host},
         next_steps=[
-            ("ab init my-agent", "Scaffold a new agent project"),
+            ("agentbricks init my-agent", "Scaffold a new agent project"),
         ],
     )
 

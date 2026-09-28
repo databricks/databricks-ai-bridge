@@ -1,8 +1,8 @@
 # Contributing to Agent Bricks CLI and AgentKit
 
-This guide covers the Agent Bricks CLI (`ab`), AgentKit, the runtime, and the project templates,
+This guide covers the Agent Bricks CLI (`agentbricks`), AgentKit, the runtime, and the project templates,
 including how to run and test changes locally and on Databricks Apps. The current Python
-distribution is `databricks-agentbricks`; installing it provides the `ab` command and AgentKit.
+distribution is `databricks-agentbricks`; installing it provides the `agentbricks` command and AgentKit.
 
 ## Three kinds of change, and how each is sourced
 
@@ -11,16 +11,16 @@ re-run:
 
 | Layer | What it is | How it's sourced |
 | --- | --- | --- |
-| **CLI** | the `ab` command (`databricks_agentbricks.cli` and its command modules) | editable install -> runs live from your working tree |
-| **Templates** | the project scaffolds under `src/databricks_agentbricks/templates/` | shipped inside the package; `ab init` copies the template matching the installed CLI via `importlib.resources`, which for an editable install resolves to your source tree |
+| **CLI** | the `agentbricks` command (`databricks_agentbricks.cli` and its command modules) | editable install -> runs live from your working tree |
+| **Templates** | the project scaffolds under `src/databricks_agentbricks/templates/` | shipped inside the package; `agentbricks init` copies the template matching the installed CLI via `importlib.resources`, which for an editable install resolves to your source tree |
 | **SDK / runtime** | `databricks_agentkit.AgentKitClient`, `databricks_agentkit.runtime`, the `langgraph`/`openai` adapters, `DurableAgentServer` | a scaffold depends on the **released** `databricks-agentbricks` distribution from PyPI; opt into local or unreleased code with a `[tool.uv.sources]` override (see below) |
 
 ## Editable install (CLI + templates)
 
 ```sh
 pip install -e integrations/agentbricks     # editable install of the CLI
-ab init /tmp/scratch-agent         # scaffolds from your working-tree template
-cd /tmp/scratch-agent && ab dev
+agentbricks init /tmp/scratch-agent         # scaffolds from your working-tree template
+cd /tmp/scratch-agent && agentbricks dev
 ```
 
 With an editable install, CLI edits and template edits both run straight from your working tree - no
@@ -31,29 +31,29 @@ dependency in `integrations/agentbricks/pyproject.toml`:
 pip install -e integrations/agentbricks     # only when dependencies changed
 ```
 
-Editing a template in the repo only affects **future** `ab init` runs. An existing scaffold has
+Editing a template in the repo only affects **future** `agentbricks init` runs. An existing scaffold has
 its own copy of the template, so to iterate on a scaffolded project edit that copy (or re-init).
 
 ## Testing SDK / runtime changes in a scaffold
 
-A scaffold uses a normal `databricks-agentbricks` PyPI dependency, so `ab dev` and `ab deploy`
+A scaffold uses a normal `databricks-agentbricks` PyPI dependency, so `agentbricks dev` and `agentbricks deploy`
 install the **released** SDK - editing the runtime and adapter implementation under `databricks_agentkit` in your
 checkout does **not** change what a scaffold runs. To exercise local or unreleased SDK changes, add a
 `[tool.uv.sources]` override to the scaffold's `pyproject.toml`. It is a dev-loop-only edit - don't
 ship it in a real deployment.
 
-**`ab dev` - your local checkout (editable, picks up uncommitted edits):**
+**`agentbricks dev` - your local checkout (editable, picks up uncommitted edits):**
 
 ```toml
 [tool.uv.sources]
 databricks-agentbricks = { path = "/abs/path/to/databricks-ai-bridge/integrations/agentbricks", editable = true }
 ```
 
-`ab dev` builds the scaffold's venv from this, so your working-tree SDK edits run live. After
-changing the pin or the scaffold's dependencies, rebuild once with `ab dev --prepare-environment`
-(otherwise `ab dev` reuses the existing `.venv` and you run stale code).
+`agentbricks dev` builds the scaffold's venv from this, so your working-tree SDK edits run live. After
+changing the pin or the scaffold's dependencies, rebuild once with `agentbricks dev --prepare-environment`
+(otherwise `agentbricks dev` reuses the existing `.venv` and you run stale code).
 
-**`ab deploy` - a pushed git ref (the Apps build can't reach a local path):**
+**`agentbricks deploy` - a pushed git ref (the Apps build can't reach a local path):**
 
 ```toml
 [tool.uv.sources]
@@ -70,7 +70,7 @@ override):
 # local: the source uv resolved into the agent venv
 cat /tmp/scratch-agent/.venv/lib/python*/site-packages/databricks_agentkit-*.dist-info/direct_url.json
 # deployed: watch the build/install logs
-ab deployments logs agent-bricks-<name>
+agentbricks deployments logs agent-bricks-<name>
 ```
 
 ## Keeping docs in sync

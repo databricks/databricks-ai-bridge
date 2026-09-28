@@ -1,4 +1,4 @@
-"""``ab add-sandbox`` — attach a downscoped ``system.ai.sandbox`` MCP server."""
+"""``agentbricks add-sandbox`` — attach a downscoped ``system.ai.sandbox`` MCP server."""
 
 from __future__ import annotations
 

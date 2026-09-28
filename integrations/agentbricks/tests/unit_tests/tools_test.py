@@ -1,4 +1,4 @@
-"""Unit tests for manifest-backed ``ab tools`` commands."""
+"""Unit tests for manifest-backed ``agentbricks tools`` commands."""
 
 from __future__ import annotations
 
@@ -210,7 +210,7 @@ def test_add_managed_tool_rejects_custom_server_template_without_manifest_change
     assert result.exit_code != 0
     output = " ".join(result.output.split())
     assert "require an Agent Bricks server template" in output
-    assert "ab init --server agentbricks" in output
+    assert "agentbricks init --server agentbricks" in output
     assert "agent/agent.py" in output
     assert manifest.read_text(encoding="utf-8") == before
 
@@ -368,7 +368,7 @@ def test_genie_command_help_has_examples(command):
     result = CliRunner().invoke(tools, ["add", command, "--help"])
     assert result.exit_code == 0, result.output
     assert "EXAMPLES" in result.output
-    assert f"ab tools add {command}" in result.output
+    assert f"agentbricks tools add {command}" in result.output
 
 
 def test_add_missing_mcp_leaves_project_unchanged(tmp_path: pathlib.Path):
@@ -384,7 +384,7 @@ def test_add_missing_mcp_leaves_project_unchanged(tmp_path: pathlib.Path):
     assert result.exit_code == 1, result.output
     assert "NOT_FOUND" in result.output
     assert "system.ai.missing_service" in result.output
-    assert "ab tools list --kind mcp" in result.output
+    assert "agentbricks tools list --kind mcp" in result.output
     assert {path: path.read_bytes() for path in project.rglob("*") if path.is_file()} == before
 
 

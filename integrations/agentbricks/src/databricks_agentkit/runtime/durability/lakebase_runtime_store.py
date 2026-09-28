@@ -148,8 +148,8 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
     app replica connects to the same schema, another replica can detect a stale heartbeat, claim the
     next attempt, and continue after process or pod loss.
 
-    This store requires a Lakebase Postgres database. ``ab deploy`` reuses or provisions a
-    dedicated app-owned database, then assigns the app its own schema. ``ab dev`` uses
+    This store requires a Lakebase Postgres database. ``agentbricks deploy`` reuses or provisions a
+    dedicated app-owned database, then assigns the app its own schema. ``agentbricks dev`` uses
     ``InMemoryRuntimeStore`` instead.
     """
 
@@ -274,7 +274,7 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
             # App replicas can initialize together; serialize checks and schema changes.
             await connection.execute(
                 text("SELECT pg_advisory_xact_lock(hashtextextended(:schema_lock_key, 0))"),
-                {"schema_lock_key": f"{self._table}:schema"},
+                {"schema_lock_key": f"schema:{self._table}"},
             )
             await connection.execute(
                 text(

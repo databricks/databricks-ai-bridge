@@ -1,4 +1,4 @@
-"""`ab sessions` — manage session stores, sessions, and session items."""
+"""`agentbricks sessions` — manage session stores, sessions, and session items."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def sessions() -> None:
     items, giving it durable conversation history it can list, resume, fork, or delete.
 
     This is the short-term, per-conversation counterpart to the cross-conversation memory in
-    `ab memory`.
+    `agentbricks memory`.
     """
 
 
@@ -69,7 +69,7 @@ def _source_option(function):
 def sessions_bind(obj, store: str, source: pathlib.Path) -> None:
     """Bind session STORE to the agent by declaring it in agent.toml.
 
-    This only edits agent.toml — it does not create the store. `ab deploy` creates any declared
+    This only edits agent.toml — it does not create the store. `agentbricks deploy` creates any declared
     store that doesn't exist yet and grants the deployed app's service principal access to it.
     """
     from databricks_agentbricks.agent_project import AgentProject
@@ -85,11 +85,11 @@ def sessions_bind(obj, store: str, source: pathlib.Path) -> None:
         fields={"agent.toml": str(project.path)},
         next_steps=[
             (
-                f"ab sessions stores create --name {store}",
+                f"agentbricks sessions stores create --name {store}",
                 "Create the store now without deploying",
             ),
-            ("ab dev", "Re-run to pick up the store locally"),
-            ("ab deploy <name>", "Create it if missing and grant the app access"),
+            ("agentbricks dev", "Re-run to pick up the store locally"),
+            ("agentbricks deploy <name>", "Create it if missing and grant the app access"),
         ],
     )
 
@@ -101,7 +101,7 @@ def sessions_unbind(obj, source: pathlib.Path) -> None:
     """Remove the session store binding from the agent's agent.toml.
 
     Only edits agent.toml; the managed store itself is untouched (delete it with
-    `ab sessions stores delete`).
+    `agentbricks sessions stores delete`).
     """
     from databricks_agentbricks.agent_project import AgentProject
 
@@ -158,12 +158,12 @@ def stores_create(obj, name, description, metadata) -> None:
         fields={"Store ID": field(data, "session_store_id")},
         next_steps=[
             (
-                f"ab sessions create --store {name} --actor-id <id>",
+                f"agentbricks sessions create --store {name} --actor-id <id>",
                 "Start a session for an actor",
             ),
-            (f"ab sessions stores get {name}", "View this store's details"),
+            (f"agentbricks sessions stores get {name}", "View this store's details"),
             (
-                f"ab sessions bind {name}",
+                f"agentbricks sessions bind {name}",
                 "Bind this store to the agent (wired in on dev/deploy)",
             ),
         ],
@@ -274,9 +274,9 @@ curl -X POST "{obj.client().host}/api/2.0/agents/session-stores/{store}/sessions
             "agentbricks",
             "bash",
             f"""
-ab sessions items append --store {store} --session-id {session_id} \\
+agentbricks sessions items append --store {store} --session-id {session_id} \\
   --data '{{"role": "user", "content": "Hello"}}'
-ab sessions items list --store {store} --session-id {session_id}
+agentbricks sessions items list --store {store} --session-id {session_id}
 """,
         ),
     ]
@@ -322,7 +322,7 @@ def sessions_create(obj, store, actor_id, session_id, parent_session_id, metadat
         fields={"Actor": actor_id, "Store": store},
         next_steps=[
             (
-                f"ab sessions items append --store {store} "
+                f"agentbricks sessions items append --store {store} "
                 f"--session-id {field(data, 'session_id')} --data '{{...}}'",
                 "Append an item to this session",
             ),
