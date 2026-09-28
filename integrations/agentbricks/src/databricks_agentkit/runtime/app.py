@@ -189,12 +189,14 @@ class DurableAgentServer(FastAPI):
             len(request.headers.getlist(_SESSION_HEADER)) != 1
             or not session_id.strip()
             or session_id != session_id.strip()
+            # Proxies can combine duplicate header lines into one comma-separated value.
+            or "," in session_id
             or any(ord(character) < 32 or ord(character) == 127 for character in session_id)
         ):
             raise HTTPException(
                 422,
-                f"Exactly one nonblank {_SESSION_HEADER} header without surrounding whitespace "
-                "or control characters is required",
+                f"Exactly one nonblank {_SESSION_HEADER} header without commas, surrounding "
+                "whitespace, or control characters is required",
             )
         if self.auth_policy.requires_user:
             request_auth = RequestAuthContext.from_headers(request.headers)

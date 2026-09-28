@@ -107,13 +107,15 @@ def invoke(
     auth,
 ) -> None:
     """Send one HTTP request to a Databricks App or arbitrary URL."""
+    # Apps ingress can fold repeated session headers into one comma-separated value.
     if session_id is not None and (
         not session_id
         or session_id != session_id.strip()
+        or "," in session_id
         or any(ord(char) < 32 or ord(char) == 127 for char in session_id)
     ):
         raise AgentCliError(
-            "--session-id must be nonblank, without surrounding whitespace or control characters."
+            "--session-id must be nonblank, without surrounding whitespace, commas, or control characters."
         )
     base_url, is_app = _resolve_endpoint(app, url, obj.profile)
     authenticate = is_app if auth is None else auth

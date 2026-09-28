@@ -86,6 +86,7 @@ def _request_session_id(request: Request) -> str:
     if (
         len(request.headers.getlist("X-Databricks-Session-Id")) != 1
         or not session_id
+        or "," in session_id
         or session_id != session_id.strip()
         or any(ord(character) < 32 or ord(character) == 127 for character in session_id)
     ):

@@ -214,7 +214,20 @@ def test_managed_invocation_requires_explicit_session_option(path, body):
 
 
 @pytest.mark.parametrize(
-    "session_id", ["", " ", " leading", "trailing ", "a\nb", "a\rb", "a\tb", "a\x7fb"]
+    "session_id",
+    [
+        "",
+        " ",
+        " leading",
+        "trailing ",
+        "one,two",
+        "one, two",
+        ",",
+        "a\nb",
+        "a\rb",
+        "a\tb",
+        "a\x7fb",
+    ],
 )
 def test_invalid_session_option_is_rejected_locally(session_id):
     result = CliRunner().invoke(

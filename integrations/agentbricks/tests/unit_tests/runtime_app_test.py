@@ -155,7 +155,8 @@ async def test_header_session_is_saved_once_and_input_does_not_override_context(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "session_id", ["", "   ", " leading", "trailing ", "a\nb", "a\rb", "a\tb", "a\x7fb"]
+    "session_id",
+    ["", "   ", " leading", "trailing ", "a\nb", "a\rb", "a\tb", "a\x7fb", "one,two", "one, two"],
 )
 async def test_invalid_session_header_is_rejected(session_id) -> None:
     app = make_app()

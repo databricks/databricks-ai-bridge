@@ -114,7 +114,9 @@ while its Runtime record is retained. Request-user invocation IDs are internally
 forwarded principal so users cannot collide with each other.
 
 Every POST requires one nonblank `X-Databricks-Session-Id` header. Reuse the value across turns in
-one conversation and choose a new invocation UUID for each turn. Same-session invocations queue
+one conversation and choose a new invocation UUID for each turn. The header cannot contain commas,
+surrounding whitespace, or control characters; commas can represent proxy-combined duplicate headers.
+Same-session invocations queue
 in durable acceptance order; different sessions can run concurrently. Completion or failure
 releases the next turn; stale active work is recovered first. Steering is not supported.
 

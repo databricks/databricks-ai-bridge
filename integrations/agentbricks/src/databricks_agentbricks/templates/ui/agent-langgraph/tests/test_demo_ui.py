@@ -544,8 +544,10 @@ def test_session_header_controls_ui_state(monkeypatch):
     assert history.json()["session_items"][0]["data"]["content"] == "header-session"
 
 
-@pytest.mark.parametrize("session_header", [None, "", "   ", " session", "session ", "s\tx"])
-def test_ui_rejects_missing_session_header(monkeypatch, session_header):
+@pytest.mark.parametrize(
+    "session_header", [None, "", "   ", " session", "session ", "s\tx", "one,two", "one, two"]
+)
+def test_ui_rejects_invalid_session_header(monkeypatch, session_header):
     client = _client(monkeypatch)
     del client.headers["X-Databricks-Session-Id"]
     client.cookies.set("__Host-databricks-app-router", "cookie-session")
