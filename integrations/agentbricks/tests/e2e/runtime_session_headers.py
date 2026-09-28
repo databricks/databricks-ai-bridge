@@ -39,6 +39,7 @@ CASES = (
     "header-contract",
     "event-replay",
 )
+OPTIONAL_CASES = ("failure-queue", "healthy-heartbeat")
 
 
 def require(condition: Any, message: str) -> None:
@@ -122,6 +123,7 @@ class Runner:
         self.results: list[dict[str, Any]] = []
         self.artifacts: dict[str, str] = {}
         self.boot_ids: set[str] = set()
+        self.build_metadata: dict[str, Any] = {}
 
     def save(self, name: str, value: Any) -> None:
         path = self.output / name
@@ -222,19 +224,21 @@ class Runner:
                 self.boot_ids.add(marker["boot_id"])
         return result["events"]
 
-    async def terminal(self, invocation_id, session):
+    async def terminal(self, invocation_id, session, expected_status="COMPLETED"):
         deadline = time.monotonic() + 180
         while time.monotonic() < deadline:
             state = await self.state(invocation_id)
             if state["status"] in {"COMPLETED", "FAILED"}:
                 require(
-                    state["status"] == "COMPLETED", f"{invocation_id} failed; inspect saved state"
+                    state["status"] == expected_status,
+                    f"{invocation_id}: expected {expected_status}, got {state['status']}",
                 )
-                require(MODEL_MARKER in json.dumps(state["response"]), "real model output missing")
-                require(
-                    state["session_id"] == state["response"]["session_id"] == session,
-                    "runtime and framework session differ",
-                )
+                require(state["session_id"] == session, "stored session differs")
+                if expected_status == "COMPLETED":
+                    require(
+                        MODEL_MARKER in json.dumps(state["response"]), "real model output missing"
+                    )
+                    require(state["response"]["session_id"] == session, "framework session differs")
                 require(state["attempt"] == 1, "unexpected recovery during normal execution")
                 require(
                     "session_id" not in state["request"], "session duplicated in request envelope"
@@ -242,6 +246,17 @@ class Runner:
                 return state
             await asyncio.sleep(0.5)
         raise AssertionError(f"{invocation_id}: completion deadline exceeded")
+
+    async def active(self, invocation_id):
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            state = await self.state(invocation_id)
+            if state["status"] == "ACTIVE":
+                require(state["attempt"] == 1, "unexpected recovery before active observation")
+                return state
+            require(state["status"] == "QUEUED", "execution terminated before active observation")
+            await asyncio.sleep(0.25)
+        raise AssertionError(f"{invocation_id}: active observation deadline exceeded")
 
     @staticmethod
     def markers(events, kind):
@@ -259,6 +274,7 @@ class Runner:
             build["installed_source_sha256"] == self.expected["installed_source_sha256"],
             "installed SDK modules differ from expected wheel",
         )
+        self.build_metadata = build
 
     async def transport(self, name):
         session = self.session()
@@ -445,6 +461,94 @@ class Runner:
             )
         self.current["events"] = events
 
+    async def failure_queue(self):
+        session = self.session()
+        first, follower = self.body(delay=8), self.body()
+        first["input"]["_runtime_e2e"]["fail"] = True
+        await self.submit(first, session)
+        await self.active(first["id"])
+        await self.submit(follower, session)
+        queued = await self.state(follower["id"])
+        require(queued["status"] == "QUEUED", "follower did not wait for the failing turn")
+        states = await complete_all(
+            self.terminal(first["id"], session, expected_status="FAILED"),
+            self.terminal(follower["id"], session),
+        )
+        events = await self.events(session)
+        first_events = [event for event in events if event["invocation_id"] == first["id"]]
+        messages = [event for event in first_events if event["event"].get("type") == "message"]
+        require(MODEL_MARKER in json.dumps(messages), "failure occurred before real model output")
+        require(
+            len(self.markers(first_events, "error")) == 1,
+            "intentional handler failure not recorded",
+        )
+        starts = self.markers(events, "start")
+        require(
+            [event["invocation_id"] for event in starts] == [first["id"], follower["id"]],
+            "failure retried or follower did not execute once",
+        )
+        failed = next(event for event in first_events if event["event"]["type"] == "run.failed")
+        require(
+            failed["sequence_number"] < starts[1]["sequence_number"],
+            "follower started before failure was committed",
+        )
+        require(
+            [state["session_sequence_number"] for state in states] == [1, 2],
+            "failure changed admission order",
+        )
+        self.current.update(queued_snapshot=queued, states=states, events=events)
+
+    async def healthy_heartbeat(self):
+        timings = self.build_metadata["timings"]
+        heartbeat, stale, scan = (
+            float(timings[key]) for key in ("heartbeat_seconds", "stale_seconds", "scan_seconds")
+        )
+        observation_seconds = stale + 2 * scan + 2 * heartbeat
+        delay = observation_seconds + 4
+        require(
+            0 < heartbeat < stale and scan > 0 and delay <= 45,
+            "probe timings do not permit bounded heartbeat observation",
+        )
+        session = self.session()
+        body = self.body(delay=delay)
+        await self.submit(body, session)
+        first = await self.active(body["id"])
+        started = time.monotonic()
+        timeout_response = await self.request(
+            "GET",
+            f"/api/runtime-e2e/invocations/{body['id']}/wait?timeout_seconds=0.2",
+            expected=408,
+        )
+        require(
+            timeout_response == {"detail": "runtime wait timed out"},
+            "timeout did not come from Runtime.wait",
+        )
+        samples = [{"elapsed_seconds": 0, "state": first}]
+        while True:
+            state = await self.state(body["id"])
+            elapsed = time.monotonic() - started
+            samples.append({"elapsed_seconds": round(elapsed, 3), "state": state})
+            require(
+                state["status"] == "ACTIVE" and state["attempt"] == 1,
+                "wait timeout cancelled execution or healthy ownership was lost",
+            )
+            if elapsed >= observation_seconds:
+                break
+            await asyncio.sleep(min(1.0, observation_seconds - elapsed))
+        state = await self.terminal(body["id"], session)
+        waited = await self.request(
+            "GET", f"/api/runtime-e2e/invocations/{body['id']}/wait?timeout_seconds=1"
+        )
+        require(
+            waited["output"] == state["response"], "wait after completion differs from saved output"
+        )
+        events = await self.events(session)
+        require(
+            len(self.markers(events, "start")) == len(self.markers(events, "end")) == 1,
+            "healthy invocation executed more than one attempt",
+        )
+        self.current.update(timings=timings, active_samples=samples, state=state, events=events)
+
     async def run_case(self, name, function):
         self.current = {"case": name, "sessions": [], "invocations": []}
         started = time.monotonic()
@@ -505,12 +609,17 @@ def main():
     parser.add_argument(
         "--cases",
         default=",".join(CASES),
-        help="Comma-separated case names; build verification always runs.",
+        help="Comma-separated case names; optional: failure-queue,healthy-heartbeat. Build verification always runs.",
     )
     args = parser.parse_args()
     args.cases = args.cases.split(",")
-    if not args.cases or set(args.cases) - set(CASES) or len(args.cases) != len(set(args.cases)):
-        parser.error(f"--cases must be unique names from: {', '.join(CASES)}")
+    available_cases = (*CASES, *OPTIONAL_CASES)
+    if (
+        not args.cases
+        or set(args.cases) - set(available_cases)
+        or len(args.cases) != len(set(args.cases))
+    ):
+        parser.error(f"--cases must be unique names from: {', '.join(available_cases)}")
     if args.require_multi_worker and "concurrent-fifo" not in args.cases:
         parser.error("--require-multi-worker requires the concurrent-fifo case")
     url = urlsplit(args.app_url)

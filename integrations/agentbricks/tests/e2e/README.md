@@ -109,6 +109,15 @@ After independently deploying multiple workers against the same Runtime Store, p
 boot IDs. Without that flag, a passing run does not establish multi-worker contention. The suite
 does not claim browser interaction, crash recovery, or stale-worker write fencing coverage.
 
+Two longer checks are opt-in with `--cases failure-queue,healthy-heartbeat`:
+
+- `failure-queue` injects an error only after the real model returns. It verifies that the failed
+  first turn releases its queued follower, both execute once, and persisted events preserve order.
+- `healthy-heartbeat` keeps the real handler active beyond the configured stale timeout and multiple
+  recovery scans. A short `Runtime.wait()` times out without cancelling it; the same attempt remains
+  active and later completes with real model output. Evidence records timed state observations,
+  not direct heartbeat timestamps. This is a healthy-ownership check, not a crash-recovery test.
+
 Retain the app, Lakebase resources, wheel, and deployment source until PR review and merge, so
 reviewers can repeat live runs and query the recorded invocation IDs directly. The runner never
 provisions, restarts, scales, or deletes resources.
