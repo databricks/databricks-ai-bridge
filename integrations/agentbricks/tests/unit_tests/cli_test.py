@@ -42,9 +42,21 @@ def test_root_registers_supported_commands():
         "tools",
     } <= names
     assert "mcp" not in names
+    assert "pipeline" not in names
     assert "durability" not in names
     assert "help" not in names
     assert "add-sandbox" not in names
+
+
+def test_pipeline_is_nested_under_memory():
+    assert "pipeline" in cli.memory.commands
+
+    nested = CliRunner().invoke(cli.agentbricks, ["memory", "pipeline", "--help"])
+    root = CliRunner().invoke(cli.agentbricks, ["pipeline", "--help"])
+
+    assert nested.exit_code == 0, nested.output
+    assert "agentbricks memory pipeline" in nested.output
+    assert root.exit_code != 0
 
 
 def test_root_command_name_and_version_default_to_agentbricks():

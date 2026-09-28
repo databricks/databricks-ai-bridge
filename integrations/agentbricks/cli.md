@@ -168,6 +168,7 @@ A memory store is the managed store that holds this memory; each entry is a smal
 | --- | --- |
 | [`memory stores`](#agentbricks-memory-stores) | Workspace-scoped managed memory stores. |
 | [`memory entries`](#agentbricks-memory-entries) | Memory entries within a store, partitioned by actor. |
+| [`memory pipeline`](#agentbricks-memory-pipeline) | Distill session history into long-term memory. |
 | [`memory bind`](#agentbricks-memory-bind) | Bind memory STORE to the agent by declaring it in agent.toml. |
 | [`memory unbind`](#agentbricks-memory-unbind) | Remove the memory store binding from the agent's agent.toml. |
 
@@ -451,6 +452,94 @@ _Options_
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--source <SOURCE>` | path | `.` | no | Agent project containing agent.toml. |
+
+#### `agentbricks memory pipeline`
+
+Manage pipelines that distill session history into long-term memory.
+
+| Subcommand | Description |
+| --- | --- |
+| [`memory pipeline create`](#agentbricks-memory-pipeline-create) | Create a Dreamer memory pipeline. |
+| [`memory pipeline list`](#agentbricks-memory-pipeline-list) | List Dreamer memory pipelines in the workspace. |
+| [`memory pipeline get`](#agentbricks-memory-pipeline-get) | Get a Dreamer memory pipeline by id or resource name. |
+| [`memory pipeline update`](#agentbricks-memory-pipeline-update) | Update a pipeline's display name or instructions. |
+| [`memory pipeline delete`](#agentbricks-memory-pipeline-delete) | Delete a Dreamer memory pipeline and its backing job. |
+| [`memory pipeline run`](#agentbricks-memory-pipeline-run) | Manually run a Dreamer memory pipeline. |
+
+##### `agentbricks memory pipeline create`
+
+```text
+agentbricks memory pipeline create --memory-store TEXT --session-store TEXT [options]
+```
+
+| Option | Type | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--memory-store` | string | - | yes | Memory store name or resource name. |
+| `--session-store` | string | - | yes | Session store name or resource name. |
+| `--model` | string | - | no | Model service used for Dreamer distillation. |
+| `--display-name` | string | - | no | Optional human-readable pipeline name. |
+| `--instructions` | string | - | no | Instructions steering distillation: inline text or @path to a UTF-8 file. |
+
+```bash
+agentbricks memory pipeline create --memory-store agent-memory --session-store agent-sessions \
+  --model system.ai.gpt-5-6-sol
+```
+
+##### `agentbricks memory pipeline list`
+
+```text
+agentbricks memory pipeline list [options]
+```
+
+| Option | Type | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--page-size` | integer | 25 | no | Maximum number of pipelines to return. |
+| `--page-token` | string | - | no | Token from a previous page. |
+
+##### `agentbricks memory pipeline get`
+
+```text
+agentbricks memory pipeline get NAME
+```
+
+`NAME` is a pipeline id or full `memory-pipelines/<id>` resource name.
+
+##### `agentbricks memory pipeline update`
+
+```text
+agentbricks memory pipeline update NAME [options]
+```
+
+| Option | Type | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--display-name` | string | - | no | New human-readable pipeline name. |
+| `--instructions` | string | - | no | Instructions steering distillation: inline text or @path to a UTF-8 file. |
+
+Load complex instructions from a UTF-8 file (also supported by `create`):
+
+```sh
+agentbricks memory pipeline update p-123 --instructions @/path/to/instructions.md
+```
+
+##### `agentbricks memory pipeline delete`
+
+```text
+agentbricks memory pipeline delete NAME [options]
+```
+
+| Option | Type | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--yes`, `-y` | flag | false | no | Skip the confirmation prompt. |
+
+##### `agentbricks memory pipeline run`
+
+Trigger the pipeline's Dreamer engine and return the newly created run.
+
+```text
+agentbricks memory pipeline run NAME
+```
+
+`NAME` is a pipeline id or full `memory-pipelines/<id>` resource name.
 
 ### `agentbricks mcp`
 
