@@ -1,7 +1,8 @@
-"""``agentbricks memory dreamer`` — manage cross-session memory pipelines."""
+"""``agentbricks memory pipeline`` — manage cross-session memory pipelines."""
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import click
@@ -9,6 +10,17 @@ import click
 from databricks_agentbricks import render
 from databricks_agentbricks.render import field
 from databricks_agentkit import timefmt
+
+
+def _resolve_instructions(ctx, param, value):
+    if value is None or not value.startswith("@"):
+        return value
+    try:
+        return Path(value[1:]).expanduser().read_text(encoding="utf-8")
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise click.BadParameter(
+            f"Cannot read instructions file: {exc}", ctx=ctx, param=param
+        ) from exc
 
 
 def _truncate(value: Any, length: int = 48) -> str:
@@ -53,16 +65,21 @@ def _render_run(run: dict) -> None:
 
 
 @click.group()
-def dreamer() -> None:
+def pipeline() -> None:
     """Manage pipelines that distill session history into long-term memory."""
 
 
-@dreamer.command("create")
+@pipeline.command("create")
 @click.option("--memory-store", required=True, help="Memory store name or resource name.")
 @click.option("--session-store", required=True, help="Session store name or resource name.")
 @click.option("--model", default=None, help="Model service used for Dreamer distillation.")
 @click.option("--display-name", default=None, help="Optional human-readable pipeline name.")
-@click.option("--instructions", default=None, help="Instructions steering distillation.")
+@click.option(
+    "--instructions",
+    default=None,
+    callback=_resolve_instructions,
+    help="Instructions steering distillation: inline text or @path to a UTF-8 file.",
+)
 @click.pass_obj
 def create(obj, memory_store, session_store, model, display_name, instructions) -> None:
     """Create a Dreamer memory pipeline."""
@@ -80,12 +97,12 @@ def create(obj, memory_store, session_store, model, display_name, instructions) 
         "Created Dreamer memory pipeline",
         fields={"Resource name": field(data, "name")},
         next_steps=[
-            (f"agentbricks memory dreamer get {field(data, 'name')}", "View the pipeline"),
+            (f"agentbricks memory pipeline get {field(data, 'name')}", "View the pipeline"),
         ],
     )
 
 
-@dreamer.command("list")
+@pipeline.command("list")
 @click.option("--page-size", type=int, default=25, show_default=True)
 @click.option("--page-token", default=None)
 @click.pass_obj
@@ -122,7 +139,7 @@ def list_(obj, page_size, page_token) -> None:
     )
 
 
-@dreamer.command("get")
+@pipeline.command("get")
 @click.argument("name")
 @click.pass_obj
 def get(obj, name) -> None:
@@ -134,20 +151,22 @@ def get(obj, name) -> None:
     _render_detail(data)
 
 
-@dreamer.command("update")
+@pipeline.command("update")
 @click.argument("name")
 @click.option("--display-name", default=None)
-@click.option("--instructions", default=None)
-@click.option("--enable", "enabled", flag_value=True, default=None)
-@click.option("--disable", "enabled", flag_value=False)
+@click.option(
+    "--instructions",
+    default=None,
+    callback=_resolve_instructions,
+    help="Instructions steering distillation: inline text or @path to a UTF-8 file.",
+)
 @click.pass_obj
-def update(obj, name, display_name, instructions, enabled) -> None:
-    """Update a pipeline's display name, instructions, or enabled state."""
+def update(obj, name, display_name, instructions) -> None:
+    """Update a pipeline's display name or instructions."""
     data = obj.client().update_memory_pipeline(
         name,
         display_name=display_name,
         instructions=instructions,
-        enabled=enabled,
     )
     if obj.output == "json":
         render.emit_json(data)
@@ -155,7 +174,7 @@ def update(obj, name, display_name, instructions, enabled) -> None:
     _render_detail(data)
 
 
-@dreamer.command("delete")
+@pipeline.command("delete")
 @click.argument("name")
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
 @click.pass_obj
@@ -169,7 +188,7 @@ def delete(obj, name, yes) -> None:
     render.success(f"Deleted Dreamer memory pipeline '{name}'")
 
 
-@dreamer.command("run")
+@pipeline.command("run")
 @click.argument("name")
 @click.pass_obj
 def run(obj, name) -> None:

@@ -9,7 +9,7 @@ from typing import Any
 import click
 
 from databricks_agentbricks import render
-from databricks_agentbricks.cli.dreamer import dreamer
+from databricks_agentbricks.cli.pipeline import pipeline
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.render import field
 from databricks_agentkit import timefmt
@@ -80,7 +80,7 @@ def entries() -> None:
     """Memory entries within a store, partitioned by actor."""
 
 
-memory.add_command(dreamer)
+memory.add_command(pipeline)
 
 
 # --- bind a store to an agent project (agent.toml) --------------------------

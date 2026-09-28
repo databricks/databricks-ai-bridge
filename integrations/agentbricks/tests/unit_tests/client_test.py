@@ -210,7 +210,7 @@ def test_memory_pipeline_crud_uses_v2_resource_contract(workspace_client):
     )
     c.get_memory_pipeline("p-123")
     c.list_memory_pipelines(page_size=10, page_token="next")
-    c.update_memory_pipeline("p-123", instructions="Only durable facts.", enabled=False)
+    c.update_memory_pipeline("p-123", instructions="Only durable facts.")
     c.delete_memory_pipeline("memory-pipelines/p-123")
     assert hasattr(c, "run_memory_pipeline"), "transport must expose the pipeline run method"
     c.run_memory_pipeline("p-123")
@@ -236,11 +236,10 @@ def test_memory_pipeline_crud_uses_v2_resource_contract(workspace_client):
         mock.call(
             "PATCH",
             "/api/2.0/agents/memory-pipelines/p-123",
-            query={"update_mask": "instructions,dreamer_policy"},
+            query={"update_mask": "instructions"},
             body={
                 "name": "memory-pipelines/p-123",
                 "instructions": "Only durable facts.",
-                "dreamer_policy": {"enabled": False},
             },
         ),
         mock.call("DELETE", "/api/2.0/agents/memory-pipelines/p-123", query=None, body=None),

@@ -116,39 +116,41 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("memory", "entries", "delete"): (
         ("agentbricks memory entries delete --store <store> <entry>", "delete an entry"),
     ),
-    ("memory", "dreamer"): (
+    ("memory", "pipeline"): (
         (
-            "agentbricks memory dreamer create --memory-store agent-memory "
+            "agentbricks memory pipeline create --memory-store agent-memory "
             "--session-store agent-sessions "
             "--model system.ai.gpt-5-6-sol",
             "create a cross-session memory pipeline",
         ),
-        ("agentbricks memory dreamer list", "list memory pipelines"),
+        ("agentbricks memory pipeline list", "list memory pipelines"),
     ),
-    ("memory", "dreamer", "create"): (
+    ("memory", "pipeline", "create"): (
         (
-            "agentbricks memory dreamer create --memory-store agent-memory "
+            "agentbricks memory pipeline create --memory-store agent-memory "
             "--session-store agent-sessions "
             "--model system.ai.gpt-5-6-sol",
             "create a memory pipeline",
         ),
     ),
-    ("memory", "dreamer", "list"): (("agentbricks memory dreamer list", "list memory pipelines"),),
-    ("memory", "dreamer", "get"): (
-        ("agentbricks memory dreamer get <pipeline>", "show one memory pipeline"),
+    ("memory", "pipeline", "list"): (
+        ("agentbricks memory pipeline list", "list memory pipelines"),
     ),
-    ("memory", "dreamer", "update"): (
+    ("memory", "pipeline", "get"): (
+        ("agentbricks memory pipeline get <pipeline>", "show one memory pipeline"),
+    ),
+    ("memory", "pipeline", "update"): (
         (
-            "agentbricks memory dreamer update <pipeline> "
+            "agentbricks memory pipeline update <pipeline> "
             '--instructions "Keep durable preferences"',
             "edit a memory pipeline",
         ),
     ),
-    ("memory", "dreamer", "delete"): (
-        ("agentbricks memory dreamer delete <pipeline>", "delete a memory pipeline"),
+    ("memory", "pipeline", "delete"): (
+        ("agentbricks memory pipeline delete <pipeline>", "delete a memory pipeline"),
     ),
-    ("memory", "dreamer", "run"): (
-        ("agentbricks memory dreamer run <pipeline>", "start a Dreamer run"),
+    ("memory", "pipeline", "run"): (
+        ("agentbricks memory pipeline run <pipeline>", "start a Dreamer run"),
     ),
     ("sessions",): (
         ("agentbricks sessions stores create --name agent-sessions", "create a session store"),

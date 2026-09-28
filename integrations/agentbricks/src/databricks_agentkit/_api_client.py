@@ -536,15 +536,10 @@ class _AgentBricksApiClient:
         *,
         display_name: Optional[str] = None,
         instructions: Optional[str] = None,
-        enabled: Optional[bool] = None,
     ) -> dict:
         body = _body(display_name=display_name, instructions=instructions)
-        if enabled is not None:
-            body["dreamer_policy"] = {"enabled": enabled}
         if not body:
-            raise AgentCliError(
-                "No fields to update. Provide --display-name, --instructions, --enable, or --disable."
-            )
+            raise AgentCliError("No fields to update. Provide --display-name or --instructions.")
         body = {"name": memory_pipeline_path(name), **body}
         update_mask = ",".join(key for key in body if key != "name")
         return self._do(
