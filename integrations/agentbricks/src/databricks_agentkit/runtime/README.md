@@ -124,6 +124,10 @@ sessions are namespaced once by authenticated owner before submission. There is 
 or invocation-ID fallback. Existing HTTP clients must migrate to the header; direct Python Runtime
 callers may still omit `session_id` for independent, sessionless execution.
 
+Before upgrading, drain older HTTP work without persisted session metadata and stop experimental
+workers that use the old `queue_order` column. Startup renames that column without changing its
+values. See [Session queueing](ARCHITECTURE.md) for the coordinated-upgrade requirements.
+
 - **Synchronous:** Wait for the result in the POST response.
 - **Streaming (`stream: true`):** Receive progress events as Server-Sent Events (SSE).
 - **Background (`background: true`):** Return immediately with `202`, then poll for the result.
