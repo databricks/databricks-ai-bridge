@@ -11,6 +11,7 @@ Environment:
     RUN_AGENTBRICKS_INTEGRATION_TESTS   "1" to enable this suite
     DATABRICKS_HOST / _CLIENT_ID / _CLIENT_SECRET   service-principal auth for the CLIs and SDK
     AGENTBRICKS_INTEGRATION_UC_SCHEMA   two-part ``catalog.schema`` for a scratch function
+    AGENTBRICKS_INTEGRATION_BRIDGE_SHA   optional; pin generated App packages to this bridge commit
     AGENTBRICKS_INTEGRATION_PREPROVISIONED_APP_CATALOG_ACCESS   "1" when Apps have USE CATALOG
     AGENTBRICKS_INTEGRATION_WAREHOUSE_ID   optional; overrides warehouse discovery
     AGENTBRICKS_WHEEL   optional; a prebuilt databricks-agentbricks wheel (else built here)
@@ -133,6 +134,9 @@ def test_tool_matrix_deploy_and_invoke(tmp_path: pathlib.Path) -> None:
     warehouse = os.environ.get("AGENTBRICKS_INTEGRATION_WAREHOUSE_ID")
     if warehouse:
         argv += ["--warehouse-id", warehouse]
+    bridge_sha = os.environ.get("AGENTBRICKS_INTEGRATION_BRIDGE_SHA")
+    if bridge_sha:
+        argv += ["--bridge-sha", bridge_sha]
     if os.environ.get("AGENTBRICKS_INTEGRATION_PREPROVISIONED_APP_CATALOG_ACCESS") == "1":
         argv.append("--preprovisioned-app-catalog-access")
 

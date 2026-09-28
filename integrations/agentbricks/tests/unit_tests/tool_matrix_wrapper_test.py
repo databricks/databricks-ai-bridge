@@ -2,6 +2,7 @@
 
 import pathlib
 import runpy
+import subprocess
 
 _WRAPPER = pathlib.Path(__file__).resolve().parents[1] / "integration_tests" / "test_tool_matrix.py"
 _runtime_log_tails = runpy.run_path(str(_WRAPPER))["_runtime_log_tails"]
@@ -69,3 +70,21 @@ def test_runtime_log_tails_redacts_workspace_secret(tmp_path: pathlib.Path, monk
 
     assert "credential=<redacted>" in tails
     assert "synthetic-test-secret" not in tails
+
+
+def test_wrapper_forwards_bridge_sha_to_matrix(tmp_path: pathlib.Path, monkeypatch) -> None:
+    wrapper = runpy.run_path(str(_WRAPPER))["test_tool_matrix_deploy_and_invoke"]
+    namespace = wrapper.__globals__
+    monkeypatch.setenv("AGENTBRICKS_INTEGRATION_BRIDGE_SHA", "a" * 40)
+    monkeypatch.setitem(namespace, "_wheel", lambda _tmp_path: tmp_path / "agentbricks.whl")
+    observed = []
+
+    def run_matrix(argv: list[str]) -> tuple[subprocess.CompletedProcess[str], bool]:
+        observed.extend(argv)
+        return subprocess.CompletedProcess(argv, 0, "", ""), False
+
+    monkeypatch.setitem(namespace, "_run_matrix", run_matrix)
+
+    wrapper(tmp_path)
+
+    assert observed[observed.index("--bridge-sha") + 1] == "a" * 40

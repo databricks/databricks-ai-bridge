@@ -225,7 +225,7 @@ The fundamental assertion: when SP-A calls the agent, it sees SP-A's identity; w
 
 | Layer | File | What it tests |
 |-------|------|---------------|
-| Agent Bricks | `integrations/agentbricks/tests/integration_tests/test_tool_matrix.py` | Drives `integrations/agentbricks/tests/e2e/tool_matrix.py`: scaffolds LangGraph agents with `agentbricks tools` and a hand-edited `agent.toml`, runs each under `agentbricks dev` and on Databricks Apps, then invokes the sandbox, web-search MCP, a local Python tool, and a temporary UC function. All 16 evidence rows must pass. The CLI and templates come from the built wheel. |
+| Agent Bricks | `integrations/agentbricks/tests/integration_tests/test_tool_matrix.py` | Drives `integrations/agentbricks/tests/e2e/tool_matrix.py`: scaffolds LangGraph agents with `agentbricks tools` and a hand-edited `agent.toml`, runs each under `agentbricks dev` and on Databricks Apps, then invokes the sandbox, web-search MCP, a local Python tool, and a temporary UC function. All 16 evidence rows must pass. The CLI and templates come from the built wheel. CI pins the generated Apps' Agent Bricks and LangChain dependencies to the checked-out bridge commit. |
 
 **Key regressions these tests guard against:**
 - A deployed agent that won't boot — durable-runtime store resolution against real Lakebase (the class of bug that shipped in #550)
@@ -308,6 +308,11 @@ RUN_AGENTBRICKS_INTEGRATION_TESTS=1 AGENTBRICKS_INTEGRATION_UC_SCHEMA=catalog.sc
   uv run --group tests python -m pytest tests/integration_tests/ -v
 ```
 
+The runner workflow accepts `agentbricks_bridge_ref` (default `main`), resolves it to a commit SHA,
+and sets `AGENTBRICKS_INTEGRATION_BRIDGE_SHA`. This adds Git source overrides to each generated
+App's `pyproject.toml` for `databricks-agentbricks` and `databricks-langchain`, so dev and deploy use
+the same bridge revision. A local run without this variable uses released scaffold dependencies.
+
 ### Environment Variables Reference
 
 | Variable | Required By | Description |
@@ -333,6 +338,7 @@ RUN_AGENTBRICKS_INTEGRATION_TESTS=1 AGENTBRICKS_INTEGRATION_UC_SCHEMA=catalog.sc
 | `OBO_TEST_APP_NAME` | OBO | Pre-deployed Databricks App name |
 | `RUN_AGENTBRICKS_INTEGRATION_TESTS` | Agent Bricks | Set to `1` to enable |
 | `AGENTBRICKS_INTEGRATION_UC_SCHEMA` | Agent Bricks | Two-part `catalog.schema` for the scratch UC function |
+| `AGENTBRICKS_INTEGRATION_BRIDGE_SHA` | Agent Bricks (optional) | 40-character checked-out bridge commit to use for generated App dependencies |
 | `AGENTBRICKS_INTEGRATION_WAREHOUSE_ID` | Agent Bricks (optional) | SQL warehouse to use instead of auto-discovering one |
 | `AGENTBRICKS_INTEGRATION_PREPROVISIONED_APP_CATALOG_ACCESS` | Agent Bricks (optional) | Set to `1` when App identities already have `USE CATALOG` |
 | `AGENTBRICKS_WHEEL` | Agent Bricks (optional) | Prebuilt databricks-agentbricks wheel (else one is built during the test) |

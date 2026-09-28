@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import shlex
 import signal
 import subprocess
@@ -24,6 +25,7 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 import tomli
+import tomlkit
 from databricks.sdk import WorkspaceClient
 
 FRAMEWORKS = ("langgraph",)
@@ -114,12 +116,16 @@ class Runner:
         wheel: pathlib.Path,
         app_auth_profile: str | None = None,
         preprovisioned_app_catalog_access: bool = False,
+        bridge_sha: str | None = None,
     ):
+        if bridge_sha is not None and re.fullmatch(r"[0-9a-f]{40}", bridge_sha) is None:
+            raise MatrixError("--bridge-sha must be a 40-character lowercase Git commit SHA.")
         self.profile = profile
         self.output = output
         self.wheel = wheel.resolve()
         self.app_auth_profile = app_auth_profile or profile
         self.preprovisioned_app_catalog_access = preprovisioned_app_catalog_access
+        self.bridge_sha = bridge_sha
         self.transcript = Transcript(output / "commands.log")
         self.runner_venv = output / "runner-venv"
         self.agentbricks = self.runner_venv / "bin" / "agentbricks"
@@ -360,6 +366,8 @@ class Runner:
                     init_args,
                     timeout=600,
                 )
+                if self.bridge_sha:
+                    self._pin_bridge_sources(project)
                 if authoring == "cli":
                     self._author_cli(project)
                 else:
@@ -368,6 +376,36 @@ class Runner:
                 app_name = f"agent-bricks-t-{framework[:2]}-{authoring[:2]}-{run_suffix}"
                 cases.append(ProjectCase(framework, authoring, project, app_name))
         return cases
+
+    def _pin_bridge_sources(self, project: pathlib.Path) -> None:
+        pyproject = project / "pyproject.toml"
+        document = tomlkit.parse(pyproject.read_text(encoding="utf-8"))
+        dependencies = document["project"]["dependencies"]
+        if not any(
+            str(dependency).startswith("databricks-langchain") for dependency in dependencies
+        ):
+            dependencies.append("databricks-langchain>=0.17.0")
+        if "tool" not in document:
+            document["tool"] = tomlkit.table()
+        if "uv" not in document["tool"]:
+            document["tool"]["uv"] = tomlkit.table()
+        if "sources" not in document["tool"]["uv"]:
+            document["tool"]["uv"]["sources"] = tomlkit.table()
+        for package, subdirectory in (
+            ("databricks-agentbricks", "integrations/agentbricks"),
+            ("databricks-langchain", "integrations/langchain"),
+        ):
+            source = tomlkit.inline_table()
+            source.update(
+                {
+                    "git": "https://github.com/databricks/databricks-ai-bridge.git",
+                    "rev": self.bridge_sha,
+                    "subdirectory": subdirectory,
+                }
+            )
+            document["tool"]["uv"]["sources"][package] = source
+        self.transcript.file_step(pyproject, f"pin Agent Bricks and LangChain to {self.bridge_sha}")
+        pyproject.write_text(tomlkit.dumps(document), encoding="utf-8")
 
     def _author_cli(self, project: pathlib.Path) -> None:
         manifest = project / "agent.toml"
@@ -774,6 +812,7 @@ class Runner:
             "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
             "wheel": str(self.wheel),
             "wheel_sha256": _sha256(self.wheel),
+            "bridge_sha": self.bridge_sha,
             "uc_function": self.uc_function,
             "warehouse_id": self.warehouse_id,
             "rows": [dataclasses.asdict(row) for row in self.rows],
@@ -936,6 +975,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warehouse-id")
     parser.add_argument("--uc-schema", default="main.agentbricks_agent_tools_e2e")
     parser.add_argument(
+        "--bridge-sha", help="Immutable bridge commit for generated App dependencies."
+    )
+    parser.add_argument(
         "--app-auth-profile",
         help="OAuth profile for deployed App /api calls; defaults to --profile.",
     )
@@ -963,6 +1005,7 @@ def main() -> int:
         args.wheel.resolve(),
         args.app_auth_profile,
         args.preprovisioned_app_catalog_access,
+        args.bridge_sha,
     )
     succeeded = False
     try:
