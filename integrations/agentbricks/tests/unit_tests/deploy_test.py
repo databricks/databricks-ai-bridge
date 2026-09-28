@@ -1532,3 +1532,121 @@ def test_deploy_grants_bound_store(tmp_path: pathlib.Path, monkeypatch):
     env = {e["name"]: e["value"] for e in env_entries}
     assert env["AGENT_SESSION_STORE"] == "bound-sess"
     assert "AGENT_MEMORY_STORE" not in env
+
+
+# --- DeployOrchestrator: DI-seam unit tests ---------------------------------------
+
+
+class _FakeOrchestratorApps:
+    """A minimal AppsClient stand-in for exercising DeployOrchestrator phases directly."""
+
+    def __init__(self, *, service_principal=None, exists=True):
+        self._service_principal = service_principal
+        self._exists = exists
+
+    def exists(self, name):
+        return self._exists
+
+    def service_principal(self, name):
+        return self._service_principal
+
+    def wait_for_running(self, name):
+        pass
+
+    def url(self, name):
+        return None
+
+
+class _FakeOrchestratorStores:
+    def __init__(self, *, grant_error=None):
+        self.grant_error = grant_error
+        self.grant_calls: list[tuple] = []
+
+    def grant_store_access(self, sp, session_store, memory_store):
+        self.grant_calls.append((sp, session_store, memory_store))
+        return self.grant_error
+
+
+def _make_orchestrator(apps, stores=None, runner=None) -> deploy_mod.DeployOrchestrator:
+    orchestrator = deploy_mod.DeployOrchestrator(
+        client_factory=lambda: (_ for _ in ()).throw(AssertionError("client should not be built")),
+        apps=apps,
+        stores_factory=lambda client: stores,
+        profile="prof",
+        output="text",
+        runner=runner
+        or (lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr="")),
+    )
+    # These phase-level tests call `_grant_access`/`_ensure_app` directly (bypassing `run()`), so wire
+    # `_stores` the same way `run()` would via `stores_factory(self._client)`.
+    orchestrator._stores = stores
+    return orchestrator
+
+
+def test_grant_access_returns_granted_when_apps_and_stores_succeed():
+    apps = _FakeOrchestratorApps(service_principal="sp-1")
+    stores = _FakeOrchestratorStores()
+    orchestrator = _make_orchestrator(apps, stores)
+
+    grants_stores, grant_error, trace_grant_error = orchestrator._grant_access(
+        "agent-bricks-x", "mem", None, None, MLflowTraceTables(), None
+    )
+
+    assert (grants_stores, grant_error) == (True, None)
+    assert stores.grant_calls == [("sp-1", None, "mem")]
+    # trace_setup_error=None means the reconcile still runs (autouse fixture stubs it to succeed).
+    assert trace_grant_error is None
+
+
+def test_grant_access_surfaces_error_when_service_principal_unresolved():
+    apps = _FakeOrchestratorApps(service_principal=None)
+    stores = _FakeOrchestratorStores()
+    orchestrator = _make_orchestrator(apps, stores)
+
+    grants_stores, grant_error, _ = orchestrator._grant_access(
+        "agent-bricks-x", None, "sess", None, MLflowTraceTables(), None
+    )
+
+    assert grants_stores is True
+    assert grant_error == "could not resolve the app's service principal."
+    assert stores.grant_calls == []  # never reached grant_store_access without a resolved SP
+
+
+def test_grant_access_skips_trace_reconcile_when_setup_errored(monkeypatch):
+    apps = _FakeOrchestratorApps(service_principal="sp-1")
+    stores = _FakeOrchestratorStores()
+    orchestrator = _make_orchestrator(apps, stores)
+    trace_grant = mock.Mock(return_value=None)
+    monkeypatch.setattr(deploy_mod, "apply_trace_resources", trace_grant)
+
+    orchestrator._grant_access(
+        "agent-bricks-x", None, None, "exp-1", MLflowTraceTables(), "mlflow blew up"
+    )
+
+    trace_grant.assert_not_called()  # a resolve failure must not touch trace resources
+
+
+def test_ensure_app_issues_create_argv_when_deployment_missing():
+    calls: list[list[str]] = []
+    apps = _FakeOrchestratorApps()
+    runner = lambda args, profile, **kw: (
+        calls.append(args) or types.SimpleNamespace(returncode=0, stdout="", stderr="")
+    )
+    orchestrator = _make_orchestrator(apps, runner=runner)
+
+    orchestrator._ensure_app("agent-bricks-x", False, None, None, [])
+
+    assert ["apps", "create", "agent-bricks-x"] in calls
+
+
+def test_ensure_app_skips_create_when_deployment_exists():
+    calls: list[list[str]] = []
+    apps = _FakeOrchestratorApps()
+    runner = lambda args, profile, **kw: (
+        calls.append(args) or types.SimpleNamespace(returncode=0, stdout="", stderr="")
+    )
+    orchestrator = _make_orchestrator(apps, runner=runner)
+
+    orchestrator._ensure_app("agent-bricks-x", True, None, None, [])
+
+    assert not any(args[:2] == ["apps", "create"] for args in calls)
