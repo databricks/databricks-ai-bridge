@@ -182,6 +182,8 @@ async def test_adapter_calls_same_run_agent_for_invoke_and_recovery(monkeypatch)
     assert calls[0][0] == {"messages": payload["messages"]}
     assert calls[1][0] is None
     assert calls[0][1] == calls[1][1]
+    assert calls[0][1]["session_id"] == "runtime-session"
+    assert calls[0][1]["actor"] == "runtime-session"
 
 
 def _has_workspace_auth() -> bool:

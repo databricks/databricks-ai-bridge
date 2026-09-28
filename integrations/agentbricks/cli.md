@@ -953,7 +953,8 @@ Any memory/session store declared in agent.toml (for example, by `ab memory/sess
 
 Scaling to multiple instances (--instances) uses best-effort sticky routing, so a browser session automatically stays on one instance.
 
-API clients that need it must resend a stable UUID in this cookie every request: __Host-databricks-app-router=<uuid>
+API clients may use __Host-databricks-app-router=<uuid> for sticky routing. This cookie does not
+identify the conversation; managed invocation requests require X-Databricks-Session-Id separately.
 
 ```
 ab deploy [NAME] [options]
@@ -1117,7 +1118,7 @@ _Options_
 | `--query <QUERY>` | string | - | no | Query parameter as 'name=value'. |
 | `--json <JSON_VALUE>` | string | - | no | Complete JSON request body. |
 | `--sse` | flag | - | no | Consume the response as Server-Sent Events. |
-| `--session-id <SESSION_ID>` | string | - | no | Application session id (default: generated for a Databricks App). |
+| `--session-id <SESSION_ID>` | string | - | no | Session ID sent as X-Databricks-Session-Id; required for POST /api/invocations. |
 | `--timeout <TIMEOUT>` | float range | `300.0` | no | - |
 | `--auth`, `--no-auth` | flag | - | no | Inject Databricks OAuth authentication. |
 

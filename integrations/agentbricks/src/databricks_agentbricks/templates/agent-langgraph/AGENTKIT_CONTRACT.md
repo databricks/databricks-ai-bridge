@@ -76,6 +76,13 @@ routing cookie is not the application session.
 The example assumes `messages` state and message/update events. Custom state, outputs, and
 interrupts require explicit mappings and must not be discarded to fit the example.
 
+Send the stable application session in the required `X-Databricks-Session-Id` header.
+The runtime serializes accepted invocations in that session and passes its identity through
+`context.session_id`; the adapter uses that same identity for conversation state. Different
+sessions can run concurrently. Session identity is not read from the body or routing cookie.
+For request-user calls, the server namespaces the session once using the authenticated owner.
+The adapter must not namespace it again. Credentials remain process-local and cannot survive recovery.
+
 ### Recovery and durability
 
 Runtime Store persistence covers invocations and emitted events. Session Store persistence covers

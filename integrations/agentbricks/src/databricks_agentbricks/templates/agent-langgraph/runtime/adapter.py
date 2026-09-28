@@ -19,8 +19,8 @@ def _payload(value: Any) -> dict[str, Any]:
     return value
 
 
-def _session_id(payload: dict[str, Any], context: InvocationContext) -> str:
-    value = payload.get("session_id") or context.session_id
+def _session_id(context: InvocationContext) -> str:
+    value = context.session_id
     if not isinstance(value, str) or not value:
         raise ValueError("session_id must be a non-empty string")
     return value
@@ -57,7 +57,7 @@ async def recover(value: Any, context: InvocationContext) -> dict:
             "Request-user invocations cannot be recovered in the background.",
             400,
         )
-    session_id = _session_id(payload, context)
+    session_id = _session_id(context)
     actor = _actor(payload, session_id)
     agent_input = await recovery_input(
         _agent_input(payload),
@@ -85,12 +85,9 @@ async def _invoke_agent(
     payload: dict[str, Any],
     context: InvocationContext,
 ) -> dict:
-    session_id = _session_id(payload, context)
+    session_id = _session_id(context)
     actor = _actor(payload, session_id)
     auth = getattr(context, "request_auth", None)
-    internal_session_id = (
-        auth.namespace("session", session_id) if auth and payload.get("session_id") else session_id
-    )
     actor = auth.namespace("actor", actor) if auth else actor
     user_auth = auth is not None
     auth_kwargs = {"workspace_client_for": auth.client_for} if user_auth else {}
@@ -99,7 +96,7 @@ async def _invoke_agent(
     async for event in _serialize_events(
         run_agent(
             agent_input,
-            session_id=internal_session_id,
+            session_id=session_id,
             actor=actor,
             model=model if isinstance(model, str) else None,
             invocation_id=context.invocation_id,
@@ -119,7 +116,7 @@ async def _invoke_agent(
     interrupted = bool(outputs and outputs[-1].get("type") == "interrupt")
     return {
         "output": [event["message"] if event["type"] == "message" else event for event in outputs],
-        **({"session_id": session_id} if not user_auth or payload.get("session_id") else {}),
+        **({"session_id": session_id} if not user_auth else {}),
         "status": "interrupted" if interrupted else "completed",
     }
 

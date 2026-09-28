@@ -223,7 +223,8 @@ ab --profile <profile> deploy my-agent
 Use `--framework openai` for OpenAI Agents. Templates keep agent code separate from the runtime
 adapter and declare default Session and Memory Store bindings in `agent.toml`.
 
-Each managed run is an **invocation**. Send a client-generated UUID `id` and your agent's `input`:
+Each managed run is an **invocation**. Send `X-Databricks-Session-Id: conversation-1` with a
+client-generated UUID `id` and your agent's `input`:
 
 ```json
 {
@@ -240,8 +241,13 @@ Each managed run is an **invocation**. Send a client-generated UUID `id` and you
 | `GET /api/invocations/{id}` | Returns the invocation status and, when completed, its output. |
 | `GET /api/invocations/{id}/events?after={cursor}` | Streams events after the last received event ID, allowing clients to reconnect. |
 
-The UUID also acts as an idempotency key: repeating the same request reuses the existing invocation
-while its record is retained; using the ID for a different request returns `409`.
+The required session header queues invocations in durable acceptance order within that session;
+different sessions can execute concurrently. Managed templates use `context.session_id` for
+conversation history. No cookie, body field, or invocation ID substitutes for the header.
+Existing HTTP callers must migrate; direct Python Runtime callers can remain sessionless.
+
+The UUID also acts as an idempotency key: repeating the same request and session reuses the existing
+invocation while its record is retained; using the ID for a different request or session returns `409`.
 
 `ab dev` keeps execution state in process and loses it on restart. For projects with
 `[agent].server = "agentbricks"`, `ab deploy` provisions a persistent Runtime Store for requests,
@@ -509,10 +515,12 @@ server.
 ```sh
 ab --profile <profile> endpoint invoke agent-bricks-my-agent \
   --path /api/invocations \
+  --session-id conversation-1 \
   --json '{"id":"00000000-0000-4000-8000-000000000001","input":[{"role":"user","content":"Hello"}]}'
 
 ab endpoint invoke --url http://localhost:8000 \
   --path /api/invocations \
+  --session-id conversation-1 \
   --json '{"id":"00000000-0000-4000-8000-000000000001","input":[{"role":"user","content":"Hello"}]}'
 ```
 
@@ -524,18 +532,19 @@ a client-generated invocation ID, and streaming servers require their own stream
 INVOCATION_ID=$(uuidgen)
 ab --profile <profile> endpoint invoke agent-bricks-my-agent \
   --path /api/invocations \
+  --session-id conversation-1 \
   --json "{\"id\":\"$INVOCATION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Run the report\"}]}"
 
 ab --profile <profile> endpoint invoke agent-bricks-my-agent \
   --path /api/invocations \
+  --session-id conversation-1 \
   --sse \
   --json "{\"id\":\"$INVOCATION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"stream\":true}"
 ```
 
-`--session-id` preserves one application session across calls by setting the Databricks Apps routing
-cookie. This also works with a direct App URL and with the generated runtime on localhost. OAuth and
-session headers are managed by the runtime; arbitrary custom request headers are intentionally not exposed
-by this command.
+`--session-id` sends `X-Databricks-Session-Id` and is required for `POST /api/invocations`.
+Reuse it across turns; the CLI never invents a session ID. It works for App names, direct App URLs,
+and localhost. OAuth is managed by the CLI; arbitrary custom request headers are not exposed.
 
 ## Command help
 
@@ -845,8 +854,8 @@ store and grants the app's service principal access to it. The memory store id f
 via the `AGENT_MEMORY_STORE` env var that `deploy` injects; `ab dev` runs locally with memory off
 and does not inject it. The id is not persisted in `agent.toml`.)
 
-The chat UI generates a stable application session UUID in browser local storage, places it inside
-the invocation's opaque `input`, and creates a fresh invocation UUID per turn. The
+The chat UI generates a stable application session UUID in browser local storage, sends it in
+`X-Databricks-Session-Id`, and creates a fresh invocation UUID per turn. The
 `__Host-databricks-app-router` cookie remains independent: API clients may reuse it for sticky
 replica routing, but it is neither authentication nor the template's application session state.
 

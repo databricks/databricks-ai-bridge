@@ -190,6 +190,7 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
 
         self._lakebase = lakebase
         self._engine = lakebase.engine
+        self._schema = schema
         self._table = f"{schema}.invocations"
         self._events_table = f"{schema}.invocation_events"
 
@@ -270,13 +271,18 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
     async def initialize(self) -> None:
         await self._lakebase.create_schema()
         async with self._engine.begin() as connection:
+            # App replicas can initialize together; serialize checks and schema changes.
+            await connection.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:schema_lock_key, 0))"),
+                {"schema_lock_key": f"{self._table}:schema"},
+            )
             await connection.execute(
                 text(
                     f"""
                     CREATE TABLE IF NOT EXISTS {self._table} (
                         invocation_id TEXT PRIMARY KEY,
                         session_id TEXT,
-                        queue_order BIGINT,
+                        session_sequence_number BIGINT,
                         status TEXT NOT NULL,
                         attempt INTEGER NOT NULL DEFAULT 0,
                         heartbeat_at TIMESTAMPTZ,
@@ -287,12 +293,34 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                     """
                 )
             )
+            # Preserve admission order from earlier versions of the session-aware SDK.
+            # Those experimental versions must be stopped before the column is renamed.
+            await connection.execute(
+                text(
+                    f"""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM pg_attribute
+                            WHERE attrelid = '{self._table}'::regclass
+                              AND attname = 'queue_order' AND NOT attisdropped
+                        ) THEN
+                            ALTER TABLE {self._table}
+                            RENAME COLUMN queue_order TO session_sequence_number;
+                            ALTER INDEX IF EXISTS {self._schema}.invocations_session_queue_order_idx
+                            RENAME TO invocations_session_sequence_number_idx;
+                        END IF;
+                    END;
+                    $$
+                    """
+                )
+            )
             await connection.execute(
                 text(
                     f"""
                     ALTER TABLE {self._table}
                     ADD COLUMN IF NOT EXISTS session_id TEXT,
-                    ADD COLUMN IF NOT EXISTS queue_order BIGINT
+                    ADD COLUMN IF NOT EXISTS session_sequence_number BIGINT
                     """
                 )
             )
@@ -313,9 +341,18 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
             await connection.execute(
                 text(
                     f"""
-                    CREATE UNIQUE INDEX IF NOT EXISTS invocations_session_queue_order_idx
-                    ON {self._table} (session_id, queue_order)
+                    CREATE UNIQUE INDEX IF NOT EXISTS invocations_session_sequence_number_idx
+                    ON {self._table} (session_id, session_sequence_number)
                     WHERE session_id IS NOT NULL
+                    """
+                )
+            )
+            await connection.execute(
+                text(
+                    f"""
+                    CREATE INDEX IF NOT EXISTS invocations_queued_session_idx
+                    ON {self._table} (session_id, session_sequence_number)
+                    WHERE status='QUEUED'
                     """
                 )
             )
@@ -360,15 +397,15 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
             _validate_session_id(session_id)
         serialized_request = _serialize_json_value(request)
         async with self._engine.begin() as connection:
-            queue_order = None
+            session_sequence_number = None
             if session_id is not None:
                 await self._lock_session(connection, session_id)
-                queue_order = int(
+                session_sequence_number = int(
                     (
                         await connection.execute(
                             text(
                                 f"""
-                                SELECT COALESCE(MAX(queue_order), 0) + 1
+                                SELECT COALESCE(MAX(session_sequence_number), 0) + 1
                                 FROM {self._table}
                                 WHERE session_id=:session_id
                                 """
@@ -381,16 +418,16 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                 text(
                     f"""
                     INSERT INTO {self._table}
-                        (invocation_id, session_id, queue_order, status, request)
+                        (invocation_id, session_id, session_sequence_number, status, request)
                     VALUES
-                        (:invocation_id, :session_id, :queue_order, 'QUEUED', CAST(:request AS JSONB))
+                        (:invocation_id, :session_id, :session_sequence_number, 'QUEUED', CAST(:request AS JSONB))
                     ON CONFLICT (invocation_id) DO NOTHING
                     """
                 ),
                 {
                     "invocation_id": invocation_id,
                     "session_id": session_id,
-                    "queue_order": queue_order,
+                    "session_sequence_number": session_sequence_number,
                     "request": serialized_request,
                 },
             )
@@ -399,7 +436,7 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                     await connection.execute(
                         text(
                             f"""
-                        SELECT invocation_id, session_id, queue_order, status, attempt,
+                        SELECT invocation_id, session_id, session_sequence_number, status, attempt,
                                request::TEXT AS request_json,
                                response::TEXT AS response_json
                         FROM {self._table}
@@ -436,7 +473,7 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
             parameters = {"session_id": session_id}
             ordering = """
                 ORDER BY CASE WHEN status='ACTIVE' THEN 0 ELSE 1 END,
-                         queue_order
+                         session_sequence_number
                 LIMIT 1
             """
         async with self._engine.connect() as connection:
@@ -445,7 +482,7 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                     await connection.execute(
                         text(
                             f"""
-                        SELECT invocation_id, session_id, queue_order, status, attempt,
+                        SELECT invocation_id, session_id, session_sequence_number, status, attempt,
                                request::TEXT AS request_json,
                                response::TEXT AS response_json
                         FROM {self._table}
@@ -485,12 +522,12 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                                       FROM {self._table} AS earlier
                                       WHERE earlier.session_id=candidate.session_id
                                         AND earlier.status='QUEUED'
-                                        AND earlier.queue_order < candidate.queue_order
+                                        AND earlier.session_sequence_number < candidate.session_sequence_number
                                   )
                               )
                           )
                         ORDER BY candidate.session_id NULLS FIRST,
-                                 candidate.queue_order NULLS FIRST,
+                                 candidate.session_sequence_number NULLS FIRST,
                                  candidate.invocation_id
                         """
                         )
@@ -559,7 +596,7 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                         FROM {table} AS earlier
                         WHERE earlier.session_id=target.session_id
                           AND earlier.status='QUEUED'
-                          AND earlier.queue_order < target.queue_order
+                          AND earlier.session_sequence_number < target.session_sequence_number
                     )
                 )
             )
@@ -597,7 +634,7 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                         SET status='ACTIVE', attempt=attempt+1, heartbeat_at=NOW()
                         WHERE target.invocation_id=:invocation_id
                           AND ({eligibility})
-                        RETURNING target.invocation_id, target.session_id, target.queue_order,
+                        RETURNING target.invocation_id, target.session_id, target.session_sequence_number,
                                   target.status, target.attempt,
                                   request::TEXT AS request_json,
                                   response::TEXT AS response_json
@@ -806,7 +843,9 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
             request=json.loads(row["request_json"]),
             response=json.loads(row["response_json"]) if row["response_json"] else None,
             session_id=str(row["session_id"]) if row["session_id"] is not None else None,
-            queue_order=int(row["queue_order"]) if row["queue_order"] is not None else None,
+            session_sequence_number=int(row["session_sequence_number"])
+            if row["session_sequence_number"] is not None
+            else None,
         )
 
     async def _lock_session(self, connection: Any, session_id: str) -> None:

@@ -114,7 +114,7 @@ async def _session_history(session_id, actor):
     }
 
 
-def _client(monkeypatch, *, configured=False, history=False, session_id="routing-session"):
+def _client(monkeypatch, *, configured=False, history=False, session_id="application-session"):
     if configured:
         monkeypatch.setenv("AGENT_MEMORY_STORE", "store")
         monkeypatch.setenv("AGENT_SESSION_STORE", "sessions")
@@ -136,7 +136,7 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
     app.recover(invoke_handler)
     ui.install_ui(app)
     client = TestClient(app, base_url="https://testserver")
-    client.cookies.set("__Host-databricks-app-router", session_id)
+    client.headers["X-Databricks-Session-Id"] = session_id
     if configured:
         # The actor is the signed-in user from this forwarded-identity header (ui._request_actor);
         # unconfigured requests have no header and fall back to the "agent" actor.
@@ -159,18 +159,19 @@ def test_demo_ui_routes(monkeypatch):
     assert "ab memory bind <store-name>" in app_script.text
     assert "refreshSessionView({ hydrateChat: true })" in app_script.text
     assert "function renderModels(" in app_script.text
-    assert 'demoUrl("/api/ui/config")' in app_script.text
-    assert 'demoUrl("/api/demo/models")' in app_script.text
+    assert 'demoFetch("/api/ui/config"' in app_script.text
+    assert 'demoFetch("/api/demo/models"' in app_script.text
     assert 'fetch("/api/session/new"' not in app_script.text
     assert "/api/demo/sessions/${encodeURIComponent(sessionId)}/open" in app_script.text
-    assert "session_id: sessionId" in app_script.text
+    assert '"X-Databricks-Session-Id": ensureSessionId()' in app_script.text
+    assert "return { id: newSessionId(), input, ...transport }" in app_script.text
     assert 'fetch("/api/invocations"' in app_script.text
     styles = client.get("/ui-assets/styles.css").text
     assert "@media (min-width: 1181px)" in styles
     assert "scrollbar-gutter: stable" in styles
 
     config = client.get("/api/ui/config").json()
-    assert config["session_id"] == "routing-session"
+    assert config["session_id"] == "application-session"
     assert config["deployed"] is False
     assert config["models"] == {
         "default": "system.ai.claude-sonnet-4-5",
@@ -198,12 +199,12 @@ def test_demo_ui_routes(monkeypatch):
     assert sessions == {
         "sessions": [
             {
-                "session_id": "routing-session",
+                "session_id": "application-session",
                 "actor_id": "agent",
                 "metadata": {"client": "agentbricks-demo-ui-local"},
             }
         ],
-        "current_session_id": "routing-session",
+        "current_session_id": "application-session",
         "managed": False,
     }
 
@@ -519,13 +520,42 @@ def test_managed_memory_and_session_routes(monkeypatch):
         "previous_session_id": "s1",
         "managed": True,
     }
-    assert client.get("/api/ui/config", params={"session_id": "s2"}).json()["session_id"] == "s2"
     assert (
-        client.get("/api/demo/session/items", params={"session_id": "s2"}).json()["session_items"][
-            0
-        ]["data"]["content"]
+        client.get("/api/ui/config", headers={"X-Databricks-Session-Id": "s2"}).json()["session_id"]
         == "s2"
     )
+    assert (
+        client.get("/api/demo/session/items", headers={"X-Databricks-Session-Id": "s2"}).json()[
+            "session_items"
+        ][0]["data"]["content"]
+        == "s2"
+    )
+
+
+def test_session_header_controls_ui_state(monkeypatch):
+    client = _client(monkeypatch, history=True, session_id="header-session")
+    client.cookies.set("__Host-databricks-app-router", "cookie-session")
+
+    config = client.get("/api/ui/config", params={"session_id": "query-session"})
+    assert config.status_code == 200
+    assert config.json()["session_id"] == "header-session"
+    history = client.get("/api/demo/session/items", params={"session_id": "query-session"})
+    assert history.status_code == 200
+    assert history.json()["session_items"][0]["data"]["content"] == "header-session"
+
+
+@pytest.mark.parametrize("session_header", [None, "", "   ", " session", "session ", "s\tx"])
+def test_ui_rejects_missing_session_header(monkeypatch, session_header):
+    client = _client(monkeypatch)
+    del client.headers["X-Databricks-Session-Id"]
+    client.cookies.set("__Host-databricks-app-router", "cookie-session")
+    if session_header is not None:
+        client.headers["X-Databricks-Session-Id"] = session_header
+
+    response = client.get("/api/ui/config", params={"session_id": "query-session"})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "A valid X-Databricks-Session-Id is required"
 
 
 def test_open_session_rejects_another_actor(monkeypatch):

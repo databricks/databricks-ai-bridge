@@ -27,8 +27,9 @@ ab dev
 ```
 
 The API is available at `http://localhost:8000/api/invocations`. Every request supplies a UUID `id`.
-That ID is the invocation identifier and idempotency key. Agent-specific values live inside the
-opaque `input` object:
+That ID is the invocation identifier and idempotency key. The required
+`X-Databricks-Session-Id` header selects the session for both queueing and conversation history.
+Agent-specific values live inside the opaque `input` object:
 
 ```bash
 SESSION_ID=$(uuidgen)
@@ -36,12 +37,15 @@ INVOCATION_ID=$(uuidgen)
 
 curl -sS http://localhost:8000/api/invocations \
   -H 'Content-Type: application/json' \
-  -d "{\"id\":\"$INVOCATION_ID\",\"input\":{\"session_id\":\"$SESSION_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"What time is it? Use your tool.\"}]}}"
+  -H "X-Databricks-Session-Id: $SESSION_ID" \
+  -d "{\"id\":\"$INVOCATION_ID\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":\"What time is it? Use your tool.\"}]}}"
 ```
 
-Reuse `SESSION_ID` for multi-turn conversation history. Generate a new `INVOCATION_ID` for each
-turn. Retrying the same request with the same invocation ID returns the persisted result; changing
-the request while reusing the ID returns `409`.
+Reuse `SESSION_ID` in the header for each turn. Turns in one session run in acceptance order;
+different sessions can run concurrently. Missing or blank session headers are rejected; neither
+body fields nor cookies select the session. Generate a new `INVOCATION_ID` for each turn.
+Retrying the same request and session with the same invocation ID returns the persisted result;
+changing either returns `409`.
 
 ## Invocation modes
 
@@ -54,12 +58,14 @@ the request while reusing the ID returns `409`.
 INVOCATION_ID=$(uuidgen)
 curl -sN http://localhost:8000/api/invocations \
   -H 'Content-Type: application/json' \
-  -d "{\"id\":\"$INVOCATION_ID\",\"input\":{\"session_id\":\"$SESSION_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"Count to three.\"}]},\"stream\":true}"
+  -H "X-Databricks-Session-Id: $SESSION_ID" \
+  -d "{\"id\":\"$INVOCATION_ID\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":\"Count to three.\"}]},\"stream\":true}"
 
 INVOCATION_ID=$(uuidgen)
 curl -sS http://localhost:8000/api/invocations \
   -H 'Content-Type: application/json' \
-  -d "{\"id\":\"$INVOCATION_ID\",\"input\":{\"session_id\":\"$SESSION_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"Summarize durable agents.\"}]},\"background\":true}" | jq
+  -H "X-Databricks-Session-Id: $SESSION_ID" \
+  -d "{\"id\":\"$INVOCATION_ID\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":\"Summarize durable agents.\"}]},\"background\":true}" | jq
 curl -sS "http://localhost:8000/api/invocations/$INVOCATION_ID" | jq
 ```
 
@@ -70,13 +76,12 @@ and HITL `interrupt`s. Replay from a cursor with
 ## Human approval
 
 `send_message` requires approval. When output or the event stream contains an `interrupt`, submit a
-new invocation with the same application session:
+new invocation with the same `X-Databricks-Session-Id` header and this body:
 
 ```json
 {
   "id": "<new-uuid>",
   "input": {
-    "session_id": "<same-session-id>",
     "resume": {"decisions": [{"type": "approve"}]}
   }
 }
@@ -100,7 +105,8 @@ remain at-least-once and must be idempotent.
 ## Chat app
 
 The browser UI is included by default. It generates a stable application session ID in local
-storage, places it inside each invocation's `input`, and generates a fresh invocation UUID per turn.
+storage, sends it in the `X-Databricks-Session-Id` header, and generates a fresh
+invocation UUID per turn. Concurrent submissions for that session are queued by the runtime.
 Use `ab init --framework openai --disable-chat-app` for API-only output.
 
 ## Configure and deploy
@@ -130,9 +136,10 @@ continues to use the application/default identity. Deployed user tools require t
 and never fall back to application credentials. Model, memory-service, session-service, and custom
 MCP server credentials are unchanged.
 
-`runtime/main.py` derives the invocation policy after `configure()`. The runtime adapter namespaces
-public session IDs and actor values for the request owner, then passes only `workspace_client_for`
-to the framework-native agent. Internal session keys are never returned to clients.
+`runtime/main.py` derives the invocation policy after `configure()`. The server namespaces the
+header's session ID for the request owner. The adapter uses `context.session_id` unchanged,
+namespaces actor values, and passes only `workspace_client_for` to the framework-native agent.
+Internal session keys are never returned to clients.
 
 User-policy invocations use the existing Runtime for synchronous, streaming, and background calls,
 including status polling, event replay, and invocation-ID idempotency. The Runtime Store persists no

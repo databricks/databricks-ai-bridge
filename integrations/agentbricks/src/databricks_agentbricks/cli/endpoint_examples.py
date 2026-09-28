@@ -19,7 +19,9 @@ def agent_invoke_command(target: str, *, uses_runtime_api: bool) -> str:
         json_arg = '"' + body.replace('"', r"\"") + '"'
     else:
         json_arg = shlex.quote(body)
-    return f"ab endpoint invoke {target} --path {path} --json {json_arg}"
+    return (
+        f"ab endpoint invoke {target} --path {path} --session-id example-session --json {json_arg}"
+    )
 
 
 def print_agent_invoke_command(target: str, *, uses_runtime_api: bool) -> None:

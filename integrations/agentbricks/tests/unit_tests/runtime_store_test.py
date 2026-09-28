@@ -289,7 +289,7 @@ def invocation_row(**overrides):
     row = {
         "invocation_id": "session-1",
         "session_id": None,
-        "queue_order": None,
+        "session_sequence_number": None,
         "status": "QUEUED",
         "attempt": 0,
         "request_json": '{"input": "hello"}',
@@ -310,17 +310,59 @@ async def test_initialize_creates_invocation_and_event_tables():
     assert "databricks_agentkit_runtime.invocations" in sql
     assert "invocation_id TEXT PRIMARY KEY" in sql
     assert "ADD COLUMN IF NOT EXISTS session_id TEXT" in sql
-    assert "ADD COLUMN IF NOT EXISTS queue_order BIGINT" in sql
+    assert "ADD COLUMN IF NOT EXISTS session_sequence_number BIGINT" in sql
     assert "request JSONB NOT NULL" in sql
     assert "response JSONB" in sql
     assert "jsonb_typeof(request)" not in sql
     assert "jsonb_typeof(response)" not in sql
     assert "databricks_agentkit_runtime.invocation_events" in sql
     assert "sequence_number BIGSERIAL PRIMARY KEY" in sql
-    assert "invocations_session_queue_order_idx" in sql
+    assert "invocations_session_sequence_number_idx" in sql
+    assert "invocations_queued_session_idx" in sql
+    assert "WHERE status='QUEUED'" in sql
     assert "invocations_active_session_idx" in sql
     assert "WHERE session_id IS NOT NULL AND status='ACTIVE'" in sql
     lakebase.create_schema.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_initialize_preserves_legacy_admission_order_before_adding_new_column():
+    # The database connection is mocked because unit tests do not provision Lakebase.
+    lakebase, connection = mock_lakebase()
+    store = LakebaseDurableRuntimeStore(lakebase=lakebase, schema="existing_runtime")
+
+    await store.initialize()
+
+    statements = [str(call.args[0]) for call in connection.execute.await_args_list]
+    migration_index = next(i for i, sql in enumerate(statements) if "DO $$" in sql)
+    migration = statements[migration_index]
+    assert "IF EXISTS" in migration
+    assert "attrelid = 'existing_runtime.invocations'::regclass" in migration
+    assert "attname = 'queue_order' AND NOT attisdropped" in migration
+    assert "RENAME COLUMN queue_order TO session_sequence_number" in migration
+    assert "ALTER INDEX IF EXISTS existing_runtime.invocations_session_queue_order_idx" in migration
+    assert "RENAME TO invocations_session_sequence_number_idx" in migration
+    add_column_index = next(
+        i
+        for i, sql in enumerate(statements)
+        if "ADD COLUMN IF NOT EXISTS session_sequence_number" in sql
+    )
+    assert migration_index < add_column_index
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("schema", ["runtime_a", "runtime_b"])
+async def test_initialize_serializes_schema_changes_for_each_runtime_store(schema):
+    # The database connection is mocked to inspect the schema-specific lock request.
+    lakebase, connection = mock_lakebase()
+    store = LakebaseDurableRuntimeStore(lakebase=lakebase, schema=schema)
+
+    await store.initialize()
+
+    first_call = connection.execute.await_args_list[0]
+    assert "pg_advisory_xact_lock" in str(first_call.args[0])
+    assert first_call.args[1] == {"schema_lock_key": f"{schema}.invocations:schema"}
+    assert "CREATE TABLE IF NOT EXISTS" in str(connection.execute.await_args_list[1].args[0])
 
 
 @pytest.mark.asyncio
@@ -347,7 +389,7 @@ async def test_accept_rejects_same_id_with_different_request():
 
 
 @pytest.mark.asyncio
-async def test_accept_assigns_queue_order_while_holding_the_session_lock():
+async def test_accept_assigns_session_sequence_number_while_holding_the_session_lock():
     lakebase, connection = mock_lakebase()
     connection.execute.side_effect = [
         MagicMock(),
@@ -357,7 +399,7 @@ async def test_accept_assigns_queue_order_while_holding_the_session_lock():
             invocation_row(
                 invocation_id="invocation-2",
                 session_id="session-1",
-                queue_order=4,
+                session_sequence_number=4,
             )
         ),
     ]
@@ -370,14 +412,14 @@ async def test_accept_assigns_queue_order_while_holding_the_session_lock():
     )
 
     assert state.session_id == "session-1"
-    assert state.queue_order == 4
+    assert state.session_sequence_number == 4
     lock_query = str(connection.execute.await_args_list[0].args[0])
     allocation_query = str(connection.execute.await_args_list[1].args[0])
     insert_parameters = connection.execute.await_args_list[2].args[1]
     assert "pg_advisory_xact_lock" in lock_query
-    assert "MAX(queue_order)" in allocation_query
+    assert "MAX(session_sequence_number)" in allocation_query
     assert insert_parameters["session_id"] == "session-1"
-    assert insert_parameters["queue_order"] == 4
+    assert insert_parameters["session_sequence_number"] == 4
     assert connection.execute.await_args_list[0].args[1] == {
         "session_lock_key": "databricks_agentkit_runtime.invocations:session-1"
     }
@@ -414,7 +456,7 @@ async def test_claim_serializes_session_work_and_rechecks_fifo_eligibility():
             invocation_row(
                 invocation_id="invocation-2",
                 session_id="session-1",
-                queue_order=2,
+                session_sequence_number=2,
                 status="ACTIVE",
                 attempt=1,
             )
@@ -427,16 +469,16 @@ async def test_claim_serializes_session_work_and_rechecks_fifo_eligibility():
 
     assert state is not None
     assert state.session_id == "session-1"
-    assert state.queue_order == 2
+    assert state.session_sequence_number == 2
     assert "pg_advisory_xact_lock" in str(connection.execute.await_args_list[1].args[0])
     claim_query = str(connection.execute.await_args_list[2].args[0])
     assert "active.status='ACTIVE'" in claim_query
     assert "earlier.status='QUEUED'" in claim_query
-    assert "earlier.queue_order < target.queue_order" in claim_query
+    assert "earlier.session_sequence_number < target.session_sequence_number" in claim_query
 
 
 @pytest.mark.asyncio
-async def test_recovery_preserves_session_and_queue_order():
+async def test_recovery_preserves_session_and_session_sequence_number():
     lakebase, connection = mock_lakebase()
     connection.execute.side_effect = [
         scalar_result("session-1"),
@@ -445,7 +487,7 @@ async def test_recovery_preserves_session_and_queue_order():
             invocation_row(
                 invocation_id="invocation-1",
                 session_id="session-1",
-                queue_order=1,
+                session_sequence_number=1,
                 status="ACTIVE",
                 attempt=3,
             )
@@ -457,7 +499,7 @@ async def test_recovery_preserves_session_and_queue_order():
     state = await store.claim_recoverable("invocation-1", 10)
 
     assert state is not None
-    assert (state.session_id, state.queue_order, state.attempt) == ("session-1", 1, 3)
+    assert (state.session_id, state.session_sequence_number, state.attempt) == ("session-1", 1, 3)
     claim_query = str(connection.execute.await_args_list[2].args[0])
     assert "target.status='ACTIVE'" in claim_query
     assert "heartbeat_at <" in claim_query
@@ -465,7 +507,8 @@ async def test_recovery_preserves_session_and_queue_order():
         "session_id=" not in claim_query.split("SET", maxsplit=1)[1].split("WHERE", maxsplit=1)[0]
     )
     assert (
-        "queue_order=" not in claim_query.split("SET", maxsplit=1)[1].split("WHERE", maxsplit=1)[0]
+        "session_sequence_number="
+        not in claim_query.split("SET", maxsplit=1)[1].split("WHERE", maxsplit=1)[0]
     )
 
 
@@ -484,7 +527,7 @@ async def test_queued_invocation_query_only_selects_queued_work():
     assert "heartbeat_at" not in query
     assert "active.status='ACTIVE'" in query
     assert "earlier.status='QUEUED'" in query
-    assert "earlier.queue_order < candidate.queue_order" in query
+    assert "earlier.session_sequence_number < candidate.session_sequence_number" in query
 
 
 @pytest.mark.asyncio
@@ -544,7 +587,7 @@ async def test_get_by_session_prefers_active_then_earliest_queued_invocation():
         invocation_row(
             invocation_id="invocation-2",
             session_id="session-1",
-            queue_order=2,
+            session_sequence_number=2,
             status="ACTIVE",
             attempt=1,
         )
@@ -558,7 +601,7 @@ async def test_get_by_session_prefers_active_then_earliest_queued_invocation():
     query = str(connection.execute.await_args.args[0])
     assert "status IN ('ACTIVE', 'QUEUED')" in query
     assert "CASE WHEN status='ACTIVE' THEN 0 ELSE 1 END" in query
-    assert "queue_order" in query
+    assert "session_sequence_number" in query
     assert "LIMIT 1" in query
 
 

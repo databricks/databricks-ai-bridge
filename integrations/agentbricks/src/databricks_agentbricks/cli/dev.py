@@ -239,7 +239,10 @@ def _announce_local_url(
             if uses_runtime_api
             else '{"input": [{"role": "user", "content": "hi"}]}'
         )
-        sample = f"curl -X POST {endpoint} -H 'Content-Type: application/json' -d '{body}'"
+        sample = (
+            f"curl -X POST {endpoint} -H 'Content-Type: application/json' "
+            f"-H 'X-Databricks-Session-Id: example-session' -d '{body}'"
+        )
         fields = {"Invoke": f"POST {endpoint}"}
         if trace_url:
             fields["Traces"] = trace_url

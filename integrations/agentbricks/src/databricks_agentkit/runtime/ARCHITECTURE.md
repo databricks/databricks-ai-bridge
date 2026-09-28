@@ -40,17 +40,34 @@ determines the execution mode:
 owned by `DurableRuntimeStore` and its Lakebase implementation.
 
 `RuntimeStore.accept(invocation_id, request, session_id=...)` defines idempotency. Existing callers
-may omit the session. When supplied, the store assigns a queue position and returns the existing
+may omit the session. When supplied, the store assigns a fixed `session_sequence_number` and returns the existing
 invocation only when its ID, session, and request all match.
 
 Invocations in one session execute serially. A claim succeeds only for the earliest queued
 invocation when that session has no active invocation. Recovery claims the same stale active
-invocation and preserves its queue position. Invocation and event reads can target either one
+invocation and preserves its sequence number. Invocation and event reads can target either one
 invocation or one session; session state returns the active invocation, then the earliest queued
 invocation, or `None`. Each claimed attempt receives the saved session ID in its execution context.
 
 All workers sharing a Runtime Store must support session-aware claims before callers start supplying
 session IDs. An older worker does not enforce session order and can claim a later queued invocation.
+
+The HTTP server requires `X-Databricks-Session-Id` on `POST /api/invocations` for every transport
+mode. It passes this identity to Runtime submission, which persists it and supplies it through
+`InvocationContext` on every attempt. Templates use only `context.session_id` for history.
+The server does not derive session identity from a routing cookie, request body, or invocation ID.
+Request-user sessions are namespaced once by the server before submission.
+
+The initial execution policy is FIFO queueing by durable acceptance order, not client send time.
+Completion or failure makes the next queued invocation eligible. Recovery replaces the stale
+active attempt before later queued invocations may run. Steering, cancellation, and alternative
+admission policies are not supported by this API. The invocation ID remains the retry/idempotency key.
+
+Clients must upgrade to send the session header. Drain legacy HTTP work that has no stored session
+before upgrading: execution no longer reconstructs session identity from the request payload.
+Startup preserves existing experimental `queue_order` values by renaming that column and its index.
+Stop workers using that experimental column before upgrading; mixed old/new experimental workers
+are not supported. Released pre-session schemas gain the new nullable columns on initialization.
 
 The durable executor always scans for persisted `QUEUED` invocations, including after process
 restart, and starts their first attempt through `@app.invoke`. Reads also schedule queued work as a

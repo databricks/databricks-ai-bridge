@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from typing import Optional
-from uuid import uuid4
+from urllib.parse import urlsplit
 
 import click
 
@@ -16,7 +16,7 @@ from databricks_agentbricks.cli.endpoint_transport import HttpSession
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentkit._api_client import _workspace_client
 
-_ROUTING_COOKIE = "__Host-databricks-app-router"
+_SESSION_HEADER = "X-Databricks-Session-Id"
 
 
 def _resolve_endpoint(
@@ -68,7 +68,7 @@ def _platform_headers(
     if authenticate:
         headers["Authorization"] = _authorization_header(profile)
     if session_id:
-        headers["Cookie"] = f"{_ROUTING_COOKIE}={session_id}"
+        headers[_SESSION_HEADER] = session_id
     return headers
 
 
@@ -88,7 +88,7 @@ def endpoint() -> None:
 @click.option(
     "--session-id",
     default=None,
-    help="Application session id (default: generated for a Databricks App).",
+    help="Session ID sent as X-Databricks-Session-Id; required for POST /api/invocations.",
 )
 @click.option("--timeout", type=click.FloatRange(min=0.1), default=300.0, show_default=True)
 @click.option("--auth/--no-auth", default=None, help="Inject Databricks OAuth authentication.")
@@ -107,9 +107,16 @@ def invoke(
     auth,
 ) -> None:
     """Send one HTTP request to a Databricks App or arbitrary URL."""
+    if session_id is not None and (
+        not session_id
+        or session_id != session_id.strip()
+        or any(ord(char) < 32 or ord(char) == 127 for char in session_id)
+    ):
+        raise AgentCliError(
+            "--session-id must be nonblank, without surrounding whitespace or control characters."
+        )
     base_url, is_app = _resolve_endpoint(app, url, obj.profile)
     authenticate = is_app if auth is None else auth
-    session_id = session_id or (str(uuid4()) if is_app else None)
     request = build_request(
         base_url=base_url,
         method=method,
@@ -119,6 +126,15 @@ def invoke(
         timeout=timeout,
         sse=sse,
     )
+    if (
+        request.method == "POST"
+        and urlsplit(request.url).path.rstrip("/") == "/api/invocations"
+        and session_id is None
+    ):
+        raise AgentCliError(
+            "--session-id is required for POST /api/invocations.",
+            hint="Choose a session ID and reuse it for every turn in the same conversation.",
+        )
     request = replace(
         request,
         headers={

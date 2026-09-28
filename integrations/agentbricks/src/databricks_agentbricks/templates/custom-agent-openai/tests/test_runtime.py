@@ -1,8 +1,7 @@
 from unittest.mock import AsyncMock
 
-from fastapi.testclient import TestClient
-
 import runtime.main as runtime
+from fastapi.testclient import TestClient
 
 
 def test_foreground_invocation(monkeypatch) -> None:
@@ -11,6 +10,7 @@ def test_foreground_invocation(monkeypatch) -> None:
 
     response = TestClient(runtime.app).post(
         "/invocations",
+        headers={"X-Databricks-Session-Id": "example-session"},
         json={"input": [{"role": "user", "content": "hi"}]},
     )
 

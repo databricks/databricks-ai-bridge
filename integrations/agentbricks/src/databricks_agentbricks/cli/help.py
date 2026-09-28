@@ -245,7 +245,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("endpoint",): (
         (
             "ab endpoint invoke agent-bricks-my-agent --path /api/invocations "
-            "--json "
+            "--session-id example-session --json "
             '\'{"id":"00000000-0000-4000-8000-000000000001",'
             '"input":[{"role":"user","content":"Hello"}]}\'',
             "invoke a deployed HTTP agent",
@@ -254,7 +254,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("endpoint", "invoke"): (
         (
             "ab endpoint invoke agent-bricks-my-agent --path /api/invocations "
-            "--json "
+            "--session-id example-session --json "
             '\'{"id":"00000000-0000-4000-8000-000000000001",'
             '"input":[{"role":"user","content":"Hello"}]}\'',
             "invoke a deployed HTTP agent",

@@ -82,13 +82,15 @@ def _request_actor(request: Request) -> str:
 
 
 def _request_session_id(request: Request) -> str:
-    """Read the chat session selected by the browser, falling back to the router cookie locally."""
-    session_id = request.query_params.get("session_id") or getattr(
-        request.state, "session_id", None
-    )
-    if not session_id:
-        raise HTTPException(status_code=400, detail="session_id is required")
-    return str(session_id)
+    session_id = request.headers.get("X-Databricks-Session-Id", "")
+    if (
+        len(request.headers.getlist("X-Databricks-Session-Id")) != 1
+        or not session_id
+        or session_id != session_id.strip()
+        or any(ord(character) < 32 or ord(character) == 127 for character in session_id)
+    ):
+        raise HTTPException(status_code=400, detail="A valid X-Databricks-Session-Id is required")
+    return session_id
 
 
 def _is_deployed() -> bool:

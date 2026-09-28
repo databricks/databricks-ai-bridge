@@ -16,13 +16,13 @@ ab --profile <profile> deploy <name> --source .
 
 ## Request contract
 
-Use only `/api/invocations`. The transport body is:
+Use only `/api/invocations` with the required `X-Databricks-Session-Id` header.
+The transport body is:
 
 ```json
 {
   "id": "<uuid>",
   "input": {
-    "session_id": "<stable-application-session>",
     "messages": [{"role": "user", "content": "hello"}],
     "resume": null,
     "model": "optional-serving-endpoint"
@@ -32,10 +32,12 @@ Use only `/api/invocations`. The transport body is:
 }
 ```
 
-`id` is the invocation identifier and idempotency key. `background` and `stream` are transport
-fields. Everything framework-specific belongs inside `input`. The browser generates a stable
-session ID in local storage; API clients should do the same. The Apps router cookie is only for
-sticky routing and is not authentication or application session state.
+`id` is the invocation identifier and idempotency key. The header is the only session input;
+the adapter uses `context.session_id` for conversation history, matching runtime queueing.
+`background` and `stream` are transport fields. Everything framework-specific belongs inside
+`input`. The browser generates a stable session ID in local storage; API clients should do the
+same. Missing or blank session headers are rejected. The Apps router cookie is only for sticky
+routing and is not authentication or application session state.
 
 ## Code map
 
