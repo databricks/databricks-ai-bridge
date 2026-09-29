@@ -179,8 +179,7 @@ class DurableAgentServer(FastAPI):
         request_auth = None
         registered_auth = False
         execution_owns_auth = False
-        # X-Routing-Key is routing-only (the platform handles replica affinity); the application
-        # session id comes from the request body, else the invocation id.
+        # Use the invocation id as the fallback when the explicit session_id is missing
         session_id = invocation_id
         if self.auth_policy.requires_user:
             request_auth = RequestAuthContext.from_headers(request.headers)
