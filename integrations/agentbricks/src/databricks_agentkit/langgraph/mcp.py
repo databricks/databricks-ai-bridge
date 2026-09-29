@@ -112,6 +112,15 @@ def _sandbox_interceptor(
                 result = await handler(request)
         except Exception as error:
             if request_user:
+                status = getattr(error, "status_code", None) or getattr(
+                    getattr(error, "response", None), "status_code", None
+                )
+                logger.warning(
+                    "MCP tool %s failed: %s (HTTP status=%s)",
+                    tool.id,
+                    type(error).__name__,
+                    status if isinstance(status, int) else "unknown",
+                )
                 raise _auth_error(error, tool.id) or AuthError(
                     "MCP_TOOL_FAILED", "The configured MCP tool failed.", 502, tool.id
                 ) from None

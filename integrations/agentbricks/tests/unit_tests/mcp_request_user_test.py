@@ -248,6 +248,21 @@ def test_tool_result_permission_errors_are_not_model_results(adapter, monkeypatc
     assert "secret" not in str(raised.value)
 
 
+def test_langgraph_mcp_failure_logs_safe_cause(adapter, caplog):
+    if not adapter.__name__.endswith("langgraph.mcp"):
+        pytest.skip("LangGraph tool interceptor")
+    from databricks_agentkit.runtime.auth import AuthError
+
+    interceptor = adapter._sandbox_interceptor((tool("user"),))
+    request = SimpleNamespace(server_name="search", name="search", args={})
+    with caplog.at_level("WARNING"), pytest.raises(AuthError):
+        asyncio.run(interceptor(request, AsyncMock(side_effect=RuntimeError("secret body"))))
+
+    assert "MCP tool search failed" in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert "secret body" not in caplog.text
+
+
 def test_app_tool_result_permission_errors_remain_model_results(adapter, monkeypatch):
     result = SimpleNamespace(
         isError=True,

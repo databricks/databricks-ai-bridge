@@ -19,8 +19,10 @@ Environment:
 
 from __future__ import annotations
 
+import json
 import os
 import pathlib
+import re
 import signal
 import subprocess
 import sys
@@ -107,6 +109,18 @@ def _runtime_log_tails(output: pathlib.Path) -> str:
                 log_file.seek(0, os.SEEK_END)
                 log_file.seek(max(0, log_file.tell() - 6000))
                 tail = log_file.read().decode("utf-8", errors="replace")
+            if path in app_logs:
+                diagnostics = [
+                    line[:500]
+                    for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
+                    if "MCP tool " in line and " failed:" in line
+                ]
+                if diagnostics:
+                    tail = "MCP diagnostics:\n" + "\n".join(diagnostics[-5:]) + "\n" + tail
+            tail = "\n".join(
+                line if len(line) <= 500 else "<oversized line omitted>"
+                for line in tail.splitlines()
+            )
         except OSError as exc:
             tail = f"(could not read log: {exc})"
         for credential_name in ("DATABRICKS_CLIENT_SECRET", "DATABRICKS_TOKEN"):
@@ -117,6 +131,48 @@ def _runtime_log_tails(output: pathlib.Path) -> str:
     if len(paths) > 6:
         excerpts.append(f"({len(paths) - 6} more logs omitted)")
     return "\n\n".join(excerpts)
+
+
+def _failed_row_summary(output: pathlib.Path) -> str:
+    evidence = output / "evidence.json"
+    if not evidence.is_file():
+        return f"No evidence written; inspect {output / 'commands.log'}"
+    try:
+        rows = json.loads(evidence.read_text(encoding="utf-8"))["rows"]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return f"Could not read failed rows from {evidence}: {type(exc).__name__}"
+    failures = []
+    for row in rows:
+        if not isinstance(row, dict) or row.get("status") != "fail":
+            continue
+        label = "/".join(
+            str(row.get(key, "?")) for key in ("framework", "authoring", "runtime", "tool_kind")
+        )
+        detail = str(row.get("error") or "No error recorded").splitlines()[0]
+        html = re.search(r"<(?:!doctype|html)\b", detail, flags=re.IGNORECASE)
+        if html:
+            detail = detail[: html.start()] + "<HTML response omitted>"
+        for credential_name in ("DATABRICKS_CLIENT_SECRET", "DATABRICKS_TOKEN"):
+            credential = os.environ.get(credential_name)
+            if credential:
+                detail = detail.replace(credential, "<redacted>")
+        failures.append(f"{label}: {detail[:500]}")
+    return "\n".join(failures) if failures else "No failed rows recorded in evidence.json"
+
+
+def _safe_process_tail(output: str) -> str:
+    output = re.sub(
+        r"<(?:!doctype html|html\b).*?</html>",
+        "<HTML response omitted>",
+        output,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    for credential_name in ("DATABRICKS_CLIENT_SECRET", "DATABRICKS_TOKEN"):
+        credential = os.environ.get(credential_name)
+        if credential:
+            output = output.replace(credential, "<redacted>")
+    lines = output.splitlines()[-40:]
+    return "\n".join(line if len(line) <= 500 else "<oversized line omitted>" for line in lines)
 
 
 def test_tool_matrix_deploy_and_invoke(tmp_path: pathlib.Path) -> None:
@@ -146,8 +202,6 @@ def test_tool_matrix_deploy_and_invoke(tmp_path: pathlib.Path) -> None:
     # unwind through its cleanup; a hard kill is only the fallback after that grace period.
     result, timed_out = _run_matrix(argv)
     if timed_out or result.returncode != 0:
-        evidence = output / "evidence.json"
-        detail = evidence.read_text() if evidence.is_file() else "(no evidence.json written)"
         outcome = (
             f"timed out after {_MATRIX_TIMEOUT_SECONDS}s; cleanup was requested"
             if timed_out
@@ -155,8 +209,8 @@ def test_tool_matrix_deploy_and_invoke(tmp_path: pathlib.Path) -> None:
         )
         pytest.fail(
             f"tool_matrix {outcome}\n"
-            f"STDOUT (tail):\n{result.stdout[-4000:]}\n"
-            f"STDERR (tail):\n{result.stderr[-4000:]}\n"
-            f"evidence (head):\n{detail[:4000]}\n"
+            f"failed matrix rows:\n{_failed_row_summary(output)}\n"
+            f"STDOUT (tail):\n{_safe_process_tail(result.stdout)}\n"
+            f"STDERR (tail):\n{_safe_process_tail(result.stderr)}\n"
             f"runtime logs:\n{_runtime_log_tails(output)}"
         )

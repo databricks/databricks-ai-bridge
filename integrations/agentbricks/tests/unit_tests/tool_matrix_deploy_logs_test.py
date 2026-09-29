@@ -20,6 +20,7 @@ def test_deploy_invocation_failure_captures_app_logs(tmp_path: pathlib.Path, mon
     commands = []
 
     monkeypatch.setattr(runner, "run_long", lambda *args, **kwargs: "")
+    monkeypatch.setattr(runner, "_assert_app_absent", lambda name: None)
     monkeypatch.setattr(runner, "_wait_for_app", lambda name: {"url": "https://test-app"})
     monkeypatch.setattr(runner, "_grant_function", lambda app: None)
 
@@ -71,6 +72,7 @@ def test_deploy_setup_failure_preserves_error_if_app_logs_unavailable(
         return subprocess.CompletedProcess(argv, 1, "", "app not found")
 
     monkeypatch.setattr(runner, "run_long", fail_deploy)
+    monkeypatch.setattr(runner, "_assert_app_absent", lambda name: None)
     monkeypatch.setattr(runner, "run", fail_logs)
 
     runner.deploy(case)
@@ -88,6 +90,7 @@ def test_successful_deploy_does_not_fetch_app_logs(tmp_path: pathlib.Path, monke
     case = ProjectCase("langgraph", "cli", tmp_path, "test-app")
 
     monkeypatch.setattr(runner, "run_long", lambda *args, **kwargs: "")
+    monkeypatch.setattr(runner, "_assert_app_absent", lambda name: None)
     monkeypatch.setattr(runner, "_wait_for_app", lambda name: {"url": "https://test-app"})
     monkeypatch.setattr(runner, "_grant_function", lambda app: None)
     monkeypatch.setattr(runner, "_exercise", lambda *args, **kwargs: None)
