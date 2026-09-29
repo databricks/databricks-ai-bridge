@@ -46,7 +46,7 @@ class InvocationAuthPolicy:
 
     @classmethod
     def from_manifest(cls, *, allow_missing: bool = False) -> InvocationAuthPolicy:
-        """Infer request-user tools from ``agent.toml`` in the active project."""
+        """Derive request-user policy from managed bindings and explicit user auth."""
         from databricks_agentkit.runtime.tool_manifest import (
             parse_tools,
             parse_user_auth,

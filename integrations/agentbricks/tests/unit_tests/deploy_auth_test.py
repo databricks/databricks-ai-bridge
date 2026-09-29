@@ -362,6 +362,27 @@ def test_empty_scope_removal_stops_before_sdk_drops_empty_list(monkeypatch):
     assert App(name="app", user_api_scopes=[]).as_dict() == {"name": "app"}
 
 
+def test_new_app_allows_credential_only_user_auth_without_explicit_scopes(monkeypatch):
+    app_auth, apps, _ = _sdk(monkeypatch)
+    plan = app_auth.plan_app_user_scope_update(
+        "app", "selected", allow_existing_app_update=False, required_scopes=set()
+    )
+    apps.get.side_effect = None
+    apps.get.return_value = App(
+        name="app",
+        user_api_scopes=[],
+        effective_user_api_scopes=["iam.access-control:read", "iam.current-user:read"],
+        forward_user_access_token=True,
+    )
+
+    app_auth.apply_app_user_scope_update(plan, attempts=1)
+
+    assert apps.create.call_args.args[0].as_dict() == {
+        "name": "app",
+        "forward_user_access_token": True,
+    }
+
+
 def test_nonempty_scope_removal_also_requires_manual_action(monkeypatch):
     from dataclasses import replace
 

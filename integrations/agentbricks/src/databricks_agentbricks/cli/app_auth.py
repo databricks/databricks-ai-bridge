@@ -76,7 +76,7 @@ class AppUserScopeUpdatePlan:
 
 
 def required_user_api_scopes(project: AgentProject | None) -> set[str]:
-    """Return Databricks Apps user API scopes required by request-user tools."""
+    """Union explicit additions with scopes inferred from request-user managed tools."""
     scopes = set(project.user_auth.additional_api_scopes) if project else set()
     # TODO: Extend this least-privilege mapping for each supported request-user tool kind/service.
     for tool in project.tools if project else ():
@@ -148,7 +148,7 @@ def apply_app_user_scope_update(
     fields. The read-before-write check detects known drift, but Apps has no compare-and-swap
     contract, so owners must still coordinate concurrent updates. Scope removal is never automatic.
     """
-    if not plan.scopes or not set(plan.existing_scopes or ()).issubset(plan.scopes):
+    if not set(plan.existing_scopes or ()).issubset(plan.scopes):
         raise AgentCliError(
             "Automatic removal of Apps user scopes is unsupported.",
             hint="Remove scopes explicitly in Databricks Apps and verify the effective scopes. "

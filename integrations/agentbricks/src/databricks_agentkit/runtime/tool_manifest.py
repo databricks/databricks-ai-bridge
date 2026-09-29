@@ -26,7 +26,7 @@ class ToolManifestError(RuntimeError):
 
 @dataclass(frozen=True)
 class UserAuthConfig:
-    """Request-user authentication declared for code-first consumers."""
+    """Explicit request-user auth whose scopes supplement managed-tool inference."""
 
     required: bool = False
     additional_api_scopes: tuple[str, ...] = ()
