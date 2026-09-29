@@ -88,7 +88,11 @@ def endpoint() -> None:
 @click.option(
     "--session-id",
     default=None,
-    help="Application session id (default: generated for a Databricks App).",
+    help=(
+        "Application session id, sent as the X-Routing-Key sticky-routing header (used verbatim; "
+        "default: generated for a Databricks App). Not added to the request body - include the "
+        "session id in --json if the app reads it from the body."
+    ),
 )
 @click.option("--timeout", type=click.FloatRange(min=0.1), default=300.0, show_default=True)
 @click.option("--auth/--no-auth", default=None, help="Inject Databricks OAuth authentication.")
