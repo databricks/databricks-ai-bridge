@@ -320,50 +320,23 @@ as `agentbricks sessions` / `agentbricks memory` CLI commands.
 
 ### How sessions and memory are keyed
 
-The two stores are keyed by different identities, and the framework templates read both from the
-invocation's `input`:
-
-- **Session store** — one conversation's transcript and state, keyed by `session_id`.
-- **Memory store** — durable facts recalled across conversations, keyed by `actor` (stored as
-  `actor_id`).
+- **Session store** — one conversation's transcript and state, keyed by `input.session_id`.
+- **Memory store** — durable facts recalled across conversations, keyed by `input.actor`.
 
 If you don't pass `actor`, it defaults to the `session_id`, so long-term memory will **not** carry
-across sessions. For cross-session memory, pass a stable `actor` (e.g. the end user's ID). If you
-omit `session_id` too, the runtime falls back to the `__Host-databricks-app-router` cookie when the
-app receives one, and otherwise to the invocation `id`, so every call is a new session and a new
-actor.
+across sessions. For cross-session memory, pass a stable `actor` (e.g. the end user's ID) from
+trusted application context. The chat app sends the signed-in user for you; HTTP clients, including
+`agentbricks endpoint invoke`, must send it themselves. With an `auth = "user"` tool bound, the
+runtime also scopes `actor` to the signed-in user.
 
-How the templates' `runtime/adapter.py` applies `actor` depends on the invocation's auth:
-
-- **App/default identity** (no managed tool with `auth = "user"`; the `agentbricks init` default):
-  `actor` is used verbatim as the store's `actor_id`. Any caller that can reach the app can pass any
-  `actor`, so set it from trusted application context.
-- **Request-user (OBO)** (any managed tool with `auth = "user"`): the adapter hashes `actor` and
-  `session_id` with the signed-in user's forwarded identity and the app before they reach the
-  stores. Memory still carries across sessions only when you pass the same `actor`, but it stays
-  private to that user: two users sending the same `actor` get separate partitions, and the stored
-  `actor_id` is the hash, not the value you sent.
-
-The bundled chat app sends the signed-in user (the `X-Forwarded-Email` header Databricks Apps adds)
-as `actor`, so its memory carries across that user's chat sessions. HTTP clients, including
-`agentbricks endpoint invoke`, must send `actor` themselves. Memory is off under `agentbricks dev`,
-so try this against a deployed agent:
+Memory is off under `agentbricks dev`, so try it against a deployed agent. Two sessions, one actor:
 
 ```sh
-ACTOR=user-123  # a stable end-user ID from your application, not a per-conversation value
-
-# Conversation 1: the agent saves a fact with its memory tool.
-agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
-  --path /api/invocations \
-  --json "{\"id\":\"$(uuidgen)\",\"input\":{\"session_id\":\"$(uuidgen)\",\"actor\":\"$ACTOR\",\"messages\":[{\"role\":\"user\",\"content\":\"Remember that I prefer answers as bullet points.\"}]}}"
-
-# Conversation 2: a new session_id with the same actor, so the agent can recall the fact.
-agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
-  --path /api/invocations \
-  --json "{\"id\":\"$(uuidgen)\",\"input\":{\"session_id\":\"$(uuidgen)\",\"actor\":\"$ACTOR\",\"messages\":[{\"role\":\"user\",\"content\":\"How do I like my answers formatted?\"}]}}"
+ask() { agentbricks endpoint invoke agent-bricks-my-agent --path /api/invocations \
+  --json "{\"id\":\"$(uuidgen)\",\"input\":{\"session_id\":\"$(uuidgen)\",\"actor\":\"user-123\",\"messages\":[{\"role\":\"user\",\"content\":\"$1\"}]}}"; }
+ask "Remember that I prefer answers as bullet points."  # conversation 1 saves a fact
+ask "How do I like my answers formatted?"                # conversation 2 recalls it
 ```
-
-Drop `actor` from the second call and it runs as a new actor, so recall comes back empty.
 
 ### Sessions
 
