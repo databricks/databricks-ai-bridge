@@ -22,7 +22,7 @@ import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, cast
 
 import tomli
 import tomlkit
@@ -985,7 +985,7 @@ class Runner:
                     f"cleanup warning | Lakebase role for {app} | ownership not verified"
                 )
                 return None
-            roles = self.databricks(["postgres", "list-roles", branch])
+            roles = cast(list[dict[str, Any]], self.databricks(["postgres", "list-roles", branch]))
             for role in roles:
                 status = role.get("status", {})
                 name = role.get("name")
