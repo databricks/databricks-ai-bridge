@@ -2,6 +2,7 @@
 
 import asyncio
 import copy
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
@@ -550,6 +551,132 @@ async def test_durable_runtime_drains_the_next_session_invocation_without_a_scan
         await runtime.stop()
 
     assert execution_order == ["one", "two"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("durable", [False, True], ids=["local", "durable"])
+async def test_session_handoff_retries_an_in_flight_ineligible_claim(
+    monkeypatch,
+    durable: bool,
+) -> None:
+    first_started = asyncio.Event()
+    second_started = asyncio.Event()
+    release_first = asyncio.Event()
+    follower_claim_decided = asyncio.Event()
+    release_follower_claim = asyncio.Event()
+    handoff_found_follower = asyncio.Event()
+
+    async def execute(request: dict, context: InvocationAttemptContext) -> dict:
+        if request["message"] == "one":
+            first_started.set()
+            await release_first.wait()
+        else:
+            second_started.set()
+        return request
+
+    store: Any = MemoryDurableRuntimeStore() if durable else InMemoryRuntimeStore()
+    original_claim = store.claim
+    original_get = store.get
+    follower_claim_suspended = False
+
+    async def claim(invocation_id: str) -> Invocation | None:
+        nonlocal follower_claim_suspended
+        claimed = await original_claim(invocation_id)
+        if invocation_id == "invocation-2" and not follower_claim_suspended:
+            follower_claim_suspended = True
+            assert claimed is None
+            follower_claim_decided.set()
+            await release_follower_claim.wait()
+        return claimed
+
+    async def get(
+        invocation_id: str | None = None,
+        session_id: str | None = None,
+    ) -> Invocation | None:
+        state = await original_get(invocation_id=invocation_id, session_id=session_id)
+        if (
+            session_id == "session-a"
+            and state is not None
+            and state.invocation_id == "invocation-2"
+            and state.status == InvocationStatus.QUEUED
+        ):
+            handoff_found_follower.set()
+        return state
+
+    monkeypatch.setattr(store, "claim", claim)
+    monkeypatch.setattr(store, "get", get)
+    runtime = (
+        make_durable_runtime(execute, store, scan_seconds=60)
+        if durable
+        else make_local_runtime(execute, store)
+    )
+
+    await runtime.start()
+    try:
+        await runtime.submit("invocation-1", {"message": "one"}, session_id="session-a")
+        await asyncio.wait_for(first_started.wait(), timeout=1)
+        await runtime.submit("invocation-2", {"message": "two"}, session_id="session-a")
+        await asyncio.wait_for(follower_claim_decided.wait(), timeout=1)
+
+        release_first.set()
+        await asyncio.wait_for(handoff_found_follower.wait(), timeout=1)
+        release_follower_claim.set()
+
+        await asyncio.wait_for(second_started.wait(), timeout=1)
+        assert await runtime.wait("invocation-2") == {"message": "two"}
+    finally:
+        release_first.set()
+        release_follower_claim.set()
+        await runtime.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("durable", [False, True], ids=["local", "durable"])
+async def test_session_handoff_lookup_failure_is_logged(
+    monkeypatch,
+    caplog,
+    durable: bool,
+) -> None:
+    lookup_attempted = asyncio.Event()
+
+    async def execute(request: dict, context: InvocationAttemptContext) -> dict:
+        return request
+
+    store: Any = MemoryDurableRuntimeStore() if durable else InMemoryRuntimeStore()
+    original_get = store.get
+    failed = False
+
+    async def get(
+        invocation_id: str | None = None,
+        session_id: str | None = None,
+    ) -> Invocation | None:
+        nonlocal failed
+        if session_id == "session-a" and not failed:
+            failed = True
+            lookup_attempted.set()
+            raise RuntimeError("connection reset by peer")
+        return await original_get(invocation_id=invocation_id, session_id=session_id)
+
+    monkeypatch.setattr(store, "get", get)
+    runtime = (
+        make_durable_runtime(execute, store, scan_seconds=60)
+        if durable
+        else make_local_runtime(execute, store)
+    )
+
+    with caplog.at_level(logging.ERROR):
+        await runtime.start()
+        try:
+            assert await runtime.invoke(
+                "invocation-1",
+                {"message": "one"},
+                session_id="session-a",
+            ) == {"message": "one"}
+            await asyncio.wait_for(lookup_attempted.wait(), timeout=1)
+        finally:
+            await runtime.stop()
+
+    assert "Failed session handoff after invocation: invocation-1" in caplog.text
 
 
 @pytest.mark.asyncio

@@ -37,6 +37,7 @@ class DurableInvocationExecutor(InvocationExecutor):
         self._stale_seconds = stale_seconds
         self._scan_seconds = scan_seconds
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._claim_retries: set[str] = set()
         self._queued_scanner: asyncio.Task[None] | None = None
         self._recovery_scheduler: RecoveryScheduler | None = None
 
@@ -54,6 +55,7 @@ class DurableInvocationExecutor(InvocationExecutor):
         self._recovery_scheduler.start(recover=self._recovery_enabled())
 
     async def stop(self) -> None:
+        self._claim_retries.clear()
         if self._queued_scanner is not None:
             self._queued_scanner.cancel()
         if self._recovery_scheduler is not None:
@@ -92,9 +94,17 @@ class DurableInvocationExecutor(InvocationExecutor):
                 logger.exception("Databricks durable runtime queued invocation scan failed")
             await asyncio.sleep(self._scan_seconds)
 
-    def _schedule(self, invocation_id: str, *, recovery: bool) -> None:
+    def _schedule(
+        self,
+        invocation_id: str,
+        *,
+        recovery: bool,
+        retry_if_running: bool = False,
+    ) -> None:
         current = self._tasks.get(invocation_id)
         if current is not None and not current.done():
+            if retry_if_running and not recovery:
+                self._claim_retries.add(invocation_id)
             return
         task = asyncio.create_task(
             self._run(invocation_id, recovery=recovery),
@@ -104,19 +114,24 @@ class DurableInvocationExecutor(InvocationExecutor):
         task.add_done_callback(lambda completed: self._discard_task(invocation_id, completed))
 
     async def _run(self, invocation_id: str, *, recovery: bool) -> None:
-        try:
-            if recovery:
-                claimed = await self._runtime_store.claim_recoverable(
-                    invocation_id,
-                    self._stale_seconds,
-                )
-            else:
-                claimed = await self._runtime_store.claim(invocation_id)
-        except Exception:
-            logger.exception("Failed to claim durable invocation: %s", invocation_id)
-            return
-        if claimed is None:
-            return
+        while True:
+            try:
+                if recovery:
+                    claimed = await self._runtime_store.claim_recoverable(
+                        invocation_id,
+                        self._stale_seconds,
+                    )
+                else:
+                    claimed = await self._runtime_store.claim(invocation_id)
+            except Exception:
+                logger.exception("Failed to claim durable invocation: %s", invocation_id)
+                claimed = None
+            if claimed is not None:
+                self._claim_retries.discard(invocation_id)
+                break
+            if recovery or invocation_id not in self._claim_retries:
+                return
+            self._claim_retries.remove(invocation_id)
 
         async with Heartbeat(
             runtime_store=self._runtime_store,
@@ -126,12 +141,21 @@ class DurableInvocationExecutor(InvocationExecutor):
         ):
             await self._execution.run(claimed)
         if claimed.session_id is not None:
-            next_state = await self._runtime_store.get(session_id=claimed.session_id)
-            if next_state is not None:
-                self.ensure_scheduled(next_state)
+            try:
+                next_state = await self._runtime_store.get(session_id=claimed.session_id)
+            except Exception:
+                logger.exception("Failed session handoff after invocation: %s", invocation_id)
+            else:
+                if next_state is not None and next_state.status == InvocationStatus.QUEUED:
+                    self._schedule(
+                        next_state.invocation_id,
+                        recovery=False,
+                        retry_if_running=True,
+                    )
 
     def _discard_task(self, invocation_id: str, completed: asyncio.Task[None]) -> None:
         if self._tasks.get(invocation_id) is completed:
             self._tasks.pop(invocation_id, None)
+            self._claim_retries.discard(invocation_id)
         if not completed.cancelled():
             completed.exception()
