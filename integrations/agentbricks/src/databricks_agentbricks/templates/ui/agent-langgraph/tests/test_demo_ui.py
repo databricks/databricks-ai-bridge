@@ -177,6 +177,20 @@ def test_demo_ui_routes(monkeypatch):
         "      headers: routingHeaders(),\n"
         "    })"
     ) in app_script.text
+    # Session-scoped demo GETs carry the routing key so history refreshes hit the same replica.
+    assert (
+        'fetch(demoUrl("/api/demo/session/items"), { cache: "no-store", headers: routingHeaders() })'
+    ) in app_script.text
+    assert (
+        'fetch(demoUrl("/api/demo/sessions"), { cache: "no-store", headers: routingHeaders() })'
+    ) in app_script.text
+    assert (
+        "fetch(demoUrl(`/api/demo/sessions/${encodeURIComponent(sessionId)}/open`), {\n"
+        '      method: "POST",\n'
+        '      credentials: "same-origin",\n'
+        "      headers: routingHeaders(),\n"
+        "    })"
+    ) in app_script.text
     styles = client.get("/ui-assets/styles.css").text
     assert "@media (min-width: 1181px)" in styles
     assert "scrollbar-gutter: stable" in styles
