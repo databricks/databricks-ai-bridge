@@ -81,6 +81,7 @@ class AttemptExecution:
                 InvocationAttemptContext(
                     invocation_id=invocation_id,
                     attempt=claimed.attempt,
+                    session_id=claimed.session_id,
                     _emit=emit,
                 ),
             )
@@ -131,11 +132,13 @@ class LocalInvocationExecutor(InvocationExecutor):
         self._execution = execution
         self._runtime_store = runtime_store
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._claim_retries: set[str] = set()
 
     async def start(self) -> None:
         pass
 
     async def stop(self) -> None:
+        self._claim_retries.clear()
         tasks = list(self._tasks.values())
         for task in tasks:
             task.cancel()
@@ -145,27 +148,48 @@ class LocalInvocationExecutor(InvocationExecutor):
     def ensure_scheduled(self, state: Invocation) -> None:
         if state.status != InvocationStatus.QUEUED:
             return
-        current = self._tasks.get(state.invocation_id)
+        self._schedule(state.invocation_id, retry_if_running=False)
+
+    def _schedule(self, invocation_id: str, *, retry_if_running: bool) -> None:
+        current = self._tasks.get(invocation_id)
         if current is not None and not current.done():
+            if retry_if_running:
+                self._claim_retries.add(invocation_id)
             return
         task = asyncio.create_task(
-            self._run(state.invocation_id),
-            name=f"invocation-{state.invocation_id}",
+            self._run(invocation_id),
+            name=f"invocation-{invocation_id}",
         )
-        self._tasks[state.invocation_id] = task
-        task.add_done_callback(lambda completed: self._discard_task(state.invocation_id, completed))
+        self._tasks[invocation_id] = task
+        task.add_done_callback(lambda completed: self._discard_task(invocation_id, completed))
 
     async def _run(self, invocation_id: str) -> None:
-        try:
-            claimed = await self._runtime_store.claim(invocation_id)
-        except Exception:
-            logger.exception("Failed to claim invocation: %s", invocation_id)
-            return
-        if claimed is not None:
-            await self._execution.run(claimed)
+        while True:
+            try:
+                claimed = await self._runtime_store.claim(invocation_id)
+            except Exception:
+                logger.exception("Failed to claim invocation: %s", invocation_id)
+                claimed = None
+            if claimed is not None:
+                self._claim_retries.discard(invocation_id)
+                break
+            if invocation_id not in self._claim_retries:
+                return
+            self._claim_retries.remove(invocation_id)
+
+        await self._execution.run(claimed)
+        if claimed.session_id is not None:
+            try:
+                next_state = await self._runtime_store.get(session_id=claimed.session_id)
+            except Exception:
+                logger.exception("Failed session handoff after invocation: %s", invocation_id)
+            else:
+                if next_state is not None and next_state.status == InvocationStatus.QUEUED:
+                    self._schedule(next_state.invocation_id, retry_if_running=True)
 
     def _discard_task(self, invocation_id: str, completed: asyncio.Task[None]) -> None:
         if self._tasks.get(invocation_id) is completed:
             self._tasks.pop(invocation_id, None)
+            self._claim_retries.discard(invocation_id)
         if not completed.cancelled():
             completed.exception()

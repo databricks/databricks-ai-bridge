@@ -74,7 +74,7 @@ _PIP_INDEX_ENVS = ("PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDEX")
 _AGENT_COMPUTE_OUTPUT = ("App compute", "Agent compute")
 # Internal rollout switch. Backend selection is intentionally not part of the user-facing CLI or
 # process environment; flip this only in an Agent Bricks release after the managed API is fully deployed.
-_USE_MANAGED_RUNTIME_STORE = False
+_USE_MANAGED_RUNTIME_STORE = True
 
 # Agent Bricks deployments use one public prefix for creation and listing.
 _DEPLOYMENT_PREFIX = "agent-bricks-"
@@ -526,8 +526,11 @@ def deploy(
     session automatically stays on one instance.
 
     \b
-    API clients that need it must resend a stable UUID in this cookie every request:
-      __Host-databricks-app-router=<uuid>
+    To keep a session on one app replica (sticky routing), API clients must resend a stable
+    UUID (for example, their session id) in the X-Routing-Key request header on every request.
+    The header is a routing hint only - non-blank, no more than 128 UTF-8 bytes, used verbatim -
+    not authentication and not the session id itself (send the session id in the request body):
+      X-Routing-Key: <uuid>
     """
     source_dir = pathlib.Path(source)
     project = _load_project(source_dir)

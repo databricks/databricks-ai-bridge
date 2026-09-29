@@ -22,10 +22,11 @@ from databricks_agentkit.runtime.store import (
 from databricks_agentkit.runtime.types import (
     Invocation,
     InvocationAttemptContext,
+    InvocationEvent,
     InvocationStatus,
 )
 
-_ROUTING_COOKIE = "__Host-databricks-app-router"
+_ROUTING_KEY_HEADER = "x-routing-key"
 _RUN_1 = "11111111-1111-4111-8111-111111111111"
 _RUN_2 = "22222222-2222-4222-8222-222222222222"
 
@@ -67,7 +68,7 @@ async def poll(client: httpx.AsyncClient, invocation_id: str) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_routing_cookie_is_the_only_session_source() -> None:
+async def test_routing_key_header_is_not_used_as_session_id() -> None:
     async def invoke(input, context):
         return {
             "received": input,
@@ -77,12 +78,13 @@ async def test_routing_cookie_is_the_only_session_source() -> None:
 
     app = make_app(invoke)
     async with running_client(app) as client:
-        client.cookies.set(_ROUTING_COOKIE, "session-1")
         response = await client.post(
             "/api/invocations",
             json={"id": _RUN_1, "input": "hello"},
+            headers={_ROUTING_KEY_HEADER: "session-1"},
         )
 
+    # The header only routes; with no body session_id the session falls back to the invocation id.
     assert response.status_code == 200
     assert response.json() == {
         "id": _RUN_1,
@@ -90,13 +92,45 @@ async def test_routing_cookie_is_the_only_session_source() -> None:
         "output": {
             "received": "hello",
             "invocation_id": _RUN_1,
-            "session_id": "session-1",
+            "session_id": _RUN_1,
         },
     }
 
 
 @pytest.mark.asyncio
-async def test_missing_forwarded_routing_cookie_uses_invocation_id() -> None:
+async def test_body_session_id_reaches_the_handler_and_the_header_is_ignored() -> None:
+    async def invoke(input, context):
+        # Mirrors the framework adapters: the body session_id wins, else context.session_id.
+        return {
+            "session_id": input.get("session_id") or context.session_id,
+            "context_session_id": context.session_id,
+        }
+
+    app = make_app(invoke)
+    async with running_client(app) as client:
+        with_body = await client.post(
+            "/api/invocations",
+            json={"id": _RUN_1, "input": {"session_id": "body-session"}},
+            headers={_ROUTING_KEY_HEADER: "header-session"},
+        )
+        without_body = await client.post(
+            "/api/invocations",
+            json={"id": _RUN_2, "input": {}},
+            headers={_ROUTING_KEY_HEADER: "header-session"},
+        )
+
+    assert with_body.json()["output"] == {
+        "session_id": "body-session",
+        "context_session_id": _RUN_1,
+    }
+    assert without_body.json()["output"] == {
+        "session_id": _RUN_2,
+        "context_session_id": _RUN_2,
+    }
+
+
+@pytest.mark.asyncio
+async def test_missing_forwarded_routing_key_header_uses_invocation_id() -> None:
     seen_sessions = []
 
     async def invoke(input, context):
@@ -109,7 +143,7 @@ async def test_missing_forwarded_routing_cookie_uses_invocation_id() -> None:
 
     assert seen_sessions == [_RUN_1]
     assert response.status_code == 200
-    assert _ROUTING_COOKIE not in response.cookies
+    assert _ROUTING_KEY_HEADER not in response.headers
 
 
 @pytest.mark.asyncio
@@ -127,6 +161,87 @@ async def test_body_session_and_resume_metadata_are_rejected() -> None:
 
     assert session.status_code == 422
     assert resume.status_code == 422
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "background,stream", [(False, False), (False, True), (True, False), (True, True)]
+)
+async def test_http_persists_invocation_session_in_every_mode(background, stream) -> None:
+    app = make_app()
+    async with running_client(app) as client:
+        response = await client.post(
+            "/api/invocations",
+            json={"id": _RUN_1, "input": "hello", "background": background, "stream": stream},
+            headers={_ROUTING_KEY_HEADER: "routing-only"},
+        )
+        await poll(client, _RUN_1)
+        state = await app._runtime.runtime_store.get(_RUN_1)
+
+    assert response.status_code == (202 if background else 200)
+    assert state is not None
+    assert isinstance(state.request, dict)
+    assert state.session_id == _RUN_1
+    assert state.request["session_id"] == state.session_id
+    assert state.session_sequence_number == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "background,stream", [(False, False), (False, True), (True, False), (True, True)]
+)
+async def test_http_routing_key_does_not_serialize_invocations(background, stream) -> None:
+    first_started = asyncio.Event()
+    second_started = asyncio.Event()
+    release = asyncio.Event()
+    seen = []
+
+    async def invoke(input, context):
+        seen.append(input)
+        if input == "first":
+            first_started.set()
+            await release.wait()
+        else:
+            second_started.set()
+        return input
+
+    app = make_app(invoke)
+    async with running_client(app) as client:
+        await client.post(
+            "/api/invocations",
+            json={"id": _RUN_1, "input": "first", "background": True},
+            headers={_ROUTING_KEY_HEADER: "shared-routing-key"},
+        )
+        await asyncio.wait_for(first_started.wait(), 2)
+        second = asyncio.create_task(
+            client.post(
+                "/api/invocations",
+                json={"id": _RUN_2, "input": "second", "background": background, "stream": stream},
+                headers={_ROUTING_KEY_HEADER: "shared-routing-key"},
+            )
+        )
+        try:
+            await asyncio.wait_for(second_started.wait(), 2)
+            response = await asyncio.wait_for(second, 2)
+            await poll(client, _RUN_2)
+            first_state = await app._runtime.runtime_store.get(_RUN_1)
+            second_state = await app._runtime.runtime_store.get(_RUN_2)
+
+            assert response.status_code == (202 if background else 200)
+            assert first_state is not None
+            assert second_state is not None
+            assert first_state.session_id == _RUN_1
+            assert second_state.session_id == _RUN_2
+            assert first_state.session_sequence_number == 1
+            assert second_state.session_sequence_number == 1
+            assert seen == ["first", "second"]
+        finally:
+            release.set()
+            if not second.done():
+                await asyncio.wait_for(second, 2)
+        await poll(client, _RUN_1)
+
+    assert seen == ["first", "second"]
 
 
 @pytest.mark.asyncio
@@ -149,6 +264,21 @@ async def test_recovery_attempt_uses_recovery_hook() -> None:
 
     assert result == {"input": "hello", "session_id": "session-1"}
     assert calls == ["recover"]
+
+
+@pytest.mark.asyncio
+async def test_attempt_context_is_the_source_of_session_identity() -> None:
+    async def invoke(input, context):
+        return context.session_id
+
+    app = make_app(invoke)
+
+    result = await app._execute(
+        {"input": "hello", "session_id": "legacy-session"},
+        InvocationAttemptContext(_RUN_1, 1, session_id="stored-session"),
+    )
+
+    assert result == "stored-session"
 
 
 @pytest.mark.asyncio
@@ -219,6 +349,118 @@ async def test_foreground_stream_returns_sse() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("background", [False, True])
+@pytest.mark.parametrize("fail", [False, True])
+async def test_stream_includes_events_committed_after_event_read(background, fail) -> None:
+    snapshot_taken = asyncio.Event()
+    release_snapshot = asyncio.Event()
+
+    class PausingEventReadStore(InMemoryRuntimeStore):
+        async def events(
+            self,
+            invocation_id: str | None = None,
+            after_sequence: int | None = None,
+            session_id: str | None = None,
+        ) -> list[InvocationEvent]:
+            events = await super().events(invocation_id, after_sequence, session_id)
+            if not snapshot_taken.is_set():
+                # Keep a real event snapshot while the handler commits its terminal state.
+                snapshot_taken.set()
+                await release_snapshot.wait()
+            return events
+
+    store = PausingEventReadStore()
+    app = DurableAgentServer(runtime_store=store)
+
+    @app.invoke
+    async def invoke(input, context):
+        await snapshot_taken.wait()
+        await context.emit({"type": "delta", "content": input})
+        if fail:
+            raise RuntimeError("intentional execution failure")
+        return input
+
+    async with running_client(app) as client:
+        if background:
+            accepted = await client.post(
+                "/api/invocations",
+                json={"id": _RUN_1, "input": "hello", "background": True},
+            )
+            assert accepted.status_code == 202
+            request = asyncio.create_task(client.get(f"/api/invocations/{_RUN_1}/events"))
+        else:
+            request = asyncio.create_task(
+                client.post(
+                    "/api/invocations",
+                    json={"id": _RUN_1, "input": "hello", "stream": True},
+                )
+            )
+        try:
+            await asyncio.wait_for(snapshot_taken.wait(), 2)
+            completed = await poll(client, _RUN_1)
+            release_snapshot.set()
+            response = await asyncio.wait_for(request, 2)
+        finally:
+            release_snapshot.set()
+            if not request.done():
+                request.cancel()
+            await asyncio.gather(request, return_exceptions=True)
+        events = await store.events(_RUN_1)
+        replay = await client.get(
+            f"/api/invocations/{_RUN_1}/events?after={events[-2].sequence_number}"
+        )
+        past_terminal = await client.get(
+            f"/api/invocations/{_RUN_1}/events?after={events[-1].sequence_number}"
+        )
+
+    terminal_type = "run.failed" if fail else "run.completed"
+    assert completed["status"] == ("failed" if fail else "completed")
+    if not fail:
+        assert completed["output"] == "hello"
+    assert response.status_code == 200
+    assert [line[7:] for line in response.text.splitlines() if line.startswith("event: ")] == [
+        "run.started",
+        "delta",
+        terminal_type,
+    ]
+    assert [int(line[4:]) for line in response.text.splitlines() if line.startswith("id: ")] == [
+        event.sequence_number for event in events
+    ]
+    assert replay.text == (
+        f"id: {events[-1].sequence_number}\nevent: {terminal_type}\n"
+        f'data: {{"type": "{terminal_type}"}}\n\n'
+    )
+    assert past_terminal.text == ""
+
+
+@pytest.mark.asyncio
+async def test_stream_closes_when_invocation_disappears() -> None:
+    store = InMemoryRuntimeStore()
+    app = DurableAgentServer(runtime_store=store)
+
+    @app.invoke
+    async def invoke(input, context):
+        await context.emit({"type": "delta", "content": input})
+        store.states.pop(context.invocation_id)
+        return input
+
+    async with running_client(app) as client:
+        response = await asyncio.wait_for(
+            client.post(
+                "/api/invocations",
+                json={"id": _RUN_1, "input": "hello", "stream": True},
+            ),
+            2,
+        )
+
+    assert response.status_code == 200
+    assert [line[7:] for line in response.text.splitlines() if line.startswith("event: ")] == [
+        "run.started",
+        "delta",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_background_stream_returns_202_with_polling_urls() -> None:
     app = make_app()
     async with running_client(app) as client:
@@ -268,7 +510,7 @@ async def test_invocation_id_is_idempotency_key_for_every_mode() -> None:
 
 
 @pytest.mark.asyncio
-async def test_retry_remains_idempotent_when_proxy_consumes_routing_cookie() -> None:
+async def test_retry_remains_idempotent_when_proxy_does_not_forward_routing_key_header() -> None:
     calls = 0
 
     async def invoke(input, context):
@@ -282,7 +524,7 @@ async def test_retry_remains_idempotent_when_proxy_consumes_routing_cookie() -> 
             "/api/invocations",
             json={"id": _RUN_1, "input": "one"},
         )
-        client.cookies.clear()
+        client.headers.pop(_ROUTING_KEY_HEADER, None)
         replay = await client.post(
             "/api/invocations",
             json={"id": _RUN_1, "input": "one", "background": True},

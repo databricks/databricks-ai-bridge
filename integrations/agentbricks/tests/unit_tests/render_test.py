@@ -162,7 +162,7 @@ def test_diagnostic_error_uses_cargo_code_form():
     assert "error[NOT_FOUND]: store not found" in buf.getvalue()
 
 
-def test_diagnostic_colors_only_the_keyword_leaving_message_and_fix_readable():
+def test_diagnostic_colors_only_the_keyword_leaving_message_and_fix_readable(monkeypatch):
     # Regression: styling must not bleed onto the message/fix. Only the severity keyword is colored
     # and the `help:` label bold; the message and fix stay at the default foreground so they are
     # fully legible on any terminal. The style resets right after the keyword/label.
@@ -172,8 +172,18 @@ def test_diagnostic_colors_only_the_keyword_leaving_message_and_fix_readable():
 
     from databricks_agentbricks.theme import AGENTBRICKS_THEME
 
+    # Test ANSI styling independently of the test runner's terminal settings.
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("TERM", "dumb")
     buf = io.StringIO()
-    con = Console(file=buf, width=120, force_terminal=True, theme=AGENTBRICKS_THEME)
+    con = Console(
+        file=buf,
+        width=120,
+        force_terminal=True,
+        color_system="standard",
+        no_color=False,
+        theme=AGENTBRICKS_THEME,
+    )
     render.diagnostic("error", "boom happened", help="do the fix", con=con)
     raw = buf.getvalue()
     assert "error\x1b[0m: boom happened" in raw  # reset lands after the keyword; message is default

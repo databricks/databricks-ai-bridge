@@ -61,8 +61,24 @@ second_response = client.chat.completions.create(
 ## Contribution Guide
 We welcome contributions! Please see our [contribution guidelines](https://github.com/databricks/databricks-ai-bridge/tree/main/integrations/langchain) for details.
 
+### Cross-version compatibility tests
+
+The `openai_cross_version_test` CI job installs current core with an unchanged historical
+OpenAI integration. It runs the maintained tests in `tests/compatibility` rather than the
+historical release's tests, so the test harness uses the tracing API supported by current core.
+The 24 cases cover retriever construction, resources, retrieval results, and persisted traces.
+Resource expectations retain the differences between historical releases.
+External services are mocked; MLflow writes traces to a temporary local store.
+
+To reproduce from the repository root, with a historical checkout at `older-version`:
+
+```bash
+pip install . older-version/integrations/openai --group dev
+pip check
+pytest -c pyproject.toml integrations/openai/tests/compatibility
+```
+
 ## License
 This project is licensed under the [MIT License](LICENSE).
 
 Thank you for using Databricks OpenAI!
-

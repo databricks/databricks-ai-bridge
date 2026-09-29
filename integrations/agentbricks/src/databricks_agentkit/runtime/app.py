@@ -32,7 +32,6 @@ from databricks_agentkit.runtime.types import (
 
 logger = logging.getLogger(__name__)
 
-_ROUTING_COOKIE = "__Host-databricks-app-router"
 _API_ROOT = "/api/invocations"
 
 
@@ -102,7 +101,6 @@ class DurableAgentServer(FastAPI):
             openapi_url=None,
         )
         self.add_exception_handler(AuthError, self._auth_error)
-        self.middleware("http")(self._bind_session)
         self.add_api_route(_API_ROOT, self._invoke_request, methods=["POST"])
         self.add_api_route(f"{_API_ROOT}/{{invocation_id}}", self._get_request, methods=["GET"])
         self.add_api_route(
@@ -125,13 +123,6 @@ class DurableAgentServer(FastAPI):
         self._recovery_hook = function
         return function
 
-    async def _bind_session(self, request: Request, call_next) -> Response:
-        # TODO: Read the standard session header once Databricks Apps supports one. The Apps proxy
-        # currently consumes its routing cookie before forwarding deployed requests, so the
-        # invocation ID becomes the deterministic session fallback in _invoke_request.
-        request.state.session_id = request.cookies.get(_ROUTING_COOKIE)
-        return await call_next(request)
-
     async def _execute(
         self,
         invocation_request: JsonValue,
@@ -139,9 +130,12 @@ class DurableAgentServer(FastAPI):
     ) -> JsonValue:
         if not isinstance(invocation_request, dict):
             raise TypeError("invocation request must be an object")
-        session_id = invocation_request.get("session_id")
-        if not isinstance(session_id, str) or "input" not in invocation_request:
-            raise TypeError("invocation request must contain session_id and input")
+        session_id = attempt_context.session_id
+        if session_id is None:
+            legacy_session_id = invocation_request.get("session_id")
+            session_id = legacy_session_id if isinstance(legacy_session_id, str) else None
+        if session_id is None or "input" not in invocation_request:
+            raise TypeError("invocation attempt must contain session_id and input")
         invocation_id = attempt_context.invocation_id
         request_auth = None
         if self.auth_policy.requires_user:
@@ -188,7 +182,8 @@ class DurableAgentServer(FastAPI):
         request_auth = None
         registered_auth = False
         execution_owns_auth = False
-        session_id = request.state.session_id or invocation_id
+        # Use the invocation id as the fallback when the explicit session_id is missing
+        session_id = invocation_id
         if self.auth_policy.requires_user:
             request_auth = RequestAuthContext.from_headers(request.headers)
             runtime_invocation_id = request_auth.namespace("invocation", invocation_id)
@@ -205,20 +200,26 @@ class DurableAgentServer(FastAPI):
             invocation_request["invocation_id"] = invocation_id
         try:
             if body.background:
-                state = await self._runtime.submit(runtime_invocation_id, invocation_request)
+                state = await self._runtime.submit(
+                    runtime_invocation_id, invocation_request, session_id=session_id
+                )
                 execution_owns_auth = registered_auth and state.status == InvocationStatus.QUEUED
                 return JSONResponse(
                     self._accepted_payload(state, stream=body.stream, invocation_id=invocation_id),
                     status_code=202,
                 )
             if body.stream:
-                state = await self._runtime.submit(runtime_invocation_id, invocation_request)
+                state = await self._runtime.submit(
+                    runtime_invocation_id, invocation_request, session_id=session_id
+                )
                 execution_owns_auth = registered_auth and state.status == InvocationStatus.QUEUED
                 return StreamingResponse(
                     self._event_stream(runtime_invocation_id),
                     media_type="text/event-stream",
                 )
-            output = await self._runtime.invoke(runtime_invocation_id, invocation_request)
+            output = await self._runtime.invoke(
+                runtime_invocation_id, invocation_request, session_id=session_id
+            )
             return JSONResponse({"id": invocation_id, "status": "completed", "output": output})
         except InvocationConflictError as exc:
             raise HTTPException(409, "id was already used for another request") from exc
@@ -263,12 +264,13 @@ class DurableAgentServer(FastAPI):
     async def _event_stream(self, invocation_id: str, after: int = 0) -> AsyncIterator[str]:
         cursor = after
         while True:
+            # Read state first so a terminal snapshot's committed events are drained below.
+            state = await self._runtime.get_invocation(invocation_id)
             for event in await self._runtime.get_events(invocation_id, after_sequence=cursor):
                 cursor = event.sequence_number
                 event_type = event.event.get("type", "message")
                 yield f"id: {cursor}\nevent: {event_type}\ndata: {json.dumps(event.event)}\n\n"
 
-            state = await self._runtime.get_invocation(invocation_id)
             if state is None or state.is_terminal:
                 return
             await asyncio.sleep(self._runtime.poll_seconds)

@@ -71,7 +71,7 @@ and register [runtime/adapter.py](runtime/adapter.py) hooks. Keep framework-nati
 The invoke hook translates opaque application input, runs the graph, translates native events,
 calls `await context.emit(event)`, and returns JSON output. DurableAgentServer owns foreground/background
 transport, polling, and replay. Invocation UUIDs differ from stable application session IDs; the
-routing cookie is not the application session.
+`X-Routing-Key` sticky-routing header is not the application session. `X-Routing-Key` is routing only and is never used as the session id; the session id comes from the request body (else the invocation id). The header is non-blank, no more than 128 UTF-8 bytes, used verbatim, and takes precedence over the legacy `__Host-databricks-app-router` cookie (for routing).
 
 The example assumes `messages` state and message/update events. Custom state, outputs, and
 interrupts require explicit mappings and must not be discarded to fit the example.
@@ -86,6 +86,11 @@ Runtime Store.
 Register recovery when intended. Resume a checkpoint only when metadata associates it with the
 current invocation; otherwise replay original input. Use synchronous checkpoint durability before
 acknowledging progress. Recovery is at least once, so side effects must tolerate replay.
+
+Recovery uses `databricks_agentkit.langgraph.responses.checkpointed_messages` to restore this
+invocation's committed outputs, then resumes the same graph. Saved messages seed the response
+without being emitted again. Keep checkpoint history and task writes available during recovery.
+Checkpoint and Runtime Store event writes are not atomic.
 
 ## Optional chat app
 
