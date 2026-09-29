@@ -50,11 +50,11 @@ Invocation and event reads can target either one invocation or one session; sess
 the active invocation, then the earliest queued
 invocation, or `None`. Each claimed attempt receives the saved session ID in its execution context.
 
-The HTTP server passes the invocation ID to Runtime as the session ID in all execution modes;
-request-user sessions are namespaced by the authenticated caller. `X-Routing-Key` only selects an
-app replica and never becomes Runtime session identity. Template conversation identity inside the
-opaque input is unchanged and does not select the runtime queue, so separate HTTP invocations do
-not share a Runtime session yet.
+The HTTP server accepts an optional top-level `session_id` and passes it to Runtime in every
+execution mode. If it is omitted, the invocation remains sessionless. Request-user sessions are
+namespaced once before they enter Runtime. The session saved in the Runtime Store and propagated
+through the attempt context is the handler's source of truth; neither opaque input nor
+`X-Routing-Key` selects Runtime session identity.
 
 All workers sharing a Runtime Store must support session-aware claims before callers start supplying
 session IDs. An older worker does not enforce session order and can claim a later queued invocation.

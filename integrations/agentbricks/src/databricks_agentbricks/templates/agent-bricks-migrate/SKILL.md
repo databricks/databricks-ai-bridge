@@ -57,7 +57,7 @@ State and durability semantics differ by framework; handle the ones that apply:
   Derive actor identity from the trusted application context; do not blindly trust a caller field or adopt a shared
   fallback. If the existing server used a different request/response shape (e.g. a
   `{conversation_id, message}` body), map it explicitly in `runtime/adapter.py` to the runtime's
-  `input.session_id` / `input.messages`, and preserve response fields clients depend on.
+  top-level `session_id` and `input.messages`, and preserve response fields clients depend on.
 - **Recovery and durability:** Distinguish Runtime Store invocation recovery from Session Store
   persistence. Address at-least-once side effects and retain stronger existing guarantees. Do not
   silently enable replay of non-idempotent tools.

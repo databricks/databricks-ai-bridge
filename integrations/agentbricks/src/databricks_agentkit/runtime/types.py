@@ -91,7 +91,7 @@ class InvocationContext:
     """Invocation/session metadata and event emission for a decorated agent function."""
 
     invocation_id: str
-    session_id: str
+    session_id: str | None
     attempt: int
     _attempt_context: InvocationAttemptContext = field(repr=False, compare=False)
     request_auth: "RequestAuthContext | None" = field(default=None, repr=False, compare=False)

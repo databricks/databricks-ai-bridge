@@ -594,7 +594,7 @@ function handleOutput(output) {
 
 function routingHeaders() {
   const headers = {};
-  // Populate the session_id as the routing key for sticky routing
+  // The UI reuses its stable session value for routing affinity, but the header is routing-only.
   if (state.sessionId) headers["X-Routing-Key"] = state.sessionId;
   return headers;
 }
@@ -606,12 +606,11 @@ function invocationHeaders() {
 function invocationPayload(payload, transport = {}) {
   const sessionId = ensureSessionId();
   const input = {
-    session_id: sessionId,
     actor: state.config?.session.actor || sessionId,
     ...payload,
   };
   if (state.model) input.model = state.model;
-  return { id: newSessionId(), input, ...transport };
+  return { id: newSessionId(), session_id: sessionId, input, ...transport };
 }
 
 function agentResult(result) {

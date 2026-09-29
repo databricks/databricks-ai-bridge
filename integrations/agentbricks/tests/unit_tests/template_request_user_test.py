@@ -45,7 +45,7 @@ class RequestAuth:
 
 
 @pytest.mark.asyncio
-async def test_adapter_namespaces_session_and_untrusted_actor(template, monkeypatch):
+async def test_adapter_uses_context_session_and_namespaces_untrusted_actor(template, monkeypatch):
     framework, adapter, _agent = template
     calls = []
 
@@ -60,11 +60,14 @@ async def test_adapter_namespaces_session_and_untrusted_actor(template, monkeypa
         yield SimpleNamespace(stream_events=stream, interruptions=[])
 
     monkeypatch.setattr(adapter, "run_agent", stream if framework == "langgraph" else result)
-    payload = {"session_id": "public", "actor": "victim", "messages": []}
+    payload = {"session_id": "ignored", "actor": "victim", "messages": []}
     for owner in ("alice", "bob"):
         auth = RequestAuth(owner)
         context = SimpleNamespace(
-            request_auth=auth, session_id="cookie", invocation_id="run", emit=AsyncMock()
+            request_auth=auth,
+            session_id=f"private:{owner}:session:public",
+            invocation_id="run",
+            emit=AsyncMock(),
         )
         response = await adapter.invoke(payload, context)
         kwargs = calls[0][1]
@@ -72,7 +75,7 @@ async def test_adapter_namespaces_session_and_untrusted_actor(template, monkeypa
         assert kwargs["actor"] == f"private:{owner}:actor:victim"
         assert kwargs["workspace_client_for"] is auth.client_for
         assert "request_auth" not in kwargs
-        assert response["session_id"] == "public"
+        assert "session_id" not in response
         assert "private:" not in repr(response)
         calls.clear()
 
@@ -89,7 +92,7 @@ async def test_user_hitl_input_rejected_before_framework_execution(template, mon
         request_auth=RequestAuth("alice"), session_id="public", emit=AsyncMock()
     )
     with pytest.raises(AuthError) as raised:
-        await adapter.invoke({"session_id": "public", key: {}}, context)
+        await adapter.invoke({key: {}}, context)
     assert raised.value.code == "MCP_USER_AUTH_HITL_UNSUPPORTED"
     run.assert_not_called()
 
@@ -109,7 +112,7 @@ def test_main_lets_durable_agent_server_infer_auth_policy_after_configure(framew
 
 
 @pytest.mark.asyncio
-async def test_context_session_is_already_private(template, monkeypatch):
+async def test_context_session_and_default_actor_are_already_private(template, monkeypatch):
     framework, adapter, _agent = template
     calls = []
 
@@ -131,10 +134,28 @@ async def test_context_session_is_already_private(template, monkeypatch):
         invocation_id="public-run",
         emit=AsyncMock(),
     )
-    response = await adapter.invoke({"messages": [], "actor": "alice"}, context)
+    response = await adapter.invoke({"messages": []}, context)
     assert calls[0]["session_id"] == "already-private"
-    assert calls[0]["actor"] == "private:alice:actor:alice"
+    assert calls[0]["actor"] == "already-private"
     assert "session_id" not in response
+
+
+@pytest.mark.asyncio
+async def test_nested_session_does_not_replace_missing_context_session(template, monkeypatch):
+    _framework, adapter, _agent = template
+    run = Mock(side_effect=AssertionError("must reject before running"))
+    monkeypatch.setattr(adapter, "run_agent", run)
+    context = SimpleNamespace(
+        request_auth=None,
+        session_id=None,
+        invocation_id="run",
+        emit=AsyncMock(),
+    )
+
+    with pytest.raises(ValueError, match="top-level invocation field"):
+        await adapter.invoke({"session_id": "legacy", "messages": []}, context)
+
+    run.assert_not_called()
 
 
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])

@@ -91,6 +91,7 @@ async def test_request_user_sync_uses_runtime_without_persisting_auth(deployed):
     assert len(contexts) == 1
     store = app._runtime.runtime_store
     assert isinstance(store, InMemoryRuntimeStore)
+    assert contexts[0].session_id is None
     assert next(iter(store.states.values())).session_id == contexts[0].session_id
     assert_auth_not_persisted(store)
     with pytest.raises(AuthError):
@@ -157,6 +158,7 @@ async def test_request_user_auth_composes_with_existing_runtime_background_mode(
     }
     assert_auth_not_persisted(store)
     assert len(contexts) == 1
+    assert contexts[0].session_id is None
     assert next(iter(store.states.values())).session_id == contexts[0].session_id
     with pytest.raises(AuthError):
         contexts[0].request_auth.client_for("user")
@@ -178,7 +180,8 @@ async def test_request_user_streams_ordered_persisted_events(deployed):
             "/api/invocations",
             json={
                 "id": invocation_id,
-                "input": {"text": "hello", "session_id": "body-session"},
+                "session_id": "public-session",
+                "input": {"text": "hello"},
                 "stream": True,
             },
             headers={**headers(), "x-routing-key": "routing-session"},
@@ -200,15 +203,14 @@ async def test_request_user_streams_ordered_persisted_events(deployed):
         "output": {"ignored": "stream output"},
     }
     assert events.text == response.text
-    # The routing header never becomes the session id; the runtime session is the namespaced
-    # invocation id, and the body session_id is left in the input for the adapter to read.
-    assert contexts[0].session_id == contexts[0].request_auth.namespace("session", invocation_id)
+    # The public session is namespaced once; the routing header remains routing-only.
+    assert contexts[0].session_id == contexts[0].request_auth.namespace("session", "public-session")
     assert contexts[0].session_id != contexts[0].request_auth.namespace(
         "session", "routing-session"
     )
-    assert (
-        next(iter(app._runtime.runtime_store.states.values())).session_id == contexts[0].session_id
-    )
+    state = next(iter(app._runtime.runtime_store.states.values()))
+    assert state.session_id == contexts[0].session_id
+    assert state.request == {"input": {"text": "hello"}, "invocation_id": invocation_id}
     with pytest.raises(AuthError):
         contexts[0].request_auth.client_for("user")
 
@@ -384,7 +386,7 @@ async def test_concurrent_request_users_have_isolated_auth_and_sessions(deployed
         return context.session_id
 
     app = make_app(handler)
-    body = {"id": str(uuid4())}
+    body = {"id": str(uuid4()), "session_id": "public-session"}
     async with running_client(app) as client:
         first, second = await asyncio.wait_for(
             asyncio.gather(
@@ -422,8 +424,12 @@ async def test_request_user_recovery_fails_before_handlers(deployed):
 
     with pytest.raises(AuthError) as caught:
         await app._execute(
-            {"input": "hello", "session_id": "session-1", "invocation_id": invocation_id},
-            InvocationAttemptContext(runtime_invocation_id, 2),
+            {"input": "hello", "invocation_id": invocation_id},
+            InvocationAttemptContext(
+                runtime_invocation_id,
+                2,
+                session_id=request_auth.namespace("session", "session-1"),
+            ),
         )
 
     assert caught.value.code == "MCP_USER_AUTH_RECOVERY_UNSUPPORTED"
