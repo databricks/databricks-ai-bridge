@@ -49,8 +49,8 @@ def _validate_invocation_id(invocation_id: str) -> None:
         raise ValueError("invocation_id must not be empty")
 
 
-def _validate_session_id(session_id: str) -> None:
-    if not session_id:
+def _validate_session_id(session_id: str | None) -> None:
+    if session_id is not None and not session_id:
         raise ValueError("session_id must not be empty")
 
 
@@ -356,8 +356,7 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
         session_id: str | None = None,
     ) -> Invocation:
         _validate_invocation_id(invocation_id)
-        if session_id is not None:
-            _validate_session_id(session_id)
+        _validate_session_id(session_id)
         serialized_request = _serialize_json_value(request)
         async with self._engine.begin() as connection:
             session_sequence_number = None
@@ -544,7 +543,7 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
         stale_seconds: float | None,
     ) -> Invocation | None:
         _validate_invocation_id(invocation_id)
-        eligibility = """
+        eligibility_filter_str = """
             target.status='QUEUED' AND (
                 target.session_id IS NULL
                 OR (
@@ -566,7 +565,7 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
         """.format(table=self._table)
         parameters: dict[str, str | float] = {"invocation_id": invocation_id}
         if stale_seconds is not None:
-            eligibility = """
+            eligibility_filter_str = """
                 target.status='ACTIVE' AND (
                     target.heartbeat_at IS NULL
                     OR target.heartbeat_at < NOW() - (:stale * INTERVAL '1 second')
@@ -596,7 +595,7 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                         UPDATE {self._table} AS target
                         SET status='ACTIVE', attempt=attempt+1, heartbeat_at=NOW()
                         WHERE target.invocation_id=:invocation_id
-                          AND ({eligibility})
+                          AND ({eligibility_filter_str})
                         RETURNING target.invocation_id, target.session_id, target.session_sequence_number,
                                   target.status, target.attempt,
                                   request::TEXT AS request_json,

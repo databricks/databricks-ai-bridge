@@ -210,16 +210,11 @@ class Runtime:
         self._require_started()
         if not invocation_id:
             raise ValueError("invocation_id must not be empty")
-        copied_request = copy_json_value(request, "request")
-        # Preserve compatibility with store adapters that predate session-aware submission.
-        if session_id is None:
-            state = await self.runtime_store.accept(invocation_id, copied_request)
-        else:
-            state = await self.runtime_store.accept(
-                invocation_id,
-                copied_request,
-                session_id=session_id,
-            )
+        state = await self.runtime_store.accept(
+            invocation_id,
+            copy_json_value(request, "request"),
+            session_id=session_id,
+        )
         self.executor.ensure_scheduled(state)
         return state
 
@@ -231,11 +226,7 @@ class Runtime:
         timeout: float | None = None,
     ) -> JsonValue:
         """Accept an invocation and wait for its terminal result."""
-        # Preserve subclasses that override the pre-session submit signature.
-        if session_id is None:
-            await self.submit(invocation_id, request)
-        else:
-            await self.submit(invocation_id, request, session_id=session_id)
+        await self.submit(invocation_id, request, session_id=session_id)
         return await self.wait(invocation_id, timeout=timeout)
 
     async def get_invocation(

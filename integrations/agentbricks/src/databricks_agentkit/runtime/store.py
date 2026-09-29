@@ -30,8 +30,8 @@ def _validate_invocation_id(invocation_id: str) -> None:
         raise ValueError("invocation_id must not be empty")
 
 
-def _validate_session_id(session_id: str) -> None:
-    if not session_id:
+def _validate_session_id(session_id: str | None) -> None:
+    if session_id is not None and not session_id:
         raise ValueError("session_id must not be empty")
 
 
@@ -133,8 +133,7 @@ class InMemoryRuntimeStore(RuntimeStore):
         session_id: str | None = None,
     ) -> Invocation:
         _validate_invocation_id(invocation_id)
-        if session_id is not None:
-            _validate_session_id(session_id)
+        _validate_session_id(session_id)
         async with self._lock:
             existing = self.states.get(invocation_id)
             if existing is not None:

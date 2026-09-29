@@ -422,38 +422,6 @@ async def test_invoke_persists_request_and_response(session_id: str | None) -> N
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("session_kwargs", [{}, {"session_id": None}], ids=["omitted", "none"])
-async def test_invoke_preserves_legacy_submit_override(session_kwargs: dict[str, Any]) -> None:
-    class LegacyRuntime(Runtime):
-        # Existing subclasses may implement the signature from before session-aware submission.
-        async def submit(  # ty: ignore[invalid-method-override]
-            self, invocation_id: str, request: JsonValue
-        ) -> Invocation:
-            return await super().submit(invocation_id, {"wrapped_input": request})
-
-    async def execute(request: JsonValue, context: InvocationAttemptContext) -> JsonValue:
-        assert context.session_id is None
-        return request
-
-    runtime = LegacyRuntime.local(execute, poll_seconds=0.005)
-    await runtime.start()
-    try:
-        response = await runtime.invoke(
-            "invocation-1", {"message": "hello"}, timeout=1, **session_kwargs
-        )
-        state = await runtime.get_invocation("invocation-1")
-    finally:
-        await runtime.stop()
-
-    assert response == {"wrapped_input": {"message": "hello"}}
-    assert state is not None
-    assert state.status == InvocationStatus.COMPLETED
-    assert state.request == state.response == response
-    assert state.session_id is None
-    assert state.session_sequence_number is None
-
-
-@pytest.mark.asyncio
 async def test_local_runtime_drains_a_session_queue_in_order() -> None:
     first_started = asyncio.Event()
     release_first = asyncio.Event()
