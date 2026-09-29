@@ -11,7 +11,7 @@ VERSION_PATTERN = re.compile(
     r"(?P<major>0|[1-9][0-9]*)\."
     r"(?P<minor>0|[1-9][0-9]*)\."
     r"(?P<patch>0|[1-9][0-9]*)"
-    r"(?:rc(?P<rc>0|[1-9][0-9]*)|\.dev(?P<dev>0|[1-9][0-9]*))?"
+    r"(?:\.dev(?P<dev>0|[1-9][0-9]*))?"
 )
 SHA_PATTERN = re.compile(r"[0-9a-fA-F]{40}")
 PROJECT_VERSION_PATTERN = re.compile(
@@ -19,7 +19,7 @@ PROJECT_VERSION_PATTERN = re.compile(
 )
 TEMPLATE_DEPENDENCY_PATTERN = re.compile(
     r'(?P<prefix>"databricks-agentbricks(?:\[[a-z]+\])?>=)'
-    r'(?P<version>[0-9]+\.[0-9]+\.[0-9]+(?:rc[0-9]+|\.dev[0-9]+)?)'
+    r'(?P<version>[0-9]+\.[0-9]+\.[0-9]+(?:\.dev[0-9]+)?)'
     r'(?P<suffix>")'
 )
 PACKAGE_PATH = Path("integrations/agentbricks/pyproject.toml")
@@ -36,8 +36,8 @@ def parse_version(value: str, *, allow_dev: bool = False) -> tuple[int, int, int
     match = VERSION_PATTERN.fullmatch(value)
     if not match or (match.group("dev") and not allow_dev):
         raise ValueError(f"unsupported version: {value!r}")
-    stage = -2 if match.group("dev") else -1 if match.group("rc") else 0
-    number = int(match.group("dev") or match.group("rc") or "0")
+    stage = -1 if match.group("dev") else 0
+    number = int(match.group("dev") or "0")
     return (int(match.group("major")), int(match.group("minor")), int(match.group("patch")), stage, number)
 
 
@@ -49,7 +49,7 @@ def parse_sha(value: str) -> str:
 
 def plan_release(
     version: str, base_sha: str, current_version: str, release_sha: str | None = None
-) -> dict[str, str | bool | None]:
+) -> dict[str, str | bool]:
     target = parse_version(version)
     current = parse_version(current_version, allow_dev=True)
     base = parse_sha(base_sha)
