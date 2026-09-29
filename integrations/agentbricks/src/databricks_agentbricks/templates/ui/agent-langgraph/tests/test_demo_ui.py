@@ -136,6 +136,9 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
     app.recover(invoke_handler)
     ui.install_ui(app)
     client = TestClient(app, base_url="https://testserver")
+    # X-Routing-Key is kept for sticky routing (harmless); session identity travels via
+    # ?session_id=... query param, matching what demoUrl() sends in the real browser.
+    client.params = {"session_id": session_id}
     client.headers["X-Routing-Key"] = session_id
     if configured:
         # The actor is the signed-in user from this forwarded-identity header (ui._request_actor);
