@@ -1,0 +1,236 @@
+name: Cut Agent Bricks release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version, such as 0.4.0rc1, 0.4.0, or 0.4.1
+        type: string
+        required: true
+      source_sha:
+        description: Optional main commit for the first cut; defaults to the latest main commit
+        type: string
+      dry_run:
+        description: Preview the plan without writing anything
+        type: boolean
+        required: true
+        default: true
+
+permissions:
+  contents: read
+concurrency:
+  group: agentbricks-release
+  cancel-in-progress: false
+env:
+  UV_VERSION: '0.9.11'
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      branch: ${{ steps.plan.outputs.branch }}
+      tag: ${{ steps.plan.outputs.tag }}
+      base_sha: ${{ steps.plan.outputs.base_sha }}
+      branch_exists: ${{ steps.plan.outputs.branch_exists }}
+      next_dev_version: ${{ steps.plan.outputs.next_dev_version }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Plan release
+        id: plan
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          MAIN_SHA=$(git rev-parse FETCH_HEAD)
+          SERIES=$(python3 - "$VERSION" <<'PY'
+          import importlib.util, sys
+          spec = importlib.util.spec_from_file_location('release', '.github/scripts/agentbricks_release.py')
+          release = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(release)
+          major, minor, *_ = release.parse_version(sys.argv[1])
+          print(f'{major}.{minor}')
+          PY
+          )
+          BRANCH="release/databricks-agentbricks/v$SERIES"
+          RELEASE_SHA=$(git ls-remote --heads origin "refs/heads/$BRANCH" | cut -f1)
+          if [ -n "$RELEASE_SHA" ]; then
+            git fetch origin "refs/heads/$BRANCH"
+            BASE_SHA=$(git rev-parse FETCH_HEAD)
+            test "$BASE_SHA" = "$RELEASE_SHA"
+          else
+            BASE_SHA="$MAIN_SHA"
+            if [ -n "$SOURCE_SHA" ]; then
+              BASE_SHA=$(python3 - "$SOURCE_SHA" <<'PY'
+          import importlib.util, sys
+          spec = importlib.util.spec_from_file_location('release', '.github/scripts/agentbricks_release.py')
+          release = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(release)
+          print(release.parse_sha(sys.argv[1]))
+          PY
+              )
+              git cat-file -e "$BASE_SHA^{commit}"
+              git merge-base --is-ancestor "$BASE_SHA" "$MAIN_SHA"
+            fi
+          fi
+          CURRENT_VERSION=$(git show "$BASE_SHA:integrations/agentbricks/pyproject.toml" | python3 -c 'import sys,tomllib; print(tomllib.loads(sys.stdin.read())["project"]["version"])')
+          PLAN_ARGS=(--version "$VERSION" --base-sha "$MAIN_SHA" --current-version "$CURRENT_VERSION")
+          if [ -n "$RELEASE_SHA" ]; then PLAN_ARGS+=(--release-sha "$RELEASE_SHA"); fi
+          python3 .github/scripts/agentbricks_release.py plan "${PLAN_ARGS[@]}" > "$RUNNER_TEMP/agentbricks-plan.json"
+          python3 - "$GITHUB_OUTPUT" "$GITHUB_STEP_SUMMARY" "$RUNNER_TEMP/agentbricks-plan.json" "$CURRENT_VERSION" <<'PY'
+          import json, sys
+          from pathlib import Path
+          output, summary, plan_file, current = sys.argv[1:]
+          plan = json.loads(Path(plan_file).read_text())
+          with open(output, 'a') as f:
+              for key in ('branch', 'tag', 'base_sha', 'branch_exists', 'next_dev_version'):
+                  value = plan[key]
+                  f.write(f'{key}={str(value).lower() if isinstance(value, bool) else value or ""}\n')
+          with open(summary, 'a') as f:
+              f.write('## Agent Bricks release plan\n\n')
+              for key in ('version', 'branch', 'tag', 'base_sha', 'branch_exists', 'next_dev_version'):
+                  f.write(f'- **{key}:** `{plan[key]}`\n')
+              f.write(f'- **Current version at source:** `{current}`\n')
+              f.write('- **Changes:** stamp the package and four templates on the release branch, test the pushed commit, tag it, then open a next minor development version PR on the first cut. Publishing requires a separate approval.\n')
+          PY
+
+  cut:
+    if: ${{ !inputs.dry_run }}
+    needs: plan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Stamp and push the release branch
+        id: release
+        env:
+          VERSION: ${{ inputs.version }}
+          BRANCH: ${{ needs.plan.outputs.branch }}
+          BASE_SHA: ${{ needs.plan.outputs.base_sha }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          BRANCH_EXISTS: ${{ needs.plan.outputs.branch_exists }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG_SHA=$(git ls-remote --tags origin "refs/tags/$TAG" | cut -f1)
+          if [ -n "$TAG_SHA" ] && [ "$TAG_SHA" != "$BASE_SHA" ]; then
+            echo "Tag already exists at a different commit: $TAG_SHA" >&2
+            exit 1
+          fi
+          if [ "$BRANCH_EXISTS" = true ]; then
+            git fetch origin "refs/heads/$BRANCH"
+            test "$(git rev-parse FETCH_HEAD)" = "$BASE_SHA"
+          else
+            if [ -n "$(git ls-remote --heads origin "refs/heads/$BRANCH")" ]; then
+              echo "Release branch changed after planning; rerun this workflow" >&2
+              exit 1
+            fi
+          fi
+          cp .github/scripts/agentbricks_release.py "$RUNNER_TEMP/agentbricks_release.py"
+          git checkout --detach "$BASE_SHA"
+          python3 "$RUNNER_TEMP/agentbricks_release.py" stamp --root . --version "$VERSION" --templates
+          git add integrations/agentbricks/pyproject.toml integrations/agentbricks/src/databricks_agentbricks/templates/*/pyproject.toml
+          if ! git diff --cached --quiet; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m "Release Agent Bricks $VERSION"
+          fi
+          RELEASE_SHA=$(git rev-parse HEAD)
+          git push origin "HEAD:refs/heads/$BRANCH"
+          echo "sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: '3.11'
+      - name: Test the exact pushed release commit
+        env:
+          BRANCH: ${{ needs.plan.outputs.branch }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          test "$(git ls-remote --heads origin "refs/heads/$BRANCH" | cut -f1)" = "$RELEASE_SHA"
+          cd integrations/agentbricks
+          uv run --resolution highest --exact --group tests pytest tests/unit_tests
+          uv run --resolution highest --exact --group tests --extra langgraph pytest tests/unit_tests
+          uv build --wheel --out-dir dist ../..
+          uv build --wheel --out-dir dist
+          uv venv .venv-functional
+          uv pip install --python .venv-functional/bin/python --no-sources \
+            "$(ls dist/databricks_ai_bridge-*.whl)" \
+            "$(ls dist/databricks_agentbricks-*.whl)" --group tests
+          AI_BRIDGE_WHEEL="$(ls "$PWD"/dist/databricks_ai_bridge-*.whl)" \
+          AGENTBRICKS_WHEEL="$(ls "$PWD"/dist/databricks_agentbricks-*.whl)" \
+            .venv-functional/bin/pytest tests/functional/
+      - name: Tag tested release commit
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+          BRANCH: ${{ needs.plan.outputs.branch }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          test "$(git ls-remote --heads origin "refs/heads/$BRANCH" | cut -f1)" = "$RELEASE_SHA"
+          TAG_SHA=$(git ls-remote --tags origin "refs/tags/$TAG" | cut -f1)
+          if [ -n "$TAG_SHA" ]; then
+            test "$TAG_SHA" = "$RELEASE_SHA"
+          else
+            git tag "$TAG" "$RELEASE_SHA"
+            git push origin "$TAG"
+          fi
+      - name: Open next development version PR on first cut
+        env:
+          NEXT_DEV_VERSION: ${{ needs.plan.outputs.next_dev_version }}
+          RELEASE_BRANCH: ${{ needs.plan.outputs.branch }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          MAIN_SHA=$(git rev-parse FETCH_HEAD)
+          MAIN_VERSION=$(git show "$MAIN_SHA:integrations/agentbricks/pyproject.toml" | python3 -c 'import sys,tomllib; print(tomllib.loads(sys.stdin.read())["project"]["version"])')
+          if python3 - "$MAIN_VERSION" "$NEXT_DEV_VERSION" "$RUNNER_TEMP/agentbricks_release.py" <<'PY'
+          import importlib.util, sys
+          spec = importlib.util.spec_from_file_location('release', sys.argv[3])
+          release = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(release)
+          sys.exit(0 if release.parse_version(sys.argv[1], allow_dev=True) >= release.parse_version(sys.argv[2], allow_dev=True) else 1)
+          PY
+          then
+            echo "Main already has version $MAIN_VERSION; no bump PR needed" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          BUMP_BRANCH="chore/agentbricks-next-dev-${NEXT_DEV_VERSION}"
+          if [ "$(gh pr list --state open --head "$BUMP_BRANCH" --json number --jq 'length')" -gt 0 ]; then
+            echo "Next development version PR is already open" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ -n "$(git ls-remote --heads origin "refs/heads/$BUMP_BRANCH")" ]; then
+            gh pr create --draft --base main --head "$BUMP_BRANCH" \
+              --title "Set Agent Bricks development version to $NEXT_DEV_VERSION" \
+              --body "After cutting $RELEASE_BRANCH, set package metadata on main to $NEXT_DEV_VERSION for development builds. This PR does not publish a release."
+            exit 0
+          fi
+          git checkout --detach "$MAIN_SHA"
+          git switch -c "$BUMP_BRANCH"
+          python3 "$RUNNER_TEMP/agentbricks_release.py" stamp --root . --version "$NEXT_DEV_VERSION"
+          git add integrations/agentbricks/pyproject.toml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m "Set Agent Bricks development version to $NEXT_DEV_VERSION"
+          git push origin "HEAD:refs/heads/$BUMP_BRANCH"
+          gh pr create --draft --base main --head "$BUMP_BRANCH" \
+            --title "Set Agent Bricks development version to $NEXT_DEV_VERSION" \
+            --body "After cutting $RELEASE_BRANCH, set package metadata on main to $NEXT_DEV_VERSION for development builds. This PR does not publish a release."
