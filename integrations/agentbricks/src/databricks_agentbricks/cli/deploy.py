@@ -17,68 +17,31 @@ from __future__ import annotations
 
 import json
 import pathlib
-from collections.abc import Sequence
-from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Optional
 
 import click
 
 import databricks_agentbricks.lakebase_runtime_store as managed_runtime_store
-import databricks_agentbricks.legacy_lakebase_runtime_store as legacy_runtime_store
 from databricks_agentbricks import render
-from databricks_agentbricks.app_manifest import AppManifest
-from databricks_agentbricks.app_resources import (
-    apply_postgres_resources,
-    apply_trace_resources,
-)
-from databricks_agentbricks.apps_client import AppsClient, DatabricksRunner
-from databricks_agentbricks.cli.app_auth import (
-    apply_app_user_scope_update,
-    plan_app_user_scope_update,
-    required_user_api_scopes,
-    requires_user_auth,
-)
-from databricks_agentbricks.cli.endpoint_examples import print_agent_invoke_command
-from databricks_agentbricks.cli.tracing import (
-    TRACING_BIND_COMMAND,
-    MLflowTraceTables,
-    ResolvedTraceExperiment,
-    create_experiment_idempotent,
-    experiment_url,
-)
+from databricks_agentbricks.apps_client import AppsClient
+from databricks_agentbricks.cli.composition import build_deploy_service
+from databricks_agentbricks.cli.presenter import present_deploy_result
 from databricks_agentbricks.databricks_cli import _databricks
 from databricks_agentbricks.deployment import (
-    _AGENT_COMPUTE_OUTPUT,
-    _AGENTKIT_RUNTIME_STORE_SCHEMA,
     _DEFAULT_PIP_INDEX_URL,
     _DEPLOYMENT_PREFIX,
-    _MAX_DEPLOYMENT_NAME_LEN,
-    _PIP_INDEX_ENVS,
     _USE_MANAGED_RUNTIME_STORE,
     TRACES_EXPERIMENT_ID_ENV,  # noqa: F401 - re-exported for tests referencing deploy_mod.TRACES_EXPERIMENT_ID_ENV
     TRACES_TRACKING_URI_ENV,  # noqa: F401 - re-exported for tests referencing deploy_mod.TRACES_TRACKING_URI_ENV
     MlflowTracingConfig,  # noqa: F401 - re-exported for callers/tests referencing deploy_mod.MlflowTracingConfig
-    _instance_args,
-    _prefixed_name,
+    _prefixed_name,  # noqa: F401 - re-exported for tests referencing deploy_mod._prefixed_name
     _validate_deployment_name,
-    mlflow_tracing_config,
+    mlflow_tracing_config,  # noqa: F401 - re-exported for tests referencing deploy_mod.mlflow_tracing_config
 )
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.project_config import (
-    require_managed_tool_support,
-)
-from databricks_agentbricks.project_types import AgentServer
 from databricks_agentbricks.render import field
-from databricks_agentbricks.store_provisioner import StoreProvisioner
+from databricks_agentbricks.services.deploy_service import DeployRequest
 from databricks_agentkit import timefmt
-from databricks_agentkit.runtime.store import (
-    RUNTIME_STORE_DATABASE_ENV,
-    RUNTIME_STORE_LAKEBASE_BRANCH_ENV,
-    RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV,
-    RUNTIME_STORE_SCHEMA_ENV,
-    RUNTIME_STORE_USERNAME_ENV,
-)
-from databricks_agentkit.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
 
 # --- databricks CLI plumbing (the deployment runtime) -----------------------
 
@@ -91,32 +54,11 @@ def _confirm_destroy(target: str, *, assume_yes: bool) -> None:
         raise click.Abort()
 
 
-# --- app.yaml manifest handling ---------------------------------------------
-
-
-def _upsert_manifest_env(
-    source: pathlib.Path,
-    updates: dict[str, str],
-    removals: Sequence[str] = (),
-) -> bool:
-    """Reconcile env entries in <source>/app.yaml: upsert ``updates``, drop any named in ``removals``.
-
-    Returns True if it scaffolded a new file. ``removals`` lets an unbind clear stale agentbricks-managed env
-    (e.g. the ``MLFLOW_*`` keys when tracing is unbound) so the manifest stops pointing the deployed
-    runtime at a resource whose grant has just been pruned; without it, the upsert-only merge would
-    leave the stale entry behind. ``updates`` and ``removals`` are expected to be disjoint.
-    """
-    app_yaml = source / "app.yaml"
-    if app_yaml.exists():
-        manifest = AppManifest.parse_lenient(app_yaml.read_text())
-        scaffolded = False
-    else:
-        manifest = AppManifest.scaffold()
-        scaffolded = True
-
-    manifest.upsert_env(updates, removals)
-    app_yaml.write_text(manifest.to_yaml())
-    return scaffolded
+# --- agent.toml bindings (`agentbricks dev`'s reader) -----------------------
+#
+# `agentbricks deploy` resolves its bindings through `ProjectResolver` (the service's render-free
+# collaborator, which carries the same logic); these two remain for `cli.dev`, whose migration to the
+# resolver is a follow-up.
 
 
 def _load_project(source: pathlib.Path):
@@ -133,10 +75,9 @@ def resource_bindings(
 ) -> tuple[Optional[str], Optional[str], Optional[str]]:
     """The (memory store, session store, tracing experiment) bound in agent.toml.
 
-    agent.toml is the single source of truth for an agent's resources. Both `agentbricks dev` and `agentbricks deploy`
-    resolve through here so the resource env/notices AND the deploy-time provisioning honor the
-    same bindings. A missing agent.toml means nothing is bound; an invalid manifest fails with a clear
-    error.
+    agent.toml is the single source of truth for an agent's resources, so `agentbricks dev`'s resource
+    env/notices and `agentbricks deploy`'s provisioning honor the same bindings. A missing agent.toml
+    means nothing is bound; an invalid manifest fails with a clear error.
     """
     project = _load_project(source)
     if project is None:
@@ -146,488 +87,6 @@ def resource_bindings(
     session = str(project.session_store) if project.session_store else None
     experiment = str(project.trace_experiment_name) if project.trace_experiment_name else None
     return memory, session, experiment
-
-
-def _resolve_deployment_name(project, name: Optional[str]) -> str:
-    """The deployment's base name: the NAME arg if given, else agent.toml's [agent].deployment_name.
-
-    Errors when neither is available, pointing the user at the one-time `agentbricks deploy <name>`.
-    """
-    if name is not None and name.strip():
-        return name.strip()
-    if project is not None and project.deployment_name:
-        return str(project.deployment_name)
-    raise AgentCliError(
-        "No deployment name given and none recorded in agent.toml.",
-        hint="Run `agentbricks deploy <name>` once to name the agent; later `agentbricks deploy` can omit it.",
-    )
-
-
-def get_or_create_trace_experiment(
-    source: pathlib.Path, client, profile
-) -> Optional[ResolvedTraceExperiment]:
-    """Get-or-create this project's bound MLflow experiment in the ``profile``'s workspace, or None
-    when tracing is unbound (no ``experiment_name`` in agent.toml).
-
-    Resolves by experiment **name**, never a stored id. ``source`` locates agent.toml. Nothing is
-    written back to agent.toml. Raises if the experiment can't be created.
-    """
-    from databricks_agentbricks.agent_project import (
-        AgentProject,  # noqa: PLC0415 - avoid import cycle
-    )
-
-    try:
-        project = AgentProject.load(source)
-    except AgentCliError:
-        project = None
-    name = project.trace_experiment_name if project is not None else None
-    if not name:
-        return None
-    # Show progress while the experiment is get-or-created (a workspace round-trip), matching the
-    # memory/session store reconcile spinners so deploy isn't silent about tracing.
-    with render.status(f"Reconciling tracing experiment '{name}'…"):
-        resolved = create_experiment_idempotent(profile, client, name)
-    return resolved
-
-
-@dataclass(frozen=True)
-class _DeployPlan:
-    """Resolved deploy identity + auth decisions from the pre-flight phase."""
-
-    project: Any
-    base_name: str
-    name: str
-    user_scope_plan: Any
-    deployment_exists: Optional[bool]  # known already from the name/scope pre-flight, else None
-
-
-class DeployOrchestrator:
-    """Runs `agentbricks deploy`: pre-flight + auth, reconcile stores + tracing, patch app.yaml,
-    ensure the app, roll out, grant access. Collaborators are injected so the command builds it from
-    the CLI context and tests construct it with fakes.
-
-    client_factory is called once, after _authorize, so a pre-flight failure never calls obj.client().
-    """
-
-    def __init__(
-        self,
-        *,
-        client_factory,
-        apps: AppsClient,
-        stores_factory,
-        profile: Optional[str],
-        output: Optional[str],
-        runner: DatabricksRunner = _databricks,
-    ) -> None:
-        self._client_factory = client_factory
-        self._apps = apps
-        self._stores_factory = stores_factory
-        self._profile = profile
-        self._output = output
-        self._runner = runner
-
-    def run(
-        self,
-        *,
-        name,
-        source,
-        pip_index_url,
-        workspace_path,
-        instances,
-        allow_user_scope_update,
-    ) -> None:
-        source_dir = pathlib.Path(source)
-        plan = self._authorize(source_dir, name, instances, allow_user_scope_update)
-        name = plan.name
-        instance_args = _instance_args(instances)
-        use_managed_runtime_store = _USE_MANAGED_RUNTIME_STORE
-        self._client = self._client_factory()
-        self._stores = self._stores_factory(self._client)
-
-        # 1. Reconcile the stores DECLARED in agent.toml: create any that don't exist yet. `agentbricks deploy`
-        #    is the only reconcile-to-cloud verb; agent.toml is the source of truth and is never rewritten.
-        memory_store, session_store, _ = resource_bindings(source_dir)
-        memory_store_id = self._stores.reconcile_declared_stores(memory_store, session_store)
-
-        # 2. Provision tracing when bound (`agentbricks init` binds a default experiment): get-or-create the
-        #    experiment NAME from agent.toml and wire the two env vars the runtime reads. Resolved by name,
-        #    never a stored id, and nothing is written back to agent.toml. (`agentbricks dev` traces to a local
-        #    MLflow server instead and never touches this workspace experiment.) The app's SP is granted
-        #    write access to it in step 5 (an experiment app resource, plus MODIFY on its UC OTEL tables
-        #    when UC-backed). Best-effort: if it can't be set up
-        #    (no mlflow, offline, permission), the deploy still proceeds without tracing.
-        trace_provision: Optional[ResolvedTraceExperiment] = None
-        trace_setup_error: Optional[str] = None
-        try:
-            trace_provision = get_or_create_trace_experiment(
-                source_dir, self._client, self._profile
-            )
-        except Exception as exc:  # noqa: BLE001 - tracing is best-effort; never block a deploy
-            trace_setup_error = str(exc)
-        trace_experiment_id = trace_provision.experiment_id if trace_provision else None
-        trace_tables = trace_provision.tables if trace_provision else MLflowTraceTables()
-        env_updates: dict[str, str] = {}
-        provisioned: dict[str, Any] = {}
-        if memory_store:
-            provisioned["Memory store"] = memory_store
-        if session_store:
-            provisioned["Session store"] = session_store
-        # Trace env: set it when bound; on a CLEAN unbind (tracing resolved to None, no setup error) remove
-        # the stale MLFLOW_* keys so the manifest stops pointing the runtime at an experiment whose grant
-        # was just pruned. On a resolve ERROR (trace_setup_error) we touch neither the env nor the trace
-        # resources - a transient failure must not look like an unbind. (Store env is still upsert-only, a
-        # separate follow-up.)
-        trace_env_removals: list[str] = []
-        if trace_experiment_id:
-            env_updates.update(mlflow_tracing_config(trace_experiment_id).env())
-            provisioned["Traces"] = (
-                experiment_url(self._client.host, trace_experiment_id) or trace_experiment_id
-            )
-        elif trace_setup_error is None:
-            trace_env_removals = list(mlflow_tracing_config("").env())  # the MLFLOW_* keys to prune
-        if memory_store_id:
-            env_updates[MEMORY_STORE_ENV] = memory_store_id
-        if session_store:
-            env_updates[SESSION_STORE_ENV] = session_store
-
-        legacy_runtime_backend = None
-        if (
-            plan.project is not None
-            and plan.project.server == AgentServer.AGENTBRICKS
-            and not use_managed_runtime_store
-        ):
-            with render.status("Reconciling Runtime Store…"):
-                legacy_runtime_backend = legacy_runtime_store.get_or_create_backend(
-                    name, self._profile
-                )
-            env_updates[RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV] = legacy_runtime_backend.endpoint_path
-            env_updates[RUNTIME_STORE_SCHEMA_ENV] = legacy_runtime_backend.schema
-        if pip_index_url:
-            for env in _PIP_INDEX_ENVS:
-                env_updates[env] = pip_index_url
-            provisioned["Package index"] = pip_index_url
-        if instances is not None:
-            provisioned["Instances"] = str(instances)
-
-        # 3. Patch app.yaml before creating the app. The managed Runtime Store fields are added after
-        #    app creation because that API requires the app's service principal.
-        scaffolded = (
-            _upsert_manifest_env(source_dir, env_updates, trace_env_removals)
-            if (env_updates or trace_env_removals)
-            else False
-        )
-
-        # 4. Ensure the app exists and its compute is active. Create only when new; the compute wait
-        #    runs every deploy.
-        deployment_exists = plan.deployment_exists
-        if deployment_exists is None:
-            deployment_exists = self._apps.exists(name)
-        self._ensure_app(name, deployment_exists, plan.user_scope_plan, instances, instance_args)
-
-        if legacy_runtime_backend is not None:
-            resource_error = apply_postgres_resources(name, [legacy_runtime_backend], self._profile)
-            if resource_error:
-                raise AgentCliError(
-                    "Could not attach the Lakebase resource required for the Runtime Store.",
-                    hint=resource_error,
-                )
-        elif plan.project is not None and plan.project.server == AgentServer.AGENTBRICKS:
-            app_service_principal_id = self._apps.service_principal(name)
-            with render.status("Reconciling Runtime Store…"):
-                runtime_backend = managed_runtime_store.get_or_create_backend(
-                    self._client, name, app_service_principal_id
-                )
-            managed_env = {
-                RUNTIME_STORE_LAKEBASE_BRANCH_ENV: runtime_backend.branch,
-                RUNTIME_STORE_DATABASE_ENV: runtime_backend.database_id,
-                RUNTIME_STORE_USERNAME_ENV: runtime_backend.username,
-            }
-            if not deployment_exists and name.startswith(_DEPLOYMENT_PREFIX):
-                managed_env[RUNTIME_STORE_SCHEMA_ENV] = _AGENTKIT_RUNTIME_STORE_SCHEMA
-            scaffolded = _upsert_manifest_env(source_dir, managed_env) or scaffolded
-            env_updates.update(managed_env)
-
-        # 5. Upload the source and roll out the deployment.
-        ws_path = (
-            workspace_path
-            or f"/Workspace/Users/{self._client.current_user}/agentbricks_deployments/{name}"
-        )
-        self._rollout(source_dir, name, ws_path)
-
-        # 6. Grant the app's service principal (and the agent runtime) what they need to run.
-        grants_stores, grant_error, trace_grant_error = self._grant_access(
-            name,
-            memory_store,
-            session_store,
-            trace_experiment_id,
-            trace_tables,
-            trace_setup_error,
-        )
-
-        self._emit_result(
-            source_dir=source_dir,
-            project=plan.project,
-            name=name,
-            ws_path=ws_path,
-            env_updates=env_updates,
-            provisioned=provisioned,
-            scaffolded=scaffolded,
-            trace_experiment_id=trace_experiment_id,
-            trace_tables=trace_tables,
-            trace_setup_error=trace_setup_error,
-            grants_stores=grants_stores,
-            grant_error=grant_error,
-            trace_grant_error=trace_grant_error,
-        )
-
-    def _authorize(
-        self,
-        source_dir: pathlib.Path,
-        name: Optional[str],
-        instances: Optional[int],
-        allow_user_scope_update: bool,
-    ) -> _DeployPlan:
-        project = _load_project(source_dir)
-        if project is not None and project.tools:
-            require_managed_tool_support(source_dir)
-        user_auth = requires_user_auth(project)
-        requested_name = name
-        base_name = _resolve_deployment_name(project, name)
-        name = _prefixed_name(base_name)
-        # Validate the shape before checking the Apps name length.
-        _validate_deployment_name(name, check_length=False)
-        deployment_exists: Optional[bool] = None
-        # A project can store the unprefixed base name in agent.toml. When NAME is omitted, reuse the
-        # matching Agent Bricks app if it exists.
-        if (
-            requested_name is None
-            and project is not None
-            and project.deployment_name
-            and not base_name.startswith(_DEPLOYMENT_PREFIX)
-        ):
-            new_name_exists = len(name) <= _MAX_DEPLOYMENT_NAME_LEN and self._apps.exists(name)
-            deployment_exists = new_name_exists
-        _validate_deployment_name(name)
-        if allow_user_scope_update and not user_auth:
-            raise AgentCliError(
-                "--allow-user-scope-update requires a managed tool with auth = 'user' in agent.toml."
-            )
-        # A request-user tool cannot use OBO until the App forwards request credentials and grants every
-        # required user API scope. New Apps are configured automatically. For an existing App, adding a
-        # missing scope requires --allow-user-scope-update; already-configured Apps need no flag.
-        user_scope_plan = (
-            plan_app_user_scope_update(
-                name,
-                self._profile,
-                allow_existing_app_update=allow_user_scope_update,
-                required_scopes=required_user_api_scopes(project),
-            )
-            if user_auth
-            else None
-        )
-        if user_scope_plan is not None:
-            click.echo(
-                "User auth: scope updates are not atomic; coordinate with other App owners. "
-                "Users may need to sign out and re-consent after scope changes. "
-                "Scopes are never removed automatically when tools change.",
-                err=True,
-            )
-            if deployment_exists is None:
-                deployment_exists = user_scope_plan.existing_scopes is not None
-            apply_app_user_scope_update(user_scope_plan, instances=instances)
-        # Persist the base name so a later `agentbricks deploy` (no NAME) resolves to the same app.
-        if project is not None and project.set_deployment_name(base_name):
-            project.write()
-        return _DeployPlan(project, base_name, name, user_scope_plan, deployment_exists)
-
-    def _ensure_app(
-        self,
-        name: str,
-        deployment_exists: bool,
-        user_scope_plan,
-        instances: Optional[int],
-        instance_args: list[str],
-    ) -> None:
-        #    `apps create` itself blocks for minutes (it provisions and waits for compute) and we capture
-        #    its output to relabel "App compute" → "Agent compute", so nothing streams meanwhile. Wrap it
-        #    in progress (persistent line + spinner) so the CLI isn't silent for the whole provision.
-        if user_scope_plan is None and not deployment_exists:
-            with render.progress(
-                "Creating the agent and starting its compute (this can take a few minutes)…"
-            ):
-                result = self._runner(
-                    ["apps", "create", name, *instance_args],
-                    self._profile,
-                    capture=True,
-                    action=f"Could not create deployment '{name}'.",
-                )
-            old, new = _AGENT_COMPUTE_OUTPUT
-            click.echo((result.stdout or "").replace(old, new), nl=False)
-        elif user_scope_plan is None and instance_args:
-            update = {
-                "app": {
-                    "compute_min_instances": instances,
-                    "compute_max_instances": instances,
-                },
-                "update_mask": "compute_min_instances,compute_max_instances",
-            }
-            result = self._runner(
-                ["apps", "create-update", name, "--json", json.dumps(update)],
-                self._profile,
-                capture=True,
-                action=f"Could not update deployment '{name}'.",
-            )
-            old, new = _AGENT_COMPUTE_OUTPUT
-            click.echo((result.stdout or "").replace(old, new), nl=False)
-        # `apps deploy` requires the app's compute to be ACTIVE — a just-created app may still be
-        # starting, and an existing one may be STOPPED — so wait either way. Returns immediately when
-        with render.progress("Waiting for agent compute to start (this can take a few minutes)…"):
-            self._apps.wait_for_running(name)
-
-    def _rollout(self, source_dir: pathlib.Path, name: str, ws_path: str) -> None:
-        # Don't ship uv.lock: it pins exact package URLs from whatever index the developer's machine
-        # resolved against (often an internal proxy). The Apps build must resolve against its own
-        # configured index, so let it lock fresh in-sandbox instead of inheriting the local lock.
-        self._runner(
-            ["sync", str(source_dir), ws_path, "--exclude", "uv.lock"],
-            self._profile,
-            action=f"Could not upload the agent source for '{name}'.",
-        )
-        self._runner(
-            ["apps", "deploy", name, "--source-code-path", ws_path],
-            self._profile,
-            action=f"Could not deploy '{name}'.",
-        )
-
-    def _grant_access(
-        self,
-        name: str,
-        memory_store: Optional[str],
-        session_store: Optional[str],
-        trace_experiment_id: Optional[str],
-        trace_tables: MLflowTraceTables,
-        trace_setup_error: Optional[str],
-    ) -> tuple[bool, Optional[str], Optional[str]]:
-        # Grant the app's service principal what it needs to run (best-effort):
-        #    - stores: grant the SP read/write via the managed store API (the store service does the
-        #      underlying Lakebase grant, so no store ownership / Lakebase MANAGE is required here);
-        #    - tracing: bind the experiment as an `experiment` resource (CAN_EDIT) so it can write traces;
-        #      a UC-backed experiment also needs MODIFY on its UC OTEL tables (`uc_securable` resources).
-        #    The experiment resource is the platform-managed grant — no manual SQL grant needed.
-        grants_stores = bool(session_store or memory_store)
-        grant_error: Optional[str] = None
-        if grants_stores:
-            with render.status("Granting the app access to its stores…"):
-                sp = self._apps.service_principal(name)
-                if sp is None:
-                    grant_error = "could not resolve the app's service principal."
-                else:
-                    grant_error = self._stores.grant_store_access(sp, session_store, memory_store)
-        # Reconcile the agentbricks-owned trace resources whenever tracing resolved cleanly (`trace_setup_error
-        # is None`): a resolved experiment grants that set, and a cleanly-unbound project (experiment_id
-        # None) prunes stale agentbricks-trace-experiment / agentbricks-trace-table-* resources left by an earlier
-        # bound deploy. If resolving the BOUND experiment errored instead (offline / permission /
-        # transient), we don't know the intended state, so we skip the reconcile rather than prune - a
-        # flaky deploy must not silently revoke the SP's trace access the way an unbind does. (Whether
-        # removing a `uc_securable` resource also revokes the underlying UC MODIFY grant is platform
-        # behavior - documented but not yet verified live.)
-        trace_grant_error: Optional[str] = None
-        if trace_setup_error is None:
-            with render.status("Granting the agent runtime access to its trace experiment…"):
-                trace_grant_error = apply_trace_resources(
-                    name, trace_experiment_id, trace_tables.otel_tables(), self._profile
-                )
-        return grants_stores, grant_error, trace_grant_error
-
-    def _emit_result(
-        self,
-        *,
-        source_dir: pathlib.Path,
-        project,
-        name: str,
-        ws_path: str,
-        env_updates: dict[str, str],
-        provisioned: dict[str, Any],
-        scaffolded: bool,
-        trace_experiment_id: Optional[str],
-        trace_tables: MLflowTraceTables,
-        trace_setup_error: Optional[str],
-        grants_stores: bool,
-        grant_error: Optional[str],
-        trace_grant_error: Optional[str],
-    ) -> None:
-        app_url = self._apps.url(name)
-
-        if self._output == "json":
-            render.emit_json(
-                {
-                    "deployment": name,
-                    "url": app_url,
-                    "workspace_path": ws_path,
-                    "env": env_updates,
-                    "trace_experiment_id": trace_experiment_id,
-                    "uc_trace_tables": [t.full_name for t in trace_tables.otel_tables()],
-                    "trace_setup_error": trace_setup_error,
-                    "trace_grant": None
-                    if not trace_experiment_id
-                    else ("granted" if trace_grant_error is None else "failed"),
-                    "trace_grant_error": trace_grant_error,
-                    "store_grant": "skipped"
-                    if not grants_stores
-                    else ("granted" if grant_error is None else "failed"),
-                    "store_grant_error": grant_error,
-                }
-            )
-            return
-
-        steps: list[str | tuple[str, str]] = [
-            (f"agentbricks deployments get {name}", "Check its status and URL"),
-            (f"agentbricks deployments logs {name}", "Tail its logs"),
-        ]
-        if app_url:
-            steps.insert(0, f"Open the deployed agent: {app_url}")
-        if scaffolded:
-            steps.insert(
-                0, f"Set a real `command:` in {source_dir / 'app.yaml'} (a placeholder was written)"
-            )
-        if grants_stores and grant_error is not None:
-            steps.insert(
-                0,
-                "The app's service principal needs read/write on its store tables; that grant couldn't "
-                "be applied automatically (it requires store ownership). "
-                f"Cause: {grant_error}",
-            )
-        if trace_experiment_id is None:
-            # Deployed without tracing - either unbound, or a bound experiment that couldn't be set up.
-            # Tell the developer (in case it wasn't intended) and point at `agentbricks tracing bind`; append the
-            # cause when setup actually failed.
-            step = (
-                "Deployed without tracing. "
-                f"Run `{TRACING_BIND_COMMAND}` and redeploy to trace this agent."
-            )
-            if trace_setup_error is not None:
-                step += f" (Tracing setup failed: {trace_setup_error})"
-            steps.insert(0, step)
-        if trace_experiment_id and trace_grant_error is not None:
-            steps.insert(
-                0,
-                "The app's service principal needs write access to its trace experiment; that grant "
-                f"couldn't be applied automatically. Cause: {trace_grant_error}",
-            )
-        if grants_stores and grant_error is None:
-            provisioned["Store access"] = "granted to app service principal"
-        if trace_experiment_id and trace_grant_error is None:
-            provisioned["Trace access"] = "granted to agent runtime service principal"
-        fields = {"URL": app_url} if app_url else {}
-        fields.update({"Workspace path": ws_path, **provisioned})
-        render.success(
-            f"Deployed agent '{name}'",
-            fields=fields,
-            next_steps=steps,
-        )
-        print_agent_invoke_command(
-            name, uses_runtime_api=bool(project and project.server == AgentServer.AGENTBRICKS)
-        )
 
 
 # --- agentbricks deploy -----------------------------------------------------------
@@ -696,15 +155,7 @@ def deploy(
     API clients that need it must resend a stable UUID in this cookie every request:
       __Host-databricks-app-router=<uuid>
     """
-    apps = AppsClient(obj.profile, runner=_databricks)
-    DeployOrchestrator(
-        client_factory=obj.client,
-        apps=apps,
-        stores_factory=StoreProvisioner,
-        profile=obj.profile,
-        output=obj.output,
-        runner=_databricks,
-    ).run(
+    request = DeployRequest(
         name=name,
         source=source,
         pip_index_url=pip_index_url,
@@ -712,6 +163,8 @@ def deploy(
         instances=instances,
         allow_user_scope_update=allow_user_scope_update,
     )
+    result = build_deploy_service(obj).run(request)
+    present_deploy_result(result, output=obj.output)
 
 
 # --- agentbricks deployments <lifecycle> ------------------------------------------
