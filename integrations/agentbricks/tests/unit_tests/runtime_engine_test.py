@@ -778,6 +778,27 @@ async def test_submit_returns_before_background_execution_finishes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_submit_preserves_idempotency_for_legacy_sessionless_state() -> None:
+    request = {"input": "hello", "session_id": "session-1"}
+
+    async def execute(request: dict, context: InvocationAttemptContext) -> dict:
+        return {"output": request["input"]}
+
+    store = InMemoryRuntimeStore()
+    await store.accept("invocation-1", request)
+    runtime = make_local_runtime(execute, store)
+    await runtime.start()
+    try:
+        state = await runtime.submit("invocation-1", request, session_id="session-1")
+        result = await runtime.wait("invocation-1")
+    finally:
+        await runtime.stop()
+
+    assert state.session_id is None
+    assert result == {"output": "hello"}
+
+
+@pytest.mark.asyncio
 async def test_get_invocation_schedules_queued_work_accepted_by_another_process() -> None:
     async def execute(request: dict, context: InvocationAttemptContext) -> dict:
         return {"output": request["input"]}
