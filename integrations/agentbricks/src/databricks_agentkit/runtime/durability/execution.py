@@ -125,6 +125,10 @@ class DurableInvocationExecutor(InvocationExecutor):
             heartbeat_seconds=self._heartbeat_seconds,
         ):
             await self._execution.run(claimed)
+        if claimed.session_id is not None:
+            next_state = await self._runtime_store.get(session_id=claimed.session_id)
+            if next_state is not None:
+                self.ensure_scheduled(next_state)
 
     def _discard_task(self, invocation_id: str, completed: asyncio.Task[None]) -> None:
         if self._tasks.get(invocation_id) is completed:

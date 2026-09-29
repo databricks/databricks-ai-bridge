@@ -80,6 +80,7 @@ class AttemptExecution:
                 InvocationAttemptContext(
                     invocation_id=invocation_id,
                     attempt=claimed.attempt,
+                    session_id=claimed.session_id,
                     _emit=emit,
                 ),
             )
@@ -152,6 +153,10 @@ class LocalInvocationExecutor(InvocationExecutor):
             return
         if claimed is not None:
             await self._execution.run(claimed)
+            if claimed.session_id is not None:
+                next_state = await self._runtime_store.get(session_id=claimed.session_id)
+                if next_state is not None:
+                    self.ensure_scheduled(next_state)
 
     def _discard_task(self, invocation_id: str, completed: asyncio.Task[None]) -> None:
         if self._tasks.get(invocation_id) is completed:

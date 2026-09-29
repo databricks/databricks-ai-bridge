@@ -144,6 +144,7 @@ async def run_agent(
     model: str | None = None,
     invocation_id: str | None = None,
     workspace_client_for: Callable[[str], WorkspaceClient] | None = None,
+    graph: Any = None,
 ) -> AsyncGenerator[Any, None]:
     """Run the agent and yield native LangGraph stream events.
 
@@ -151,7 +152,8 @@ async def run_agent(
     so it can be called from another server, a notebook, or a test harness.
     """
     actor = actor or session_id
-    graph = await create_agent_graph(actor, model, workspace_client_for=workspace_client_for)
+    if graph is None:
+        graph = await create_agent_graph(actor, model, workspace_client_for=workspace_client_for)
     config = thread_config(session_id, actor)
     if invocation_id:
         config["metadata"] = invocation_metadata(invocation_id)

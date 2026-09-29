@@ -14,7 +14,7 @@ DurableAgentServer
 Runtime
   submit, wait/poll, and event replay
   ├── RuntimeStore
-  │     accept/get/claim/complete/fail/events
+  │     session-aware accept/get/claim/complete/fail/events
   │     ├── InMemoryRuntimeStore
   │     └── LakebaseDurableRuntimeStore
   └── InvocationExecutor
@@ -39,8 +39,25 @@ determines the execution mode:
 `RuntimeStore` deliberately has no heartbeat operation or heartbeat state. Those lease details are
 owned by `DurableRuntimeStore` and its Lakebase implementation.
 
-`RuntimeStore.accept(invocation_id, request)` defines idempotency. The same ID and request returns
-the existing invocation; the same ID and different request raises `InvocationConflictError`.
+`RuntimeStore.accept(invocation_id, request, session_id=...)` defines idempotency. Existing callers
+may omit the session. When supplied, the store assigns an immutable `session_sequence_number` and
+returns the existing invocation only when its ID, session, and request all match.
+
+Invocations in one session execute serially. A claim succeeds only for the earliest queued
+invocation when that session has no active invocation. Recovery claims the same stale active
+invocation and preserves its sequence number. This is acceptance order, not the event replay cursor.
+Invocation and event reads can target either one invocation or one session; session state returns
+the active invocation, then the earliest queued
+invocation, or `None`. Each claimed attempt receives the saved session ID in its execution context.
+
+The HTTP server forwards its existing resolved session ID to Runtime in all execution modes.
+Resolution is unchanged: the routing cookie is used when forwarded, otherwise the invocation ID
+is used; request-user sessions are namespaced by the authenticated caller. If ingress consumes the
+cookie, separate HTTP invocations do not share a runtime session. Template conversation identity
+inside the opaque input is unchanged and does not select the runtime queue.
+
+All workers sharing a Runtime Store must support session-aware claims before callers start supplying
+session IDs. An older worker does not enforce session order and can claim a later queued invocation.
 
 The durable executor always scans for persisted `QUEUED` invocations, including after process
 restart, and starts their first attempt through `@app.invoke`. Reads also schedule queued work as a

@@ -91,6 +91,7 @@ async def test_request_user_sync_uses_runtime_without_persisting_auth(deployed):
     assert len(contexts) == 1
     store = app._runtime.runtime_store
     assert isinstance(store, InMemoryRuntimeStore)
+    assert next(iter(store.states.values())).session_id == contexts[0].session_id
     assert_auth_not_persisted(store)
     with pytest.raises(AuthError):
         contexts[0].request_auth.client_for("user")
@@ -156,6 +157,7 @@ async def test_request_user_auth_composes_with_existing_runtime_background_mode(
     }
     assert_auth_not_persisted(store)
     assert len(contexts) == 1
+    assert next(iter(store.states.values())).session_id == contexts[0].session_id
     with pytest.raises(AuthError):
         contexts[0].request_auth.client_for("user")
 
@@ -196,6 +198,9 @@ async def test_request_user_streams_ordered_persisted_events(deployed):
     assert events.text == response.text
     assert contexts[0].session_id == contexts[0].request_auth.namespace(
         "session", "routing-session"
+    )
+    assert (
+        next(iter(app._runtime.runtime_store.states.values())).session_id == contexts[0].session_id
     )
     with pytest.raises(AuthError):
         contexts[0].request_auth.client_for("user")

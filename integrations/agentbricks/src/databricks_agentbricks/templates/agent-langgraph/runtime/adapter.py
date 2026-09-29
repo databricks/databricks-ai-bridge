@@ -3,11 +3,14 @@
 from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any
 
+from agent import agent as agent_module
 from agent.agent import recovery_input, run_agent
 from langchain.messages import AIMessageChunk
 from langgraph.types import Command
 
 from databricks_agentkit import InvocationContext
+from databricks_agentkit.langgraph.responses import checkpointed_messages
+from databricks_agentkit.langgraph.session_store import thread_config
 from databricks_agentkit.runtime.auth import AuthError
 
 
@@ -93,17 +96,27 @@ async def _invoke_agent(
     )
     actor = auth.namespace("actor", actor) if auth else actor
     user_auth = auth is not None
-    auth_kwargs = {"workspace_client_for": auth.client_for} if user_auth else {}
+    run_kwargs = {"workspace_client_for": auth.client_for} if user_auth else {}
     model = payload.get("model")
+    model = model if isinstance(model, str) else None
     outputs = []
+    if agent_input is None:
+        graph = await agent_module.create_agent_graph(actor, model, **run_kwargs)
+        outputs = [
+            {"type": "message", "message": message.model_dump()}
+            for message in await checkpointed_messages(
+                graph, thread_config(internal_session_id, actor), context.invocation_id
+            )
+        ]
+        run_kwargs["graph"] = graph
     async for event in _serialize_events(
         run_agent(
             agent_input,
             session_id=internal_session_id,
             actor=actor,
-            model=model if isinstance(model, str) else None,
+            model=model,
             invocation_id=context.invocation_id,
-            **auth_kwargs,
+            **run_kwargs,
         )
     ):
         if user_auth and event.get("type") == "interrupt":

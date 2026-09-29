@@ -195,20 +195,31 @@ class Runtime:
         self._started = False
         await self.runtime_store.close()
 
-    async def submit(self, invocation_id: str, request: JsonValue) -> Invocation:
+    async def submit(
+        self,
+        invocation_id: str,
+        request: JsonValue,
+        session_id: str | None = None,
+    ) -> Invocation:
         """Accept an idempotent invocation and schedule it on this worker.
 
         The Runtime Store makes ``invocation_id`` the idempotency key. Retrying the same request
-        returns its existing state; a different request for the same ID raises
-        :class:`InvocationConflictError`.
+        and session returns its existing state; a different request or session for the same ID
+        raises :class:`InvocationConflictError`.
         """
         self._require_started()
         if not invocation_id:
             raise ValueError("invocation_id must not be empty")
-        state = await self.runtime_store.accept(
-            invocation_id,
-            copy_json_value(request, "request"),
-        )
+        copied_request = copy_json_value(request, "request")
+        # Preserve compatibility with store adapters that predate session-aware submission.
+        if session_id is None:
+            state = await self.runtime_store.accept(invocation_id, copied_request)
+        else:
+            state = await self.runtime_store.accept(
+                invocation_id,
+                copied_request,
+                session_id=session_id,
+            )
         self.executor.ensure_scheduled(state)
         return state
 
@@ -216,17 +227,29 @@ class Runtime:
         self,
         invocation_id: str,
         request: JsonValue,
-        *,
+        session_id: str | None = None,
         timeout: float | None = None,
     ) -> JsonValue:
         """Accept an invocation and wait for its terminal result."""
-        await self.submit(invocation_id, request)
+        # Preserve subclasses that override the pre-session submit signature.
+        if session_id is None:
+            await self.submit(invocation_id, request)
+        else:
+            await self.submit(invocation_id, request, session_id=session_id)
         return await self.wait(invocation_id, timeout=timeout)
 
-    async def get_invocation(self, invocation_id: str) -> Invocation | None:
-        """Return current state and ensure queued first-attempt work is scheduled locally."""
+    async def get_invocation(
+        self,
+        invocation_id: str | None = None,
+        session_id: str | None = None,
+    ) -> Invocation | None:
+        """Return invocation or session state and schedule queued first-attempt work."""
         self._require_started()
-        state = await self.runtime_store.get(invocation_id)
+        self._validate_read_scope(invocation_id, session_id)
+        if session_id is None:
+            state = await self.runtime_store.get(invocation_id)
+        else:
+            state = await self.runtime_store.get(session_id=session_id)
         if state is not None:
             self.executor.ensure_scheduled(state)
         return state
@@ -260,14 +283,25 @@ class Runtime:
 
     async def get_events(
         self,
-        invocation_id: str,
-        *,
+        invocation_id: str | None = None,
+        session_id: str | None = None,
         after_sequence: int | None = None,
     ) -> list[InvocationEvent]:
-        """Return persisted invocation events after an optional exclusive replay cursor."""
+        """Return invocation or session events after an optional exclusive replay cursor."""
         self._require_started()
-        return await self.runtime_store.events(invocation_id, after_sequence)
+        self._validate_read_scope(invocation_id, session_id)
+        if session_id is None:
+            return await self.runtime_store.events(invocation_id, after_sequence)
+        return await self.runtime_store.events(
+            session_id=session_id,
+            after_sequence=after_sequence,
+        )
 
     def _require_started(self) -> None:
         if not self._started:
             raise RuntimeError("Runtime.start() must be called first")
+
+    @staticmethod
+    def _validate_read_scope(invocation_id: str | None, session_id: str | None) -> None:
+        if (invocation_id is None) == (session_id is None):
+            raise ValueError("exactly one of invocation_id or session_id must be provided")
