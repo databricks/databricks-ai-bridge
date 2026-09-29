@@ -9,6 +9,7 @@ import pytest
 from click.testing import CliRunner
 
 from databricks_agentbricks import app_resources as sa
+from databricks_agentbricks.cli import composition as comp_mod
 from databricks_agentbricks.cli import deploy as deploy_mod
 from databricks_agentbricks.errors import AgentCliError
 
@@ -16,6 +17,9 @@ from databricks_agentbricks.errors import AgentCliError
 class _Ctx:
     profile = "prof"
     output = "text"
+
+    def client(self):  # the composed service takes the context's client factory
+        raise AssertionError("these verbs must not open a workspace client")
 
 
 # --- ML-69259 / 69247: deployment-name validation ---------------------------
@@ -62,13 +66,12 @@ def test_deployments_list_shows_agent_bricks_apps(monkeypatch):
         ]
     }
     monkeypatch.setattr(
-        deploy_mod,
+        comp_mod,
         "_databricks",
         lambda *a, **k: types.SimpleNamespace(returncode=0, stdout=json.dumps(apps), stderr=""),
     )
 
-    class _JsonCtx:
-        profile = "prof"
+    class _JsonCtx(_Ctx):
         output = "json"
 
     result = CliRunner().invoke(deploy_mod.deployments_list, [], obj=_JsonCtx())
@@ -79,7 +82,7 @@ def test_deployments_list_shows_agent_bricks_apps(monkeypatch):
 
 def test_deployments_get_rejects_empty_name_without_calling_cli(monkeypatch):
     called = []
-    monkeypatch.setattr(deploy_mod, "_databricks", lambda *a, **k: called.append(a))
+    monkeypatch.setattr(comp_mod, "_databricks", lambda *a, **k: called.append(a))
     result = CliRunner().invoke(deploy_mod.deployments_get, [""], obj=_Ctx())
     assert result.exit_code != 0
     assert "Invalid deployment name" in result.output
@@ -91,7 +94,7 @@ def test_deployments_get_rejects_empty_name_without_calling_cli(monkeypatch):
 
 def test_delete_aborts_without_confirmation(monkeypatch):
     called = []
-    monkeypatch.setattr(deploy_mod, "_databricks", lambda *a, **k: called.append(a))
+    monkeypatch.setattr(comp_mod, "_databricks", lambda *a, **k: called.append(a))
     result = CliRunner().invoke(deploy_mod.deployments_delete, ["myapp"], obj=_Ctx(), input="n\n")
     assert result.exit_code != 0  # aborted
     assert called == []
@@ -100,7 +103,7 @@ def test_delete_aborts_without_confirmation(monkeypatch):
 def test_delete_proceeds_with_yes(monkeypatch):
     called = []
     monkeypatch.setattr(
-        deploy_mod,
+        comp_mod,
         "_databricks",
         lambda args, profile, **k: (
             called.append(args) or types.SimpleNamespace(returncode=0, stdout="", stderr="")

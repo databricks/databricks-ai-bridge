@@ -9,50 +9,38 @@ switch chooses between the legacy per-app Lakebase project and the service-manag
 `agent.toml`. `agentbricks deployments` covers the lifecycle verbs
 (`list`/`get`/`logs`/`start`/`stop`/`delete`).
 
-Deployments run on the Databricks Apps runtime, which this module drives via the
-`databricks apps` CLI — an implementation detail that is not part of the Agent Bricks CLI surface.
+Every verb here is a thin adapter: it builds a `DeployService` from the CLI context, calls one method,
+and hands the raw result to a presenter. The work itself lives in the service and its collaborators,
+including driving the Databricks Apps runtime via the `databricks apps` CLI (an implementation detail
+that is not part of the Agent Bricks CLI surface).
 """
 
 from __future__ import annotations
 
-import json
 import pathlib
 from typing import Optional
 
 import click
 
-import databricks_agentbricks.lakebase_runtime_store as managed_runtime_store
-from databricks_agentbricks import render
-from databricks_agentbricks.apps_client import AppsClient
 from databricks_agentbricks.cli.composition import build_deploy_service
-from databricks_agentbricks.cli.presenter import present_deploy_result
-from databricks_agentbricks.databricks_cli import _databricks
+from databricks_agentbricks.cli.presenter import (
+    present_deleted,
+    present_deploy_result,
+    present_deployment_detail,
+    present_deployments_list,
+    present_started,
+    present_stopped,
+)
 from databricks_agentbricks.deployment import (
     _DEFAULT_PIP_INDEX_URL,
-    _DEPLOYMENT_PREFIX,
-    _USE_MANAGED_RUNTIME_STORE,
     TRACES_EXPERIMENT_ID_ENV,  # noqa: F401 - re-exported for tests referencing deploy_mod.TRACES_EXPERIMENT_ID_ENV
     TRACES_TRACKING_URI_ENV,  # noqa: F401 - re-exported for tests referencing deploy_mod.TRACES_TRACKING_URI_ENV
     MlflowTracingConfig,  # noqa: F401 - re-exported for callers/tests referencing deploy_mod.MlflowTracingConfig
     _prefixed_name,  # noqa: F401 - re-exported for tests referencing deploy_mod._prefixed_name
-    _validate_deployment_name,
+    _validate_deployment_name,  # noqa: F401 - re-exported for tests referencing deploy_mod._validate_deployment_name
     mlflow_tracing_config,  # noqa: F401 - re-exported for tests referencing deploy_mod.mlflow_tracing_config
 )
-from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.render import field
-from databricks_agentbricks.services.deploy_service import DeployRequest
-from databricks_agentkit import timefmt
-
-# --- databricks CLI plumbing (the deployment runtime) -----------------------
-
-
-def _confirm_destroy(target: str, *, assume_yes: bool) -> None:
-    """Prompt before a destructive deployment op; --yes/-y skips it (for scripts)."""
-    if assume_yes:
-        return
-    if not click.confirm(f"{target}? This cannot be undone.", default=False):
-        raise click.Abort()
-
+from databricks_agentbricks.services.deploy_service import DeployRequest, OperationAborted
 
 # --- agent.toml bindings (`agentbricks dev`'s reader) -----------------------
 #
@@ -163,7 +151,7 @@ def deploy(
         instances=instances,
         allow_user_scope_update=allow_user_scope_update,
     )
-    result = build_deploy_service(obj).run(request)
+    result = build_deploy_service(obj).deploy(request)
     present_deploy_result(result, output=obj.output)
 
 
@@ -175,43 +163,11 @@ def deployments() -> None:
     """Inspect and manage deployed agents: list, get, stream logs, start, stop, or delete."""
 
 
-def _deployment_status(a: dict) -> Optional[str]:
-    for key in ("app_status", "compute_status"):
-        section = a.get(key)
-        if isinstance(section, dict) and field(section, "state"):
-            return field(section, "state")
-    return field(a, "state")
-
-
 @deployments.command("list")
 @click.pass_obj
 def deployments_list(obj) -> None:
     """List Agent Bricks deployments (apps named `agent-bricks-*`)."""
-    result = _databricks(
-        ["apps", "list", "-o", "json"],
-        obj.profile,
-        capture=True,
-        action="Could not list agent deployments.",
-    )
-    data = json.loads(result.stdout or "[]")
-    items = data.get("apps", data) if isinstance(data, dict) else data
-    items = [a for a in items if str(field(a, "name") or "").startswith(_DEPLOYMENT_PREFIX)]
-    if obj.output == "json":
-        render.emit_json(items)
-        return
-    rows = [
-        [
-            render.hyperlink(field(a, "name"), field(a, "url")),
-            render.status_pill(_deployment_status(a)),
-            timefmt.relative(field(a, "update_time")),
-        ]
-        for a in items
-    ]
-    render.resource_table(
-        "Agent Deployments",
-        [("Name", "left"), ("Status", "left"), ("Updated", "left")],
-        rows,
-    )
+    present_deployments_list(build_deploy_service(obj).list_deployments(), output=obj.output)
 
 
 @deployments.command("get")
@@ -219,30 +175,7 @@ def deployments_list(obj) -> None:
 @click.pass_obj
 def deployments_get(obj, name) -> None:
     """Get an agent deployment's details."""
-    _validate_deployment_name(name)
-    result = _databricks(
-        ["apps", "get", name, "-o", "json"],
-        obj.profile,
-        capture=True,
-        action=f"Could not read deployment '{name}'.",
-    )
-    data = json.loads(result.stdout or "{}")
-    if obj.output == "json":
-        render.emit_json(data)
-        return
-    url = field(data, "url")
-    render.detail(
-        "Agent Deployment",
-        field(data, "name") or name,
-        {
-            "URL": render.hyperlink(url, url) if url else None,
-            "Description": field(data, "description"),
-            "Created": timefmt.absolute(field(data, "create_time")),
-            "Updated": timefmt.absolute(field(data, "update_time")),
-        },
-        status=_deployment_status(data),
-        snippets=[("open", "bash", f"open {url}")] if url else None,
-    )
+    present_deployment_detail(build_deploy_service(obj).get(name), name, output=obj.output)
 
 
 @deployments.command("logs")
@@ -250,8 +183,7 @@ def deployments_get(obj, name) -> None:
 @click.pass_obj
 def deployments_logs(obj, name) -> None:
     """Stream a deployment's logs."""
-    _validate_deployment_name(name)
-    _databricks(["apps", "logs", name], obj.profile, action=f"Could not read logs for '{name}'.")
+    build_deploy_service(obj).logs(name)
 
 
 @deployments.command("start")
@@ -259,14 +191,8 @@ def deployments_logs(obj, name) -> None:
 @click.pass_obj
 def deployments_start(obj, name) -> None:
     """Start a deployment."""
-    _validate_deployment_name(name)
-    _databricks(
-        ["apps", "start", name], obj.profile, action=f"Could not start deployment '{name}'."
-    )
-    if obj.output == "json":
-        render.emit_json({"started": name})
-        return
-    render.success(f"Started deployment '{name}'")
+    build_deploy_service(obj).start(name)
+    present_started(name, output=obj.output)
 
 
 @deployments.command("stop")
@@ -275,13 +201,12 @@ def deployments_start(obj, name) -> None:
 @click.pass_obj
 def deployments_stop(obj, name, yes) -> None:
     """Stop a deployment."""
-    _validate_deployment_name(name)
-    _confirm_destroy(f"Stop deployment '{name}'", assume_yes=yes)
-    _databricks(["apps", "stop", name], obj.profile, action=f"Could not stop deployment '{name}'.")
-    if obj.output == "json":
-        render.emit_json({"stopped": name})
-        return
-    render.success(f"Stopped deployment '{name}'")
+    try:
+        build_deploy_service(obj).stop(name, assume_yes=yes)
+    except OperationAborted:
+        # Click's abort is this layer's business: it prints "Aborted!" and picks the exit code.
+        raise click.Abort() from None
+    present_stopped(name, output=obj.output)
 
 
 @deployments.command("delete")
@@ -290,29 +215,8 @@ def deployments_stop(obj, name, yes) -> None:
 @click.pass_obj
 def deployments_delete(obj, name, yes) -> None:
     """Delete a deployment and, when managed provisioning is enabled, its Runtime Store."""
-    _validate_deployment_name(name)
-    use_managed_runtime_store = _USE_MANAGED_RUNTIME_STORE
-    target = (
-        f"Delete deployment '{name}' and its Runtime Store data"
-        if use_managed_runtime_store
-        else f"Delete deployment '{name}'"
-    )
-    _confirm_destroy(target, assume_yes=yes)
-    if use_managed_runtime_store:
-        app_service_principal_id = AppsClient(obj.profile, runner=_databricks).service_principal(
-            name
-        )
-        if not app_service_principal_id:
-            raise AgentCliError(
-                "Could not resolve the app's service principal for Runtime Store cleanup.",
-                hint="The deployment was retained. Check access to the app and retry deletion.",
-            )
-        with render.status("Deleting Runtime Store…"):
-            managed_runtime_store.delete(obj.client(), name, app_service_principal_id)
-    _databricks(
-        ["apps", "delete", name], obj.profile, action=f"Could not delete deployment '{name}'."
-    )
-    if obj.output == "json":
-        render.emit_json({"deleted": name})
-        return
-    render.success(f"Deleted deployment '{name}'")
+    try:
+        build_deploy_service(obj).delete(name, assume_yes=yes)
+    except OperationAborted:
+        raise click.Abort() from None
+    present_deleted(name, output=obj.output)

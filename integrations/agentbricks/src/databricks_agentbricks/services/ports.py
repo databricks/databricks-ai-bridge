@@ -23,3 +23,13 @@ class Reporter(Protocol):
     def echo(self, message: str, *, newline: bool = True) -> None:
         """Write a line of primary output (stdout)."""
         ...
+
+
+class Prompter(Protocol):
+    """How a service asks the operator to confirm a destructive step. Separate from
+    :class:`Reporter` because it reads from the terminal rather than writing to it, and only the
+    destructive verbs need it; the same adapter reasoning applies - the service never imports click."""
+
+    def confirm(self, prompt: str, *, default: bool = False) -> bool:
+        """Ask a yes/no question, returning the operator's answer."""
+        ...

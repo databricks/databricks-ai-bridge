@@ -9,7 +9,7 @@ is built.
 from __future__ import annotations
 
 from databricks_agentbricks.apps_client import AppsClient
-from databricks_agentbricks.cli.presenter import ClickReporter
+from databricks_agentbricks.cli.presenter import ClickPrompter, ClickReporter
 from databricks_agentbricks.databricks_cli import _databricks
 from databricks_agentbricks.manifest_manager import ManifestManager
 from databricks_agentbricks.project_resolver import ProjectResolver
@@ -39,4 +39,5 @@ def build_deploy_service(obj) -> DeployService:
         runner=runner,
         profile=obj.profile,
         reporter=ClickReporter(),
+        prompter=ClickPrompter(),
     )

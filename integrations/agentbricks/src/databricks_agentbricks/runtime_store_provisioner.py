@@ -41,3 +41,11 @@ class RuntimeStoreProvisioner:
     ) -> RuntimeStoreBackend:
         """Create or reuse the service-managed Runtime Store owned by the app's service principal."""
         return managed_runtime_store.get_or_create_backend(client, name, service_principal_id)
+
+    def delete_managed(self, client, name: str, service_principal_id: str) -> None:
+        """Drop the deployment's service-managed Runtime Store and its data.
+
+        Called before the app itself is deleted: the delete needs the app's service principal, which
+        stops resolving once the app is gone.
+        """
+        managed_runtime_store.delete(client, name, service_principal_id)

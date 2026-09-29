@@ -1,8 +1,10 @@
-"""Click/rich presentation for the deploy service: the `Reporter` adapter and the result output.
+"""Click/rich presentation for the deploy service: the terminal ports and every verb's output.
 
-``DeployService`` is CLI-framework-agnostic — it reports progress through the :class:`Reporter` port
-and returns raw facts. This module is the only place those facts become terminal output, so the
-`--output json` payload and the human success panel are chosen here, not inside the business logic.
+``DeployService`` is CLI-framework-agnostic: it reaches the terminal through the
+:class:`Reporter` / :class:`Prompter` ports and returns raw facts. This module is the only place
+those facts become terminal output, so each verb's `--output json` payload and its human rendering
+(the deploy success panel, the deployment table, the detail view, the action confirmations) are
+chosen here, not inside the business logic.
 """
 
 from __future__ import annotations
@@ -16,7 +18,9 @@ import click
 from databricks_agentbricks import render
 from databricks_agentbricks.cli.endpoint_examples import print_agent_invoke_command
 from databricks_agentbricks.cli.tracing import TRACING_BIND_COMMAND, experiment_url
+from databricks_agentbricks.render import field
 from databricks_agentbricks.services.deploy_service import DeployResult
+from databricks_agentkit import timefmt
 
 
 class ClickReporter:
@@ -33,6 +37,92 @@ class ClickReporter:
 
     def echo(self, message: str, *, newline: bool = True) -> None:
         click.echo(message, nl=newline)
+
+
+class ClickPrompter:
+    """A :class:`Prompter` backed by ``click.confirm``: the interactive yes/no at the terminal."""
+
+    def confirm(self, prompt: str, *, default: bool = False) -> bool:
+        return click.confirm(prompt, default=default)
+
+
+def _deployment_status(a: dict) -> Optional[str]:
+    """The state to show for a deployment: the app's, else its compute's, else a bare top-level one.
+
+    `apps list` and `apps get` report state in whichever of these sections the app version populates,
+    so fall through them rather than pick one and show a blank pill.
+    """
+    for key in ("app_status", "compute_status"):
+        section = a.get(key)
+        if isinstance(section, dict) and field(section, "state"):
+            return field(section, "state")
+    return field(a, "state")
+
+
+def present_deployments_list(items: list[dict], *, output: Optional[str]) -> None:
+    """Show the agent deployments: the raw payloads for `--output json`, else a table."""
+    if output == "json":
+        render.emit_json(items)
+        return
+    rows = [
+        [
+            render.hyperlink(field(a, "name"), field(a, "url")),
+            render.status_pill(_deployment_status(a)),
+            timefmt.relative(field(a, "update_time")),
+        ]
+        for a in items
+    ]
+    render.resource_table(
+        "Agent Deployments",
+        [("Name", "left"), ("Status", "left"), ("Updated", "left")],
+        rows,
+    )
+
+
+def present_deployment_detail(data: dict, name: str, *, output: Optional[str]) -> None:
+    """Show one deployment: the raw payload for `--output json`, else a detail view."""
+    if output == "json":
+        render.emit_json(data)
+        return
+    url = field(data, "url")
+    render.detail(
+        "Agent Deployment",
+        # The requested name is the fallback: an app that answered without a name still has the one
+        # the user asked about.
+        field(data, "name") or name,
+        {
+            "URL": render.hyperlink(url, url) if url else None,
+            "Description": field(data, "description"),
+            "Created": timefmt.absolute(field(data, "create_time")),
+            "Updated": timefmt.absolute(field(data, "update_time")),
+        },
+        status=_deployment_status(data),
+        snippets=[("open", "bash", f"open {url}")] if url else None,
+    )
+
+
+def present_started(name: str, *, output: Optional[str]) -> None:
+    """Confirm a start: the machine payload for `--output json`, else a success line."""
+    if output == "json":
+        render.emit_json({"started": name})
+        return
+    render.success(f"Started deployment '{name}'")
+
+
+def present_stopped(name: str, *, output: Optional[str]) -> None:
+    """Confirm a stop: the machine payload for `--output json`, else a success line."""
+    if output == "json":
+        render.emit_json({"stopped": name})
+        return
+    render.success(f"Stopped deployment '{name}'")
+
+
+def present_deleted(name: str, *, output: Optional[str]) -> None:
+    """Confirm a delete: the machine payload for `--output json`, else a success line."""
+    if output == "json":
+        render.emit_json({"deleted": name})
+        return
+    render.success(f"Deleted deployment '{name}'")
 
 
 def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> None:

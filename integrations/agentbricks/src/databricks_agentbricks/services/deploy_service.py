@@ -1,10 +1,16 @@
-"""The framework-agnostic `agentbricks deploy` workflow.
+"""The framework-agnostic deployment workflow behind `agentbricks deploy` and `agentbricks deployments`.
 
-``DeployService`` owns the deploy business logic: pre-flight + auth, reconciling the stores and
-tracing bound in agent.toml, patching app.yaml, ensuring the app exists, rolling out the source, and
-granting access. It talks to the terminal only through the injected :class:`Reporter` port and hands
-back a :class:`DeployResult` of raw facts, so the CLI layer owns every presentation decision and this
-module needs no CLI framework of its own.
+``DeployService`` owns the deployment business logic. ``deploy`` is the big one: pre-flight + auth,
+reconciling the stores and tracing bound in agent.toml, patching app.yaml, ensuring the app exists,
+rolling out the source, and granting access. The lifecycle verbs (``list_deployments``, ``get``,
+``logs``, ``start``, ``stop``, ``delete``) are thin, but they live here too so that the policy they
+carry - what counts as an agent deployment, which name shapes are legal, what a destructive verb
+confirms, and that a managed Runtime Store is torn down before its app - is stated once instead of
+in each command.
+
+It talks to the terminal only through the injected :class:`Reporter` and :class:`Prompter` ports and
+hands back raw facts (a :class:`DeployResult`, or the Apps payloads as they came off the wire), so
+the CLI layer owns every presentation decision and this module needs no CLI framework of its own.
 
 Collaborators are injected so the command composes the service from the CLI context while tests
 construct it with fakes. ``client_factory`` is called once, after the pre-flight/auth phase, so a
@@ -38,7 +44,7 @@ from databricks_agentbricks.project_config import require_managed_tool_support
 from databricks_agentbricks.project_resolver import ProjectResolver
 from databricks_agentbricks.project_types import AgentServer
 from databricks_agentbricks.runtime_store_provisioner import RuntimeStoreProvisioner
-from databricks_agentbricks.services.ports import Reporter
+from databricks_agentbricks.services.ports import Prompter, Reporter
 from databricks_agentbricks.store_provisioner import StoreProvisioner
 from databricks_agentbricks.trace_tables import TraceTable
 from databricks_agentkit.runtime.store import (
@@ -57,6 +63,28 @@ if TYPE_CHECKING:
     # itself circular; the service only ever needs them as types, since the collaborator is injected.
     from databricks_agentbricks.cli.tracing import ResolvedTraceExperiment
     from databricks_agentbricks.tracing_provisioner import TracingProvisioner
+
+
+class OperationAborted(Exception):
+    """A destructive verb the user declined at the confirm prompt.
+
+    The service's own signal, so declining doesn't require a CLI-framework exception here; the
+    command translates it into whatever its framework uses to abort.
+    """
+
+
+def _field(obj: Any, name: str) -> Any:
+    """Read a field off an Apps payload, tolerating snake_case or camelCase JSON keys.
+
+    The `databricks` CLI's JSON uses either spelling depending on the version, so a lookup that
+    assumed one would silently read None from the other. Duplicated (small) rather than imported
+    from the display helpers, which reach for a CLI framework this module stays clear of.
+    """
+    if name in obj:
+        return obj[name]
+    parts = name.split("_")
+    camel = parts[0] + "".join(p.title() for p in parts[1:])
+    return obj.get(camel)
 
 
 @dataclass(frozen=True)
@@ -111,8 +139,9 @@ class _DeployPlan:
 
 
 class DeployService:
-    """Runs `agentbricks deploy`: pre-flight + auth, reconcile stores + tracing, patch app.yaml,
-    ensure the app, roll out, grant access — then report the facts back.
+    """Owns the deployment verbs: `deploy` (pre-flight + auth, reconcile stores + tracing, patch
+    app.yaml, ensure the app, roll out, grant access) and the lifecycle verbs that list, read, tail,
+    start, stop, and delete what it deployed, then reports the facts back.
     """
 
     def __init__(
@@ -128,6 +157,7 @@ class DeployService:
         runner: DatabricksRunner,
         profile: Optional[str],
         reporter: Reporter,
+        prompter: Prompter,
     ) -> None:
         self._project = project
         self._apps = apps
@@ -139,8 +169,82 @@ class DeployService:
         self._runner = runner
         self._profile = profile
         self._reporter = reporter
+        self._prompter = prompter
 
-    def run(self, request: DeployRequest) -> DeployResult:
+    # --- lifecycle verbs ----------------------------------------------------
+
+    def list_deployments(self) -> list[dict]:
+        """Every agent deployment, as raw Apps payloads.
+
+        Agent deployments are Apps named with the Agent Bricks prefix, so the workspace's other apps
+        are filtered out here - the prefix convention is this service's policy, not the client's.
+        """
+        return [
+            a
+            for a in self._apps.list_all()
+            if str(_field(a, "name") or "").startswith(_DEPLOYMENT_PREFIX)
+        ]
+
+    def get(self, name: str) -> dict:
+        """One deployment's raw Apps payload."""
+        _validate_deployment_name(name)
+        return self._apps.get(name)
+
+    def logs(self, name: str) -> None:
+        """Stream the deployment's logs to the terminal until the user interrupts."""
+        _validate_deployment_name(name)
+        self._apps.logs(name)
+
+    def start(self, name: str) -> None:
+        _validate_deployment_name(name)
+        self._apps.start(name)
+
+    def stop(self, name: str, *, assume_yes: bool) -> None:
+        """Stop a deployment, confirming first unless `assume_yes` (for scripts)."""
+        _validate_deployment_name(name)
+        self._confirm_destroy(f"Stop deployment '{name}'", assume_yes=assume_yes)
+        self._apps.stop(name)
+
+    def delete(self, name: str, *, assume_yes: bool) -> None:
+        """Delete a deployment and, when managed provisioning is on, its Runtime Store first.
+
+        The Runtime Store goes first because dropping it needs the app's service principal, which
+        stops resolving once the app is gone. If that identity can't be read we refuse outright
+        rather than delete the app and orphan its data.
+        """
+        _validate_deployment_name(name)
+        use_managed_runtime_store = _USE_MANAGED_RUNTIME_STORE
+        # Name the data loss in the prompt: with a managed store, deleting the app also drops the
+        # agent's persisted memory/sessions, which the app name alone doesn't imply.
+        target = (
+            f"Delete deployment '{name}' and its Runtime Store data"
+            if use_managed_runtime_store
+            else f"Delete deployment '{name}'"
+        )
+        self._confirm_destroy(target, assume_yes=assume_yes)
+        if use_managed_runtime_store:
+            app_service_principal_id = self._apps.service_principal(name)
+            if not app_service_principal_id:
+                raise AgentCliError(
+                    "Could not resolve the app's service principal for Runtime Store cleanup.",
+                    hint="The deployment was retained. Check access to the app and retry deletion.",
+                )
+            with self._reporter.status("Deleting Runtime Store…"):
+                self._runtime_store.delete_managed(
+                    self._client_factory(), name, app_service_principal_id
+                )
+        self._apps.delete(name)
+
+    def _confirm_destroy(self, target: str, *, assume_yes: bool) -> None:
+        """Confirm before a destructive op; `assume_yes` skips the prompt (for scripts)."""
+        if assume_yes:
+            return
+        if not self._prompter.confirm(f"{target}? This cannot be undone.", default=False):
+            raise OperationAborted()
+
+    # --- deploy -------------------------------------------------------------
+
+    def deploy(self, request: DeployRequest) -> DeployResult:
         source_dir = pathlib.Path(request.source)
         plan = self._authorize(source_dir, request)
         name = plan.name

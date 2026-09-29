@@ -23,7 +23,10 @@ DatabricksRunner = Callable[..., subprocess.CompletedProcess]
 
 
 class AppsClient:
-    """Reads over `databricks apps`, behind a single `apps get -o json` accessor.
+    """Reads and lifecycle calls over `databricks apps`, with the reads behind `apps get -o json`.
+
+    Terminal-free: every method returns raw data (or nothing) and raises on failure, so a service
+    can drive the Apps control plane without owning any presentation.
 
     The `runner` (the `databricks` CLI wrapper) is injected so callers - and tests - can
     supply a fake instead of monkeypatching a module-level function.
@@ -48,6 +51,55 @@ class AppsClient:
         return (
             self._run(["apps", "get", name], self._profile, capture=True, check=False).returncode
             == 0
+        )
+
+    def list_all(self) -> list[dict]:
+        """Every app in the workspace, as the raw `apps list` payload's items.
+
+        Unfiltered on purpose: which apps count as agent deployments is the caller's policy.
+        """
+        result = self._run(
+            ["apps", "list", "-o", "json"],
+            self._profile,
+            capture=True,
+            action="Could not list agent deployments.",
+        )
+        data = json.loads(result.stdout or "[]")
+        return data.get("apps", data) if isinstance(data, dict) else data
+
+    def get(self, name: str) -> dict:
+        """The app's full `apps get` payload, raising when it can't be read.
+
+        The read-or-None `_get_json` above backs the single-field accessors, which treat an
+        unreadable app as "unknown"; a caller that shows the app to the user needs the failure.
+        """
+        result = self._run(
+            ["apps", "get", name, "-o", "json"],
+            self._profile,
+            capture=True,
+            action=f"Could not read deployment '{name}'.",
+        )
+        return json.loads(result.stdout or "{}")
+
+    def logs(self, name: str) -> None:
+        """Stream the app's logs straight to the terminal (uncaptured, so it tails live)."""
+        self._run(
+            ["apps", "logs", name], self._profile, action=f"Could not read logs for '{name}'."
+        )
+
+    def start(self, name: str) -> None:
+        self._run(
+            ["apps", "start", name], self._profile, action=f"Could not start deployment '{name}'."
+        )
+
+    def stop(self, name: str) -> None:
+        self._run(
+            ["apps", "stop", name], self._profile, action=f"Could not stop deployment '{name}'."
+        )
+
+    def delete(self, name: str) -> None:
+        self._run(
+            ["apps", "delete", name], self._profile, action=f"Could not delete deployment '{name}'."
         )
 
     def service_principal(self, name: str) -> Optional[str]:
