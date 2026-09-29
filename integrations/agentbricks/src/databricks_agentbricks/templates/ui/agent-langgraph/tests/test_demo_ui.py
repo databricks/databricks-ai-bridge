@@ -159,22 +159,24 @@ def test_demo_ui_routes(monkeypatch):
     assert "agentbricks memory bind <store-name>" in app_script.text
     assert "refreshSessionView({ hydrateChat: true })" in app_script.text
     assert "function renderModels(" in app_script.text
-    assert 'demoUrl("/api/ui/config")' in app_script.text
-    assert 'demoUrl("/api/demo/models")' in app_script.text
+    assert 'sessionFetch("/api/ui/config",' in app_script.text
+    assert 'sessionFetch("/api/demo/models",' in app_script.text
+    assert 'sessionFetch("/api/demo/session/items"' in app_script.text
     assert 'fetch("/api/session/new"' not in app_script.text
     assert "/api/demo/sessions/${encodeURIComponent(sessionId)}/open" in app_script.text
-    assert "session_id: sessionId" in app_script.text
+    assert "session_id: sessionId" not in app_script.text
     assert 'fetch("/api/invocations"' in app_script.text
-    # Routing key: a shared helper composed into both the submit POST and the background poll
-    # GET, so every replica-scoped request is pinned to the session that started it.
-    assert "function routingHeaders()" in app_script.text
-    assert 'if (state.sessionId) headers["X-Routing-Key"] = state.sessionId;' in app_script.text
-    assert 'return { "Content-Type": "application/json", ...routingHeaders() };' in app_script.text
+    assert "function routingHeaders(sessionId = ensureSessionId())" in app_script.text
+    assert 'return { "X-Routing-Key": sessionId };' in app_script.text
+    assert (
+        'return { "Content-Type": "application/json", ...routingHeaders(sessionId) };'
+        in app_script.text
+    )
     assert (
         "fetch(`/api/invocations/${encodeURIComponent(invocationId)}`, {\n"
         '      cache: "no-store",\n'
         '      credentials: "same-origin",\n'
-        "      headers: routingHeaders(),\n"
+        "      headers: routingHeaders(sessionId),\n"
         "    })"
     ) in app_script.text
     styles = client.get("/ui-assets/styles.css").text
@@ -531,11 +533,13 @@ def test_managed_memory_and_session_routes(monkeypatch):
         "previous_session_id": "s1",
         "managed": True,
     }
-    assert client.get("/api/ui/config", params={"session_id": "s2"}).json()["session_id"] == "s2"
     assert (
-        client.get("/api/demo/session/items", params={"session_id": "s2"}).json()["session_items"][
-            0
-        ]["data"]["content"]
+        client.get("/api/ui/config", headers={"X-Routing-Key": "s2"}).json()["session_id"] == "s2"
+    )
+    assert (
+        client.get("/api/demo/session/items", headers={"X-Routing-Key": "s2"}).json()[
+            "session_items"
+        ][0]["data"]["content"]
         == "s2"
     )
 

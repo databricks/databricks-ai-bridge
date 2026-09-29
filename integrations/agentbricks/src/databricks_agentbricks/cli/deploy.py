@@ -526,8 +526,9 @@ def deploy(
     session automatically stays on one instance.
 
     \b
-    API clients that need it must resend a stable UUID in this request header every request:
-      X-Routing-Key: <uuid>
+    Every managed POST /api/invocations request must include one nonblank application session ID
+    of at most 128 UTF-8 bytes. Reuse it for every turn in the same conversation:
+      X-Routing-Key: <session-id>
     """
     source_dir = pathlib.Path(source)
     project = _load_project(source_dir)

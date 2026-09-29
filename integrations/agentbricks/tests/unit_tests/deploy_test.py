@@ -490,7 +490,9 @@ def test_deploy_help_exposes_instances_and_sticky_routing():
     assert "--min-instances" not in result.output
     assert "--max-instances" not in result.output
     assert "sticky routing" in result.output
-    assert "X-Routing-Key" in result.output
+    normalized_output = " ".join(result.output.split())
+    assert "Every managed POST /api/invocations request" in normalized_output
+    assert "X-Routing-Key: <session-id>" in normalized_output
     assert "Databricks Apps instances" not in result.output
 
 
@@ -824,7 +826,10 @@ def test_deploy_recommends_invoking_deployed_agent(
     assert len(commands) == 1, result.output
     command = commands[0]
     path = "/api/invocations" if server == "agentbricks" else "/invocations"
-    assert f"agentbricks endpoint invoke agent-bricks-myapp --path {path} --json " in command
+    session = " --session-id example-session" if server == "agentbricks" else ""
+    assert (
+        f"agentbricks endpoint invoke agent-bricks-myapp --path {path}{session} --json " in command
+    )
     assert "│" not in command
     assert ("$(uuidgen)" in command) is (server == "agentbricks")
     panel, example = result.output.split("Invoke with Agent Bricks\n")

@@ -22,6 +22,7 @@ from databricks_agentkit.runtime.store import runtime_store_is_persistent_enviro
 _UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
 _INSTANCE_ID = uuid.uuid4().hex[:12]  # identifies this process in the UI
 _AGENTS_API = "/api/2.0/agents"
+_ROUTING_KEY_HEADER = "x-routing-key"
 _MESSAGE_ROLES = {
     "ai",
     "assistant",
@@ -82,12 +83,10 @@ def _request_actor(request: Request) -> str:
 
 
 def _request_session_id(request: Request) -> str:
-    """Read the chat session selected by the browser, falling back to the router cookie locally."""
-    session_id = request.query_params.get("session_id") or getattr(
-        request.state, "session_id", None
-    )
+    """Read the chat session selected by the browser."""
+    session_id = request.headers.get(_ROUTING_KEY_HEADER)
     if not session_id:
-        raise HTTPException(status_code=400, detail="session_id is required")
+        raise HTTPException(status_code=400, detail="X-Routing-Key is required")
     return str(session_id)
 
 

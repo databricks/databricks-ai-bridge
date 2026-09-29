@@ -51,7 +51,11 @@ def test_printed_invoke_command_is_shell_copyable(
             check=True,
         )
         args = result.stdout.removesuffix("\0").split("\0")
-        assert args[:-1] == ["endpoint", "invoke", *shlex.split(target), "--path", path, "--json"]
+        expected = ["endpoint", "invoke", *shlex.split(target), "--path", path]
+        if uses_runtime_api:
+            expected.extend(["--session-id", "example-session"])
+        expected.append("--json")
+        assert args[:-1] == expected
         body = json.loads(args[-1])
         assert body.pop("input") == [{"role": "user", "content": "hi"}]
         if uses_runtime_api:

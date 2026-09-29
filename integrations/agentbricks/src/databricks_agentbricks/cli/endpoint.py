@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from typing import Optional
-from uuid import uuid4
+from urllib.parse import urlsplit
 
 import click
 
@@ -88,7 +88,7 @@ def endpoint() -> None:
 @click.option(
     "--session-id",
     default=None,
-    help="Application session id (default: generated for a Databricks App).",
+    help="Session ID sent as X-Routing-Key; required for POST /api/invocations.",
 )
 @click.option("--timeout", type=click.FloatRange(min=0.1), default=300.0, show_default=True)
 @click.option("--auth/--no-auth", default=None, help="Inject Databricks OAuth authentication.")
@@ -107,9 +107,10 @@ def invoke(
     auth,
 ) -> None:
     """Send one HTTP request to a Databricks App or arbitrary URL."""
+    if session_id is not None and (not session_id.strip() or len(session_id.encode("utf-8")) > 128):
+        raise AgentCliError("--session-id must be nonblank and at most 128 UTF-8 bytes.")
     base_url, is_app = _resolve_endpoint(app, url, obj.profile)
     authenticate = is_app if auth is None else auth
-    session_id = session_id or (str(uuid4()) if is_app else None)
     request = build_request(
         base_url=base_url,
         method=method,
@@ -119,6 +120,15 @@ def invoke(
         timeout=timeout,
         sse=sse,
     )
+    if (
+        request.method == "POST"
+        and urlsplit(request.url).path.rstrip("/") == "/api/invocations"
+        and session_id is None
+    ):
+        raise AgentCliError(
+            "--session-id is required for POST /api/invocations.",
+            hint="Choose a session ID and reuse it for every turn in the same conversation.",
+        )
     request = replace(
         request,
         headers={

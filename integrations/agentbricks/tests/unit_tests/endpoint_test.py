@@ -3,7 +3,6 @@ from __future__ import annotations
 import io
 import json
 import urllib.error
-import uuid
 
 import pytest
 from click.testing import CliRunner
@@ -122,7 +121,7 @@ def test_invalid_json_is_rejected_locally():
     assert "Invalid JSON request body" in result.output
 
 
-def test_invoke_deployed_app_resolves_oauth_and_generated_session(monkeypatch):
+def test_invoke_deployed_app_resolves_oauth_and_explicit_session(monkeypatch):
     captured = {}
 
     class FakeSession:
@@ -141,6 +140,8 @@ def test_invoke_deployed_app_resolves_oauth_and_generated_session(monkeypatch):
             "my-agent",
             "--path",
             "/api/invocations",
+            "--session-id",
+            "session-1",
             "--json",
             '{"input":[]}',
         ],
@@ -151,8 +152,44 @@ def test_invoke_deployed_app_resolves_oauth_and_generated_session(monkeypatch):
     request = captured["request"]
     assert request.url == "https://app.example/api/invocations"
     assert request.headers["Authorization"] == "Bearer token"
-    assert uuid.UUID(request.headers["X-Routing-Key"])
+    assert request.headers["X-Routing-Key"] == "session-1"
     assert request.body == {"input": []}
+
+
+def test_managed_invocation_requires_explicit_session(monkeypatch):
+    send = pytest.fail
+    monkeypatch.setattr(endpoint_mod, "_app_url", lambda name, profile: "https://app.example")
+    monkeypatch.setattr(endpoint_mod, "_authorization_header", lambda profile: "Bearer token")
+    monkeypatch.setattr(endpoint_mod.HttpSession, "send", send)
+
+    result = CliRunner().invoke(
+        endpoint,
+        ["invoke", "my-agent", "--path", "/api/invocations", "--json", '{"input":[]}'],
+        obj=_Ctx(),
+    )
+
+    assert result.exit_code != 0
+    assert "--session-id is required for POST /api/invocations" in result.output
+
+
+@pytest.mark.parametrize("session_id", ["", "   ", "é" * 65])
+def test_invalid_session_id_is_rejected(session_id):
+    result = CliRunner().invoke(
+        endpoint,
+        [
+            "invoke",
+            "--url",
+            "http://localhost:8000",
+            "--path",
+            "/api/invocations",
+            "--session-id",
+            session_id,
+        ],
+        obj=_Ctx(),
+    )
+
+    assert result.exit_code != 0
+    assert "--session-id must be nonblank and at most 128 UTF-8 bytes" in result.output
 
 
 def test_invoke_url_uses_explicit_routing_session_without_auth(monkeypatch):

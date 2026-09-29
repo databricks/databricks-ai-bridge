@@ -50,11 +50,13 @@ Invocation and event reads can target either one invocation or one session; sess
 the active invocation, then the earliest queued
 invocation, or `None`. Each claimed attempt receives the saved session ID in its execution context.
 
-The HTTP server forwards its existing resolved session ID to Runtime in all execution modes.
-Resolution is unchanged: the routing cookie is used when forwarded, otherwise the invocation ID
-is used; request-user sessions are namespaced by the authenticated caller. If ingress consumes the
-cookie, separate HTTP invocations do not share a runtime session. Template conversation identity
-inside the opaque input is unchanged and does not select the runtime queue.
+The HTTP server requires exactly one nonblank `X-Routing-Key` header of at most 128 UTF-8 bytes on
+every invocation submission. It persists that value as the canonical Runtime session and supplies
+it to every attempt through `InvocationContext.session_id`. Generated adapters use the same value
+for framework conversation state, so queueing, recovery, checkpoints, and transcripts share one
+identity. The server does not read `input.session_id`, derive a session from the invocation ID, or
+generate a random fallback. Request-user sessions are namespaced once by the authenticated caller
+before admission; adapters do not namespace them again.
 
 All workers sharing a Runtime Store must support session-aware claims before callers start supplying
 session IDs. An older worker does not enforce session order and can claim a later queued invocation.

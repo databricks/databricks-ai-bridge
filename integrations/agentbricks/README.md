@@ -223,7 +223,10 @@ agentbricks --profile <profile> deploy my-agent
 Use `--framework openai` for OpenAI Agents. Templates keep agent code separate from the runtime
 adapter and declare default Session and Memory Store bindings in `agent.toml`.
 
-Each managed run is an **invocation**. Send a client-generated UUID `id` and your agent's `input`:
+Each managed run is an **invocation**. Every `POST /api/invocations` request must include one
+nonblank `X-Routing-Key` header of at most 128 UTF-8 bytes. The client chooses this stable session
+ID and reuses it for every turn in the same conversation. Send a separate client-generated UUID
+`id` for each invocation and put only agent-specific values in `input`:
 
 ```json
 {
@@ -240,8 +243,16 @@ Each managed run is an **invocation**. Send a client-generated UUID `id` and you
 | `GET /api/invocations/{id}` | Returns the invocation status and, when completed, its output. |
 | `GET /api/invocations/{id}/events?after={cursor}` | Streams events after the last received event ID, allowing clients to reconnect. |
 
-The UUID also acts as an idempotency key: repeating the same request reuses the existing invocation
-while its record is retained; using the ID for a different request returns `409`.
+`X-Routing-Key` is the canonical session identity across the Runtime Store and the framework
+adapter. Invocations in one session execute in durable acceptance order, while different sessions
+can execute concurrently. The runtime persists the session and supplies it to every attempt as
+`InvocationContext.session_id`; generated adapters use that value for framework conversation
+history. Neither `input.session_id` nor the invocation ID selects the session, and the server does
+not generate a fallback session.
+
+The invocation UUID also acts as an idempotency key: repeating the same request in the same session
+reuses the existing invocation while its record is retained; using the ID for a different request
+or session returns `409`.
 
 `agentbricks dev` keeps execution state in process and loses it on restart. For projects with
 `[agent].server = "agentbricks"`, `agentbricks deploy` provisions a persistent Runtime Store for requests,
@@ -509,10 +520,12 @@ server.
 ```sh
 agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
   --path /api/invocations \
+  --session-id conversation-1 \
   --json '{"id":"00000000-0000-4000-8000-000000000001","input":[{"role":"user","content":"Hello"}]}'
 
 agentbricks endpoint invoke --url http://localhost:8000 \
   --path /api/invocations \
+  --session-id conversation-1 \
   --json '{"id":"00000000-0000-4000-8000-000000000001","input":[{"role":"user","content":"Hello"}]}'
 ```
 
@@ -524,18 +537,21 @@ a client-generated invocation ID, and streaming servers require their own stream
 INVOCATION_ID=$(uuidgen)
 agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
   --path /api/invocations \
+  --session-id conversation-1 \
   --json "{\"id\":\"$INVOCATION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Run the report\"}]}"
 
 agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
   --path /api/invocations \
+  --session-id conversation-1 \
   --sse \
   --json "{\"id\":\"$INVOCATION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"stream\":true}"
 ```
 
-`--session-id` preserves one application session across calls by sending it in the `X-Routing-Key`
-request header, which pins the session to one app replica. This also works with a
-direct App URL and with the generated runtime on localhost. OAuth and session headers are managed by
-the runtime; arbitrary custom request headers are intentionally not exposed by this command.
+For managed `POST /api/invocations` requests, `--session-id` is required and sends the value as
+`X-Routing-Key`. Reuse it across turns; the CLI does not derive a session from the invocation ID or
+generate one. The same header also pins requests to one app replica. This works with an App name, a
+direct App URL, and the generated runtime on localhost. OAuth is managed by the CLI; arbitrary
+custom request headers are intentionally not exposed by this command.
 
 ## Command help
 
@@ -845,12 +861,11 @@ store and grants the app's service principal access to it. The memory store id f
 via the `AGENT_MEMORY_STORE` env var that `deploy` injects; `agentbricks dev` runs locally with memory off
 and does not inject it. The id is not persisted in `agent.toml`.)
 
-The chat UI generates a stable application session UUID in browser local storage, places it inside
-the invocation's opaque `input`, and creates a fresh invocation UUID per turn. The chat app also
-sends this session UUID in the `X-Routing-Key` request header, which is used verbatim to pin
-the session to one app replica (it must be non-blank and no more than 128 UTF-8 bytes). The header is neither
-authentication nor the template's application session state; it is independent sticky-routing
-plumbing.
+When a conversation starts, the chat UI creates a stable application session UUID and keeps it in
+browser local storage. It sends that value as `X-Routing-Key` on session-scoped requests and creates
+a fresh invocation UUID per turn. The header is both the managed Runtime session and the framework
+conversation identity; it also pins the session to one app replica. It is not authentication, and
+it is not duplicated inside the invocation's opaque `input`.
 
 The generated `README.md` documents every request the client makes: config discovery, sync and SSE
 invocations, background submission and polling, session transcript loading, HITL resume, and memory

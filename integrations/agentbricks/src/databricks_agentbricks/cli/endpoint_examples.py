@@ -10,7 +10,7 @@ from databricks_agentbricks import render
 
 
 def agent_invoke_command(target: str, *, uses_runtime_api: bool) -> str:
-    """Build a single-line example, generating a fresh runtime invocation ID on every run."""
+    """Build a single-line example with a stable session and a fresh invocation ID."""
     path = "/api/invocations" if uses_runtime_api else "/invocations"
     body = '{"input":[{"role":"user","content":"hi"}]}'
     if uses_runtime_api:
@@ -19,7 +19,8 @@ def agent_invoke_command(target: str, *, uses_runtime_api: bool) -> str:
         json_arg = '"' + body.replace('"', r"\"") + '"'
     else:
         json_arg = shlex.quote(body)
-    return f"agentbricks endpoint invoke {target} --path {path} --json {json_arg}"
+    session = " --session-id example-session" if uses_runtime_api else ""
+    return f"agentbricks endpoint invoke {target} --path {path}{session} --json {json_arg}"
 
 
 def print_agent_invoke_command(target: str, *, uses_runtime_api: bool) -> None:

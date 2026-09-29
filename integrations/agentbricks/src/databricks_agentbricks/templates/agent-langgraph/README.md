@@ -26,9 +26,10 @@ configuration and client examples; [AGENTS.md](AGENTS.md) provides the developme
 agentbricks dev
 ```
 
-The API is available at `http://localhost:8000/api/invocations`. Every request supplies a UUID `id`.
-That ID is the invocation identifier and idempotency key. Agent-specific values live inside the
-opaque `input` object:
+The API is available at `http://localhost:8000/api/invocations`. Every POST supplies a stable
+application session in `X-Routing-Key` and a UUID `id`. The header is the Runtime and LangGraph
+session identity; the UUID identifies one invocation and is its idempotency key. Agent-specific
+values live inside the opaque `input` object:
 
 ```bash
 SESSION_ID=$(uuidgen)
@@ -36,12 +37,16 @@ INVOCATION_ID=$(uuidgen)
 
 curl -sS http://localhost:8000/api/invocations \
   -H 'Content-Type: application/json' \
-  -d "{\"id\":\"$INVOCATION_ID\",\"input\":{\"session_id\":\"$SESSION_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"What time is it? Use your tool.\"}]}}"
+  -H "X-Routing-Key: $SESSION_ID" \
+  -d "{\"id\":\"$INVOCATION_ID\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":\"What time is it? Use your tool.\"}]}}"
 ```
 
-Reuse `SESSION_ID` for multi-turn conversation state. Generate a new `INVOCATION_ID` for each turn.
-Retrying the same request with the same invocation ID returns the persisted result; changing the
-request while reusing the ID returns `409`.
+Reuse `SESSION_ID` in the header for multi-turn conversation state. Generate a new `INVOCATION_ID`
+for each turn. Invocations in one session execute in durable acceptance order; different sessions
+can execute concurrently. Retrying the same request and session with the same invocation ID returns
+the persisted result; changing the request or session while reusing the ID returns `409`. The
+server rejects a missing header instead of using `input.session_id`, the invocation ID, or a random
+fallback.
 
 ## Invocation modes
 
@@ -54,13 +59,16 @@ request while reusing the ID returns `409`.
 INVOCATION_ID=$(uuidgen)
 curl -sN http://localhost:8000/api/invocations \
   -H 'Content-Type: application/json' \
-  -d "{\"id\":\"$INVOCATION_ID\",\"input\":{\"session_id\":\"$SESSION_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"Count to three.\"}]},\"stream\":true}"
+  -H "X-Routing-Key: $SESSION_ID" \
+  -d "{\"id\":\"$INVOCATION_ID\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":\"Count to three.\"}]},\"stream\":true}"
 
 INVOCATION_ID=$(uuidgen)
 curl -sS http://localhost:8000/api/invocations \
   -H 'Content-Type: application/json' \
-  -d "{\"id\":\"$INVOCATION_ID\",\"input\":{\"session_id\":\"$SESSION_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"Summarize durable agents.\"}]},\"background\":true}" | jq
-curl -sS "http://localhost:8000/api/invocations/$INVOCATION_ID" | jq
+  -H "X-Routing-Key: $SESSION_ID" \
+  -d "{\"id\":\"$INVOCATION_ID\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":\"Summarize durable agents.\"}]},\"background\":true}" | jq
+curl -sS "http://localhost:8000/api/invocations/$INVOCATION_ID" \
+  -H "X-Routing-Key: $SESSION_ID" | jq
 ```
 
 SSE records contain events translated by `runtime/adapter.py`: token `delta`s, completed `message`s,
@@ -71,13 +79,12 @@ and HITL `interrupt`s. Replay from a cursor with
 
 `send_message` is gated by `HumanInTheLoopMiddleware`. Start a turn asking the agent to use that
 tool. When the output or event stream contains an `interrupt`, submit a new invocation with the same
-application session:
+`X-Routing-Key` header and this body:
 
 ```json
 {
   "id": "<new-uuid>",
   "input": {
-    "session_id": "<same-session-id>",
     "resume": {"decisions": [{"type": "approve"}]}
   }
 }
@@ -98,8 +105,9 @@ repeated side effects. See [Recovery and durability](AGENTKIT_CONTRACT.md#recove
 
 ## Chat app
 
-The browser UI is included by default. It generates a stable application session ID in local
-storage, places it inside each invocation's `input`, and generates a fresh invocation UUID per turn.
+The browser UI is included by default. When a conversation starts, it creates a stable application
+session ID in local storage, sends it as `X-Routing-Key` on session-scoped requests, and generates a
+fresh invocation UUID per turn. It does not duplicate the session inside `input`.
 Use `agentbricks init --framework langgraph --disable-chat-app` for API-only output.
 
 ## Configure and deploy
@@ -118,8 +126,9 @@ When deployment provisions a dedicated Runtime Store, only the app-owned
 `databricks_agentkit_runtime_<hash>` schema and runtime tables are added. Managed Runtime Store
 deployments use their own default schema.
 
-To pin a session to one app replica, send the session id in the `X-Routing-Key` request header on
-every call. It is not authentication and is not used as the template's application session ID.
+Send the application session ID in `X-Routing-Key` on every session-scoped call. The required
+header is the canonical Runtime and LangGraph session identity and also pins the session to one app
+replica. It is not authentication.
 
 # Request-user authorization
 
@@ -128,9 +137,11 @@ continues to use the application/default identity. Deployed user tools require t
 and never fall back to application credentials. Model, memory-service, session-service, and custom
 MCP server credentials are unchanged.
 
-`runtime/main.py` derives the invocation policy after `configure()`. The runtime adapter namespaces
-public session IDs and actor values for the request owner, then passes only `workspace_client_for`
-to the framework-native agent. Internal session keys are never returned to clients.
+`runtime/main.py` derives the invocation policy after `configure()`. The server namespaces the
+public `X-Routing-Key` once for the request owner. The runtime adapter uses
+`InvocationContext.session_id` unchanged, namespaces actor values, and passes only
+`workspace_client_for` to the framework-native agent. Internal session keys are never returned to
+clients.
 
 User-policy invocations use the existing Runtime for synchronous, streaming, and background calls,
 including status polling, event replay, and invocation-ID idempotency. The Runtime Store persists no

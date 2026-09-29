@@ -27,8 +27,8 @@ def _payload(value: Any) -> dict[str, Any]:
     return value
 
 
-def _session_id(payload: dict[str, Any], context: InvocationContext) -> str:
-    value = payload.get("session_id") or context.session_id
+def _session_id(context: InvocationContext) -> str:
+    value = context.session_id
     if not isinstance(value, str) or not value:
         raise ValueError("session_id must be a non-empty string")
     return value
@@ -73,7 +73,7 @@ async def _invoke_agent(
     *,
     recovery: bool = False,
 ) -> dict:
-    session_id = _session_id(payload, context)
+    session_id = _session_id(context)
     actor = _actor(payload, session_id)
     auth = getattr(context, "request_auth", None)
     user_auth = auth is not None
@@ -91,16 +91,13 @@ async def _invoke_agent(
             "Request-user invocations cannot be recovered in the background.",
             400,
         )
-    internal_session_id = (
-        auth.namespace("session", session_id) if auth and payload.get("session_id") else session_id
-    )
     actor = auth.namespace("actor", actor) if auth else actor
     auth_kwargs = {"workspace_client_for": auth.client_for} if user_auth else {}
     model = payload.get("model")
     outputs = []
     async with run_agent(
-        _agent_input(payload, internal_session_id, recovery=recovery),
-        session_id=internal_session_id,
+        _agent_input(payload, session_id, recovery=recovery),
+        session_id=session_id,
         actor=actor,
         model=model if isinstance(model, str) else None,
         **auth_kwargs,
@@ -119,7 +116,7 @@ async def _invoke_agent(
     interrupted = bool(outputs and outputs[-1].get("type") == "interrupt")
     return {
         "output": [event["message"] if event["type"] == "message" else event for event in outputs],
-        **({"session_id": session_id} if not user_auth or payload.get("session_id") else {}),
+        **({"session_id": session_id} if not user_auth else {}),
         "status": "interrupted" if interrupted else "completed",
     }
 

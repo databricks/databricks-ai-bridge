@@ -955,7 +955,9 @@ Any memory/session store declared in agent.toml (for example, by `agentbricks me
 
 Scaling to multiple instances (--instances) uses best-effort sticky routing, so a browser session automatically stays on one instance.
 
-API clients that need it must resend a stable UUID in this request header every request: X-Routing-Key: <uuid>
+Every managed POST /api/invocations request must include one nonblank application session ID
+of at most 128 UTF-8 bytes. Reuse it for every turn in the same conversation:
+X-Routing-Key: <session-id>. It is the Runtime and framework session identity as well as the sticky-routing key.
 
 ```
 agentbricks deploy [NAME] [options]
@@ -1119,7 +1121,7 @@ _Options_
 | `--query <QUERY>` | string | - | no | Query parameter as 'name=value'. |
 | `--json <JSON_VALUE>` | string | - | no | Complete JSON request body. |
 | `--sse` | flag | - | no | Consume the response as Server-Sent Events. |
-| `--session-id <SESSION_ID>` | string | - | no | Application session id (default: generated for a Databricks App). |
+| `--session-id <SESSION_ID>` | string | - | no | Session ID sent as X-Routing-Key; required for POST /api/invocations. |
 | `--timeout <TIMEOUT>` | float range | `300.0` | no | - |
 | `--auth`, `--no-auth` | flag | - | no | Inject Databricks OAuth authentication. |
 

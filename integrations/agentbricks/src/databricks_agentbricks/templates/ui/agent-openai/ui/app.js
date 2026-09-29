@@ -104,10 +104,15 @@ function setSessionId(value) {
   elements.sessionId.textContent = state.sessionId;
 }
 
-function demoUrl(path) {
-  const url = new URL(path, window.location.origin);
-  url.searchParams.set("session_id", ensureSessionId());
-  return `${url.pathname}${url.search}`;
+function routingHeaders(sessionId = ensureSessionId()) {
+  return { "X-Routing-Key": sessionId };
+}
+
+function sessionFetch(path, options = {}, sessionId = ensureSessionId()) {
+  return fetch(path, {
+    ...options,
+    headers: { ...options.headers, ...routingHeaders(sessionId) },
+  });
 }
 
 function setStatus(label, type = "ready") {
@@ -592,21 +597,12 @@ function handleOutput(output) {
   }
 }
 
-function routingHeaders() {
-  const headers = {};
-  // Populate the session_id as the routing key for sticky routing
-  if (state.sessionId) headers["X-Routing-Key"] = state.sessionId;
-  return headers;
+function invocationHeaders(sessionId) {
+  return { "Content-Type": "application/json", ...routingHeaders(sessionId) };
 }
 
-function invocationHeaders() {
-  return { "Content-Type": "application/json", ...routingHeaders() };
-}
-
-function invocationPayload(payload, transport = {}) {
-  const sessionId = ensureSessionId();
+function invocationPayload(payload, transport = {}, sessionId = ensureSessionId()) {
   const input = {
-    session_id: sessionId,
     actor: state.config?.session.actor || sessionId,
     ...payload,
   };
@@ -765,15 +761,15 @@ async function loadMemory() {
   try {
     let entries;
     if (query) {
-      const response = await fetch(demoUrl("/api/demo/memory/search"), {
+      const response = await sessionFetch("/api/demo/memory/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query, limit: 50, actor: actor || undefined }),
       });
       entries = memoryEntries(await jsonResponse(response));
     } else {
-      const url = demoUrl("/api/demo/memory/entries") + (actor ? `&actor=${encodeURIComponent(actor)}` : "");
-      const response = await fetch(url, { cache: "no-store" });
+      const url = "/api/demo/memory/entries" + (actor ? `?actor=${encodeURIComponent(actor)}` : "");
+      const response = await sessionFetch(url, { cache: "no-store" });
       entries = memoryEntries(await jsonResponse(response));
     }
     renderMemoryCards(entries, query);
@@ -921,7 +917,7 @@ async function ensureManagedSession() {
   const sessionId = ensureSessionId();
   if (state.managedSessionId === sessionId) return sessionId;
   stateMessage(elements.sessionItems, "Connecting managed session…", "loading");
-  const response = await fetch(demoUrl("/api/demo/sessions"), {
+  const response = await sessionFetch("/api/demo/sessions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: "{}",
@@ -939,7 +935,7 @@ async function refreshSession({ hydrateChat = false } = {}) {
   }
   try {
     const sessionId = state.config.session.managed ? await ensureManagedSession() : ensureSessionId();
-    const response = await fetch(demoUrl("/api/demo/session/items"), { cache: "no-store" });
+    const response = await sessionFetch("/api/demo/session/items", { cache: "no-store" });
     const result = await jsonResponse(response);
     const items = sessionItems(result);
     renderSessionItems(items);
@@ -957,7 +953,7 @@ async function refreshSession({ hydrateChat = false } = {}) {
 async function refreshSessions() {
   stateMessage(elements.sessionList, "Loading sessions…", "loading");
   try {
-    const response = await fetch(demoUrl("/api/demo/sessions"), { cache: "no-store" });
+    const response = await sessionFetch("/api/demo/sessions", { cache: "no-store" });
     const result = await jsonResponse(response);
     renderSessions(sessions(result));
     addEvent("sessions.list", result);
@@ -973,11 +969,12 @@ async function refreshSessionView({ hydrateChat = false } = {}) {
 }
 
 async function invokeSync(payload) {
+  const sessionId = ensureSessionId();
   const response = await fetch("/api/invocations", {
     method: "POST",
     credentials: "same-origin",
-    headers: invocationHeaders(),
-    body: JSON.stringify(invocationPayload(payload)),
+    headers: invocationHeaders(sessionId),
+    body: JSON.stringify(invocationPayload(payload, {}, sessionId)),
   });
   const result = await jsonResponse(response);
   const output = agentResult(result);
@@ -998,11 +995,12 @@ function parseSseFrame(frame) {
 }
 
 async function invokeStreaming(payload) {
+  const sessionId = ensureSessionId();
   const response = await fetch("/api/invocations", {
     method: "POST",
     credentials: "same-origin",
-    headers: invocationHeaders(),
-    body: JSON.stringify(invocationPayload(payload, { stream: true })),
+    headers: invocationHeaders(sessionId),
+    body: JSON.stringify(invocationPayload(payload, { stream: true }, sessionId)),
   });
   if (!response.ok || !response.body) await jsonResponse(response);
   const reader = response.body.getReader();
@@ -1027,14 +1025,14 @@ async function invokeStreaming(payload) {
   return { status: state.pendingInterrupt ? "interrupted" : "completed" };
 }
 
-async function pollBackground(invocationId) {
+async function pollBackground(invocationId, sessionId) {
   const deadline = Date.now() + 180000;
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 850));
     const response = await fetch(`/api/invocations/${encodeURIComponent(invocationId)}`, {
       cache: "no-store",
       credentials: "same-origin",
-      headers: routingHeaders(),
+      headers: routingHeaders(sessionId),
     });
     const result = await jsonResponse(response);
     addEvent("background.poll", result);
@@ -1051,16 +1049,17 @@ async function pollBackground(invocationId) {
 }
 
 async function invokeBackground(payload) {
+  const sessionId = ensureSessionId();
   const response = await fetch("/api/invocations", {
     method: "POST",
     credentials: "same-origin",
-    headers: invocationHeaders(),
-    body: JSON.stringify(invocationPayload(payload, { background: true })),
+    headers: invocationHeaders(sessionId),
+    body: JSON.stringify(invocationPayload(payload, { background: true }, sessionId)),
   });
   const started = await jsonResponse(response);
   addEvent("background.started", started);
   setStatus(`Background · ${started.id}`, "busy");
-  return pollBackground(started.id);
+  return pollBackground(started.id, sessionId);
 }
 
 async function dispatch(payload, mode = state.mode) {
@@ -1153,7 +1152,7 @@ async function openSession(sessionId) {
   if (state.busy || !sessionId || sessionId === state.sessionId) return;
   setBusy(true, "Opening session");
   try {
-    const response = await fetch(demoUrl(`/api/demo/sessions/${encodeURIComponent(sessionId)}/open`), {
+    const response = await sessionFetch(`/api/demo/sessions/${encodeURIComponent(sessionId)}/open`, {
       method: "POST",
       credentials: "same-origin",
     });
@@ -1207,13 +1206,13 @@ function sizeModelSelect() {
 }
 
 async function loadModels() {
-  const response = await fetch(demoUrl("/api/demo/models"), { cache: "no-store" });
+  const response = await sessionFetch("/api/demo/models", { cache: "no-store" });
   renderModels(await jsonResponse(response));
 }
 
 async function loadConfig() {
   try {
-    const response = await fetch(demoUrl("/api/ui/config"), { cache: "no-store" });
+    const response = await sessionFetch("/api/ui/config", { cache: "no-store" });
     const config = await jsonResponse(response);
     state.config = config;
     state.instanceId = config.instance_id;

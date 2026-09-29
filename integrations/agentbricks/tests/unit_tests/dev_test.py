@@ -438,8 +438,10 @@ def test_dev_prints_standalone_invoke_for_each_template(tmp_path, framework, ser
     assert len(commands) == 1, result.output
     command = commands[0]
     path = "/api/invocations" if server == "agentbricks" else "/invocations"
+    session = " --session-id example-session" if server == "agentbricks" else ""
     assert (
-        f"agentbricks endpoint invoke --url http://localhost:8000 --path {path} --json " in command
+        f"agentbricks endpoint invoke --url http://localhost:8000 --path {path}{session} --json "
+        in command
     )
     assert "│" not in command
     assert ("$(uuidgen)" in command) is (server == "agentbricks")

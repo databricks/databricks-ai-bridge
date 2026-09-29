@@ -289,13 +289,16 @@ async def test_adapter_recovery_marks_replayed_agent_input(monkeypatch):
     await adapter.recover(payload, context)
 
     assert calls == [
-        (payload["messages"], {"session_id": "session-1", "actor": "session-1", "model": None}),
+        (
+            payload["messages"],
+            {"session_id": "runtime-session", "actor": "runtime-session", "model": None},
+        ),
         (
             [
                 {"role": "developer", "content": adapter._RECOVERY_INSTRUCTION},
                 *payload["messages"],
             ],
-            {"session_id": "session-1", "actor": "session-1", "model": None},
+            {"session_id": "runtime-session", "actor": "runtime-session", "model": None},
         ),
     ]
     assert payload["messages"] == [{"role": "user", "content": "hi"}]

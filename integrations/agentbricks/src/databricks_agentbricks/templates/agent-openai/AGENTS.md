@@ -22,7 +22,6 @@ Use only `/api/invocations`. The transport body is:
 {
   "id": "<uuid>",
   "input": {
-    "session_id": "<stable-application-session>",
     "messages": [{"role": "user", "content": "hello"}],
     "resume": null,
     "model": "optional-serving-endpoint"
@@ -32,11 +31,12 @@ Use only `/api/invocations`. The transport body is:
 }
 ```
 
-`id` is the invocation identifier and idempotency key. `background` and `stream` are transport
-fields. Everything framework-specific belongs inside `input`. The browser generates a stable
-session ID in local storage and sends it on every call in the `X-Routing-Key` request header, which
-pins the session to one runtime replica. API clients should do the same. That header is only for
-sticky routing and is not authentication or application session state.
+Every POST also requires `X-Routing-Key: <stable-application-session>`. `id` is the invocation
+identifier and idempotency key. `background` and `stream` are transport fields. Everything
+framework-specific belongs inside `input`, which does not contain `session_id`. The header is the
+canonical Runtime and Agents SDK session identity and also pins the session to one runtime replica.
+API clients choose it and reuse it across turns; the server does not derive or generate a fallback.
+The header is not authentication.
 
 ## Code map
 

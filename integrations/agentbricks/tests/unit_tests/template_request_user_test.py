@@ -45,7 +45,7 @@ class RequestAuth:
 
 
 @pytest.mark.asyncio
-async def test_adapter_namespaces_session_and_untrusted_actor(template, monkeypatch):
+async def test_adapter_uses_namespaced_context_session_and_namespaces_actor(template, monkeypatch):
     framework, adapter, _agent = template
     calls = []
 
@@ -64,15 +64,18 @@ async def test_adapter_namespaces_session_and_untrusted_actor(template, monkeypa
     for owner in ("alice", "bob"):
         auth = RequestAuth(owner)
         context = SimpleNamespace(
-            request_auth=auth, session_id="cookie", invocation_id="run", emit=AsyncMock()
+            request_auth=auth,
+            session_id=f"private:{owner}:session:header",
+            invocation_id="run",
+            emit=AsyncMock(),
         )
         response = await adapter.invoke(payload, context)
         kwargs = calls[0][1]
-        assert kwargs["session_id"] == f"private:{owner}:session:public"
+        assert kwargs["session_id"] == f"private:{owner}:session:header"
         assert kwargs["actor"] == f"private:{owner}:actor:victim"
         assert kwargs["workspace_client_for"] is auth.client_for
         assert "request_auth" not in kwargs
-        assert response["session_id"] == "public"
+        assert "session_id" not in response
         assert "private:" not in repr(response)
         calls.clear()
 
@@ -159,7 +162,7 @@ async def test_ui_runtime_capabilities_ignore_tool_auth_policy(framework, user_a
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
-        config = (await client.get("/api/ui/config?session_id=public")).json()
+        config = (await client.get("/api/ui/config", headers={"X-Routing-Key": "public"})).json()
     assert config["background"] == {
         "enabled": True,
         "persistent": True,

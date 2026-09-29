@@ -239,7 +239,8 @@ def _announce_local_url(
             if uses_runtime_api
             else '{"input": [{"role": "user", "content": "hi"}]}'
         )
-        sample = f"curl -X POST {endpoint} -H 'Content-Type: application/json' -d '{body}'"
+        headers = " -H 'X-Routing-Key: local-session'" if uses_runtime_api else ""
+        sample = f"curl -X POST {endpoint} -H 'Content-Type: application/json'{headers} -d '{body}'"
         fields = {"Invoke": f"POST {endpoint}"}
         if trace_url:
             fields["Traces"] = trace_url

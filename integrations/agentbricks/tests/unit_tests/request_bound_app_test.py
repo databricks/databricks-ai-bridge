@@ -18,8 +18,12 @@ def deployed(monkeypatch):
     monkeypatch.setenv("DATABRICKS_HOST", "https://workspace.example")
 
 
-def headers(subject="user-a", token="token-sentinel"):
-    return {"x-forwarded-user": subject, "x-forwarded-access-token": token}
+def headers(subject="user-a", token="token-sentinel", session_id="session-1"):
+    return {
+        "x-forwarded-user": subject,
+        "x-forwarded-access-token": token,
+        "x-routing-key": session_id,
+    }
 
 
 def make_app(handler):
@@ -415,8 +419,12 @@ async def test_request_user_recovery_fails_before_handlers(deployed):
 
     with pytest.raises(AuthError) as caught:
         await app._execute(
-            {"input": "hello", "session_id": "session-1", "invocation_id": invocation_id},
-            InvocationAttemptContext(runtime_invocation_id, 2),
+            {"input": "hello", "invocation_id": invocation_id},
+            InvocationAttemptContext(
+                runtime_invocation_id,
+                2,
+                session_id=request_auth.namespace("session", "session-1"),
+            ),
         )
 
     assert caught.value.code == "MCP_USER_AUTH_RECOVERY_UNSUPPORTED"

@@ -113,14 +113,23 @@ An **invocation** is one managed agent run. The client-supplied UUID `id` acts a
 while its Runtime record is retained. Request-user invocation IDs are internally namespaced by the
 forwarded principal so users cannot collide with each other.
 
+Every `POST /api/invocations` requires exactly one nonblank `X-Routing-Key` of at most 128 UTF-8
+bytes. The client chooses it and reuses it for every turn in one conversation. The runtime persists
+this canonical session ID, serializes its invocations in durable acceptance order, and passes it to
+the handler as `InvocationContext.session_id`, including during recovery. Generated framework
+adapters use that same value for checkpoint or transcript state. The server does not read a session
+from `input`, derive one from the invocation ID, or generate a random fallback. Request-user sessions
+are namespaced once by the authenticated principal before persistence.
+
 - **Synchronous:** Wait for the result in the POST response.
 - **Streaming (`stream: true`):** Receive progress events as Server-Sent Events (SSE).
 - **Background (`background: true`):** Return immediately with `202`, then poll for the result.
   Add `stream: true` to include an events URL in the response.
 - **Reconnect:** Read stored events with `GET .../events?after=<last-event-id>`.
 
-These examples use an agent that returns `{"answer":"Hello"}` and emits `delta` events. The input,
-output, and application event payloads are defined by your agent or framework adapter.
+Every POST example below includes `X-Routing-Key: conversation-1`. These examples use an agent that
+returns `{"answer":"Hello"}` and emits `delta` events. The input, output, and application event
+payloads are defined by your agent or framework adapter.
 
 | API endpoint | Request | Response |
 | --- | --- | --- |

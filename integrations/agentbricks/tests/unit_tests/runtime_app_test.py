@@ -44,7 +44,9 @@ def make_app(invoke=echo, *, recover=None) -> DurableAgentServer:
 
 
 @asynccontextmanager
-async def running_client(app: DurableAgentServer) -> AsyncIterator[httpx.AsyncClient]:
+async def running_client(
+    app: DurableAgentServer, session_id: str | None = "session-1"
+) -> AsyncIterator[httpx.AsyncClient]:
     runtime = app._runtime
     assert runtime is not None
     await runtime.start()
@@ -52,6 +54,7 @@ async def running_client(app: DurableAgentServer) -> AsyncIterator[httpx.AsyncCl
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
             base_url="https://testserver",
+            headers={_ROUTING_KEY_HEADER: session_id} if session_id is not None else None,
         ) as client:
             yield client
     finally:
@@ -80,7 +83,7 @@ async def test_routing_key_header_is_the_only_session_source() -> None:
     async with running_client(app) as client:
         response = await client.post(
             "/api/invocations",
-            json={"id": _RUN_1, "input": "hello"},
+            json={"id": _RUN_1, "input": {"session_id": "body-session"}},
             headers={_ROUTING_KEY_HEADER: "session-1"},
         )
 
@@ -89,7 +92,7 @@ async def test_routing_key_header_is_the_only_session_source() -> None:
         "id": _RUN_1,
         "status": "completed",
         "output": {
-            "received": "hello",
+            "received": {"session_id": "body-session"},
             "invocation_id": _RUN_1,
             "session_id": "session-1",
         },
@@ -97,7 +100,7 @@ async def test_routing_key_header_is_the_only_session_source() -> None:
 
 
 @pytest.mark.asyncio
-async def test_missing_forwarded_routing_key_header_uses_invocation_id() -> None:
+async def test_missing_routing_key_is_rejected() -> None:
     seen_sessions = []
 
     async def invoke(input, context):
@@ -105,12 +108,42 @@ async def test_missing_forwarded_routing_key_header_uses_invocation_id() -> None
         return input
 
     app = make_app(invoke)
-    async with running_client(app) as client:
+    async with running_client(app, session_id=None) as client:
         response = await client.post("/api/invocations", json={"id": _RUN_1})
 
-    assert seen_sessions == [_RUN_1]
-    assert response.status_code == 200
-    assert _ROUTING_KEY_HEADER not in response.headers
+    assert response.status_code == 422
+    assert response.json() == {"detail": "exactly one nonblank X-Routing-Key header is required"}
+    assert not seen_sessions
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("session_id", ["", "   ", "a" * 129])
+async def test_invalid_routing_key_is_rejected(session_id) -> None:
+    app = make_app()
+    async with running_client(app, session_id=None) as client:
+        response = await client.post(
+            "/api/invocations",
+            json={"id": _RUN_1},
+            headers={_ROUTING_KEY_HEADER: session_id},
+        )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_duplicate_routing_keys_are_rejected() -> None:
+    app = make_app()
+    async with running_client(app, session_id=None) as client:
+        response = await client.post(
+            "/api/invocations",
+            json={"id": _RUN_1},
+            headers=[
+                (_ROUTING_KEY_HEADER, "session-1"),
+                (_ROUTING_KEY_HEADER, "session-2"),
+            ],
+        )
+
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -134,12 +167,9 @@ async def test_body_session_and_resume_metadata_are_rejected() -> None:
 @pytest.mark.parametrize(
     "background,stream", [(False, False), (False, True), (True, False), (True, True)]
 )
-@pytest.mark.parametrize("cookie", [None, "session-1"])
-async def test_http_persists_resolved_session_in_every_mode(background, stream, cookie) -> None:
+async def test_http_persists_resolved_session_in_every_mode(background, stream) -> None:
     app = make_app()
     async with running_client(app) as client:
-        if cookie is not None:
-            client.cookies.set(_ROUTING_COOKIE, cookie)
         response = await client.post(
             "/api/invocations",
             json={"id": _RUN_1, "input": "hello", "background": background, "stream": stream},
@@ -150,8 +180,8 @@ async def test_http_persists_resolved_session_in_every_mode(background, stream, 
     assert response.status_code == (202 if background else 200)
     assert state is not None
     assert isinstance(state.request, dict)
-    assert state.session_id == (cookie or _RUN_1)
-    assert state.request["session_id"] == state.session_id
+    assert state.session_id == "session-1"
+    assert state.request == {"input": "hello"}
     assert state.session_sequence_number == 1
 
 
@@ -173,7 +203,6 @@ async def test_http_same_session_waits_for_active_invocation(background, stream)
 
     app = make_app(invoke)
     async with running_client(app) as client:
-        client.cookies.set(_ROUTING_COOKIE, "session-1")
         await client.post(
             "/api/invocations", json={"id": _RUN_1, "input": "first", "background": True}
         )
@@ -217,8 +246,8 @@ async def test_recovery_attempt_uses_recovery_hook() -> None:
 
     app = make_app(invoke, recover=recover)
     result = await app._execute(
-        {"input": "hello", "session_id": "session-1"},
-        InvocationAttemptContext(_RUN_1, 2),
+        {"input": "hello"},
+        InvocationAttemptContext(_RUN_1, 2, session_id="session-1"),
     )
 
     assert result == {"input": "hello", "session_id": "session-1"}
@@ -233,7 +262,7 @@ async def test_attempt_context_is_the_source_of_session_identity() -> None:
     app = make_app(invoke)
 
     result = await app._execute(
-        {"input": "hello", "session_id": "legacy-session"},
+        {"input": {"session_id": "body-session"}},
         InvocationAttemptContext(_RUN_1, 1, session_id="stored-session"),
     )
 
@@ -246,8 +275,8 @@ async def test_recovery_attempt_requires_a_recovery_hook() -> None:
 
     with pytest.raises(RuntimeError, match="@app.recover"):
         await app._execute(
-            {"input": {}, "session_id": "session-1"},
-            InvocationAttemptContext(_RUN_1, 2),
+            {"input": {}},
+            InvocationAttemptContext(_RUN_1, 2, session_id="session-1"),
         )
 
 
@@ -469,7 +498,7 @@ async def test_invocation_id_is_idempotency_key_for_every_mode() -> None:
 
 
 @pytest.mark.asyncio
-async def test_retry_remains_idempotent_when_proxy_does_not_forward_routing_key_header() -> None:
+async def test_invocation_id_retry_requires_the_same_session() -> None:
     calls = 0
 
     async def invoke(input, context):
@@ -483,14 +512,19 @@ async def test_retry_remains_idempotent_when_proxy_does_not_forward_routing_key_
             "/api/invocations",
             json={"id": _RUN_1, "input": "one"},
         )
-        client.headers.pop(_ROUTING_KEY_HEADER, None)
         replay = await client.post(
             "/api/invocations",
             json={"id": _RUN_1, "input": "one", "background": True},
         )
+        conflict = await client.post(
+            "/api/invocations",
+            json={"id": _RUN_1, "input": "one"},
+            headers={_ROUTING_KEY_HEADER: "session-2"},
+        )
 
     assert first.status_code == 200
     assert replay.status_code == 202
+    assert conflict.status_code == 409
     assert calls == 1
 
 

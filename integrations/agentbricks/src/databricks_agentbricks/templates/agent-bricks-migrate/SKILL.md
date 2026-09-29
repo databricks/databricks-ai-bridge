@@ -52,12 +52,14 @@ State and durability semantics differ by framework; handle the ones that apply:
   reference assumes message-oriented events and is not a generic serializer. Implement explicit
   mappings without discarding custom results to fit the reference UI.
 - **Identity and sessions:** Preserve authentication, actor/tenant isolation, and session/thread
-  identity. The reference separates invocation UUIDs, application session IDs, and the
-  `X-Routing-Key` sticky-routing header. Map existing IDs explicitly, including reopening sessions.
-  Derive actor identity from the trusted application context; do not blindly trust a caller field or adopt a shared
-  fallback. If the existing server used a different request/response shape (e.g. a
-  `{conversation_id, message}` body), map it explicitly in `runtime/adapter.py` to the runtime's
-  `input.session_id` / `input.messages`, and preserve response fields clients depend on.
+  identity. For the managed HTTP protocol, `X-Routing-Key` is the canonical Runtime and framework
+  session identity; the invocation UUID remains a separate per-turn idempotency key. Migrate
+  clients to choose and resend a stable routing key, including when reopening sessions. Do not put
+  `session_id` in invocation input or fall back to an invocation ID or generated session. Derive
+  actor identity from trusted application context; do not blindly trust a caller field or adopt a
+  shared fallback. If the existing server used a different request/response shape (for example,
+  `{conversation_id, message}`), map the message to `input.messages`, map the conversation ID to
+  `X-Routing-Key`, and preserve response fields clients depend on.
 - **Recovery and durability:** Distinguish Runtime Store invocation recovery from Session Store
   persistence. Address at-least-once side effects and retain stronger existing guarantees. Do not
   silently enable replay of non-idempotent tools.

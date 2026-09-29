@@ -33,6 +33,7 @@ from databricks_agentkit.runtime.types import (
 logger = logging.getLogger(__name__)
 
 _ROUTING_KEY_HEADER = "x-routing-key"
+_MAX_ROUTING_KEY_BYTES = 128
 _API_ROOT = "/api/invocations"
 
 
@@ -126,11 +127,18 @@ class DurableAgentServer(FastAPI):
         return function
 
     async def _bind_session(self, request: Request, call_next) -> Response:
-        # The standard sticky-routing header, X-Routing-Key, is forwarded to the app - unlike the
-        # routing cookie, which the platform consumes before forwarding - so we read it here.
-        # The invocation ID remains the deterministic session fallback in _invoke_request.
         request.state.session_id = request.headers.get(_ROUTING_KEY_HEADER)
         return await call_next(request)
+
+    @staticmethod
+    def _session_id(request: Request) -> str:
+        values = request.headers.getlist(_ROUTING_KEY_HEADER)
+        if len(values) != 1 or not values[0].strip():
+            raise HTTPException(422, "exactly one nonblank X-Routing-Key header is required")
+        session_id = values[0]
+        if len(session_id.encode("utf-8")) > _MAX_ROUTING_KEY_BYTES:
+            raise HTTPException(422, "X-Routing-Key must not exceed 128 UTF-8 bytes")
+        return session_id
 
     async def _execute(
         self,
@@ -140,9 +148,6 @@ class DurableAgentServer(FastAPI):
         if not isinstance(invocation_request, dict):
             raise TypeError("invocation request must be an object")
         session_id = attempt_context.session_id
-        if session_id is None:
-            legacy_session_id = invocation_request.get("session_id")
-            session_id = legacy_session_id if isinstance(legacy_session_id, str) else None
         if session_id is None or "input" not in invocation_request:
             raise TypeError("invocation attempt must contain session_id and input")
         invocation_id = attempt_context.invocation_id
@@ -191,19 +196,22 @@ class DurableAgentServer(FastAPI):
         request_auth = None
         registered_auth = False
         execution_owns_auth = False
-        session_id = request.state.session_id or invocation_id
         if self.auth_policy.requires_user:
             request_auth = RequestAuthContext.from_headers(request.headers)
+        try:
+            session_id = self._session_id(request)
+        except Exception:
+            if request_auth is not None:
+                request_auth.close()
+            raise
+        if request_auth is not None:
             runtime_invocation_id = request_auth.namespace("invocation", invocation_id)
             session_id = request_auth.namespace("session", session_id)
             existing_auth = self._request_auth.setdefault(runtime_invocation_id, request_auth)
             registered_auth = existing_auth is request_auth
             if not registered_auth:
                 request_auth.close()
-        invocation_request: JsonObject = {
-            "session_id": session_id,
-            "input": copy.deepcopy(body.input),
-        }
+        invocation_request: JsonObject = {"input": copy.deepcopy(body.input)}
         if self.auth_policy.requires_user:
             invocation_request["invocation_id"] = invocation_id
         try:

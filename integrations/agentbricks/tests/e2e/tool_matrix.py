@@ -662,18 +662,19 @@ class Runner:
     ) -> dict[str, Any]:
         last: Exception | None = None
         invocation_id = str(uuid.uuid4())
+        session_id = str(uuid.uuid4())
         body = {
             "id": invocation_id,
             "input": {
-                "session_id": invocation_id,
                 "messages": [{"role": "user", "content": prompt}],
             },
         }
+        request_headers = {**headers, "X-Routing-Key": session_id}
         for attempt in range(1, 4):
             try:
                 return _monitored(
                     label,
-                    lambda: _http_json(url, body, headers),
+                    lambda: _http_json(url, body, request_headers),
                     self.transcript,
                     timeout=360,
                 )
@@ -828,15 +829,14 @@ def _curl_command(invocation_url: str, prompt: str, authenticated: bool) -> str:
     body = json.dumps(
         {
             "id": "<client-generated-uuid>",
-            "input": {
-                "session_id": "<stable-session-id>",
-                "messages": [{"role": "user", "content": prompt}],
-            },
+            "input": {"messages": [{"role": "user", "content": prompt}]},
         }
     )
     return (
         f"curl -sS -X POST {shlex.quote(invocation_url)}"
-        f" -H 'Content-Type: application/json'{auth} --data {shlex.quote(body)}"
+        " -H 'Content-Type: application/json'"
+        " -H 'X-Routing-Key: <stable-session-id>'"
+        f"{auth} --data {shlex.quote(body)}"
     )
 
 

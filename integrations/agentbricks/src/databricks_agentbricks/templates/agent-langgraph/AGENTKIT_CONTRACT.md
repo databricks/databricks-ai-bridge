@@ -17,7 +17,7 @@ needs runtime wiring as well as manifest configuration.
 | `sessions bind` | Select the bound checkpointer and supply session/actor identity |
 | `memory bind` | Include bound, actor-scoped memory tools in definitions and execution |
 | `tracing bind`, `tracing unbind` | Initialize tracing and open a root span from resolved config |
-| `endpoint invoke` | An HTTP endpoint; the caller supplies its path and complete request body |
+| `endpoint invoke` | An HTTP endpoint; managed invocation callers also supply `--session-id`, which becomes `X-Routing-Key` |
 
 ### Project and startup
 
@@ -51,6 +51,10 @@ graph run. The helper selects the bound Session Store or an in-process saver; ex
 and environment overrides take precedence. It caches the saver per process, so restart after a
 binding change. The application state must be serializable by the selected saver.
 
+For the managed server, take `session_id` from `InvocationContext.session_id`. The server persists
+the required `X-Routing-Key` and restores it on every attempt, including recovery. Do not read a
+session from application input, derive it from the invocation ID, or generate a fallback.
+
 Include `memory_tools(actor)` in model and execution wiring. It returns no tools when unconfigured.
 Its closures capture actor identity, so never reuse them across users. The application owns trusted
 actor/tenant authentication; a payload field alone does not establish identity.
@@ -71,7 +75,9 @@ and register [runtime/adapter.py](runtime/adapter.py) hooks. Keep framework-nati
 The invoke hook translates opaque application input, runs the graph, translates native events,
 calls `await context.emit(event)`, and returns JSON output. DurableAgentServer owns foreground/background
 transport, polling, and replay. Invocation UUIDs differ from stable application session IDs; the
-`X-Routing-Key` sticky-routing header is not the application session.
+required `X-Routing-Key` is the canonical Runtime and LangGraph session identity as well as the
+sticky-routing key. It must be nonblank and at most 128 UTF-8 bytes. Framework-specific input does
+not contain `session_id`.
 
 The example assumes `messages` state and message/update events. Custom state, outputs, and
 interrupts require explicit mappings and must not be discarded to fit the example.

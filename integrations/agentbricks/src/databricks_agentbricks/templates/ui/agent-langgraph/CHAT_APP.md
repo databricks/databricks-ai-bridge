@@ -35,16 +35,17 @@ drops the configured default. Transient list failures are retried in
 `databricks_agentkit.runtime.model_services` before the fallback applies.
 
 The UI reads local history from the LangGraph checkpoint and managed history from Session Store
-items. It keeps a stable application session UUID in browser local storage, includes it inside
-every durable invocation's `input`, and sends it on every call in the `X-Routing-Key` request
-header to ensure sticky routing; each turn gets a separate invocation
-UUID.
+items. When a conversation starts, it creates a stable application session UUID in browser local
+storage and sends it as `X-Routing-Key` on every session-scoped request; each turn gets a separate
+invocation UUID. The header is the canonical Runtime and LangGraph session identity as well as the
+sticky-routing key. The invocation `input` does not contain `session_id`.
 
 The Sessions card creates new session UUIDs in the browser. With a managed Session Store,
 `GET /api/demo/sessions` lists the most recent sessions for the signed-in actor and each Open action
 calls `POST /api/demo/sessions/{session_id}/open`. Opening a session verifies ownership and reloads
-its transcript and pending LangGraph state. In local in-memory mode only the current browser session
-can be listed because there is no shared session index.
+its transcript and pending LangGraph state. Opening also switches the header used by later requests.
+In local in-memory mode only the current browser session can be listed because there is no shared
+session index.
 
 Transcript responses include only user, assistant, tool, system, and human-decision message items;
 checkpoint fragments remain in Session Store but are never returned to the chat UI.
