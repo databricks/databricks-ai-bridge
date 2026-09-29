@@ -532,10 +532,10 @@ agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
   --json "{\"id\":\"$INVOCATION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"stream\":true}"
 ```
 
-`--session-id` preserves one application session across calls by sending it in the `X-Routing-Key`
-request header, which pins the session to one app replica. It is a routing hint only and is not added
-to the request body - include the session id in `--json` if the app reads it from the body. This also works with a
-direct App URL and with the generated runtime on localhost. OAuth and session headers are managed by
+`--routing-key` keeps a session on one app replica (sticky routing): set it to your stable session id
+and it is sent verbatim in the `X-Routing-Key` request header. It is a routing hint only and is not
+added to the request body - include the session id in `--json` if the app reads it from the body. This
+also works with a direct App URL and with the generated runtime on localhost. OAuth and session headers are managed by
 the runtime; arbitrary custom request headers are intentionally not exposed by this command.
 
 ## Command help

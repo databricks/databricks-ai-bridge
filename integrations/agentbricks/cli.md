@@ -1119,7 +1119,7 @@ _Options_
 | `--query <QUERY>` | string | - | no | Query parameter as 'name=value'. |
 | `--json <JSON_VALUE>` | string | - | no | Complete JSON request body. |
 | `--sse` | flag | - | no | Consume the response as Server-Sent Events. |
-| `--session-id <SESSION_ID>` | string | - | no | Application session id, sent as the X-Routing-Key sticky-routing header (used verbatim; default: generated for a Databricks App). Not added to the request body - include the session id in --json if the app reads it from the body. |
+| `--routing-key <ROUTING_KEY>` | string | - | no | Sticky-routing key; set it to your stable session id to keep a session on one app replica. Sent verbatim as the X-Routing-Key header (default: generated for a Databricks App). Not added to the request body - include the session id in --json if the app reads it from the body. |
 | `--timeout <TIMEOUT>` | float range | `300.0` | no | - |
 | `--auth`, `--no-auth` | flag | - | no | Inject Databricks OAuth authentication. |
 

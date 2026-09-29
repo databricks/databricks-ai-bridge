@@ -62,13 +62,13 @@ def _platform_headers(
     *,
     authenticate: bool,
     profile: Optional[str],
-    session_id: str | None,
+    routing_key: str | None,
 ) -> dict[str, str]:
     headers: dict[str, str] = {}
     if authenticate:
         headers["Authorization"] = _authorization_header(profile)
-    if session_id:
-        headers[_ROUTING_KEY_HEADER] = session_id
+    if routing_key:
+        headers[_ROUTING_KEY_HEADER] = routing_key
     return headers
 
 
@@ -86,12 +86,12 @@ def endpoint() -> None:
 @click.option("--json", "json_value", default=None, help="Complete JSON request body.")
 @click.option("--sse", is_flag=True, help="Consume the response as Server-Sent Events.")
 @click.option(
-    "--session-id",
+    "--routing-key",
     default=None,
     help=(
-        "Application session id, sent as the X-Routing-Key sticky-routing header (used verbatim; "
-        "default: generated for a Databricks App). Not added to the request body - include the "
-        "session id in --json if the app reads it from the body."
+        "Sticky-routing key; set it to your stable session id to keep a session on one app replica. "
+        "Sent verbatim as the X-Routing-Key header (default: generated for a Databricks App). Not "
+        "added to the request body - include the session id in --json if the app reads it from the body."
     ),
 )
 @click.option("--timeout", type=click.FloatRange(min=0.1), default=300.0, show_default=True)
@@ -106,14 +106,14 @@ def invoke(
     query,
     json_value,
     sse,
-    session_id,
+    routing_key,
     timeout,
     auth,
 ) -> None:
     """Send one HTTP request to a Databricks App or arbitrary URL."""
     base_url, is_app = _resolve_endpoint(app, url, obj.profile)
     authenticate = is_app if auth is None else auth
-    session_id = session_id or (str(uuid4()) if is_app else None)
+    routing_key = routing_key or (str(uuid4()) if is_app else None)
     request = build_request(
         base_url=base_url,
         method=method,
@@ -130,7 +130,7 @@ def invoke(
             **_platform_headers(
                 authenticate=authenticate,
                 profile=obj.profile,
-                session_id=session_id,
+                routing_key=routing_key,
             ),
         },
     )
