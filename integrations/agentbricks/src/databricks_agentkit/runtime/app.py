@@ -32,7 +32,6 @@ from databricks_agentkit.runtime.types import (
 
 logger = logging.getLogger(__name__)
 
-_ROUTING_KEY_HEADER = "x-routing-key"
 _API_ROOT = "/api/invocations"
 
 
@@ -102,7 +101,6 @@ class DurableAgentServer(FastAPI):
             openapi_url=None,
         )
         self.add_exception_handler(AuthError, self._auth_error)
-        self.middleware("http")(self._bind_session)
         self.add_api_route(_API_ROOT, self._invoke_request, methods=["POST"])
         self.add_api_route(f"{_API_ROOT}/{{invocation_id}}", self._get_request, methods=["GET"])
         self.add_api_route(
@@ -124,13 +122,6 @@ class DurableAgentServer(FastAPI):
             raise ValueError("a recovery handler is already registered")
         self._recovery_hook = function
         return function
-
-    async def _bind_session(self, request: Request, call_next) -> Response:
-        # The standard sticky-routing header, X-Routing-Key, is forwarded to the app - unlike the
-        # routing cookie, which the platform consumes before forwarding - so we read it here.
-        # The invocation ID remains the deterministic session fallback in _invoke_request.
-        request.state.session_id = request.headers.get(_ROUTING_KEY_HEADER)
-        return await call_next(request)
 
     async def _execute(
         self,
@@ -188,7 +179,9 @@ class DurableAgentServer(FastAPI):
         request_auth = None
         registered_auth = False
         execution_owns_auth = False
-        session_id = request.state.session_id or invocation_id
+        # X-Routing-Key is routing-only (the platform handles replica affinity); the application
+        # session id comes from the request body, else the invocation id.
+        session_id = invocation_id
         if self.auth_policy.requires_user:
             request_auth = RequestAuthContext.from_headers(request.headers)
             runtime_invocation_id = request_auth.namespace("invocation", invocation_id)

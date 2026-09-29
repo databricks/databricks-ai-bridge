@@ -533,8 +533,8 @@ agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
 ```
 
 `--routing-key` keeps a session on one app replica (sticky routing): set it to your stable session id
-and it is sent verbatim in the `X-Routing-Key` request header. It is a routing hint only and is not
-added to the request body - include the session id in `--json` if the app reads it from the body. This
+and it is sent verbatim in the `X-Routing-Key` request header. It is routing only and is never used
+as the session id - put the session id in the `--json` body for session continuity. This
 also works with a direct App URL and with the generated runtime on localhost. OAuth and session headers are managed by
 the runtime; arbitrary custom request headers are intentionally not exposed by this command.
 

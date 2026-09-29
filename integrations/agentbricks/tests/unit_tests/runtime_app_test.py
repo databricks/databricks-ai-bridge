@@ -67,7 +67,7 @@ async def poll(client: httpx.AsyncClient, invocation_id: str) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_routing_key_header_is_the_only_session_source() -> None:
+async def test_routing_key_header_is_not_used_as_session_id() -> None:
     async def invoke(input, context):
         return {
             "received": input,
@@ -83,6 +83,7 @@ async def test_routing_key_header_is_the_only_session_source() -> None:
             headers={_ROUTING_KEY_HEADER: "session-1"},
         )
 
+    # The header only routes; with no body session_id the session falls back to the invocation id.
     assert response.status_code == 200
     assert response.json() == {
         "id": _RUN_1,
@@ -90,8 +91,40 @@ async def test_routing_key_header_is_the_only_session_source() -> None:
         "output": {
             "received": "hello",
             "invocation_id": _RUN_1,
-            "session_id": "session-1",
+            "session_id": _RUN_1,
         },
+    }
+
+
+@pytest.mark.asyncio
+async def test_body_session_id_reaches_the_handler_and_the_header_is_ignored() -> None:
+    async def invoke(input, context):
+        # Mirrors the framework adapters: the body session_id wins, else context.session_id.
+        return {
+            "session_id": input.get("session_id") or context.session_id,
+            "context_session_id": context.session_id,
+        }
+
+    app = make_app(invoke)
+    async with running_client(app) as client:
+        with_body = await client.post(
+            "/api/invocations",
+            json={"id": _RUN_1, "input": {"session_id": "body-session"}},
+            headers={_ROUTING_KEY_HEADER: "header-session"},
+        )
+        without_body = await client.post(
+            "/api/invocations",
+            json={"id": _RUN_2, "input": {}},
+            headers={_ROUTING_KEY_HEADER: "header-session"},
+        )
+
+    assert with_body.json()["output"] == {
+        "session_id": "body-session",
+        "context_session_id": _RUN_1,
+    }
+    assert without_body.json()["output"] == {
+        "session_id": _RUN_2,
+        "context_session_id": _RUN_2,
     }
 
 
