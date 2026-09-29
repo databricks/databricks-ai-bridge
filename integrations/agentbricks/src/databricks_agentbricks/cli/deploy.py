@@ -526,7 +526,10 @@ def deploy(
     session automatically stays on one instance.
 
     \b
-    API clients that need it must resend a stable UUID in this request header every request:
+    To keep a session on one app replica (sticky routing), API clients must resend a stable
+    UUID (for example, their session id) in the X-Routing-Key request header on every request.
+    The header is a routing hint only - non-blank, no more than 128 UTF-8 bytes, used verbatim -
+    not authentication and not the session id itself (send the session id in the request body):
       X-Routing-Key: <uuid>
     """
     source_dir = pathlib.Path(source)

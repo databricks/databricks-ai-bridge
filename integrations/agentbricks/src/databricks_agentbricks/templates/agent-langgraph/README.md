@@ -118,8 +118,11 @@ When deployment provisions a dedicated Runtime Store, only the app-owned
 `databricks_agentkit_runtime_<hash>` schema and runtime tables are added. Managed Runtime Store
 deployments use their own default schema.
 
-To pin a session to one app replica, send the session id in the `X-Routing-Key` request header on
-every call. It is not authentication and is not used as the template's application session ID.
+To keep a session on one app replica (sticky routing), set the `X-Routing-Key` request header to your
+stable session id on every call. It is a routing hint only: non-blank, no more than 128 UTF-8 bytes,
+used verbatim, and it takes precedence over the legacy `__Host-databricks-app-router` cookie. It is not
+authentication and is not the application's session id - send the session id in the request body; the
+runtime uses the header value as the session id only as a fallback when the body omits one.
 
 # Request-user authorization
 

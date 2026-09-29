@@ -955,7 +955,7 @@ Any memory/session store declared in agent.toml (for example, by `agentbricks me
 
 Scaling to multiple instances (--instances) uses best-effort sticky routing, so a browser session automatically stays on one instance.
 
-API clients that need it must resend a stable UUID in this request header every request: X-Routing-Key: <uuid>
+To keep a session on one app replica (sticky routing), API clients must resend a stable UUID (for example, their session id) in the `X-Routing-Key` request header on every request. The header is a routing hint only - non-blank, no more than 128 UTF-8 bytes, used verbatim - not authentication and not the session id itself (send the session id in the request body). Example: `X-Routing-Key: <uuid>`
 
 ```
 agentbricks deploy [NAME] [options]
