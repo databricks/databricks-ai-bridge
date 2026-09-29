@@ -26,9 +26,13 @@ mapping changes needed in `runtime/adapter.py`.
 agentbricks dev
 ```
 
-The API is available at `http://localhost:8000/api/invocations`. Every request supplies a UUID `id`.
-That ID is the invocation identifier and idempotency key. Agent-specific values live inside the
-opaque `input` object:
+The API is available at `http://localhost:8000/api/invocations`, or on the port you pass with
+`--app-port`. The `http://localhost:8001` URL that `databricks apps run-local` also prints is its
+local proxy to the same app. Requests fail for a few seconds while the server starts (the proxy
+returns HTTP 500); wait for `Uvicorn running on ...` in the log.
+
+Every request supplies a UUID `id`. That ID is the invocation identifier and idempotency key.
+Agent-specific values live inside the opaque `input` object:
 
 ```bash
 SESSION_ID=$(uuidgen)

@@ -126,6 +126,16 @@ agentbricks deploy my-agent     # deploy to Databricks
 `agentbricks dev` runs the agent locally on `http://localhost:8000`, wrapping the Databricks Apps
 local runtime so local behavior matches a deployment.
 
+The app listens on `--app-port` (default 8000); use the `Chat UI` or `Invoke` URL that
+`agentbricks dev` prints. The wrapped `databricks apps run-local` also prints
+`To access your app go to http://localhost:8001`: that is its local proxy, which forwards to the
+same app and adds your profile's identity as forwarded-user headers. If the app port is already in
+use, there is no fallback: the app exits with `address already in use` and `agentbricks dev`
+reports `Could not start the agent locally.`, so pass a free `--app-port`. While the app starts (a
+few seconds, longer on the first run while the environment builds), the app port refuses
+connections and the 8001 proxy returns HTTP 500. That is expected; retry once the log shows
+`Uvicorn running on ...`.
+
 `agentbricks deploy my-agent` deploys a Databricks App named `agent-bricks-my-agent`, provisions the
 stores declared in `agent.toml`, and grants the app's service principal access to them. Use
 `agentbricks deployments list` to find deployed apps, and `agentbricks deployments get agent-bricks-my-agent` to
