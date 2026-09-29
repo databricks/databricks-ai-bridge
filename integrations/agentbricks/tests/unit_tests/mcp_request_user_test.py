@@ -73,7 +73,9 @@ def adapter(request, monkeypatch):
     sys.modules.pop(module_name, None)
 
 
-def tool(auth=None, kind="mcp", name="search", *, downscope=(), databricks_access_token_included=False):
+def tool(
+    auth=None, kind="mcp", name="search", *, downscope=(), databricks_access_token_included=False
+):
     return SimpleNamespace(
         id=name,
         kind=kind,
