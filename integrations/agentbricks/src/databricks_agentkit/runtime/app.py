@@ -133,7 +133,7 @@ class DurableAgentServer(FastAPI):
     @staticmethod
     def _session_id(request: Request) -> str:
         values = request.headers.getlist(_ROUTING_KEY_HEADER)
-        if len(values) != 1 or not values[0].strip():
+        if len(values) != 1 or not values[0].strip() or "," in values[0]:
             raise HTTPException(422, "exactly one nonblank X-Routing-Key header is required")
         session_id = values[0]
         if len(session_id.encode("utf-8")) > _MAX_ROUTING_KEY_BYTES:

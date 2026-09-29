@@ -556,3 +556,15 @@ def test_open_session_rejects_another_actor(monkeypatch):
     response = client.post("/api/demo/sessions/s2/open")
     assert response.status_code == 403
     assert response.json()["detail"] == "Session belongs to another actor."
+
+
+@pytest.mark.parametrize("session_id", [None, "", "   ", "one,two", "a" * 129])
+def test_ui_rejects_invalid_routing_key(monkeypatch, session_id):
+    client = _client(monkeypatch)
+    del client.headers["X-Routing-Key"]
+    headers = {} if session_id is None else {"X-Routing-Key": session_id}
+
+    response = client.get("/api/ui/config", headers=headers)
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "exactly one nonblank X-Routing-Key header is required"}

@@ -23,6 +23,7 @@ _UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
 _INSTANCE_ID = uuid.uuid4().hex[:12]  # identifies this process in the UI
 _AGENTS_API = "/api/2.0/agents"
 _ROUTING_KEY_HEADER = "x-routing-key"
+_MAX_ROUTING_KEY_BYTES = 128
 _MESSAGE_ROLES = {
     "ai",
     "assistant",
@@ -84,10 +85,18 @@ def _request_actor(request: Request) -> str:
 
 def _request_session_id(request: Request) -> str:
     """Read the chat session selected by the browser."""
-    session_id = request.headers.get(_ROUTING_KEY_HEADER)
-    if not session_id:
-        raise HTTPException(status_code=400, detail="X-Routing-Key is required")
-    return str(session_id)
+    values = request.headers.getlist(_ROUTING_KEY_HEADER)
+    if (
+        len(values) != 1
+        or not values[0].strip()
+        or "," in values[0]
+        or len(values[0].encode("utf-8")) > _MAX_ROUTING_KEY_BYTES
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="exactly one nonblank X-Routing-Key header is required",
+        )
+    return values[0]
 
 
 def _is_deployed() -> bool:

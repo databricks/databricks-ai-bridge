@@ -147,6 +147,20 @@ async def test_duplicate_routing_keys_are_rejected() -> None:
 
 
 @pytest.mark.asyncio
+async def test_proxy_folded_routing_keys_are_rejected() -> None:
+    app = make_app()
+    async with running_client(app, session_id=None) as client:
+        response = await client.post(
+            "/api/invocations",
+            json={"id": _RUN_1},
+            headers={_ROUTING_KEY_HEADER: "one,two"},
+        )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "exactly one nonblank X-Routing-Key header is required"}
+
+
+@pytest.mark.asyncio
 async def test_body_session_and_resume_metadata_are_rejected() -> None:
     app = make_app()
     async with running_client(app) as client:

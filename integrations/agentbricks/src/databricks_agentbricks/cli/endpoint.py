@@ -107,8 +107,12 @@ def invoke(
     auth,
 ) -> None:
     """Send one HTTP request to a Databricks App or arbitrary URL."""
-    if session_id is not None and (not session_id.strip() or len(session_id.encode("utf-8")) > 128):
-        raise AgentCliError("--session-id must be nonblank and at most 128 UTF-8 bytes.")
+    if session_id is not None and (
+        not session_id.strip() or "," in session_id or len(session_id.encode("utf-8")) > 128
+    ):
+        raise AgentCliError(
+            "--session-id must be nonblank, contain no commas, and be at most 128 UTF-8 bytes."
+        )
     base_url, is_app = _resolve_endpoint(app, url, obj.profile)
     authenticate = is_app if auth is None else auth
     request = build_request(

@@ -172,7 +172,7 @@ def test_managed_invocation_requires_explicit_session(monkeypatch):
     assert "--session-id is required for POST /api/invocations" in result.output
 
 
-@pytest.mark.parametrize("session_id", ["", "   ", "é" * 65])
+@pytest.mark.parametrize("session_id", ["", "   ", "one,two", "é" * 65])
 def test_invalid_session_id_is_rejected(session_id):
     result = CliRunner().invoke(
         endpoint,
@@ -189,7 +189,10 @@ def test_invalid_session_id_is_rejected(session_id):
     )
 
     assert result.exit_code != 0
-    assert "--session-id must be nonblank and at most 128 UTF-8 bytes" in result.output
+    assert (
+        "--session-id must be nonblank, contain no commas, and be at most 128 UTF-8 bytes"
+        in " ".join(result.output.split())
+    )
 
 
 def test_invoke_url_uses_explicit_routing_session_without_auth(monkeypatch):
