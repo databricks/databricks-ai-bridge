@@ -340,16 +340,15 @@ async def test_agent_failure_returns_500_and_failed_event() -> None:
 
 
 @pytest.mark.asyncio
-async def test_authorization_failure_returns_browser_login_url() -> None:
+async def test_mcp_permission_failure_returns_safe_error() -> None:
     from databricks_agentkit.runtime.auth import AuthError
 
     async def fail(input, context):
         raise AuthError(
-            "MCP_AUTHORIZATION_REQUIRED",
-            "Authorize the configured service in Databricks before retrying.",
-            401,
-            "slack_user",
-            "https://workspace.example/mcp-service-login?name=system.ai.slack",
+            "MCP_PERMISSION_DENIED",
+            "MCP permission denied.",
+            403,
+            "sandbox",
         )
 
     app = make_app(fail)
@@ -358,12 +357,11 @@ async def test_authorization_failure_returns_browser_login_url() -> None:
         state = await client.get(f"/api/invocations/{_RUN_1}")
 
     expected_error = {
-        "code": "MCP_AUTHORIZATION_REQUIRED",
-        "message": "Authorize the configured service in Databricks before retrying.",
-        "integration_id": "slack_user",
-        "authorization_url": "https://workspace.example/mcp-service-login?name=system.ai.slack",
+        "code": "MCP_PERMISSION_DENIED",
+        "message": "MCP permission denied.",
+        "integration_id": "sandbox",
     }
-    assert response.status_code == 401
+    assert response.status_code == 403
     assert response.json() == {"error": expected_error}
     assert state.json() == {"id": _RUN_1, "status": "failed", "error": expected_error}
 

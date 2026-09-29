@@ -33,7 +33,6 @@ from databricks_agentkit.runtime.workspace import mcp_headers, workspace_client
 
 _FRAMEWORK = "openai"
 _auth_error = mcp_auth.mcp_auth_error
-_auth_error_for_server = mcp_auth.mcp_auth_error_for_server
 _tool_error = mcp_auth.mcp_tool_error
 
 
@@ -42,17 +41,12 @@ class _ConfiguredMcpServer(McpServer):
 
     def __init__(self, *args: Any, request_user: bool, **kwargs: Any) -> None:
         self._agentbricks_request_user = request_user
-        server_url = kwargs.get("url")
-        params = kwargs.get("params")
-        if not isinstance(server_url, str) and isinstance(params, dict):
-            server_url = params.get("url")
-        self._agentbricks_server_url = server_url if isinstance(server_url, str) else ""
         if request_user:
             kwargs["failure_error_function"] = self._raise_tool_error
         super().__init__(*args, **kwargs)
 
     def _raise_tool_error(self, context: Any, error: Exception) -> str:
-        raise _auth_error_for_server(error, self.name, self._agentbricks_server_url) or AuthError(
+        raise _auth_error(error, self.name) or AuthError(
             "MCP_TOOL_FAILED", "The configured MCP tool failed.", 502, self.name
         ) from None
 
@@ -62,9 +56,7 @@ class _ConfiguredMcpServer(McpServer):
         try:
             return await super().connect()
         except Exception as error:
-            raise _auth_error_for_server(
-                error, self.name, self._agentbricks_server_url
-            ) or AuthError(
+            raise _auth_error(error, self.name) or AuthError(
                 "MCP_TOOL_FAILED",
                 "Could not connect to the configured MCP service.",
                 502,
@@ -77,9 +69,7 @@ class _ConfiguredMcpServer(McpServer):
         try:
             return await super().list_tools(*args, **kwargs)
         except Exception as error:
-            raise _auth_error_for_server(
-                error, self.name, self._agentbricks_server_url
-            ) or AuthError(
+            raise _auth_error(error, self.name) or AuthError(
                 "MCP_TOOL_FAILED", "Could not discover configured MCP tools.", 502, self.name
             ) from None
 
@@ -90,14 +80,10 @@ class _ConfiguredMcpServer(McpServer):
             call = getattr(McpServer.call_tool, "__wrapped__", McpServer.call_tool)
             result = await call(self, tool_name, arguments, **kwargs)
         except Exception as error:
-            raise _auth_error_for_server(
-                error, self.name, self._agentbricks_server_url
-            ) or AuthError(
+            raise _auth_error(error, self.name) or AuthError(
                 "MCP_TOOL_FAILED", "The configured MCP tool failed.", 502, self.name
             ) from None
-        if getattr(result, "isError", False) and (
-            error := _tool_error(result, self.name, self._agentbricks_server_url)
-        ):
+        if getattr(result, "isError", False) and (error := _tool_error(result, self.name)):
             raise error
         return result
 

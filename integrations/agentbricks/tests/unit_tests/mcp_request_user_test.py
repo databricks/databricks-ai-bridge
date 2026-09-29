@@ -305,42 +305,14 @@ def test_sdk_permission_type_is_classified(adapter):
     assert error.code == "MCP_PERMISSION_DENIED"
 
 
-def test_mcp_oauth_registration_failure_requests_service_authorization(adapter):
+def test_oauth_registration_failure_is_not_a_sandbox_browser_challenge(adapter):
     oauth_registration_error = type(
         "OAuthRegistrationError",
         (RuntimeError,),
         {"__module__": "mcp.client.auth.exceptions"},
     )
 
-    error = adapter._auth_error(
-        oauth_registration_error("Registration failed: 404"),
-        "slack_user",
-    )
-
-    assert error is not None
-    assert error.code == "MCP_AUTHORIZATION_REQUIRED"
-    assert error.status_code == 401
-    assert error.integration_id == "slack_user"
-    assert str(error) == "Authorize the configured service in Databricks before retrying."
-
-
-def test_mcp_oauth_registration_failure_includes_browser_login_url(adapter):
-    oauth_registration_error = type(
-        "OAuthRegistrationError",
-        (RuntimeError,),
-        {"__module__": "mcp.client.auth.exceptions"},
-    )
-
-    error = adapter._auth_error_for_server(
-        oauth_registration_error("Registration failed: 404"),
-        "slack_user",
-        "https://workspace.example/ai-gateway/mcp-services/system.ai.slack",
-    )
-
-    assert error is not None
-    assert error.payload()["authorization_url"] == (
-        "https://workspace.example/mcp-service-login?name=system.ai.slack"
-    )
+    assert adapter._auth_error(oauth_registration_error("Registration failed"), "sandbox") is None
 
 
 def test_tool_result_permission_errors_are_not_model_results(adapter, monkeypatch):
@@ -360,60 +332,6 @@ def test_tool_result_permission_errors_are_not_model_results(adapter, monkeypatc
     with pytest.raises(AuthError) as raised:
         asyncio.run(invoke)
     assert raised.value.code == "MCP_PERMISSION_DENIED"
-    assert "secret" not in str(raised.value)
-
-
-def test_tool_result_authorization_challenge_includes_browser_login_url(adapter, monkeypatch):
-    from databricks_agentkit.runtime.auth import AuthError
-
-    result = SimpleNamespace(
-        isError=True,
-        structuredContent={"error": {"code": -32042, "message": "secret"}},
-    )
-    if adapter.__name__.endswith("openai.mcp"):
-        monkeypatch.setattr(FakeServer, "call_tool", AsyncMock(return_value=result))
-        invoke = adapter._server_from_tool(tool("user")).call_tool("search", {})
-    else:
-        server = adapter._server_from_tool(tool("user"))
-        client = adapter.mcp_client([server], tools=(tool("user"),))
-        request = SimpleNamespace(server_name="search", name="search", args={})
-        invoke = client.interceptors[0](request, AsyncMock(return_value=result))
-
-    with pytest.raises(AuthError) as raised:
-        asyncio.run(invoke)
-
-    assert raised.value.code == "MCP_AUTHORIZATION_REQUIRED"
-    assert raised.value.payload()["authorization_url"] == (
-        "https://workspace/mcp-service-login?name=system.ai.search"
-    )
-    assert "secret" not in str(raised.value)
-
-
-def test_langgraph_call_time_authorization_failure_includes_browser_login_url(adapter, monkeypatch):
-    if not adapter.__name__.endswith("langgraph.mcp"):
-        pytest.skip("LangGraph interceptor")
-    from databricks_agentkit.runtime.auth import AuthError
-
-    oauth_registration_error = type(
-        "OAuthRegistrationError",
-        (RuntimeError,),
-        {"__module__": "mcp.client.auth.exceptions"},
-    )
-    server = adapter._server_from_tool(tool("user"))
-    client = adapter.mcp_client([server], tools=(tool("user"),))
-    request = SimpleNamespace(server_name="search", name="search", args={})
-    invoke = client.interceptors[0](
-        request,
-        AsyncMock(side_effect=oauth_registration_error("Registration failed: secret")),
-    )
-
-    with pytest.raises(AuthError) as raised:
-        asyncio.run(invoke)
-
-    assert raised.value.code == "MCP_AUTHORIZATION_REQUIRED"
-    assert raised.value.payload()["authorization_url"] == (
-        "https://workspace/mcp-service-login?name=system.ai.search"
-    )
     assert "secret" not in str(raised.value)
 
 

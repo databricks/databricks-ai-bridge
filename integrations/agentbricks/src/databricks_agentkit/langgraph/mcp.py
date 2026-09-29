@@ -28,7 +28,6 @@ from databricks_agentkit.runtime.workspace import mcp_headers, workspace_client
 
 logger = logging.getLogger(__name__)
 _auth_error = mcp_auth.mcp_auth_error
-_auth_error_for_server = mcp_auth.mcp_auth_error_for_server
 _tool_error = mcp_auth.mcp_tool_error
 
 
@@ -89,17 +88,14 @@ def _sandbox_interceptor(
     tools: tuple[ToolRecord, ...],
     *,
     workspace_client_for: mcp_auth.WorkspaceClientResolver | None = None,
-    server_urls: dict[str, str] | None = None,
 ):
     declared = {tool.id: tool for tool in tools}
-    configured_server_urls = server_urls or {}
 
     async def interceptor(request: Any, handler: Any) -> Any:
         tool = declared.get(request.server_name)
         if tool is None:
             return await handler(request)
         request_user = tool.auth == "user"
-        server_url = configured_server_urls.get(tool.id, "")
         try:
             if tool.kind == "sandbox":
                 server = _server_from_tool(tool, workspace_client_for=workspace_client_for)
@@ -116,19 +112,14 @@ def _sandbox_interceptor(
                 result = await handler(request)
         except Exception as error:
             if request_user:
-                classified = (
-                    _auth_error_for_server(error, tool.id, server_url)
-                    if server_url
-                    else _auth_error(error, tool.id)
-                )
-                raise classified or AuthError(
+                raise _auth_error(error, tool.id) or AuthError(
                     "MCP_TOOL_FAILED", "The configured MCP tool failed.", 502, tool.id
                 ) from None
             raise
         if (
             request_user
             and getattr(result, "isError", False)
-            and (error := _tool_error(result, tool.id, server_url))
+            and (error := _tool_error(result, tool.id))
         ):
             raise error
         return result
@@ -150,13 +141,7 @@ def mcp_client(
     """
     snapshot = tuple(load_tools(expected_framework="langgraph")) if tools is None else tools
     interceptors = (
-        [
-            _sandbox_interceptor(
-                snapshot,
-                workspace_client_for=workspace_client_for,
-                server_urls={server.name: server.url for server in servers},
-            )
-        ]
+        [_sandbox_interceptor(snapshot, workspace_client_for=workspace_client_for)]
         if snapshot
         else []
     )
@@ -195,7 +180,7 @@ async def mcp_tools(
                 return await client.get_tools(server_name=server.name)
             except Exception as error:
                 if server.name in request_user:
-                    raise _auth_error_for_server(error, server.name, server.url) or AuthError(
+                    raise _auth_error(error, server.name) or AuthError(
                         "MCP_TOOL_FAILED",
                         "Could not discover configured MCP tools.",
                         502,
