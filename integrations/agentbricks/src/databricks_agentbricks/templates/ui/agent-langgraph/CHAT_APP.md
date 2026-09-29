@@ -45,5 +45,13 @@ calls `POST /api/demo/sessions/{session_id}/open`. Opening a session verifies ow
 its transcript and pending LangGraph state. In local in-memory mode only the current browser session
 can be listed because there is no shared session index.
 
+Every invocation also carries `input.actor`, the key for long-term memory. The UI sets it to the
+signed-in user from the `X-Forwarded-Email` (or `X-Forwarded-User`) header that Databricks Apps
+adds, so memory carries across that user's chat sessions; without those headers, such as on the app
+port `agentbricks dev` prints, the actor is `agent`. The Memory and Sessions panels query the same
+raw value. With a request-user (`auth = "user"`) tool bound, the agent adapter namespaces the actor
+and session ID to the signed-in user before writing, so those panels don't list what the agent
+wrote.
+
 Transcript responses include only user, assistant, tool, system, and human-decision message items;
 checkpoint fragments remain in Session Store but are never returned to the chat UI.

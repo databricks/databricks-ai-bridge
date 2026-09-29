@@ -228,11 +228,19 @@ Each managed run is an **invocation**. Send a client-generated UUID `id` and you
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
-  "input": {"messages": [{"role": "user", "content": "Hello"}]},
+  "input": {
+    "session_id": "case-456",
+    "actor": "user-123",
+    "messages": [{"role": "user", "content": "Hello"}]
+  },
   "background": true,
   "stream": true
 }
 ```
+
+`input` is opaque to the runtime. The framework templates read `session_id` (which conversation) and
+`actor` (whose long-term memory) from it; omit `actor` and memory won't carry across conversations
+(see [How sessions and memory are keyed](#how-sessions-and-memory-are-keyed)).
 
 | Endpoint | Behavior |
 | --- | --- |
@@ -287,6 +295,53 @@ The examples below use the [`AgentKitClient` Python SDK](#agentkit-sdk); the sam
 as `agentbricks sessions` / `agentbricks memory` CLI commands.
 
 ![Sessions and memory: the agent reads and appends one conversation's transcript in the session store, and recalls and saves durable facts in the memory store, which outlive any single conversation.](docs/sessions_and_memory.png)
+
+### How sessions and memory are keyed
+
+The two stores are keyed by different identities, and the framework templates read both from the
+invocation's `input`:
+
+- **Session store** — one conversation's transcript and state, keyed by `session_id`.
+- **Memory store** — durable facts recalled across conversations, keyed by `actor` (stored as
+  `actor_id`).
+
+If you don't pass `actor`, it defaults to the `session_id`, so long-term memory will **not** carry
+across sessions. For cross-session memory, pass a stable `actor` (e.g. the end user's ID). If you
+omit `session_id` too, the runtime falls back to the `__Host-databricks-app-router` cookie when the
+app receives one, and otherwise to the invocation `id`, so every call is a new session and a new
+actor.
+
+How the templates' `runtime/adapter.py` applies `actor` depends on the invocation's auth:
+
+- **App/default identity** (no managed tool with `auth = "user"`; the `agentbricks init` default):
+  `actor` is used verbatim as the store's `actor_id`. Any caller that can reach the app can pass any
+  `actor`, so set it from trusted application context.
+- **Request-user (OBO)** (any managed tool with `auth = "user"`): the adapter hashes `actor` and
+  `session_id` with the signed-in user's forwarded identity and the app before they reach the
+  stores. Memory still carries across sessions only when you pass the same `actor`, but it stays
+  private to that user: two users sending the same `actor` get separate partitions, and the stored
+  `actor_id` is the hash, not the value you sent.
+
+The bundled chat app sends the signed-in user (the `X-Forwarded-Email` header Databricks Apps adds)
+as `actor`, so its memory carries across that user's chat sessions. HTTP clients, including
+`agentbricks endpoint invoke`, must send `actor` themselves. Memory is off under `agentbricks dev`,
+so try this against a deployed agent:
+
+```sh
+ACTOR=user-123  # a stable end-user ID from your application, not a per-conversation value
+
+# Conversation 1: the agent saves a fact with its memory tool.
+agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
+  --path /api/invocations \
+  --json "{\"id\":\"$(uuidgen)\",\"input\":{\"session_id\":\"$(uuidgen)\",\"actor\":\"$ACTOR\",\"messages\":[{\"role\":\"user\",\"content\":\"Remember that I prefer answers as bullet points.\"}]}}"
+
+# Conversation 2: a new session_id with the same actor, so the agent can recall the fact.
+agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
+  --path /api/invocations \
+  --json "{\"id\":\"$(uuidgen)\",\"input\":{\"session_id\":\"$(uuidgen)\",\"actor\":\"$ACTOR\",\"messages\":[{\"role\":\"user\",\"content\":\"How do I like my answers formatted?\"}]}}"
+```
+
+Drop `actor` from the second call and it runs as a new actor, so recall comes back empty.
 
 ### Sessions
 
@@ -378,12 +433,14 @@ To browse rather than search, `memory_store.list(actor_id=..., path_prefix=...)`
 directly.
 
 In an agent configured with `server = "agentbricks"`, add the memory tools so the model can read and write memory during a run.
-`memory_tools(actor)` exposes `remember` and `recall` bound to one actor's partition; it resolves the
+`memory_tools(actor)` exposes `remember` and `recall` bound to one actor's partition; the templates
+pass the invocation's `input.actor`, which defaults to the session ID (see
+[How sessions and memory are keyed](#how-sessions-and-memory-are-keyed)). It resolves the
 store from the `[memory_store]` binding, carried to the runtime by the `AGENT_MEMORY_STORE` env var
 that `agentbricks deploy` injects, and returns no tools when no store is set, so the agent runs unchanged.
 That "no store set" path is also how it runs under `agentbricks dev`, which runs locally: memory is off
 there (the store is provisioned and used only at deploy). The OpenAI Agents adapter exposes the same as
-`memory_tools()`:
+`memory_tools(actor)`:
 
 ```python
 from databricks_agentkit.langgraph import memory_tools
@@ -507,9 +564,11 @@ agent protocol: provide the method, path, query parameters, and complete JSON bo
 server.
 
 ```sh
+# input.actor keys long-term memory; without it, memory is per session_id
+# (see "How sessions and memory are keyed").
 agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
   --path /api/invocations \
-  --json '{"id":"00000000-0000-4000-8000-000000000001","input":[{"role":"user","content":"Hello"}]}'
+  --json '{"id":"00000000-0000-4000-8000-000000000001","input":{"session_id":"case-456","actor":"user-123","messages":[{"role":"user","content":"Hello"}]}}'
 
 agentbricks endpoint invoke --url http://localhost:8000 \
   --path /api/invocations \
@@ -846,7 +905,9 @@ via the `AGENT_MEMORY_STORE` env var that `deploy` injects; `agentbricks dev` ru
 and does not inject it. The id is not persisted in `agent.toml`.)
 
 The chat UI generates a stable application session UUID in browser local storage, places it inside
-the invocation's opaque `input`, and creates a fresh invocation UUID per turn. The
+the invocation's opaque `input`, and creates a fresh invocation UUID per turn. It also sends the
+signed-in user as `input.actor`, so memory carries across that user's chat sessions (see
+[How sessions and memory are keyed](#how-sessions-and-memory-are-keyed)). The
 `__Host-databricks-app-router` cookie remains independent: API clients may reuse it for sticky
 replica routing, but it is neither authentication nor the template's application session state.
 
