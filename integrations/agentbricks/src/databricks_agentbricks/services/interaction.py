@@ -1,3 +1,12 @@
+"""The user-interaction boundary a service talks through.
+
+Defines the :class:`Reporter` and :class:`Prompter` protocols - the only way ``DeployService``
+touches the terminal. Progress, notices, and primary output go out through the reporter; the one
+destructive-verb confirmation comes back through the prompter. Both are CLI-framework-agnostic
+protocols, implemented by an adapter (e.g. a Click/rich presenter), so the core business logic never
+imports click or any render layer.
+"""
+
 from __future__ import annotations
 
 from contextlib import AbstractContextManager

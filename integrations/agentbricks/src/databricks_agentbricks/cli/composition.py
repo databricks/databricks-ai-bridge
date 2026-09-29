@@ -30,13 +30,12 @@ def build_deploy_service(obj) -> DeployService:
     runner = _databricks
     return DeployService(
         project=ProjectResolver(),
-        apps=AppsClient(obj.profile, runner=runner),
+        apps_client=AppsClient(obj.profile, runner=runner),
         stores_factory=StoreProvisioner,
         manifest=ManifestManager(),
         tracing=TracingProvisioner(obj.profile),
         runtime_store=RuntimeStoreProvisioner(obj.profile),
         client_factory=obj.client,
-        runner=runner,
         profile=obj.profile,
         reporter=ClickReporter(),
         prompter=ClickPrompter(),

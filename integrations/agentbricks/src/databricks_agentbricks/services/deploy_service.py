@@ -19,13 +19,12 @@ pre-flight failure never opens a workspace client.
 
 from __future__ import annotations
 
-import json
 import pathlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
-from databricks_agentbricks.apps_client import AppsClient, DatabricksRunner
+from databricks_agentbricks.apps_client import AppsClient
 from databricks_agentbricks.deployment import (
     _AGENT_COMPUTE_OUTPUT,
     _AGENTKIT_RUNTIME_STORE_SCHEMA,
@@ -44,7 +43,7 @@ from databricks_agentbricks.project_config import require_managed_tool_support
 from databricks_agentbricks.project_resolver import ProjectResolver
 from databricks_agentbricks.project_types import AgentServer
 from databricks_agentbricks.runtime_store_provisioner import RuntimeStoreProvisioner
-from databricks_agentbricks.services.ports import Prompter, Reporter
+from databricks_agentbricks.services.interaction import Prompter, Reporter
 from databricks_agentbricks.store_provisioner import StoreProvisioner
 from databricks_agentbricks.trace_tables import TraceTable
 from databricks_agentkit.runtime.store import (
@@ -148,25 +147,23 @@ class DeployService:
         self,
         *,
         project: ProjectResolver,
-        apps: AppsClient,
+        apps_client: AppsClient,
         stores_factory: Callable[[Any], StoreProvisioner],
         manifest: ManifestManager,
         tracing: TracingProvisioner,
         runtime_store: RuntimeStoreProvisioner,
         client_factory: Callable[[], Any],
-        runner: DatabricksRunner,
         profile: Optional[str],
         reporter: Reporter,
         prompter: Prompter,
     ) -> None:
         self._project = project
-        self._apps = apps
+        self._apps_client = apps_client
         self._stores_factory = stores_factory
         self._manifest = manifest
         self._tracing = tracing
         self._runtime_store = runtime_store
         self._client_factory = client_factory
-        self._runner = runner
         self._profile = profile
         self._reporter = reporter
         self._prompter = prompter
@@ -181,29 +178,29 @@ class DeployService:
         """
         return [
             a
-            for a in self._apps.list_all()
+            for a in self._apps_client.list_all()
             if str(_field(a, "name") or "").startswith(_DEPLOYMENT_PREFIX)
         ]
 
     def get(self, name: str) -> dict:
         """One deployment's raw Apps payload."""
         _validate_deployment_name(name)
-        return self._apps.get(name)
+        return self._apps_client.get(name)
 
     def logs(self, name: str) -> None:
         """Stream the deployment's logs to the terminal until the user interrupts."""
         _validate_deployment_name(name)
-        self._apps.logs(name)
+        self._apps_client.logs(name)
 
     def start(self, name: str) -> None:
         _validate_deployment_name(name)
-        self._apps.start(name)
+        self._apps_client.start(name)
 
     def stop(self, name: str, *, assume_yes: bool) -> None:
         """Stop a deployment, confirming first unless `assume_yes` (for scripts)."""
         _validate_deployment_name(name)
         self._confirm_destroy(f"Stop deployment '{name}'", assume_yes=assume_yes)
-        self._apps.stop(name)
+        self._apps_client.stop(name)
 
     def delete(self, name: str, *, assume_yes: bool) -> None:
         """Delete a deployment and, when managed provisioning is on, its Runtime Store first.
@@ -223,7 +220,7 @@ class DeployService:
         )
         self._confirm_destroy(target, assume_yes=assume_yes)
         if use_managed_runtime_store:
-            app_service_principal_id = self._apps.service_principal(name)
+            app_service_principal_id = self._apps_client.service_principal(name)
             if not app_service_principal_id:
                 raise AgentCliError(
                     "Could not resolve the app's service principal for Runtime Store cleanup.",
@@ -233,7 +230,7 @@ class DeployService:
                 self._runtime_store.delete_managed(
                     self._client_factory(), name, app_service_principal_id
                 )
-        self._apps.delete(name)
+        self._apps_client.delete(name)
 
     def _confirm_destroy(self, target: str, *, assume_yes: bool) -> None:
         """Confirm before a destructive op; `assume_yes` skips the prompt (for scripts)."""
@@ -323,7 +320,7 @@ class DeployService:
         #    runs every deploy.
         deployment_exists = plan.deployment_exists
         if deployment_exists is None:
-            deployment_exists = self._apps.exists(name)
+            deployment_exists = self._apps_client.exists(name)
         self._ensure_app(name, deployment_exists, plan.user_scope_plan, instances, instance_args)
 
         if legacy_runtime_backend is not None:
@@ -334,7 +331,7 @@ class DeployService:
                     hint=resource_error,
                 )
         elif plan.project is not None and plan.project.server == AgentServer.AGENTBRICKS:
-            app_service_principal_id = self._apps.service_principal(name)
+            app_service_principal_id = self._apps_client.service_principal(name)
             with self._reporter.status("Reconciling Runtime Store…"):
                 runtime_backend = self._runtime_store.managed_backend(
                     client, name, app_service_principal_id
@@ -370,7 +367,7 @@ class DeployService:
         return DeployResult(
             deployment=name,
             source=request.source,
-            url=self._apps.url(name),
+            url=self._apps_client.url(name),
             workspace_path=ws_path,
             env=env_updates,
             client_host=client.host,
@@ -417,7 +414,9 @@ class DeployService:
             and project.deployment_name
             and not base_name.startswith(_DEPLOYMENT_PREFIX)
         ):
-            new_name_exists = len(name) <= _MAX_DEPLOYMENT_NAME_LEN and self._apps.exists(name)
+            new_name_exists = len(name) <= _MAX_DEPLOYMENT_NAME_LEN and self._apps_client.exists(
+                name
+            )
             deployment_exists = new_name_exists
         _validate_deployment_name(name)
         if request.allow_user_scope_update and not user_auth:
@@ -466,51 +465,23 @@ class DeployService:
             with self._reporter.progress(
                 "Creating the agent and starting its compute (this can take a few minutes)…"
             ):
-                result = self._runner(
-                    ["apps", "create", name, *instance_args],
-                    self._profile,
-                    capture=True,
-                    action=f"Could not create deployment '{name}'.",
-                )
+                out = self._apps_client.create(name, instance_args)
             old, new = _AGENT_COMPUTE_OUTPUT
-            self._reporter.echo((result.stdout or "").replace(old, new), newline=False)
-        elif user_scope_plan is None and instance_args:
-            update = {
-                "app": {
-                    "compute_min_instances": instances,
-                    "compute_max_instances": instances,
-                },
-                "update_mask": "compute_min_instances,compute_max_instances",
-            }
-            result = self._runner(
-                ["apps", "create-update", name, "--json", json.dumps(update)],
-                self._profile,
-                capture=True,
-                action=f"Could not update deployment '{name}'.",
-            )
+            self._reporter.echo(out.replace(old, new), newline=False)
+        elif user_scope_plan is None and instances is not None:
+            out = self._apps_client.create_update_instances(name, instances)
             old, new = _AGENT_COMPUTE_OUTPUT
-            self._reporter.echo((result.stdout or "").replace(old, new), newline=False)
+            self._reporter.echo(out.replace(old, new), newline=False)
         # `apps deploy` requires the app's compute to be ACTIVE — a just-created app may still be
         # starting, and an existing one may be STOPPED — so wait either way. Returns immediately when
         with self._reporter.progress(
             "Waiting for agent compute to start (this can take a few minutes)…"
         ):
-            self._apps.wait_for_running(name)
+            self._apps_client.wait_for_running(name)
 
     def _rollout(self, source_dir: pathlib.Path, name: str, ws_path: str) -> None:
-        # Don't ship uv.lock: it pins exact package URLs from whatever index the developer's machine
-        # resolved against (often an internal proxy). The Apps build must resolve against its own
-        # configured index, so let it lock fresh in-sandbox instead of inheriting the local lock.
-        self._runner(
-            ["sync", str(source_dir), ws_path, "--exclude", "uv.lock"],
-            self._profile,
-            action=f"Could not upload the agent source for '{name}'.",
-        )
-        self._runner(
-            ["apps", "deploy", name, "--source-code-path", ws_path],
-            self._profile,
-            action=f"Could not deploy '{name}'.",
-        )
+        self._apps_client.sync_source(name, source_dir, ws_path)
+        self._apps_client.deploy(name, ws_path)
 
     def _grant_access(
         self,
@@ -532,7 +503,7 @@ class DeployService:
         grant_error: Optional[str] = None
         if grants_stores:
             with self._reporter.status("Granting the app access to its stores…"):
-                sp = self._apps.service_principal(name)
+                sp = self._apps_client.service_principal(name)
                 if sp is None:
                     grant_error = "could not resolve the app's service principal."
                 else:

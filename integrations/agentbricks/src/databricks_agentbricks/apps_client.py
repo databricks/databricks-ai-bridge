@@ -102,6 +102,52 @@ class AppsClient:
             ["apps", "delete", name], self._profile, action=f"Could not delete deployment '{name}'."
         )
 
+    def create(self, name: str, instance_args: list[str]) -> str:
+        """Create the app (blocks while its compute provisions); returns the raw command output."""
+        result = self._run(
+            ["apps", "create", name, *instance_args],
+            self._profile,
+            capture=True,
+            action=f"Could not create deployment '{name}'.",
+        )
+        return result.stdout or ""
+
+    def create_update_instances(self, name: str, instances: int) -> str:
+        """Pin the app's compute to a fixed instance count; returns the raw command output."""
+        update = {
+            "app": {
+                "compute_min_instances": instances,
+                "compute_max_instances": instances,
+            },
+            "update_mask": "compute_min_instances,compute_max_instances",
+        }
+        result = self._run(
+            ["apps", "create-update", name, "--json", json.dumps(update)],
+            self._profile,
+            capture=True,
+            action=f"Could not update deployment '{name}'.",
+        )
+        return result.stdout or ""
+
+    def sync_source(self, name: str, source_dir, ws_path: str) -> None:
+        """Upload the local agent source to the app's workspace path."""
+        # Don't ship uv.lock: it pins exact package URLs from whatever index the developer's machine
+        # resolved against (often an internal proxy). The Apps build must resolve against its own
+        # configured index, so let it lock fresh in-sandbox instead of inheriting the local lock.
+        self._run(
+            ["sync", str(source_dir), ws_path, "--exclude", "uv.lock"],
+            self._profile,
+            action=f"Could not upload the agent source for '{name}'.",
+        )
+
+    def deploy(self, name: str, ws_path: str) -> None:
+        """Roll out the uploaded source as the app's active deployment."""
+        self._run(
+            ["apps", "deploy", name, "--source-code-path", ws_path],
+            self._profile,
+            action=f"Could not deploy '{name}'.",
+        )
+
     def service_principal(self, name: str) -> Optional[str]:
         """The app's service principal client id (its Postgres role identity), or None if unavailable."""
         data = self._get_json(name)
