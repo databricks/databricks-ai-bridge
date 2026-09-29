@@ -434,6 +434,7 @@ agentbricks [-p <profile>] [-o text|json]
                [--disable-chat-app]
                [--memory-store NAME] [--session-store NAME]
                [--existing] [--profile P] [directory]
+  doctor       [directory]
   dev          [--source PATH] [--prepare-environment] [--app-port PORT]
   memory
     bind         STORE [--source PATH]
@@ -472,6 +473,26 @@ From the existing project, prepare a migration for your coding agent:
 agentbricks init --framework langgraph --existing .
 agentbricks init --framework openai --existing .
 ```
+
+Before or after the conversion, inspect its progress without changing the repository or contacting
+Databricks:
+
+```sh
+agentbricks doctor .
+agentbricks -o json doctor .
+```
+
+Doctor exits 0 only when the project has a valid Agent Bricks manifest and matching project
+metadata, uses the Agent Bricks server, declares the framework-appropriate `databricks-agentbricks`
+extra and a non-empty `app.yaml` command, constructs `DurableAgentServer` with an `invoke` hook, and
+calls a recognized adapter for the selected framework in production Python source. Test, example, and
+old/stale directories do not count as source evidence. A failed report is the normal result for a
+project that still needs migration; run
+`agentbricks init --framework <framework_name> --existing <directory>` with the appropriate framework
+to prepare the migration instructions. Doctor never imports or executes the target's source, and a
+bounded source scan that exceeds a limit is reported while the evidence it already found still counts.
+Its findings are static repository evidence, not proof that the configured startup command executes
+the files it finds.
 
 This writes `agent-bricks-migrate/` containing a skill, a prompt to paste into your coding agent,
 `references/migration.json`, and a reference project generated from the templates bundled with the
@@ -532,10 +553,11 @@ agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
   --json "{\"id\":\"$INVOCATION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"stream\":true}"
 ```
 
-`--session-id` preserves one application session across calls by setting the Databricks Apps routing
-cookie. This also works with a direct App URL and with the generated runtime on localhost. OAuth and
-session headers are managed by the runtime; arbitrary custom request headers are intentionally not exposed
-by this command.
+`--routing-key` keeps a session on one app replica (sticky routing): set it to your stable session id
+and it is sent verbatim in the `X-Routing-Key` request header. It is routing only and is never used
+as the session id - put the session id in the `--json` body for session continuity. This
+also works with a direct App URL and with the generated runtime on localhost. OAuth and session headers are managed by
+the runtime; arbitrary custom request headers are intentionally not exposed by this command.
 
 ## Command help
 
@@ -846,9 +868,11 @@ via the `AGENT_MEMORY_STORE` env var that `deploy` injects; `agentbricks dev` ru
 and does not inject it. The id is not persisted in `agent.toml`.)
 
 The chat UI generates a stable application session UUID in browser local storage, places it inside
-the invocation's opaque `input`, and creates a fresh invocation UUID per turn. The
-`__Host-databricks-app-router` cookie remains independent: API clients may reuse it for sticky
-replica routing, but it is neither authentication nor the template's application session state.
+the invocation's opaque `input`, and creates a fresh invocation UUID per turn. The chat app also
+sends this session UUID in the `X-Routing-Key` request header, which is used verbatim to pin
+the session to one app replica (it must be non-blank and no more than 128 UTF-8 bytes). The header is neither
+authentication nor the template's application session state; it is independent sticky-routing
+plumbing.
 
 The generated `README.md` documents every request the client makes: config discovery, sync and SSE
 invocations, background submission and polling, session transcript loading, HITL resume, and memory

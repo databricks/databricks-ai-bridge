@@ -26,7 +26,7 @@ from databricks_agentkit.runtime.types import (
     InvocationStatus,
 )
 
-_ROUTING_COOKIE = "__Host-databricks-app-router"
+_ROUTING_KEY_HEADER = "x-routing-key"
 _RUN_1 = "11111111-1111-4111-8111-111111111111"
 _RUN_2 = "22222222-2222-4222-8222-222222222222"
 
@@ -68,7 +68,7 @@ async def poll(client: httpx.AsyncClient, invocation_id: str) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_routing_cookie_is_the_only_session_source() -> None:
+async def test_routing_key_header_is_not_used_as_session_id() -> None:
     async def invoke(input, context):
         return {
             "received": input,
@@ -78,12 +78,13 @@ async def test_routing_cookie_is_the_only_session_source() -> None:
 
     app = make_app(invoke)
     async with running_client(app) as client:
-        client.cookies.set(_ROUTING_COOKIE, "session-1")
         response = await client.post(
             "/api/invocations",
             json={"id": _RUN_1, "input": "hello"},
+            headers={_ROUTING_KEY_HEADER: "session-1"},
         )
 
+    # The header only routes; with no body session_id the session falls back to the invocation id.
     assert response.status_code == 200
     assert response.json() == {
         "id": _RUN_1,
@@ -91,13 +92,45 @@ async def test_routing_cookie_is_the_only_session_source() -> None:
         "output": {
             "received": "hello",
             "invocation_id": _RUN_1,
-            "session_id": "session-1",
+            "session_id": _RUN_1,
         },
     }
 
 
 @pytest.mark.asyncio
-async def test_missing_forwarded_routing_cookie_uses_invocation_id() -> None:
+async def test_body_session_id_reaches_the_handler_and_the_header_is_ignored() -> None:
+    async def invoke(input, context):
+        # Mirrors the framework adapters: the body session_id wins, else context.session_id.
+        return {
+            "session_id": input.get("session_id") or context.session_id,
+            "context_session_id": context.session_id,
+        }
+
+    app = make_app(invoke)
+    async with running_client(app) as client:
+        with_body = await client.post(
+            "/api/invocations",
+            json={"id": _RUN_1, "input": {"session_id": "body-session"}},
+            headers={_ROUTING_KEY_HEADER: "header-session"},
+        )
+        without_body = await client.post(
+            "/api/invocations",
+            json={"id": _RUN_2, "input": {}},
+            headers={_ROUTING_KEY_HEADER: "header-session"},
+        )
+
+    assert with_body.json()["output"] == {
+        "session_id": "body-session",
+        "context_session_id": _RUN_1,
+    }
+    assert without_body.json()["output"] == {
+        "session_id": _RUN_2,
+        "context_session_id": _RUN_2,
+    }
+
+
+@pytest.mark.asyncio
+async def test_missing_forwarded_routing_key_header_uses_invocation_id() -> None:
     seen_sessions = []
 
     async def invoke(input, context):
@@ -110,7 +143,7 @@ async def test_missing_forwarded_routing_cookie_uses_invocation_id() -> None:
 
     assert seen_sessions == [_RUN_1]
     assert response.status_code == 200
-    assert _ROUTING_COOKIE not in response.cookies
+    assert _ROUTING_KEY_HEADER not in response.headers
 
 
 @pytest.mark.asyncio
@@ -469,7 +502,7 @@ async def test_invocation_id_is_idempotency_key_for_every_mode() -> None:
 
 
 @pytest.mark.asyncio
-async def test_retry_remains_idempotent_when_proxy_consumes_routing_cookie() -> None:
+async def test_retry_remains_idempotent_when_proxy_does_not_forward_routing_key_header() -> None:
     calls = 0
 
     async def invoke(input, context):
@@ -483,7 +516,7 @@ async def test_retry_remains_idempotent_when_proxy_consumes_routing_cookie() -> 
             "/api/invocations",
             json={"id": _RUN_1, "input": "one"},
         )
-        client.cookies.clear()
+        client.headers.pop(_ROUTING_KEY_HEADER, None)
         replay = await client.post(
             "/api/invocations",
             json={"id": _RUN_1, "input": "one", "background": True},

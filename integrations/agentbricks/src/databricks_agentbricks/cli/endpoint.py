@@ -16,7 +16,7 @@ from databricks_agentbricks.cli.endpoint_transport import HttpSession
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentkit._api_client import _workspace_client
 
-_ROUTING_COOKIE = "__Host-databricks-app-router"
+_ROUTING_KEY_HEADER = "X-Routing-Key"
 
 
 def _resolve_endpoint(
@@ -62,13 +62,13 @@ def _platform_headers(
     *,
     authenticate: bool,
     profile: Optional[str],
-    session_id: str | None,
+    routing_key: str | None,
 ) -> dict[str, str]:
     headers: dict[str, str] = {}
     if authenticate:
         headers["Authorization"] = _authorization_header(profile)
-    if session_id:
-        headers["Cookie"] = f"{_ROUTING_COOKIE}={session_id}"
+    if routing_key:
+        headers[_ROUTING_KEY_HEADER] = routing_key
     return headers
 
 
@@ -86,9 +86,14 @@ def endpoint() -> None:
 @click.option("--json", "json_value", default=None, help="Complete JSON request body.")
 @click.option("--sse", is_flag=True, help="Consume the response as Server-Sent Events.")
 @click.option(
-    "--session-id",
+    "--routing-key",
     default=None,
-    help="Application session id (default: generated for a Databricks App).",
+    help=(
+        "Sticky-routing key; set it to your stable session id to keep a session on one app replica. "
+        "Sent verbatim as the X-Routing-Key header (default: generated for a Databricks App). "
+        "Routing only: while session_id is a natural routing key, it is recommended to pass the session "
+        "id in the --json body for session continuity."
+    ),
 )
 @click.option("--timeout", type=click.FloatRange(min=0.1), default=300.0, show_default=True)
 @click.option("--auth/--no-auth", default=None, help="Inject Databricks OAuth authentication.")
@@ -102,14 +107,14 @@ def invoke(
     query,
     json_value,
     sse,
-    session_id,
+    routing_key,
     timeout,
     auth,
 ) -> None:
     """Send one HTTP request to a Databricks App or arbitrary URL."""
     base_url, is_app = _resolve_endpoint(app, url, obj.profile)
     authenticate = is_app if auth is None else auth
-    session_id = session_id or (str(uuid4()) if is_app else None)
+    routing_key = routing_key or (str(uuid4()) if is_app else None)
     request = build_request(
         base_url=base_url,
         method=method,
@@ -126,7 +131,7 @@ def invoke(
             **_platform_headers(
                 authenticate=authenticate,
                 profile=obj.profile,
-                session_id=session_id,
+                routing_key=routing_key,
             ),
         },
     )

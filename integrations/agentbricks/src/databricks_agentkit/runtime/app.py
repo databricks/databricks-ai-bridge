@@ -32,7 +32,6 @@ from databricks_agentkit.runtime.types import (
 
 logger = logging.getLogger(__name__)
 
-_ROUTING_COOKIE = "__Host-databricks-app-router"
 _API_ROOT = "/api/invocations"
 
 
@@ -102,7 +101,6 @@ class DurableAgentServer(FastAPI):
             openapi_url=None,
         )
         self.add_exception_handler(AuthError, self._auth_error)
-        self.middleware("http")(self._bind_session)
         self.add_api_route(_API_ROOT, self._invoke_request, methods=["POST"])
         self.add_api_route(f"{_API_ROOT}/{{invocation_id}}", self._get_request, methods=["GET"])
         self.add_api_route(
@@ -124,13 +122,6 @@ class DurableAgentServer(FastAPI):
             raise ValueError("a recovery handler is already registered")
         self._recovery_hook = function
         return function
-
-    async def _bind_session(self, request: Request, call_next) -> Response:
-        # TODO: Read the standard session header once Databricks Apps supports one. The Apps proxy
-        # currently consumes its routing cookie before forwarding deployed requests, so the
-        # invocation ID becomes the deterministic session fallback in _invoke_request.
-        request.state.session_id = request.cookies.get(_ROUTING_COOKIE)
-        return await call_next(request)
 
     async def _execute(
         self,
@@ -191,7 +182,8 @@ class DurableAgentServer(FastAPI):
         request_auth = None
         registered_auth = False
         execution_owns_auth = False
-        session_id = request.state.session_id or invocation_id
+        # Use the invocation id as the fallback when the explicit session_id is missing
+        session_id = invocation_id
         if self.auth_policy.requires_user:
             request_auth = RequestAuthContext.from_headers(request.headers)
             runtime_invocation_id = request_auth.namespace("invocation", invocation_id)

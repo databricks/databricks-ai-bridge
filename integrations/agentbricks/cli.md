@@ -60,6 +60,7 @@ These options apply to every command. Pass them before the command name, for exa
 | [`login`](#agentbricks-login) | Authenticate and save a default profile |
 | [`logout`](#agentbricks-logout) | Forget the saved default profile |
 | [`init`](#agentbricks-init) | Scaffold a new agent project |
+| [`doctor`](#agentbricks-doctor) | Check an existing agent's Agent Bricks onboarding |
 | [`dev`](#agentbricks-dev) | Run the agent locally with a chat UI |
 | [`memory`](#agentbricks-memory) | Manage an agent's long-term memory |
 | [`mcp`](#agentbricks-mcp) | Discover managed MCP services |
@@ -131,6 +132,32 @@ _Options_
 | `--session-store <SESSION_STORE>` | string | - | no | Name for the declared session store (default: derived from the directory, <dir>-session). |
 | `--existing` | flag | - | no | Prepare a coding-agent migration bundle for an existing LangGraph or OpenAI Agents SDK project (defaults to `.`). Requires `--server agentbricks`. |
 
+### `agentbricks doctor`
+
+Check whether an existing agent repository is onboarded to Agent Bricks. DIRECTORY defaults to the
+current directory.
+
+Doctor is read-only and offline: it does not import application source, contact Databricks, or
+change files. It checks `agent.toml`, `.agentbricks/project.toml`, the framework-specific
+`databricks-agentbricks` dependency extra, `app.yaml`, and production Python source for a
+`DurableAgentServer` instance with an `invoke` hook plus a recognized framework adapter call; test,
+example, and old/stale directories are excluded. A bounded source scan that exceeds a limit is
+reported while the evidence it already found still counts. These checks are static repository
+evidence, not proof that the configured startup command executes the files found. Doctor exits 0
+only when every check passes, and exits 1 after printing a normal report otherwise. If the framework
+is unknown, the remediation requires an explicit `--framework <framework_name>`. Use global
+`-o json` for a structured report.
+
+```
+agentbricks doctor [DIRECTORY]
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `DIRECTORY` | no | Existing agent repository to inspect (default: `.`). |
+
 ### `agentbricks dev`
 
 Run your agent locally so you can try it before deploying.
@@ -168,6 +195,7 @@ A memory store is the managed store that holds this memory; each entry is a smal
 | --- | --- |
 | [`memory stores`](#agentbricks-memory-stores) | Workspace-scoped managed memory stores. |
 | [`memory entries`](#agentbricks-memory-entries) | Memory entries within a store, partitioned by actor. |
+| [`memory pipeline`](#agentbricks-memory-pipeline) | Distill session history into long-term memory. |
 | [`memory bind`](#agentbricks-memory-bind) | Bind memory STORE to the agent by declaring it in agent.toml. |
 | [`memory unbind`](#agentbricks-memory-unbind) | Remove the memory store binding from the agent's agent.toml. |
 
@@ -451,6 +479,94 @@ _Options_
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--source <SOURCE>` | path | `.` | no | Agent project containing agent.toml. |
+
+#### `agentbricks memory pipeline`
+
+Manage pipelines that distill session history into long-term memory.
+
+| Subcommand | Description |
+| --- | --- |
+| [`memory pipeline create`](#agentbricks-memory-pipeline-create) | Create a Dreamer memory pipeline. |
+| [`memory pipeline list`](#agentbricks-memory-pipeline-list) | List Dreamer memory pipelines in the workspace. |
+| [`memory pipeline get`](#agentbricks-memory-pipeline-get) | Get a Dreamer memory pipeline by id or resource name. |
+| [`memory pipeline update`](#agentbricks-memory-pipeline-update) | Update a pipeline's display name or instructions. |
+| [`memory pipeline delete`](#agentbricks-memory-pipeline-delete) | Delete a Dreamer memory pipeline and its backing job. |
+| [`memory pipeline run`](#agentbricks-memory-pipeline-run) | Manually run a Dreamer memory pipeline. |
+
+##### `agentbricks memory pipeline create`
+
+```text
+agentbricks memory pipeline create --memory-store TEXT --session-store TEXT [options]
+```
+
+| Option | Type | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--memory-store` | string | - | yes | Memory store name or resource name. |
+| `--session-store` | string | - | yes | Session store name or resource name. |
+| `--model` | string | - | no | Model service used for Dreamer distillation. |
+| `--display-name` | string | - | no | Optional human-readable pipeline name. |
+| `--instructions` | string | - | no | Instructions steering distillation: inline text or @path to a UTF-8 file. |
+
+```bash
+agentbricks memory pipeline create --memory-store agent-memory --session-store agent-sessions \
+  --model system.ai.gpt-5-6-sol
+```
+
+##### `agentbricks memory pipeline list`
+
+```text
+agentbricks memory pipeline list [options]
+```
+
+| Option | Type | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--page-size` | integer | 25 | no | Maximum number of pipelines to return. |
+| `--page-token` | string | - | no | Token from a previous page. |
+
+##### `agentbricks memory pipeline get`
+
+```text
+agentbricks memory pipeline get NAME
+```
+
+`NAME` is a pipeline id or full `memory-pipelines/<id>` resource name.
+
+##### `agentbricks memory pipeline update`
+
+```text
+agentbricks memory pipeline update NAME [options]
+```
+
+| Option | Type | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--display-name` | string | - | no | New human-readable pipeline name. |
+| `--instructions` | string | - | no | Instructions steering distillation: inline text or @path to a UTF-8 file. |
+
+Load complex instructions from a UTF-8 file (also supported by `create`):
+
+```sh
+agentbricks memory pipeline update p-123 --instructions @/path/to/instructions.md
+```
+
+##### `agentbricks memory pipeline delete`
+
+```text
+agentbricks memory pipeline delete NAME [options]
+```
+
+| Option | Type | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--yes`, `-y` | flag | false | no | Skip the confirmation prompt. |
+
+##### `agentbricks memory pipeline run`
+
+Trigger the pipeline's Dreamer engine and return the newly created run.
+
+```text
+agentbricks memory pipeline run NAME
+```
+
+`NAME` is a pipeline id or full `memory-pipelines/<id>` resource name.
 
 ### `agentbricks mcp`
 
@@ -955,7 +1071,7 @@ Any memory/session store declared in agent.toml (for example, by `agentbricks me
 
 Scaling to multiple instances (--instances) uses best-effort sticky routing, so a browser session automatically stays on one instance.
 
-API clients that need it must resend a stable UUID in this cookie every request: __Host-databricks-app-router=<uuid>
+To keep a session on one app replica (sticky routing), API clients must resend a stable UUID (for example, their session id) in the `X-Routing-Key` request header on every request. The header is a routing hint only - non-blank, no more than 128 UTF-8 bytes, used verbatim - not authentication and not the session id itself (send the session id in the request body). Example: `X-Routing-Key: <uuid>`
 
 ```
 agentbricks deploy [NAME] [options]
@@ -1119,7 +1235,7 @@ _Options_
 | `--query <QUERY>` | string | - | no | Query parameter as 'name=value'. |
 | `--json <JSON_VALUE>` | string | - | no | Complete JSON request body. |
 | `--sse` | flag | - | no | Consume the response as Server-Sent Events. |
-| `--session-id <SESSION_ID>` | string | - | no | Application session id (default: generated for a Databricks App). |
+| `--routing-key <ROUTING_KEY>` | string | - | no | Sticky-routing key; set it to your stable session id to keep a session on one app replica. Sent verbatim as the X-Routing-Key header (default: generated for a Databricks App). Routing only: while session_id is a natural routing key, it is recommended to pass the session id in the --json body for session continuity. |
 | `--timeout <TIMEOUT>` | float range | `300.0` | no | - |
 | `--auth`, `--no-auth` | flag | - | no | Inject Databricks OAuth authentication. |
 

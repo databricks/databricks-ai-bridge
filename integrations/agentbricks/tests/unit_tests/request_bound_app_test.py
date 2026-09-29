@@ -168,17 +168,20 @@ async def test_request_user_streams_ordered_persisted_events(deployed):
 
     async def handler(value, context):
         contexts.append(context)
-        assert await context.emit({"type": "delta", "content": value}) == 2
+        assert await context.emit({"type": "delta", "content": value["text"]}) == 2
         return {"ignored": "stream output"}
 
     app = make_app(handler)
     invocation_id = str(uuid4())
     async with running_client(app) as client:
-        client.cookies.set("__Host-databricks-app-router", "routing-session")
         response = await client.post(
             "/api/invocations",
-            json={"id": invocation_id, "input": "hello", "stream": True},
-            headers=headers(),
+            json={
+                "id": invocation_id,
+                "input": {"text": "hello", "session_id": "body-session"},
+                "stream": True,
+            },
+            headers={**headers(), "x-routing-key": "routing-session"},
         )
         status = await client.get(f"/api/invocations/{invocation_id}", headers=headers())
         events = await client.get(f"/api/invocations/{invocation_id}/events", headers=headers())
@@ -197,7 +200,10 @@ async def test_request_user_streams_ordered_persisted_events(deployed):
         "output": {"ignored": "stream output"},
     }
     assert events.text == response.text
-    assert contexts[0].session_id == contexts[0].request_auth.namespace(
+    # The routing header never becomes the session id; the runtime session is the namespaced
+    # invocation id, and the body session_id is left in the input for the adapter to read.
+    assert contexts[0].session_id == contexts[0].request_auth.namespace("session", invocation_id)
+    assert contexts[0].session_id != contexts[0].request_auth.namespace(
         "session", "routing-session"
     )
     assert (
