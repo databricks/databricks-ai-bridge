@@ -164,6 +164,87 @@ async def test_body_session_and_resume_metadata_are_rejected() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "background,stream", [(False, False), (False, True), (True, False), (True, True)]
+)
+async def test_http_persists_invocation_session_in_every_mode(background, stream) -> None:
+    app = make_app()
+    async with running_client(app) as client:
+        response = await client.post(
+            "/api/invocations",
+            json={"id": _RUN_1, "input": "hello", "background": background, "stream": stream},
+            headers={_ROUTING_KEY_HEADER: "routing-only"},
+        )
+        await poll(client, _RUN_1)
+        state = await app._runtime.runtime_store.get(_RUN_1)
+
+    assert response.status_code == (202 if background else 200)
+    assert state is not None
+    assert isinstance(state.request, dict)
+    assert state.session_id == _RUN_1
+    assert state.request["session_id"] == state.session_id
+    assert state.session_sequence_number == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "background,stream", [(False, False), (False, True), (True, False), (True, True)]
+)
+async def test_http_routing_key_does_not_serialize_invocations(background, stream) -> None:
+    first_started = asyncio.Event()
+    second_started = asyncio.Event()
+    release = asyncio.Event()
+    seen = []
+
+    async def invoke(input, context):
+        seen.append(input)
+        if input == "first":
+            first_started.set()
+            await release.wait()
+        else:
+            second_started.set()
+        return input
+
+    app = make_app(invoke)
+    async with running_client(app) as client:
+        await client.post(
+            "/api/invocations",
+            json={"id": _RUN_1, "input": "first", "background": True},
+            headers={_ROUTING_KEY_HEADER: "shared-routing-key"},
+        )
+        await asyncio.wait_for(first_started.wait(), 2)
+        second = asyncio.create_task(
+            client.post(
+                "/api/invocations",
+                json={"id": _RUN_2, "input": "second", "background": background, "stream": stream},
+                headers={_ROUTING_KEY_HEADER: "shared-routing-key"},
+            )
+        )
+        try:
+            await asyncio.wait_for(second_started.wait(), 2)
+            response = await asyncio.wait_for(second, 2)
+            await poll(client, _RUN_2)
+            first_state = await app._runtime.runtime_store.get(_RUN_1)
+            second_state = await app._runtime.runtime_store.get(_RUN_2)
+
+            assert response.status_code == (202 if background else 200)
+            assert first_state is not None
+            assert second_state is not None
+            assert first_state.session_id == _RUN_1
+            assert second_state.session_id == _RUN_2
+            assert first_state.session_sequence_number == 1
+            assert second_state.session_sequence_number == 1
+            assert seen == ["first", "second"]
+        finally:
+            release.set()
+            if not second.done():
+                await asyncio.wait_for(second, 2)
+        await poll(client, _RUN_1)
+
+    assert seen == ["first", "second"]
+
+
+@pytest.mark.asyncio
 async def test_recovery_attempt_uses_recovery_hook() -> None:
     calls = []
 
@@ -183,6 +264,21 @@ async def test_recovery_attempt_uses_recovery_hook() -> None:
 
     assert result == {"input": "hello", "session_id": "session-1"}
     assert calls == ["recover"]
+
+
+@pytest.mark.asyncio
+async def test_attempt_context_is_the_source_of_session_identity() -> None:
+    async def invoke(input, context):
+        return context.session_id
+
+    app = make_app(invoke)
+
+    result = await app._execute(
+        {"input": "hello", "session_id": "legacy-session"},
+        InvocationAttemptContext(_RUN_1, 1, session_id="stored-session"),
+    )
+
+    assert result == "stored-session"
 
 
 @pytest.mark.asyncio
@@ -261,9 +357,12 @@ async def test_stream_includes_events_committed_after_event_read(background, fai
 
     class PausingEventReadStore(InMemoryRuntimeStore):
         async def events(
-            self, invocation_id: str, after_sequence: int | None = None
+            self,
+            invocation_id: str | None = None,
+            after_sequence: int | None = None,
+            session_id: str | None = None,
         ) -> list[InvocationEvent]:
-            events = await super().events(invocation_id, after_sequence)
+            events = await super().events(invocation_id, after_sequence, session_id)
             if not snapshot_taken.is_set():
                 # Keep a real event snapshot while the handler commits its terminal state.
                 snapshot_taken.set()
