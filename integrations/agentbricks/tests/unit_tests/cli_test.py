@@ -32,6 +32,7 @@ def test_root_registers_supported_commands():
         "login",
         "logout",
         "init",
+        "doctor",
         "dev",
         "memory",
         "sessions",

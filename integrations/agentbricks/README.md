@@ -434,6 +434,7 @@ agentbricks [-p <profile>] [-o text|json]
                [--disable-chat-app]
                [--memory-store NAME] [--session-store NAME]
                [--existing] [--profile P] [directory]
+  doctor       [directory]
   dev          [--source PATH] [--prepare-environment] [--app-port PORT]
   memory
     bind         STORE [--source PATH]
@@ -472,6 +473,26 @@ From the existing project, prepare a migration for your coding agent:
 agentbricks init --framework langgraph --existing .
 agentbricks init --framework openai --existing .
 ```
+
+Before or after the conversion, inspect its progress without changing the repository or contacting
+Databricks:
+
+```sh
+agentbricks doctor .
+agentbricks -o json doctor .
+```
+
+Doctor exits 0 only when the project has a valid Agent Bricks manifest and matching project
+metadata, uses the Agent Bricks server, declares the framework-appropriate `databricks-agentbricks`
+extra and a non-empty `app.yaml` command, constructs `DurableAgentServer` with an `invoke` hook, and
+calls a recognized adapter for the selected framework in production Python source. Test, example, and
+old/stale directories do not count as source evidence. A failed report is the normal result for a
+project that still needs migration; run
+`agentbricks init --framework <framework_name> --existing <directory>` with the appropriate framework
+to prepare the migration instructions. Doctor never imports or executes the target's source, and a
+bounded source scan that exceeds a limit is reported while the evidence it already found still counts.
+Its findings are static repository evidence, not proof that the configured startup command executes
+the files it finds.
 
 This writes `agent-bricks-migrate/` containing a skill, a prompt to paste into your coding agent,
 `references/migration.json`, and a reference project generated from the templates bundled with the
