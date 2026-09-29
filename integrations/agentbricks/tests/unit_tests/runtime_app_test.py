@@ -167,15 +167,13 @@ async def test_body_session_and_resume_metadata_are_rejected() -> None:
 @pytest.mark.parametrize(
     "background,stream", [(False, False), (False, True), (True, False), (True, True)]
 )
-@pytest.mark.parametrize("cookie", [None, "session-1"])
-async def test_http_persists_resolved_session_in_every_mode(background, stream, cookie) -> None:
+async def test_http_persists_invocation_session_in_every_mode(background, stream) -> None:
     app = make_app()
     async with running_client(app) as client:
-        if cookie is not None:
-            client.cookies.set(_ROUTING_COOKIE, cookie)
         response = await client.post(
             "/api/invocations",
             json={"id": _RUN_1, "input": "hello", "background": background, "stream": stream},
+            headers={_ROUTING_KEY_HEADER: "routing-only"},
         )
         await poll(client, _RUN_1)
         state = await app._runtime.runtime_store.get(_RUN_1)
@@ -183,7 +181,7 @@ async def test_http_persists_resolved_session_in_every_mode(background, stream, 
     assert response.status_code == (202 if background else 200)
     assert state is not None
     assert isinstance(state.request, dict)
-    assert state.session_id == (cookie or _RUN_1)
+    assert state.session_id == _RUN_1
     assert state.request["session_id"] == state.session_id
     assert state.session_sequence_number == 1
 
@@ -192,46 +190,56 @@ async def test_http_persists_resolved_session_in_every_mode(background, stream, 
 @pytest.mark.parametrize(
     "background,stream", [(False, False), (False, True), (True, False), (True, True)]
 )
-async def test_http_same_session_waits_for_active_invocation(background, stream) -> None:
-    started = asyncio.Event()
+async def test_http_routing_key_does_not_serialize_invocations(background, stream) -> None:
+    first_started = asyncio.Event()
+    second_started = asyncio.Event()
     release = asyncio.Event()
     seen = []
 
     async def invoke(input, context):
         seen.append(input)
         if input == "first":
-            started.set()
+            first_started.set()
             await release.wait()
+        else:
+            second_started.set()
         return input
 
     app = make_app(invoke)
     async with running_client(app) as client:
-        client.cookies.set(_ROUTING_COOKIE, "session-1")
         await client.post(
-            "/api/invocations", json={"id": _RUN_1, "input": "first", "background": True}
+            "/api/invocations",
+            json={"id": _RUN_1, "input": "first", "background": True},
+            headers={_ROUTING_KEY_HEADER: "shared-routing-key"},
         )
-        await asyncio.wait_for(started.wait(), 2)
+        await asyncio.wait_for(first_started.wait(), 2)
         second = asyncio.create_task(
             client.post(
                 "/api/invocations",
                 json={"id": _RUN_2, "input": "second", "background": background, "stream": stream},
+                headers={_ROUTING_KEY_HEADER: "shared-routing-key"},
             )
         )
         try:
-            for _ in range(100):
-                state = await app._runtime.runtime_store.get(_RUN_2)
-                if state is not None:
-                    break
-                await asyncio.sleep(0.005)
-            assert state is not None
-            assert state.status == InvocationStatus.QUEUED
-            assert state.session_id == "session-1"
-            assert state.session_sequence_number == 2
-            assert seen == ["first"]
+            await asyncio.wait_for(second_started.wait(), 2)
+            response = await asyncio.wait_for(second, 2)
+            await poll(client, _RUN_2)
+            first_state = await app._runtime.runtime_store.get(_RUN_1)
+            second_state = await app._runtime.runtime_store.get(_RUN_2)
+
+            assert response.status_code == (202 if background else 200)
+            assert first_state is not None
+            assert second_state is not None
+            assert first_state.session_id == _RUN_1
+            assert second_state.session_id == _RUN_2
+            assert first_state.session_sequence_number == 1
+            assert second_state.session_sequence_number == 1
+            assert seen == ["first", "second"]
         finally:
             release.set()
-            await asyncio.wait_for(second, 2)
-        await poll(client, _RUN_2)
+            if not second.done():
+                await asyncio.wait_for(second, 2)
+        await poll(client, _RUN_1)
 
     assert seen == ["first", "second"]
 
