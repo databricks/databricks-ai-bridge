@@ -592,10 +592,15 @@ function handleOutput(output) {
   }
 }
 
+function routingHeaders() {
+  const headers = {};
+  // Populate the session_id as the routing key for sticky routing
+  if (state.sessionId) headers["X-Routing-Key"] = state.sessionId;
+  return headers;
+}
+
 function invocationHeaders() {
-  return {
-    "Content-Type": "application/json",
-  };
+  return { "Content-Type": "application/json", ...routingHeaders() };
 }
 
 function invocationPayload(payload, transport = {}) {
@@ -918,7 +923,7 @@ async function ensureManagedSession() {
   stateMessage(elements.sessionItems, "Connecting managed session…", "loading");
   const response = await fetch(demoUrl("/api/demo/sessions"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...routingHeaders() },
     body: "{}",
   });
   const result = await jsonResponse(response);
@@ -934,7 +939,7 @@ async function refreshSession({ hydrateChat = false } = {}) {
   }
   try {
     const sessionId = state.config.session.managed ? await ensureManagedSession() : ensureSessionId();
-    const response = await fetch(demoUrl("/api/demo/session/items"), { cache: "no-store" });
+    const response = await fetch(demoUrl("/api/demo/session/items"), { cache: "no-store", headers: routingHeaders() });
     const result = await jsonResponse(response);
     const items = sessionItems(result);
     renderSessionItems(items);
@@ -952,7 +957,7 @@ async function refreshSession({ hydrateChat = false } = {}) {
 async function refreshSessions() {
   stateMessage(elements.sessionList, "Loading sessions…", "loading");
   try {
-    const response = await fetch(demoUrl("/api/demo/sessions"), { cache: "no-store" });
+    const response = await fetch(demoUrl("/api/demo/sessions"), { cache: "no-store", headers: routingHeaders() });
     const result = await jsonResponse(response);
     renderSessions(sessions(result));
     addEvent("sessions.list", result);
@@ -1029,6 +1034,7 @@ async function pollBackground(invocationId) {
     const response = await fetch(`/api/invocations/${encodeURIComponent(invocationId)}`, {
       cache: "no-store",
       credentials: "same-origin",
+      headers: routingHeaders(),
     });
     const result = await jsonResponse(response);
     addEvent("background.poll", result);
@@ -1150,6 +1156,7 @@ async function openSession(sessionId) {
     const response = await fetch(demoUrl(`/api/demo/sessions/${encodeURIComponent(sessionId)}/open`), {
       method: "POST",
       credentials: "same-origin",
+      headers: routingHeaders(),
     });
     const result = await jsonResponse(response);
     setSessionId(result.session_id);

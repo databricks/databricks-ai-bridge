@@ -136,7 +136,10 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
     app.recover(invoke_handler)
     ui.install_ui(app)
     client = TestClient(app, base_url="https://testserver")
-    client.cookies.set("__Host-databricks-app-router", session_id)
+    # X-Routing-Key is kept for sticky routing (harmless); session identity travels via
+    # ?session_id=... query param, matching what demoUrl() sends in the real browser.
+    client.params = {"session_id": session_id}
+    client.headers["X-Routing-Key"] = session_id
     if configured:
         # The actor is the signed-in user from this forwarded-identity header (ui._request_actor);
         # unconfigured requests have no header and fall back to the "agent" actor.
@@ -165,6 +168,32 @@ def test_demo_ui_routes(monkeypatch):
     assert "/api/demo/sessions/${encodeURIComponent(sessionId)}/open" in app_script.text
     assert "session_id: sessionId" in app_script.text
     assert 'fetch("/api/invocations"' in app_script.text
+    # Routing key: a shared helper composed into both the submit POST and the background poll
+    # GET, so every replica-scoped request is pinned to the session that started it.
+    assert "function routingHeaders()" in app_script.text
+    assert 'if (state.sessionId) headers["X-Routing-Key"] = state.sessionId;' in app_script.text
+    assert 'return { "Content-Type": "application/json", ...routingHeaders() };' in app_script.text
+    assert (
+        "fetch(`/api/invocations/${encodeURIComponent(invocationId)}`, {\n"
+        '      cache: "no-store",\n'
+        '      credentials: "same-origin",\n'
+        "      headers: routingHeaders(),\n"
+        "    })"
+    ) in app_script.text
+    # Session-scoped demo GETs carry the routing key so history refreshes hit the same replica.
+    assert (
+        'fetch(demoUrl("/api/demo/session/items"), { cache: "no-store", headers: routingHeaders() })'
+    ) in app_script.text
+    assert (
+        'fetch(demoUrl("/api/demo/sessions"), { cache: "no-store", headers: routingHeaders() })'
+    ) in app_script.text
+    assert (
+        "fetch(demoUrl(`/api/demo/sessions/${encodeURIComponent(sessionId)}/open`), {\n"
+        '      method: "POST",\n'
+        '      credentials: "same-origin",\n'
+        "      headers: routingHeaders(),\n"
+        "    })"
+    ) in app_script.text
     styles = client.get("/ui-assets/styles.css").text
     assert "@media (min-width: 1181px)" in styles
     assert "scrollbar-gutter: stable" in styles
