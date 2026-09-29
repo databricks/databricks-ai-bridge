@@ -65,6 +65,22 @@ def _validate_deployment_name(name: str, *, check_length: bool = True) -> str:
     return name
 
 
+class DeploymentName(str):
+    """A deployment name that has passed :func:`_validate_deployment_name`; constructing one IS the check.
+
+    Subclasses ``str`` so it drops straight into f-strings, the workspace path, the ``databricks``
+    argv, and ``.startswith(_DEPLOYMENT_PREFIX)`` - callers and presenters need no change - while still
+    letting the deploy service *require* a validated name in its signatures. A lifecycle verb that
+    forgets to validate is then a type error at the call site, not a bug that reaches the workspace -
+    the guarantee the per-method ``_validate_deployment_name`` call carried but could not enforce.
+    """
+
+    __slots__ = ()
+
+    def __new__(cls, raw: str) -> "DeploymentName":
+        return super().__new__(cls, _validate_deployment_name(raw))
+
+
 def _instance_args(instances: Optional[int]) -> list[str]:
     """Build runtime instance arguments from the Agent Bricks fixed-count option."""
     if instances is None:

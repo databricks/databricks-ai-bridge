@@ -37,6 +37,7 @@ from databricks_agentbricks.apps_client import AppsClient
 from databricks_agentbricks.deployment import (
     _AGENTKIT_RUNTIME_STORE_SCHEMA,
     _DEPLOYMENT_PREFIX,
+    DeploymentName,
     mlflow_tracing_config,
 )
 from databricks_agentbricks.errors import AgentCliError
@@ -74,7 +75,7 @@ class DeployContext:
 
     # --- inputs ---------------------------------------------------------------
     source_dir: pathlib.Path
-    name: str
+    name: DeploymentName
     project: Any  # the loaded AgentProject, or None when the source has no agent.toml
     client: Any  # the workspace client, opened once after the pre-flight/auth phase
     apps_client: AppsClient

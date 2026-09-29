@@ -18,7 +18,7 @@ that is not part of the Agent Bricks CLI surface).
 from __future__ import annotations
 
 import pathlib
-from typing import Optional
+from typing import Any, Callable, Optional
 
 import click
 
@@ -35,6 +35,7 @@ from databricks_agentbricks.deployment import (
     _DEFAULT_PIP_INDEX_URL,
     TRACES_EXPERIMENT_ID_ENV,  # noqa: F401 - re-exported for tests referencing deploy_mod.TRACES_EXPERIMENT_ID_ENV
     TRACES_TRACKING_URI_ENV,  # noqa: F401 - re-exported for tests referencing deploy_mod.TRACES_TRACKING_URI_ENV
+    DeploymentName,
     MlflowTracingConfig,  # noqa: F401 - re-exported for callers/tests referencing deploy_mod.MlflowTracingConfig
     _prefixed_name,  # noqa: F401 - re-exported for tests referencing deploy_mod._prefixed_name
     _validate_deployment_name,  # noqa: F401 - re-exported for tests referencing deploy_mod._validate_deployment_name
@@ -158,6 +159,32 @@ def deploy(
 # --- agentbricks deployments <lifecycle> ------------------------------------------
 
 
+class _DeploymentNameParam(click.ParamType):
+    """Parse the lifecycle verbs' NAME argument into a validated ``DeploymentName``.
+
+    Validating as Click parses the argument (rather than inside each command) is what lets
+    ``DeployService`` *require* a ``DeploymentName`` and never re-check one - forgetting the check
+    becomes a type error, not a name that reaches the workspace. A bad name raises ``AgentCliError``,
+    a ``click.ClickException``, which the CLI renders with the same exit code whether it is raised
+    here at parse time or from a command body - so this stays behavior-preserving. It deliberately
+    does not call ``self.fail()``, which would emit Click's parse-time "Invalid value" usage error
+    (a different exit code and message) instead of the CLI's own diagnostic.
+    """
+
+    name = "name"
+
+    def convert(self, value: Any, param: Any, ctx: Any) -> DeploymentName:
+        return DeploymentName(value)
+
+
+_DEPLOYMENT_NAME = _DeploymentNameParam()
+
+
+def deployment_name_argument(command: Callable[..., Any]) -> Callable[..., Any]:
+    """Declare the shared, self-validating NAME argument for the ``deployments`` lifecycle verbs."""
+    return click.argument("name", type=_DEPLOYMENT_NAME)(command)
+
+
 @click.group()
 def deployments() -> None:
     """Inspect and manage deployed agents: list, get, stream logs, start, stop, or delete."""
@@ -171,7 +198,7 @@ def deployments_list(obj) -> None:
 
 
 @deployments.command("get")
-@click.argument("name")
+@deployment_name_argument
 @click.pass_obj
 def deployments_get(obj, name) -> None:
     """Get an agent deployment's details."""
@@ -179,7 +206,7 @@ def deployments_get(obj, name) -> None:
 
 
 @deployments.command("logs")
-@click.argument("name")
+@deployment_name_argument
 @click.pass_obj
 def deployments_logs(obj, name) -> None:
     """Stream a deployment's logs."""
@@ -187,7 +214,7 @@ def deployments_logs(obj, name) -> None:
 
 
 @deployments.command("start")
-@click.argument("name")
+@deployment_name_argument
 @click.pass_obj
 def deployments_start(obj, name) -> None:
     """Start a deployment."""
@@ -196,7 +223,7 @@ def deployments_start(obj, name) -> None:
 
 
 @deployments.command("stop")
-@click.argument("name")
+@deployment_name_argument
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
 @click.pass_obj
 def deployments_stop(obj, name, yes) -> None:
@@ -210,7 +237,7 @@ def deployments_stop(obj, name, yes) -> None:
 
 
 @deployments.command("delete")
-@click.argument("name")
+@deployment_name_argument
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
 @click.pass_obj
 def deployments_delete(obj, name, yes) -> None:

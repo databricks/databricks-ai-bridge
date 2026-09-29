@@ -6,9 +6,11 @@ out the source, and granting access. Each resource's own work lives in its
 :class:`~databricks_agentbricks.services.provisioners.ResourceProvisioner`, so ``deploy`` is the
 sequence - the phase order every resource is driven through - rather than the sum of them. The
 lifecycle verbs (``list_deployments``, ``get``, ``logs``, ``start``, ``stop``, ``delete``) are thin,
-but they live here too so that the policy they carry - what counts as an agent deployment, which name
-shapes are legal, what a destructive verb confirms, and that a managed Runtime Store is torn down
-before its app - is stated once instead of in each command.
+but they live here too so that the policy they carry - what counts as an agent deployment, what a
+destructive verb confirms, and that a managed Runtime Store is torn down before its app - is stated
+once instead of in each command. Which name shapes are legal is no longer among those policies: the
+verbs require a :class:`~databricks_agentbricks.deployment.DeploymentName`, a value object that is
+valid by construction, so a name is validated once at the boundary instead of re-checked in each verb.
 
 It talks to the terminal only through the injected :class:`Reporter` and :class:`Prompter` ports and
 hands back raw facts (a :class:`DeployResult`, or the Apps payloads as they came off the wire), so
@@ -33,6 +35,7 @@ from databricks_agentbricks.deployment import (
     _MAX_DEPLOYMENT_NAME_LEN,
     _PIP_INDEX_ENVS,
     _USE_MANAGED_RUNTIME_STORE,
+    DeploymentName,
     _instance_args,
     _prefixed_name,
     _validate_deployment_name,
@@ -128,7 +131,7 @@ class _DeployPlan:
 
     project: Any
     base_name: str
-    name: str
+    name: DeploymentName
     user_scope_plan: Any
     deployment_exists: Optional[bool]  # known already from the name/scope pre-flight, else None
 
@@ -176,34 +179,29 @@ class DeployService:
             if str(_field(a, "name") or "").startswith(_DEPLOYMENT_PREFIX)
         ]
 
-    def get(self, name: str) -> dict:
+    def get(self, name: DeploymentName) -> dict:
         """One deployment's raw Apps payload."""
-        _validate_deployment_name(name)
         return self._apps_client.get(name)
 
-    def logs(self, name: str) -> None:
+    def logs(self, name: DeploymentName) -> None:
         """Stream the deployment's logs to the terminal until the user interrupts."""
-        _validate_deployment_name(name)
         self._apps_client.logs(name)
 
-    def start(self, name: str) -> None:
-        _validate_deployment_name(name)
+    def start(self, name: DeploymentName) -> None:
         self._apps_client.start(name)
 
-    def stop(self, name: str, *, assume_yes: bool) -> None:
+    def stop(self, name: DeploymentName, *, assume_yes: bool) -> None:
         """Stop a deployment, confirming first unless `assume_yes` (for scripts)."""
-        _validate_deployment_name(name)
         self._confirm_action(f"Stop deployment '{name}'", assume_yes=assume_yes)
         self._apps_client.stop(name)
 
-    def delete(self, name: str, *, assume_yes: bool) -> None:
+    def delete(self, name: DeploymentName, *, assume_yes: bool) -> None:
         """Delete a deployment and, when managed provisioning is on, its Runtime Store first.
 
         The Runtime Store goes first because dropping it needs the app's service principal, which
         stops resolving once the app is gone. If that identity can't be read we refuse outright
         rather than delete the app and orphan its data.
         """
-        _validate_deployment_name(name)
         use_managed_runtime_store = _USE_MANAGED_RUNTIME_STORE
         # Name the data loss in the prompt: with a managed store, deleting the app also drops the
         # agent's persisted memory/sessions, which the app name alone doesn't imply.
@@ -373,7 +371,9 @@ class DeployService:
                 name
             )
             deployment_exists = new_name_exists
-        _validate_deployment_name(name)
+        # Apply the length cap now (after the exists probe, which needs the raw string) and, in the
+        # same step, promote the validated name to the DeploymentName the rest of deploy carries.
+        name = DeploymentName(name)
         if request.allow_user_scope_update and not user_auth:
             raise AgentCliError(
                 "--allow-user-scope-update requires a managed tool with auth = 'user' in agent.toml."
