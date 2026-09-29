@@ -26,22 +26,52 @@ configuration and client examples; [AGENTS.md](AGENTS.md) provides the developme
 agentbricks dev
 ```
 
-The API is available at `http://localhost:8000/api/invocations`. Every request supplies a UUID `id`.
-That ID is the invocation identifier and idempotency key. Agent-specific values live inside the
-opaque `input` object:
+The API is available at `http://localhost:8000/api/invocations`, or on the port you pass with
+`--app-port`. The `http://localhost:8001` URL that `databricks apps run-local` also prints is its
+local proxy to the same app. Requests fail for a few seconds while the server starts (the proxy
+returns HTTP 500); wait for `Uvicorn running on ...` in the log.
+
+Every request supplies a UUID `id`. That ID is the invocation identifier and idempotency key.
+Agent-specific values live inside the opaque `input` object:
 
 ```bash
 SESSION_ID=$(uuidgen)
+ACTOR=user-123  # keys long-term memory; see "Long-term memory" below
 INVOCATION_ID=$(uuidgen)
 
 curl -sS http://localhost:8000/api/invocations \
   -H 'Content-Type: application/json' \
-  -d "{\"id\":\"$INVOCATION_ID\",\"input\":{\"session_id\":\"$SESSION_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"What time is it? Use your tool.\"}]}}"
+  -d "{\"id\":\"$INVOCATION_ID\",\"input\":{\"session_id\":\"$SESSION_ID\",\"actor\":\"$ACTOR\",\"messages\":[{\"role\":\"user\",\"content\":\"What time is it? Use your tool.\"}]}}"
 ```
 
 Reuse `SESSION_ID` for multi-turn conversation state. Generate a new `INVOCATION_ID` for each turn.
 Retrying the same request with the same invocation ID returns the persisted result; changing the
 request while reusing the ID returns `409`.
+
+## Long-term memory
+
+The Session Store keeps one conversation's state, keyed by `session_id`. The Memory Store keeps
+facts the agent recalls across conversations, keyed by `actor`. `runtime/adapter.py` reads
+`input.actor` and passes it to `memory_tools(actor)`. If you don't pass `actor`, it defaults to the
+`session_id`, so long-term memory will **not** carry across sessions. For cross-session memory, pass
+a stable `actor` (e.g. the end user's ID) from trusted application context. With a request-user
+(`auth = "user"`) tool bound, the adapter also namespaces `actor` to the signed-in user; see
+[Request-user authorization](#request-user-authorization).
+
+Memory is off under `agentbricks dev`, so try it against the deployed app (`agent-bricks-<name>`):
+two invocations with different `session_id`s and the same `actor`.
+
+```bash
+ACTOR=user-123
+
+# Conversation 1: the agent saves a fact with its memory tool.
+agentbricks --profile <profile> endpoint invoke agent-bricks-<name> --path /api/invocations \
+  --json "{\"id\":\"$(uuidgen)\",\"input\":{\"session_id\":\"$(uuidgen)\",\"actor\":\"$ACTOR\",\"messages\":[{\"role\":\"user\",\"content\":\"Remember that I prefer answers as bullet points.\"}]}}"
+
+# Conversation 2: a new session_id, same actor, so the agent can recall it.
+agentbricks --profile <profile> endpoint invoke agent-bricks-<name> --path /api/invocations \
+  --json "{\"id\":\"$(uuidgen)\",\"input\":{\"session_id\":\"$(uuidgen)\",\"actor\":\"$ACTOR\",\"messages\":[{\"role\":\"user\",\"content\":\"How do I like my answers formatted?\"}]}}"
+```
 
 ## Invocation modes
 
@@ -54,12 +84,12 @@ request while reusing the ID returns `409`.
 INVOCATION_ID=$(uuidgen)
 curl -sN http://localhost:8000/api/invocations \
   -H 'Content-Type: application/json' \
-  -d "{\"id\":\"$INVOCATION_ID\",\"input\":{\"session_id\":\"$SESSION_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"Count to three.\"}]},\"stream\":true}"
+  -d "{\"id\":\"$INVOCATION_ID\",\"input\":{\"session_id\":\"$SESSION_ID\",\"actor\":\"$ACTOR\",\"messages\":[{\"role\":\"user\",\"content\":\"Count to three.\"}]},\"stream\":true}"
 
 INVOCATION_ID=$(uuidgen)
 curl -sS http://localhost:8000/api/invocations \
   -H 'Content-Type: application/json' \
-  -d "{\"id\":\"$INVOCATION_ID\",\"input\":{\"session_id\":\"$SESSION_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"Summarize durable agents.\"}]},\"background\":true}" | jq
+  -d "{\"id\":\"$INVOCATION_ID\",\"input\":{\"session_id\":\"$SESSION_ID\",\"actor\":\"$ACTOR\",\"messages\":[{\"role\":\"user\",\"content\":\"Summarize durable agents.\"}]},\"background\":true}" | jq
 curl -sS "http://localhost:8000/api/invocations/$INVOCATION_ID" | jq
 ```
 
@@ -100,6 +130,7 @@ repeated side effects. See [Recovery and durability](AGENTKIT_CONTRACT.md#recove
 
 The browser UI is included by default. It generates a stable application session ID in local
 storage, places it inside each invocation's `input`, and generates a fresh invocation UUID per turn.
+It sends the signed-in user as `input.actor`, so memory carries across that user's chat sessions.
 Use `agentbricks init --framework langgraph --disable-chat-app` for API-only output.
 
 ## Configure and deploy
@@ -113,6 +144,10 @@ Use `agentbricks init --framework langgraph --disable-chat-app` for API-only out
 ```bash
 agentbricks --profile <profile> deploy agent-langgraph --source .
 ```
+
+This deploys an app named `agent-bricks-agent-langgraph`. The `agentbricks deployments` subcommands
+(`get`, `logs`, `start`, `stop`, `delete`) don't read `agent.toml`; pass that full app name, for
+example `agentbricks deployments get agent-bricks-agent-langgraph`. `agentbricks deployments list` shows it.
 
 When deployment provisions a dedicated Runtime Store, only the app-owned
 `databricks_agentkit_runtime_<hash>` schema and runtime tables are added. Managed Runtime Store

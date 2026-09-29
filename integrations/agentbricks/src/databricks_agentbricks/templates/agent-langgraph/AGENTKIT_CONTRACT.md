@@ -53,7 +53,9 @@ binding change. The application state must be serializable by the selected saver
 
 Include `memory_tools(actor)` in model and execution wiring. It returns no tools when unconfigured.
 Its closures capture actor identity, so never reuse them across users. The application owns trusted
-actor/tenant authentication; a payload field alone does not establish identity.
+actor/tenant authentication; a payload field alone does not establish identity. The template
+adapter reads `input.actor` and defaults it to the session ID, so memory carries across sessions
+only when the client sends a stable actor.
 
 ### Tracing
 
