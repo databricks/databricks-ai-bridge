@@ -147,6 +147,10 @@ Use `agentbricks init --framework openai --disable-chat-app` for API-only output
 agentbricks --profile <profile> deploy agent-openai --source .
 ```
 
+This deploys an app named `agent-bricks-agent-openai`. The `agentbricks deployments` subcommands
+(`get`, `logs`, `start`, `stop`, `delete`) don't read `agent.toml`; pass that full app name, for
+example `agentbricks deployments get agent-bricks-agent-openai`. `agentbricks deployments list` shows it.
+
 When deployment provisions a dedicated Runtime Store, only the app-owned
 `databricks_agentkit_runtime_<hash>` schema and runtime tables are added. Managed Runtime Store
 deployments use their own default schema.

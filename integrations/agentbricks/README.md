@@ -141,6 +141,18 @@ stores declared in `agent.toml`, and grants the app's service principal access t
 `agentbricks deployments list` to find deployed apps, and `agentbricks deployments get agent-bricks-my-agent` to
 print an app's URL and status.
 
+Unlike `deploy`, the `agentbricks deployments` subcommands (`get`, `logs`, `start`, `stop`,
+`delete`) don't read the deployment name from `agent.toml`. They require the full app name,
+including the `agent-bricks-` prefix, so `agentbricks deployments get` with no argument fails with
+`Missing argument 'NAME'`, even from the project directory. List the deployments, copy the name,
+then pass it:
+
+```sh
+agentbricks deployments list
+agentbricks deployments get agent-bricks-my-agent
+agentbricks deployments logs agent-bricks-my-agent
+```
+
 `agentbricks init` declares default memory and session stores in `agent.toml`, so the deployed agent has
 long-term memory and durable conversation history. It creates `<name>-<6-letter-token>-memory` and
 `<name>-<6-letter-token>-sessions`, and records both names in `agent.toml`.
