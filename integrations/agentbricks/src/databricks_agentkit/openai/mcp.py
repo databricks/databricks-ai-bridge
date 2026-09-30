@@ -15,12 +15,9 @@ Unlike a fetch-once tool list, these are connection objects: open them for the l
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from databricks_openai.agents import McpServer
-
-if TYPE_CHECKING:
-    from agents.mcp import MCPServerStreamableHttpParams
 
 from databricks_agentkit.runtime import mcp_auth
 from databricks_agentkit.runtime.auth import AuthError
@@ -29,7 +26,7 @@ from databricks_agentkit.runtime.tool_manifest import (
     load_tools,
     sandbox_meta,
 )
-from databricks_agentkit.runtime.workspace import mcp_headers, workspace_client
+from databricks_agentkit.runtime.workspace import workspace_client, workspace_headers
 
 _FRAMEWORK = "openai"
 _auth_error = mcp_auth.mcp_auth_error
@@ -117,10 +114,6 @@ def _server_from_tool(
         mode, tool.id, workspace_client_for, workspace_client
     )
     host = client.config.host.rstrip("/")
-    headers = mcp_headers()
-    mcp_params: MCPServerStreamableHttpParams | None = (
-        {"url": "", "headers": headers} if headers else None
-    )
     if tool.kind in {"sandbox", "mcp", "genie_one"}:
         url = (
             f"{host}/api/2.0/mcp/genie"
@@ -133,7 +126,6 @@ def _server_from_tool(
                 name=tool.id,
                 workspace_client=client,
                 timeout=120.0,
-                params=mcp_params,
                 protected_meta=sandbox_meta(tool),
                 request_user=mode == "user",
             )
@@ -142,7 +134,7 @@ def _server_from_tool(
                 name=tool.id,
                 workspace_client=client,
                 timeout=120.0,
-                params={"url": url, "headers": headers},
+                params={"url": url, "headers": workspace_headers()},
                 request_user=mode == "user",
             )
         return _ConfiguredMcpServer(
@@ -150,7 +142,6 @@ def _server_from_tool(
             name=tool.id,
             workspace_client=client,
             timeout=120.0,
-            params=mcp_params,
             request_user=mode == "user",
         )
     if tool.kind == "uc_function":
@@ -162,7 +153,6 @@ def _server_from_tool(
             name=tool.id,
             workspace_client=client,
             timeout=120.0,
-            params=mcp_params,
             request_user=mode == "user",
         )
     return None
