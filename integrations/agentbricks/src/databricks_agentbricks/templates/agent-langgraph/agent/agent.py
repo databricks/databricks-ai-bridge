@@ -6,6 +6,7 @@ from databricks.sdk import WorkspaceClient
 from databricks_langchain import ChatDatabricks
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langchain_core.messages import BaseMessage, ToolMessage
 
 from agent.mcps import build_mcp_servers
 
@@ -40,7 +41,26 @@ REQUIRE_APPROVAL = {"send_message": True}
 
 
 class _RoutedChatDatabricks(ChatDatabricks):
-    """Forward account-host workspace routing to the underlying OpenAI clients."""
+    """Prepare gateway-safe tool messages and forward account-host routing."""
+
+    def _prepare_inputs(
+        self, messages: list[BaseMessage], *args: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        prepared = []
+        for message in messages:
+            if isinstance(message, ToolMessage) and isinstance(message.content, list):
+                # Released databricks-langchain can pass LangChain text-block metadata to AI Gateway.
+                content = [
+                    {"type": "text", "text": block["text"]}
+                    if isinstance(block, dict)
+                    and block.get("type") == "text"
+                    and isinstance(block.get("text"), str)
+                    else block
+                    for block in message.content
+                ]
+                message = message.model_copy(update={"content": content})
+            prepared.append(message)
+        return super()._prepare_inputs(prepared, *args, **kwargs)
 
     def _get_client_kwargs(self) -> dict[str, Any]:
         kwargs = super()._get_client_kwargs()
