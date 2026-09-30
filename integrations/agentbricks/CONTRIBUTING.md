@@ -107,6 +107,8 @@ Run **Cut Agent Bricks release** from the Actions tab with a version such as `0.
 `0.4.1`. Leave **dry_run** on first to see the source commit, branch, tag, and next
 development version. The helper's `plan` command runs for both previews and real cuts;
 `dry_run` skips the branch, tests, tag, and PR steps. Then rerun with dry_run off to make the cut.
+For a dry run, select the workflow branch to preview its workflow and release script changes.
+Run a real cut from `main`; the workflow checks this before planning.
 The workflow needs permission to write repository contents and open pull requests.
 
 The first `0.4.x` run creates `release/databricks-agentbricks/v0.4` from `main` (or

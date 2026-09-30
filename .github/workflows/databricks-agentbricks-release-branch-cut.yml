@@ -35,9 +35,12 @@ jobs:
       branch_exists: ${{ steps.plan.outputs.branch_exists }}
       next_dev_version: ${{ steps.plan.outputs.next_dev_version }}
     steps:
+      - name: Require main for a real cut
+        if: ${{ !inputs.dry_run }}
+        run: test "$GITHUB_REF" = refs/heads/main
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: main
+          ref: ${{ inputs.dry_run && github.workflow_sha || 'main' }}
           fetch-depth: 0
       - name: Plan release
         id: plan
