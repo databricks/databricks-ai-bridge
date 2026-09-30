@@ -534,11 +534,11 @@ server.
 ```sh
 agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
   --path /api/invocations \
-  --json '{"id":"00000000-0000-4000-8000-000000000001","input":[{"role":"user","content":"Hello"}]}'
+  --json '{"id":"00000000-0000-4000-8000-000000000001","session_id":"support-case-123","input":[{"role":"user","content":"Hello"}]}'
 
 agentbricks endpoint invoke --url http://localhost:8000 \
   --path /api/invocations \
-  --json '{"id":"00000000-0000-4000-8000-000000000001","input":[{"role":"user","content":"Hello"}]}'
+  --json '{"id":"00000000-0000-4000-8000-000000000001","session_id":"support-case-123","input":[{"role":"user","content":"Hello"}]}'
 ```
 
 The JSON body remains explicit even for generated agents. For example, managed runtime agents require
@@ -546,15 +546,19 @@ a client-generated invocation ID, and streaming servers require their own stream
 `--sse` so the CLI consumes the response as Server-Sent Events.
 
 ```sh
+SESSION_ID=$(uuidgen)
 INVOCATION_ID=$(uuidgen)
 agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
   --path /api/invocations \
-  --json "{\"id\":\"$INVOCATION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Run the report\"}]}"
+  --routing-key "$SESSION_ID" \
+  --json "{\"id\":\"$INVOCATION_ID\",\"session_id\":\"$SESSION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Run the report\"}]}"
 
+INVOCATION_ID=$(uuidgen)
 agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
   --path /api/invocations \
+  --routing-key "$SESSION_ID" \
   --sse \
-  --json "{\"id\":\"$INVOCATION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"stream\":true}"
+  --json "{\"id\":\"$INVOCATION_ID\",\"session_id\":\"$SESSION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"stream\":true}"
 ```
 
 `--routing-key` keeps a session on one app replica (sticky routing): set it to your stable session id
