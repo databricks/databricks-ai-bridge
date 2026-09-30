@@ -23,12 +23,6 @@ TEMPLATE_DEPENDENCY_PATTERN = re.compile(
     r'(?P<suffix>")'
 )
 PACKAGE_PATH = Path("integrations/agentbricks/pyproject.toml")
-TEMPLATE_NAMES = (
-    "agent-langgraph",
-    "agent-openai",
-    "custom-agent-langgraph",
-    "custom-agent-openai",
-)
 TEMPLATE_BASE_PATH = Path("integrations/agentbricks/src/databricks_agentbricks/templates")
 
 
@@ -48,19 +42,20 @@ def parse_sha(value: str) -> str:
 
 
 def plan_release(
-    version: str, base_sha: str, current_version: str, release_sha: str | None = None
+    version: str, base_sha: str, base_version: str, release_sha: str | None = None
 ) -> dict[str, str | bool]:
     target = parse_version(version)
-    current = parse_version(current_version, allow_dev=True)
+    current = parse_version(base_version, allow_dev=True)
     base = parse_sha(base_sha)
     branch_head = parse_sha(release_sha) if release_sha else None
     if target < current:
-        raise ValueError(f"release {version} would regress from {current_version}")
+        raise ValueError(f"release {version} would regress from {base_version}")
     if target[2] > 0 and branch_head is None:
         raise ValueError("patch releases require an existing release branch SHA")
     if branch_head is not None and target[:2] != current[:2]:
         raise ValueError("existing release branch version must share the target major and minor")
     major, minor, patch = target[:3]
+    # Patches reuse the same release branch for their major and minor series.
     return {
         "version": version,
         "branch": f"release/databricks-agentbricks/v{major}.{minor}",
@@ -91,8 +86,10 @@ def stamp_release(root: Path, version: str, *, templates: bool = False) -> None:
     package_path = root / PACKAGE_PATH
     updates = {package_path: _replace_package_version(package_path.read_text(), version)}
     if templates:
-        for name in TEMPLATE_NAMES:
-            path = root / TEMPLATE_BASE_PATH / name / "pyproject.toml"
+        template_paths = sorted((root / TEMPLATE_BASE_PATH).glob("*/pyproject.toml"))
+        if not template_paths:
+            raise ValueError("expected Agent Bricks template pyproject.toml files")
+        for path in template_paths:
             text = path.read_text()
             updated, count = TEMPLATE_DEPENDENCY_PATTERN.subn(
                 lambda match: f'{match.group("prefix")}{version}{match.group("suffix")}', text
@@ -108,21 +105,21 @@ def stamp_release(root: Path, version: str, *, templates: bool = False) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    plan = commands.add_parser("plan", help="print release details without changing files")
+    plan = commands.add_parser("plan", help="print a read-only plan for dry runs and actual cuts")
     plan.add_argument("--version", required=True)
     plan.add_argument("--base-sha", required=True, help="commit SHA of main for a new branch")
     plan.add_argument("--release-sha", help="head SHA of an existing release branch")
-    plan.add_argument("--current-version", required=True, help="version at the selected base SHA")
+    plan.add_argument("--base-version", required=True, help="version at the selected base SHA")
     stamp = commands.add_parser("stamp", help="stamp the package and optionally its templates")
-    stamp.add_argument("--version", required=True)
+    stamp.add_argument("--target-version", required=True)
     stamp.add_argument("--root", type=Path, required=True)
     stamp.add_argument("--templates", action="store_true")
     args = parser.parse_args()
     try:
         if args.command == "plan":
-            print(json.dumps(plan_release(args.version, args.base_sha, args.current_version, args.release_sha)))
+            print(json.dumps(plan_release(args.version, args.base_sha, args.base_version, args.release_sha)))
         else:
-            stamp_release(args.root, args.version, templates=args.templates)
+            stamp_release(args.root, args.target_version, templates=args.templates)
     except (ValueError, OSError) as exc:
         parser.error(str(exc))
 

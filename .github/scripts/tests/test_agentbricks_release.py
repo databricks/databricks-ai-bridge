@@ -72,7 +72,7 @@ class ReleasePlanTest(unittest.TestCase):
     def test_cli_prints_json(self) -> None:
         result = subprocess.run(
             [sys.executable, str(SCRIPT_PATH), "plan", "--version", "0.4.0",
-             "--base-sha", self.main_sha, "--current-version", "0.4.0"],
+             "--base-sha", self.main_sha, "--base-version", "0.4.0"],
             check=True,
             capture_output=True,
             text=True,
@@ -93,7 +93,9 @@ class StampTest(unittest.TestCase):
             '[tool.example]\nversion = "9.9.9"\n'
         )
         self.templates = []
-        for name in release.TEMPLATE_NAMES:
+        for name in (
+            "agent-langgraph", "agent-openai", "custom-agent-langgraph", "custom-agent-openai"
+        ):
             path = self.root / release.TEMPLATE_BASE_PATH / name / "pyproject.toml"
             path.parent.mkdir(parents=True)
             extra = "[langgraph]" if "langgraph" in name and not name.startswith("custom") else (
@@ -121,6 +123,31 @@ class StampTest(unittest.TestCase):
         expected = {path: path.read_bytes() for path in (self.package, *self.templates)}
         release.stamp_release(self.root, "0.4.0", templates=True)
         self.assertEqual(expected, {path: path.read_bytes() for path in expected})
+
+    def test_new_template_receives_release_version(self) -> None:
+        path = self.root / release.TEMPLATE_BASE_PATH / "another-framework" / "pyproject.toml"
+        path.parent.mkdir(parents=True)
+        path.write_text('[project]\ndependencies = ["databricks-agentbricks>=0.3.0"]\n')
+        release.stamp_release(self.root, "0.4.0", templates=True)
+        self.assertIn('"databricks-agentbricks>=0.4.0"', path.read_text())
+
+    def test_missing_templates_fail_before_package_write(self) -> None:
+        for path in self.templates:
+            path.unlink()
+        previous = self.package.read_bytes()
+        with self.assertRaisesRegex(ValueError, "expected Agent Bricks template pyproject.toml"):
+            release.stamp_release(self.root, "0.4.0", templates=True)
+        self.assertEqual(self.package.read_bytes(), previous)
+
+    def test_cli_stamp_accepts_target_version(self) -> None:
+        subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), "stamp", "--root", str(self.root),
+             "--target-version", "0.4.0", "--templates"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn('version = "0.4.0"', self.package.read_text())
 
     def test_development_stamp_changes_package_only(self) -> None:
         template_contents = [path.read_bytes() for path in self.templates]

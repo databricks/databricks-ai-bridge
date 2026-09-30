@@ -105,14 +105,15 @@ coverage for the new framework in `tests/unit_tests/doctor_test.py`.
 
 Run **Cut Agent Bricks release** from the Actions tab with a version such as `0.4.0` or
 `0.4.1`. Leave **dry_run** on first to see the source commit, branch, tag, and next
-development version. Then rerun with dry_run off to make the cut.
+development version. The helper's `plan` command runs for both previews and real cuts;
+`dry_run` skips the branch, tests, tag, and PR steps. Then rerun with dry_run off to make the cut.
 The workflow needs permission to write repository contents and open pull requests.
 
 The first `0.4.x` run creates `release/databricks-agentbricks/v0.4` from `main` (or
 an explicitly selected ancestor commit). Later runs use the current head of that
 branch; merge any required fixes into it before cutting a patch.
 The workflow stamps the package version and the minimum Agent Bricks dependency in
-all four scaffolds, tests the pushed commit, and tags that commit as
+all scaffolds, tests the pushed commit, and tags that commit as
 `databricks-agentbricks-v<version>` only after those tests pass. If tests fail, fix
 the release branch and rerun with the same version. Once a version is tagged,
 use the next patch version for any further fixes (for example, `0.4.1` after `0.4.0`).

@@ -27,6 +27,7 @@ env:
 jobs:
   plan:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     outputs:
       branch: ${{ steps.plan.outputs.branch }}
       tag: ${{ steps.plan.outputs.tag }}
@@ -79,7 +80,7 @@ jobs:
             fi
           fi
           CURRENT_VERSION=$(git show "$BASE_SHA:integrations/agentbricks/pyproject.toml" | python3 -c 'import sys,tomllib; print(tomllib.loads(sys.stdin.read())["project"]["version"])')
-          PLAN_ARGS=(--version "$VERSION" --base-sha "$BASE_SHA" --current-version "$CURRENT_VERSION")
+          PLAN_ARGS=(--version "$VERSION" --base-sha "$BASE_SHA" --base-version "$CURRENT_VERSION")
           if [ -n "$RELEASE_SHA" ]; then PLAN_ARGS+=(--release-sha "$RELEASE_SHA"); fi
           python3 .github/scripts/agentbricks_release.py plan "${PLAN_ARGS[@]}" > "$RUNNER_TEMP/agentbricks-plan.json"
           python3 - "$GITHUB_OUTPUT" "$GITHUB_STEP_SUMMARY" "$RUNNER_TEMP/agentbricks-plan.json" "$CURRENT_VERSION" <<'PY'
@@ -96,13 +97,14 @@ jobs:
               for key in ('version', 'branch', 'tag', 'base_sha', 'branch_exists', 'next_dev_version'):
                   f.write(f'- **{key}:** `{plan[key]}`\n')
               f.write(f'- **Current version at source:** `{current}`\n')
-              f.write('- **Changes:** stamp the package and four templates on the release branch, test the pushed commit, tag it, then open a next minor development version PR on the first cut. Publishing requires a separate approval.\n')
+              f.write('- **Changes:** stamp the package and scaffold templates on the release branch, test the pushed commit, tag it, then open a next minor development version PR on the first cut. Publishing requires a separate approval.\n')
           PY
 
   cut:
     if: ${{ !inputs.dry_run }}
     needs: plan
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: write
       pull-requests: write
@@ -138,7 +140,7 @@ jobs:
           fi
           cp .github/scripts/agentbricks_release.py "$RUNNER_TEMP/agentbricks_release.py"
           git checkout --detach "$BASE_SHA"
-          python3 "$RUNNER_TEMP/agentbricks_release.py" stamp --root . --version "$VERSION" --templates
+          python3 "$RUNNER_TEMP/agentbricks_release.py" stamp --root . --target-version "$VERSION" --templates
           git add integrations/agentbricks/pyproject.toml integrations/agentbricks/src/databricks_agentbricks/templates/*/pyproject.toml
           if ! git diff --cached --quiet; then
             git config user.name 'github-actions[bot]'
@@ -225,7 +227,7 @@ jobs:
           fi
           git checkout --detach "$MAIN_SHA"
           git switch -c "$BUMP_BRANCH"
-          python3 "$RUNNER_TEMP/agentbricks_release.py" stamp --root . --version "$NEXT_DEV_VERSION"
+          python3 "$RUNNER_TEMP/agentbricks_release.py" stamp --root . --target-version "$NEXT_DEV_VERSION"
           git add integrations/agentbricks/pyproject.toml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
