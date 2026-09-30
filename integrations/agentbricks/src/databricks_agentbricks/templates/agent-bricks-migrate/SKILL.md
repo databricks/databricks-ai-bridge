@@ -56,8 +56,9 @@ State and durability semantics differ by framework; handle the ones that apply:
   `X-Routing-Key` sticky-routing header. Map existing IDs explicitly, including reopening sessions.
   Derive actor identity from the trusted application context; do not blindly trust a caller field or adopt a shared
   fallback. If the existing server used a different request/response shape (e.g. a
-  `{conversation_id, message}` body), map it explicitly in `runtime/adapter.py` to the runtime's
-  `input.session_id` / `input.messages`, and preserve response fields clients depend on.
+  `{conversation_id, message}` body), translate it at the HTTP/client boundary to the runtime's
+  top-level `session_id` and `input.messages`. The runtime adapter reads session identity only from
+  `InvocationContext`. Preserve response fields clients depend on, except session identity.
 - **Recovery and durability:** Distinguish Runtime Store invocation recovery from Session Store
   persistence. Address at-least-once side effects and retain stronger existing guarantees. Do not
   silently enable replay of non-idempotent tools.

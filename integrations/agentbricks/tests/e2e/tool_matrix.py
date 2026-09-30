@@ -662,10 +662,11 @@ class Runner:
     ) -> dict[str, Any]:
         last: Exception | None = None
         invocation_id = str(uuid.uuid4())
+        session_id = str(uuid.uuid4())
         body = {
             "id": invocation_id,
+            "session_id": session_id,
             "input": {
-                "session_id": invocation_id,
                 "messages": [{"role": "user", "content": prompt}],
             },
         }
@@ -828,8 +829,8 @@ def _curl_command(invocation_url: str, prompt: str, authenticated: bool) -> str:
     body = json.dumps(
         {
             "id": "<client-generated-uuid>",
+            "session_id": "<stable-session-id>",
             "input": {
-                "session_id": "<stable-session-id>",
                 "messages": [{"role": "user", "content": prompt}],
             },
         }

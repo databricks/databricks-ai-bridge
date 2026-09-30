@@ -81,7 +81,13 @@ and register [runtime/adapter.py](runtime/adapter.py) hooks. Keep framework-nati
 The invoke hook translates opaque application input, runs the agent through the framework `Runner`,
 translates native events, calls `await context.emit(event)`, and returns JSON output. DurableAgentServer owns
 foreground/background transport, polling, and replay. Invocation UUIDs differ from stable
-application session IDs; the `X-Routing-Key` sticky-routing header is not the application session. `X-Routing-Key` is routing only and is never used as the session id; the session id comes from the request body (else the invocation id). The header is non-blank, no more than 128 UTF-8 bytes, used verbatim, and takes precedence over the legacy `__Host-databricks-app-router` cookie (for routing).
+application session IDs; the `X-Routing-Key` sticky-routing header is not the application session.
+`DurableAgentServer` accepts the application session as an optional top-level `session_id`; this
+template requires it for conversation state. The adapter reads it only from `InvocationContext`
+and does not echo it in the agent response; clients retain the value they submitted.
+`X-Routing-Key` is routing only and is never used as the session ID. The header is non-blank, no
+more than 128 UTF-8 bytes, used verbatim, and takes precedence over the legacy
+`__Host-databricks-app-router` cookie (for routing).
 
 The example assumes `messages` input and message, delta, and interrupt events. Custom inputs,
 outputs, and interruptions require explicit mappings and must not be discarded to fit the example.

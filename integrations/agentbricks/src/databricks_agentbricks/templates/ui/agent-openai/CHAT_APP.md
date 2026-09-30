@@ -36,9 +36,8 @@ drops the configured default. Transient list failures are retried in
 
 The UI reads local history from the agent's in-process session (`SQLiteSession`) and managed history
 from Session Store items. It keeps a stable application session UUID in browser local storage,
-includes it inside every durable invocation's `input`, and sends it on every call in the
-`X-Routing-Key` request header to ensure sticky routing; each turn gets a
-separate invocation UUID.
+sends it as every durable invocation's top-level `session_id`, and also uses the same value in the
+independent `X-Routing-Key` header for sticky routing; each turn gets a separate invocation UUID.
 
 The Sessions card creates new session UUIDs in the browser. With a managed Session Store,
 `GET /api/demo/sessions` lists the most recent sessions for the signed-in actor and each Open action

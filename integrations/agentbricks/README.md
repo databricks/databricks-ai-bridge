@@ -228,11 +228,15 @@ Each managed run is an **invocation**. Send a client-generated UUID `id` and you
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
+  "session_id": "support-case-123",
   "input": {"messages": [{"role": "user", "content": "Hello"}]},
   "background": true,
   "stream": true
 }
 ```
+
+The optional top-level `session_id` groups invocations into one application session. It is distinct
+from the invocation `id` and from the `X-Routing-Key` sticky-routing header.
 
 | Endpoint | Behavior |
 | --- | --- |
@@ -531,11 +535,11 @@ server.
 ```sh
 agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
   --path /api/invocations \
-  --json '{"id":"00000000-0000-4000-8000-000000000001","input":[{"role":"user","content":"Hello"}]}'
+  --json '{"id":"00000000-0000-4000-8000-000000000001","session_id":"support-case-123","input":[{"role":"user","content":"Hello"}]}'
 
 agentbricks endpoint invoke --url http://localhost:8000 \
   --path /api/invocations \
-  --json '{"id":"00000000-0000-4000-8000-000000000001","input":[{"role":"user","content":"Hello"}]}'
+  --json '{"id":"00000000-0000-4000-8000-000000000001","session_id":"support-case-123","input":[{"role":"user","content":"Hello"}]}'
 ```
 
 The JSON body remains explicit even for generated agents. For example, managed runtime agents require
@@ -543,20 +547,24 @@ a client-generated invocation ID, and streaming servers require their own stream
 `--sse` so the CLI consumes the response as Server-Sent Events.
 
 ```sh
+SESSION_ID=$(uuidgen)
 INVOCATION_ID=$(uuidgen)
 agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
   --path /api/invocations \
-  --json "{\"id\":\"$INVOCATION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Run the report\"}]}"
+  --routing-key "$SESSION_ID" \
+  --json "{\"id\":\"$INVOCATION_ID\",\"session_id\":\"$SESSION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Run the report\"}]}"
 
+INVOCATION_ID=$(uuidgen)
 agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
   --path /api/invocations \
+  --routing-key "$SESSION_ID" \
   --sse \
-  --json "{\"id\":\"$INVOCATION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"stream\":true}"
+  --json "{\"id\":\"$INVOCATION_ID\",\"session_id\":\"$SESSION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"stream\":true}"
 ```
 
 `--routing-key` keeps a session on one app replica (sticky routing): set it to your stable session id
 and it is sent verbatim in the `X-Routing-Key` request header. It is routing only and is never used
-as the session id - put the session id in the `--json` body for session continuity. This
+as the session id - put the session id at the top level of the `--json` body for session continuity. This
 also works with a direct App URL and with the generated runtime on localhost. OAuth and session headers are managed by
 the runtime; arbitrary custom request headers are intentionally not exposed by this command.
 
@@ -892,8 +900,8 @@ store and grants the app's service principal access to it. The memory store id f
 via the `AGENT_MEMORY_STORE` env var that `deploy` injects; `agentbricks dev` runs locally with memory off
 and does not inject it. The id is not persisted in `agent.toml`.)
 
-The chat UI generates a stable application session UUID in browser local storage, places it inside
-the invocation's opaque `input`, and creates a fresh invocation UUID per turn. The chat app also
+The chat UI generates a stable application session UUID in browser local storage, sends it as the
+invocation's top-level `session_id`, and creates a fresh invocation UUID per turn. The chat app also
 sends this session UUID in the `X-Routing-Key` request header, which is used verbatim to pin
 the session to one app replica (it must be non-blank and no more than 128 UTF-8 bytes). The header is neither
 authentication nor the template's application session state; it is independent sticky-routing

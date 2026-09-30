@@ -123,7 +123,7 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
     monkeypatch.setattr(ui, "_discover_chat_models", lambda: ["system.ai.claude-sonnet-4-5"])
 
     async def invoke_handler(request, context):
-        return {"output": [], "session_id": context.session_id}
+        return {"output": []}
 
     app = DurableAgentServer(runtime_store=InMemoryRuntimeStore())
     app.invoke(invoke_handler)
@@ -160,7 +160,16 @@ def test_demo_ui_routes(monkeypatch):
     assert 'demoUrl("/api/demo/models")' in app_script.text
     assert 'fetch("/api/session/new"' not in app_script.text
     assert "/api/demo/sessions/${encodeURIComponent(sessionId)}/open" in app_script.text
-    assert "session_id: sessionId" in app_script.text
+    assert (
+        "return { id: newSessionId(), session_id: sessionId, input, ...transport };"
+        in app_script.text
+    )
+    assert "session_id: sessionId,\n    actor:" not in app_script.text
+    assert "output.session_id" not in app_script.text
+    assert "result.session_id" not in app_script.text
+    assert "config.session_id" not in app_script.text
+    assert "setSessionId(sessionId);" in app_script.text
+    assert "setSessionId(state.sessionId);" in app_script.text
     assert 'fetch("/api/invocations"' in app_script.text
     # Routing key: a shared helper composed into both the submit POST and the background poll
     # GET, so every replica-scoped request is pinned to the session that started it.

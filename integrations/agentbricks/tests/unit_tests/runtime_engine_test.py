@@ -910,8 +910,8 @@ async def test_submit_returns_before_background_execution_finishes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_submit_preserves_idempotency_for_legacy_sessionless_state() -> None:
-    request = {"input": "hello", "session_id": "session-1"}
+async def test_submit_rejects_adding_session_to_existing_sessionless_invocation() -> None:
+    request = {"input": "hello"}
 
     async def execute(request: dict, context: InvocationAttemptContext) -> dict:
         return {"output": request["input"]}
@@ -921,13 +921,10 @@ async def test_submit_preserves_idempotency_for_legacy_sessionless_state() -> No
     runtime = make_local_runtime(execute, store)
     await runtime.start()
     try:
-        state = await runtime.submit("invocation-1", request, session_id="session-1")
-        result = await runtime.wait("invocation-1")
+        with pytest.raises(InvocationConflictError):
+            await runtime.submit("invocation-1", request, session_id="session-1")
     finally:
         await runtime.stop()
-
-    assert state.session_id is None
-    assert result == {"output": "hello"}
 
 
 @pytest.mark.asyncio

@@ -39,6 +39,7 @@ class _InvocationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: UUID
+    session_id: str | None = Field(default=None, min_length=1)
     input: PydanticJsonValue = Field(default_factory=list)
     background: bool = False
     stream: bool = False
@@ -130,12 +131,8 @@ class DurableAgentServer(FastAPI):
     ) -> JsonValue:
         if not isinstance(invocation_request, dict):
             raise TypeError("invocation request must be an object")
-        session_id = attempt_context.session_id
-        if session_id is None:
-            legacy_session_id = invocation_request.get("session_id")
-            session_id = legacy_session_id if isinstance(legacy_session_id, str) else None
-        if session_id is None or "input" not in invocation_request:
-            raise TypeError("invocation attempt must contain session_id and input")
+        if "input" not in invocation_request:
+            raise TypeError("invocation attempt must contain input")
         invocation_id = attempt_context.invocation_id
         request_auth = None
         if self.auth_policy.requires_user:
@@ -161,7 +158,7 @@ class DurableAgentServer(FastAPI):
 
         context = InvocationContext(
             invocation_id=invocation_id,
-            session_id=session_id,
+            session_id=attempt_context.session_id,
             attempt=attempt_context.attempt,
             _attempt_context=attempt_context,
             request_auth=request_auth,
@@ -182,18 +179,17 @@ class DurableAgentServer(FastAPI):
         request_auth = None
         registered_auth = False
         execution_owns_auth = False
-        # Use the invocation id as the fallback when the explicit session_id is missing
-        session_id = invocation_id
+        session_id = body.session_id
         if self.auth_policy.requires_user:
             request_auth = RequestAuthContext.from_headers(request.headers)
             runtime_invocation_id = request_auth.namespace("invocation", invocation_id)
-            session_id = request_auth.namespace("session", session_id)
+            if session_id is not None:
+                session_id = request_auth.namespace("session", session_id)
             existing_auth = self._request_auth.setdefault(runtime_invocation_id, request_auth)
             registered_auth = existing_auth is request_auth
             if not registered_auth:
                 request_auth.close()
         invocation_request: JsonObject = {
-            "session_id": session_id,
             "input": copy.deepcopy(body.input),
         }
         if self.auth_policy.requires_user:

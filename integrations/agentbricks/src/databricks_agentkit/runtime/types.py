@@ -88,10 +88,13 @@ InvocationExecutorFn = Callable[[JsonValue, InvocationAttemptContext], Awaitable
 
 @dataclass(frozen=True)
 class InvocationContext:
-    """Invocation/session metadata and event emission for a decorated agent function."""
+    """Invocation/session metadata and event emission for a decorated agent function.
+
+    ``session_id`` is ``None` when it is a "session-less" invocation
+    """
 
     invocation_id: str
-    session_id: str
+    session_id: str | None
     attempt: int
     _attempt_context: InvocationAttemptContext = field(repr=False, compare=False)
     request_auth: "RequestAuthContext | None" = field(default=None, repr=False, compare=False)
