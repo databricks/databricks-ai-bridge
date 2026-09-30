@@ -11,9 +11,16 @@ from __future__ import annotations
 from databricks_agentbricks.apps_client import AppsClient
 from databricks_agentbricks.cli.presenter import ClickPrompter, ClickReporter
 from databricks_agentbricks.databricks_cli import _databricks
+from databricks_agentbricks.deployment import _USE_MANAGED_RUNTIME_STORE
 from databricks_agentbricks.project_resolver import ProjectResolver
 from databricks_agentbricks.runtime_store_client import RuntimeStoreClient
 from databricks_agentbricks.services.deploy_service import DeployService
+from databricks_agentbricks.services.provisioners import (
+    MemoryStoreProvisioner,
+    RuntimeStoreProvisioner,
+    SessionStoreProvisioner,
+    TracingProvisioner,
+)
 from databricks_agentbricks.store_client import MemoryStoreClient, SessionStoreClient
 
 
@@ -26,16 +33,24 @@ def build_deploy_service(obj) -> DeployService:
         TracingClient,
     )
 
-    runner = _databricks
+    # `obj.client` memoizes the workspace client, so every collaborator handed this factory shares
+    # the one instance - and, it being a factory, nothing opens the client before pre-flight.
+    api = obj.client
+    # One AppsClient for the whole command: its service-principal cache then collapses the memory
+    # grant, session grant, and managed Runtime Store lookups into a single `apps get`.
+    apps = AppsClient(obj.profile, runner=_databricks)
+    reporter = ClickReporter()
     return DeployService(
         project=ProjectResolver(),
-        apps_client=AppsClient(obj.profile, runner=runner),
-        memory_store=MemoryStoreClient(),
-        session_store=SessionStoreClient(),
-        tracing=TracingClient(obj.profile),
-        runtime_store=RuntimeStoreClient(obj.profile),
-        client_factory=obj.client,
+        apps_client=apps,
+        api_client_factory=api,
+        memory_store=MemoryStoreProvisioner(MemoryStoreClient(api, apps), reporter),
+        session_store=SessionStoreProvisioner(SessionStoreClient(api, apps), reporter),
+        tracing=TracingProvisioner(TracingClient(api, obj.profile), reporter),
+        runtime_store=RuntimeStoreProvisioner(
+            RuntimeStoreClient(api, obj.profile, apps, _USE_MANAGED_RUNTIME_STORE), reporter
+        ),
         profile=obj.profile,
-        reporter=ClickReporter(),
+        reporter=reporter,
         prompter=ClickPrompter(),
     )

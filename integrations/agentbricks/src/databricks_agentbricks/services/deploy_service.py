@@ -16,16 +16,18 @@ It talks to the terminal only through the injected :class:`Reporter` and :class:
 hands back raw facts (a :class:`DeployResult`, or the Apps payloads as they came off the wire), so
 the CLI layer owns every presentation decision and this module needs no CLI framework of its own.
 
-Collaborators are injected so the command composes the service from the CLI context while tests
-construct it with fakes. ``client_factory`` is called once, after the pre-flight/auth phase, so a
-pre-flight failure never opens a workspace client.
+Collaborators - including the four resource provisioners ``deploy`` drives - are injected so the
+command composes the service from the CLI context while tests construct it with fakes.
+``api_client_factory`` is called once, after the pre-flight/auth phase, so a pre-flight failure
+never opens a workspace client.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import pathlib
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import Any, Callable, Optional
 
 from databricks_agentbricks.app_manifest import upsert_env_file
 from databricks_agentbricks.apps_client import AppsClient
@@ -34,7 +36,6 @@ from databricks_agentbricks.deployment import (
     _DEPLOYMENT_PREFIX,
     _MAX_DEPLOYMENT_NAME_LEN,
     _PIP_INDEX_ENVS,
-    _USE_MANAGED_RUNTIME_STORE,
     DeploymentName,
     _instance_args,
     _prefixed_name,
@@ -44,7 +45,6 @@ from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.project_config import require_managed_tool_support
 from databricks_agentbricks.project_resolver import ProjectResolver
 from databricks_agentbricks.project_types import AgentServer
-from databricks_agentbricks.runtime_store_client import RuntimeStoreClient
 from databricks_agentbricks.services.interaction import Prompter, Reporter
 from databricks_agentbricks.services.provisioners import (
     MemoryStoreProvisioner,
@@ -55,14 +55,6 @@ from databricks_agentbricks.services.provisioners import (
     SessionStoreProvisioner,
     TracingProvisioner,
 )
-from databricks_agentbricks.store_client import MemoryStoreClient, SessionStoreClient
-
-if TYPE_CHECKING:
-    # Typing-only, because it reaches the `cli` package (``TracingClient`` imports ``cli.tracing``),
-    # whose ``__init__`` eagerly imports the command tree — including the ``deploy`` command, which
-    # imports this module. Importing it at runtime would make importing the service itself circular;
-    # the service only ever needs it as a type, since the collaborator is injected.
-    from databricks_agentbricks.tracing_client import TracingClient
 
 
 class OperationAborted(Exception):
@@ -151,22 +143,22 @@ class DeployService:
         *,
         project: ProjectResolver,
         apps_client: AppsClient,
-        memory_store: MemoryStoreClient,
-        session_store: SessionStoreClient,
-        tracing: TracingClient,
-        runtime_store: RuntimeStoreClient,
-        client_factory: Callable[[], Any],
+        api_client_factory: Callable[[], Any],
+        memory_store: MemoryStoreProvisioner,
+        session_store: SessionStoreProvisioner,
+        tracing: TracingProvisioner,
+        runtime_store: RuntimeStoreProvisioner,
         profile: Optional[str],
         reporter: Reporter,
         prompter: Prompter,
     ) -> None:
         self._project = project
         self._apps_client = apps_client
+        self._api_client_factory = api_client_factory
         self._memory_store = memory_store
         self._session_store = session_store
         self._tracing = tracing
         self._runtime_store = runtime_store
-        self._client_factory = client_factory
         self._profile = profile
         self._reporter = reporter
         self._prompter = prompter
@@ -208,26 +200,18 @@ class DeployService:
         stops resolving once the app is gone. If that identity can't be read we refuse outright
         rather than delete the app and orphan its data.
         """
-        use_managed_runtime_store = _USE_MANAGED_RUNTIME_STORE
+        manages_persistent_data = self._runtime_store.manages_persistent_data()
         # Name the data loss in the prompt: with a managed store, deleting the app also drops the
         # agent's persisted memory/sessions, which the app name alone doesn't imply.
         target = (
             f"Delete deployment '{name}' and its Runtime Store data"
-            if use_managed_runtime_store
+            if manages_persistent_data
             else f"Delete deployment '{name}'"
         )
         self._confirm_action(target, assume_yes=assume_yes)
-        if use_managed_runtime_store:
-            app_service_principal_id = self._apps_client.service_principal(name)
-            if not app_service_principal_id:
-                raise AgentCliError(
-                    "Could not resolve the app's service principal for Runtime Store cleanup.",
-                    hint="The deployment was retained. Check access to the app and retry deletion.",
-                )
+        if manages_persistent_data:
             with self._reporter.status("Deleting Runtime Store…"):
-                self._runtime_store.delete_managed(
-                    self._client_factory(), name, app_service_principal_id
-                )
+                self._runtime_store.delete_managed(name)
         self._apps_client.delete(name)
 
     def _confirm_action(self, target: str, *, assume_yes: bool) -> None:
@@ -252,35 +236,41 @@ class DeployService:
         name = plan.name
         instances = request.instances
         instance_args = _instance_args(instances)
-        client = self._client_factory()
+        client = self._api_client_factory()
         memory_store_name, session_store_name, experiment_name = self._project.resource_bindings(
             source_dir
         )
-        rc = ResourceContext(
+        ctx = ResourceContext(
             project=ProjectContext(source_dir=source_dir, name=name, agent_project=plan.project),
-            client=client,
-            apps_client=self._apps_client,
-            reporter=self._reporter,
-            use_managed_runtime_store=_USE_MANAGED_RUNTIME_STORE,
+            memory_store=memory_store_name,
+            session_store=session_store_name,
+            experiment_name=experiment_name,
+            deployment_exists=False,
         )
-        memory = MemoryStoreProvisioner(self._memory_store, memory_store_name)
-        session = SessionStoreProvisioner(self._session_store, session_store_name)
-        tracing = TracingProvisioner(self._tracing, experiment_name)
-        runtime_store = RuntimeStoreProvisioner(self._runtime_store)
         # The order resources are reconciled in - each one's progress spinner appears here, so this is
         # the order the developer watches the deploy happen in. It also drives the later phases:
         # the stores grant (memory then session) before tracing does.
-        provisioners: tuple[ResourceProvisioner, ...] = (memory, session, tracing, runtime_store)
+        provisioners: tuple[ResourceProvisioner, ...] = (
+            self._memory_store,
+            self._session_store,
+            self._tracing,
+            self._runtime_store,
+        )
         # The order their env lands in app.yaml, which is NOT the reconcile order: tracing's MLFLOW_*
         # keys come first, then the memory/session store env. app.yaml's env list is a user-visible
         # file the developer reads and edits, so its key order is part of the CLI's output and is fixed
         # here rather than left to fall out of whichever order the resources happen to be reconciled in.
-        env_order: tuple[ResourceProvisioner, ...] = (tracing, memory, session, runtime_store)
+        env_order: tuple[ResourceProvisioner, ...] = (
+            self._tracing,
+            self._memory_store,
+            self._session_store,
+            self._runtime_store,
+        )
 
         # 1. Reconcile every declared resource: create what doesn't exist yet; each records on itself
         #    the env the deployed runtime reads. agent.toml is the source of truth and is never rewritten.
         for provisioner in provisioners:
-            provisioner.reconcile(rc)
+            provisioner.reconcile(ctx)
         env: dict[str, str] = {}
         for provisioner in env_order:
             env.update(provisioner.env)
@@ -305,8 +295,9 @@ class DeployService:
         # 4. Finish the resources that needed the app to exist (its service principal is resolvable
         #    only now), then fold any env they added (the managed Runtime Store) in - appended after
         #    the pip keys, since re-merging leaves the already-present keys in place.
+        ctx = dataclasses.replace(ctx, deployment_exists=deployment_exists)
         for provisioner in provisioners:
-            provisioner.after_app_ready(rc, deployment_exists)
+            provisioner.after_app_ready(ctx)
         for provisioner in env_order:
             env.update(provisioner.env)
 
@@ -321,7 +312,7 @@ class DeployService:
         #    grant is best-effort: each provisioner records its own failure instead of raising, because
         #    the deploy itself succeeded and the CLI reports a missing grant as a next step.
         for provisioner in provisioners:
-            provisioner.grant(rc)
+            provisioner.grant(ctx)
 
         return DeployResult(
             deployment=name,
@@ -330,16 +321,16 @@ class DeployService:
             workspace_path=ws_path,
             env=env,
             client_host=client.host,
-            memory_store=memory.store_name,
-            session_store=session.store_name,
-            trace_experiment_id=tracing.experiment_id,
-            uc_trace_tables=[t.full_name for t in tracing.otel_tables],
-            trace_setup_error=tracing.setup_error,
-            trace_grant_error=tracing.grant_error,
-            memory_grant_error=memory.grant_error,
-            session_grant_error=session.grant_error,
-            grants_memory=memory.grants,
-            grants_session=session.grants,
+            memory_store=self._memory_store.store_name,
+            session_store=self._session_store.store_name,
+            trace_experiment_id=self._tracing.experiment_id,
+            uc_trace_tables=[t.full_name for t in self._tracing.otel_tables],
+            trace_setup_error=self._tracing.setup_error,
+            trace_grant_error=self._tracing.grant_error,
+            memory_grant_error=self._memory_store.grant_error,
+            session_grant_error=self._session_store.grant_error,
+            grants_memory=self._memory_store.grants,
+            grants_session=self._session_store.grants,
             scaffolded=scaffolded or any(provisioner.scaffolded for provisioner in provisioners),
             pip_index_url=request.pip_index_url,
             instances=instances,

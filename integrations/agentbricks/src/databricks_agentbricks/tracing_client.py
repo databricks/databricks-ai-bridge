@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pathlib
 from collections.abc import Sequence
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from databricks_agentbricks.app_resources import apply_trace_resources
 from databricks_agentbricks.cli.tracing import (
@@ -21,12 +21,17 @@ from databricks_agentbricks.trace_tables import TraceTable
 
 
 class TracingClient:
-    """Resolve a project's bound tracing experiment and grant the app access to it, for a ``profile``."""
+    """Resolve a project's bound tracing experiment and grant the app access to it, for a ``profile``.
 
-    def __init__(self, profile: Optional[str]) -> None:
+    Holds the caching workspace-client factory, invoked lazily on first use, so its methods take
+    only the resource names.
+    """
+
+    def __init__(self, api_client_factory: Callable[[], Any], profile: Optional[str]) -> None:
+        self._api = api_client_factory
         self._profile = profile
 
-    def get_or_create(self, source: pathlib.Path, client) -> Optional[ResolvedTraceExperiment]:
+    def get_or_create(self, source: pathlib.Path) -> Optional[ResolvedTraceExperiment]:
         """Get-or-create this project's bound MLflow experiment in the ``profile``'s workspace, or None
         when tracing is unbound (no ``experiment_name`` in agent.toml).
 
@@ -44,7 +49,7 @@ class TracingClient:
         name = project.trace_experiment_name if project is not None else None
         if not name:
             return None
-        return create_experiment_idempotent(self._profile, client, name)
+        return create_experiment_idempotent(self._profile, self._api(), name)
 
     def apply_resources(
         self,
