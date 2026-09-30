@@ -35,6 +35,7 @@ class AppsClient:
     def __init__(self, profile: Optional[str], *, runner: DatabricksRunner = _databricks) -> None:
         self._profile = profile
         self._run = runner
+        self._sp_cache: dict[str, Optional[str]] = {}
 
     def _get_json(self, name: str) -> Optional[dict]:
         result = self._run(
@@ -149,9 +150,16 @@ class AppsClient:
         )
 
     def service_principal(self, name: str) -> Optional[str]:
-        """The app's service principal client id (its Postgres role identity), or None if unavailable."""
-        data = self._get_json(name)
-        return data.get("service_principal_client_id") if data else None
+        """The app's service principal client id (its Postgres role identity), or None if unavailable.
+
+        Resolved once per app name and cached: within a deploy the memory grant, the session grant, and
+        the managed Runtime Store all need the same SP, and an app's SP is stable for the run - so this
+        collapses their separate `apps get` calls into one, and no caller has to thread the value around.
+        """
+        if name not in self._sp_cache:
+            data = self._get_json(name)
+            self._sp_cache[name] = data.get("service_principal_client_id") if data else None
+        return self._sp_cache[name]
 
     def url(self, name: str) -> Optional[str]:
         """The deployed app's browsable URL, or None if it can't be read."""

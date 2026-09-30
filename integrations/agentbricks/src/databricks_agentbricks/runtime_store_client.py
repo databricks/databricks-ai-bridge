@@ -15,7 +15,7 @@ from databricks_agentbricks.app_resources import LakebaseBackend, apply_postgres
 from databricks_agentbricks.lakebase_runtime_store import RuntimeStoreBackend
 
 
-class RuntimeStoreProvisioner:
+class RuntimeStoreClient:
     """Get-or-create the Runtime Store backend for a deployment, for a ``profile``.
 
     A temporary rollout switch chooses between the legacy per-app Lakebase project and the

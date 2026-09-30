@@ -1,36 +1,36 @@
 """The phased resource provisioners `agentbricks deploy` drives, one per deployed resource.
 
-A deploy has to reconcile several independent resources - the stores declared in agent.toml, the
-tracing experiment, the Runtime Store - and each of them needs work at a different point in the
-rollout: some before the app exists, some only after (its service principal isn't resolvable until
-then), and some only after the source is live (the grants). Expressing that as inline blocks made
-``deploy()`` a long script in which each resource's three moments were pages apart, and let the
-asymmetries drift: a resource's reconcile sat next to its env contribution, while its grant sat in a
-separate helper shared with the other resources' grants.
+A deploy has to reconcile several independent resources - the memory and session stores declared in
+agent.toml, the tracing experiment, the Runtime Store - and each needs work at a different point in
+the rollout: some before the app exists, some only after (its service principal isn't resolvable
+until then), and some only after the source is live (the grants). Expressing that inline made
+``deploy()`` a long script in which each resource's three moments were pages apart.
 
 So each resource implements one uniform :class:`ResourceProvisioner` with the same three phases -
 ``reconcile`` (pre-create), ``after_app_ready`` (post-create), ``grant`` (post-rollout) - and
 ``deploy()`` becomes a driver that runs each phase across every provisioner. Adding a resource means
 adding a provisioner, not editing the driver.
 
-:class:`DeployContext` is the accumulator threaded through the phases: the run's inputs plus the
-facts the phases record for the final ``DeployResult``. Env is the one thing a phase does *not* write
-straight to the context: a provisioner records its contribution on itself and the driver merges them
-in a fixed order, because the order env lands in ``app.yaml`` is user-visible and does not match the
-order the resources are reconciled in (see ``DeployService.deploy``).
+The contexts passed to the phases are immutable data, split small on purpose (no kitchen-sink
+object, no methods): :class:`ProjectContext` is the deploy's identity (source dir, name, agent
+project) and :class:`ResourceContext` is that plus the shared machinery (workspace client, apps
+client, reporter, rollout flag). A phase records nothing back onto them - instead each provisioner
+accumulates its OWN outcome on itself (its ``env`` contribution, the keys it wants pruned, whether
+its manifest write scaffolded, and its per-resource facts/errors), and the driver reads those to
+assemble the ``DeployResult`` and to write ``app.yaml``. The app service principal several phases
+need is resolved and cached inside :class:`AppsClient`, so it needn't be threaded through here.
 
-Every provisioner here delegates the actual work to the collaborator that already owns it - one per
-resource (``MemoryStoreProvisioner``, ``SessionStoreProvisioner``, ``TracingProvisioner``,
-``RuntimeStoreProvisioner``) - so this module holds only the phasing, the env contributions, and the
-deploy-level error policy. It is free of any CLI framework: its own progress goes through the injected
-:class:`Reporter` (the store collaborators still render their reconcile notices directly, a pre-existing
-wart left for a follow-up).
+Each provisioner delegates the actual work to its own low-level client - ``MemoryStoreClient``,
+``SessionStoreClient``, ``TracingClient``, ``RuntimeStoreClient`` - so this module holds only the
+phasing, the env contributions, and the deploy-level error policy. Its own progress goes through the
+injected :class:`Reporter` (the store clients still render their reconcile notices directly, a
+pre-existing wart left for a follow-up).
 """
 
 from __future__ import annotations
 
 import pathlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Protocol
 
 from databricks_agentbricks.app_manifest import upsert_env_file
@@ -44,9 +44,9 @@ from databricks_agentbricks.deployment import (
 )
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.project_types import AgentServer
-from databricks_agentbricks.runtime_store_provisioner import RuntimeStoreProvisioner
+from databricks_agentbricks.runtime_store_client import RuntimeStoreClient
 from databricks_agentbricks.services.interaction import Reporter
-from databricks_agentbricks.store_provisioner import MemoryStoreProvisioner, SessionStoreProvisioner
+from databricks_agentbricks.store_client import MemoryStoreClient, SessionStoreClient
 from databricks_agentbricks.trace_tables import TraceTable
 from databricks_agentkit.runtime.store import (
     RUNTIME_STORE_DATABASE_ENV,
@@ -58,62 +58,34 @@ from databricks_agentkit.runtime.store import (
 from databricks_agentkit.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
 
 if TYPE_CHECKING:
-    # Typing-only: ``TracingProvisioner`` imports ``cli.tracing``, whose package ``__init__`` eagerly
+    # Typing-only: ``TracingClient`` imports ``cli.tracing``, whose package ``__init__`` eagerly
     # imports the command tree - including the ``deploy`` command, which reaches this module. The
     # collaborator is injected, so the type is all this module needs.
-    from databricks_agentbricks.tracing_provisioner import TracingProvisioner
+    from databricks_agentbricks.tracing_client import TracingClient
 
 
-@dataclass
-class DeployContext:
-    """One deploy run, as the provisioners see it: its inputs, plus what the phases record.
+@dataclass(frozen=True)
+class ProjectContext:
+    """What is being deployed: the identity shared by every resource, and nothing else."""
 
-    Mutable and shared: the phases read the inputs and accumulate onto the same object, which is what
-    lets a later phase depend on an earlier one's result (the managed Runtime Store branch needs
-    ``deployment_exists``; the trace grant needs the reconcile's ``trace_setup_error``) without the
-    driver passing tuples around. ``DeployService.deploy`` turns the accumulated facts into its
-    ``DeployResult``.
-    """
-
-    # --- inputs ---------------------------------------------------------------
     source_dir: pathlib.Path
     name: DeploymentName
-    project: Any  # the loaded AgentProject, or None when the source has no agent.toml
+    agent_project: Any  # the loaded AgentProject, or None when the source has no agent.toml
+
+
+@dataclass(frozen=True)
+class ResourceContext:
+    """What a provisioner phase is handed: the project identity plus the shared machinery.
+
+    Immutable and method-free - it carries no accumulators and no service-principal resolver. A phase
+    reads what it needs and records its result on its own provisioner; the driver owns the rest.
+    """
+
+    project: ProjectContext
     client: Any  # the workspace client, opened once after the pre-flight/auth phase
     apps_client: AppsClient
     reporter: Reporter
     use_managed_runtime_store: bool
-    # Known already from the name/scope pre-flight, else None until the driver probes for it (before
-    # the app is ensured, so ``after_app_ready`` can rely on it).
-    deployment_exists: Optional[bool] = None
-
-    # --- accumulators ---------------------------------------------------------
-    # The app.yaml env the deploy writes, assembled by the driver in a fixed order (see the module
-    # docstring), plus the agentbricks-managed keys a clean unbind prunes.
-    env: dict[str, str] = field(default_factory=dict)
-    env_removals: list[str] = field(default_factory=list)
-    scaffolded: bool = False  # True if a manifest write created app.yaml rather than patching it
-    memory_store: Optional[str] = None
-    session_store: Optional[str] = None
-    trace_experiment_id: Optional[str] = None
-    otel_tables: list[TraceTable] = field(default_factory=list)
-    trace_setup_error: Optional[str] = None
-    trace_grant_error: Optional[str] = None
-    memory_grant_error: Optional[str] = None
-    session_grant_error: Optional[str] = None
-    grants_memory: bool = False
-    grants_session: bool = False
-    # The deployed app's service principal, resolved lazily and cached so both store grants share the
-    # one `apps get` the combined grant used to make, now that memory and session grant separately.
-    _resolved_sp: Optional[str] = field(default=None, init=False)
-    _sp_resolved: bool = field(default=False, init=False)
-
-    def app_service_principal(self) -> Optional[str]:
-        """The deployed app's service principal (or None if it can't be resolved), resolved once."""
-        if not self._sp_resolved:
-            self._resolved_sp = self.apps_client.service_principal(self.name)
-            self._sp_resolved = True
-        return self._resolved_sp
 
 
 class ResourceProvisioner(Protocol):
@@ -121,143 +93,155 @@ class ResourceProvisioner(Protocol):
 
     A phase is a hook, not a step a caller has to remember: the driver runs all three for every
     provisioner, and a resource that has nothing to do in one leaves it at its no-op default (see
-    :class:`_Provisioner`). ``env`` is the provisioner's contribution to ``app.yaml``, recorded during
-    ``reconcile`` and merged by the driver in the order ``app.yaml`` expects.
+    :class:`_Provisioner`). Between phases a provisioner accumulates its contribution to the shared
+    ``app.yaml`` on itself: ``env`` (keys to set), ``env_removals`` (keys to prune), and ``scaffolded``
+    (whether its own manifest write created the file). The driver merges those in the order ``app.yaml``
+    expects.
     """
 
     env: dict[str, str]
+    env_removals: list[str]
+    scaffolded: bool
 
-    def reconcile(self, ctx: DeployContext) -> None:
-        """Pre-create: create or resolve the resource, record its facts on ``ctx`` and its env here."""
+    def reconcile(self, rc: ResourceContext) -> None:
+        """Pre-create: create or resolve the resource; record its env and facts on the provisioner."""
         ...
 
-    def after_app_ready(self, ctx: DeployContext) -> None:
-        """Post-create: the phase for work that needs the app to exist (e.g. its service principal).
+    def after_app_ready(self, rc: ResourceContext, deployment_exists: bool) -> None:
+        """Post-create: work that needs the app to exist (e.g. its service principal).
 
-        Env contributed here goes straight onto ``ctx.env`` (and needs its own manifest write): the
-        fixed-order merge has already run by now, and a post-create key is the last env a deploy emits.
+        ``deployment_exists`` tells a resource whether the app pre-existed this deploy. Env contributed
+        here is the last a deploy emits, so a provisioner that adds it also writes it to ``app.yaml``.
         """
         ...
 
-    def grant(self, ctx: DeployContext) -> None:
+    def grant(self, rc: ResourceContext) -> None:
         """Post-rollout: grant the app's identity access to the resource, recording any failure."""
         ...
 
 
 class _Provisioner:
-    """Base with an empty env contribution and no-op phases, so a provisioner writes only its own.
+    """Base with empty manifest contributions and no-op phases, so a provisioner writes only its own.
 
     Nothing here is abstract on purpose: most resources use one or two of the three phases, and
-    forcing the other one to be spelled out as ``pass`` would add noise without adding meaning.
+    forcing the others to be spelled out as ``pass`` would add noise without adding meaning.
     """
 
     def __init__(self) -> None:
         self.env: dict[str, str] = {}
+        self.env_removals: list[str] = []
+        self.scaffolded: bool = False
 
-    def reconcile(self, ctx: DeployContext) -> None:
+    def reconcile(self, rc: ResourceContext) -> None:
         """No-op unless overridden."""
 
-    def after_app_ready(self, ctx: DeployContext) -> None:
+    def after_app_ready(self, rc: ResourceContext, deployment_exists: bool) -> None:
         """No-op unless overridden."""
 
-    def grant(self, ctx: DeployContext) -> None:
+    def grant(self, rc: ResourceContext) -> None:
         """No-op unless overridden."""
 
 
-class MemoryStoreResourceProvisioner(_Provisioner):
+class MemoryStoreProvisioner(_Provisioner):
     """The memory store declared in agent.toml, reconciled and granted on its own.
 
     A sibling of the session, tracing, and Runtime Store provisioners: same three phases, its own env
-    contribution, its own grant. Delegates the API work to its own ``MemoryStoreProvisioner``.
+    contribution, its own grant. Delegates the API work to its own ``MemoryStoreClient``.
     """
 
-    def __init__(self, memory: MemoryStoreProvisioner, memory_store: Optional[str]) -> None:
+    def __init__(self, memory: MemoryStoreClient, memory_store: Optional[str]) -> None:
         super().__init__()
         self._memory = memory
-        self._memory_store = memory_store
+        self.store_name = memory_store  # the bound store name, surfaced back on the DeployResult
+        self.grant_error: Optional[str] = None
+        self.grants: bool = False
 
-    def reconcile(self, ctx: DeployContext) -> None:
+    def reconcile(self, rc: ResourceContext) -> None:
         """Create the declared memory store if absent and wire ``AGENT_MEMORY_STORE``.
 
         `agentbricks deploy` is the only reconcile-to-cloud verb; agent.toml is the source of truth and
         is never rewritten. ``AGENT_MEMORY_STORE`` carries the store's bare id (not its display name),
         because the entries API is keyed by id.
         """
-        ctx.memory_store = self._memory_store
-        if not self._memory_store:
+        if not self.store_name:
             return
-        memory_store_id = self._memory.reconcile(ctx.client, self._memory_store)
+        memory_store_id = self._memory.reconcile(rc.client, self.store_name)
         if memory_store_id:
             self.env[MEMORY_STORE_ENV] = memory_store_id
 
-    def grant(self, ctx: DeployContext) -> None:
+    def grant(self, rc: ResourceContext) -> None:
         """Grant the app's service principal read/write on the memory store (best-effort).
 
         Goes through the managed store API, so the store service performs the underlying Lakebase grant
         - no store ownership or Lakebase MANAGE required of the deployer. A failure is recorded, not
         raised: the deploy succeeded, and the CLI reports the missing grant as a next step.
         """
-        if not self._memory_store:
+        if not self.store_name:
             return
-        ctx.grants_memory = True
-        with ctx.reporter.status("Granting the app access to its memory store…"):
-            sp = ctx.app_service_principal()
+        self.grants = True
+        with rc.reporter.status("Granting the app access to its memory store…"):
+            sp = rc.apps_client.service_principal(rc.project.name)
             if sp is None:
-                ctx.memory_grant_error = "could not resolve the app's service principal."
+                self.grant_error = "could not resolve the app's service principal."
             else:
-                ctx.memory_grant_error = self._memory.grant(ctx.client, sp, self._memory_store)
+                self.grant_error = self._memory.grant(rc.client, sp, self.store_name)
 
 
-class SessionStoreResourceProvisioner(_Provisioner):
+class SessionStoreProvisioner(_Provisioner):
     """The session store declared in agent.toml, reconciled and granted on its own.
 
-    The memory store's sibling: same shape, delegating to its own ``SessionStoreProvisioner``. Session
+    The memory store's sibling: same shape, delegating to its own ``SessionStoreClient``. Session
     stores resolve by name, so ``AGENT_SESSION_STORE`` carries the name rather than a resolved id.
     """
 
-    def __init__(self, session: SessionStoreProvisioner, session_store: Optional[str]) -> None:
+    def __init__(self, session: SessionStoreClient, session_store: Optional[str]) -> None:
         super().__init__()
         self._session = session
-        self._session_store = session_store
+        self.store_name = session_store  # the bound store name, surfaced back on the DeployResult
+        self.grant_error: Optional[str] = None
+        self.grants: bool = False
 
-    def reconcile(self, ctx: DeployContext) -> None:
+    def reconcile(self, rc: ResourceContext) -> None:
         """Create the declared session store if absent and wire ``AGENT_SESSION_STORE``."""
-        ctx.session_store = self._session_store
-        if not self._session_store:
+        if not self.store_name:
             return
-        self._session.reconcile(ctx.client, self._session_store)
-        self.env[SESSION_STORE_ENV] = self._session_store
+        self._session.reconcile(rc.client, self.store_name)
+        self.env[SESSION_STORE_ENV] = self.store_name
 
-    def grant(self, ctx: DeployContext) -> None:
+    def grant(self, rc: ResourceContext) -> None:
         """Grant the app's service principal read/write on the session store (best-effort).
 
-        Same managed-store-API path and best-effort contract as the memory grant; the app's service
-        principal is resolved once (via the context) and shared with the memory grant.
+        Same managed-store-API path and best-effort contract as the memory grant; the service principal
+        is resolved once and cached in ``AppsClient``, so this and the memory grant share the one lookup.
         """
-        if not self._session_store:
+        if not self.store_name:
             return
-        ctx.grants_session = True
-        with ctx.reporter.status("Granting the app access to its session store…"):
-            sp = ctx.app_service_principal()
+        self.grants = True
+        with rc.reporter.status("Granting the app access to its session store…"):
+            sp = rc.apps_client.service_principal(rc.project.name)
             if sp is None:
-                ctx.session_grant_error = "could not resolve the app's service principal."
+                self.grant_error = "could not resolve the app's service principal."
             else:
-                ctx.session_grant_error = self._session.grant(ctx.client, sp, self._session_store)
+                self.grant_error = self._session.grant(rc.client, sp, self.store_name)
 
 
-class TraceExperimentProvisioner(_Provisioner):
+class TracingProvisioner(_Provisioner):
     """The MLflow experiment a deployed agent traces to, and the app resources granting write access.
 
     Best-effort throughout: tracing is an add-on, so neither a failed resolve nor a failed grant
     blocks a deploy - both are recorded for the CLI to report.
     """
 
-    def __init__(self, tracing: TracingProvisioner, experiment_name: Optional[str]) -> None:
+    def __init__(self, tracing: TracingClient, experiment_name: Optional[str]) -> None:
         super().__init__()
         self._tracing = tracing
         self._experiment_name = experiment_name
+        self.experiment_id: Optional[str] = None
+        self.otel_tables: list[TraceTable] = []
+        self.setup_error: Optional[str] = None
+        self.grant_error: Optional[str] = None
 
-    def reconcile(self, ctx: DeployContext) -> None:
+    def reconcile(self, rc: ResourceContext) -> None:
         """Get-or-create the experiment bound in agent.toml and wire the two env vars the runtime reads.
 
         Resolved by experiment NAME (never a stored id), and nothing is written back to agent.toml.
@@ -274,23 +258,23 @@ class TraceExperimentProvisioner(_Provisioner):
             if self._experiment_name:
                 # Show progress while the experiment is get-or-created (a workspace round-trip),
                 # matching the store reconcile spinners so deploy isn't silent about tracing.
-                with ctx.reporter.status(
+                with rc.reporter.status(
                     f"Reconciling tracing experiment '{self._experiment_name}'…"
                 ):
-                    trace_provision = self._tracing.get_or_create(ctx.source_dir, ctx.client)
+                    trace_provision = self._tracing.get_or_create(rc.project.source_dir, rc.client)
             else:
-                trace_provision = self._tracing.get_or_create(ctx.source_dir, ctx.client)
+                trace_provision = self._tracing.get_or_create(rc.project.source_dir, rc.client)
         except Exception as exc:  # noqa: BLE001 - tracing is best-effort; never block a deploy
-            ctx.trace_setup_error = str(exc)
-        ctx.trace_experiment_id = trace_provision.experiment_id if trace_provision else None
+            self.setup_error = str(exc)
+        self.experiment_id = trace_provision.experiment_id if trace_provision else None
         # No resolved experiment means no UC OTEL tables to grant - the same as an empty table set.
-        ctx.otel_tables = list(trace_provision.tables.otel_tables()) if trace_provision else []
-        if ctx.trace_experiment_id:
-            self.env.update(mlflow_tracing_config(ctx.trace_experiment_id).env())
-        elif ctx.trace_setup_error is None:
-            ctx.env_removals = list(mlflow_tracing_config("").env())  # the MLFLOW_* keys to prune
+        self.otel_tables = list(trace_provision.tables.otel_tables()) if trace_provision else []
+        if self.experiment_id:
+            self.env.update(mlflow_tracing_config(self.experiment_id).env())
+        elif self.setup_error is None:
+            self.env_removals = list(mlflow_tracing_config("").env())  # the MLFLOW_* keys to prune
 
-    def grant(self, ctx: DeployContext) -> None:
+    def grant(self, rc: ResourceContext) -> None:
         """Reconcile the agentbricks-owned trace resources whenever tracing resolved cleanly.
 
         A resolved experiment grants that set (the ``experiment`` resource, CAN_EDIT, plus MODIFY on
@@ -302,15 +286,15 @@ class TraceExperimentProvisioner(_Provisioner):
         (Whether removing a ``uc_securable`` resource also revokes the underlying UC MODIFY grant is
         platform behavior - documented but not yet verified live.)
         """
-        if ctx.trace_setup_error is not None:
+        if self.setup_error is not None:
             return
-        with ctx.reporter.status("Granting the agent runtime access to its trace experiment…"):
-            ctx.trace_grant_error = self._tracing.apply_resources(
-                ctx.name, ctx.trace_experiment_id, ctx.otel_tables
+        with rc.reporter.status("Granting the agent runtime access to its trace experiment…"):
+            self.grant_error = self._tracing.apply_resources(
+                rc.project.name, self.experiment_id, self.otel_tables
             )
 
 
-class RuntimeStoreResourceProvisioner(_Provisioner):
+class RuntimeStoreProvisioner(_Provisioner):
     """The persistent Runtime Store behind an Agent Bricks Runtime deployment.
 
     The only resource that splits across both create phases, because a temporary rollout switch picks
@@ -320,27 +304,30 @@ class RuntimeStoreResourceProvisioner(_Provisioner):
     until the app is there. Custom-server projects have no Runtime Store and skip every phase.
     """
 
-    def __init__(self, runtime_store: RuntimeStoreProvisioner) -> None:
+    def __init__(self, runtime_store: RuntimeStoreClient) -> None:
         super().__init__()
         self._runtime_store = runtime_store
         # None means the managed branch: `after_app_ready` keys off this to tell the two backends apart.
         self._legacy_backend: Optional[LakebaseBackend] = None
 
     @staticmethod
-    def _uses_runtime_store(ctx: DeployContext) -> bool:
+    def _uses_runtime_store(rc: ResourceContext) -> bool:
         """Only Agent Bricks Runtime projects get a Runtime Store; a custom server manages its own."""
-        return ctx.project is not None and ctx.project.server == AgentServer.AGENTBRICKS
+        return (
+            rc.project.agent_project is not None
+            and rc.project.agent_project.server == AgentServer.AGENTBRICKS
+        )
 
-    def reconcile(self, ctx: DeployContext) -> None:
+    def reconcile(self, rc: ResourceContext) -> None:
         """Legacy backend only: get-or-create the per-app Lakebase project and wire its env."""
-        if not self._uses_runtime_store(ctx) or ctx.use_managed_runtime_store:
+        if not self._uses_runtime_store(rc) or rc.use_managed_runtime_store:
             return
-        with ctx.reporter.status("Reconciling Runtime Store…"):
-            self._legacy_backend = self._runtime_store.legacy_backend(ctx.name)
+        with rc.reporter.status("Reconciling Runtime Store…"):
+            self._legacy_backend = self._runtime_store.legacy_backend(rc.project.name)
         self.env[RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV] = self._legacy_backend.endpoint_path
         self.env[RUNTIME_STORE_SCHEMA_ENV] = self._legacy_backend.schema
 
-    def after_app_ready(self, ctx: DeployContext) -> None:
+    def after_app_ready(self, rc: ResourceContext, deployment_exists: bool) -> None:
         """Attach the legacy backend to the app, or provision the managed store the app now owns.
 
         The managed branch writes its own env: app.yaml was already patched before the app was
@@ -348,7 +335,7 @@ class RuntimeStoreResourceProvisioner(_Provisioner):
         """
         if self._legacy_backend is not None:
             resource_error = self._runtime_store.apply_legacy_resource(
-                ctx.name, self._legacy_backend
+                rc.project.name, self._legacy_backend
             )
             if resource_error:
                 raise AgentCliError(
@@ -356,19 +343,19 @@ class RuntimeStoreResourceProvisioner(_Provisioner):
                     hint=resource_error,
                 )
             return
-        if not self._uses_runtime_store(ctx):
+        if not self._uses_runtime_store(rc):
             return
-        app_service_principal_id = ctx.apps_client.service_principal(ctx.name)
-        with ctx.reporter.status("Reconciling Runtime Store…"):
+        app_service_principal_id = rc.apps_client.service_principal(rc.project.name)
+        with rc.reporter.status("Reconciling Runtime Store…"):
             runtime_backend = self._runtime_store.managed_backend(
-                ctx.client, ctx.name, app_service_principal_id
+                rc.client, rc.project.name, app_service_principal_id
             )
         managed_env = {
             RUNTIME_STORE_LAKEBASE_BRANCH_ENV: runtime_backend.branch,
             RUNTIME_STORE_DATABASE_ENV: runtime_backend.database_id,
             RUNTIME_STORE_USERNAME_ENV: runtime_backend.username,
         }
-        if not ctx.deployment_exists and ctx.name.startswith(_DEPLOYMENT_PREFIX):
+        if not deployment_exists and rc.project.name.startswith(_DEPLOYMENT_PREFIX):
             managed_env[RUNTIME_STORE_SCHEMA_ENV] = _AGENTKIT_RUNTIME_STORE_SCHEMA
-        ctx.scaffolded = upsert_env_file(ctx.source_dir, managed_env) or ctx.scaffolded
-        ctx.env.update(managed_env)
+        self.scaffolded = upsert_env_file(rc.project.source_dir, managed_env) or self.scaffolded
+        self.env.update(managed_env)

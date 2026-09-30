@@ -20,7 +20,7 @@ from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.trace_tables import TraceTable
 
 
-class TracingProvisioner:
+class TracingClient:
     """Resolve a project's bound tracing experiment and grant the app access to it, for a ``profile``."""
 
     def __init__(self, profile: Optional[str]) -> None:

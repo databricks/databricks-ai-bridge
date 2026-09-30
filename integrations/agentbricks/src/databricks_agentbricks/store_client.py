@@ -1,7 +1,7 @@
 """Provisions and grants the memory and session stores declared in agent.toml.
 
-`MemoryStoreProvisioner` and `SessionStoreProvisioner` each wrap the managed-store API for their own
-store, mirroring how `RuntimeStoreProvisioner` and `TracingProvisioner` own their resource. Both are
+`MemoryStoreClient` and `SessionStoreClient` each wrap the managed-store API for their own
+store, mirroring how `RuntimeStoreClient` and `TracingClient` own their resource. Both are
 stateless - the workspace client is passed to each method rather than captured at construction - so
 `agentbricks deploy` injects one instance of each (symmetrically with the other resource
 collaborators) and uses it once the client is opened. The two share only the error-mapping helpers
@@ -48,11 +48,11 @@ def _store_access_error(name: str, kind: str) -> AgentCliError:
     )
 
 
-class MemoryStoreProvisioner:
+class MemoryStoreClient:
     """Provisions and grants access to the memory store declared in agent.toml.
 
     Stateless - every method takes the workspace client - so a single instance is injected into the
-    deploy service and driven by ``MemoryStoreResourceProvisioner``.
+    deploy service and driven by ``MemoryStoreProvisioner``.
     """
 
     def resolve(self, client, display_name: str) -> Optional[dict]:
@@ -121,11 +121,11 @@ class MemoryStoreProvisioner:
         return None
 
 
-class SessionStoreProvisioner:
+class SessionStoreClient:
     """Provisions and grants access to the session store declared in agent.toml.
 
     The memory store's sibling: same stateless, client-per-method shape, driven by
-    ``SessionStoreResourceProvisioner``. Session stores resolve by name, so there is no id to return.
+    ``SessionStoreProvisioner``. Session stores resolve by name, so there is no id to return.
     """
 
     def ensure(self, client, name: str) -> tuple[dict, bool]:
