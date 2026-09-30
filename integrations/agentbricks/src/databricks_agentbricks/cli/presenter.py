@@ -141,10 +141,14 @@ def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> Non
                 if not result.trace_experiment_id
                 else ("granted" if result.trace_grant_error is None else "failed"),
                 "trace_grant_error": result.trace_grant_error,
-                "store_grant": "skipped"
-                if not result.grants_stores
-                else ("granted" if result.store_grant_error is None else "failed"),
-                "store_grant_error": result.store_grant_error,
+                "memory_grant": "skipped"
+                if not result.grants_memory
+                else ("granted" if result.memory_grant_error is None else "failed"),
+                "memory_grant_error": result.memory_grant_error,
+                "session_grant": "skipped"
+                if not result.grants_session
+                else ("granted" if result.session_grant_error is None else "failed"),
+                "session_grant_error": result.session_grant_error,
             }
         )
         return
@@ -176,12 +180,21 @@ def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> Non
             f"Set a real `command:` in {pathlib.Path(result.source) / 'app.yaml'} "
             "(a placeholder was written)",
         )
-    if result.grants_stores and result.store_grant_error is not None:
+    # Per-store failure next steps. Inserted session-then-memory so memory lands above session (each
+    # insert(0) pushes to the front), matching the reconcile/grant order.
+    if result.grants_session and result.session_grant_error is not None:
         steps.insert(
             0,
-            "The app's service principal needs read/write on its store tables; that grant couldn't "
-            "be applied automatically (it requires store ownership). "
-            f"Cause: {result.store_grant_error}",
+            "The app's service principal needs read/write on its session store tables; that grant "
+            "couldn't be applied automatically (it requires store ownership). "
+            f"Cause: {result.session_grant_error}",
+        )
+    if result.grants_memory and result.memory_grant_error is not None:
+        steps.insert(
+            0,
+            "The app's service principal needs read/write on its memory store tables; that grant "
+            "couldn't be applied automatically (it requires store ownership). "
+            f"Cause: {result.memory_grant_error}",
         )
     if result.trace_experiment_id is None:
         # Deployed without tracing - either unbound, or a bound experiment that couldn't be set up.
@@ -200,7 +213,11 @@ def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> Non
             "The app's service principal needs write access to its trace experiment; that grant "
             f"couldn't be applied automatically. Cause: {result.trace_grant_error}",
         )
-    if result.grants_stores and result.store_grant_error is None:
+    if (
+        (result.grants_memory or result.grants_session)
+        and result.memory_grant_error is None
+        and result.session_grant_error is None
+    ):
         provisioned["Store access"] = "granted to app service principal"
     if result.trace_experiment_id and result.trace_grant_error is None:
         provisioned["Trace access"] = "granted to agent runtime service principal"

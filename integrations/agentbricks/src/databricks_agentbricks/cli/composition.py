@@ -14,7 +14,10 @@ from databricks_agentbricks.databricks_cli import _databricks
 from databricks_agentbricks.project_resolver import ProjectResolver
 from databricks_agentbricks.runtime_store_provisioner import RuntimeStoreProvisioner
 from databricks_agentbricks.services.deploy_service import DeployService
-from databricks_agentbricks.store_provisioner import StoreProvisioner
+from databricks_agentbricks.store_provisioner import (
+    MemoryStoreProvisioner,
+    SessionStoreProvisioner,
+)
 
 
 def build_deploy_service(obj) -> DeployService:
@@ -30,7 +33,8 @@ def build_deploy_service(obj) -> DeployService:
     return DeployService(
         project=ProjectResolver(),
         apps_client=AppsClient(obj.profile, runner=runner),
-        stores_factory=StoreProvisioner,
+        memory_store=MemoryStoreProvisioner(),
+        session_store=SessionStoreProvisioner(),
         tracing=TracingProvisioner(obj.profile),
         runtime_store=RuntimeStoreProvisioner(obj.profile),
         client_factory=obj.client,

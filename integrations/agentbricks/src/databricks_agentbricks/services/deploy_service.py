@@ -47,13 +47,17 @@ from databricks_agentbricks.project_types import AgentServer
 from databricks_agentbricks.runtime_store_provisioner import RuntimeStoreProvisioner
 from databricks_agentbricks.services.interaction import Prompter, Reporter
 from databricks_agentbricks.services.provisioners import (
-    DeclaredStoresProvisioner,
     DeployContext,
+    MemoryStoreResourceProvisioner,
     ResourceProvisioner,
     RuntimeStoreResourceProvisioner,
+    SessionStoreResourceProvisioner,
     TraceExperimentProvisioner,
 )
-from databricks_agentbricks.store_provisioner import StoreProvisioner
+from databricks_agentbricks.store_provisioner import (
+    MemoryStoreProvisioner,
+    SessionStoreProvisioner,
+)
 
 if TYPE_CHECKING:
     # Typing-only, because it reaches the `cli` package (``TracingProvisioner`` imports
@@ -117,8 +121,10 @@ class DeployResult:
     uc_trace_tables: list[str]
     trace_setup_error: Optional[str]
     trace_grant_error: Optional[str]
-    store_grant_error: Optional[str]
-    grants_stores: bool
+    memory_grant_error: Optional[str]
+    session_grant_error: Optional[str]
+    grants_memory: bool
+    grants_session: bool
     scaffolded: bool
     pip_index_url: Optional[str]
     instances: Optional[int]
@@ -147,7 +153,8 @@ class DeployService:
         *,
         project: ProjectResolver,
         apps_client: AppsClient,
-        stores_factory: Callable[[Any], StoreProvisioner],
+        memory_store: MemoryStoreProvisioner,
+        session_store: SessionStoreProvisioner,
         tracing: TracingProvisioner,
         runtime_store: RuntimeStoreProvisioner,
         client_factory: Callable[[], Any],
@@ -157,7 +164,8 @@ class DeployService:
     ) -> None:
         self._project = project
         self._apps_client = apps_client
-        self._stores_factory = stores_factory
+        self._memory_store = memory_store
+        self._session_store = session_store
         self._tracing = tracing
         self._runtime_store = runtime_store
         self._client_factory = client_factory
@@ -247,8 +255,9 @@ class DeployService:
         instances = request.instances
         instance_args = _instance_args(instances)
         client = self._client_factory()
-        stores = self._stores_factory(client)
-        memory_store, session_store, experiment_name = self._project.resource_bindings(source_dir)
+        memory_store_name, session_store_name, experiment_name = self._project.resource_bindings(
+            source_dir
+        )
         ctx = DeployContext(
             source_dir=source_dir,
             name=name,
@@ -259,18 +268,19 @@ class DeployService:
             use_managed_runtime_store=_USE_MANAGED_RUNTIME_STORE,
             deployment_exists=plan.deployment_exists,
         )
-        declared_stores = DeclaredStoresProvisioner(stores, memory_store, session_store)
+        memory = MemoryStoreResourceProvisioner(self._memory_store, memory_store_name)
+        session = SessionStoreResourceProvisioner(self._session_store, session_store_name)
         tracing = TraceExperimentProvisioner(self._tracing, experiment_name)
         runtime_store = RuntimeStoreResourceProvisioner(self._runtime_store)
         # The order resources are reconciled in - each one's progress spinner appears here, so this is
         # the order the developer watches the deploy happen in. It also drives the later phases:
-        # stores grant before tracing does.
-        provisioners: tuple[ResourceProvisioner, ...] = (declared_stores, tracing, runtime_store)
+        # the stores grant (memory then session) before tracing does.
+        provisioners: tuple[ResourceProvisioner, ...] = (memory, session, tracing, runtime_store)
         # The order their env lands in app.yaml, which is NOT the reconcile order: tracing's MLFLOW_*
-        # keys come first. app.yaml's env list is a user-visible file the developer reads and edits, so
-        # its key order is part of the CLI's output and is fixed here rather than left to fall out of
-        # whichever order the resources happen to be reconciled in.
-        env_order: tuple[ResourceProvisioner, ...] = (tracing, declared_stores, runtime_store)
+        # keys come first, then the memory/session store env. app.yaml's env list is a user-visible
+        # file the developer reads and edits, so its key order is part of the CLI's output and is fixed
+        # here rather than left to fall out of whichever order the resources happen to be reconciled in.
+        env_order: tuple[ResourceProvisioner, ...] = (tracing, memory, session, runtime_store)
 
         # 1. Reconcile every resource declared in agent.toml (stores, tracing, Runtime Store): create
         #    what doesn't exist yet and collect the env the deployed runtime reads. agent.toml is the
@@ -330,8 +340,10 @@ class DeployService:
             uc_trace_tables=[t.full_name for t in ctx.otel_tables],
             trace_setup_error=ctx.trace_setup_error,
             trace_grant_error=ctx.trace_grant_error,
-            store_grant_error=ctx.store_grant_error,
-            grants_stores=ctx.grants_stores,
+            memory_grant_error=ctx.memory_grant_error,
+            session_grant_error=ctx.session_grant_error,
+            grants_memory=ctx.grants_memory,
+            grants_session=ctx.grants_session,
             scaffolded=ctx.scaffolded,
             pip_index_url=request.pip_index_url,
             instances=instances,

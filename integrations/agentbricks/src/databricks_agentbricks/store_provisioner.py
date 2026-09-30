@@ -1,7 +1,11 @@
-"""Provisions and grants the memory/session stores declared in agent.toml.
+"""Provisions and grants the memory and session stores declared in agent.toml.
 
-`StoreProvisioner` wraps the managed-store API client so `agentbricks deploy` (and its tests) inject
-the client once via the constructor, instead of threading it through free functions.
+`MemoryStoreProvisioner` and `SessionStoreProvisioner` each wrap the managed-store API for their own
+store, mirroring how `RuntimeStoreProvisioner` and `TracingProvisioner` own their resource. Both are
+stateless - the workspace client is passed to each method rather than captured at construction - so
+`agentbricks deploy` injects one instance of each (symmetrically with the other resource
+collaborators) and uses it once the client is opened. The two share only the error-mapping helpers
+below, since a create denied/inaccessible looks the same for either store.
 """
 
 from __future__ import annotations
@@ -44,14 +48,15 @@ def _store_access_error(name: str, kind: str) -> AgentCliError:
     )
 
 
-class StoreProvisioner:
-    """Provisions and grants access to the memory/session stores declared in agent.toml."""
+class MemoryStoreProvisioner:
+    """Provisions and grants access to the memory store declared in agent.toml.
 
-    def __init__(self, client) -> None:
-        self._client = client
+    Stateless - every method takes the workspace client - so a single instance is injected into the
+    deploy service and driven by ``MemoryStoreResourceProvisioner``.
+    """
 
-    def resolve_memory_store(self, display_name: str) -> Optional[dict]:
-        """Find a memory store by display name, paging through the list, or None if none matches.
+    def resolve(self, client, display_name: str) -> Optional[dict]:
+        """Find the memory store by display name, paging through the list, or None if none matches.
 
         `get_memory_store` looks up by resource id (`memory-stores/<uuid>`), not the display name users
         pass, so resolving a name means listing and matching on `display_name`. The list API caps
@@ -59,7 +64,7 @@ class StoreProvisioner:
         """
         page_token: Optional[str] = None
         while True:
-            listing = self._client.list_memory_stores(
+            listing = client.list_memory_stores(
                 page_size=_MEMORY_STORE_PAGE_SIZE, page_token=page_token
             )
             for store in field(listing, "managed_memory_stores") or []:
@@ -69,82 +74,94 @@ class StoreProvisioner:
             if not page_token:
                 return None
 
-    def ensure_memory_store(self, display_name: str) -> tuple[dict, bool]:
+    def ensure(self, client, display_name: str) -> tuple[dict, bool]:
         """Create the memory store, or resolve it if it already exists. Returns (store, created)."""
         try:
-            return self._client.create_memory_store(display_name, retry_transient=True), True
+            return client.create_memory_store(display_name, retry_transient=True), True
         except AgentCliError as exc:
             if exc.error_code == "PERMISSION_DENIED":
                 raise _store_create_permission_error(display_name, "memory", exc) from exc
             if exc.error_code != "ALREADY_EXISTS":
                 raise
-        store = self.resolve_memory_store(display_name)
+        store = self.resolve(client, display_name)
         if store is None:
             # ALREADY_EXISTS but not in the caller's listing: the store isn't accessible to them.
             raise _store_access_error(display_name, "memory")
         return store, False
 
-    def ensure_session_store(self, name: str) -> tuple[dict, bool]:
+    def reconcile(self, client, display_name: str) -> Optional[str]:
+        """Create the declared memory store if it doesn't exist yet; return its bare id.
+
+        `agentbricks deploy` is the only verb that provisions stores. It reconciles to the name declared
+        in agent.toml (by `agentbricks init` or `agentbricks memory bind`) - never inventing a name and
+        never writing bindings back into the manifest. A store created here gets a one-line notice. The
+        bare id is returned so the caller can wire AGENT_MEMORY_STORE (the entries API is keyed by id,
+        not display name).
+        """
+        with render.status(f"Reconciling memory store '{display_name}'…"):
+            resolved, created = self.ensure(client, display_name)
+        if created:
+            render.console().print(f"[green]✓[/] Created memory store {display_name!r}")
+        return (field(resolved, "name") or "").split("/", 1)[-1] or None
+
+    def grant(self, client, sp: str, display_name: str) -> Optional[str]:
+        """Grant the app's service principal read/write on the memory store; return any error hint.
+
+        Goes through the managed store API, so the store service owns the SP's Lakebase role and runs
+        the GRANT itself - no store ownership or Lakebase MANAGE required of the deployer. Best-effort:
+        a failure is returned, not raised, so a missing grant is reported as a next step.
+        """
+        try:
+            store = self.resolve(client, display_name)
+            if store is None:
+                return f"memory store {display_name!r} could not be resolved."
+            client.grant_memory_store_permission(field(store, "name"), sp)
+        except AgentCliError as exc:
+            return exc.hint or str(exc)
+        return None
+
+
+class SessionStoreProvisioner:
+    """Provisions and grants access to the session store declared in agent.toml.
+
+    The memory store's sibling: same stateless, client-per-method shape, driven by
+    ``SessionStoreResourceProvisioner``. Session stores resolve by name, so there is no id to return.
+    """
+
+    def ensure(self, client, name: str) -> tuple[dict, bool]:
         """Create the session store, or resolve it if it already exists. Returns (store, created)."""
         try:
-            return self._client.create_session_store(name, retry_transient=True), True
+            return client.create_session_store(name, retry_transient=True), True
         except AgentCliError as exc:
             if exc.error_code == "PERMISSION_DENIED":
                 raise _store_create_permission_error(name, "session", exc) from exc
             if exc.error_code != "ALREADY_EXISTS":
                 raise
         try:
-            return self._client.get_session_store(name), False
+            return client.get_session_store(name), False
         except AgentCliError as exc:
             if exc.error_code == "PERMISSION_DENIED":
                 raise _store_access_error(name, "session") from exc
             raise
 
-    def reconcile_declared_stores(
-        self, memory_store: Optional[str], session_store: Optional[str]
-    ) -> Optional[str]:
-        """Create any store DECLARED in agent.toml that doesn't exist yet; return the memory store's id.
+    def reconcile(self, client, name: str) -> None:
+        """Create the declared session store if it doesn't exist yet.
 
-        `agentbricks deploy` is the only verb that provisions stores. It reconciles to the names declared in
-        agent.toml (by `agentbricks init` or `agentbricks memory/sessions bind`) — never inventing a name and never
-        writing bindings back into the manifest. A store created here gets a one-line notice. The memory
-        store's bare id is returned so the caller can wire AGENT_MEMORY_STORE (the entries API is keyed
-        by id, not display name); session stores resolve by name and need nothing here.
+        Like the memory store, reconciled to the name in agent.toml and never written back. Session
+        stores resolve by name, so nothing is returned - a created store gets a one-line notice.
         """
-        memory_store_id: Optional[str] = None
-        if memory_store:
-            with render.status(f"Reconciling memory store '{memory_store}'…"):
-                resolved, created = self.ensure_memory_store(memory_store)
-            memory_store_id = (field(resolved, "name") or "").split("/", 1)[-1] or None
-            if created:
-                render.console().print(f"[green]✓[/] Created memory store {memory_store!r}")
-        if session_store:
-            with render.status(f"Reconciling session store '{session_store}'…"):
-                _, created = self.ensure_session_store(session_store)
-            if created:
-                render.console().print(f"[green]✓[/] Created session store {session_store!r}")
-        return memory_store_id
+        with render.status(f"Reconciling session store '{name}'…"):
+            _, created = self.ensure(client, name)
+        if created:
+            render.console().print(f"[green]✓[/] Created session store {name!r}")
 
-    def grant_store_access(
-        self,
-        sp: str,
-        session_store: Optional[str],
-        memory_store: Optional[str],
-    ) -> Optional[str]:
-        """Grant the app's service principal read/write on its bound stores, via the managed store API.
+    def grant(self, client, sp: str, name: str) -> Optional[str]:
+        """Grant the app's service principal read/write on the session store; return any error hint.
 
-        The conversation-store service owns the (service-managed) store Lakebase, so it provisions the
-        SP's role and runs the GRANTs itself. Unlike a direct Lakebase grant, this needs neither store
-        ownership nor MANAGE on the store's Lakebase project, so it works for non-admin deployers.
+        Same managed-store-API path and best-effort contract as the memory grant.
         """
         try:
-            if session_store:
-                self._client.grant_session_store_permission(session_store, sp)
-            if memory_store:
-                store = self.resolve_memory_store(memory_store)
-                if store is None:
-                    return f"memory store {memory_store!r} could not be resolved."
-                self._client.grant_memory_store_permission(field(store, "name"), sp)
+            client.grant_session_store_permission(name, sp)
         except AgentCliError as exc:
             return exc.hint or str(exc)
         return None

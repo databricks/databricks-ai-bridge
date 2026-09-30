@@ -19,10 +19,12 @@ straight to the context: a provisioner records its contribution on itself and th
 in a fixed order, because the order env lands in ``app.yaml`` is user-visible and does not match the
 order the resources are reconciled in (see ``DeployService.deploy``).
 
-Every provisioner here delegates the actual work to the render-free collaborator that already owns it
-(``StoreProvisioner``, ``TracingProvisioner``, ``RuntimeStoreProvisioner``); this module holds only
-the phasing, the env contributions, and the deploy-level error policy. Like the service, it is free
-of any CLI framework: progress goes through the injected :class:`Reporter`.
+Every provisioner here delegates the actual work to the collaborator that already owns it - one per
+resource (``MemoryStoreProvisioner``, ``SessionStoreProvisioner``, ``TracingProvisioner``,
+``RuntimeStoreProvisioner``) - so this module holds only the phasing, the env contributions, and the
+deploy-level error policy. It is free of any CLI framework: its own progress goes through the injected
+:class:`Reporter` (the store collaborators still render their reconcile notices directly, a pre-existing
+wart left for a follow-up).
 """
 
 from __future__ import annotations
@@ -44,7 +46,7 @@ from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.project_types import AgentServer
 from databricks_agentbricks.runtime_store_provisioner import RuntimeStoreProvisioner
 from databricks_agentbricks.services.interaction import Reporter
-from databricks_agentbricks.store_provisioner import StoreProvisioner
+from databricks_agentbricks.store_provisioner import MemoryStoreProvisioner, SessionStoreProvisioner
 from databricks_agentbricks.trace_tables import TraceTable
 from databricks_agentkit.runtime.store import (
     RUNTIME_STORE_DATABASE_ENV,
@@ -97,8 +99,21 @@ class DeployContext:
     otel_tables: list[TraceTable] = field(default_factory=list)
     trace_setup_error: Optional[str] = None
     trace_grant_error: Optional[str] = None
-    store_grant_error: Optional[str] = None
-    grants_stores: bool = False
+    memory_grant_error: Optional[str] = None
+    session_grant_error: Optional[str] = None
+    grants_memory: bool = False
+    grants_session: bool = False
+    # The deployed app's service principal, resolved lazily and cached so both store grants share the
+    # one `apps get` the combined grant used to make, now that memory and session grant separately.
+    _resolved_sp: Optional[str] = field(default=None, init=False)
+    _sp_resolved: bool = field(default=False, init=False)
+
+    def app_service_principal(self) -> Optional[str]:
+        """The deployed app's service principal (or None if it can't be resolved), resolved once."""
+        if not self._sp_resolved:
+            self._resolved_sp = self.apps_client.service_principal(self.name)
+            self._sp_resolved = True
+        return self._resolved_sp
 
 
 class ResourceProvisioner(Protocol):
@@ -149,60 +164,85 @@ class _Provisioner:
         """No-op unless overridden."""
 
 
-class DeclaredStoresProvisioner(_Provisioner):
-    """The memory and session stores declared in agent.toml.
+class MemoryStoreResourceProvisioner(_Provisioner):
+    """The memory store declared in agent.toml, reconciled and granted on its own.
 
-    One provisioner for both, not one each, because the managed-store API grants them as a unit: a
-    single call covers both stores under a single service-principal resolution, and a deploy reports
-    one store-grant outcome. They are still reconciled one at a time (memory, then session), each
-    through ``StoreProvisioner``, which owns that store's progress spinner and its "Created …" notice.
+    A sibling of the session, tracing, and Runtime Store provisioners: same three phases, its own env
+    contribution, its own grant. Delegates the API work to its own ``MemoryStoreProvisioner``.
     """
 
-    def __init__(
-        self,
-        stores: StoreProvisioner,
-        memory_store: Optional[str],
-        session_store: Optional[str],
-    ) -> None:
+    def __init__(self, memory: MemoryStoreProvisioner, memory_store: Optional[str]) -> None:
         super().__init__()
-        self._stores = stores
+        self._memory = memory
         self._memory_store = memory_store
+
+    def reconcile(self, ctx: DeployContext) -> None:
+        """Create the declared memory store if absent and wire ``AGENT_MEMORY_STORE``.
+
+        `agentbricks deploy` is the only reconcile-to-cloud verb; agent.toml is the source of truth and
+        is never rewritten. ``AGENT_MEMORY_STORE`` carries the store's bare id (not its display name),
+        because the entries API is keyed by id.
+        """
+        ctx.memory_store = self._memory_store
+        if not self._memory_store:
+            return
+        memory_store_id = self._memory.reconcile(ctx.client, self._memory_store)
+        if memory_store_id:
+            self.env[MEMORY_STORE_ENV] = memory_store_id
+
+    def grant(self, ctx: DeployContext) -> None:
+        """Grant the app's service principal read/write on the memory store (best-effort).
+
+        Goes through the managed store API, so the store service performs the underlying Lakebase grant
+        - no store ownership or Lakebase MANAGE required of the deployer. A failure is recorded, not
+        raised: the deploy succeeded, and the CLI reports the missing grant as a next step.
+        """
+        if not self._memory_store:
+            return
+        ctx.grants_memory = True
+        with ctx.reporter.status("Granting the app access to its memory store…"):
+            sp = ctx.app_service_principal()
+            if sp is None:
+                ctx.memory_grant_error = "could not resolve the app's service principal."
+            else:
+                ctx.memory_grant_error = self._memory.grant(ctx.client, sp, self._memory_store)
+
+
+class SessionStoreResourceProvisioner(_Provisioner):
+    """The session store declared in agent.toml, reconciled and granted on its own.
+
+    The memory store's sibling: same shape, delegating to its own ``SessionStoreProvisioner``. Session
+    stores resolve by name, so ``AGENT_SESSION_STORE`` carries the name rather than a resolved id.
+    """
+
+    def __init__(self, session: SessionStoreProvisioner, session_store: Optional[str]) -> None:
+        super().__init__()
+        self._session = session
         self._session_store = session_store
 
     def reconcile(self, ctx: DeployContext) -> None:
-        """Create any declared store that doesn't exist yet and wire the env the runtime reads.
-
-        `agentbricks deploy` is the only reconcile-to-cloud verb; agent.toml is the source of truth
-        and is never rewritten. The memory store's bare id (not its display name) is what
-        ``AGENT_MEMORY_STORE`` carries, because the entries API is keyed by id.
-        """
-        ctx.memory_store = self._memory_store
+        """Create the declared session store if absent and wire ``AGENT_SESSION_STORE``."""
         ctx.session_store = self._session_store
-        memory_store_id = self._stores.reconcile_declared_stores(self._memory_store, None)
-        self._stores.reconcile_declared_stores(None, self._session_store)
-        if memory_store_id:
-            self.env[MEMORY_STORE_ENV] = memory_store_id
-        if self._session_store:
-            self.env[SESSION_STORE_ENV] = self._session_store
+        if not self._session_store:
+            return
+        self._session.reconcile(ctx.client, self._session_store)
+        self.env[SESSION_STORE_ENV] = self._session_store
 
     def grant(self, ctx: DeployContext) -> None:
-        """Grant the app's service principal read/write on its bound stores (best-effort).
+        """Grant the app's service principal read/write on the session store (best-effort).
 
-        Goes through the managed store API, so the store service performs the underlying Lakebase
-        grant - no store ownership or Lakebase MANAGE required of the deployer. A failure is recorded,
-        not raised: the deploy succeeded, and the CLI reports the missing grant as a next step.
+        Same managed-store-API path and best-effort contract as the memory grant; the app's service
+        principal is resolved once (via the context) and shared with the memory grant.
         """
-        ctx.grants_stores = bool(self._session_store or self._memory_store)
-        if not ctx.grants_stores:
+        if not self._session_store:
             return
-        with ctx.reporter.status("Granting the app access to its stores…"):
-            sp = ctx.apps_client.service_principal(ctx.name)
+        ctx.grants_session = True
+        with ctx.reporter.status("Granting the app access to its session store…"):
+            sp = ctx.app_service_principal()
             if sp is None:
-                ctx.store_grant_error = "could not resolve the app's service principal."
+                ctx.session_grant_error = "could not resolve the app's service principal."
             else:
-                ctx.store_grant_error = self._stores.grant_store_access(
-                    sp, self._session_store, self._memory_store
-                )
+                ctx.session_grant_error = self._session.grant(ctx.client, sp, self._session_store)
 
 
 class TraceExperimentProvisioner(_Provisioner):
