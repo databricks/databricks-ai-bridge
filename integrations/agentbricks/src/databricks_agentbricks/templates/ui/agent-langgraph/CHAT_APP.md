@@ -35,9 +35,9 @@ drops the configured default. Transient list failures are retried in
 `databricks_agentkit.runtime.model_services` before the fallback applies.
 
 The UI reads local history from the LangGraph checkpoint and managed history from Session Store
-items. It keeps a stable application session UUID in browser local storage and includes it inside
-every durable invocation's `input`; each turn gets a separate invocation UUID. The router cookie is
-independent and may still provide sticky replica routing.
+items. It keeps a stable application session UUID in browser local storage, sends it as every
+durable invocation's top-level `session_id`, and also uses the same value in the independent
+`X-Routing-Key` header for sticky routing; each turn gets a separate invocation UUID.
 
 The Sessions card creates new session UUIDs in the browser. With a managed Session Store,
 `GET /api/demo/sessions` lists the most recent sessions for the signed-in actor and each Open action

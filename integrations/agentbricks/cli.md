@@ -60,6 +60,7 @@ These options apply to every command. Pass them before the command name, for exa
 | [`login`](#agentbricks-login) | Authenticate and save a default profile |
 | [`logout`](#agentbricks-logout) | Forget the saved default profile |
 | [`init`](#agentbricks-init) | Scaffold a new agent project |
+| [`doctor`](#agentbricks-doctor) | Check an existing agent's Agent Bricks onboarding |
 | [`dev`](#agentbricks-dev) | Run the agent locally with a chat UI |
 | [`memory`](#agentbricks-memory) | Manage an agent's long-term memory |
 | [`mcp`](#agentbricks-mcp) | Discover managed MCP services |
@@ -130,6 +131,32 @@ _Options_
 | `--memory-store <MEMORY_STORE>` | string | - | no | Name for the declared memory store (default: derived from the directory, <dir>-memory). Only --server agentbricks declares stores by default. |
 | `--session-store <SESSION_STORE>` | string | - | no | Name for the declared session store (default: derived from the directory, <dir>-session). |
 | `--existing` | flag | - | no | Prepare a coding-agent migration bundle for an existing LangGraph or OpenAI Agents SDK project (defaults to `.`). Requires `--server agentbricks`. |
+
+### `agentbricks doctor`
+
+Check whether an existing agent repository is onboarded to Agent Bricks. DIRECTORY defaults to the
+current directory.
+
+Doctor is read-only and offline: it does not import application source, contact Databricks, or
+change files. It checks `agent.toml`, `.agentbricks/project.toml`, the framework-specific
+`databricks-agentbricks` dependency extra, `app.yaml`, and production Python source for a
+`DurableAgentServer` instance with an `invoke` hook plus a recognized framework adapter call; test,
+example, and old/stale directories are excluded. A bounded source scan that exceeds a limit is
+reported while the evidence it already found still counts. These checks are static repository
+evidence, not proof that the configured startup command executes the files found. Doctor exits 0
+only when every check passes, and exits 1 after printing a normal report otherwise. If the framework
+is unknown, the remediation requires an explicit `--framework <framework_name>`. Use global
+`-o json` for a structured report.
+
+```
+agentbricks doctor [DIRECTORY]
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `DIRECTORY` | no | Existing agent repository to inspect (default: `.`). |
 
 ### `agentbricks dev`
 
@@ -1044,7 +1071,7 @@ Any memory/session store declared in agent.toml (for example, by `agentbricks me
 
 Scaling to multiple instances (--instances) uses best-effort sticky routing, so a browser session automatically stays on one instance.
 
-API clients that need it must resend a stable UUID in this cookie every request: __Host-databricks-app-router=<uuid>
+To keep a session on one app replica (sticky routing), API clients must resend a stable UUID (for example, their session id) in the `X-Routing-Key` request header on every request. The header is a routing hint only - non-blank, no more than 128 UTF-8 bytes, used verbatim - not authentication and not the session id itself (send the session id in the request body). Example: `X-Routing-Key: <uuid>`
 
 ```
 agentbricks deploy [NAME] [options]
@@ -1208,7 +1235,7 @@ _Options_
 | `--query <QUERY>` | string | - | no | Query parameter as 'name=value'. |
 | `--json <JSON_VALUE>` | string | - | no | Complete JSON request body. |
 | `--sse` | flag | - | no | Consume the response as Server-Sent Events. |
-| `--session-id <SESSION_ID>` | string | - | no | Application session id (default: generated for a Databricks App). |
+| `--routing-key <ROUTING_KEY>` | string | - | no | Sticky-routing key; set it to your stable session id to keep a session on one app replica. Sent verbatim as the X-Routing-Key header (default: generated for a Databricks App). Routing only: while session_id is a natural routing key, it is recommended to pass the session id in the --json body for session continuity. |
 | `--timeout <TIMEOUT>` | float range | `300.0` | no | - |
 | `--auth`, `--no-auth` | flag | - | no | Inject Databricks OAuth authentication. |
 
@@ -1265,6 +1292,7 @@ _Options_
 | `--permission <read_only|read_write>` | `read_only` \| `read_write` | `read_only` | no | - |
 | `--name <TOOL_ID>` | string | `sandbox` | no | - |
 | `--auth <user|app>` | `user` \| `app` | `user` | no | - |
+| `--databricks-access-token-included`, `--no-databricks-access-token-included` | boolean flag | `--databricks-access-token-included` | no | Expose the selected Databricks credential to sandbox code. |
 | `--source <SOURCE>` | path | `.` | no | Agent project containing agent.toml. |
 
 ##### `agentbricks tools add mcp`

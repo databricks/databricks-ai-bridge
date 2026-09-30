@@ -186,15 +186,19 @@ async def test_adapter_calls_same_run_agent_for_invoke_and_recovery(monkeypatch)
         session_id="runtime-session",
         emit=AsyncMock(),
     )
-    payload = {"session_id": "session-1", "messages": [{"role": "user", "content": "hi"}]}
+    payload = {"session_id": "ignored", "messages": [{"role": "user", "content": "hi"}]}
 
-    await adapter.invoke(payload, context)
-    await adapter.recover(payload, context)
+    response = await adapter.invoke(payload, context)
+    recovered = await adapter.recover(payload, context)
 
     assert calls[0][0] == {"messages": payload["messages"]}
+    assert calls[0][1]["session_id"] == "runtime-session"
+    assert calls[0][1]["actor"] == "runtime-session"
     assert calls[1][0] is None
     assert calls[1][1] == {**calls[0][1], "graph": graph}
-    create_graph.assert_awaited_once_with("session-1", None)
+    create_graph.assert_awaited_once_with("runtime-session", None)
+    assert "session_id" not in response
+    assert "session_id" not in recovered
 
 
 def _has_workspace_auth() -> bool:

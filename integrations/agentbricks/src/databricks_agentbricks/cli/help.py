@@ -16,7 +16,7 @@ CommandPath = tuple[str, ...]
 # getting-started path. Any command missing here still lists under "Other commands" (see
 # `_group.AgentBricksGroup`).
 _COMMAND_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("SETUP", ("login", "logout", "init")),
+    ("SETUP", ("login", "logout", "init", "doctor")),
     ("DEVELOP", ("dev", "tools", "memory", "sessions", "tracing")),
     ("SHIP", ("deploy", "deployments")),
 )
@@ -42,6 +42,9 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
             "agentbricks init --framework langgraph --existing .",
             "prepare a coding-agent migration bundle for an existing agent",
         ),
+    ),
+    ("doctor",): (
+        ("agentbricks doctor .", "check an existing repository's Agent Bricks onboarding"),
     ),
     ("dev",): (("agentbricks dev", "run the agent locally with a chat UI"),),
     ("memory",): (
@@ -313,6 +316,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
             "agentbricks endpoint invoke agent-bricks-my-agent --path /api/invocations "
             "--json "
             '\'{"id":"00000000-0000-4000-8000-000000000001",'
+            '"session_id":"support-case-123",'
             '"input":[{"role":"user","content":"Hello"}]}\'',
             "invoke a deployed HTTP agent",
         ),
@@ -322,6 +326,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
             "agentbricks endpoint invoke agent-bricks-my-agent --path /api/invocations "
             "--json "
             '\'{"id":"00000000-0000-4000-8000-000000000001",'
+            '"session_id":"support-case-123",'
             '"input":[{"role":"user","content":"Hello"}]}\'',
             "invoke a deployed HTTP agent",
         ),
@@ -404,6 +409,7 @@ _SHORT_HELP: dict[CommandPath, str] = {
     ("login",): "Authenticate and save a default profile",
     ("logout",): "Forget the saved default profile",
     ("init",): "Scaffold a new agent project",
+    ("doctor",): "Check an existing agent's onboarding",
     ("dev",): "Run the agent locally with a chat UI",
     ("deploy",): "Deploy an agent to Databricks Apps",
     ("deployments",): "Manage deployed agents",

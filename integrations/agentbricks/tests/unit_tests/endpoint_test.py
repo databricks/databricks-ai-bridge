@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import urllib.error
+import uuid
 
 import pytest
 from click.testing import CliRunner
@@ -150,7 +151,7 @@ def test_invoke_deployed_app_resolves_oauth_and_generated_session(monkeypatch):
     request = captured["request"]
     assert request.url == "https://app.example/api/invocations"
     assert request.headers["Authorization"] == "Bearer token"
-    assert request.headers["Cookie"].startswith("__Host-databricks-app-router=")
+    assert uuid.UUID(request.headers["X-Routing-Key"])
     assert request.body == {"input": []}
 
 
@@ -172,7 +173,7 @@ def test_invoke_url_uses_explicit_routing_session_without_auth(monkeypatch):
             "http://localhost:8000",
             "--path",
             "/api/invocations",
-            "--session-id",
+            "--routing-key",
             "local-session",
             "--json",
             '{"input":[]}',
@@ -183,7 +184,7 @@ def test_invoke_url_uses_explicit_routing_session_without_auth(monkeypatch):
     assert result.exit_code == 0, result.output
     request = captured["request"]
     assert "Authorization" not in request.headers
-    assert request.headers["Cookie"] == "__Host-databricks-app-router=local-session"
+    assert request.headers["X-Routing-Key"] == "local-session"
 
 
 def test_url_can_explicitly_request_oauth(monkeypatch):
@@ -325,7 +326,7 @@ def test_help_exposes_only_low_level_options():
     result = CliRunner().invoke(endpoint, ["invoke", "--help"], obj=_Ctx())
 
     assert result.exit_code == 0, result.output
-    for option in ("--url", "--method", "--path", "--query", "--json", "--sse", "--session-id"):
+    for option in ("--url", "--method", "--path", "--query", "--json", "--sse", "--routing-key"):
         assert option in result.output
     for removed in (
         "--preset",
@@ -335,7 +336,6 @@ def test_help_exposes_only_low_level_options():
         "--id",
         "--poll-interval",
         "--expect-status",
-        "--routing-key",
         "--header",
         "--json-file",
     ):
