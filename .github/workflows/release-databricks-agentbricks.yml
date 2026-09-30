@@ -4,9 +4,6 @@
 name: Release databricks-agentbricks
 
 on:
-  push:
-    tags:
-      - "databricks-agentbricks-v*"
   workflow_dispatch:
     inputs:
       production:

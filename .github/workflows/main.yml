@@ -16,6 +16,17 @@ env:
   UV_VERSION: "0.9.11"
 
 jobs:
+  agentbricks_release_helper_test:
+    runs-on: ubuntu-latest
+    name: "agentbricks_release_helper_test (python: 3.11)"
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+      - run: python -m unittest discover .github/scripts/tests
+
   core_test:
     runs-on: ubuntu-latest
     name: "core_test (python: ${{ matrix.python-version }}, uv: ${{ matrix.uv-resolution }})"
@@ -314,9 +325,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Run tests
         working-directory: integrations/agentbricks
-        run: |
-          uv run --resolution ${{ matrix.uv-resolution }} \
-            --exact --group tests pytest tests/unit_tests
+        run: bash ../../.github/scripts/run_agentbricks_tests.sh unit "${{ matrix.uv-resolution }}"
 
   agentbricks_framework_test:
     runs-on: ubuntu-latest
@@ -333,9 +342,7 @@ jobs:
           python-version: "3.11"
       - name: Run tests with framework dependencies
         working-directory: integrations/agentbricks
-        run: |
-          uv run --resolution highest \
-            --exact --group tests --extra langgraph pytest tests/unit_tests
+        run: bash ../../.github/scripts/run_agentbricks_tests.sh framework
 
   agentbricks_dev_functional:
     runs-on: ${{ matrix.os }}
@@ -357,18 +364,6 @@ jobs:
       # exercise the shipped artifact (a packaging gap fails here) rather than an editable source
       # tree. `agentbricks` on PATH is the wheel's console script; AGENTBRICKS_WHEEL pins the scaffolded agent's
       # databricks-agentbricks at the same wheel.
-      - name: Build and install the Agent Bricks wheel
+      - name: Build and test the Agent Bricks wheel
         working-directory: integrations/agentbricks
-        run: |
-          uv build --wheel --out-dir dist ../..
-          uv build --wheel --out-dir dist
-          uv venv .venv-functional
-          uv pip install --python .venv-functional/bin/python --no-sources \
-            "$(ls dist/databricks_ai_bridge-*.whl)" \
-            "$(ls dist/databricks_agentbricks-*.whl)" --group tests
-      - name: Run Agent Bricks functional tests against the wheel
-        working-directory: integrations/agentbricks
-        run: |
-          AI_BRIDGE_WHEEL="$(ls "$PWD"/dist/databricks_ai_bridge-*.whl)" \
-          AGENTBRICKS_WHEEL="$(ls "$PWD"/dist/databricks_agentbricks-*.whl)" \
-            .venv-functional/bin/pytest tests/functional/
+        run: bash ../../.github/scripts/run_agentbricks_tests.sh functional
