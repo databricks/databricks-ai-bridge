@@ -581,6 +581,33 @@ async def test_agent_failure_returns_500_and_failed_event() -> None:
     ]
 
 
+@pytest.mark.asyncio
+async def test_mcp_permission_failure_returns_safe_error() -> None:
+    from databricks_agentkit.runtime.auth import AuthError
+
+    async def fail(input, context):
+        raise AuthError(
+            "MCP_PERMISSION_DENIED",
+            "MCP permission denied.",
+            403,
+            "sandbox",
+        )
+
+    app = make_app(fail)
+    async with running_client(app) as client:
+        response = await client.post("/api/invocations", json={"id": _RUN_1})
+        state = await client.get(f"/api/invocations/{_RUN_1}")
+
+    expected_error = {
+        "code": "MCP_PERMISSION_DENIED",
+        "message": "MCP permission denied.",
+        "integration_id": "sandbox",
+    }
+    assert response.status_code == 403
+    assert response.json() == {"error": expected_error}
+    assert state.json() == {"id": _RUN_1, "status": "failed", "error": expected_error}
+
+
 def test_app_is_asgi_app_with_instance_scoped_decorators() -> None:
     app = DurableAgentServer(runtime_store=InMemoryRuntimeStore())
 

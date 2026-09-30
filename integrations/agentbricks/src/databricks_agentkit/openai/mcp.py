@@ -23,8 +23,8 @@ from databricks_agentkit.runtime import mcp_auth
 from databricks_agentkit.runtime.auth import AuthError
 from databricks_agentkit.runtime.tool_manifest import (
     ToolRecord,
-    downscope_wire,
     load_tools,
+    sandbox_meta,
 )
 from databricks_agentkit.runtime.workspace import workspace_client, workspace_headers
 
@@ -86,19 +86,19 @@ class _ConfiguredMcpServer(McpServer):
 
 
 class _DownscopedMcpServer(_ConfiguredMcpServer):
-    """An ``McpServer`` that injects a sandbox downscope into every ``call_tool``.
+    """An ``McpServer`` that injects protected sandbox policy into every ``call_tool``.
 
-    The Databricks sandbox MCP applies the downscope from the call's ``_meta``; the Agents SDK does
-    not surface a per-call hook, so bind the manifest's downscope to the server and add it on each
-    invocation. Only sandbox bindings need this — plain MCP / UC-function servers use the base class.
+    The Databricks sandbox MCP applies policy from the call's ``_meta``; the Agents SDK does not
+    surface a per-call hook, so bind the manifest policy to the server and add it on each invocation.
+    Only sandbox bindings need this — plain MCP / UC-function servers use the base class.
     """
 
-    def __init__(self, *args: Any, downscope: dict[str, Any], **kwargs: Any) -> None:
+    def __init__(self, *args: Any, protected_meta: dict[str, Any], **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._downscope = downscope
+        self._protected_meta = protected_meta
 
     async def call_tool(self, tool_name, arguments, **kwargs):
-        meta = {**(kwargs.pop("meta", None) or {}), "downscope": self._downscope}
+        meta = {**(kwargs.pop("meta", None) or {}), **self._protected_meta}
         return await super().call_tool(tool_name, arguments, meta=meta, **kwargs)
 
 
@@ -126,7 +126,7 @@ def _server_from_tool(
                 name=tool.id,
                 workspace_client=client,
                 timeout=120.0,
-                downscope=downscope_wire(tool),
+                protected_meta=sandbox_meta(tool),
                 request_user=mode == "user",
             )
         if tool.kind == "genie_one":
