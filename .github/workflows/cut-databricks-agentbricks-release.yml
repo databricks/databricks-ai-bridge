@@ -79,7 +79,7 @@ jobs:
             fi
           fi
           CURRENT_VERSION=$(git show "$BASE_SHA:integrations/agentbricks/pyproject.toml" | python3 -c 'import sys,tomllib; print(tomllib.loads(sys.stdin.read())["project"]["version"])')
-          PLAN_ARGS=(--version "$VERSION" --base-sha "$MAIN_SHA" --current-version "$CURRENT_VERSION")
+          PLAN_ARGS=(--version "$VERSION" --base-sha "$BASE_SHA" --current-version "$CURRENT_VERSION")
           if [ -n "$RELEASE_SHA" ]; then PLAN_ARGS+=(--release-sha "$RELEASE_SHA"); fi
           python3 .github/scripts/agentbricks_release.py plan "${PLAN_ARGS[@]}" > "$RUNNER_TEMP/agentbricks-plan.json"
           python3 - "$GITHUB_OUTPUT" "$GITHUB_STEP_SUMMARY" "$RUNNER_TEMP/agentbricks-plan.json" "$CURRENT_VERSION" <<'PY'
