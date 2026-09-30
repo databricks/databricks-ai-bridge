@@ -35,9 +35,7 @@ def _session_id(context: InvocationContext) -> str:
 
 
 def _actor(payload: dict[str, Any], session_id: str) -> str:
-    value = payload.get("actor")
-    if value is None:
-        return session_id
+    value = payload.get("actor") or session_id
     if not isinstance(value, str) or not value:
         raise ValueError("actor must be a non-empty string")
     return value
@@ -93,7 +91,7 @@ async def _invoke_agent(
             "Request-user invocations cannot be recovered in the background.",
             400,
         )
-    if auth and payload.get("actor") is not None:
+    if auth and payload.get("actor"):
         actor = auth.namespace("actor", actor)
     auth_kwargs = {"workspace_client_for": auth.client_for} if user_auth else {}
     model = payload.get("model")

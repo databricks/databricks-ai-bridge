@@ -88,7 +88,12 @@ InvocationExecutorFn = Callable[[JsonValue, InvocationAttemptContext], Awaitable
 
 @dataclass(frozen=True)
 class InvocationContext:
-    """Invocation/session metadata and event emission for a decorated agent function."""
+    """Invocation/session metadata and event emission for a decorated agent function.
+
+    ``session_id`` is ``None`` when the optional top-level request field was omitted. It is not
+    inferred from the invocation ID, nested input, response, or routing header, and remains
+    ``None`` during recovery.
+    """
 
     invocation_id: str
     session_id: str | None

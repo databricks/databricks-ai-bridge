@@ -112,7 +112,8 @@ def test_main_lets_durable_agent_server_infer_auth_policy_after_configure(framew
 
 
 @pytest.mark.asyncio
-async def test_context_session_and_default_actor_are_already_private(template, monkeypatch):
+@pytest.mark.parametrize("actor", [None, ""])
+async def test_context_session_and_default_actor_are_already_private(template, monkeypatch, actor):
     framework, adapter, _agent = template
     calls = []
 
@@ -134,7 +135,10 @@ async def test_context_session_and_default_actor_are_already_private(template, m
         invocation_id="public-run",
         emit=AsyncMock(),
     )
-    response = await adapter.invoke({"messages": []}, context)
+    payload = {"messages": []}
+    if actor is not None:
+        payload["actor"] = actor
+    response = await adapter.invoke(payload, context)
     assert calls[0]["session_id"] == "already-private"
     assert calls[0]["actor"] == "already-private"
     assert "session_id" not in response

@@ -1071,7 +1071,7 @@ Any memory/session store declared in agent.toml (for example, by `agentbricks me
 
 Scaling to multiple instances (--instances) uses best-effort sticky routing, so a browser session automatically stays on one instance.
 
-To keep a session on one app replica (sticky routing), API clients must resend a stable UUID (for example, their session id) in the `X-Routing-Key` request header on every request. The header is a routing hint only - non-blank, no more than 128 UTF-8 bytes, used verbatim - not authentication and not the session id itself (send the session id as the top-level `session_id` in the request body). Example: `X-Routing-Key: <uuid>`
+To keep a session on one app replica (sticky routing), API clients must resend a stable UUID (for example, their session id) in the `X-Routing-Key` request header on every request. The header is a routing hint only - non-blank, no more than 128 UTF-8 bytes, used verbatim - not authentication and not the session id itself (send the session id in the request body). Example: `X-Routing-Key: <uuid>`
 
 ```
 agentbricks deploy [NAME] [options]
@@ -1235,7 +1235,7 @@ _Options_
 | `--query <QUERY>` | string | - | no | Query parameter as 'name=value'. |
 | `--json <JSON_VALUE>` | string | - | no | Complete JSON request body. |
 | `--sse` | flag | - | no | Consume the response as Server-Sent Events. |
-| `--routing-key <ROUTING_KEY>` | string | - | no | Sticky-routing key; set it to your stable session id to keep a session on one app replica. Sent verbatim as the X-Routing-Key header (default: generated for a Databricks App). Routing only: while session_id is a natural routing key, pass the session id as the top-level session_id in the --json body for session continuity. |
+| `--routing-key <ROUTING_KEY>` | string | - | no | Sticky-routing key; set it to your stable session id to keep a session on one app replica. Sent verbatim as the X-Routing-Key header (default: generated for a Databricks App). Routing only: while session_id is a natural routing key, it is recommended to pass the session id in the --json body for session continuity. |
 | `--timeout <TIMEOUT>` | float range | `300.0` | no | - |
 | `--auth`, `--no-auth` | flag | - | no | Inject Databricks OAuth authentication. |
 

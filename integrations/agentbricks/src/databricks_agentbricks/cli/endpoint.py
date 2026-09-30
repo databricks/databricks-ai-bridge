@@ -91,8 +91,8 @@ def endpoint() -> None:
     help=(
         "Sticky-routing key; set it to your stable session id to keep a session on one app replica. "
         "Sent verbatim as the X-Routing-Key header (default: generated for a Databricks App). "
-        "Routing only: while session_id is a natural routing key, pass the session id as the top-level "
-        "session_id in the --json body for session continuity."
+        "Routing only: while session_id is a natural routing key, it is recommended to pass the session "
+        "id in the --json body for session continuity."
     ),
 )
 @click.option("--timeout", type=click.FloatRange(min=0.1), default=300.0, show_default=True)

@@ -30,9 +30,7 @@ def _session_id(context: InvocationContext) -> str:
 
 
 def _actor(payload: dict[str, Any], session_id: str) -> str:
-    value = payload.get("actor")
-    if value is None:
-        return session_id
+    value = payload.get("actor") or session_id
     if not isinstance(value, str) or not value:
         raise ValueError("actor must be a non-empty string")
     return value
@@ -93,7 +91,7 @@ async def _invoke_agent(
     session_id = _session_id(context)
     actor = _actor(payload, session_id)
     auth = getattr(context, "request_auth", None)
-    if auth and payload.get("actor") is not None:
+    if auth and payload.get("actor"):
         actor = auth.namespace("actor", actor)
     user_auth = auth is not None
     run_kwargs = {"workspace_client_for": auth.client_for} if user_auth else {}
