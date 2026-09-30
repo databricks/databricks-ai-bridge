@@ -22,7 +22,7 @@ import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, cast
 
 import tomli
 import tomlkit
@@ -84,6 +84,8 @@ class ProjectCase:
     authoring: str
     path: pathlib.Path
     app_name: str
+    memory_store_name: str | None = None
+    session_store_name: str | None = None
 
 
 class Transcript:
@@ -131,6 +133,7 @@ class Runner:
         self.agentbricks = self.runner_venv / "bin" / "agentbricks"
         self.rows: list[EvidenceRow] = []
         self.apps: list[str] = []
+        self.cases: list[ProjectCase] = []
         self.uc_function: str | None = None
         self.warehouse_id: str | None = None
         self.host: str | None = None
@@ -374,8 +377,57 @@ class Runner:
                     self._author_direct(project, framework)
                 self._write_python_marker(project)
                 app_name = f"agent-bricks-t-{framework[:2]}-{authoring[:2]}-{run_suffix}"
-                cases.append(ProjectCase(framework, authoring, project, app_name))
+                case = ProjectCase(framework, authoring, project, app_name)
+                cases.append(case)
+                self.cases.append(case)
+                self._provision_stores(case)
         return cases
+
+    def _provision_stores(self, case: ProjectCase) -> None:
+        manifest = tomli.loads((case.path / "agent.toml").read_text(encoding="utf-8"))
+        memory = manifest.get("memory_store", {}).get("name")
+        session = manifest.get("session_store", {}).get("name")
+        if memory:
+            result = self.run(
+                [
+                    str(self.agentbricks),
+                    *self._profile_args(),
+                    "--output",
+                    "json",
+                    "memory",
+                    "stores",
+                    "create",
+                    "--name",
+                    memory,
+                ]
+            )
+            resource = json.loads(result.stdout)
+            name = resource.get("name")
+            if resource.get("display_name") != memory or not str(name).startswith("memory-stores/"):
+                raise MatrixError(
+                    f"Memory store create returned an unexpected resource: {resource}"
+                )
+            case.memory_store_name = str(name)
+        if session:
+            result = self.run(
+                [
+                    str(self.agentbricks),
+                    *self._profile_args(),
+                    "--output",
+                    "json",
+                    "sessions",
+                    "stores",
+                    "create",
+                    "--name",
+                    session,
+                ]
+            )
+            resource = json.loads(result.stdout)
+            if resource.get("session_store_name") != session:
+                raise MatrixError(
+                    f"Session store create returned an unexpected resource: {resource}"
+                )
+            case.session_store_name = session
 
     def _pin_bridge_sources(self, project: pathlib.Path) -> None:
         pyproject = project / "pyproject.toml"
@@ -581,11 +633,11 @@ class Runner:
     def deploy(self, case: ProjectCase) -> None:
         label = f"deploy-{case.framework}-{case.authoring}"
         log_path = self.output / "logs" / f"{label}.log"
-        # Track the deterministic name before deployment because `agentbricks deploy` can create the App
-        # and then fail while waiting for it. Deleting a name that was never created is harmless.
-        if case.app_name not in self.apps:
-            self.apps.append(case.app_name)
         try:
+            self._assert_app_absent(case.app_name)
+            # Deploy can create the App and then fail while waiting for it.
+            if case.app_name not in self.apps:
+                self.apps.append(case.app_name)
             self.run_long(
                 label,
                 [
@@ -615,12 +667,26 @@ class Runner:
                 and row.runtime == "deploy"
                 and row.status == "fail"
             ]
-            if failed_rows:
+            if failed_rows and case.app_name in self.apps:
                 app_log_path = self._capture_app_logs(case)
                 if app_log_path is not None:
                     for row in failed_rows:
                         row.artifact_paths.append(str(app_log_path))
                     self._write_evidence()
+
+    def _assert_app_absent(self, name: str) -> None:
+        result = self.run(
+            ["databricks", "apps", "get", name, *self._profile_args()],
+            log=False,
+            check=False,
+        )
+        if result.returncode == 0:
+            raise MatrixError(f"App {name} already exists; refusing to deploy over it.")
+        detail = (result.stderr or result.stdout).lower()
+        if "does not exist" not in detail and "resource_does_not_exist" not in detail:
+            raise MatrixError(
+                f"Could not verify App {name} is absent: {result.stderr or result.stdout}"
+            )
 
     def _capture_app_logs(self, case: ProjectCase) -> pathlib.Path | None:
         log_path = self.output / "logs" / f"deploy-runtime-{case.framework}-{case.authoring}.log"
@@ -824,21 +890,116 @@ class Runner:
         os.replace(temporary, target)
 
     def cleanup(self) -> None:
+        role_targets = {app: self._app_role_target(app) for app in dict.fromkeys(self.apps)}
+        cleaned_apps: set[str] = set()
+        cleaned_stores: set[str] = set()
+        for case in self.cases:
+            stores_ok = True
+            for label, name, command in (
+                ("memory store", case.memory_store_name, ["memory", "stores", "delete"]),
+                ("session store", case.session_store_name, ["sessions", "stores", "delete"]),
+            ):
+                if not name:
+                    continue
+                try:
+                    result = self.run(
+                        [str(self.agentbricks), *self._profile_args(), *command, name, "--yes"],
+                        timeout=600,
+                        check=False,
+                    )
+                    if result.returncode != 0:
+                        self.transcript.write(
+                            f"cleanup warning | {label} {name} | exit {result.returncode}"
+                        )
+                        stores_ok = False
+                        continue
+                except Exception as exc:
+                    self.transcript.write(f"cleanup warning | {label} {name} | {exc}")
+                    stores_ok = False
+                    continue
+            if stores_ok:
+                cleaned_stores.add(case.app_name)
+            if case.app_name in self.apps:
+                try:
+                    result = self.run(
+                        [
+                            str(self.agentbricks),
+                            *self._profile_args(),
+                            "deployments",
+                            "delete",
+                            case.app_name,
+                            "--yes",
+                        ],
+                        timeout=600,
+                        check=False,
+                    )
+                    if result.returncode == 0:
+                        cleaned_apps.add(case.app_name)
+                    else:
+                        self.transcript.write(
+                            f"cleanup warning | App {case.app_name} | exit {result.returncode}"
+                        )
+                except Exception as exc:
+                    self.transcript.write(f"cleanup warning | App {case.app_name} | {exc}")
         for app in dict.fromkeys(self.apps):
+            if (
+                app not in cleaned_apps
+                or app not in cleaned_stores
+                or not (target := role_targets[app])
+            ):
+                continue
             try:
-                self.run(
-                    ["databricks", "apps", "delete", app, *self._profile_args()],
+                result = self.run(
+                    ["databricks", "postgres", "delete-role", target, *self._profile_args()],
                     timeout=600,
                     check=False,
                 )
+                if result.returncode != 0:
+                    self.transcript.write(
+                        f"cleanup warning | Lakebase role {target} | exit {result.returncode}"
+                    )
             except Exception as exc:
-                self.transcript.write(f"cleanup warning | App {app} | {exc}")
+                self.transcript.write(f"cleanup warning | Lakebase role {target} | {exc}")
         if self.uc_function:
             catalog, schema, function_name = self.uc_function.split(".")
             try:
                 self.sql(f"DROP FUNCTION IF EXISTS `{catalog}`.`{schema}`.`{function_name}`")
             except Exception as exc:
                 self.transcript.write(f"cleanup warning | UC function | {exc}")
+
+    def _app_role_target(self, app: str) -> str | None:
+        try:
+            app_record = self.databricks(["apps", "get", app])
+            principal = app_record.get("service_principal_client_id")
+            store = self.databricks(["api", "get", f"/api/2.0/agents/runtime-stores/{app}"])
+            owner = store.get("owner", {}).get("app", {})
+            branch = store.get("storage_backend", {}).get("lakebase", {}).get("branch")
+            if (
+                not principal
+                or store.get("name") != f"runtime-stores/{app}"
+                or owner.get("name") != app
+                or owner.get("service_principal_id") != principal
+                or not isinstance(branch, str)
+                or not re.fullmatch(r"projects/[^/]+/branches/[^/]+", branch)
+            ):
+                self.transcript.write(
+                    f"cleanup warning | Lakebase role for {app} | ownership not verified"
+                )
+                return None
+            roles = cast(list[dict[str, Any]], self.databricks(["postgres", "list-roles", branch]))
+            for role in roles:
+                status = role.get("status", {})
+                name = role.get("name")
+                if (
+                    status.get("postgres_role") == principal
+                    and status.get("identity_type") == "SERVICE_PRINCIPAL"
+                    and isinstance(name, str)
+                    and name.startswith(f"{branch}/roles/")
+                ):
+                    return name
+        except Exception as exc:
+            self.transcript.write(f"cleanup warning | Lakebase role lookup for {app} | {exc}")
+        return None
 
 
 def _last_lines(path: pathlib.Path, count: int) -> str:

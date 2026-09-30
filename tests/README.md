@@ -233,7 +233,7 @@ The fundamental assertion: when SP-A calls the agent, it sees SP-A's identity; w
 - CLI-authored and direct-`agent.toml` agents diverging at runtime
 - `system.ai.*` tools or UC-function invocation breaking under platform changes
 
-**Infrastructure:** Databricks Apps enabled with the CI service principal able to create and delete apps; `system.ai.sandbox` and `system.ai.web_search`; a SQL warehouse; and a scratch UC schema (`AGENTBRICKS_INTEGRATION_UC_SCHEMA`) where the SP can create a temporary function. The test cleans up its Apps and function after success or failure, with a bounded grace period on timeout.
+**Infrastructure:** Databricks Apps enabled with the CI service principal able to create and delete apps; `system.ai.sandbox` and `system.ai.web_search`; a SQL warehouse; and a scratch UC schema (`AGENTBRICKS_INTEGRATION_UC_SCHEMA`) where the SP can create a temporary function. The test records its own session and memory stores, then best-effort deletes those stores, each App and Runtime Store, matching App-SP Lakebase roles, and the UC function after success or failure. Role deletion requires permission on the shared Lakebase branch; cleanup warnings identify any resources needing manual attention. The wrapper leaves a bounded grace period for cleanup on timeout and names failed matrix cells in its error output.
 
 ---
 
