@@ -84,10 +84,16 @@ jobs:
           if [ -n "$RELEASE_SHA" ]; then PLAN_ARGS+=(--release-sha "$RELEASE_SHA"); fi
           python3 .github/scripts/agentbricks_release.py plan "${PLAN_ARGS[@]}" > "$RUNNER_TEMP/agentbricks-plan.json"
           python3 - "$GITHUB_OUTPUT" "$GITHUB_STEP_SUMMARY" "$RUNNER_TEMP/agentbricks-plan.json" "$CURRENT_VERSION" <<'PY'
-          import json, sys
+          import json, subprocess, sys
           from pathlib import Path
           output, summary, plan_file, current = sys.argv[1:]
           plan = json.loads(Path(plan_file).read_text())
+          tag_sha = subprocess.check_output(
+              ['git', 'ls-remote', '--tags', 'origin', f"refs/tags/{plan['tag']}"],
+          ).decode().partition('\t')[0]
+          if tag_sha:
+              notice = f"Tag {plan['tag']} already exists at {tag_sha}; a real cut will verify it matches the planned commit before testing and tagging."
+              print(notice)
           with open(output, 'a') as f:
               for key in ('branch', 'tag', 'base_sha', 'branch_exists', 'next_dev_version'):
                   value = plan[key]
@@ -98,12 +104,16 @@ jobs:
                   f.write(f'- **{key}:** `{plan[key]}`\n')
               f.write(f'- **Current version at source:** `{current}`\n')
               f.write('- **Changes:** stamp the package and scaffold templates on the release branch, test the pushed commit, tag it, then open a next minor development version PR on the first cut. Publishing requires a separate approval.\n')
+              if tag_sha:
+                  f.write(f'- {notice}\n')
           PY
 
   cut:
     if: ${{ !inputs.dry_run }}
     needs: plan
     runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.release.outputs.sha }}
     timeout-minutes: 30
     permissions:
       contents: write
@@ -138,6 +148,9 @@ jobs:
               exit 1
             fi
           fi
+          if [ -n "$TAG_SHA" ]; then
+            echo "Tag $TAG already exists at $TAG_SHA; rerunning full release tests before confirming it." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
           cp .github/scripts/agentbricks_release.py "$RUNNER_TEMP/agentbricks_release.py"
           git checkout --detach "$BASE_SHA"
           python3 "$RUNNER_TEMP/agentbricks_release.py" stamp --root . --target-version "$VERSION" --templates
@@ -150,36 +163,130 @@ jobs:
           RELEASE_SHA=$(git rev-parse HEAD)
           git push origin "HEAD:refs/heads/$BRANCH"
           echo "sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+
+  unit_tests:
+    needs: [plan, cut]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        resolution: ['lowest-direct', 'highest']
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ needs.cut.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: workflow-tools
+          persist-credentials: false
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff
         with:
           version: ${{ env.UV_VERSION }}
-          python-version: '3.11'
-      - name: Test the exact pushed release commit
+          python-version: '3.10'
+      - name: Test the exact pushed release commit (Python 3.10, ${{ matrix.resolution }})
         env:
           BRANCH: ${{ needs.plan.outputs.branch }}
-          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+          RELEASE_SHA: ${{ needs.cut.outputs.sha }}
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
           test "$(git ls-remote --heads origin "refs/heads/$BRANCH" | cut -f1)" = "$RELEASE_SHA"
           cd integrations/agentbricks
-          uv run --resolution highest --exact --group tests pytest tests/unit_tests
-          uv run --resolution highest --exact --group tests --extra langgraph pytest tests/unit_tests
-          uv build --wheel --out-dir dist ../..
-          uv build --wheel --out-dir dist
-          uv venv .venv-functional
-          uv pip install --python .venv-functional/bin/python --no-sources \
-            "$(ls dist/databricks_ai_bridge-*.whl)" \
-            "$(ls dist/databricks_agentbricks-*.whl)" --group tests
-          AI_BRIDGE_WHEEL="$(ls "$PWD"/dist/databricks_ai_bridge-*.whl)" \
-          AGENTBRICKS_WHEEL="$(ls "$PWD"/dist/databricks_agentbricks-*.whl)" \
-            .venv-functional/bin/pytest tests/functional/
+          bash "$GITHUB_WORKSPACE/workflow-tools/.github/scripts/run_agentbricks_tests.sh" unit "${{ matrix.resolution }}"
+
+  framework_tests:
+    needs: [plan, cut]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ needs.cut.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: workflow-tools
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: '3.11'
+      - name: Test the exact pushed release commit with LangGraph (Python 3.11)
+        env:
+          BRANCH: ${{ needs.plan.outputs.branch }}
+          RELEASE_SHA: ${{ needs.cut.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          test "$(git ls-remote --heads origin "refs/heads/$BRANCH" | cut -f1)" = "$RELEASE_SHA"
+          cd integrations/agentbricks
+          bash "$GITHUB_WORKSPACE/workflow-tools/.github/scripts/run_agentbricks_tests.sh" framework
+
+  functional_tests:
+    needs: [plan, cut]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ needs.cut.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: workflow-tools
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: '3.12'
+      - name: Test the exact pushed release wheels (Python 3.12)
+        env:
+          BRANCH: ${{ needs.plan.outputs.branch }}
+          RELEASE_SHA: ${{ needs.cut.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          test "$(git ls-remote --heads origin "refs/heads/$BRANCH" | cut -f1)" = "$RELEASE_SHA"
+          cd integrations/agentbricks
+          bash "$GITHUB_WORKSPACE/workflow-tools/.github/scripts/run_agentbricks_tests.sh" functional
+
+  tag:
+    needs: [plan, cut, unit_tests, framework_tests, functional_tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ needs.cut.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: workflow-tools
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: '3.11'
       - name: Tag tested release commit
         env:
           TAG: ${{ needs.plan.outputs.tag }}
           BRANCH: ${{ needs.plan.outputs.branch }}
-          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+          RELEASE_SHA: ${{ needs.cut.outputs.sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -200,6 +307,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          cp workflow-tools/.github/scripts/agentbricks_release.py "$RUNNER_TEMP/agentbricks_release.py"
           git fetch origin main
           MAIN_SHA=$(git rev-parse FETCH_HEAD)
           MAIN_VERSION=$(git show "$MAIN_SHA:integrations/agentbricks/pyproject.toml" | python3 -c 'import sys,tomllib; print(tomllib.loads(sys.stdin.read())["project"]["version"])')
