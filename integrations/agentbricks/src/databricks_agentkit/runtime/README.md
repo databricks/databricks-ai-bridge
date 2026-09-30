@@ -116,7 +116,7 @@ forwarded principal so users cannot collide with each other.
 Clients may also supply an optional top-level `session_id`. Runtime persists it separately from the
 opaque `input`, serializes invocations that share it, and exposes it as `context.session_id`. If it
 is omitted, the invocation remains sessionless; Runtime does not infer it from the invocation ID,
-the input payload, or `X-Routing-Key`.
+the input payload, a handler response, or `X-Routing-Key`.
 
 - **Synchronous:** Wait for the result in the POST response.
 - **Streaming (`stream: true`):** Receive progress events as Server-Sent Events (SSE).

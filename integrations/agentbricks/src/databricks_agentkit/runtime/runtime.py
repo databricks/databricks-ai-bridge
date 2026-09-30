@@ -20,7 +20,6 @@ from databricks_agentkit.runtime.store import (
 )
 from databricks_agentkit.runtime.types import (
     Invocation,
-    InvocationConflictError,
     InvocationEvent,
     InvocationExecutorFn,
     InvocationFailedError,
@@ -206,23 +205,17 @@ class Runtime:
 
         The Runtime Store makes ``invocation_id`` the idempotency key. Retrying the same request
         and session returns its existing state; a different request or session for the same ID
-        raises :class:`InvocationConflictError`. An invocation accepted before session metadata
-        was stored remains idempotent when the same request is retried with a session.
+        raises :class:`InvocationConflictError`.
         """
         self._require_started()
         if not invocation_id:
             raise ValueError("invocation_id must not be empty")
         copied_request = copy_json_value(request, "request")
-        try:
-            state = await self.runtime_store.accept(
-                invocation_id,
-                copied_request,
-                session_id=session_id,
-            )
-        except InvocationConflictError:
-            state = await self.runtime_store.get(invocation_id)
-            if state is None or state.session_id is not None or state.request != copied_request:
-                raise
+        state = await self.runtime_store.accept(
+            invocation_id,
+            copied_request,
+            session_id=session_id,
+        )
         self.executor.ensure_scheduled(state)
         return state
 

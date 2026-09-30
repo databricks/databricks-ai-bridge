@@ -197,8 +197,8 @@ async def test_adapter_calls_same_run_agent_for_invoke_and_recovery(monkeypatch)
     assert calls[1][0] is None
     assert calls[1][1] == {**calls[0][1], "graph": graph}
     create_graph.assert_awaited_once_with("runtime-session", None)
-    assert response["session_id"] == "runtime-session"
-    assert recovered["session_id"] == "runtime-session"
+    assert "session_id" not in response
+    assert "session_id" not in recovered
 
 
 def _has_workspace_auth() -> bool:

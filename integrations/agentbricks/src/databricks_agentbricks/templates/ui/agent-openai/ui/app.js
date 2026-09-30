@@ -104,6 +104,8 @@ function setSessionId(value) {
   elements.sessionId.textContent = state.sessionId;
 }
 
+setSessionId(state.sessionId);
+
 function demoUrl(path) {
   const url = new URL(path, window.location.origin);
   url.searchParams.set("session_id", ensureSessionId());
@@ -981,7 +983,6 @@ async function invokeSync(payload) {
   const result = await jsonResponse(response);
   const output = agentResult(result);
   addEvent("response", result);
-  if (output.session_id) setSessionId(output.session_id);
   handleOutput(output.output);
   return output;
 }
@@ -1039,7 +1040,6 @@ async function pollBackground(invocationId) {
     addEvent("background.poll", result);
     if (result.status === "completed") {
       const output = agentResult(result);
-      if (output.session_id) setSessionId(output.session_id);
       handleOutput(output.output);
       return output;
     }
@@ -1158,7 +1158,7 @@ async function openSession(sessionId) {
       headers: routingHeaders(),
     });
     const result = await jsonResponse(response);
-    setSessionId(result.session_id);
+    setSessionId(sessionId);
     resetSessionState();
     addEvent("session.open", result);
     await refreshSessionView({ hydrateChat: true });
@@ -1217,7 +1217,6 @@ async function loadConfig() {
     const config = await jsonResponse(response);
     state.config = config;
     state.instanceId = config.instance_id;
-    setSessionId(config.session_id);
     renderModels(config.models);
     void loadModels().catch((error) => addEvent("models.error", { message: String(error) }));
     setViewer(config.viewer);

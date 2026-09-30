@@ -132,7 +132,6 @@ async def _invoke_agent(
     interrupted = bool(outputs and outputs[-1].get("type") == "interrupt")
     return {
         "output": [event["message"] if event["type"] == "message" else event for event in outputs],
-        **({"session_id": session_id} if not user_auth else {}),
         "status": "interrupted" if interrupted else "completed",
     }
 

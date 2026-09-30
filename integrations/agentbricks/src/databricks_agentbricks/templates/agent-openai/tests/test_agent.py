@@ -301,8 +301,8 @@ async def test_adapter_recovery_marks_replayed_agent_input(monkeypatch):
             {"session_id": "runtime-session", "actor": "runtime-session", "model": None},
         ),
     ]
-    assert response["session_id"] == "runtime-session"
-    assert recovered["session_id"] == "runtime-session"
+    assert "session_id" not in response
+    assert "session_id" not in recovered
     assert payload["messages"] == [{"role": "user", "content": "hi"}]
 
 
