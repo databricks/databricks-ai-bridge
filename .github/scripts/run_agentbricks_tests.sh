@@ -4,7 +4,7 @@ set -euo pipefail
 # Run from the Agent Bricks package directory in the checkout being tested.
 case "${1:-}" in
   unit)
-    resolution="${2:?Usage: run_agentbricks_tests.sh unit {lowest-direct|highest}}"
+    resolution="${2:?Provide a resolution: lowest-direct or highest}"
     case "$resolution" in
       lowest-direct|highest) ;;
       *) echo "Unsupported resolution: $resolution" >&2; exit 2 ;;
