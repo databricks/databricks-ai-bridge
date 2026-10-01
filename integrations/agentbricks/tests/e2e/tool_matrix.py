@@ -503,7 +503,8 @@ class Runner:
         if any(tool["id"] == "broken_mcp" for tool in manifest.get("tools", [])):
             raise MatrixError("agentbricks tools remove left the broken MCP binding in agent.toml")
         commands = [
-            ["tools", "add", "sandbox", "--scope", "table:samples.nyctaxi.trips"],
+            # Request-user sandbox auth is not supported by system.ai.sandbox yet.
+            ["tools", "add", "sandbox", "--scope", "table:samples.nyctaxi.trips", "--auth", "app"],
             ["tools", "add", "mcp", "system.ai.web_search"],
             [
                 "tools",
