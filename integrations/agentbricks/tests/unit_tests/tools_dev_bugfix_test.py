@@ -6,8 +6,8 @@ import pathlib
 
 from click.testing import CliRunner
 
+from databricks_agentbricks.agent_project import AgentProject, ToolSpec
 from databricks_agentbricks.cli.tools import tools
-from databricks_agentbricks.projects.agent_project import AgentProject, ToolSpec
 
 
 class _Ctx:

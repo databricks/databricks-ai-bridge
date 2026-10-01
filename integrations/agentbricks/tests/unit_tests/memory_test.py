@@ -166,8 +166,8 @@ def _bind_ctx(tmp_path):
 
 
 def test_memory_bind_only_edits_agent_toml(tmp_path):
+    from databricks_agentbricks.agent_project import AgentProject
     from databricks_agentbricks.cli.memory import memory as memory_group
-    from databricks_agentbricks.projects.agent_project import AgentProject
 
     ctx = _bind_ctx(tmp_path)
     result = CliRunner().invoke(
@@ -186,8 +186,8 @@ def test_memory_bind_only_edits_agent_toml(tmp_path):
 
 
 def test_memory_unbind_clears_agent_toml(tmp_path):
+    from databricks_agentbricks.agent_project import AgentProject
     from databricks_agentbricks.cli.memory import memory as memory_group
-    from databricks_agentbricks.projects.agent_project import AgentProject
 
     (tmp_path / "agent.toml").write_text(
         'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "agentbricks"\n\n[memory_store]\nname = "m"\n',

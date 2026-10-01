@@ -104,10 +104,4 @@ include = ["./src", "./tests"]
 # The files under templates/ are code-as-data — scaffolding snippets written into a generated agent
 # project, not importable package modules. They import scaffold-relative paths (agent.agentbricks.*,
 # agent.mcps) that never resolve in the package, so type-checking them here is meaningless.
-exclude = [
-    "./src/databricks_agentbricks/templates",
-    # These pre-refactor CLI tests are excluded from pytest until migrated to DeployService.
-    "./tests/unit_tests/deploy_test.py",
-    "./tests/unit_tests/deploy_auth_test.py",
-    "./tests/unit_tests/runtime_store_deploy_test.py",
-]
+exclude = ["./src/databricks_agentbricks/templates"]

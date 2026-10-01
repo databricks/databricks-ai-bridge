@@ -6,7 +6,7 @@ import json
 import types
 from typing import Any
 
-from databricks_agentbricks.clients import app_resources as sa
+from databricks_agentbricks import app_resources as sa
 from databricks_agentbricks.trace_tables import TraceTable, TraceTableKind
 
 

@@ -6,7 +6,7 @@ import click
 from click.testing import CliRunner
 
 import databricks_agentbricks.cli.app as cli
-from databricks_agentbricks.presentation import help as help_mod
+from databricks_agentbricks.cli import help as help_mod
 
 
 def _command_paths(group: click.Group, prefix: tuple[str, ...] = ()):

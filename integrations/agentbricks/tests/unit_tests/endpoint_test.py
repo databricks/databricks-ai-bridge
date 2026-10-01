@@ -9,11 +9,11 @@ import pytest
 from click.testing import CliRunner
 
 from databricks_agentbricks.cli import endpoint as endpoint_mod
+from databricks_agentbricks.cli import endpoint_output as endpoint_output_mod
+from databricks_agentbricks.cli import endpoint_request as endpoint_request_mod
+from databricks_agentbricks.cli import endpoint_transport as endpoint_transport_mod
 from databricks_agentbricks.cli.endpoint import endpoint
-from databricks_agentbricks.endpoints import request as endpoint_request_mod
-from databricks_agentbricks.endpoints import transport as endpoint_transport_mod
-from databricks_agentbricks.endpoints.transport import EndpointRequest, EndpointResponse
-from databricks_agentbricks.presentation import endpoint as endpoint_output_mod
+from databricks_agentbricks.cli.endpoint_transport import EndpointRequest, EndpointResponse
 
 
 class _Ctx:
@@ -130,9 +130,7 @@ def test_invoke_deployed_app_resolves_oauth_and_generated_session(monkeypatch):
             captured["request"] = request
             return _response({"ok": True}, url=request.url)
 
-    monkeypatch.setattr(
-        endpoint_mod.AppsClient, "get_app_url", lambda self, name: "https://app.example"
-    )
+    monkeypatch.setattr(endpoint_mod, "_app_url", lambda name, profile: "https://app.example")
     monkeypatch.setattr(endpoint_mod, "_authorization_header", lambda profile: "Bearer token")
     monkeypatch.setattr(endpoint_mod, "HttpSession", FakeSession)
 

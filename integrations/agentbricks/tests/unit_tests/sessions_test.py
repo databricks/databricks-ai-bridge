@@ -110,7 +110,7 @@ def test_store_get_unifies_name_resource_name_store_id_and_storage():
 
 
 def test_sessions_bind_only_edits_agent_toml(tmp_path):
-    from databricks_agentbricks.projects.agent_project import AgentProject
+    from databricks_agentbricks.agent_project import AgentProject
 
     (tmp_path / "agent.toml").write_text(
         'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "custom"\n',

@@ -10,10 +10,10 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
+from databricks_agentbricks.agent_project import AgentProject, ToolSpec
 from databricks_agentbricks.cli import dev as dev_mod
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.projects.agent_project import AgentProject, ToolSpec
-from databricks_agentbricks.projects.config import write_project_metadata
+from databricks_agentbricks.project_config import write_project_metadata
 
 
 def _write_agent_manifest(

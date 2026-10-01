@@ -9,8 +9,7 @@ from typing import Any, cast
 import pytest
 import tomli
 
-from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.projects.agent_project import (
+from databricks_agentbricks.agent_project import (
     AgentProject,
     Scope,
     ToolPolicy,
@@ -18,7 +17,8 @@ from databricks_agentbricks.projects.agent_project import (
     ToolSpec,
     default_store_name,
 )
-from databricks_agentbricks.projects.types import AgentFramework, AgentServer
+from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.project_types import AgentFramework, AgentServer
 from databricks_agentkit.runtime.tool_manifest import ToolManifestError, load_tools
 
 
@@ -397,7 +397,7 @@ def test_write_is_atomic_when_replace_fails(tmp_path: pathlib.Path, monkeypatch)
     def fail_replace(source, target):
         raise OSError("replace failed")
 
-    monkeypatch.setattr("databricks_agentbricks.projects.agent_project.os.replace", fail_replace)
+    monkeypatch.setattr("databricks_agentbricks.agent_project.os.replace", fail_replace)
     with pytest.raises(AgentCliError, match="replace failed"):
         project.write()
 

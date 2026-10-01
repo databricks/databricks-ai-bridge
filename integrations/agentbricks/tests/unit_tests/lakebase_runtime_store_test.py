@@ -2,7 +2,7 @@
 
 import pytest
 
-from databricks_agentbricks.clients import managed_runtime_store as runtime_store
+from databricks_agentbricks import lakebase_runtime_store as runtime_store
 from databricks_agentbricks.errors import AgentCliError
 
 

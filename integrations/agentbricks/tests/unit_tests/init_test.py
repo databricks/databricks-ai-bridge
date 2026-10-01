@@ -17,7 +17,7 @@ from click.testing import CliRunner
 
 from databricks_agentbricks.cli import init as init_mod
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.projects.types import AgentFramework, AgentServer
+from databricks_agentbricks.project_types import AgentFramework, AgentServer
 
 
 class _Ctx:

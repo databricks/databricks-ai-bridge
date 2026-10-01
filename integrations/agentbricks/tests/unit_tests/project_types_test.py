@@ -5,7 +5,7 @@ import json
 import pytest
 
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.projects.types import (
+from databricks_agentbricks.project_types import (
     AgentFramework,
     AgentServer,
     parse_framework,

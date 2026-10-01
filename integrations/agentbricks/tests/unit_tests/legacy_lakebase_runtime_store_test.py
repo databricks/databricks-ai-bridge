@@ -5,7 +5,7 @@ import types
 
 import pytest
 
-from databricks_agentbricks.clients import legacy_runtime_store as runtime_store
+from databricks_agentbricks import legacy_lakebase_runtime_store as runtime_store
 
 
 def test_backend_uses_a_dedicated_per_app_project() -> None:
