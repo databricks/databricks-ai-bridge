@@ -306,6 +306,8 @@ def _trace_to_json(trace: Any) -> dict:
 
 # --- local dev tracing (`agentbricks dev`) ----------------------------------------
 
+# TODO: Move the local MLflow server helpers into clients/local_tracing_client.py and
+# inject that client into DevService instead of adapting these CLI functions in cli/dev.py.
 # Local-only scratch dir (gitignored) under a dev project: holds the sqlite tracing store + artifacts.
 _AGENTBRICKS_LOCAL_DIR = ".agentbricks"
 # The local tracing server's MLflow: a broad 3.x range (the runtime's floor). `agentbricks dev` writes the
