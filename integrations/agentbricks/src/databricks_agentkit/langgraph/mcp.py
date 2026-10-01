@@ -112,8 +112,6 @@ def _sandbox_interceptor(
                 result = await handler(request)
         except Exception as error:
             if request_user:
-                # TEMP: full traceback for one debug run; it can include upstream error text.
-                logger.warning("MCP tool %s failed.", tool.id, exc_info=True)
                 raise _auth_error(error, tool.id) or AuthError(
                     "MCP_TOOL_FAILED", "The configured MCP tool failed.", 502, tool.id
                 ) from None
