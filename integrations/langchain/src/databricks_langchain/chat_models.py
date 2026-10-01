@@ -936,8 +936,14 @@ class ChatDatabricks(BaseChatModel):
                         final_usage = usage  # store for usage chunk at end
                     # Use model_dump instead of manual dict reconstruction
                     chunk_delta_dict = chunk_delta.model_dump(exclude_unset=True)
+                    # Usage is deliberately NOT attached to content chunks. It is
+                    # accumulated into final_usage and emitted once as a dedicated
+                    # usage chunk after the stream ends (same as the Responses API
+                    # branch above). LangChain sums usage_metadata when chunks are
+                    # added together, so attaching it here as well made aggregated
+                    # token counts double.
                     chunk_message = _convert_dict_to_message_chunk(
-                        chunk_delta_dict, first_chunk_role, usage=usage
+                        chunk_delta_dict, first_chunk_role
                     )
                     generation_info = {}
                     if choice.finish_reason:
@@ -1047,8 +1053,14 @@ class ChatDatabricks(BaseChatModel):
                         final_usage = usage  # store for usage chunk at end
                     # Use model_dump instead of manual dict reconstruction
                     chunk_delta_dict = chunk_delta.model_dump(exclude_unset=True)
+                    # Usage is deliberately NOT attached to content chunks. It is
+                    # accumulated into final_usage and emitted once as a dedicated
+                    # usage chunk after the stream ends (same as the Responses API
+                    # branch above). LangChain sums usage_metadata when chunks are
+                    # added together, so attaching it here as well made aggregated
+                    # token counts double.
                     chunk_message = _convert_dict_to_message_chunk(
-                        chunk_delta_dict, first_chunk_role, usage=usage
+                        chunk_delta_dict, first_chunk_role
                     )
                     generation_info = {}
                     if choice.finish_reason:
