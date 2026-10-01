@@ -8,12 +8,14 @@ is built.
 
 from __future__ import annotations
 
+from databricks_agentbricks.app_auth_client import AppAuthClient
 from databricks_agentbricks.apps_client import AppsClient
 from databricks_agentbricks.cli.presenter import ClickPrompter, ClickReporter
 from databricks_agentbricks.databricks_cli import _databricks
 from databricks_agentbricks.deployment import _USE_MANAGED_RUNTIME_STORE
 from databricks_agentbricks.project_resolver import ProjectResolver
 from databricks_agentbricks.runtime_store_client import RuntimeStoreClient
+from databricks_agentbricks.services.app_provisioner import AppProvisioner
 from databricks_agentbricks.services.deploy_service import DeployService
 from databricks_agentbricks.services.provisioners import (
     MemoryStoreProvisioner,
@@ -44,6 +46,8 @@ def build_deploy_service(obj) -> DeployService:
         project=ProjectResolver(),
         apps_client=apps,
         api_client_factory=api,
+        app=AppProvisioner(apps, api, reporter),
+        app_auth=AppAuthClient(obj.profile),
         memory_store=MemoryStoreProvisioner(MemoryStoreClient(api, apps), reporter),
         session_store=SessionStoreProvisioner(SessionStoreClient(api, apps), reporter),
         tracing=TracingProvisioner(TracingClient(api, obj.profile), reporter),

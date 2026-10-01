@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import Optional
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import DatabricksError, NotFound
@@ -196,3 +197,39 @@ def apply_app_user_scope_update(
         hint="Source deployment was stopped. Inspect requested/effective scopes in Databricks "
         "Apps; contact your platform administrator if propagation remains blocked. Then retry.",
     )
+
+
+class AppAuthClient:
+    """The low-level Apps identity/auth client for request-user tools.
+
+    It is Python SDK based (``WorkspaceClient``/``AppsAPI``), distinct from
+    :class:`~databricks_agentbricks.apps_client.AppsClient`, which shells out to ``databricks apps``.
+    It holds the profile and wraps this module's helpers so the service can be injected with it
+    instead of importing the module functions. It is render-free: it never touches the terminal.
+    """
+
+    def __init__(self, profile: Optional[str]) -> None:
+        self._profile = profile
+
+    def requires_user_auth(self, project) -> bool:
+        return requires_user_auth(project)
+
+    def required_user_api_scopes(self, project) -> set[str]:
+        return required_user_api_scopes(project)
+
+    def plan_user_scope_update(
+        self,
+        name,
+        *,
+        allow_existing_app_update: bool,
+        required_scopes,
+    ) -> Optional[AppUserScopeUpdatePlan]:
+        return plan_app_user_scope_update(
+            name,
+            self._profile,
+            allow_existing_app_update=allow_existing_app_update,
+            required_scopes=required_scopes,
+        )
+
+    def apply_user_scope_update(self, plan, *, instances) -> None:
+        apply_app_user_scope_update(plan, instances=instances)

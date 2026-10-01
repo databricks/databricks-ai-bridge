@@ -29,10 +29,10 @@ import pathlib
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
+from databricks_agentbricks.app_auth_client import AppAuthClient, AppUserScopeUpdatePlan
 from databricks_agentbricks.app_manifest import upsert_env_file
 from databricks_agentbricks.apps_client import AppsClient
 from databricks_agentbricks.deployment import (
-    _AGENT_COMPUTE_OUTPUT,
     _DEPLOYMENT_PREFIX,
     _MAX_DEPLOYMENT_NAME_LEN,
     _PIP_INDEX_ENVS,
@@ -45,6 +45,7 @@ from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.project_config import require_managed_tool_support
 from databricks_agentbricks.project_resolver import ProjectResolver
 from databricks_agentbricks.project_types import AgentServer
+from databricks_agentbricks.services.app_provisioner import AppProvisioner
 from databricks_agentbricks.services.interaction import Prompter, Reporter
 from databricks_agentbricks.services.provisioners import (
     MemoryStoreProvisioner,
@@ -128,7 +129,7 @@ class _DeployPlan:
     project: Any
     base_name: str
     name: DeploymentName
-    user_scope_plan: Any
+    user_scope_plan: Optional[AppUserScopeUpdatePlan]
     deployment_exists: Optional[bool]  # known already from the name/scope pre-flight, else None
 
 
@@ -144,6 +145,8 @@ class DeployService:
         project: ProjectResolver,
         apps_client: AppsClient,
         api_client_factory: Callable[[], Any],
+        app: AppProvisioner,
+        app_auth: AppAuthClient,
         memory_store: MemoryStoreProvisioner,
         session_store: SessionStoreProvisioner,
         tracing: TracingProvisioner,
@@ -155,6 +158,8 @@ class DeployService:
         self._project = project
         self._apps_client = apps_client
         self._api_client_factory = api_client_factory
+        self._app = app
+        self._app_auth = app_auth
         self._memory_store = memory_store
         self._session_store = session_store
         self._tracing = tracing
@@ -290,23 +295,19 @@ class DeployService:
         deployment_exists = plan.deployment_exists
         if deployment_exists is None:
             deployment_exists = self._apps_client.exists(name)
-        self._ensure_app(name, deployment_exists, plan.user_scope_plan, instances, instance_args)
+        ctx = dataclasses.replace(ctx, deployment_exists=deployment_exists)
+        self._app.ensure(ctx, plan.user_scope_plan, instances, instance_args)
 
         # 4. Finish the resources that needed the app to exist (its service principal is resolvable
         #    only now), then fold any env they added (the managed Runtime Store) in - appended after
         #    the pip keys, since re-merging leaves the already-present keys in place.
-        ctx = dataclasses.replace(ctx, deployment_exists=deployment_exists)
         for provisioner in provisioners:
             provisioner.after_app_ready(ctx)
         for provisioner in env_order:
             env.update(provisioner.env)
 
         # 5. Upload the source and roll out the deployment.
-        ws_path = (
-            request.workspace_path
-            or f"/Workspace/Users/{client.current_user}/agentbricks_deployments/{name}"
-        )
-        self._rollout(source_dir, name, ws_path)
+        ws_path = self._app.rollout(ctx, request.workspace_path)
 
         # 6. Grant the app's service principal (and the agent runtime) access to each resource. Every
         #    grant is best-effort: each provisioner records its own failure instead of raising, because
@@ -338,20 +339,10 @@ class DeployService:
         )
 
     def _authorize(self, source_dir: pathlib.Path, request: DeployRequest) -> _DeployPlan:
-        # Imported here, not at module scope: the `cli` package's __init__ eagerly imports the whole
-        # command tree — including the `deploy` command, which imports this module — so a top-level
-        # import of anything under `cli` would make importing the service itself circular.
-        from databricks_agentbricks.cli.app_auth import (  # noqa: PLC0415 - avoid import cycle
-            apply_app_user_scope_update,
-            plan_app_user_scope_update,
-            required_user_api_scopes,
-            requires_user_auth,
-        )
-
         project = self._project.load(source_dir)
         if project is not None and project.tools:
             require_managed_tool_support(source_dir)
-        user_auth = requires_user_auth(project)
+        user_auth = self._app_auth.requires_user_auth(project)
         requested_name = request.name
         base_name = self._project.resolve_deployment_name(project, request.name)
         name = _prefixed_name(base_name)
@@ -381,11 +372,10 @@ class DeployService:
         # required user API scope. New Apps are configured automatically. For an existing App, adding a
         # missing scope requires --allow-user-scope-update; already-configured Apps need no flag.
         user_scope_plan = (
-            plan_app_user_scope_update(
+            self._app_auth.plan_user_scope_update(
                 name,
-                self._profile,
                 allow_existing_app_update=request.allow_user_scope_update,
-                required_scopes=required_user_api_scopes(project),
+                required_scopes=self._app_auth.required_user_api_scopes(project),
             )
             if user_auth
             else None
@@ -398,41 +388,8 @@ class DeployService:
             )
             if deployment_exists is None:
                 deployment_exists = user_scope_plan.existing_scopes is not None
-            apply_app_user_scope_update(user_scope_plan, instances=request.instances)
+            self._app_auth.apply_user_scope_update(user_scope_plan, instances=request.instances)
         # Persist the base name so a later `agentbricks deploy` (no NAME) resolves to the same app.
         if project is not None and project.set_deployment_name(base_name):
             project.write()
         return _DeployPlan(project, base_name, name, user_scope_plan, deployment_exists)
-
-    def _ensure_app(
-        self,
-        name: str,
-        deployment_exists: bool,
-        user_scope_plan,
-        instances: Optional[int],
-        instance_args: list[str],
-    ) -> None:
-        #    `apps create` itself blocks for minutes (it provisions and waits for compute) and we capture
-        #    its output to relabel "App compute" → "Agent compute", so nothing streams meanwhile. Wrap it
-        #    in progress (persistent line + spinner) so the CLI isn't silent for the whole provision.
-        if user_scope_plan is None and not deployment_exists:
-            with self._reporter.progress(
-                "Creating the agent and starting its compute (this can take a few minutes)…"
-            ):
-                out = self._apps_client.create(name, instance_args)
-            old, new = _AGENT_COMPUTE_OUTPUT
-            self._reporter.echo(out.replace(old, new), newline=False)
-        elif user_scope_plan is None and instances is not None:
-            out = self._apps_client.create_update_instances(name, instances)
-            old, new = _AGENT_COMPUTE_OUTPUT
-            self._reporter.echo(out.replace(old, new), newline=False)
-        # `apps deploy` requires the app's compute to be ACTIVE — a just-created app may still be
-        # starting, and an existing one may be STOPPED — so wait either way. Returns immediately when
-        with self._reporter.progress(
-            "Waiting for agent compute to start (this can take a few minutes)…"
-        ):
-            self._apps_client.wait_for_running(name)
-
-    def _rollout(self, source_dir: pathlib.Path, name: str, ws_path: str) -> None:
-        self._apps_client.sync_source(name, source_dir, ws_path)
-        self._apps_client.deploy(name, ws_path)
