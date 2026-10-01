@@ -14,10 +14,10 @@ from typing import Protocol
 
 import click
 
-from databricks_agentbricks import render
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.project_config import load_project_metadata
-from databricks_agentbricks.project_types import AgentFramework
+from databricks_agentbricks.presentation import render
+from databricks_agentbricks.projects.config import load_project_metadata
+from databricks_agentbricks.projects.types import AgentFramework
 
 _BEGIN_MARKER = "# BEGIN: agentbricks add-sandbox"
 _END_MARKER = "# END: agentbricks add-sandbox"

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import types
+from unittest import mock
 
 import pytest
 from click.testing import CliRunner
 
-from databricks_agentbricks import app_resources as sa
 from databricks_agentbricks.cli import deploy as deploy_mod
+from databricks_agentbricks.clients import app_resources as sa
 from databricks_agentbricks.errors import AgentCliError
 
 
@@ -53,19 +54,13 @@ def test_prefixed_name_is_idempotent():
 
 
 def test_deployments_list_shows_agent_bricks_apps(monkeypatch):
-    apps = {
-        "apps": [
-            {"name": "agent-bricks-new"},
-            {"name": "agent-bricks-foo"},
-            {"name": "someone-else-app"},
-            {"name": "agent-bricks-bar"},
-        ]
-    }
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda *a, **k: types.SimpleNamespace(returncode=0, stdout=json.dumps(apps), stderr=""),
-    )
+    service = mock.Mock()
+    service.list_deployments.return_value = [
+        {"name": "agent-bricks-new"},
+        {"name": "agent-bricks-foo"},
+        {"name": "agent-bricks-bar"},
+    ]
+    monkeypatch.setattr(deploy_mod, "build_deploy_service", lambda obj: service)
 
     class _JsonCtx:
         profile = "prof"
@@ -75,6 +70,7 @@ def test_deployments_list_shows_agent_bricks_apps(monkeypatch):
     assert result.exit_code == 0, result.output
     names = {a["name"] for a in json.loads(result.output)}
     assert names == {"agent-bricks-new", "agent-bricks-foo", "agent-bricks-bar"}
+    service.list_deployments.assert_called_once_with()
 
 
 def test_deployments_get_rejects_empty_name_without_calling_cli(monkeypatch):
@@ -90,26 +86,20 @@ def test_deployments_get_rejects_empty_name_without_calling_cli(monkeypatch):
 
 
 def test_delete_aborts_without_confirmation(monkeypatch):
-    called = []
-    monkeypatch.setattr(deploy_mod, "_databricks", lambda *a, **k: called.append(a))
+    service = mock.Mock()
+    service.deletes_runtime_store_data.return_value = False
+    monkeypatch.setattr(deploy_mod, "build_deploy_service", lambda obj: service)
     result = CliRunner().invoke(deploy_mod.deployments_delete, ["myapp"], obj=_Ctx(), input="n\n")
     assert result.exit_code != 0  # aborted
-    assert called == []
+    service.delete.assert_not_called()
 
 
 def test_delete_proceeds_with_yes(monkeypatch):
-    called = []
-    monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", False)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **k: (
-            called.append(args) or types.SimpleNamespace(returncode=0, stdout="", stderr="")
-        ),
-    )
+    service = mock.Mock()
+    monkeypatch.setattr(deploy_mod, "build_deploy_service", lambda obj: service)
     result = CliRunner().invoke(deploy_mod.deployments_delete, ["myapp", "--yes"], obj=_Ctx())
     assert result.exit_code == 0, result.output
-    assert called and called[0][:3] == ["apps", "delete", "myapp"]
+    service.delete.assert_called_once_with("myapp")
 
 
 # --- ML-69245: postgres resources are MERGED, not replaced -------------------

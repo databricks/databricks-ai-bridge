@@ -7,8 +7,8 @@ import json
 import re
 from typing import Optional
 
-from databricks_agentbricks.app_resources import LakebaseBackend
-from databricks_agentbricks.databricks_cli import _databricks
+from databricks_agentbricks.clients.app_resources import LakebaseBackend
+from databricks_agentbricks.clients.databricks_cli import _databricks
 from databricks_agentbricks.errors import AgentCliError
 
 _BRANCH = "production"

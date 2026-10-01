@@ -9,11 +9,12 @@ from uuid import uuid4
 
 import click
 
-from databricks_agentbricks.cli.deploy import _app_url, _prefixed_name
-from databricks_agentbricks.cli.endpoint_output import SsePrinter, render_response
-from databricks_agentbricks.cli.endpoint_request import build_request
-from databricks_agentbricks.cli.endpoint_transport import HttpSession
+from databricks_agentbricks.clients.apps_client import AppsClient
+from databricks_agentbricks.deployment.names import _prefixed_name
+from databricks_agentbricks.endpoints.request import build_request
+from databricks_agentbricks.endpoints.transport import HttpSession
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.presentation.endpoint import SsePrinter, render_response
 from databricks_agentkit._api_client import _workspace_client
 
 _ROUTING_KEY_HEADER = "X-Routing-Key"
@@ -34,7 +35,7 @@ def _resolve_endpoint(
             hint="Use --url http://localhost:8000 when running the agent locally.",
         )
     app_name = _prefixed_name(app)
-    resolved_url = _app_url(app_name, profile)
+    resolved_url = AppsClient(profile).get_app_url(app_name)
     if not resolved_url:
         raise AgentCliError(f"Could not resolve a URL for Databricks App {app_name!r}.")
     return resolved_url.rstrip("/"), True

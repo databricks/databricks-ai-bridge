@@ -8,9 +8,9 @@ from click.testing import CliRunner
 from databricks.sdk.errors import NotFound, PermissionDenied
 from databricks.sdk.service.apps import App
 
-from databricks_agentbricks.agent_project import AgentProject, Scope, ToolSpec
 from databricks_agentbricks.cli import deploy as deploy_mod
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.projects.agent_project import AgentProject, Scope, ToolSpec
 
 
 @pytest.fixture(autouse=True)

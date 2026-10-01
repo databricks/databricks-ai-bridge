@@ -7,7 +7,8 @@ The service-managed Runtime Store path grants database access through Conversati
 
 Managed-store (session/memory) table access is NOT granted here. The deployed app reaches those
 stores over the conversation-store REST API, which grants the app's service principal read/write
-server-side (see `deploy._grant_store_access`), so no direct Lakebase grant is needed.
+server-side (see `MemoryStoreProvisioner.grant` / `SessionStoreProvisioner.grant`), so no direct
+Lakebase grant is needed.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Optional
 
-from databricks_agentbricks.databricks_cli import _databricks
+from databricks_agentbricks.clients.databricks_cli import _databricks
 from databricks_agentbricks.trace_tables import TraceTable
 
 

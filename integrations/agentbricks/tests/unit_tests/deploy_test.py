@@ -11,11 +11,11 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
-from databricks_agentbricks.agent_project import AgentProject, ToolSpec
 from databricks_agentbricks.cli import deploy as deploy_mod
 from databricks_agentbricks.cli.tracing import MLflowTraceTables, ResolvedTraceExperiment
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.project_config import write_project_metadata
+from databricks_agentbricks.projects.agent_project import AgentProject, ToolSpec
+from databricks_agentbricks.projects.config import write_project_metadata
 
 # The autouse fixture below stubs `get_or_create_trace_experiment` for deploy-command tests; capture the
 # real function here so its own unit tests can exercise the actual logic.

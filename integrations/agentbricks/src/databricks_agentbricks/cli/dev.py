@@ -13,19 +13,16 @@ import pathlib
 from typing import Optional
 
 import click
-import yaml
 
-from databricks_agentbricks import render
-from databricks_agentbricks.cli.deploy import (
-    _load_project,
-    resource_bindings,
-)
-from databricks_agentbricks.cli.endpoint_examples import print_agent_invoke_command
 from databricks_agentbricks.cli.tracing import start_local_tracing_server, stop_local_tracing_server
-from databricks_agentbricks.databricks_cli import _databricks
+from databricks_agentbricks.clients.databricks_cli import _databricks
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.project_config import require_managed_tool_support
-from databricks_agentbricks.project_types import AgentServer
+from databricks_agentbricks.presentation import render
+from databricks_agentbricks.presentation.endpoint import print_agent_invoke_command
+from databricks_agentbricks.projects.app_manifest import AppManifest
+from databricks_agentbricks.projects.config import require_managed_tool_support
+from databricks_agentbricks.projects.resolver import ProjectResolver
+from databricks_agentbricks.projects.types import AgentServer
 from databricks_agentkit.runtime.store import RUNTIME_STORE_LOCAL_ENV
 from databricks_agentkit.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
 
@@ -107,7 +104,8 @@ def dev(
             hint="Run from a scaffolded project, or pass --source <dir> (see `agentbricks init`).",
         )
 
-    project = _load_project(source_dir)
+    project_resolver = ProjectResolver()
+    project = project_resolver.load(source_dir)
     if project is not None and project.tools:
         require_managed_tool_support(source_dir)
 
@@ -117,7 +115,7 @@ def dev(
     # durable), regardless of any binding. Stores are created and used only by `agentbricks deploy`; the
     # deploy-written store env is stripped from the dev manifest (see `_dev_entry_point`) so a prior
     # deploy can't quietly pull dev onto the workspace stores. Read the bindings only to name them.
-    memory_store, session_store, trace_experiment = resource_bindings(source_dir)
+    memory_store, session_store, trace_experiment = project_resolver.resource_bindings(source_dir)
     if memory_store:
         render.console().print(
             f"[dim]Memory store '{memory_store}' is bound but `agentbricks dev` runs with "
@@ -272,18 +270,9 @@ def _dev_entry_point(
     removed so dev stays fully local. ``extra_env`` is merged in (overriding any same-named entries)
     for dev-only overrides such as the local tracing config.
     """
-    try:
-        doc = yaml.safe_load(app_yaml.read_text()) or {}
-    except yaml.YAMLError as exc:
-        raise AgentCliError(f"Could not parse {app_yaml}: {exc}") from exc
-    if not isinstance(doc, dict):
-        raise AgentCliError(f"Invalid {app_yaml}: top level must be an object.")
-    env = doc.get("env")
-    if env is not None and not isinstance(env, list):
-        raise AgentCliError(f"Invalid {app_yaml}: env must be a list.")
-    filtered = [
-        e for e in (env or []) if not (isinstance(e, dict) and e.get("name") in _BUILD_INDEX_ENVS)
-    ]
+    manifest = AppManifest.parse(app_yaml.read_text(), source=app_yaml)
+    env = manifest.raw_env()
+    filtered = [e for e in env if not (isinstance(e, dict) and e.get("name") in _BUILD_INDEX_ENVS)]
     filtered = [
         e
         for e in filtered
@@ -300,11 +289,11 @@ def _dev_entry_point(
         filtered = [e for e in filtered if not (isinstance(e, dict) and e.get("name") == name)]
         filtered.append({"name": name, "value": value})
     filtered.append({"name": RUNTIME_STORE_LOCAL_ENV, "value": "true"})
-    doc["env"] = filtered
+    manifest.set_env(filtered)
     # The Apps CLI rejects hidden or hyphenated entry-point filenames.
     dev_yaml = app_yaml.parent / _LOCAL_APP_YAML
     try:
-        dev_yaml.write_text(yaml.safe_dump(doc, sort_keys=False))
+        dev_yaml.write_text(manifest.to_yaml())
     except OSError as exc:
         raise AgentCliError(f"Could not write {dev_yaml}: {exc}") from exc
     return dev_yaml

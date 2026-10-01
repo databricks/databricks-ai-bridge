@@ -32,8 +32,8 @@ import tomlkit
 import yaml
 from rich.console import Console
 
-from databricks_agentbricks import render
-from databricks_agentbricks.agent_project import AgentServer
+from databricks_agentbricks.presentation import render
+from databricks_agentbricks.projects.agent_project import AgentServer
 
 _MARKER = "AGENTBRICKS_DEV_OK"
 

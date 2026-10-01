@@ -5,14 +5,15 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import Optional
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import DatabricksError, NotFound
 from databricks.sdk.service.apps import App, AppsAPI
 
-from databricks_agentbricks.agent_project import AgentProject
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.project_types import AgentServer
+from databricks_agentbricks.projects.agent_project import AgentProject
+from databricks_agentbricks.projects.types import AgentServer
 
 _IDENTITY_DEFAULT_SCOPES = frozenset({"iam.access-control:read", "iam.current-user:read"})
 
@@ -72,6 +73,20 @@ class AppUserScopeUpdatePlan:
     name: str
     existing_scopes: tuple[str, ...] | None
     scopes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class AppAuthResult:
+    """Outcome of preparing Apps request-user auth for one deployment.
+
+    ``app_reconciled`` tells the app lifecycle that creation and any requested scale update were
+    already handled through the SDK auth operation. ``app_existed`` describes the state before that
+    operation; it is unknown when the project does not require request-user auth.
+    """
+
+    required: bool
+    app_reconciled: bool
+    app_existed: Optional[bool]
 
 
 def required_user_api_scopes(project: AgentProject | None) -> set[str]:
@@ -198,3 +213,68 @@ def apply_app_user_scope_update(
         hint="Source deployment was stopped. Inspect requested/effective scopes in Databricks "
         "Apps; contact your platform administrator if propagation remains blocked. Then retry.",
     )
+
+
+class AppAuthClient:
+    """The low-level Apps identity/auth client for request-user tools.
+
+    It is Python SDK based (``WorkspaceClient``/``AppsAPI``), distinct from
+    :class:`~databricks_agentbricks.clients.apps_client.AppsClient`, which shells out to ``databricks apps``.
+    It holds the profile and wraps this module's helpers so the service can be injected with it
+    instead of importing the module functions. It is render-free: it never touches the terminal.
+    """
+
+    def __init__(self, profile: Optional[str]) -> None:
+        self._profile = profile
+
+    def requires_user_auth(self, project) -> bool:
+        """Whether the project binds a managed tool with ``auth = 'user'``, so the App needs OBO.
+
+        False for a project with no tools or no agent.toml at all. Raises when the bindings are
+        inconsistent (user auth on a non-Agent-Bricks server, or a managed tool left without an
+        explicit ``auth``), so a bad combination fails pre-flight rather than mid-deploy.
+        """
+        return requires_user_auth(project)
+
+    def required_user_api_scopes(self, project) -> set[str]:
+        """The least-privilege Apps user API scopes the project's request-user tools need.
+
+        Empty when nothing requests user auth; derived from the tool bindings only, so it reads no
+        workspace state.
+        """
+        return required_user_api_scopes(project)
+
+    def ensure_user_auth(
+        self,
+        name: str,
+        project: AgentProject | None,
+        *,
+        allow_existing_app_update: bool,
+        instance_count: Optional[int],
+    ) -> AppAuthResult:
+        """Validate and reconcile request-user auth, returning only deploy-level facts.
+
+        The SDK-backed update plan stays private to this collaborator. Callers learn whether auth
+        was required, whether this operation already reconciled the App, and whether it existed
+        beforehand; they do not coordinate an ``AppsAPI`` plan themselves.
+        """
+        required = self.requires_user_auth(project)
+        if allow_existing_app_update and not required:
+            raise AgentCliError(
+                "--allow-user-scope-update requires a managed tool with auth = 'user' in agent.toml."
+            )
+        if not required:
+            return AppAuthResult(required=False, app_reconciled=False, app_existed=None)
+
+        plan = plan_app_user_scope_update(
+            name,
+            self._profile,
+            allow_existing_app_update=allow_existing_app_update,
+            required_scopes=self.required_user_api_scopes(project),
+        )
+        apply_app_user_scope_update(plan, instances=instance_count)
+        return AppAuthResult(
+            required=True,
+            app_reconciled=True,
+            app_existed=plan.existing_scopes is not None,
+        )
