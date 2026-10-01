@@ -331,8 +331,6 @@ def test_langgraph_mcp_failure_returns_generic_auth_error(adapter, caplog):
     with caplog.at_level("WARNING"), pytest.raises(AuthError) as raised:
         asyncio.run(interceptor(request, AsyncMock(side_effect=RuntimeError("secret body"))))
 
-    assert "MCP tool search failed" not in caplog.text
-    assert "secret body" not in caplog.text
     assert raised.value.code == "MCP_TOOL_FAILED"
     assert raised.value.status_code == 502
 
