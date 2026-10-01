@@ -1,4 +1,4 @@
-"""A small client over `databricks apps`, used by `deploy.py` and `endpoint.py`.
+"""A small client over `databricks apps`, used by deploy, dev, and endpoint commands.
 
 The `databricks apps get <name> -o json` call is the one read the CLI needs from the Apps
 control plane, but three different pieces of information come out of it (service principal,
@@ -12,6 +12,7 @@ functions.
 from __future__ import annotations
 
 import json
+import pathlib
 import subprocess
 import time
 from typing import Callable, Optional
@@ -186,6 +187,29 @@ class AppsClient:
             ["apps", "deploy", name, "--source-code-path", ws_path],
             self._profile,
             action=f"Could not deploy '{name}'.",
+        )
+
+    def run_local(
+        self,
+        source_dir: pathlib.Path,
+        entry_point_name: str,
+        *,
+        prepare_environment: bool,
+        app_port: Optional[int],
+    ) -> None:
+        """Run an app locally from a prepared manifest, streaming its output."""
+        args = ["apps", "run-local"]
+        if prepare_environment:
+            args.append("--prepare-environment")
+        if app_port is not None:
+            args += ["--app-port", str(app_port)]
+        # run-local resolves this relative to cwd and rejects an absolute alternate-manifest path.
+        args += ["--entry-point", entry_point_name]
+        self._run(
+            args,
+            self._profile,
+            cwd=str(source_dir),
+            action="Could not start the agent locally.",
         )
 
     def get_service_principal(self, app_name: str) -> Optional[str]:
