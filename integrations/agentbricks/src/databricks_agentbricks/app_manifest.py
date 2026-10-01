@@ -93,6 +93,7 @@ class AppManifest:
         self._doc["env"] = entries
 
     def to_yaml(self) -> str:
+        """Serialize the document back to YAML, preserving key order (``app.yaml`` is user-edited)."""
         return yaml.safe_dump(self._doc, sort_keys=False)
 
     @classmethod

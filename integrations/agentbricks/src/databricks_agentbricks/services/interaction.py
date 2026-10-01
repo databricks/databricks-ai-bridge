@@ -29,8 +29,12 @@ class Reporter(Protocol):
         """A one-off user notice (stderr)."""
         ...
 
-    def echo(self, message: str, *, newline: bool = True) -> None:
-        """Write a line of primary output (stdout)."""
+    def echo(self, message: str, *, add_newline: bool = True) -> None:
+        """Write primary output (stdout), terminating it with a newline unless ``add_newline`` is False.
+
+        Pass ``add_newline=False`` for text that already ends in one, so relayed command output isn't
+        double-spaced.
+        """
         ...
 
 

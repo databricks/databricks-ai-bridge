@@ -128,7 +128,7 @@ class DeployResult:
 class _DeployPlan:
     """Resolved deploy identity + auth decisions from the pre-flight phase."""
 
-    project: Any
+    agent_project: Any  # the loaded AgentProject, or None when the source has no agent.toml
     base_name: str
     name: DeploymentName
     user_scope_plan: Optional[AppUserScopeUpdatePlan]
@@ -144,28 +144,28 @@ class DeployService:
     def __init__(
         self,
         *,
-        project: ProjectResolver,
+        project_resolver: ProjectResolver,
         apps_client: AppsClient,
         api_client_factory: Callable[[], Any],
-        app: AppProvisioner,
-        app_auth: AppAuthClient,
-        memory_store: MemoryStoreProvisioner,
-        session_store: SessionStoreProvisioner,
-        tracing: TracingProvisioner,
-        runtime_store: RuntimeStoreProvisioner,
+        app_provisioner: AppProvisioner,
+        app_auth_client: AppAuthClient,
+        memory_store_provisioner: MemoryStoreProvisioner,
+        session_store_provisioner: SessionStoreProvisioner,
+        tracing_provisioner: TracingProvisioner,
+        runtime_store_provisioner: RuntimeStoreProvisioner,
         profile: Optional[str],
         reporter: Reporter,
         prompter: Prompter,
     ) -> None:
-        self._project = project
+        self._project_resolver = project_resolver
         self._apps_client = apps_client
         self._api_client_factory = api_client_factory
-        self._app = app
-        self._app_auth = app_auth
-        self._memory_store = memory_store
-        self._session_store = session_store
-        self._tracing = tracing
-        self._runtime_store = runtime_store
+        self._app_provisioner = app_provisioner
+        self._app_auth_client = app_auth_client
+        self._memory_store_provisioner = memory_store_provisioner
+        self._session_store_provisioner = session_store_provisioner
+        self._tracing_provisioner = tracing_provisioner
+        self._runtime_store_provisioner = runtime_store_provisioner
         self._profile = profile
         self._reporter = reporter
         self._prompter = prompter
@@ -193,6 +193,7 @@ class DeployService:
         self._apps_client.logs(name)
 
     def start(self, name: DeploymentName) -> None:
+        """Start a stopped deployment's compute. Unconfirmed: starting one destroys nothing."""
         self._apps_client.start(name)
 
     def stop(self, name: DeploymentName, *, assume_yes: bool) -> None:
@@ -207,7 +208,7 @@ class DeployService:
         stops resolving once the app is gone. If that identity can't be read we refuse outright
         rather than delete the app and orphan its data.
         """
-        manages_persistent_data = self._runtime_store.manages_persistent_data()
+        manages_persistent_data = self._runtime_store_provisioner.manages_persistent_data()
         # Name the data loss in the prompt: with a managed store, deleting the app also drops the
         # agent's persisted memory/sessions, which the app name alone doesn't imply.
         target = (
@@ -218,7 +219,7 @@ class DeployService:
         self._confirm_action(target, assume_yes=assume_yes)
         if manages_persistent_data:
             with self._reporter.status("Deleting Runtime Store…"):
-                self._runtime_store.delete_managed(name)
+                self._runtime_store_provisioner.delete_managed(name)
         self._apps_client.delete(name)
 
     def _confirm_action(self, target: str, *, assume_yes: bool) -> None:
@@ -244,11 +245,13 @@ class DeployService:
         instance_count = request.instance_count
         instance_args = _instance_args(instance_count)
         client = self._api_client_factory()
-        memory_store_name, session_store_name, experiment_name = self._project.resource_bindings(
-            source_dir
+        memory_store_name, session_store_name, experiment_name = (
+            self._project_resolver.resource_bindings(source_dir)
         )
         ctx = ResourceContext(
-            project=ProjectContext(source_dir=source_dir, name=name, agent_project=plan.project),
+            project=ProjectContext(
+                source_dir=source_dir, name=name, agent_project=plan.agent_project
+            ),
             memory_store=memory_store_name,
             session_store=session_store_name,
             experiment_name=experiment_name,
@@ -258,20 +261,20 @@ class DeployService:
         # the order the developer watches the deploy happen in. It also drives the later phases:
         # the stores grant (memory then session) before tracing does.
         provisioners: tuple[ResourceProvisioner, ...] = (
-            self._memory_store,
-            self._session_store,
-            self._tracing,
-            self._runtime_store,
+            self._memory_store_provisioner,
+            self._session_store_provisioner,
+            self._tracing_provisioner,
+            self._runtime_store_provisioner,
         )
         # The order their env lands in app.yaml, which is NOT the reconcile order: tracing's MLFLOW_*
         # keys come first, then the memory/session store env. app.yaml's env list is a user-visible
         # file the developer reads and edits, so its key order is part of the CLI's output and is fixed
         # here rather than left to fall out of whichever order the resources happen to be reconciled in.
         env_order: tuple[ResourceProvisioner, ...] = (
-            self._tracing,
-            self._memory_store,
-            self._session_store,
-            self._runtime_store,
+            self._tracing_provisioner,
+            self._memory_store_provisioner,
+            self._session_store_provisioner,
+            self._runtime_store_provisioner,
         )
 
         # 1. Reconcile every declared resource: create what doesn't exist yet; each records on itself
@@ -300,7 +303,7 @@ class DeployService:
         if deployment_exists is None:
             deployment_exists = self._apps_client.exists(name)
         ctx = dataclasses.replace(ctx, deployment_exists=deployment_exists)
-        self._app.create_and_wait_for_active(
+        self._app_provisioner.create_and_wait_for_active(
             ctx, plan.user_scope_plan, instance_count, instance_args
         )
 
@@ -313,7 +316,7 @@ class DeployService:
             env.update(provisioner.env)
 
         # 5. Upload the source and roll out the deployment.
-        ws_path = self._app.deploy(ctx, request.workspace_path)
+        ws_path = self._app_provisioner.deploy(ctx, request.workspace_path)
 
         # 6. Grant the app's service principal (and the agent runtime) access to each resource. Every
         #    grant is best-effort: each provisioner records its own failure instead of raising, because
@@ -328,29 +331,31 @@ class DeployService:
             workspace_path=ws_path,
             env=env,
             client_host=client.host,
-            memory_store=self._memory_store.store_name,
-            session_store=self._session_store.store_name,
-            trace_experiment_id=self._tracing.experiment_id,
-            uc_trace_tables=[t.full_name for t in self._tracing.otel_tables],
-            trace_setup_error=self._tracing.setup_error,
-            trace_grant_error=self._tracing.grant_error,
-            memory_grant_error=self._memory_store.grant_error,
-            session_grant_error=self._session_store.grant_error,
-            grants_memory=self._memory_store.grants,
-            grants_session=self._session_store.grants,
+            memory_store=self._memory_store_provisioner.store_name,
+            session_store=self._session_store_provisioner.store_name,
+            trace_experiment_id=self._tracing_provisioner.experiment_id,
+            uc_trace_tables=[t.full_name for t in self._tracing_provisioner.otel_tables],
+            trace_setup_error=self._tracing_provisioner.setup_error,
+            trace_grant_error=self._tracing_provisioner.grant_error,
+            memory_grant_error=self._memory_store_provisioner.grant_error,
+            session_grant_error=self._session_store_provisioner.grant_error,
+            grants_memory=self._memory_store_provisioner.grants_access,
+            grants_session=self._session_store_provisioner.grants_access,
             scaffolded=scaffolded or any(provisioner.scaffolded for provisioner in provisioners),
             pip_index_url=request.pip_index_url,
             instance_count=instance_count,
-            uses_runtime_api=bool(plan.project and plan.project.server == AgentServer.AGENTBRICKS),
+            uses_runtime_api=bool(
+                plan.agent_project and plan.agent_project.server == AgentServer.AGENTBRICKS
+            ),
         )
 
     def _authorize(self, source_dir: pathlib.Path, request: DeployRequest) -> _DeployPlan:
-        project = self._project.load(source_dir)
-        if project is not None and project.tools:
+        agent_project = self._project_resolver.load(source_dir)
+        if agent_project is not None and agent_project.tools:
             require_managed_tool_support(source_dir)
-        user_auth = self._app_auth.requires_user_auth(project)
+        require_user_auth = self._app_auth_client.requires_user_auth(agent_project)
         requested_name = request.name
-        base_name = self._project.resolve_deployment_name(project, request.name)
+        base_name = self._project_resolver.resolve_deployment_name(agent_project, request.name)
         name = _prefixed_name(base_name)
         # Validate the shape before checking the Apps name length.
         _validate_deployment_name(name, check_length=False)
@@ -359,8 +364,8 @@ class DeployService:
         # matching Agent Bricks app if it exists.
         if (
             requested_name is None
-            and project is not None
-            and project.deployment_name
+            and agent_project is not None
+            and agent_project.deployment_name
             and not base_name.startswith(_DEPLOYMENT_PREFIX)
         ):
             new_name_exists = len(name) <= _MAX_DEPLOYMENT_NAME_LEN and self._apps_client.exists(
@@ -370,7 +375,7 @@ class DeployService:
         # Apply the length cap now (after the exists probe, which needs the raw string) and, in the
         # same step, promote the validated name to the DeploymentName the rest of deploy carries.
         name = DeploymentName(name)
-        if request.allow_user_scope_update and not user_auth:
+        if request.allow_user_scope_update and not require_user_auth:
             raise AgentCliError(
                 "--allow-user-scope-update requires a managed tool with auth = 'user' in agent.toml."
             )
@@ -378,12 +383,12 @@ class DeployService:
         # required user API scope. New Apps are configured automatically. For an existing App, adding a
         # missing scope requires --allow-user-scope-update; already-configured Apps need no flag.
         user_scope_plan = (
-            self._app_auth.plan_user_scope_update(
+            self._app_auth_client.plan_user_scope_update(
                 name,
                 allow_existing_app_update=request.allow_user_scope_update,
-                required_scopes=self._app_auth.required_user_api_scopes(project),
+                required_scopes=self._app_auth_client.required_user_api_scopes(agent_project),
             )
-            if user_auth
+            if require_user_auth
             else None
         )
         if user_scope_plan is not None:
@@ -394,10 +399,10 @@ class DeployService:
             )
             if deployment_exists is None:
                 deployment_exists = user_scope_plan.existing_scopes is not None
-            self._app_auth.apply_user_scope_update(
+            self._app_auth_client.apply_user_scope_update(
                 user_scope_plan, instance_count=request.instance_count
             )
         # Persist the base name so a later `agentbricks deploy` (no NAME) resolves to the same app.
-        if project is not None and project.set_deployment_name(base_name):
-            project.write()
-        return _DeployPlan(project, base_name, name, user_scope_plan, deployment_exists)
+        if agent_project is not None and agent_project.set_deployment_name(base_name):
+            agent_project.write()
+        return _DeployPlan(agent_project, base_name, name, user_scope_plan, deployment_exists)

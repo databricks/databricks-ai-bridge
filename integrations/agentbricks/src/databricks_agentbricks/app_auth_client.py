@@ -212,9 +212,20 @@ class AppAuthClient:
         self._profile = profile
 
     def requires_user_auth(self, project) -> bool:
+        """Whether the project binds a managed tool with ``auth = 'user'``, so the App needs OBO.
+
+        False for a project with no tools or no agent.toml at all. Raises when the bindings are
+        inconsistent (user auth on a non-Agent-Bricks server, or a managed tool left without an
+        explicit ``auth``), so a bad combination fails pre-flight rather than mid-deploy.
+        """
         return requires_user_auth(project)
 
     def required_user_api_scopes(self, project) -> set[str]:
+        """The least-privilege Apps user API scopes the project's request-user tools need.
+
+        Empty when nothing requests user auth; derived from the tool bindings only, so it reads no
+        workspace state.
+        """
         return required_user_api_scopes(project)
 
     def plan_user_scope_update(
@@ -224,6 +235,13 @@ class AppAuthClient:
         allow_existing_app_update: bool,
         required_scopes,
     ) -> Optional[AppUserScopeUpdatePlan]:
+        """Read the App's current scopes and plan the create-or-add, changing nothing yet.
+
+        The plan carries the union of configured and required scopes; its ``existing_scopes`` is None
+        when the App does not exist yet, which is how :meth:`apply_user_scope_update` tells a create
+        from an update. Raises when an existing App is missing a scope and
+        ``allow_existing_app_update`` is False.
+        """
         return plan_app_user_scope_update(
             name,
             self._profile,
@@ -232,4 +250,10 @@ class AppAuthClient:
         )
 
     def apply_user_scope_update(self, plan, *, instance_count: int) -> None:
+        """Apply the plan - create the scoped App or add its missing scopes - and wait for propagation.
+
+        Also pins the App to ``instance_count`` instances (min and max alike) as part of that same
+        Apps update, so a deploy that takes this path must not re-pin the scale afterwards. Scopes
+        are never removed; raises if the effective scopes do not converge.
+        """
         apply_app_user_scope_update(plan, instances=instance_count)

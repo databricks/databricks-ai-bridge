@@ -71,7 +71,7 @@ class MemoryStoreClient:
     """
 
     def __init__(self, api_client_factory: Callable[[], Any], apps_client: AppsClient) -> None:
-        self._api = api_client_factory
+        self._api_client_factory = api_client_factory
         self._apps = apps_client
 
     def resolve(self, display_name: str) -> Optional[dict]:
@@ -83,7 +83,7 @@ class MemoryStoreClient:
         """
         page_token: Optional[str] = None
         while True:
-            listing = self._api().list_memory_stores(
+            listing = self._api_client_factory().list_memory_stores(
                 page_size=_MEMORY_STORE_PAGE_SIZE, page_token=page_token
             )
             for store in field(listing, "managed_memory_stores") or []:
@@ -96,7 +96,9 @@ class MemoryStoreClient:
     def ensure(self, display_name: str) -> tuple[dict, bool]:
         """Create the memory store, or resolve it if it already exists. Returns (store, created)."""
         try:
-            return self._api().create_memory_store(display_name, retry_transient=True), True
+            return self._api_client_factory().create_memory_store(
+                display_name, retry_transient=True
+            ), True
         except AgentCliError as exc:
             if exc.error_code == "PERMISSION_DENIED":
                 raise _store_create_permission_error(display_name, "memory", exc) from exc
@@ -138,7 +140,7 @@ class MemoryStoreClient:
             store = self.resolve(store_name)
             if store is None:
                 return f"memory store {store_name!r} could not be resolved."
-            self._api().grant_memory_store_permission(field(store, "name"), sp)
+            self._api_client_factory().grant_memory_store_permission(field(store, "name"), sp)
         except AgentCliError as exc:
             return exc.hint or str(exc)
         return None
@@ -152,20 +154,20 @@ class SessionStoreClient:
     """
 
     def __init__(self, api_client_factory: Callable[[], Any], apps_client: AppsClient) -> None:
-        self._api = api_client_factory
+        self._api_client_factory = api_client_factory
         self._apps = apps_client
 
     def ensure(self, name: str) -> tuple[dict, bool]:
         """Create the session store, or resolve it if it already exists. Returns (store, created)."""
         try:
-            return self._api().create_session_store(name, retry_transient=True), True
+            return self._api_client_factory().create_session_store(name, retry_transient=True), True
         except AgentCliError as exc:
             if exc.error_code == "PERMISSION_DENIED":
                 raise _store_create_permission_error(name, "session", exc) from exc
             if exc.error_code != "ALREADY_EXISTS":
                 raise
         try:
-            return self._api().get_session_store(name), False
+            return self._api_client_factory().get_session_store(name), False
         except AgentCliError as exc:
             if exc.error_code == "PERMISSION_DENIED":
                 raise _store_access_error(name, "session") from exc
@@ -192,7 +194,7 @@ class SessionStoreClient:
         if sp is None:
             return "could not resolve the app's service principal."
         try:
-            self._api().grant_session_store_permission(store_name, sp)
+            self._api_client_factory().grant_session_store_permission(store_name, sp)
         except AgentCliError as exc:
             return exc.hint or str(exc)
         return None
@@ -215,7 +217,7 @@ class RuntimeStoreClient:
         apps_client: AppsClient,
         use_managed: bool,
     ) -> None:
-        self._api = api_client_factory
+        self._api_client_factory = api_client_factory
         self._profile = profile
         self._apps = apps_client
         self._use_managed = use_managed
@@ -238,7 +240,7 @@ class RuntimeStoreClient:
     def managed_backend(self, name: str) -> RuntimeStoreBackend:
         """Create or reuse the service-managed Runtime Store owned by the app's service principal."""
         sp = self._apps.get_service_principal(name)
-        return managed_runtime_store.get_or_create_backend(self._api(), name, sp)
+        return managed_runtime_store.get_or_create_backend(self._api_client_factory(), name, sp)
 
     def delete_managed(self, name: str) -> None:
         """Drop the deployment's service-managed Runtime Store and its data.
@@ -253,4 +255,4 @@ class RuntimeStoreClient:
                 "Could not resolve the app's service principal for Runtime Store cleanup.",
                 hint="The deployment was retained. Check access to the app and retry deletion.",
             )
-        managed_runtime_store.delete(self._api(), name, sp)
+        managed_runtime_store.delete(self._api_client_factory(), name, sp)

@@ -159,13 +159,13 @@ class MemoryStoreProvisioner(_Provisioner):
     contribution, its own grant. Delegates the API work to its own ``MemoryStoreClient``.
     """
 
-    def __init__(self, client: MemoryStoreClient, reporter: Reporter) -> None:
+    def __init__(self, memory_store_client: MemoryStoreClient, reporter: Reporter) -> None:
         super().__init__()
-        self._client = client
+        self._memory_store_client = memory_store_client
         self._reporter = reporter
         self.store_name: Optional[str] = None  # the bound store name, surfaced on the DeployResult
         self.grant_error: Optional[str] = None
-        self.grants: bool = False
+        self.grants_access: bool = False
 
     def reconcile(self, ctx: ResourceContext) -> None:
         """Create the declared memory store if absent and wire ``AGENT_MEMORY_STORE``.
@@ -177,7 +177,7 @@ class MemoryStoreProvisioner(_Provisioner):
         self.store_name = ctx.memory_store
         if not self.store_name:
             return
-        memory_store_id = self._client.reconcile(self.store_name)
+        memory_store_id = self._memory_store_client.reconcile(self.store_name)
         if memory_store_id:
             self.env[MEMORY_STORE_ENV] = memory_store_id
 
@@ -191,8 +191,8 @@ class MemoryStoreProvisioner(_Provisioner):
         if not self.store_name:
             return
         with self._reporter.status("Granting the app access to its memory store…"):
-            self.grant_error = self._client.grant(ctx.project.name, self.store_name)
-            self.grants = True
+            self.grant_error = self._memory_store_client.grant(ctx.project.name, self.store_name)
+            self.grants_access = True
 
 
 class SessionStoreProvisioner(_Provisioner):
@@ -202,20 +202,20 @@ class SessionStoreProvisioner(_Provisioner):
     stores resolve by name, so ``AGENT_SESSION_STORE`` carries the name rather than a resolved id.
     """
 
-    def __init__(self, client: SessionStoreClient, reporter: Reporter) -> None:
+    def __init__(self, session_store_client: SessionStoreClient, reporter: Reporter) -> None:
         super().__init__()
-        self._client = client
+        self._session_store_client = session_store_client
         self._reporter = reporter
         self.store_name: Optional[str] = None  # the bound store name, surfaced on the DeployResult
         self.grant_error: Optional[str] = None
-        self.grants: bool = False
+        self.grants_access: bool = False
 
     def reconcile(self, ctx: ResourceContext) -> None:
         """Create the declared session store if absent and wire ``AGENT_SESSION_STORE``."""
         self.store_name = ctx.session_store
         if not self.store_name:
             return
-        self._client.reconcile(self.store_name)
+        self._session_store_client.reconcile(self.store_name)
         self.env[SESSION_STORE_ENV] = self.store_name
 
     def grant(self, ctx: ResourceContext) -> None:
@@ -227,8 +227,8 @@ class SessionStoreProvisioner(_Provisioner):
         if not self.store_name:
             return
         with self._reporter.status("Granting the app access to its session store…"):
-            self.grant_error = self._client.grant(ctx.project.name, self.store_name)
-            self.grants = True
+            self.grant_error = self._session_store_client.grant(ctx.project.name, self.store_name)
+            self.grants_access = True
 
 
 class TracingProvisioner(_Provisioner):
@@ -238,9 +238,9 @@ class TracingProvisioner(_Provisioner):
     blocks a deploy - both are recorded for the CLI to report.
     """
 
-    def __init__(self, client: TracingClient, reporter: Reporter) -> None:
+    def __init__(self, tracing_client: TracingClient, reporter: Reporter) -> None:
         super().__init__()
-        self._client = client
+        self._tracing_client = tracing_client
         self._reporter = reporter
         self.experiment_id: Optional[str] = None
         self.otel_tables: list[TraceTable] = []
@@ -267,9 +267,9 @@ class TracingProvisioner(_Provisioner):
                 with self._reporter.status(
                     f"Reconciling tracing experiment '{ctx.experiment_name}'…"
                 ):
-                    trace_provision = self._client.get_or_create(ctx.project.source_dir)
+                    trace_provision = self._tracing_client.get_or_create(ctx.project.source_dir)
             else:
-                trace_provision = self._client.get_or_create(ctx.project.source_dir)
+                trace_provision = self._tracing_client.get_or_create(ctx.project.source_dir)
         except Exception as exc:  # noqa: BLE001 - tracing is best-effort; never block a deploy
             self.setup_error = str(exc)
         self.experiment_id = trace_provision.experiment_id if trace_provision else None
@@ -295,7 +295,7 @@ class TracingProvisioner(_Provisioner):
         if self.setup_error is not None:
             return
         with self._reporter.status("Granting the agent runtime access to its trace experiment…"):
-            self.grant_error = self._client.apply_resources(
+            self.grant_error = self._tracing_client.apply_resources(
                 ctx.project.name, self.experiment_id, self.otel_tables
             )
 
@@ -312,9 +312,9 @@ class RuntimeStoreProvisioner(_Provisioner):
     ``is_managed()`` rather than holding the flag.
     """
 
-    def __init__(self, client: RuntimeStoreClient, reporter: Reporter) -> None:
+    def __init__(self, runtime_store_client: RuntimeStoreClient, reporter: Reporter) -> None:
         super().__init__()
-        self._client = client
+        self._runtime_store_client = runtime_store_client
         self._reporter = reporter
         # None means the managed branch: `after_app_ready` keys off this to tell the two backends apart.
         self._legacy_backend: Optional[LakebaseBackend] = None
@@ -329,10 +329,10 @@ class RuntimeStoreProvisioner(_Provisioner):
 
     def reconcile(self, ctx: ResourceContext) -> None:
         """Legacy backend only: get-or-create the per-app Lakebase project and wire its env."""
-        if not self._uses_runtime_store(ctx) or self._client.is_managed():
+        if not self._uses_runtime_store(ctx) or self._runtime_store_client.is_managed():
             return
         with self._reporter.status("Reconciling Runtime Store…"):
-            self._legacy_backend = self._client.legacy_backend(ctx.project.name)
+            self._legacy_backend = self._runtime_store_client.legacy_backend(ctx.project.name)
         self.env[RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV] = self._legacy_backend.endpoint_path
         self.env[RUNTIME_STORE_SCHEMA_ENV] = self._legacy_backend.schema
 
@@ -343,7 +343,7 @@ class RuntimeStoreProvisioner(_Provisioner):
         created, so these fields need a second manifest write, and they land last in the deploy's env.
         """
         if self._legacy_backend is not None:
-            resource_error = self._client.apply_legacy_resource(
+            resource_error = self._runtime_store_client.apply_legacy_resource(
                 ctx.project.name, self._legacy_backend
             )
             if resource_error:
@@ -355,7 +355,7 @@ class RuntimeStoreProvisioner(_Provisioner):
         if not self._uses_runtime_store(ctx):
             return
         with self._reporter.status("Reconciling Runtime Store…"):
-            runtime_backend = self._client.managed_backend(ctx.project.name)
+            runtime_backend = self._runtime_store_client.managed_backend(ctx.project.name)
         managed_env = {
             RUNTIME_STORE_LAKEBASE_BRANCH_ENV: runtime_backend.branch,
             RUNTIME_STORE_DATABASE_ENV: runtime_backend.database_id,
@@ -370,11 +370,11 @@ class RuntimeStoreProvisioner(_Provisioner):
 
     def manages_persistent_data(self) -> bool:
         """Whether the Runtime Store is service-managed, so a delete must tear it down first."""
-        return self._client.is_managed()
+        return self._runtime_store_client.is_managed()
 
     def delete_managed(self, name: DeploymentName) -> None:
         """Drop the deployment's service-managed Runtime Store and its data."""
-        self._client.delete_managed(name)
+        self._runtime_store_client.delete_managed(name)
 
 
 class AppProvisioner:
@@ -399,7 +399,7 @@ class AppProvisioner:
         reporter: Reporter,
     ) -> None:
         self._apps_client = apps_client
-        self._api = api_client_factory
+        self._api_client_factory = api_client_factory
         self._reporter = reporter
 
     def create_and_wait_for_active(
@@ -427,14 +427,14 @@ class AppProvisioner:
             ):
                 out = self._apps_client.create(name, instance_args)
             old, new = _AGENT_COMPUTE_OUTPUT
-            self._reporter.echo(out.replace(old, new), newline=False)
+            self._reporter.echo(out.replace(old, new), add_newline=False)
         # An existing app has its scale re-pinned every deploy, so the count the deploy asked for wins
         # over whatever a previous deploy left behind. (When a scope plan ran it already applied the
         # count as part of the same Apps update.)
         elif user_scope_plan is None:
             out = self._apps_client.create_update_instances(name, instance_count)
             old, new = _AGENT_COMPUTE_OUTPUT
-            self._reporter.echo(out.replace(old, new), newline=False)
+            self._reporter.echo(out.replace(old, new), add_newline=False)
         # `apps deploy` requires the app's compute to be ACTIVE — a just-created app may still be
         # starting, and an existing one may be STOPPED — so wait either way. Returns immediately when
         with self._reporter.progress(
@@ -450,7 +450,7 @@ class AppProvisioner:
         """
         ws_path = (
             workspace_path
-            or f"/Workspace/Users/{self._api().current_user}/agentbricks_deployments/{ctx.project.name}"
+            or f"/Workspace/Users/{self._api_client_factory().current_user}/agentbricks_deployments/{ctx.project.name}"
         )
         self._apps_client.sync_source(ctx.project.name, ctx.project.source_dir, ws_path)
         self._apps_client.deploy(ctx.project.name, ws_path)

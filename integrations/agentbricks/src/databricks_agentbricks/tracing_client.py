@@ -28,7 +28,7 @@ class TracingClient:
     """
 
     def __init__(self, api_client_factory: Callable[[], Any], profile: Optional[str]) -> None:
-        self._api = api_client_factory
+        self._api_client_factory = api_client_factory
         self._profile = profile
 
     def get_or_create(self, source: pathlib.Path) -> Optional[ResolvedTraceExperiment]:
@@ -49,7 +49,7 @@ class TracingClient:
         name = project.trace_experiment_name if project is not None else None
         if not name:
             return None
-        return create_experiment_idempotent(self._profile, self._api(), name)
+        return create_experiment_idempotent(self._profile, self._api_client_factory(), name)
 
     def apply_resources(
         self,

@@ -178,6 +178,11 @@ class _DeploymentNameParam(click.ParamType):
     name = "name"
 
     def convert(self, value: Any, param: Any, ctx: Any) -> DeploymentName:
+        """Click's parse hook: promote the raw argument to a ``DeploymentName``, validating it.
+
+        Raises ``AgentCliError`` (not ``self.fail()``) on a bad name, so the CLI renders its own
+        diagnostic and exit code rather than Click's "Invalid value" usage error.
+        """
         return DeploymentName(value)
 
 

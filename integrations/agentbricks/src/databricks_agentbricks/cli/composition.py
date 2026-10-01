@@ -40,22 +40,31 @@ def build_deploy_service(obj) -> DeployService:
 
     # `obj.client` memoizes the workspace client, so every collaborator handed this factory shares
     # the one instance - and, it being a factory, nothing opens the client before pre-flight.
-    api = obj.client
+    api_client_factory = obj.client
     # One AppsClient for the whole command: its service-principal cache then collapses the memory
     # grant, session grant, and managed Runtime Store lookups into a single `apps get`.
-    apps = AppsClient(obj.profile, runner=_databricks)
+    apps_client = AppsClient(obj.profile, runner=_databricks)
     reporter = ClickReporter()
     return DeployService(
-        project=ProjectResolver(),
-        apps_client=apps,
-        api_client_factory=api,
-        app=AppProvisioner(apps, api, reporter),
-        app_auth=AppAuthClient(obj.profile),
-        memory_store=MemoryStoreProvisioner(MemoryStoreClient(api, apps), reporter),
-        session_store=SessionStoreProvisioner(SessionStoreClient(api, apps), reporter),
-        tracing=TracingProvisioner(TracingClient(api, obj.profile), reporter),
-        runtime_store=RuntimeStoreProvisioner(
-            RuntimeStoreClient(api, obj.profile, apps, _USE_MANAGED_RUNTIME_STORE), reporter
+        project_resolver=ProjectResolver(),
+        apps_client=apps_client,
+        api_client_factory=api_client_factory,
+        app_provisioner=AppProvisioner(apps_client, api_client_factory, reporter),
+        app_auth_client=AppAuthClient(obj.profile),
+        memory_store_provisioner=MemoryStoreProvisioner(
+            MemoryStoreClient(api_client_factory, apps_client), reporter
+        ),
+        session_store_provisioner=SessionStoreProvisioner(
+            SessionStoreClient(api_client_factory, apps_client), reporter
+        ),
+        tracing_provisioner=TracingProvisioner(
+            TracingClient(api_client_factory, obj.profile), reporter
+        ),
+        runtime_store_provisioner=RuntimeStoreProvisioner(
+            RuntimeStoreClient(
+                api_client_factory, obj.profile, apps_client, _USE_MANAGED_RUNTIME_STORE
+            ),
+            reporter,
         ),
         profile=obj.profile,
         reporter=reporter,

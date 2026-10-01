@@ -116,6 +116,11 @@ class MlflowTracingConfig:
     tracking_uri: str = "databricks"
 
     def env(self) -> dict[str, str]:
+        """The two ``MLFLOW_*`` env vars to wire into app.yaml, as a name -> value mapping.
+
+        Always both keys, so an empty ``experiment_id`` renders the exact key set a tracing unbind
+        has to prune from the manifest.
+        """
         return {
             TRACES_TRACKING_URI_ENV: self.tracking_uri,
             TRACES_EXPERIMENT_ID_ENV: self.experiment_id,

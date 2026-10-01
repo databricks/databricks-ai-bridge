@@ -49,6 +49,11 @@ class AppsClient:
             return None
 
     def exists(self, name: str) -> bool:
+        """Whether the workspace has an app by this name, probed with a non-raising `apps get`.
+
+        A failed read is reported as "absent": the probe can't distinguish a missing app from a
+        workspace it can't reach, and the callers treat both as "nothing to reuse".
+        """
         return (
             self._run(["apps", "get", name], self._profile, capture=True, check=False).returncode
             == 0
@@ -89,16 +94,19 @@ class AppsClient:
         )
 
     def start(self, name: str) -> None:
+        """Start the app's compute, raising if the command fails."""
         self._run(
             ["apps", "start", name], self._profile, action=f"Could not start deployment '{name}'."
         )
 
     def stop(self, name: str) -> None:
+        """Stop the app's compute, raising if the command fails. Its deployed source is kept."""
         self._run(
             ["apps", "stop", name], self._profile, action=f"Could not stop deployment '{name}'."
         )
 
     def delete(self, name: str) -> None:
+        """Delete the app, raising if the command fails. Unconfirmed here - the caller owns that."""
         self._run(
             ["apps", "delete", name], self._profile, action=f"Could not delete deployment '{name}'."
         )
