@@ -6,7 +6,7 @@ import json
 import urllib.parse
 from typing import Any, Mapping
 
-from databricks_agentbricks.cli.endpoint_transport import EndpointRequest
+from databricks_agentbricks.endpoints.transport import EndpointRequest
 from databricks_agentbricks.errors import AgentCliError
 
 

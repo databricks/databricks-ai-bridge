@@ -11,7 +11,7 @@ from typing import Any
 import tomli
 
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.project_types import AgentFramework, parse_framework
+from databricks_agentbricks.projects.types import AgentFramework, parse_framework
 
 _CONFIG_PATH = pathlib.Path(".agentbricks/project.toml")
 _SCHEMA_VERSION = 1
