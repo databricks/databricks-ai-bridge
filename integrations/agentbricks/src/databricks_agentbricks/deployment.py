@@ -15,7 +15,6 @@ This module is intentionally pure: it imports neither ``click`` nor ``render`` n
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 from databricks_agentbricks.errors import AgentCliError
 
@@ -34,6 +33,9 @@ _USE_MANAGED_RUNTIME_STORE = False
 _DEPLOYMENT_PREFIX = "agent-bricks-"
 _AGENTKIT_RUNTIME_STORE_SCHEMA = "databricks_agentkit_runtime"
 _MAX_DEPLOYMENT_NAME_LEN = 30  # Databricks Apps name limit
+# Instances a deploy pins the app to when `--instances` is not given. Every deploy sends the count, so
+# this is the scale an unqualified `agentbricks deploy` settles the app at.
+_DEFAULT_INSTANCE_COUNT = 1
 
 # The two env vars the deployed agent reads to enable tracing: a destination (the workspace tracking
 # uri) and an experiment (by id). These mirror ``cli.tracing.TRACES_TRACKING_URI_ENV`` /
@@ -81,15 +83,18 @@ class DeploymentName(str):
         return super().__new__(cls, _validate_deployment_name(raw))
 
 
-def _instance_args(instances: Optional[int]) -> list[str]:
-    """Build runtime instance arguments from the Agent Bricks fixed-count option."""
-    if instances is None:
-        return []
+def _instance_args(instance_count: int) -> list[str]:
+    """Build runtime instance arguments from the Agent Bricks fixed-count option.
+
+    The count is always sent: a deploy pins the app to exactly ``instance_count`` instances (min and
+    max alike), so the deployed scale is whatever the current deploy asked for rather than whatever a
+    previous deploy happened to leave behind.
+    """
     return [
         "--compute-min-instances",
-        str(instances),
+        str(instance_count),
         "--compute-max-instances",
-        str(instances),
+        str(instance_count),
     ]
 
 

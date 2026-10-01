@@ -165,8 +165,7 @@ def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> Non
         )
     if result.pip_index_url:
         provisioned["Package index"] = result.pip_index_url
-    if result.instances is not None:
-        provisioned["Instances"] = str(result.instances)
+    provisioned["Instances"] = str(result.instance_count)
 
     steps: list[str | tuple[str, str]] = [
         (f"agentbricks deployments get {result.deployment}", "Check its status and URL"),

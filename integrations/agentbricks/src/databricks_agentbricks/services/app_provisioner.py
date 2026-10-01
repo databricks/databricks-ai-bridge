@@ -40,7 +40,7 @@ class AppProvisioner:
         self,
         ctx: ResourceContext,
         user_scope_plan: Optional[AppUserScopeUpdatePlan],
-        instance_count: Optional[int],
+        instance_count: int,
         instance_args: list[str],
     ) -> None:
         name = ctx.project.name
@@ -55,7 +55,10 @@ class AppProvisioner:
                 out = self._apps_client.create(name, instance_args)
             old, new = _AGENT_COMPUTE_OUTPUT
             self._reporter.echo(out.replace(old, new), newline=False)
-        elif user_scope_plan is None and instance_count is not None:
+        # An existing app has its scale re-pinned every deploy, so the count the deploy asked for wins
+        # over whatever a previous deploy left behind. (When a scope plan ran it already applied the
+        # count as part of the same Apps update.)
+        elif user_scope_plan is None:
             out = self._apps_client.create_update_instances(name, instance_count)
             old, new = _AGENT_COMPUTE_OUTPUT
             self._reporter.echo(out.replace(old, new), newline=False)

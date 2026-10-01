@@ -32,6 +32,7 @@ from databricks_agentbricks.cli.presenter import (
     present_stopped,
 )
 from databricks_agentbricks.deployment import (
+    _DEFAULT_INSTANCE_COUNT,
     _DEFAULT_PIP_INDEX_URL,
     TRACES_EXPERIMENT_ID_ENV,  # noqa: F401 - re-exported for tests referencing deploy_mod.TRACES_EXPERIMENT_ID_ENV
     TRACES_TRACKING_URI_ENV,  # noqa: F401 - re-exported for tests referencing deploy_mod.TRACES_TRACKING_URI_ENV
@@ -103,9 +104,12 @@ def resource_bindings(
 )
 @click.option(
     "--instances",
+    "instance_count",
     type=click.IntRange(min=1, max=5),
-    default=None,
-    help="Number of deployment instances.",
+    default=_DEFAULT_INSTANCE_COUNT,
+    show_default=True,
+    help="Number of deployment instances the agent is pinned to. Every deploy applies this count, so "
+    "re-deploying without the flag returns the agent to the default.",
 )
 @click.option(
     "--allow-user-scope-update",
@@ -120,7 +124,7 @@ def deploy(
     source,
     pip_index_url,
     workspace_path,
-    instances,
+    instance_count,
     allow_user_scope_update,
 ) -> None:
     """Deploy your agent to Databricks Apps and get back a hosted URL to try it.
@@ -149,7 +153,7 @@ def deploy(
         source=source,
         pip_index_url=pip_index_url,
         workspace_path=workspace_path,
-        instances=instances,
+        instance_count=instance_count,
         allow_user_scope_update=allow_user_scope_update,
     )
     result = build_deploy_service(obj).deploy(request)

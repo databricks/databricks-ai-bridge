@@ -231,5 +231,5 @@ class AppAuthClient:
             required_scopes=required_scopes,
         )
 
-    def apply_user_scope_update(self, plan, *, instances) -> None:
-        apply_app_user_scope_update(plan, instances=instances)
+    def apply_user_scope_update(self, plan, *, instance_count: int) -> None:
+        apply_app_user_scope_update(plan, instances=instance_count)

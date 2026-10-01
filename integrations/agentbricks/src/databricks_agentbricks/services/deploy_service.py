@@ -88,7 +88,9 @@ class DeployRequest:
     source: str
     pip_index_url: Optional[str]
     workspace_path: Optional[str]
-    instances: Optional[int]
+    # The scale this deploy pins the app to (min and max alike), defaulted by the CLI - never None, so
+    # every deploy settles the instance count rather than inheriting the previous deploy's.
+    instance_count: int
     allow_user_scope_update: bool
 
 
@@ -118,7 +120,7 @@ class DeployResult:
     grants_session: bool
     scaffolded: bool
     pip_index_url: Optional[str]
-    instances: Optional[int]
+    instance_count: int
     uses_runtime_api: bool
 
 
@@ -239,8 +241,8 @@ class DeployService:
         source_dir = pathlib.Path(request.source)
         plan = self._authorize(source_dir, request)
         name = plan.name
-        instances = request.instances
-        instance_args = _instance_args(instances)
+        instance_count = request.instance_count
+        instance_args = _instance_args(instance_count)
         client = self._api_client_factory()
         memory_store_name, session_store_name, experiment_name = self._project.resource_bindings(
             source_dir
@@ -296,7 +298,7 @@ class DeployService:
         if deployment_exists is None:
             deployment_exists = self._apps_client.exists(name)
         ctx = dataclasses.replace(ctx, deployment_exists=deployment_exists)
-        self._app.ensure(ctx, plan.user_scope_plan, instances, instance_args)
+        self._app.ensure(ctx, plan.user_scope_plan, instance_count, instance_args)
 
         # 4. Finish the resources that needed the app to exist (its service principal is resolvable
         #    only now), then fold any env they added (the managed Runtime Store) in - appended after
@@ -334,7 +336,7 @@ class DeployService:
             grants_session=self._session_store.grants,
             scaffolded=scaffolded or any(provisioner.scaffolded for provisioner in provisioners),
             pip_index_url=request.pip_index_url,
-            instances=instances,
+            instance_count=instance_count,
             uses_runtime_api=bool(plan.project and plan.project.server == AgentServer.AGENTBRICKS),
         )
 
@@ -388,7 +390,9 @@ class DeployService:
             )
             if deployment_exists is None:
                 deployment_exists = user_scope_plan.existing_scopes is not None
-            self._app_auth.apply_user_scope_update(user_scope_plan, instances=request.instances)
+            self._app_auth.apply_user_scope_update(
+                user_scope_plan, instance_count=request.instance_count
+            )
         # Persist the base name so a later `agentbricks deploy` (no NAME) resolves to the same app.
         if project is not None and project.set_deployment_name(base_name):
             project.write()
