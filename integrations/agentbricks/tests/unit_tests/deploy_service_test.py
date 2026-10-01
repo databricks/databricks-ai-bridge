@@ -10,8 +10,9 @@ from unittest.mock import Mock
 import pytest
 
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
-from databricks_agentbricks.clients.app_auth_client import AppAuthClient, AppAuthResult
 from databricks_agentbricks.clients.apps_client import AppsClient
+from databricks_agentbricks.clients.apps_user_auth_client import AppAuthResult, AppsUserAuthClient
+from databricks_agentbricks.clients.tracing_client import TraceTable, TraceTableKind
 from databricks_agentbricks.deployment.names import DeploymentName
 from databricks_agentbricks.deployment.provisioners import (
     AppProvisioner,
@@ -32,7 +33,6 @@ from databricks_agentbricks.projects.app_manifest import AppManifest
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.reporting import Reporter
 from databricks_agentbricks.services.deploy_service import DeployRequest, DeployService
-from databricks_agentbricks.trace_tables import TraceTable, TraceTableKind
 
 
 @pytest.fixture
@@ -44,7 +44,7 @@ def deployment_fixture(tmp_path: pathlib.Path) -> SimpleNamespace:
     resolver.resolve_deployment_name.return_value = "demo"
     resolver.resource_bindings.return_value = (None, None, None)
 
-    auth = Mock(spec=AppAuthClient)
+    auth = Mock(spec=AppsUserAuthClient)
     auth.ensure_user_auth.return_value = AppAuthResult(
         required=False, app_reconciled=False, app_existed=None
     )
@@ -79,7 +79,7 @@ def deployment_fixture(tmp_path: pathlib.Path) -> SimpleNamespace:
         apps_client=apps,
         api_client_provider=provider,
         app_provisioner=app,
-        app_auth_client=auth,
+        apps_user_auth_client=auth,
         memory_store_provisioner=memory,
         session_store_provisioner=session,
         tracing_provisioner=tracing,
@@ -136,7 +136,7 @@ def test_deploy_passes_returned_state_between_phases(tmp_path: pathlib.Path) -> 
     resolver.resolve_deployment_name.return_value = "demo"
     resolver.resource_bindings.return_value = ("memory", "session", "/Shared/trace")
 
-    auth = Mock(spec=AppAuthClient)
+    auth = Mock(spec=AppsUserAuthClient)
     auth.ensure_user_auth.return_value = AppAuthResult(
         required=False, app_reconciled=False, app_existed=None
     )
@@ -197,7 +197,7 @@ def test_deploy_passes_returned_state_between_phases(tmp_path: pathlib.Path) -> 
         apps_client=apps,
         api_client_provider=provider,
         app_provisioner=app,
-        app_auth_client=auth,
+        apps_user_auth_client=auth,
         memory_store_provisioner=memory,
         session_store_provisioner=session,
         tracing_provisioner=tracing,

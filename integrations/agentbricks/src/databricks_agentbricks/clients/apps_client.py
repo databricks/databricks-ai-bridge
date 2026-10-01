@@ -15,12 +15,26 @@ import json
 import pathlib
 import subprocess
 import time
+from collections.abc import Collection, Sequence
 from typing import Callable, Optional
 
 from databricks_agentbricks.clients.databricks_cli import _databricks
+from databricks_agentbricks.clients.legacy_runtime_store import LakebaseBackend
 from databricks_agentbricks.errors import AgentCliError
 
 DatabricksRunner = Callable[..., subprocess.CompletedProcess]
+
+
+class _AppResourcesReadError(RuntimeError):
+    """The app's current resources could not be read safely."""
+
+
+def _read_failed_reason(exc: _AppResourcesReadError) -> str:
+    """Explain why a resource write was skipped after an unsafe read."""
+    return (
+        "skipped the resource update to avoid dropping the app's other resources "
+        f"(could not read current resources: {exc})"
+    )
 
 
 def _instance_args(instance_count: Optional[int]) -> list[str]:
@@ -141,6 +155,98 @@ class AppsClient:
         """Delete the app, raising if the command fails. Unconfirmed here - the caller owns that."""
         self._run(
             ["apps", "delete", name], self._profile, action=f"Could not delete deployment '{name}'."
+        )
+
+    def reconcile_resources(
+        self,
+        name: str,
+        desired_resources: Sequence[dict],
+        *,
+        owned_names: Collection[str],
+        owned_prefixes: Collection[str],
+    ) -> Optional[str]:
+        """Safely replace only explicitly owned resources on an App.
+
+        Apps resource updates replace the complete array, so the current resources must be read
+        strictly before writing. A failed, malformed, or structurally invalid read returns an error
+        and never writes; a successful read preserves every resource that does not match one of the
+        caller's explicit names or prefixes. The masked update changes only ``resources``.
+        """
+        try:
+            current = self._read_resources(name)
+        except _AppResourcesReadError as exc:
+            return _read_failed_reason(exc)
+
+        owned_name_set = set(owned_names)
+        owned_prefixes = tuple(owned_prefixes)
+        preserved = [
+            resource
+            for resource in current
+            if resource.get("name") not in owned_name_set
+            and not (
+                isinstance(resource.get("name"), str)
+                and any(resource["name"].startswith(prefix) for prefix in owned_prefixes)
+            )
+        ]
+        result = self._update_resources(name, [*preserved, *desired_resources])
+        if result.returncode == 0:
+            return None
+        return (result.stderr or result.stdout or "").strip() or "unknown error"
+
+    def attach_postgres_backends(
+        self, name: str, backends: Sequence[LakebaseBackend]
+    ) -> Optional[str]:
+        """Attach the supplied legacy Runtime Store backends as ``postgres`` resources.
+
+        Only the backend resource names passed for this deployment are managed; unrelated App
+        resources, including other ``postgres`` entries, remain untouched.
+        """
+        desired = [backend.postgres_resource() for backend in backends]
+        return self.reconcile_resources(
+            name,
+            desired,
+            owned_names=[backend.resource_name for backend in backends],
+            owned_prefixes=(),
+        )
+
+    def _read_resources(self, name: str) -> list[dict]:
+        """Read an App's resources array without treating malformed data as empty."""
+        result = self._run(
+            ["apps", "get", name, "-o", "json"],
+            self._profile,
+            capture=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip() or "apps get failed"
+            raise _AppResourcesReadError(detail)
+        try:
+            payload = json.loads(result.stdout)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise _AppResourcesReadError(f"unparseable apps get output: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise _AppResourcesReadError("unparseable apps get output: expected an object")
+        if "resources" not in payload:
+            return []
+        resources = payload["resources"]
+        if not isinstance(resources, list) or not all(
+            isinstance(resource, dict) for resource in resources
+        ):
+            raise _AppResourcesReadError(
+                "unparseable apps get output: resources must be an array of objects"
+            )
+        return resources
+
+    def _update_resources(
+        self, name: str, resources: Sequence[dict]
+    ) -> subprocess.CompletedProcess:
+        """Replace only an App's resources field with a masked Apps update."""
+        payload = {"app": {"resources": list(resources)}, "update_mask": "resources"}
+        return self._run(
+            ["apps", "create-update", name, "--json", json.dumps(payload)],
+            self._profile,
+            capture=True,
+            check=False,
         )
 
     def create(self, name: str, instance_count: Optional[int]) -> str:

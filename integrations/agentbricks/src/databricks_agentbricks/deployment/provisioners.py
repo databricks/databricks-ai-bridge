@@ -25,13 +25,13 @@ from typing import Optional
 import databricks_agentbricks.clients.legacy_runtime_store as legacy_runtime_store
 import databricks_agentbricks.clients.managed_runtime_store as managed_runtime_store
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
-from databricks_agentbricks.clients.app_resources import LakebaseBackend, apply_postgres_resources
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.conversation_store_client import (
     MemoryStoreClient,
     SessionStoreClient,
 )
-from databricks_agentbricks.clients.tracing_client import TracingClient
+from databricks_agentbricks.clients.legacy_runtime_store import LakebaseBackend
+from databricks_agentbricks.clients.tracing_client import TraceTable, TracingClient
 from databricks_agentbricks.deployment.config import (
     _AGENT_COMPUTE_OUTPUT,
     _AGENTKIT_RUNTIME_STORE_SCHEMA,
@@ -42,7 +42,6 @@ from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.agent_project import AgentProject
 from databricks_agentbricks.projects.types import AgentServer
 from databricks_agentbricks.reporting import Reporter
-from databricks_agentbricks.trace_tables import TraceTable
 from databricks_agentkit.runtime.store import (
     RUNTIME_STORE_DATABASE_ENV,
     RUNTIME_STORE_LAKEBASE_BRANCH_ENV,
@@ -362,8 +361,8 @@ class RuntimeStoreProvisioner:
             return ManifestPatch(env={})
         with self._reporter.status("Reconciling Runtime Store…"):
             if state.legacy_backend is not None:
-                resource_error = apply_postgres_resources(
-                    ctx.project.name, [state.legacy_backend], self._profile
+                resource_error = self._apps.attach_postgres_backends(
+                    ctx.project.name, [state.legacy_backend]
                 )
                 if resource_error:
                     raise AgentCliError(

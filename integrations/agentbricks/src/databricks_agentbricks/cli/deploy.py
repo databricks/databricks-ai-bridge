@@ -18,13 +18,10 @@ that is not part of the Agent Bricks CLI surface).
 
 from __future__ import annotations
 
-import pathlib
-from typing import Optional
-
 import click
 
-from databricks_agentbricks.clients.app_auth_client import AppAuthClient
 from databricks_agentbricks.clients.apps_client import AppsClient
+from databricks_agentbricks.clients.apps_user_auth_client import AppsUserAuthClient
 from databricks_agentbricks.clients.conversation_store_client import (
     MemoryStoreClient,
     SessionStoreClient,
@@ -42,7 +39,6 @@ from databricks_agentbricks.deployment.config import (
 from databricks_agentbricks.deployment.names import (
     DeploymentName,
     _prefixed_name,  # noqa: F401 - compatibility re-export
-    _validate_deployment_name,  # noqa: F401 - compatibility re-export
 )
 from databricks_agentbricks.deployment.provisioners import (
     AppProvisioner,
@@ -64,28 +60,6 @@ from databricks_agentbricks.presentation.reporter import ClickReporter
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.services.deploy_service import DeployRequest, DeployService
 
-# --- compatibility wrappers for agent.toml bindings -------------------------
-#
-# Both deploy and dev now use ProjectResolver directly. Keep these names for existing callers/tests
-# until their imports can be migrated independently.
-
-
-def _load_project(source: pathlib.Path):
-    """The AgentProject at `source`, or None when agent.toml is absent."""
-    return ProjectResolver().load(source)
-
-
-def resource_bindings(
-    source: pathlib.Path,
-) -> tuple[Optional[str], Optional[str], Optional[str]]:
-    """The (memory store, session store, tracing experiment) bound in agent.toml.
-
-    agent.toml is the single source of truth for an agent's resources, so `agentbricks dev`'s resource
-    env/notices and `agentbricks deploy`'s provisioning honor the same bindings. A missing agent.toml
-    means nothing is bound; an invalid manifest fails with a clear error.
-    """
-    return ProjectResolver().resource_bindings(source)
-
 
 def build_deploy_service(obj) -> DeployService:
     """Compose a deployment service for this CLI invocation without opening an API client."""
@@ -97,7 +71,7 @@ def build_deploy_service(obj) -> DeployService:
         apps_client=apps_client,
         api_client_provider=api_client_provider,
         app_provisioner=AppProvisioner(apps_client, api_client_provider, reporter),
-        app_auth_client=AppAuthClient(obj.profile),
+        apps_user_auth_client=AppsUserAuthClient(obj.profile),
         memory_store_provisioner=MemoryStoreProvisioner(
             MemoryStoreClient(api_client_provider, apps_client), reporter
         ),
@@ -105,7 +79,7 @@ def build_deploy_service(obj) -> DeployService:
             SessionStoreClient(api_client_provider, apps_client), reporter
         ),
         tracing_provisioner=TracingProvisioner(
-            TracingClient(api_client_provider, obj.profile), reporter
+            TracingClient(api_client_provider, apps_client, obj.profile), reporter
         ),
         runtime_store_provisioner=RuntimeStoreProvisioner(
             api_client_provider, apps_client, obj.profile, _USE_MANAGED_RUNTIME_STORE, reporter

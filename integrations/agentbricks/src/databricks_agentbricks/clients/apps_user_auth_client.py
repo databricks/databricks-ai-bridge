@@ -215,7 +215,7 @@ def apply_app_user_scope_update(
     )
 
 
-class AppAuthClient:
+class AppsUserAuthClient:
     """The low-level Apps identity/auth client for request-user tools.
 
     It is Python SDK based (``WorkspaceClient``/``AppsAPI``), distinct from

@@ -29,14 +29,13 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
-from databricks_agentbricks.clients.app_auth_client import AppAuthClient
 from databricks_agentbricks.clients.apps_client import AppsClient
+from databricks_agentbricks.clients.apps_user_auth_client import AppsUserAuthClient
 from databricks_agentbricks.deployment.config import _PIP_INDEX_ENVS
 from databricks_agentbricks.deployment.names import (
     _DEPLOYMENT_PREFIX,
     DeploymentName,
     _prefixed_name,
-    _validate_deployment_name,
 )
 from databricks_agentbricks.deployment.provisioners import (
     AppProvisioner,
@@ -145,7 +144,7 @@ class DeployService:
         apps_client: AppsClient,
         api_client_provider: ApiClientProvider,
         app_provisioner: AppProvisioner,
-        app_auth_client: AppAuthClient,
+        apps_user_auth_client: AppsUserAuthClient,
         memory_store_provisioner: MemoryStoreProvisioner,
         session_store_provisioner: SessionStoreProvisioner,
         tracing_provisioner: TracingProvisioner,
@@ -156,7 +155,7 @@ class DeployService:
         self._apps_client = apps_client
         self._api_client_provider = api_client_provider
         self._app_provisioner = app_provisioner
-        self._app_auth_client = app_auth_client
+        self._apps_user_auth_client = apps_user_auth_client
         self._memory_store_provisioner = memory_store_provisioner
         self._session_store_provisioner = session_store_provisioner
         self._tracing_provisioner = tracing_provisioner
@@ -342,7 +341,6 @@ class DeployService:
         agent_project = self._project_resolver.load(source_dir)
         base_name = self._project_resolver.resolve_deployment_name(agent_project, requested_name)
         name = _prefixed_name(base_name)
-        _validate_deployment_name(name, check_length=False)
         return _ResolvedDeployment(
             agent_project=agent_project,
             base_name=base_name,
@@ -358,7 +356,7 @@ class DeployService:
         if agent_project is not None and agent_project.tools:
             require_managed_tool_support(source_dir)
 
-        auth = self._app_auth_client.ensure_user_auth(
+        auth = self._apps_user_auth_client.ensure_user_auth(
             resolved.name,
             agent_project,
             allow_existing_app_update=request.allow_user_scope_update,

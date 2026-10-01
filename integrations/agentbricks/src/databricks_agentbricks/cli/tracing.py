@@ -37,24 +37,22 @@ from typing import Any, Optional
 
 import click
 
-from databricks_agentbricks.clients.trace_experiment import (
+from databricks_agentbricks.clients.tracing_client import (
+    MLflowTraceTables,  # noqa: F401 - compatibility re-export
     ResolvedTraceExperiment,  # noqa: F401 - compatibility re-export
+    TraceTable,  # noqa: F401 - compatibility re-export
+    TraceTableKind,  # noqa: F401 - compatibility re-export
     _mlflow,
     _set_tracking_uri,
     _workspace_uri,
     create_experiment_idempotent,  # noqa: F401 - compatibility re-export
+    uc_trace_tables,  # noqa: F401 - compatibility re-export
 )
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.tracing import (
     TRACING_BIND_COMMAND,
     experiment_url,  # noqa: F401 - compatibility re-export
-)
-from databricks_agentbricks.trace_tables import (
-    MLflowTraceTables,  # noqa: F401 - compatibility re-export
-    TraceTable,  # noqa: F401 - compatibility re-export
-    TraceTableKind,  # noqa: F401 - compatibility re-export
-    uc_trace_tables,  # noqa: F401 - compatibility re-export
 )
 from databricks_agentkit import timefmt
 
@@ -552,7 +550,7 @@ def tracing_bind(obj, experiment_name, experiment_id, source) -> None:
 
     # The name to store. --experiment-id is resolved to the experiment's name (Agent Bricks stores
     # names, not ids). A UC-backed experiment is supported for trace export: deploy grants the app's
-    # service principal MODIFY on its UC OTEL tables (see app_resources.apply_trace_resources).
+    # service principal MODIFY on its UC OTEL tables through TracingClient.
     name = experiment_name
     if experiment_id:
         mlflow = _mlflow()
