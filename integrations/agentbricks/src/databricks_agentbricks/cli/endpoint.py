@@ -35,7 +35,7 @@ def _resolve_endpoint(
             hint="Use --url http://localhost:8000 when running the agent locally.",
         )
     app_name = _prefixed_name(app)
-    resolved_url = AppsClient(profile).url(app_name)
+    resolved_url = AppsClient(profile).get_app_url(app_name)
     if not resolved_url:
         raise AgentCliError(f"Could not resolve a URL for Databricks App {app_name!r}.")
     return resolved_url.rstrip("/"), True

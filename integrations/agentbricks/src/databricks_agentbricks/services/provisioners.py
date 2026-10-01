@@ -26,17 +26,23 @@ Each provisioner holds its own low-level client - ``MemoryStoreClient``, ``Sessi
 through, both injected at construction; this module holds only the phasing, the env contributions,
 and the deploy-level error policy. (The store clients still render their reconcile notices
 directly, a pre-existing wart left for a follow-up.)
+
+The module also holds :class:`AppProvisioner`, which owns the deployed app itself and is
+deliberately not one of the phased resource provisioners.
 """
 
 from __future__ import annotations
 
 import pathlib
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional, Protocol
+from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol
 
-from databricks_agentbricks.app_manifest import upsert_env_file
+from databricks_agentbricks.app_auth_client import AppUserScopeUpdatePlan
+from databricks_agentbricks.app_manifest import AppManifest
 from databricks_agentbricks.app_resources import LakebaseBackend
+from databricks_agentbricks.apps_client import AppsClient
 from databricks_agentbricks.deployment import (
+    _AGENT_COMPUTE_OUTPUT,
     _AGENTKIT_RUNTIME_STORE_SCHEMA,
     _DEPLOYMENT_PREFIX,
     DeploymentName,
@@ -44,9 +50,12 @@ from databricks_agentbricks.deployment import (
 )
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.project_types import AgentServer
-from databricks_agentbricks.runtime_store_client import RuntimeStoreClient
 from databricks_agentbricks.services.interaction import Reporter
-from databricks_agentbricks.store_client import MemoryStoreClient, SessionStoreClient
+from databricks_agentbricks.store_client import (
+    MemoryStoreClient,
+    RuntimeStoreClient,
+    SessionStoreClient,
+)
 from databricks_agentbricks.trace_tables import TraceTable
 from databricks_agentkit.runtime.store import (
     RUNTIME_STORE_DATABASE_ENV,
@@ -354,7 +363,9 @@ class RuntimeStoreProvisioner(_Provisioner):
         }
         if not ctx.deployment_exists and ctx.project.name.startswith(_DEPLOYMENT_PREFIX):
             managed_env[RUNTIME_STORE_SCHEMA_ENV] = _AGENTKIT_RUNTIME_STORE_SCHEMA
-        self.scaffolded = upsert_env_file(ctx.project.source_dir, managed_env) or self.scaffolded
+        self.scaffolded = (
+            AppManifest.upsert_env_file(ctx.project.source_dir, managed_env) or self.scaffolded
+        )
         self.env.update(managed_env)
 
     def manages_persistent_data(self) -> bool:
@@ -364,3 +375,83 @@ class RuntimeStoreProvisioner(_Provisioner):
     def delete_managed(self, name: DeploymentName) -> None:
         """Drop the deployment's service-managed Runtime Store and its data."""
         self._client.delete_managed(name)
+
+
+class AppProvisioner:
+    """Create-or-scale the deployed App, wait for its compute, then sync and roll out the source.
+
+    Owns the app the four :class:`ResourceProvisioner`\\ s above hang off - the Databricks App that
+    a deploy creates and rolls source out to. It deliberately does NOT implement the three-phase
+    ``ResourceProvisioner`` protocol: its moments are "create the app when new (or re-pin its scale)
+    and wait for its compute to be ACTIVE" and "roll the source out", not
+    ``reconcile``/``after_app_ready``/``grant``, so the naming does not imply it is one of the
+    resource provisioners.
+
+    Like the rest of the services layer it talks to the terminal only through the injected
+    :class:`Reporter`; it shells out through the injected ``AppsClient`` and opens a workspace
+    client only through ``api_client_factory``.
+    """
+
+    def __init__(
+        self,
+        apps_client: AppsClient,
+        api_client_factory: Callable[[], Any],
+        reporter: Reporter,
+    ) -> None:
+        self._apps_client = apps_client
+        self._api = api_client_factory
+        self._reporter = reporter
+
+    def create_and_wait_for_active(
+        self,
+        ctx: ResourceContext,
+        user_scope_plan: Optional[AppUserScopeUpdatePlan],
+        instance_count: int,
+        instance_args: list[str],
+    ) -> None:
+        """Ensure the app exists at the requested scale, then block until its compute is ACTIVE.
+
+        Creates the app when it is new; when the app already exists, re-pins its scale to the
+        instance count this deploy asked for (via ``create_update_instances``). In both cases it
+        then waits for the compute to reach ACTIVE - the name is not create-only: an existing app
+        still gets its scale re-pinned and its compute waited on every deploy.
+        """
+        name = ctx.project.name
+        deployment_exists = ctx.deployment_exists
+        #    `apps create` itself blocks for minutes (it provisions and waits for compute) and we capture
+        #    its output to relabel "App compute" → "Agent compute", so nothing streams meanwhile. Wrap it
+        #    in progress (persistent line + spinner) so the CLI isn't silent for the whole provision.
+        if user_scope_plan is None and not deployment_exists:
+            with self._reporter.progress(
+                "Creating the agent and starting its compute (this can take a few minutes)…"
+            ):
+                out = self._apps_client.create(name, instance_args)
+            old, new = _AGENT_COMPUTE_OUTPUT
+            self._reporter.echo(out.replace(old, new), newline=False)
+        # An existing app has its scale re-pinned every deploy, so the count the deploy asked for wins
+        # over whatever a previous deploy left behind. (When a scope plan ran it already applied the
+        # count as part of the same Apps update.)
+        elif user_scope_plan is None:
+            out = self._apps_client.create_update_instances(name, instance_count)
+            old, new = _AGENT_COMPUTE_OUTPUT
+            self._reporter.echo(out.replace(old, new), newline=False)
+        # `apps deploy` requires the app's compute to be ACTIVE — a just-created app may still be
+        # starting, and an existing one may be STOPPED — so wait either way. Returns immediately when
+        with self._reporter.progress(
+            "Waiting for agent compute to start (this can take a few minutes)…"
+        ):
+            self._apps_client.wait_for_running(name)
+
+    def deploy(self, ctx: ResourceContext, workspace_path: Optional[str]) -> str:
+        """The app-level rollout: sync the source to the workspace, then ``apps deploy`` it.
+
+        Distinct from :meth:`AppsClient.deploy`, which is the single ``databricks apps deploy``
+        call this drives once the source is synced.
+        """
+        ws_path = (
+            workspace_path
+            or f"/Workspace/Users/{self._api().current_user}/agentbricks_deployments/{ctx.project.name}"
+        )
+        self._apps_client.sync_source(ctx.project.name, ctx.project.source_dir, ws_path)
+        self._apps_client.deploy(ctx.project.name, ws_path)
+        return ws_path

@@ -14,16 +14,19 @@ from databricks_agentbricks.cli.presenter import ClickPrompter, ClickReporter
 from databricks_agentbricks.databricks_cli import _databricks
 from databricks_agentbricks.deployment import _USE_MANAGED_RUNTIME_STORE
 from databricks_agentbricks.project_resolver import ProjectResolver
-from databricks_agentbricks.runtime_store_client import RuntimeStoreClient
-from databricks_agentbricks.services.app_provisioner import AppProvisioner
 from databricks_agentbricks.services.deploy_service import DeployService
 from databricks_agentbricks.services.provisioners import (
+    AppProvisioner,
     MemoryStoreProvisioner,
     RuntimeStoreProvisioner,
     SessionStoreProvisioner,
     TracingProvisioner,
 )
-from databricks_agentbricks.store_client import MemoryStoreClient, SessionStoreClient
+from databricks_agentbricks.store_client import (
+    MemoryStoreClient,
+    RuntimeStoreClient,
+    SessionStoreClient,
+)
 
 
 def build_deploy_service(obj) -> DeployService:

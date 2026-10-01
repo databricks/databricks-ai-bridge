@@ -149,24 +149,24 @@ class AppsClient:
             action=f"Could not deploy '{name}'.",
         )
 
-    def service_principal(self, name: str) -> Optional[str]:
+    def get_service_principal(self, app_name: str) -> Optional[str]:
         """The app's service principal client id (its Postgres role identity), or None if unavailable.
 
         Resolved once per app name and cached: within a deploy the memory grant, the session grant, and
         the managed Runtime Store all need the same SP, and an app's SP is stable for the run - so this
         collapses their separate `apps get` calls into one, and no caller has to thread the value around.
         """
-        if name not in self._sp_cache:
-            data = self._get_json(name)
-            self._sp_cache[name] = data.get("service_principal_client_id") if data else None
-        return self._sp_cache[name]
+        if app_name not in self._sp_cache:
+            data = self._get_json(app_name)
+            self._sp_cache[app_name] = data.get("service_principal_client_id") if data else None
+        return self._sp_cache[app_name]
 
-    def url(self, name: str) -> Optional[str]:
+    def get_app_url(self, name: str) -> Optional[str]:
         """The deployed app's browsable URL, or None if it can't be read."""
         data = self._get_json(name)
         return (data.get("url") or None) if data else None
 
-    def compute_state(self, name: str) -> Optional[str]:
+    def get_compute_state(self, name: str) -> Optional[str]:
         """The app's compute state (e.g. RUNNING), or None if it can't be read."""
         data = self._get_json(name)
         return data.get("compute_status", {}).get("state") if data else None
@@ -179,7 +179,7 @@ class AppsClient:
         """
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
-            if self.compute_state(name) == "ACTIVE":
+            if self.get_compute_state(name) == "ACTIVE":
                 return
             time.sleep(5)
         raise AgentCliError(

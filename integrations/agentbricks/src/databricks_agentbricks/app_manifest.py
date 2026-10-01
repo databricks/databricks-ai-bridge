@@ -5,9 +5,9 @@
 the document. Each caller keeps its own env policy on top of this - `deploy` upserts/removes
 named env entries when reconciling a deployment, while `dev` filters and rewrites the env
 list to build a local-only manifest. `dev`'s policy lives with `dev`; `deploy`'s lives here,
-as `upsert_env_file`, because it is the same merge `AppManifest.upsert_env` implements, one
-level up (read-or-scaffold the file, apply, write back) - and splitting the two halves across
-modules only hid that.
+as `AppManifest.upsert_env_file`, because it is the same merge `AppManifest.upsert_env`
+implements, one level up (read-or-scaffold the file, apply, write back) - and splitting the two
+halves across modules only hid that.
 
 Two divergences between the callers are preserved rather than unified:
 
@@ -95,31 +95,32 @@ class AppManifest:
     def to_yaml(self) -> str:
         return yaml.safe_dump(self._doc, sort_keys=False)
 
+    @classmethod
+    def upsert_env_file(
+        cls,
+        source: pathlib.Path,
+        updates: dict[str, str],
+        removals: Sequence[str] = (),
+    ) -> bool:
+        """Reconcile env entries in <source>/app.yaml: upsert ``updates``, drop any named in ``removals``.
 
-def upsert_env_file(
-    source: pathlib.Path,
-    updates: dict[str, str],
-    removals: Sequence[str] = (),
-) -> bool:
-    """Reconcile env entries in <source>/app.yaml: upsert ``updates``, drop any named in ``removals``.
+        The file-level half of ``deploy``'s env policy - read-or-scaffold, apply, write back - next to the
+        document-level half (:meth:`AppManifest.upsert_env`) it drives, so the manifest contract lives in
+        one module. Returns True if it scaffolded a new file.
 
-    The file-level half of ``deploy``'s env policy - read-or-scaffold, apply, write back - next to the
-    document-level half (:meth:`AppManifest.upsert_env`) it drives, so the manifest contract lives in
-    one module. Returns True if it scaffolded a new file.
+        ``removals`` lets an unbind clear stale agentbricks-managed env (e.g. the ``MLFLOW_*`` keys when
+        tracing is unbound) so the manifest stops pointing the deployed runtime at a resource whose grant
+        has just been pruned; without it, the upsert-only merge would leave the stale entry behind.
+        ``updates`` and ``removals`` are expected to be disjoint.
+        """
+        app_yaml = source / "app.yaml"
+        if app_yaml.exists():
+            manifest = cls.parse_lenient(app_yaml.read_text())
+            scaffolded = False
+        else:
+            manifest = cls.scaffold()
+            scaffolded = True
 
-    ``removals`` lets an unbind clear stale agentbricks-managed env (e.g. the ``MLFLOW_*`` keys when
-    tracing is unbound) so the manifest stops pointing the deployed runtime at a resource whose grant
-    has just been pruned; without it, the upsert-only merge would leave the stale entry behind.
-    ``updates`` and ``removals`` are expected to be disjoint.
-    """
-    app_yaml = source / "app.yaml"
-    if app_yaml.exists():
-        manifest = AppManifest.parse_lenient(app_yaml.read_text())
-        scaffolded = False
-    else:
-        manifest = AppManifest.scaffold()
-        scaffolded = True
-
-    manifest.upsert_env(updates, removals)
-    app_yaml.write_text(manifest.to_yaml())
-    return scaffolded
+        manifest.upsert_env(updates, removals)
+        app_yaml.write_text(manifest.to_yaml())
+        return scaffolded

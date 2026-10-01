@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from databricks_agentbricks.app_auth_client import AppAuthClient, AppUserScopeUpdatePlan
-from databricks_agentbricks.app_manifest import upsert_env_file
+from databricks_agentbricks.app_manifest import AppManifest
 from databricks_agentbricks.apps_client import AppsClient
 from databricks_agentbricks.deployment import (
     _DEPLOYMENT_PREFIX,
@@ -45,9 +45,9 @@ from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.project_config import require_managed_tool_support
 from databricks_agentbricks.project_resolver import ProjectResolver
 from databricks_agentbricks.project_types import AgentServer
-from databricks_agentbricks.services.app_provisioner import AppProvisioner
 from databricks_agentbricks.services.interaction import Prompter, Reporter
 from databricks_agentbricks.services.provisioners import (
+    AppProvisioner,
     MemoryStoreProvisioner,
     ProjectContext,
     ResourceContext,
@@ -289,7 +289,9 @@ class DeployService:
         # 2. Patch app.yaml before creating the app. The managed Runtime Store fields are added after
         #    app creation because that API requires the app's service principal.
         scaffolded = (
-            upsert_env_file(source_dir, env, env_removals) if (env or env_removals) else False
+            AppManifest.upsert_env_file(source_dir, env, env_removals)
+            if (env or env_removals)
+            else False
         )
 
         # 3. Ensure the app exists and its compute is active. Create only when new; the compute wait
@@ -298,7 +300,9 @@ class DeployService:
         if deployment_exists is None:
             deployment_exists = self._apps_client.exists(name)
         ctx = dataclasses.replace(ctx, deployment_exists=deployment_exists)
-        self._app.ensure(ctx, plan.user_scope_plan, instance_count, instance_args)
+        self._app.create_and_wait_for_active(
+            ctx, plan.user_scope_plan, instance_count, instance_args
+        )
 
         # 4. Finish the resources that needed the app to exist (its service principal is resolvable
         #    only now), then fold any env they added (the managed Runtime Store) in - appended after
@@ -309,7 +313,7 @@ class DeployService:
             env.update(provisioner.env)
 
         # 5. Upload the source and roll out the deployment.
-        ws_path = self._app.rollout(ctx, request.workspace_path)
+        ws_path = self._app.deploy(ctx, request.workspace_path)
 
         # 6. Grant the app's service principal (and the agent runtime) access to each resource. Every
         #    grant is best-effort: each provisioner records its own failure instead of raising, because
@@ -320,7 +324,7 @@ class DeployService:
         return DeployResult(
             deployment=name,
             source=request.source,
-            url=self._apps_client.url(name),
+            url=self._apps_client.get_app_url(name),
             workspace_path=ws_path,
             env=env,
             client_host=client.host,
