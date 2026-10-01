@@ -195,8 +195,6 @@ def test_tool_matrix_deploy_and_invoke(tmp_path: pathlib.Path) -> None:
         argv += ["--bridge-sha", bridge_sha]
     if os.environ.get("AGENTBRICKS_INTEGRATION_PREPROVISIONED_APP_CATALOG_ACCESS") == "1":
         argv.append("--preprovisioned-app-catalog-access")
-    # TEMP: retain Apps for one debugging run; revert after.
-    argv.append("--keep-resources")
 
     # No --profile: tool_matrix falls back to ambient env credentials (the CI service principal),
     # which as OAuth also authorize the deployed App's /api calls. This deploys real Apps and starts
