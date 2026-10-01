@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import shlex
 import signal
 import subprocess
@@ -21,9 +22,10 @@ import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, cast
 
 import tomli
+import tomlkit
 from databricks.sdk import WorkspaceClient
 
 FRAMEWORKS = ("langgraph",)
@@ -82,6 +84,8 @@ class ProjectCase:
     authoring: str
     path: pathlib.Path
     app_name: str
+    memory_store_name: str | None = None
+    session_store_name: str | None = None
 
 
 class Transcript:
@@ -109,28 +113,43 @@ class Transcript:
 class Runner:
     def __init__(
         self,
-        profile: str,
+        profile: str | None,
         output: pathlib.Path,
         wheel: pathlib.Path,
-        template_repo: str | None = None,
-        template_ref: str | None = None,
         app_auth_profile: str | None = None,
+        preprovisioned_app_catalog_access: bool = False,
+        bridge_sha: str | None = None,
     ):
+        if bridge_sha is not None and re.fullmatch(r"[0-9a-f]{40}", bridge_sha) is None:
+            raise MatrixError("--bridge-sha must be a 40-character lowercase Git commit SHA.")
         self.profile = profile
         self.output = output
         self.wheel = wheel.resolve()
-        self.template_repo = template_repo
-        self.template_ref = template_ref
         self.app_auth_profile = app_auth_profile or profile
+        self.preprovisioned_app_catalog_access = preprovisioned_app_catalog_access
+        self.bridge_sha = bridge_sha
         self.transcript = Transcript(output / "commands.log")
         self.runner_venv = output / "runner-venv"
         self.agentbricks = self.runner_venv / "bin" / "agentbricks"
         self.rows: list[EvidenceRow] = []
         self.apps: list[str] = []
+        self.cases: list[ProjectCase] = []
         self.uc_function: str | None = None
         self.warehouse_id: str | None = None
         self.host: str | None = None
         self.headers: dict[str, str] = {}
+
+    def _profile_args(self) -> list[str]:
+        """CLI `--profile` args, or nothing when auth comes from the ambient environment."""
+        return ["--profile", self.profile] if self.profile else []
+
+    def _auth_label(self) -> str:
+        return f"profile {self.profile!r}" if self.profile else "environment credentials"
+
+    def _app_auth_label(self) -> str:
+        if self.app_auth_profile:
+            return f"App auth profile {self.app_auth_profile!r}"
+        return "environment credentials"
 
     def run(
         self,
@@ -205,7 +224,7 @@ class Runner:
 
     def databricks(self, args: Sequence[str], *, timeout: float = 300) -> dict[str, Any]:
         result = self.run(
-            ["databricks", *args, "--profile", self.profile, "--output", "json"],
+            ["databricks", *args, *self._profile_args(), "--output", "json"],
             timeout=timeout,
         )
         try:
@@ -231,29 +250,22 @@ class Runner:
         workspace_client = WorkspaceClient(profile=self.profile)
         app_auth_client = WorkspaceClient(profile=self.app_auth_profile)
         if not workspace_client.config.host:
-            raise MatrixError(f"Could not resolve a host from profile {self.profile!r}.")
+            raise MatrixError(f"Could not resolve a host from {self._auth_label()}.")
         if not app_auth_client.config.host:
-            raise MatrixError(
-                f"Could not resolve a host from App auth profile {self.app_auth_profile!r}."
-            )
+            raise MatrixError(f"Could not resolve a host from {self._app_auth_label()}.")
         self.host = workspace_client.config.host.rstrip("/")
         app_auth_host = app_auth_client.config.host.rstrip("/")
         if app_auth_host != self.host:
-            raise MatrixError(
-                f"App auth profile {self.app_auth_profile!r} targets {app_auth_host}, "
-                f"not {self.host}."
-            )
+            raise MatrixError(f"{self._app_auth_label()} targets {app_auth_host}, not {self.host}.")
         if app_auth_client.config.auth_type == "pat":
             raise MatrixError(
-                f"App auth profile {self.app_auth_profile!r} uses a PAT. "
-                "Databricks Apps /api routes require OAuth; run `databricks auth login` "
-                "for a profile on the same workspace."
+                f"{self._app_auth_label()} uses a PAT. Databricks Apps /api routes require OAuth; "
+                "use an OAuth profile (`databricks auth login`) or service-principal env credentials "
+                "on the same workspace."
             )
         authorization = app_auth_client.config.authenticate().get("Authorization")
         if not authorization:
-            raise MatrixError(
-                f"Could not resolve credentials from App auth profile {self.app_auth_profile!r}."
-            )
+            raise MatrixError(f"Could not resolve credentials from {self._app_auth_label()}.")
         self.headers = {"Authorization": authorization}
 
     def select_warehouse(self, override: str | None) -> str:
@@ -262,7 +274,9 @@ class Runner:
         else:
             warehouses = self.databricks(["warehouses", "list"])
             if not isinstance(warehouses, list) or not warehouses:
-                raise MatrixError("df1 has no SQL warehouse available for UC function setup.")
+                raise MatrixError(
+                    "The workspace has no SQL warehouse available for UC function setup."
+                )
             running = next(
                 (item for item in warehouses if item.get("state") == "RUNNING"), warehouses[0]
             )
@@ -274,8 +288,7 @@ class Runner:
                 "warehouses",
                 "start",
                 self.warehouse_id,
-                "--profile",
-                self.profile,
+                *self._profile_args(),
                 "--timeout",
                 "20m",
             ],
@@ -316,7 +329,8 @@ class Runner:
         if not separator or not catalog or not schema_name or "." in schema_name:
             raise MatrixError("--uc-schema must be a two-part catalog.schema name.")
         self.sql(f"CREATE SCHEMA IF NOT EXISTS `{catalog}`.`{schema_name}`")
-        function_name = f"agentbricks_uc_{uuid.uuid4().hex[:8]}"
+        # Leave room for catalog and schema in the 64-character MCP tool name.
+        function_name = f"ab_uc_{uuid.uuid4().hex[:8]}"
         self.uc_function = f"{catalog}.{schema_name}.{function_name}"
         exposed_tool_name = self.uc_function.replace(".", "__")
         if len(exposed_tool_name) > 64:
@@ -344,32 +358,106 @@ class Runner:
                 project = projects_root / f"{framework}-{authoring}"
                 init_args = [
                     str(self.agentbricks),
-                    "--profile",
-                    self.profile,
+                    *self._profile_args(),
                     "init",
                     "--framework",
                     framework,
-                    "--profile",
-                    self.profile,
                 ]
-                if self.template_repo:
-                    init_args.extend(["--repo", self.template_repo])
-                if self.template_ref:
-                    init_args.extend(["--ref", self.template_ref])
                 init_args.append(str(project))
                 self.run_long(
                     f"init-{framework}-{authoring}",
                     init_args,
                     timeout=600,
                 )
+                if self.bridge_sha:
+                    self._pin_bridge_sources(project)
                 if authoring == "cli":
                     self._author_cli(project)
                 else:
                     self._author_direct(project, framework)
                 self._write_python_marker(project)
                 app_name = f"agent-bricks-t-{framework[:2]}-{authoring[:2]}-{run_suffix}"
-                cases.append(ProjectCase(framework, authoring, project, app_name))
+                case = ProjectCase(framework, authoring, project, app_name)
+                cases.append(case)
+                self.cases.append(case)
+                self._provision_stores(case)
         return cases
+
+    def _provision_stores(self, case: ProjectCase) -> None:
+        manifest = tomli.loads((case.path / "agent.toml").read_text(encoding="utf-8"))
+        memory = manifest.get("memory_store", {}).get("name")
+        session = manifest.get("session_store", {}).get("name")
+        if memory:
+            result = self.run(
+                [
+                    str(self.agentbricks),
+                    *self._profile_args(),
+                    "--output",
+                    "json",
+                    "memory",
+                    "stores",
+                    "create",
+                    "--name",
+                    memory,
+                ]
+            )
+            resource = json.loads(result.stdout)
+            name = resource.get("name")
+            if resource.get("display_name") != memory or not str(name).startswith("memory-stores/"):
+                raise MatrixError(
+                    f"Memory store create returned an unexpected resource: {resource}"
+                )
+            case.memory_store_name = str(name)
+        if session:
+            result = self.run(
+                [
+                    str(self.agentbricks),
+                    *self._profile_args(),
+                    "--output",
+                    "json",
+                    "sessions",
+                    "stores",
+                    "create",
+                    "--name",
+                    session,
+                ]
+            )
+            resource = json.loads(result.stdout)
+            if resource.get("session_store_name") != session:
+                raise MatrixError(
+                    f"Session store create returned an unexpected resource: {resource}"
+                )
+            case.session_store_name = session
+
+    def _pin_bridge_sources(self, project: pathlib.Path) -> None:
+        pyproject = project / "pyproject.toml"
+        document = tomlkit.parse(pyproject.read_text(encoding="utf-8"))
+        dependencies = document["project"]["dependencies"]
+        if not any(
+            str(dependency).startswith("databricks-langchain") for dependency in dependencies
+        ):
+            dependencies.append("databricks-langchain>=0.17.0")
+        if "tool" not in document:
+            document["tool"] = tomlkit.table()
+        if "uv" not in document["tool"]:
+            document["tool"]["uv"] = tomlkit.table()
+        if "sources" not in document["tool"]["uv"]:
+            document["tool"]["uv"]["sources"] = tomlkit.table()
+        for package, subdirectory in (
+            ("databricks-agentbricks", "integrations/agentbricks"),
+            ("databricks-langchain", "integrations/langchain"),
+        ):
+            source = tomlkit.inline_table()
+            source.update(
+                {
+                    "git": "https://github.com/databricks/databricks-ai-bridge.git",
+                    "rev": self.bridge_sha,
+                    "subdirectory": subdirectory,
+                }
+            )
+            document["tool"]["uv"]["sources"][package] = source
+        self.transcript.file_step(pyproject, f"pin Agent Bricks and LangChain to {self.bridge_sha}")
+        pyproject.write_text(tomlkit.dumps(document), encoding="utf-8")
 
     def _author_cli(self, project: pathlib.Path) -> None:
         manifest = project / "agent.toml"
@@ -377,8 +465,7 @@ class Runner:
         rejected = self.run(
             [
                 str(self.agentbricks),
-                "--profile",
-                self.profile,
+                *self._profile_args(),
                 "--output",
                 "json",
                 "tools",
@@ -416,7 +503,8 @@ class Runner:
         if any(tool["id"] == "broken_mcp" for tool in manifest.get("tools", [])):
             raise MatrixError("agentbricks tools remove left the broken MCP binding in agent.toml")
         commands = [
-            ["tools", "add", "sandbox", "--scope", "table:samples.nyctaxi.trips"],
+            # Request-user sandbox auth is not supported by system.ai.sandbox yet.
+            ["tools", "add", "sandbox", "--scope", "table:samples.nyctaxi.trips", "--auth", "app"],
             ["tools", "add", "mcp", "system.ai.web_search"],
             [
                 "tools",
@@ -431,8 +519,7 @@ class Runner:
             self.run(
                 [
                     str(self.agentbricks),
-                    "--profile",
-                    self.profile,
+                    *self._profile_args(),
                     *args,
                     "--source",
                     str(project),
@@ -478,8 +565,7 @@ class Runner:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         argv = [
             str(self.agentbricks),
-            "--profile",
-            self.profile,
+            *self._profile_args(),
             "dev",
             "--source",
             str(case.path),
@@ -549,12 +635,15 @@ class Runner:
         label = f"deploy-{case.framework}-{case.authoring}"
         log_path = self.output / "logs" / f"{label}.log"
         try:
+            self._assert_app_absent(case.app_name)
+            # Deploy can create the App and then fail while waiting for it.
+            if case.app_name not in self.apps:
+                self.apps.append(case.app_name)
             self.run_long(
                 label,
                 [
                     str(self.agentbricks),
-                    "--profile",
-                    self.profile,
+                    *self._profile_args(),
                     "deploy",
                     case.app_name,
                     "--source",
@@ -562,7 +651,6 @@ class Runner:
                 ],
                 timeout=2400,
             )
-            self.apps.append(case.app_name)
             app = self._wait_for_app(case.app_name)
             self._grant_function(app)
             url = str(app.get("url") or "").rstrip("/")
@@ -571,6 +659,64 @@ class Runner:
             self._exercise(case, "deploy", url, self.headers, log_path, app_name=case.app_name)
         except Exception as exc:
             self._record_runtime_failure(case, "deploy", exc, log_path, case.app_name)
+        finally:
+            failed_rows = [
+                row
+                for row in self.rows
+                if row.framework == case.framework
+                and row.authoring == case.authoring
+                and row.runtime == "deploy"
+                and row.status == "fail"
+            ]
+            if failed_rows and case.app_name in self.apps:
+                app_log_path = self._capture_app_logs(case)
+                if app_log_path is not None:
+                    for row in failed_rows:
+                        row.artifact_paths.append(str(app_log_path))
+                    self._write_evidence()
+
+    def _assert_app_absent(self, name: str) -> None:
+        result = self.run(
+            ["databricks", "apps", "get", name, *self._profile_args()],
+            log=False,
+            check=False,
+        )
+        if result.returncode == 0:
+            raise MatrixError(f"App {name} already exists; refusing to deploy over it.")
+        detail = (result.stderr or result.stdout).lower()
+        if "does not exist" not in detail and "resource_does_not_exist" not in detail:
+            raise MatrixError(
+                f"Could not verify App {name} is absent: {result.stderr or result.stdout}"
+            )
+
+    def _capture_app_logs(self, case: ProjectCase) -> pathlib.Path | None:
+        log_path = self.output / "logs" / f"deploy-runtime-{case.framework}-{case.authoring}.log"
+        try:
+            result = self.run(
+                [
+                    "databricks",
+                    "apps",
+                    "logs",
+                    case.app_name,
+                    "--tail-lines",
+                    "200",
+                    *self._profile_args(),
+                ],
+                timeout=120,
+                log=False,
+                check=False,
+            )
+            content = result.stdout if result.returncode == 0 else result.stderr or result.stdout
+        except Exception as exc:
+            content = f"Could not retrieve App logs: {exc}\n"
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text(content, encoding="utf-8")
+        except OSError as exc:
+            self.transcript.write(f"App runtime log capture warning for {case.app_name}: {exc}")
+            return None
+        self.transcript.write(f"App runtime logs captured: {log_path}")
+        return log_path
 
     def _wait_for_app(self, name: str) -> dict[str, Any]:
         started = time.monotonic()
@@ -596,11 +742,16 @@ class Runner:
             raise MatrixError(f"App response has no service_principal_client_id: {app}")
         catalog, schema, function_name = self.uc_function.split(".")
         quoted_principal = f"`{str(principal).replace('`', '``')}`"
-        for statement in (
-            f"GRANT USE CATALOG ON CATALOG `{catalog}` TO {quoted_principal}",
-            f"GRANT USE SCHEMA ON SCHEMA `{catalog}`.`{schema}` TO {quoted_principal}",
-            f"GRANT EXECUTE ON FUNCTION `{catalog}`.`{schema}`.`{function_name}` TO {quoted_principal}",
-        ):
+        statements = []
+        if not self.preprovisioned_app_catalog_access:
+            statements.append(f"GRANT USE CATALOG ON CATALOG `{catalog}` TO {quoted_principal}")
+        statements.extend(
+            (
+                f"GRANT USE SCHEMA ON SCHEMA `{catalog}`.`{schema}` TO {quoted_principal}",
+                f"GRANT EXECUTE ON FUNCTION `{catalog}`.`{schema}`.`{function_name}` TO {quoted_principal}",
+            )
+        )
+        for statement in statements:
             self.sql(statement)
 
     def _exercise(
@@ -729,6 +880,7 @@ class Runner:
             "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
             "wheel": str(self.wheel),
             "wheel_sha256": _sha256(self.wheel),
+            "bridge_sha": self.bridge_sha,
             "uc_function": self.uc_function,
             "warehouse_id": self.warehouse_id,
             "rows": [dataclasses.asdict(row) for row in self.rows],
@@ -739,18 +891,116 @@ class Runner:
         os.replace(temporary, target)
 
     def cleanup(self) -> None:
-        for app in self.apps:
-            self.run(
-                ["databricks", "apps", "delete", app, "--profile", self.profile],
-                timeout=600,
-                check=False,
-            )
+        role_targets = {app: self._app_role_target(app) for app in dict.fromkeys(self.apps)}
+        cleaned_apps: set[str] = set()
+        cleaned_stores: set[str] = set()
+        for case in self.cases:
+            stores_ok = True
+            for label, name, command in (
+                ("memory store", case.memory_store_name, ["memory", "stores", "delete"]),
+                ("session store", case.session_store_name, ["sessions", "stores", "delete"]),
+            ):
+                if not name:
+                    continue
+                try:
+                    result = self.run(
+                        [str(self.agentbricks), *self._profile_args(), *command, name, "--yes"],
+                        timeout=600,
+                        check=False,
+                    )
+                    if result.returncode != 0:
+                        self.transcript.write(
+                            f"cleanup warning | {label} {name} | exit {result.returncode}"
+                        )
+                        stores_ok = False
+                        continue
+                except Exception as exc:
+                    self.transcript.write(f"cleanup warning | {label} {name} | {exc}")
+                    stores_ok = False
+                    continue
+            if stores_ok:
+                cleaned_stores.add(case.app_name)
+            if case.app_name in self.apps:
+                try:
+                    result = self.run(
+                        [
+                            str(self.agentbricks),
+                            *self._profile_args(),
+                            "deployments",
+                            "delete",
+                            case.app_name,
+                            "--yes",
+                        ],
+                        timeout=600,
+                        check=False,
+                    )
+                    if result.returncode == 0:
+                        cleaned_apps.add(case.app_name)
+                    else:
+                        self.transcript.write(
+                            f"cleanup warning | App {case.app_name} | exit {result.returncode}"
+                        )
+                except Exception as exc:
+                    self.transcript.write(f"cleanup warning | App {case.app_name} | {exc}")
+        for app in dict.fromkeys(self.apps):
+            if (
+                app not in cleaned_apps
+                or app not in cleaned_stores
+                or not (target := role_targets[app])
+            ):
+                continue
+            try:
+                result = self.run(
+                    ["databricks", "postgres", "delete-role", target, *self._profile_args()],
+                    timeout=600,
+                    check=False,
+                )
+                if result.returncode != 0:
+                    self.transcript.write(
+                        f"cleanup warning | Lakebase role {target} | exit {result.returncode}"
+                    )
+            except Exception as exc:
+                self.transcript.write(f"cleanup warning | Lakebase role {target} | {exc}")
         if self.uc_function:
             catalog, schema, function_name = self.uc_function.split(".")
             try:
                 self.sql(f"DROP FUNCTION IF EXISTS `{catalog}`.`{schema}`.`{function_name}`")
             except Exception as exc:
                 self.transcript.write(f"cleanup warning | UC function | {exc}")
+
+    def _app_role_target(self, app: str) -> str | None:
+        try:
+            app_record = self.databricks(["apps", "get", app])
+            principal = app_record.get("service_principal_client_id")
+            store = self.databricks(["api", "get", f"/api/2.0/agents/runtime-stores/{app}"])
+            owner = store.get("owner", {}).get("app", {})
+            branch = store.get("storage_backend", {}).get("lakebase", {}).get("branch")
+            if (
+                not principal
+                or store.get("name") != f"runtime-stores/{app}"
+                or owner.get("name") != app
+                or owner.get("service_principal_id") != principal
+                or not isinstance(branch, str)
+                or not re.fullmatch(r"projects/[^/]+/branches/[^/]+", branch)
+            ):
+                self.transcript.write(
+                    f"cleanup warning | Lakebase role for {app} | ownership not verified"
+                )
+                return None
+            roles = cast(list[dict[str, Any]], self.databricks(["postgres", "list-roles", branch]))
+            for role in roles:
+                status = role.get("status", {})
+                name = role.get("name")
+                if (
+                    status.get("postgres_role") == principal
+                    and status.get("identity_type") == "SERVICE_PRINCIPAL"
+                    and isinstance(name, str)
+                    and name.startswith(f"{branch}/roles/")
+                ):
+                    return name
+        except Exception as exc:
+            self.transcript.write(f"cleanup warning | Lakebase role lookup for {app} | {exc}")
+        return None
 
 
 def _last_lines(path: pathlib.Path, count: int) -> str:
@@ -878,24 +1128,33 @@ def verify_evidence(path: pathlib.Path) -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", default="df1")
+    parser.add_argument(
+        "--profile",
+        help="Workspace CLI profile; omit to authenticate from ambient Databricks environment "
+        "credentials (e.g. a service principal in CI).",
+    )
     parser.add_argument("--wheel", type=pathlib.Path)
     parser.add_argument("--output", type=pathlib.Path)
     parser.add_argument("--warehouse-id")
     parser.add_argument("--uc-schema", default="main.agentbricks_agent_tools_e2e")
-    parser.add_argument("--template-repo")
-    parser.add_argument("--template-ref")
+    parser.add_argument(
+        "--bridge-sha", help="Immutable bridge commit for generated App dependencies."
+    )
     parser.add_argument(
         "--app-auth-profile",
         help="OAuth profile for deployed App /api calls; defaults to --profile.",
     )
     parser.add_argument("--keep-resources", action="store_true")
+    parser.add_argument(
+        "--preprovisioned-app-catalog-access",
+        action="store_true",
+        help="Skip per-App USE CATALOG grants because catalog access is pre-provisioned. Without "
+        "this flag, the runner identity must be able to grant USE CATALOG on --uc-schema.",
+    )
     parser.add_argument("--verify-evidence", type=pathlib.Path)
     args = parser.parse_args()
     if args.verify_evidence is None and (args.wheel is None or args.output is None):
         parser.error("--wheel and --output are required unless --verify-evidence is used")
-    if bool(args.template_repo) != bool(args.template_ref):
-        parser.error("--template-repo and --template-ref must be provided together")
     return args
 
 
@@ -907,9 +1166,9 @@ def main() -> int:
         args.profile,
         args.output.resolve(),
         args.wheel.resolve(),
-        args.template_repo,
-        args.template_ref,
         args.app_auth_profile,
+        args.preprovisioned_app_catalog_access,
+        args.bridge_sha,
     )
     succeeded = False
     try:
@@ -925,12 +1184,18 @@ def main() -> int:
         succeeded = verify_evidence(runner.output / "evidence.json") == 0
         return 0 if succeeded else 1
     finally:
-        if not args.keep_resources and succeeded:
-            runner.cleanup()
-        elif not succeeded:
-            runner.transcript.write(
-                "Resources retained after failure for diagnosis; rerun cleanup after fixing."
-            )
+        try:
+            runner._write_evidence()
+        except Exception as exc:
+            runner.transcript.write(f"evidence warning | {exc}")
+        if args.keep_resources:
+            runner.transcript.write("Resources retained because --keep-resources was specified.")
+        else:
+            # Cleanup is best-effort and must never replace the test's original failure.
+            try:
+                runner.cleanup()
+            except Exception as exc:
+                runner.transcript.write(f"cleanup warning | unexpected | {exc}")
 
 
 if __name__ == "__main__":

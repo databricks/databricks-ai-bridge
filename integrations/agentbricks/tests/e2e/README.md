@@ -33,19 +33,24 @@ uv run python tests/e2e/tool_matrix.py \
   --app-auth-profile df1-oauth-mcp \
   --wheel "$(ls /tmp/agentbricks-tooling-dist/databricks_agentbricks-*.whl)" \
   --output /tmp/agentbricks-tool-matrix-df1 \
-  --uc-schema aifx_benchmarks.agentbricks_agent_tools_e2e \
-  --template-repo /absolute/path/to/databricks-ai-bridge \
-  --template-ref your-feature-branch
+  --uc-schema aifx_benchmarks.agentbricks_agent_tools_e2e
 ```
 
 The profile must identify a workspace with Databricks Apps, `system.ai.sandbox`,
 `system.ai.web_search`, and permission to create a schema/function. The suite discovers and starts
-a SQL warehouse. Override its defaults with `--warehouse-id` or `--uc-schema catalog.schema`.
+a SQL warehouse. The dev identity and the deployed Apps must also be able to call the template's
+Unity Gateway model without hitting a blocking budget. Override the suite's defaults with
+`--warehouse-id` or `--uc-schema catalog.schema`.
 Deployed Databricks Apps accept programmatic calls under `/api/*` with OAuth Bearer tokens. If the
 workspace profile uses a PAT, pass an OAuth profile for the same workspace with
 `--app-auth-profile`.
-The template repo/ref flags make `agentbricks init` read the exact checkout under test and avoid remote
-clone throttling; provide both or omit both to test the default upstream template.
+Omit `--profile` (and `--app-auth-profile`) to authenticate from ambient Databricks environment
+credentials instead of a CLI profile — e.g. a service principal via `DATABRICKS_HOST` /
+`DATABRICKS_CLIENT_ID` / `DATABRICKS_CLIENT_SECRET`. Because those are OAuth, one identity covers
+both deploys and the deployed App's `/api/*` calls. This is how the gated nightly integration test
+(`tests/integration_tests/test_tool_matrix.py`, enabled by `RUN_AGENTBRICKS_INTEGRATION_TESTS=1`) drives
+this suite.
+`agentbricks init` copies templates from the wheel under test.
 
 Direct authoring does not call `agentbricks tools add`: it replaces `agent.toml` with
 `fixtures/direct_agent.toml`. CLI authoring invokes the three managed `agentbricks tools add ...`
@@ -64,5 +69,9 @@ uv run python tests/e2e/tool_matrix.py \
   --verify-evidence /tmp/agentbricks-tool-matrix-df1/evidence.json
 ```
 
-Success is exactly `16 passed, 0 failed, 0 skipped`. Temporary Apps and the UC function are deleted
-after a successful run. Pass `--keep-resources` while debugging.
+Success is exactly `16 passed, 0 failed, 0 skipped`. Temporary Apps and the UC function receive
+best-effort cleanup even on failure. Pass `--keep-resources` while debugging.
+If the gated nightly test fails, its pytest output includes bounded tails of the dev and deploy
+logs so runtime exceptions are visible without accessing the runner's temporary files. For failed
+deployed cases, the matrix fetches the App's recent runtime logs before deleting it and records
+their paths in `evidence.json`; the pytest failure prioritizes those App log tails.
