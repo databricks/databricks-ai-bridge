@@ -114,7 +114,9 @@ jobs:
   cut:
     if: ${{ !inputs.dry_run }}
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on:
+      group: databricks-protected-runner-group
+      labels: linux-ubuntu-latest
     outputs:
       sha: ${{ steps.release.outputs.sha }}
     timeout-minutes: 30
@@ -266,7 +268,9 @@ jobs:
 
   tag:
     needs: [plan, cut, unit_tests, framework_tests, functional_tests]
-    runs-on: ubuntu-latest
+    runs-on:
+      group: databricks-protected-runner-group
+      labels: linux-ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: write
