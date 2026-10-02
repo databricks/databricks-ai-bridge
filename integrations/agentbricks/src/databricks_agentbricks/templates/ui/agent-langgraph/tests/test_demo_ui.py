@@ -122,7 +122,7 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
     else:
         monkeypatch.delenv("AGENT_MEMORY_STORE", raising=False)
         monkeypatch.delenv("AGENT_SESSION_STORE", raising=False)
-    if history:
+    if history or configured:
         monkeypatch.setattr(ui, "_checkpoint_history", _session_history)
     # Keep model discovery deterministic and offline (no AI Gateway listing call).
     monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-sonnet-4-5")
@@ -448,13 +448,7 @@ async def test_checkpoint_history_reads_messages_and_interrupts(monkeypatch):
 
     class Snapshot:
         values = {"messages": [Message()]}
-        tasks = [
-            type(
-                "Task",
-                (),
-                {"interrupts": [_FakeInterrupt({"approval": True}, "int-1")]},
-            )()
-        ]
+        tasks = [type("Task", (), {"interrupts": [_FakeInterrupt({"approval": True}, "int-1")]})()]
 
     class FakeAgent:
         async def aget_state(self, config):
@@ -549,7 +543,7 @@ def test_managed_memory_and_session_routes(monkeypatch):
     assert [
         item["data"]["content"]
         for item in client.get("/api/demo/session/items").json()["session_items"]
-    ] == ["s1", "saved reply"]
+    ] == ["s1", "checkpoint reply"]
 
     opened = client.post("/api/demo/sessions/s2/open")
     assert opened.json() == {

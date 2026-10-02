@@ -168,7 +168,7 @@ Auth uses your Databricks profile (`-p` / `agentbricks login`), and the agent re
 
 Under the hood this wraps `databricks apps run-local`: it reads the command + env from `app.yaml` and runs the app the way the Apps runtime would, so local behavior matches a deployment. The environment is built on the first run and reused after; pass `--prepare-environment` to force a rebuild (e.g. after changing dependencies).
 
-Everything runs locally: `agentbricks dev` is a local deployment that does not depend on a Databricks workspace for its resources. Tracing goes to a local MLflow tracking server (sqlite-backed, under the existing `.agentbricks/` state directory) so traces are recorded on your machine with no workspace experiment or setup - open the printed Traces URL to view them (`agentbricks tracing unbind` doesn't affect dev; it only stops the deployed agent's tracing). Long-term memory is off and conversation history is in-process (not durable): the memory/session stores bound with `agentbricks memory/sessions bind` are created and used only when you `agentbricks deploy`, not here. So there's nothing to provision and no service-principal grant to make; that all happens at `agentbricks deploy` time.
+By default, state is local: tracing goes to a local MLflow tracking server (sqlite-backed, under `.agentbricks/`) so traces are recorded on your machine with no workspace experiment or setup - open the printed Traces URL to view them (`agentbricks tracing unbind` doesn't affect dev; it only stops the deployed agent's tracing). Long-term memory is off and conversation history is in-process, lost on restart. Pass `--workspace-stores` to exercise existing bound stores before deploying, using your selected profile's credentials. This reads and writes real workspace data; use development stores. Missing or inaccessible bindings stop startup with an actionable error. No stores or grants are created by dev. Execution state (background runs and event replay) remains in-process in both modes, even when conversation history and memory are durable.
 
 ```
 agentbricks dev [options]
@@ -182,6 +182,7 @@ _Options_
 | `--source <SOURCE>` | path | `.` | no | Local source directory to run (containing app.yaml). Defaults to the current directory. |
 | `--prepare-environment`, `--no-prepare-environment` | flag | - | no | Build the app's environment with uv before running. Default: build only if no .venv exists yet, and reuse it otherwise. Requires uv. |
 | `--app-port <APP_PORT>` | integer | - | no | Port to run the app on (default 8000). |
+| `--workspace-stores` | flag | false | no | Use existing memory/session stores bound in agent.toml with your selected profile. Validates access without creating stores; local runs can read and write their data. |
 
 ### `agentbricks memory`
 

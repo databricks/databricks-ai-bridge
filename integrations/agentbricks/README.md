@@ -423,6 +423,44 @@ agentbricks memory bind support-agent-memory
 agentbricks deploy my-agent
 ```
 
+### Testing state before deployment
+
+A **store** is a workspace resource. A **binding** is the store name saved in `agent.toml`.
+A **session** is one conversation inside a session store. Creating a store does not bind it,
+and saving a binding does not verify that the store exists or that your profile can use it.
+
+Use separate development stores when testing locally. For a new pair of stores:
+
+```sh
+agentbricks --profile <profile> sessions stores create --name my-agent-dev-sessions
+agentbricks --profile <profile> memory stores create --name my-agent-dev-memory
+agentbricks sessions bind my-agent-dev-sessions
+agentbricks memory bind my-agent-dev-memory
+agentbricks --profile <profile> dev --workspace-stores
+```
+
+For existing stores, skip the create commands. Binding the same names again is safe. `dev
+--workspace-stores` resolves both bindings in the selected workspace and verifies read access before
+starting the app; it creates no remote resources or grants. The agent uses your profile's credentials
+for store operations. Write permissions are checked when a request writes data. Missing stores,
+permission errors, and unavailable services stop startup instead of silently disabling state.
+
+| State | Default `dev` | `dev --workspace-stores` | Deployed managed server |
+| --- | --- | --- | --- |
+| Conversation history | In-process; lost on restart | Durable when a session store is bound | Durable when a session store is bound |
+| Cross-conversation memory | Off | Enabled when a memory store is bound | Enabled when a memory store is bound |
+| Invocation status, event replay, background work | In-process; lost on restart | In-process; lost on restart | Durable Runtime Store |
+| OpenAI pending approval `RunState` | In-process | In-process | In-process |
+
+The chat UI reads the same ordered transcript/checkpoint used by the agent, so API-created turns
+also appear when the UI opens that conversation. With app-auth agents, session/actor identifiers
+are application-defined and stores remain shared at the store permission boundary. When the
+project requires request-user auth, the runtime namespaces session and actor identifiers by trusted
+request identity; the UI uses the same mapping and keeps the public browser session id stable.
+Local development uses a single local-developer identity and does not simulate multiple signed-in
+users. Use the same `session_id` and `input.actor` when comparing UI and API history. Changing the
+auth mode changes the namespace; it does not migrate existing history.
+
 Memory and session stores are independent resources: deleting one never affects the other.
 
 ## Commands
@@ -971,8 +1009,8 @@ agentbricks --profile <profile> deploy agent-bricks-agent-demo --source .
 
 (`bind` declares the store name in `agent.toml`; `agentbricks deploy` creates any declared-but-missing
 store and grants the app's service principal access to it. The memory store id flows to the runtime
-via the `AGENT_MEMORY_STORE` env var that `deploy` injects; `agentbricks dev` runs locally with memory off
-and does not inject it. The id is not persisted in `agent.toml`.)
+via the `AGENT_MEMORY_STORE` env var that `deploy` injects; `agentbricks dev --workspace-stores`
+resolves and injects it after validating access. Plain `agentbricks dev` keeps memory off. The id is not persisted in `agent.toml`.)
 
 The chat UI generates a stable application session UUID in browser local storage, sends it as the
 invocation's top-level `session_id`, and creates a fresh invocation UUID per turn. The chat app also

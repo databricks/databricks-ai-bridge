@@ -28,8 +28,9 @@ distribution, supply the real command in `app.yaml`, load configuration before a
 on the app port. The Agent Bricks CLI and runtime find `agent.toml` from the working directory or
 `AGENTBRICKS_PROJECT_ROOT`. Keep credentials out of `app.yaml`.
 
-Store binding commands declare intent. `dev` and `deploy` resolve or provision declared stores and
-supply runtime config; deploy grants app access. The resolved Memory Store ID reaches the runtime
+Store binding commands declare intent. `dev --workspace-stores` validates existing declared stores
+and supplies runtime config using the selected profile; plain `dev` keeps state in-process and
+memory off. `deploy` provisions missing declared stores and grants app access. The resolved Memory Store ID reaches the runtime
 as `AGENT_MEMORY_STORE`, rather than being stored as an ID in the manifest. Do not hardcode values
 that make later bindings ineffective.
 

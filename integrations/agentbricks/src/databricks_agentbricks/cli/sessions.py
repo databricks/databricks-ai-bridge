@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import shlex
 import sys
 from typing import Any, Optional
 
@@ -77,19 +78,26 @@ def sessions_bind(obj, store: str, source: pathlib.Path) -> None:
     project = AgentProject.load(source)
     project.bind_session_store(store)
     project.write()
+    source_arg = "" if source == pathlib.Path(".") else f" --source {shlex.quote(str(source))}"
     if obj.output == "json":
         render.emit_json({"session_store": store, "manifest": str(project.path)})
         return
     render.success(
         f"Bound session store '{store}'",
-        fields={"agent.toml": str(project.path)},
+        fields={"agent.toml": str(project.path), "Store readiness": "Not checked (binding only)"},
         next_steps=[
             (
-                f"agentbricks sessions stores create --name {store}",
-                "Create the store now without deploying",
+                f"agentbricks sessions stores create --name {shlex.quote(store)}",
+                "Create it if missing; skip for an existing store",
             ),
-            ("agentbricks dev", "Re-run to pick up the store locally"),
-            ("agentbricks deploy <name>", "Create it if missing and grant the app access"),
+            (
+                f"agentbricks dev --workspace-stores{source_arg}",
+                "Validate and use existing bound stores locally",
+            ),
+            (
+                f"agentbricks deploy <name>{source_arg}",
+                "Create it if missing and grant the app access",
+            ),
         ],
     )
 
@@ -157,15 +165,12 @@ def stores_create(obj, name, description, metadata) -> None:
         f"Created session store '{name}'",
         fields={"Store ID": field(data, "session_store_id")},
         next_steps=[
+            (f"agentbricks sessions bind {shlex.quote(name)}", "Bind this store to the project"),
             (
-                f"agentbricks sessions create --store {name} --actor-id <id>",
-                "Start a session for an actor",
+                "agentbricks dev --workspace-stores",
+                "Use the bound store locally; the agent creates conversations",
             ),
-            (f"agentbricks sessions stores get {name}", "View this store's details"),
-            (
-                f"agentbricks sessions bind {name}",
-                "Bind this store to the agent (wired in on dev/deploy)",
-            ),
+            (f"agentbricks sessions stores get {shlex.quote(name)}", "View this store's details"),
         ],
     )
 

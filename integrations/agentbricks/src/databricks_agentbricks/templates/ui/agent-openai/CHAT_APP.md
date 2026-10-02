@@ -52,3 +52,16 @@ Human-in-the-loop pauses are **in-process only**: a paused run (the Agents SDK `
 memory by `agent/agent.py`, not in the session transcript, so — unlike the LangGraph template — it is
 not durable even with a managed Session Store, and the unmanaged history path never reports pending
 interrupts. Resume a pause on the same process that created it.
+
+## Local state and history
+
+Plain `agentbricks dev` keeps conversation state in-process and memory off. To use existing bound
+workspace stores before deployment, run `agentbricks --profile <profile> dev --workspace-stores`.
+It verifies read access before startup without provisioning resources. Requests can write to those
+stores using your credentials; use development stores. Session history and memory then survive
+process restart, but local invocation status, background runs, and replay events do not.
+
+The UI reads the agent's authoritative transcript/checkpoint, including turns submitted through the
+API. For request-user-auth projects, state routes use the same identity namespace as invocation
+routes, while the public browser session id remains unchanged. App-auth agents retain application
+actor partitioning and store-level access. Local development uses one local-developer identity.

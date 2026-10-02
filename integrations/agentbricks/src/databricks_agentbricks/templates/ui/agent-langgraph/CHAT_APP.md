@@ -47,3 +47,16 @@ can be listed because there is no shared session index.
 
 Transcript responses include only user, assistant, tool, system, and human-decision message items;
 checkpoint fragments remain in Session Store but are never returned to the chat UI.
+
+## Local state and history
+
+Plain `agentbricks dev` keeps conversation state in-process and memory off. To use existing bound
+workspace stores before deployment, run `agentbricks --profile <profile> dev --workspace-stores`.
+It verifies read access before startup without provisioning resources. Requests can write to those
+stores using your credentials; use development stores. Session history and memory then survive
+process restart, but local invocation status, background runs, and replay events do not.
+
+The UI reads the agent's authoritative transcript/checkpoint, including turns submitted through the
+API. For request-user-auth projects, state routes use the same identity namespace as invocation
+routes, while the public browser session id remains unchanged. App-auth agents retain application
+actor partitioning and store-level access. Local development uses one local-developer identity.

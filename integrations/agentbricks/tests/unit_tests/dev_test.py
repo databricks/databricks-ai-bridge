@@ -591,7 +591,7 @@ def test_dev_notes_local_stores_when_bound(tmp_path: pathlib.Path):
     out = " ".join(result.output.split())  # collapse rich line-wrapping
     assert "Memory store 'mem' is bound" in out
     assert "Session store 'sess' is bound" in out
-    assert "Run `agentbricks deploy` to use bound store" in out
+    assert "`agentbricks dev --workspace-stores`" in out
 
 
 def test_dev_notes_bound_tracing_experiment(tmp_path: pathlib.Path):
@@ -606,3 +606,126 @@ def test_dev_notes_bound_tracing_experiment(tmp_path: pathlib.Path):
     out = " ".join(result.output.split())  # collapse rich line-wrapping
     assert "Tracing experiment '/Shared/agentbricks_traces/mine' is bound" in out
     assert "Run `agentbricks deploy` to trace to the bound experiment" in out
+
+
+class _WorkspaceStoresCtx(_Ctx):
+    def __init__(self, client):
+        super().__init__(profile="chosen-workspace")
+        self._client = client
+
+    def client(self):
+        return self._client
+
+
+def _workspace_store_client():
+    client = mock.Mock(host="https://selected-workspace.example")
+    client.list_memory_stores.return_value = {
+        "managed_memory_stores": [{"display_name": "memory", "name": "memory-stores/memory-id"}]
+    }
+    client.get_memory_store.return_value = {"name": "memory-stores/memory-id"}
+    client.get_session_store.return_value = {"session_store_name": "sessions"}
+    return client
+
+
+def test_workspace_stores_validates_and_wires_only_current_bindings(tmp_path, monkeypatch):
+    original = {
+        "command": ["start-server"],
+        "env": [{"name": "AGENT_MEMORY_STORE", "value": "old-workspace-id"}],
+    }
+    (tmp_path / "app.yaml").write_text(yaml.safe_dump(original))
+    _write_agent_manifest(tmp_path, memory="memory", session="sessions")
+    client = _workspace_store_client()
+    client.list_memory_stores.side_effect = [
+        {"managed_memory_stores": [], "next_page_token": "page2"},
+        client.list_memory_stores.return_value,
+    ]
+    captured = {}
+
+    def run_local(args, profile, **kwargs):
+        assert profile == "chosen-workspace"
+        client.get_memory_store.assert_called_once_with("memory-id")
+        client.get_session_store.assert_called_once_with("sessions")
+        captured.update(yaml.safe_load((tmp_path / "app.agentbricksdev.yaml").read_text()))
+
+    monkeypatch.setattr(dev_mod, "_databricks", run_local)
+    result = CliRunner().invoke(
+        dev_mod.dev,
+        ["--source", str(tmp_path), "--workspace-stores"],
+        obj=_WorkspaceStoresCtx(client),
+    )
+    assert result.exit_code == 0, result.output
+    assert client.list_memory_stores.call_args_list[-1].kwargs["page_token"] == "page2"
+    env = {item["name"]: item["value"] for item in captured["env"]}
+    assert env["AGENT_MEMORY_STORE"] == "memory-id"
+    assert env["AGENT_SESSION_STORE"] == "sessions"
+    assert env["DATABRICKS_AGENTBRICKS_RUNTIME_STORE_LOCAL"] == "true"
+    assert yaml.safe_load((tmp_path / "app.yaml").read_text()) == original
+    assert not (tmp_path / "app.agentbricksdev.yaml").exists()
+    client.create_memory_store.assert_not_called()
+    client.create_session_store.assert_not_called()
+    output = " ".join(result.output.split())
+    assert "chosen-workspace" in output
+    assert "write permissions are checked when used" in output
+    assert "pending runs and replay events are lost on restart" in output
+
+
+@pytest.mark.parametrize(
+    "code,hint",
+    [
+        ("NOT_FOUND", "stores create"),
+        ("PERMISSION_DENIED", "Ask the store owner"),
+        ("UNAUTHENTICATED", "auth login"),
+        ("UNAVAILABLE", "workspace connectivity"),
+    ],
+)
+def test_workspace_store_failures_stop_before_starting_servers(tmp_path, code, hint):
+    (tmp_path / "app.yaml").write_text("command: [start-server]\n")
+    _write_agent_manifest(tmp_path, session="sessions")
+    client = _workspace_store_client()
+    client.get_session_store.side_effect = AgentCliError("secret-sentinel", error_code=code)
+    with (
+        mock.patch.object(dev_mod, "_databricks") as runner,
+        mock.patch.object(dev_mod, "start_local_tracing_server") as tracing,
+    ):
+        result = CliRunner().invoke(
+            dev_mod.dev,
+            ["--source", str(tmp_path), "--workspace-stores"],
+            obj=_WorkspaceStoresCtx(client),
+        )
+    assert result.exit_code != 0
+    output = " ".join(result.output.split())
+    assert hint in output
+    assert "secret-sentinel" not in output
+    runner.assert_not_called()
+    tracing.assert_not_called()
+    assert not (tmp_path / "app.agentbricksdev.yaml").exists()
+
+
+def test_workspace_stores_requires_at_least_one_binding(tmp_path):
+    (tmp_path / "app.yaml").write_text("command: [start-server]\n")
+    client = _workspace_store_client()
+    result = CliRunner().invoke(
+        dev_mod.dev,
+        ["--source", str(tmp_path), "--workspace-stores"],
+        obj=_WorkspaceStoresCtx(client),
+    )
+    assert result.exit_code != 0
+    assert "No memory or session store is bound" in result.output
+    assert client.mock_calls == []
+
+
+def test_workspace_stores_missing_memory_does_not_create_or_fall_back(tmp_path):
+    (tmp_path / "app.yaml").write_text("command: [start-server]\n")
+    _write_agent_manifest(tmp_path, memory="memory")
+    client = _workspace_store_client()
+    client.list_memory_stores.return_value = {"managed_memory_stores": []}
+    with mock.patch.object(dev_mod, "_databricks") as runner:
+        result = CliRunner().invoke(
+            dev_mod.dev,
+            ["--source", str(tmp_path), "--workspace-stores"],
+            obj=_WorkspaceStoresCtx(client),
+        )
+    assert result.exit_code != 0
+    assert "Could not verify bound memory store" in result.output
+    runner.assert_not_called()
+    client.create_memory_store.assert_not_called()

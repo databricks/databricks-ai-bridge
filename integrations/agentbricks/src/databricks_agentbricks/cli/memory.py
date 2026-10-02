@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+import shlex
 import sys
 from typing import Any
 
@@ -111,19 +112,26 @@ def memory_bind(obj, store: str, source: pathlib.Path) -> None:
     project = AgentProject.load(source)
     project.bind_memory_store(store)
     project.write()
+    source_arg = "" if source == pathlib.Path(".") else f" --source {shlex.quote(str(source))}"
     if obj.output == "json":
         render.emit_json({"memory_store": store, "manifest": str(project.path)})
         return
     render.success(
         f"Bound memory store '{store}'",
-        fields={"agent.toml": str(project.path)},
+        fields={"agent.toml": str(project.path), "Store readiness": "Not checked (binding only)"},
         next_steps=[
             (
-                f"agentbricks memory stores create --name {store}",
-                "Create the store now without deploying",
+                f"agentbricks memory stores create --name {shlex.quote(store)}",
+                "Create it if missing; skip for an existing store",
             ),
-            ("agentbricks dev", "Re-run to pick up the store locally"),
-            ("agentbricks deploy <name>", "Create it if missing and grant the app access"),
+            (
+                f"agentbricks dev --workspace-stores{source_arg}",
+                "Validate and use existing bound stores locally",
+            ),
+            (
+                f"agentbricks deploy <name>{source_arg}",
+                "Create it if missing and grant the app access",
+            ),
         ],
     )
 
@@ -227,14 +235,11 @@ def stores_create(obj, display_name, description) -> None:
         fields={"Store ID": store_id, "Name": field(data, "name")},
         next_steps=[
             (
-                f"agentbricks memory entries create --store {store_id} --actor-id <id> --path </p>",
-                "Add a memory entry for an actor",
+                f"agentbricks memory bind {shlex.quote(display_name)}",
+                "Bind this store to the project",
             ),
-            (f"agentbricks memory stores get {store_id}", "View this store's details"),
-            (
-                f"agentbricks memory bind {display_name}",
-                "Bind this store to the agent (wired in on dev/deploy)",
-            ),
+            ("agentbricks dev --workspace-stores", "Use the bound store locally"),
+            (f"agentbricks memory stores get {shlex.quote(store_id)}", "View this store's details"),
         ],
     )
 

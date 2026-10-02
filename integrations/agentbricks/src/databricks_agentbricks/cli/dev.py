@@ -18,6 +18,7 @@ import yaml
 from databricks_agentbricks import render
 from databricks_agentbricks.cli.deploy import (
     _load_project,
+    _resolve_memory_store,
     resource_bindings,
 )
 from databricks_agentbricks.cli.endpoint_examples import print_agent_invoke_command
@@ -26,6 +27,7 @@ from databricks_agentbricks.databricks_cli import _databricks
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.project_config import require_managed_tool_support
 from databricks_agentbricks.project_types import AgentServer
+from databricks_agentbricks.render import field
 from databricks_agentkit.runtime.store import RUNTIME_STORE_LOCAL_ENV
 from databricks_agentkit.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
 
@@ -45,9 +47,8 @@ _BUILD_INDEX_ENVS = frozenset({"PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDE
 #     (which MLflow resolves ahead of MLFLOW_EXPERIMENT_NAME) would point the local agent at an
 #     experiment that doesn't exist on the local sqlite server. dev re-adds the local
 #     MLFLOW_TRACKING_URI / MLFLOW_EXPERIMENT_NAME itself.
-#   - stores: dev never uses the workspace memory/session stores (memory off, sessions in-process),
-#     so a prior deploy's AGENT_MEMORY_STORE / AGENT_SESSION_STORE must not quietly pull dev onto
-#     them. dev re-adds nothing here - the runtime falls back to its local defaults.
+#   - stores: only --workspace-stores opts into the current project's workspace bindings. Strip a
+#     prior deploy's ids first, then re-add the ids verified for the selected profile, if requested.
 # (The Runtime Store's lakebase env needs no strip: dev already forces RUNTIME_STORE_LOCAL=true.)
 _DEPLOY_TRACING_ENVS = frozenset(
     {"MLFLOW_TRACKING_URI", "MLFLOW_EXPERIMENT_ID", "MLFLOW_TRACING_DESTINATION"}
@@ -69,12 +70,19 @@ _DEPLOY_RESOURCE_ENVS = _DEPLOY_TRACING_ENVS | {MEMORY_STORE_ENV, SESSION_STORE_
     "exists yet, and reuse it otherwise. Requires uv.",
 )
 @click.option("--app-port", type=int, default=None, help="Port to run the app on (default 8000).")
+@click.option(
+    "--workspace-stores",
+    is_flag=True,
+    help="Use existing memory/session stores bound in agent.toml with your selected profile. "
+    "Validates access without creating stores; local runs can read and write their data.",
+)
 @click.pass_obj
 def dev(
     obj,
     source: str,
     prepare_environment: Optional[bool],
     app_port: Optional[int],
+    workspace_stores: bool,
 ) -> None:
     """Run your agent locally so you can try it before deploying.
 
@@ -90,14 +98,15 @@ def dev(
     deployment. The environment is built on the first run and reused after; pass
     `--prepare-environment` to force a rebuild (e.g. after changing dependencies).
 
-    Everything runs locally: `agentbricks dev` is a local deployment that does not depend on a Databricks
-    workspace for its resources. Tracing goes to a local MLflow tracking server (sqlite-backed, under `.agentbricks/`)
+    By default, state is local: tracing goes to a local MLflow tracking server (sqlite-backed, under `.agentbricks/`)
     so traces are recorded on your machine with no workspace experiment or setup - open the printed
     Traces URL to view them (`agentbricks tracing unbind` doesn't affect dev; it only stops the deployed
-    agent's tracing). Long-term memory is off and conversation history is in-process (not durable):
-    the memory/session stores bound with `agentbricks memory/sessions bind` are created and used only when you
-    `agentbricks deploy`, not here. So there's nothing to provision and no service-principal grant to make;
-    that all happens at `agentbricks deploy` time.
+    agent's tracing). Long-term memory is off and conversation history is in-process, lost on restart.
+    Pass --workspace-stores to exercise existing bound stores before deploying, using your selected
+    profile's credentials. This reads and writes real workspace data; use development stores.
+    Missing or inaccessible bindings stop startup with an actionable error. No stores or grants
+    are created by dev. Execution state (background runs and event replay) remains in-process in
+    both modes, even when conversation history and memory are durable.
     """
     source_dir = pathlib.Path(source)
     app_yaml = source_dir / "app.yaml"
@@ -111,29 +120,32 @@ def dev(
     if project is not None and project.tools:
         require_managed_tool_support(source_dir)
 
-    # `agentbricks dev` is a fully local sandbox: the Runtime Store and tracing already run locally, and
-    # memory/sessions follow suit here. Dev never reaches the workspace for stores (so it stays fast
-    # and works offline): long-term memory is off and conversation history is in-process (not
-    # durable), regardless of any binding. Stores are created and used only by `agentbricks deploy`; the
-    # deploy-written store env is stripped from the dev manifest (see `_dev_entry_point`) so a prior
-    # deploy can't quietly pull dev onto the workspace stores. Read the bindings only to name them.
+    # Keep the default local sandbox. Workspace state is an explicit opt-in, validated before
+    # starting either process and without modifying app.yaml or provisioning remote resources.
     memory_store, session_store, trace_experiment = resource_bindings(source_dir)
-    if memory_store:
+    local_env: dict[str, str] = {}
+    if workspace_stores:
+        local_env.update(_workspace_store_env(obj, memory_store, session_store))
+    elif memory_store:
         render.console().print(
             f"[dim]Memory store '{memory_store}' is bound but `agentbricks dev` runs with "
-            "long-term memory off. Run `agentbricks deploy` to use bound store.[/]"
+            "long-term memory off. Use `agentbricks dev --workspace-stores` for an existing store, "
+            "or `agentbricks deploy` to provision it.[/]"
         )
-    if session_store:
+    if session_store and not workspace_stores:
         render.console().print(
             f"[dim]Session store '{session_store}' is bound but `agentbricks dev` keeps "
-            "conversation history in-process (not durable). Run `agentbricks deploy` to use bound store.[/]"
+            "conversation history in-process (not durable). Use `agentbricks dev --workspace-stores` "
+            "for an existing store, or `agentbricks deploy` to provision it.[/]"
         )
     if trace_experiment:
         render.console().print(
             f"[dim]Tracing experiment '{trace_experiment}' is bound but `agentbricks dev` "
             "traces to a local MLflow server. Run `agentbricks deploy` to trace to the bound experiment.[/]"
         )
-    local_env: dict[str, str] = {}
+    render.console().print(
+        "[dim]Execution state is in-process: pending runs and replay events are lost on restart.[/]"
+    )
     # Local tracing: start a local MLflow tracking server backed by sqlite under .agentbricks/ and point the
     # agent at it via the dev-only manifest — for any project, regardless of framework/server. An agent
     # that uses MLflow (autolog or `start_trace`) then traces to it; it's harmless for one that doesn't.
@@ -225,7 +237,8 @@ def _announce_local_url(
             next_steps=[
                 f"Open {base} to chat with your agent",
                 tool_step,
-                ("agentbricks memory bind <store>", "Attach a memory / session store"),
+                ("agentbricks memory bind <store>", "Declare a long-term memory store"),
+                ("agentbricks sessions bind <store>", "Declare a conversation history store"),
                 (f"agentbricks deploy {deploy_name}", "Deploy it to Databricks"),
             ],
         )
@@ -258,6 +271,84 @@ def _announce_local_url(
         uses_runtime_api=(source_dir / "runtime" / "ui.py").is_file()
         or server == AgentServer.AGENTBRICKS,
     )
+
+
+def _workspace_store_env(
+    obj, memory_store: str | None, session_store: str | None
+) -> dict[str, str]:
+    """Resolve existing bindings with the same profile used by run-local; never provision."""
+    if not memory_store and not session_store:
+        raise AgentCliError(
+            "No memory or session store is bound in agent.toml.",
+            hint="Run `agentbricks sessions bind <store>` and/or `agentbricks memory bind <store>`, "
+            "then create the named stores or select existing ones before using --workspace-stores.",
+        )
+    try:
+        client = obj.client()
+    except Exception as exc:
+        raise AgentCliError(
+            "Could not authenticate for workspace stores.",
+            hint="Select your workspace with `agentbricks --profile <profile> dev --workspace-stores`. "
+            "Check that profile with `databricks auth describe --profile <profile>`.",
+        ) from exc
+
+    env: dict[str, str] = {}
+    for kind, name in (("memory", memory_store), ("session", session_store)):
+        if not name:
+            continue
+        try:
+            if kind == "memory":
+                store = _resolve_memory_store(client, name)
+                if store is None:
+                    raise AgentCliError("Store not found.", error_code="NOT_FOUND")
+                resource_name = field(store, "name") or ""
+                store_id = resource_name.removeprefix("memory-stores/")
+                if not store_id:
+                    raise AgentCliError("Store response has no id.", error_code="INVALID_RESPONSE")
+                # Listing resolves a display name; GET verifies access to the resolved resource.
+                client.get_memory_store(store_id)
+                env[MEMORY_STORE_ENV] = store_id
+            else:
+                client.get_session_store(name)
+                env[SESSION_STORE_ENV] = name
+        except AgentCliError as exc:
+            code = exc.error_code
+            if code in {"NOT_FOUND", "RESOURCE_DOES_NOT_EXIST"}:
+                hint = (
+                    f"Check the selected profile and binding. If the store is new, create it with "
+                    f"`agentbricks --profile <profile> {kind} stores create --name {name}`, "
+                    "or run `agentbricks deploy` to provision the declared stores. "
+                    "A store absent from your listing may instead require an access grant from its owner."
+                )
+            elif code == "PERMISSION_DENIED":
+                hint = "Ask the store owner for access, or bind a development store you can access."
+            elif code in {"UNAUTHENTICATED", "UNAUTHORIZED", "INVALID_ACCESS_TOKEN"}:
+                hint = "Refresh credentials with `databricks auth login --profile <profile>`."
+            else:
+                hint = exc.hint or (
+                    "Check the selected profile, workspace connectivity, and store availability, "
+                    "then retry. No local server or workspace store was created."
+                )
+            raise AgentCliError(
+                f"Could not verify bound {kind} store '{name}' for local development.",
+                error_code=code,
+                hint=hint,
+            ) from exc
+
+    render.success(
+        "Using workspace stores for local development",
+        fields={
+            "Workspace": client.host,
+            "Profile": obj.profile or "configured credentials",
+            "Conversation history": session_store or "In-process (lost on restart)",
+            "Long-term memory": memory_store or "Off",
+        },
+    )
+    render.console().print(
+        "[dim]Store read access verified. Agent requests use your credentials and can write to "
+        "these stores; write permissions are checked when used.[/]"
+    )
+    return env
 
 
 def _dev_entry_point(
