@@ -29,6 +29,13 @@ from databricks_agentkit.runtime.store import RUNTIME_STORE_LOCAL_ENV, InMemoryR
 @pytest.fixture(params=["openai", "langgraph"])
 def ui(request, monkeypatch):
     framework = request.param
+    # A scaffold may bundle the discovery helper under runtime/ for compatibility with the
+    # released SDK. Load raw template files with the same helper without creating a scaffold.
+    from databricks_agentkit.runtime import model_services
+
+    if "runtime" not in sys.modules:
+        monkeypatch.setitem(sys.modules, "runtime", ModuleType("runtime"))
+    monkeypatch.setitem(sys.modules, "runtime.model_services", model_services)
     pytest.importorskip("agents" if framework == "openai" else "langgraph")
     path = (
         Path(__file__).parents[2]
