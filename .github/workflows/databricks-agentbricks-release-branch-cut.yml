@@ -330,14 +330,24 @@ jobs:
             exit 0
           fi
           BUMP_BRANCH="chore/agentbricks-next-dev-${NEXT_DEV_VERSION}"
-          if [ "$(gh pr list --state open --head "$BUMP_BRANCH" --json number --jq 'length')" -gt 0 ]; then
-            echo "Next development version PR is already open" >> "$GITHUB_STEP_SUMMARY"
+          auto_merge() {
+            gh pr merge --auto --squash "$1"
+            echo "Next development version PR (auto-merges once approved and checks pass): $1" | tee -a "$GITHUB_STEP_SUMMARY"
+          }
+          open_pr() {
+            local url
+            url=$(gh pr create --base main --head "$BUMP_BRANCH" \
+              --title "Set Agent Bricks development version to $NEXT_DEV_VERSION" \
+              --body "After cutting $RELEASE_BRANCH, set package metadata on main to $NEXT_DEV_VERSION for development builds. This PR does not publish a release.")
+            auto_merge "$url"
+          }
+          PR_URL=$(gh pr list --state open --head "$BUMP_BRANCH" --json url --jq '.[0].url // ""')
+          if [ -n "$PR_URL" ]; then
+            auto_merge "$PR_URL"
             exit 0
           fi
           if [ -n "$(git ls-remote --heads origin "refs/heads/$BUMP_BRANCH")" ]; then
-            gh pr create --draft --base main --head "$BUMP_BRANCH" \
-              --title "Set Agent Bricks development version to $NEXT_DEV_VERSION" \
-              --body "After cutting $RELEASE_BRANCH, set package metadata on main to $NEXT_DEV_VERSION for development builds. This PR does not publish a release."
+            open_pr
             exit 0
           fi
           git checkout --detach "$MAIN_SHA"
@@ -348,6 +358,4 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m "Set Agent Bricks development version to $NEXT_DEV_VERSION"
           git push origin "HEAD:refs/heads/$BUMP_BRANCH"
-          gh pr create --draft --base main --head "$BUMP_BRANCH" \
-            --title "Set Agent Bricks development version to $NEXT_DEV_VERSION" \
-            --body "After cutting $RELEASE_BRANCH, set package metadata on main to $NEXT_DEV_VERSION for development builds. This PR does not publish a release."
+          open_pr
