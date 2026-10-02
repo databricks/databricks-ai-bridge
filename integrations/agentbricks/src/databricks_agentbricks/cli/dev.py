@@ -314,9 +314,10 @@ def _workspace_store_env(
         except AgentCliError as exc:
             code = exc.error_code
             if code in {"NOT_FOUND", "RESOURCE_DOES_NOT_EXIST"}:
+                command_group = "sessions" if kind == "session" else "memory"
                 hint = (
                     f"Check the selected profile and binding. If the store is new, create it with "
-                    f"`agentbricks --profile <profile> {kind} stores create --name {name}`, "
+                    f"`agentbricks --profile <profile> {command_group} stores create --name {name}`, "
                     "or run `agentbricks deploy` to provision the declared stores. "
                     "A store absent from your listing may instead require an access grant from its owner."
                 )

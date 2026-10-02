@@ -672,7 +672,7 @@ def test_workspace_stores_validates_and_wires_only_current_bindings(tmp_path, mo
 @pytest.mark.parametrize(
     "code,hint",
     [
-        ("NOT_FOUND", "stores create"),
+        ("NOT_FOUND", "sessions stores create"),
         ("PERMISSION_DENIED", "Ask the store owner"),
         ("UNAUTHENTICATED", "auth login"),
         ("UNAVAILABLE", "workspace connectivity"),
