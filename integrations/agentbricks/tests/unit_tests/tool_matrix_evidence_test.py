@@ -510,7 +510,7 @@ def test_direct_authoring_includes_temporary_volume_scope(tmp_path):
     runner.uc_volume = "supervisor_agent.mason_agent_tools_e2e.matrix_volume"
     runner.genie_space_id = "0" * 32
 
-    runner._author_direct(project, "langgraph")
+    runner._author_direct(project, "langgraph", "abc123")
 
     manifest = tool_matrix.tomli.loads((project / "agent.toml").read_text())
     sandbox = next(tool for tool in manifest["tools"] if tool["id"] == "sandbox")
