@@ -5,7 +5,7 @@ import importlib.util
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -168,6 +168,13 @@ async def test_nested_session_does_not_replace_missing_context_session(template,
 async def test_ui_runtime_capabilities_ignore_tool_auth_policy(framework, user_auth, monkeypatch):
     import httpx
     from fastapi import FastAPI
+
+    from databricks_agentkit.runtime import model_services
+
+    # Raw templates import the discovery helper copied by init into runtime/.
+    if "runtime" not in sys.modules:
+        monkeypatch.setitem(sys.modules, "runtime", ModuleType("runtime"))
+    monkeypatch.setitem(sys.modules, "runtime.model_services", model_services)
 
     path = TEMPLATES / "ui" / f"agent-{framework}" / "runtime/ui.py"
     spec = importlib.util.spec_from_file_location(f"ui_{framework}", path)

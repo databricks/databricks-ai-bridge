@@ -1,8 +1,9 @@
 """Tests for the SDK-provided agent application."""
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
+from typing import cast
 
 import httpx
 import pytest
@@ -534,11 +535,11 @@ async def test_stream_wakes_on_persisted_delta_and_releases_subscription() -> No
     app._runtime.poll_seconds = 30
     async with running_client(app):
         await app._runtime.submit(_RUN_1, {"input": "hello"})
-        stream = app._event_stream(_RUN_1)
+        stream = cast(AsyncGenerator[str, None], app._event_stream(_RUN_1))
         first = await asyncio.wait_for(anext(stream), 1)
         while '"content": "first"' not in first:
             first = await asyncio.wait_for(anext(stream), 1)
-        second = asyncio.create_task(anext(stream))
+        second = asyncio.ensure_future(anext(stream))
         await asyncio.sleep(0)
         release.set()
         assert '"content": "second"' in await asyncio.wait_for(second, 1)
