@@ -27,8 +27,8 @@ agentbricks dev
 ```
 
 The API is available at `http://localhost:8000/api/invocations`. Every request supplies a UUID `id`.
-That ID is the invocation identifier and idempotency key. Agent-specific values live inside the
-opaque `input` object:
+That ID is the invocation identifier and idempotency key. Supply the stable application session as
+the top-level `session_id`; agent-specific values live inside the opaque `input` object:
 
 ```bash
 SESSION_ID=$(uuidgen)
@@ -36,7 +36,7 @@ INVOCATION_ID=$(uuidgen)
 
 curl -sS http://localhost:8000/api/invocations \
   -H 'Content-Type: application/json' \
-  -d "{\"id\":\"$INVOCATION_ID\",\"input\":{\"session_id\":\"$SESSION_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"What time is it? Use your tool.\"}]}}"
+  -d "{\"id\":\"$INVOCATION_ID\",\"session_id\":\"$SESSION_ID\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":\"What time is it? Use your tool.\"}]}}"
 ```
 
 Reuse `SESSION_ID` for multi-turn conversation state. Generate a new `INVOCATION_ID` for each turn.
@@ -54,12 +54,12 @@ request while reusing the ID returns `409`.
 INVOCATION_ID=$(uuidgen)
 curl -sN http://localhost:8000/api/invocations \
   -H 'Content-Type: application/json' \
-  -d "{\"id\":\"$INVOCATION_ID\",\"input\":{\"session_id\":\"$SESSION_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"Count to three.\"}]},\"stream\":true}"
+  -d "{\"id\":\"$INVOCATION_ID\",\"session_id\":\"$SESSION_ID\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":\"Count to three.\"}]},\"stream\":true}"
 
 INVOCATION_ID=$(uuidgen)
 curl -sS http://localhost:8000/api/invocations \
   -H 'Content-Type: application/json' \
-  -d "{\"id\":\"$INVOCATION_ID\",\"input\":{\"session_id\":\"$SESSION_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"Summarize durable agents.\"}]},\"background\":true}" | jq
+  -d "{\"id\":\"$INVOCATION_ID\",\"session_id\":\"$SESSION_ID\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":\"Summarize durable agents.\"}]},\"background\":true}" | jq
 curl -sS "http://localhost:8000/api/invocations/$INVOCATION_ID" | jq
 ```
 
@@ -76,8 +76,8 @@ application session:
 ```json
 {
   "id": "<new-uuid>",
+  "session_id": "<same-session-id>",
   "input": {
-    "session_id": "<same-session-id>",
     "resume": {"decisions": [{"type": "approve"}]}
   }
 }
@@ -99,7 +99,7 @@ repeated side effects. See [Recovery and durability](AGENTKIT_CONTRACT.md#recove
 ## Chat app
 
 The browser UI is included by default. It generates a stable application session ID in local
-storage, places it inside each invocation's `input`, and generates a fresh invocation UUID per turn.
+storage, sends it as the top-level `session_id`, and generates a fresh invocation UUID per turn.
 Use `agentbricks init --framework langgraph --disable-chat-app` for API-only output.
 
 ## Configure and deploy
@@ -121,8 +121,8 @@ deployments use their own default schema.
 To keep a session on one app replica (sticky routing), set the `X-Routing-Key` request header to your
 stable session id on every call. It is a routing hint only: non-blank, no more than 128 UTF-8 bytes,
 used verbatim, and it takes precedence over the legacy `__Host-databricks-app-router` cookie. It is not
-authentication and is never used as the application's session id - send the session id in the request
-body (otherwise the invocation id is used).
+authentication and is never used as the application's session id. Send that separately as the
+top-level `session_id` in the request body.
 
 # Request-user authorization
 

@@ -84,7 +84,7 @@ async def test_routing_key_header_is_not_used_as_session_id() -> None:
             headers={_ROUTING_KEY_HEADER: "session-1"},
         )
 
-    # The header only routes; with no body session_id the session falls back to the invocation id.
+    # The header only routes; omitting session_id leaves the invocation sessionless.
     assert response.status_code == 200
     assert response.json() == {
         "id": _RUN_1,
@@ -92,45 +92,48 @@ async def test_routing_key_header_is_not_used_as_session_id() -> None:
         "output": {
             "received": "hello",
             "invocation_id": _RUN_1,
-            "session_id": _RUN_1,
+            "session_id": None,
         },
     }
 
 
 @pytest.mark.asyncio
-async def test_body_session_id_reaches_the_handler_and_the_header_is_ignored() -> None:
+async def test_top_level_session_id_reaches_the_handler_and_nested_input_is_ignored() -> None:
     async def invoke(input, context):
-        # Mirrors the framework adapters: the body session_id wins, else context.session_id.
         return {
-            "session_id": input.get("session_id") or context.session_id,
-            "context_session_id": context.session_id,
+            "input_session_id": input.get("session_id"),
+            "session_id": context.session_id,
         }
 
     app = make_app(invoke)
     async with running_client(app) as client:
-        with_body = await client.post(
+        with_session = await client.post(
             "/api/invocations",
-            json={"id": _RUN_1, "input": {"session_id": "body-session"}},
+            json={
+                "id": _RUN_1,
+                "session_id": "top-level-session",
+                "input": {"session_id": "nested-session"},
+            },
             headers={_ROUTING_KEY_HEADER: "header-session"},
         )
-        without_body = await client.post(
+        without_session = await client.post(
             "/api/invocations",
-            json={"id": _RUN_2, "input": {}},
+            json={"id": _RUN_2, "input": {"session_id": "nested-session"}},
             headers={_ROUTING_KEY_HEADER: "header-session"},
         )
 
-    assert with_body.json()["output"] == {
-        "session_id": "body-session",
-        "context_session_id": _RUN_1,
+    assert with_session.json()["output"] == {
+        "input_session_id": "nested-session",
+        "session_id": "top-level-session",
     }
-    assert without_body.json()["output"] == {
-        "session_id": _RUN_2,
-        "context_session_id": _RUN_2,
+    assert without_session.json()["output"] == {
+        "input_session_id": "nested-session",
+        "session_id": None,
     }
 
 
 @pytest.mark.asyncio
-async def test_missing_forwarded_routing_key_header_uses_invocation_id() -> None:
+async def test_omitted_session_id_remains_none() -> None:
     seen_sessions = []
 
     async def invoke(input, context):
@@ -141,18 +144,18 @@ async def test_missing_forwarded_routing_key_header_uses_invocation_id() -> None
     async with running_client(app) as client:
         response = await client.post("/api/invocations", json={"id": _RUN_1})
 
-    assert seen_sessions == [_RUN_1]
+    assert seen_sessions == [None]
     assert response.status_code == 200
     assert _ROUTING_KEY_HEADER not in response.headers
 
 
 @pytest.mark.asyncio
-async def test_body_session_and_resume_metadata_are_rejected() -> None:
+async def test_empty_session_id_and_resume_metadata_are_rejected() -> None:
     app = make_app()
     async with running_client(app) as client:
         session = await client.post(
             "/api/invocations",
-            json={"id": _RUN_1, "session_id": "body-session"},
+            json={"id": _RUN_1, "session_id": ""},
         )
         resume = await client.post(
             "/api/invocations",
@@ -172,7 +175,13 @@ async def test_http_persists_invocation_session_in_every_mode(background, stream
     async with running_client(app) as client:
         response = await client.post(
             "/api/invocations",
-            json={"id": _RUN_1, "input": "hello", "background": background, "stream": stream},
+            json={
+                "id": _RUN_1,
+                "session_id": "session-1",
+                "input": "hello",
+                "background": background,
+                "stream": stream,
+            },
             headers={_ROUTING_KEY_HEADER: "routing-only"},
         )
         await poll(client, _RUN_1)
@@ -180,10 +189,57 @@ async def test_http_persists_invocation_session_in_every_mode(background, stream
 
     assert response.status_code == (202 if background else 200)
     assert state is not None
-    assert isinstance(state.request, dict)
-    assert state.session_id == _RUN_1
-    assert state.request["session_id"] == state.session_id
+    assert state.request == {"input": "hello"}
+    assert state.session_id == "session-1"
     assert state.session_sequence_number == 1
+
+
+@pytest.mark.asyncio
+async def test_top_level_session_id_serializes_invocations() -> None:
+    first_started = asyncio.Event()
+    release = asyncio.Event()
+    seen = []
+
+    async def invoke(input, context):
+        seen.append(input)
+        if input == "first":
+            first_started.set()
+            await release.wait()
+        return input
+
+    app = make_app(invoke)
+    async with running_client(app) as client:
+        await client.post(
+            "/api/invocations",
+            json={
+                "id": _RUN_1,
+                "session_id": "shared-session",
+                "input": "first",
+                "background": True,
+            },
+        )
+        await asyncio.wait_for(first_started.wait(), 2)
+        await client.post(
+            "/api/invocations",
+            json={
+                "id": _RUN_2,
+                "session_id": "shared-session",
+                "input": "second",
+                "background": True,
+            },
+        )
+
+        first_state = await app._runtime.runtime_store.get(_RUN_1)
+        second_state = await app._runtime.runtime_store.get(_RUN_2)
+        assert first_state is not None and first_state.status == InvocationStatus.ACTIVE
+        assert second_state is not None and second_state.status == InvocationStatus.QUEUED
+        assert seen == ["first"]
+
+        release.set()
+        await poll(client, _RUN_1)
+        await poll(client, _RUN_2)
+
+    assert seen == ["first", "second"]
 
 
 @pytest.mark.asyncio
@@ -230,10 +286,10 @@ async def test_http_routing_key_does_not_serialize_invocations(background, strea
             assert response.status_code == (202 if background else 200)
             assert first_state is not None
             assert second_state is not None
-            assert first_state.session_id == _RUN_1
-            assert second_state.session_id == _RUN_2
-            assert first_state.session_sequence_number == 1
-            assert second_state.session_sequence_number == 1
+            assert first_state.session_id is None
+            assert second_state.session_id is None
+            assert first_state.session_sequence_number is None
+            assert second_state.session_sequence_number is None
             assert seen == ["first", "second"]
         finally:
             release.set()
@@ -258,8 +314,8 @@ async def test_recovery_attempt_uses_recovery_hook() -> None:
 
     app = make_app(invoke, recover=recover)
     result = await app._execute(
-        {"input": "hello", "session_id": "session-1"},
-        InvocationAttemptContext(_RUN_1, 2),
+        {"input": "hello"},
+        InvocationAttemptContext(_RUN_1, 2, session_id="session-1"),
     )
 
     assert result == {"input": "hello", "session_id": "session-1"}
@@ -267,7 +323,8 @@ async def test_recovery_attempt_uses_recovery_hook() -> None:
 
 
 @pytest.mark.asyncio
-async def test_attempt_context_is_the_source_of_session_identity() -> None:
+@pytest.mark.parametrize("stored_session_id", ["stored-session", None])
+async def test_attempt_context_is_the_source_of_session_identity(stored_session_id) -> None:
     async def invoke(input, context):
         return context.session_id
 
@@ -275,10 +332,10 @@ async def test_attempt_context_is_the_source_of_session_identity() -> None:
 
     result = await app._execute(
         {"input": "hello", "session_id": "legacy-session"},
-        InvocationAttemptContext(_RUN_1, 1, session_id="stored-session"),
+        InvocationAttemptContext(_RUN_1, 1, session_id=stored_session_id),
     )
 
-    assert result == "stored-session"
+    assert result == stored_session_id
 
 
 @pytest.mark.asyncio
@@ -287,7 +344,7 @@ async def test_recovery_attempt_requires_a_recovery_hook() -> None:
 
     with pytest.raises(RuntimeError, match="@app.recover"):
         await app._execute(
-            {"input": {}, "session_id": "session-1"},
+            {"input": {}},
             InvocationAttemptContext(_RUN_1, 2),
         )
 
@@ -581,6 +638,33 @@ async def test_agent_failure_returns_500_and_failed_event() -> None:
     ]
 
 
+@pytest.mark.asyncio
+async def test_mcp_permission_failure_returns_safe_error() -> None:
+    from databricks_agentkit.runtime.auth import AuthError
+
+    async def fail(input, context):
+        raise AuthError(
+            "MCP_PERMISSION_DENIED",
+            "MCP permission denied.",
+            403,
+            "sandbox",
+        )
+
+    app = make_app(fail)
+    async with running_client(app) as client:
+        response = await client.post("/api/invocations", json={"id": _RUN_1})
+        state = await client.get(f"/api/invocations/{_RUN_1}")
+
+    expected_error = {
+        "code": "MCP_PERMISSION_DENIED",
+        "message": "MCP permission denied.",
+        "integration_id": "sandbox",
+    }
+    assert response.status_code == 403
+    assert response.json() == {"error": expected_error}
+    assert state.json() == {"id": _RUN_1, "status": "failed", "error": expected_error}
+
+
 def test_app_is_asgi_app_with_instance_scoped_decorators() -> None:
     app = DurableAgentServer(runtime_store=InMemoryRuntimeStore())
 
@@ -639,11 +723,29 @@ def test_durable_agent_server_infers_request_user_policy_from_manifest(
     project.add_tool(ToolSpec.mcp("search", service="system.ai.web_search", auth="user"))
     project.add_tool(ToolSpec.mcp("docs", service="system.ai.docs", auth="app"))
     project.write()
+    with project.path.open("a", encoding="utf-8") as manifest:
+        manifest.write('\n[auth.user]\nrequired = true\nadditional_api_scopes = ["sql"]\n')
     monkeypatch.chdir(tmp_path)
 
     app = DurableAgentServer(runtime_store=InMemoryRuntimeStore())
 
     assert app.auth_policy.user_tools == ("search",)
+    assert app.auth_policy.user_required is True
+    assert app.auth_policy.requires_user is True
+
+
+def test_durable_agent_server_requires_user_for_code_first_manifest(tmp_path, monkeypatch) -> None:
+    project = AgentProject.create(tmp_path, framework="openai", server="agentbricks")
+    project.write()
+    with project.path.open("a", encoding="utf-8") as manifest:
+        manifest.write('\n[auth.user]\nrequired = true\nadditional_api_scopes = ["sql"]\n')
+    monkeypatch.chdir(tmp_path)
+
+    app = DurableAgentServer(runtime_store=InMemoryRuntimeStore())
+
+    assert app.auth_policy.user_tools == ()
+    assert app.auth_policy.user_required is True
+    assert app.auth_policy.requires_user is True
 
 
 def test_state_payload_nests_completed_application_response() -> None:

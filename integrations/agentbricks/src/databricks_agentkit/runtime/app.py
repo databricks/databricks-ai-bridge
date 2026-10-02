@@ -39,6 +39,7 @@ class _InvocationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: UUID
+    session_id: str | None = Field(default=None, min_length=1)
     input: PydanticJsonValue = Field(default_factory=list)
     background: bool = False
     stream: bool = False
@@ -130,12 +131,8 @@ class DurableAgentServer(FastAPI):
     ) -> JsonValue:
         if not isinstance(invocation_request, dict):
             raise TypeError("invocation request must be an object")
-        session_id = attempt_context.session_id
-        if session_id is None:
-            legacy_session_id = invocation_request.get("session_id")
-            session_id = legacy_session_id if isinstance(legacy_session_id, str) else None
-        if session_id is None or "input" not in invocation_request:
-            raise TypeError("invocation attempt must contain session_id and input")
+        if "input" not in invocation_request:
+            raise TypeError("invocation attempt must contain input")
         invocation_id = attempt_context.invocation_id
         request_auth = None
         if self.auth_policy.requires_user:
@@ -161,7 +158,7 @@ class DurableAgentServer(FastAPI):
 
         context = InvocationContext(
             invocation_id=invocation_id,
-            session_id=session_id,
+            session_id=attempt_context.session_id,
             attempt=attempt_context.attempt,
             _attempt_context=attempt_context,
             request_auth=request_auth,
@@ -182,18 +179,17 @@ class DurableAgentServer(FastAPI):
         request_auth = None
         registered_auth = False
         execution_owns_auth = False
-        # Use the invocation id as the fallback when the explicit session_id is missing
-        session_id = invocation_id
+        session_id = body.session_id
         if self.auth_policy.requires_user:
             request_auth = RequestAuthContext.from_headers(request.headers)
             runtime_invocation_id = request_auth.namespace("invocation", invocation_id)
-            session_id = request_auth.namespace("session", session_id)
+            if session_id is not None:
+                session_id = request_auth.namespace("session", session_id)
             existing_auth = self._request_auth.setdefault(runtime_invocation_id, request_auth)
             registered_auth = existing_auth is request_auth
             if not registered_auth:
                 request_auth.close()
         invocation_request: JsonObject = {
-            "session_id": session_id,
             "input": copy.deepcopy(body.input),
         }
         if self.auth_policy.requires_user:
@@ -224,6 +220,14 @@ class DurableAgentServer(FastAPI):
         except InvocationConflictError as exc:
             raise HTTPException(409, "id was already used for another request") from exc
         except InvocationFailedError as exc:
+            state = await self._runtime.get_invocation(runtime_invocation_id)
+            if state is not None:
+                auth_failure = self._auth_failure_response(state)
+                if auth_failure is not None:
+                    return JSONResponse(
+                        {"error": auth_failure[0]},
+                        status_code=auth_failure[1],
+                    )
             raise HTTPException(500, "agent invocation failed") from exc
         finally:
             if registered_auth and not execution_owns_auth and request_auth is not None:
@@ -290,8 +294,27 @@ class DurableAgentServer(FastAPI):
         if state.status == InvocationStatus.COMPLETED:
             payload["output"] = copy.deepcopy(state.response)
         elif state.status == InvocationStatus.FAILED:
-            payload["error"] = "agent invocation failed"
+            auth_failure = DurableAgentServer._auth_failure_response(state)
+            payload["error"] = (
+                copy.deepcopy(auth_failure[0])
+                if auth_failure is not None
+                else "agent invocation failed"
+            )
         return payload
+
+    @staticmethod
+    def _auth_failure_response(state: Invocation) -> tuple[JsonObject, int] | None:
+        if state.status != InvocationStatus.FAILED or not isinstance(state.response, dict):
+            return None
+        error = state.response.get("error")
+        status_code = state.response.get("status_code")
+        if not isinstance(error, dict) or not isinstance(status_code, int):
+            return None
+        if not isinstance(error.get("code"), str) or not isinstance(error.get("message"), str):
+            return None
+        if status_code < 400 or status_code > 599:
+            return None
+        return copy.deepcopy(error), status_code
 
     def _runtime_invocation_id(self, request: Request, invocation_id: str) -> str:
         if not self.auth_policy.requires_user:

@@ -228,11 +228,15 @@ Each managed run is an **invocation**. Send a client-generated UUID `id` and you
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
+  "session_id": "support-case-123",
   "input": {"messages": [{"role": "user", "content": "Hello"}]},
   "background": true,
   "stream": true
 }
 ```
+
+The optional top-level `session_id` groups invocations into one application session. It is distinct
+from the invocation `id` and from the `X-Routing-Key` sticky-routing header.
 
 | Endpoint | Behavior |
 | --- | --- |
@@ -451,7 +455,8 @@ agentbricks [-p <profile>] [-o text|json]
     unbind     [--source PATH]
     list | get [--experiment-name NAME | --experiment-id ID] [--source PATH]
   tools
-    add sandbox      --scope SCOPE [--scope SCOPE ...] [--source PATH]
+    add sandbox      --scope SCOPE [--scope SCOPE ...]
+                     [--no-databricks-access-token-included] [--source PATH]
     add mcp          SERVICE [--name NAME] [--source PATH]
     add uc-function  FUNCTION [--name NAME] [--source PATH]
     add genie-one    [--name NAME] [--auth user|app] [--source PATH]
@@ -530,11 +535,11 @@ server.
 ```sh
 agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
   --path /api/invocations \
-  --json '{"id":"00000000-0000-4000-8000-000000000001","input":[{"role":"user","content":"Hello"}]}'
+  --json '{"id":"00000000-0000-4000-8000-000000000001","session_id":"support-case-123","input":[{"role":"user","content":"Hello"}]}'
 
 agentbricks endpoint invoke --url http://localhost:8000 \
   --path /api/invocations \
-  --json '{"id":"00000000-0000-4000-8000-000000000001","input":[{"role":"user","content":"Hello"}]}'
+  --json '{"id":"00000000-0000-4000-8000-000000000001","session_id":"support-case-123","input":[{"role":"user","content":"Hello"}]}'
 ```
 
 The JSON body remains explicit even for generated agents. For example, managed runtime agents require
@@ -542,20 +547,24 @@ a client-generated invocation ID, and streaming servers require their own stream
 `--sse` so the CLI consumes the response as Server-Sent Events.
 
 ```sh
+SESSION_ID=$(uuidgen)
 INVOCATION_ID=$(uuidgen)
 agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
   --path /api/invocations \
-  --json "{\"id\":\"$INVOCATION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Run the report\"}]}"
+  --routing-key "$SESSION_ID" \
+  --json "{\"id\":\"$INVOCATION_ID\",\"session_id\":\"$SESSION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Run the report\"}]}"
 
+INVOCATION_ID=$(uuidgen)
 agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
   --path /api/invocations \
+  --routing-key "$SESSION_ID" \
   --sse \
-  --json "{\"id\":\"$INVOCATION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"stream\":true}"
+  --json "{\"id\":\"$INVOCATION_ID\",\"session_id\":\"$SESSION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"stream\":true}"
 ```
 
 `--routing-key` keeps a session on one app replica (sticky routing): set it to your stable session id
 and it is sent verbatim in the `X-Routing-Key` request header. It is routing only and is never used
-as the session id - put the session id in the `--json` body for session continuity. This
+as the session id - put the session id at the top level of the `--json` body for session continuity. This
 also works with a direct App URL and with the generated runtime on localhost. OAuth and session headers are managed by
 the runtime; arbitrary custom request headers are intentionally not exposed by this command.
 
@@ -638,9 +647,48 @@ Grant those transitive dependencies manually when the called service uses the Ap
 required direct grant cannot be read, applied, or verified, deploy stops before source upload and
 leaves the currently deployed version untouched.
 
-`DurableAgentServer` derives its request-auth policy directly from the managed tool bindings in `agent.toml`.
-Projects do not maintain a separate request-auth contract marker: the presence of any managed tool
-with `auth = "user"` makes the invocation require a transient request-user credential.
+`DurableAgentServer` derives its request-auth policy directly from the managed tool bindings in
+`agent.toml`. Projects do not maintain a separate request-auth contract marker: a managed tool with
+`auth = "user"` requires a transient request-user credential. Code-first tools can declare any
+additional API scopes that Agent Bricks cannot infer from Python:
+
+```toml
+[auth.user]
+required = true
+additional_api_scopes = ["sql"]
+```
+
+`additional_api_scopes` is additive: deploy unions it with scopes inferred from managed bindings,
+deduplicates the result, and preserves unrelated scopes already configured on the App. Scope names
+are not restricted to a client-side allowlist; Databricks Apps validates whether a requested scope
+is supported. Entries must be non-empty strings without surrounding whitespace or control
+characters, and a non-empty list requires `required = true`. This request-auth contract is supported
+only with `[agent].server = "agentbricks"`.
+
+Generated framework adapters pass the request-bound resolver to agent construction. A code-first
+tool should obtain its user client from that resolver inside the active invocation rather than
+creating or persisting a user credential:
+
+```python
+from langchain_core.tools import tool
+
+
+def sql_tools(workspace_client_for):
+    @tool
+    def run_statement(statement: str) -> str:
+        client = workspace_client_for("user")
+        response = client.statement_execution.execute_statement(
+            warehouse_id="...",
+            statement=statement,
+        )
+        return str(response.result)
+
+    return [run_statement]
+```
+
+The resolver is request-bound and closes after the attempt. Agent Bricks does not inject it into
+arbitrary auto-discovered decorated tools; build those tools from the resolver passed to the
+generated request-aware agent function.
 
 Request-user invocations use the same synchronous, streaming, background, status, event-replay,
 and idempotency APIs as app-auth invocations. The Runtime Store records only token-free request
@@ -656,13 +704,18 @@ upgrade copied Python adapter code. Outdated adapters fail closed rather than si
 identity. App-only legacy projects and generic bring-your-own source directories keep the existing
 path.
 
-Deploy derives Apps user scopes from explicit `auth = "user"` bindings:
+Deploy derives Apps user scopes from explicit `auth = "user"` bindings and unions them with
+`[auth.user].additional_api_scopes`:
 
 | Binding | Requested Apps scopes |
 | --- | --- |
 | Managed MCP (governed ingress) | `ai-gateway` |
+| `system.ai.dbsql` | `ai-gateway`, `sql` |
 | `system.ai.genie_one_mcp` | `ai-gateway`, `genie` |
+| Sandbox with a Volume downscope | `ai-gateway`, `files` |
 | First-class Genie One or Genie Agent | `genie` |
+| Sandbox with token injection | `ai-gateway`, `workspace.workspace` |
+| Sandbox with token injection disabled | `ai-gateway` |
 
 For example, bind Genie tools in a current project with `server = "agentbricks"`:
 
@@ -671,7 +724,8 @@ agentbricks tools add mcp system.ai.genie_one_mcp --auth user
 agentbricks tools add genie-agent SPACE_ID --auth user
 ```
 
-Mixed bindings request the union. App-auth and legacy bindings add no user scopes. These are
+Mixed bindings and explicit additions request the union. App-auth and legacy bindings add no user
+scopes. These are
 explicit service-consent scopes, not a claim that gateway access alone authorizes the downstream
 resource. OAuth consent does not grant Unity Catalog privileges: the user still needs access to
 the configured Genie Space and its underlying data.
@@ -688,10 +742,15 @@ The `system.ai.dbsql` managed MCP additionally requests the Apps `sql` user scop
 API consent, not `sql:restricted-query`; read-only enforcement remains the service policy plus the
 requesting user's Unity Catalog grants. DBSQL does not use Databricks Connect.
 
-A sandbox binding with a Volume downscope additionally requests the Apps `files` user scope.
+When a user-auth sandbox has `databricks_access_token_included = true`, it requests the Apps
+`workspace.workspace` user scope so the injected credential can call workspace APIs. A sandbox
+binding with a Volume downscope additionally requests the Apps `files` user scope.
 OAuth consent does not grant Volume access: the requesting user still needs the corresponding
-Unity Catalog privileges, and the sandbox downscope remains authoritative. Table-only sandbox
-bindings request `ai-gateway` but do not request `files`.
+Unity Catalog privileges, and the sandbox downscope remains authoritative. A sandbox binding with
+token injection disabled does not request `workspace.workspace`; its other resource-derived scopes
+still apply. Databricks Apps rejects the legacy bare `workspace` scope, so Agent Bricks requests
+`workspace.workspace`. These scopes are requested only for `auth = "user"`; `auth = "app"` uses
+the App service principal's permissions instead.
 
 Review the target App's scopes and coordinate with its other owners before allowing the update. Once
 those scopes are present, later deploys do not need the flag. The CLI preserves unrelated scopes,
@@ -790,7 +849,24 @@ do not generate or patch Python tool code, and do not alter the manifest's `[[to
 Sandbox scopes default to read-only access. Repeat `--scope` to allow more than one resource, use
 `volume:` or `workspace:` for those resource types, and use `--permission read_write` only when the
 agent needs writes. Every sandbox call carries this fixed downscope in MCP `_meta`, outside the tool
-arguments controlled by the model.
+arguments controlled by the model. New sandbox bindings also expose the selected Databricks
+credential to sandbox code by default:
+
+```toml
+[[tools]]
+id = "sandbox"
+auth = "user"
+source = { kind = "sandbox", service = "system.ai.sandbox" }
+policy = { downscope = [{ resource = "workspace:/Workspace/Shared", permission = "read_only" }], databricks_access_token_included = true }
+```
+
+With `databricks_access_token_included = true`, the sandbox receives `DATABRICKS_HOST`, a short-lived
+`DATABRICKS_TOKEN`, and `DATABRICKS_AUTH_TYPE`, so code such as
+`WorkspaceClient().current_user.me()` can call workspace APIs. This policy does not choose the
+identity: `auth = "user"` uses the request user's OBO credential, while `auth = "app"` uses the
+Databricks App service principal. Use `--no-databricks-access-token-included` when adding a sandbox that
+does not need workspace API access. Existing manifests that omit `databricks_access_token_included`
+remain disabled until explicitly updated.
 
 ### Genie tools
 
@@ -898,8 +974,8 @@ store and grants the app's service principal access to it. The memory store id f
 via the `AGENT_MEMORY_STORE` env var that `deploy` injects; `agentbricks dev` runs locally with memory off
 and does not inject it. The id is not persisted in `agent.toml`.)
 
-The chat UI generates a stable application session UUID in browser local storage, places it inside
-the invocation's opaque `input`, and creates a fresh invocation UUID per turn. The chat app also
+The chat UI generates a stable application session UUID in browser local storage, sends it as the
+invocation's top-level `session_id`, and creates a fresh invocation UUID per turn. The chat app also
 sends this session UUID in the `X-Routing-Key` request header, which is used verbatim to pin
 the session to one app replica (it must be non-blank and no more than 128 UTF-8 bytes). The header is neither
 authentication nor the template's application session state; it is independent sticky-routing

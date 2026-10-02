@@ -282,22 +282,27 @@ async def test_adapter_recovery_marks_replayed_agent_input(monkeypatch):
         yield _FakeStreamResult([], [], None)
 
     monkeypatch.setattr(adapter, "run_agent", fake_run_agent)
-    payload = {"session_id": "session-1", "messages": [{"role": "user", "content": "hi"}]}
+    payload = {"session_id": "ignored", "messages": [{"role": "user", "content": "hi"}]}
     context = SimpleNamespace(session_id="runtime-session", emit=AsyncMock())
 
-    await adapter.invoke(payload, context)
-    await adapter.recover(payload, context)
+    response = await adapter.invoke(payload, context)
+    recovered = await adapter.recover(payload, context)
 
     assert calls == [
-        (payload["messages"], {"session_id": "session-1", "actor": "session-1", "model": None}),
+        (
+            payload["messages"],
+            {"session_id": "runtime-session", "actor": "runtime-session", "model": None},
+        ),
         (
             [
                 {"role": "developer", "content": adapter._RECOVERY_INSTRUCTION},
                 *payload["messages"],
             ],
-            {"session_id": "session-1", "actor": "session-1", "model": None},
+            {"session_id": "runtime-session", "actor": "runtime-session", "model": None},
         ),
     ]
+    assert "session_id" not in response
+    assert "session_id" not in recovered
     assert payload["messages"] == [{"role": "user", "content": "hi"}]
 
 

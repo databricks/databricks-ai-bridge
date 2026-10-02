@@ -25,6 +25,14 @@ class ToolManifestError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class UserAuthConfig:
+    """Explicit request-user auth whose scopes supplement managed-tool inference."""
+
+    required: bool = False
+    additional_api_scopes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class ScopeRecord:
     kind: str
     value: str
@@ -38,6 +46,7 @@ class ToolRecord:
     service: str | None = None
     function: str | None = None
     downscope: tuple[ScopeRecord, ...] = ()
+    databricks_access_token_included: bool = False
     space_id: str | None = None
     auth: str | None = None
 
@@ -95,6 +104,75 @@ def project_root() -> pathlib.Path:
     )
 
 
+def parse_user_auth(document: Mapping[str, Any]) -> UserAuthConfig:
+    """Parse the shared ``[auth.user]`` contract from a manifest document."""
+    raw_auth = document.get("auth")
+    if raw_auth is None:
+        return UserAuthConfig()
+    if not isinstance(raw_auth, Mapping):
+        raise ToolManifestError("agent.toml auth must be a table.")
+    raw_user = raw_auth.get("user")
+    if raw_user is None:
+        return UserAuthConfig()
+    if not isinstance(raw_user, Mapping):
+        raise ToolManifestError("agent.toml auth.user must be a table.")
+
+    unexpected = set(raw_user) - {"required", "additional_api_scopes"}
+    if unexpected:
+        raise ToolManifestError(
+            "agent.toml auth.user has unsupported fields: "
+            f"{', '.join(sorted(str(field) for field in unexpected))}."
+        )
+
+    required = raw_user.get("required", False)
+    if not isinstance(required, bool):
+        raise ToolManifestError("agent.toml auth.user.required must be a boolean.")
+    raw_scopes = raw_user.get("additional_api_scopes", [])
+    if not isinstance(raw_scopes, list):
+        raise ToolManifestError("agent.toml auth.user.additional_api_scopes must be an array.")
+
+    scopes: list[str] = []
+    for scope in raw_scopes:
+        if not isinstance(scope, str):
+            raise ToolManifestError(
+                "agent.toml auth.user.additional_api_scopes must contain strings."
+            )
+        if not scope:
+            raise ToolManifestError(
+                "agent.toml auth.user.additional_api_scopes must contain non-empty scope names."
+            )
+        if scope != scope.strip():
+            raise ToolManifestError(
+                "agent.toml auth.user.additional_api_scopes cannot contain surrounding whitespace."
+            )
+        if any(ord(character) < 32 or ord(character) == 127 for character in scope):
+            raise ToolManifestError(
+                "agent.toml auth.user.additional_api_scopes cannot contain control characters."
+            )
+        scopes.append(scope)
+
+    additional_api_scopes = tuple(dict.fromkeys(scopes))
+    if additional_api_scopes and not required:
+        raise ToolManifestError(
+            "agent.toml auth.user.additional_api_scopes requires auth.user.required = true."
+        )
+    return UserAuthConfig(
+        required=required,
+        additional_api_scopes=additional_api_scopes,
+    )
+
+
+def load_user_auth() -> UserAuthConfig:
+    """Load declarative user auth from the active project's manifest."""
+    path = project_root() / "agent.toml"
+    try:
+        with path.open("rb") as source:
+            document: dict[str, Any] = tomllib.load(source)
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise ToolManifestError(f"Could not read {path}: {exc}") from exc
+    return parse_user_auth(document)
+
+
 def _required_string(value: object, description: str) -> str:
     if not isinstance(value, str) or not value:
         raise RuntimeError(f"agent.toml must declare {description}.")
@@ -131,6 +209,11 @@ def _tool(value: object) -> ToolRecord:
     if not isinstance(raw_downscope, list):
         raise RuntimeError("agent.toml policy.downscope must be an array.")
     kind = _required_string(source.get("kind"), "a tool source kind")
+    databricks_access_token_included = policy.get("databricks_access_token_included", False)
+    if not isinstance(databricks_access_token_included, bool):
+        raise RuntimeError("agent.toml policy.databricks_access_token_included must be a boolean.")
+    if kind != "sandbox" and "databricks_access_token_included" in policy:
+        raise RuntimeError("Only sandbox bindings accept policy.databricks_access_token_included.")
     tool_id = _required_string(value.get("id"), "a tool id")
     validate_genie_source(tool_id, source, has_downscope="downscope" in policy)
     auth = value.get("auth")
@@ -150,6 +233,7 @@ def _tool(value: object) -> ToolRecord:
         function=source.get("function") if isinstance(source.get("function"), str) else None,
         space_id=source.get("space_id") if isinstance(source.get("space_id"), str) else None,
         downscope=tuple(_scope(item) for item in raw_downscope),
+        databricks_access_token_included=databricks_access_token_included,
         auth=auth,
     )
     if record.kind == "sandbox" and (record.service != "system.ai.sandbox" or not record.downscope):
@@ -165,16 +249,10 @@ def _tool(value: object) -> ToolRecord:
     return record
 
 
-def load_tools(*, expected_framework: str) -> tuple[ToolRecord, ...]:
-    """Load a fresh immutable view so direct manifest edits apply on the next request."""
-    path = project_root() / "agent.toml"
-    try:
-        with path.open("rb") as input_file:
-            document: dict[str, Any] = tomllib.load(input_file)
-    except (OSError, tomllib.TOMLDecodeError) as exc:
-        raise RuntimeError(f"Could not read {path}: {exc}") from exc
+def parse_tools(document: Mapping[str, Any], *, expected_framework: str) -> tuple[ToolRecord, ...]:
+    """Parse managed bindings from an already loaded manifest snapshot."""
     if document.get("schema_version") != 1:
-        raise RuntimeError(f"Unsupported agent.toml schema in {path}; expected schema_version = 1.")
+        raise RuntimeError("Unsupported agent.toml schema; expected schema_version = 1.")
     agent = document.get("agent")
     if not isinstance(agent, dict) or agent.get("framework") != expected_framework:
         actual = agent.get("framework") if isinstance(agent, dict) else None
@@ -189,6 +267,17 @@ def load_tools(*, expected_framework: str) -> tuple[ToolRecord, ...]:
     if len(ids) != len(set(ids)):
         raise RuntimeError("agent.toml tool ids must be unique.")
     return tools
+
+
+def load_tools(*, expected_framework: str) -> tuple[ToolRecord, ...]:
+    """Load a fresh immutable view so direct manifest edits apply on the next request."""
+    path = project_root() / "agent.toml"
+    try:
+        with path.open("rb") as input_file:
+            document: dict[str, Any] = tomllib.load(input_file)
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise RuntimeError(f"Could not read {path}: {exc}") from exc
+    return parse_tools(document, expected_framework=expected_framework)
 
 
 def resolve_memory_store(explicit: str | None = None) -> str | None:
@@ -221,3 +310,11 @@ def downscope_wire(tool: ToolRecord) -> dict[str, list[dict[str, str]]]:
         group, field = fields[scope.kind]
         result.setdefault(group, []).append({field: scope.value, "permission": scope.permission})
     return result
+
+
+def sandbox_meta(tool: ToolRecord) -> dict[str, Any]:
+    """Build the protected MCP metadata for a configured sandbox binding."""
+    return {
+        "downscope": downscope_wire(tool),
+        "databricks_access_token_included": tool.databricks_access_token_included,
+    }

@@ -124,6 +124,7 @@ class ToolPolicy:
     """Protected runtime policy for a tool binding."""
 
     downscope: tuple[Scope, ...] = ()
+    databricks_access_token_included: bool = False
 
 
 @dataclass(frozen=True)
@@ -150,6 +151,10 @@ class ToolSpec:
         kind = self.source.kind
         if self.auth is not None and self.auth not in ("user", "app"):
             raise AgentCliError("Tool auth must be 'user' or 'app'.")
+        if kind != "sandbox" and self.policy.databricks_access_token_included:
+            raise AgentCliError(
+                "Only sandbox bindings accept policy.databricks_access_token_included."
+            )
         if kind in {"genie_one", "genie_agent"}:
             return
         if not _TOOL_ID.fullmatch(self.id):
@@ -188,11 +193,12 @@ class ToolSpec:
         *,
         scopes: Sequence[Scope],
         auth: Literal["user", "app"] | None = None,
+        databricks_access_token_included: bool = True,
     ) -> "ToolSpec":
         return cls(
             id=tool_id,
             source=ToolSource(kind="sandbox", service="system.ai.sandbox"),
-            policy=ToolPolicy(tuple(scopes)),
+            policy=ToolPolicy(tuple(scopes), databricks_access_token_included),
             auth=auth,
         )
 
@@ -312,6 +318,11 @@ def _tool_from_manifest(value: object) -> ToolSpec:
     downscope_value = policy_value.get("downscope", [])
     if not isinstance(downscope_value, list):
         raise AgentCliError("Tool policy downscope must be an array.")
+    databricks_access_token_included = policy_value.get("databricks_access_token_included", False)
+    if not isinstance(databricks_access_token_included, bool):
+        raise AgentCliError("Tool policy databricks_access_token_included must be a boolean.")
+    if kind != "sandbox" and "databricks_access_token_included" in policy_value:
+        raise AgentCliError("Only sandbox bindings accept policy.databricks_access_token_included.")
     return ToolSpec(
         id=tool_id,
         source=ToolSource(
@@ -320,7 +331,10 @@ def _tool_from_manifest(value: object) -> ToolSpec:
             function=source.get("function") if isinstance(source.get("function"), str) else None,
             space_id=source.get("space_id") if isinstance(source.get("space_id"), str) else None,
         ),
-        policy=ToolPolicy(tuple(_scope_from_manifest(item) for item in downscope_value)),
+        policy=ToolPolicy(
+            tuple(_scope_from_manifest(item) for item in downscope_value),
+            databricks_access_token_included,
+        ),
         auth=value.get("auth"),
     )
 
@@ -351,6 +365,7 @@ def _tool_table(spec: ToolSpec) -> Any:
             )
         policy = tomlkit.inline_table()
         policy["downscope"] = downscope
+        policy["databricks_access_token_included"] = spec.policy.databricks_access_token_included
         table.add("policy", policy)
     return table
 
@@ -370,6 +385,7 @@ class AgentProject:
         memory_store_id: str | None = None,
         deployment_name: str | None = None,
         trace_experiment_name: str | None = None,
+        user_auth: tool_manifest.UserAuthConfig | None = None,
     ) -> None:
         self.root = root
         self.path = root / "agent.toml"
@@ -391,6 +407,7 @@ class AgentProject:
         # unbound, i.e. off. Storing a name (not an id) keeps the binding valid across workspaces and
         # profiles, since an id is workspace-local. `agentbricks init` bootstraps a default name.
         self.trace_experiment_name = trace_experiment_name
+        self.user_auth = user_auth or tool_manifest.UserAuthConfig()
 
     @classmethod
     def load(cls, root: pathlib.Path | str | None = None) -> "AgentProject":
@@ -423,6 +440,10 @@ class AgentProject:
             raise AgentCliError("agent.toml must declare an [agent] table.")
         framework = parse_framework(_required_string(agent.get("framework"), "agent.framework"))
         server = parse_server(_required_string(agent.get("server"), "agent.server"))
+        try:
+            user_auth = tool_manifest.parse_user_auth(document)
+        except tool_manifest.ToolManifestError as exc:
+            raise AgentCliError(str(exc)) from exc
         deployment_name = agent.get("deployment_name")
         if deployment_name is not None and not (
             isinstance(deployment_name, str) and deployment_name
@@ -460,6 +481,7 @@ class AgentProject:
             memory_store_id,
             str(deployment_name) if deployment_name is not None else None,
             trace_experiment_name,
+            user_auth,
         )
 
     @classmethod

@@ -196,7 +196,12 @@ class MemoryDurableRuntimeStore:
         self._append_event(invocation_id, attempt, {"type": "run.completed"})
         return True
 
-    async def fail(self, invocation_id: str, attempt: int) -> bool:
+    async def fail(
+        self,
+        invocation_id: str,
+        attempt: int,
+        response: JsonValue = None,
+    ) -> bool:
         state = self.states.get(invocation_id)
         if state is None or not self._owns_attempt(state, attempt):
             return False
@@ -205,7 +210,7 @@ class MemoryDurableRuntimeStore:
             status=InvocationStatus.FAILED,
             attempt=state.attempt,
             request=state.request,
-            response=None,
+            response=copy.deepcopy(response),
             session_id=state.session_id,
             session_sequence_number=state.session_sequence_number,
         )
@@ -905,8 +910,8 @@ async def test_submit_returns_before_background_execution_finishes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_submit_preserves_idempotency_for_legacy_sessionless_state() -> None:
-    request = {"input": "hello", "session_id": "session-1"}
+async def test_submit_rejects_adding_session_to_existing_sessionless_invocation() -> None:
+    request = {"input": "hello"}
 
     async def execute(request: dict, context: InvocationAttemptContext) -> dict:
         return {"output": request["input"]}
@@ -916,13 +921,10 @@ async def test_submit_preserves_idempotency_for_legacy_sessionless_state() -> No
     runtime = make_local_runtime(execute, store)
     await runtime.start()
     try:
-        state = await runtime.submit("invocation-1", request, session_id="session-1")
-        result = await runtime.wait("invocation-1")
+        with pytest.raises(InvocationConflictError):
+            await runtime.submit("invocation-1", request, session_id="session-1")
     finally:
         await runtime.stop()
-
-    assert state.session_id is None
-    assert result == {"output": "hello"}
 
 
 @pytest.mark.asyncio

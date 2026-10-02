@@ -38,6 +38,7 @@ uv run python tests/e2e/tool_matrix.py \
   --uc-schema supervisor_agent.mason_agent_tools_e2e \
   --genie-space-id "$AGENTBRICKS_E2E_GENIE_SPACE_ID" \
   --commit-sha <pushed-40-character-sha> \
+  --bridge-sha <pushed-40-character-sha> \
   --source-root /absolute/path/to/databricks-ai-bridge \
   --template-repo /absolute/path/to/databricks-ai-bridge \
   --template-ref your-feature-branch
@@ -55,6 +56,11 @@ workspace profile uses a PAT, pass an OAuth profile for the same workspace with
 Bricks modules in the wheel against that checkout. The template repo/ref flags make `agentbricks init`
 read the exact checkout under test and avoid remote clone throttling; provide both or omit both to use
 the verified installed wheel template.
+When `--bridge-sha` is supplied, the generated App pins Agent Bricks and LangChain to that immutable
+bridge commit; otherwise it uses the wheel built for this run. Pass `--preprovisioned-app-catalog-access`
+when Apps already have catalog access and the runner identity cannot grant `USE CATALOG` itself.
+Omit `--profile` and `--app-auth-profile` to use ambient OAuth environment credentials, as the gated
+nightly integration test does.
 
 Direct authoring does not call `agentbricks tools add`: it replaces `agent.toml` with
 `fixtures/direct_agent.toml`. CLI authoring invokes four managed `agentbricks tools add ...` commands.
@@ -83,6 +89,44 @@ uv run python tests/e2e/tool_matrix.py \
 ```
 
 Success is exactly `24 passed, 0 failed, 0 skipped`, two deploy grant snapshots, and one idempotent
-repeat deploy. Temporary Apps and both UC functions are deleted after a successful run, with cleanup
-results saved in `evidence.json`; App deletion is not considered complete until a follow-up read
-confirms absence. Pass `--keep-resources` while debugging.
+repeat deploy. Temporary Apps and UC resources are deleted after a successful run, with cleanup results
+saved in `evidence.json`; App deletion is not considered complete until a follow-up read confirms
+absence. A failed run retains resources for diagnosis. Pass `--keep-resources` to retain resources after
+a successful run while debugging. The gated nightly test reports bounded dev/deploy log tails and
+captures App runtime logs for failed deployed cases.
+
+## Declarative user-auth scope matrix
+
+`auth_scope_matrix.py` deploys four projects covering LangGraph and OpenAI Agents SDK harnesses,
+each with either an explicit-only `sql` scope or the union of explicit `sql` plus managed web-search
+`ai-gateway` inference. Every project contains a request-bound code-first SQL tool that proves the
+invoking user can read a temporary marker while the App principal is denied. Combined cases also
+invoke managed web search. The runner verifies configured and effective App scopes, a pushed source
+SHA freshness marker in App logs, OAuth invocation status, and resource cleanup.
+
+Build and push the source commit before running because deployed projects pin their runtime to that
+exact remote SHA:
+
+```bash
+cd integrations/agentbricks
+uv build --wheel --out-dir /tmp/agentbricks-auth-scope-dist
+uv run python tests/e2e/auth_scope_matrix.py \
+  --profile df1 \
+  --app-auth-profile df1-oauth-mcp \
+  --wheel /tmp/agentbricks-auth-scope-dist/databricks_agentbricks-0.3.0-py3-none-any.whl \
+  --output /tmp/agentbricks-auth-scope-matrix \
+  --uc-schema aifx_benchmarks.agentbricks_auth_scope_e2e \
+  --source-repo https://github.com/databricks/databricks-ai-bridge.git \
+  --source-ref <full-pushed-commit-sha>
+```
+
+Verify saved evidence without workspace access:
+
+```bash
+uv run python tests/e2e/auth_scope_matrix.py \
+  --verify-evidence /tmp/agentbricks-auth-scope-matrix/evidence.json
+```
+
+Success is exactly `4 passed, 0 failed, 0 skipped` with both cleanup checks true. Credentials and
+workspace identifiers are not written to `evidence.json`; detailed local logs remain under the
+output directory for diagnosis and report generation.
