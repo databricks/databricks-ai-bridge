@@ -463,7 +463,7 @@ class Runner:
                 if authoring == "cli":
                     self._author_cli(project)
                 else:
-                    self._author_direct(project, framework)
+                    self._author_direct(project, framework, run_suffix)
                 self._write_python_marker(project)
                 app_name = f"agent-bricks-t-{framework[:2]}-{authoring[:2]}-{run_suffix}"
                 case = ProjectCase(framework, authoring, project, app_name)
@@ -665,9 +665,14 @@ class Runner:
             if tools_by_id[tool_id].get("auth") != "app":
                 raise MatrixError(f"CLI-authored {tool_id} binding is not App-auth.")
 
-    def _author_direct(self, project: pathlib.Path, framework: str) -> None:
+    def _author_direct(self, project: pathlib.Path, framework: str, run_suffix: str) -> None:
         if self.uc_table is None or self.uc_volume is None:
             raise MatrixError("Sandbox table and volume were not created.")
+        # `agentbricks init` binds a default tracing experiment, which deploy attaches as a non-tool
+        # App resource; mirror that here so the direct path also carries one (and the deploy-resource
+        # preservation check has something to preserve). Follows default_experiment_name's shape.
+        slug = re.sub(r"[^a-z0-9-]+", "-", project.name.lower()).strip("-") or "agent"
+        experiment_name = f"/Shared/agentbricks_traces/{slug}-{run_suffix}"
         fixture = pathlib.Path(__file__).parent / "fixtures" / "direct_agent.toml"
         manifest = (
             fixture.read_text(encoding="utf-8")
@@ -676,6 +681,7 @@ class Runner:
             .replace("__GENIE_SPACE_ID__", self.genie_space_id or "")
             .replace("__UC_TABLE__", self.uc_table)
             .replace("__UC_VOLUME__", self.uc_volume)
+            .replace("__EXPERIMENT_NAME__", experiment_name)
         )
         target = project / "agent.toml"
         self.transcript.file_step(target, "direct authoring; no agentbricks tools command")

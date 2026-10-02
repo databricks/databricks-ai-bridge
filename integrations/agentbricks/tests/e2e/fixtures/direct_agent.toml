@@ -24,3 +24,6 @@ source = { kind = "uc_function", function = "__UC_FUNCTION__" }
 id = "genie"
 auth = "app"
 source = { kind = "genie_agent", space_id = "__GENIE_SPACE_ID__" }
+
+[tracing]
+experiment_name = "__EXPERIMENT_NAME__"
