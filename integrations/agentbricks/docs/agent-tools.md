@@ -252,7 +252,7 @@ decorator in `agent/tools/`: LangGraph uses `@tool`, while OpenAI Agents uses `@
 templates auto-discover decorated tools from that package and add them to the agent; there is no CLI
 command or `agent.toml` entry to keep in sync. Customer-managed MCP servers are likewise ordinary
 code in `agent/mcps.py` and are joined with the managed bindings by `mcp_tools(...)` or
-`mcp_servers(...)`. See the [custom-tool quickstart](../README.md#add-a-custom-tool)
+`mcp_servers(...)`. See the [first customization example](../README.md#first-customization-add-a-custom-tool)
 for a working example in both frameworks.
 
 Projects created with `--server custom` do not auto-discover `agent/tools/` or load managed tool
