@@ -123,14 +123,17 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
     monkeypatch.setattr(ui, "_discover_chat_models", lambda: ["system.ai.claude-sonnet-4-5"])
 
     async def invoke_handler(request, context):
-        return {"output": [], "session_id": context.session_id}
+        return {"output": []}
 
     app = DurableAgentServer(runtime_store=InMemoryRuntimeStore())
     app.invoke(invoke_handler)
     app.recover(invoke_handler)
     ui.install_ui(app)
     client = TestClient(app, base_url="https://testserver")
-    client.cookies.set("__Host-databricks-app-router", session_id)
+    # X-Routing-Key is kept for sticky routing (harmless); session identity travels via
+    # ?session_id=... query param, matching what demoUrl() sends in the real browser.
+    client.params = {"session_id": session_id}
+    client.headers["X-Routing-Key"] = session_id
     if configured:
         # The actor is the signed-in user from this forwarded-identity header (ui._request_actor);
         # unconfigured requests have no header and fall back to the "agent" actor.
@@ -157,8 +160,43 @@ def test_demo_ui_routes(monkeypatch):
     assert 'demoUrl("/api/demo/models")' in app_script.text
     assert 'fetch("/api/session/new"' not in app_script.text
     assert "/api/demo/sessions/${encodeURIComponent(sessionId)}/open" in app_script.text
-    assert "session_id: sessionId" in app_script.text
+    assert (
+        "return { id: newSessionId(), session_id: sessionId, input, ...transport };"
+        in app_script.text
+    )
+    assert "session_id: sessionId,\n    actor:" not in app_script.text
+    assert "output.session_id" not in app_script.text
+    assert "result.session_id" not in app_script.text
+    assert "config.session_id" not in app_script.text
+    assert "setSessionId(sessionId);" in app_script.text
+    assert "setSessionId(state.sessionId);" in app_script.text
     assert 'fetch("/api/invocations"' in app_script.text
+    # Routing key: a shared helper composed into both the submit POST and the background poll
+    # GET, so every replica-scoped request is pinned to the session that started it.
+    assert "function routingHeaders()" in app_script.text
+    assert 'if (state.sessionId) headers["X-Routing-Key"] = state.sessionId;' in app_script.text
+    assert 'return { "Content-Type": "application/json", ...routingHeaders() };' in app_script.text
+    assert (
+        "fetch(`/api/invocations/${encodeURIComponent(invocationId)}`, {\n"
+        '      cache: "no-store",\n'
+        '      credentials: "same-origin",\n'
+        "      headers: routingHeaders(),\n"
+        "    })"
+    ) in app_script.text
+    # Session-scoped demo GETs carry the routing key so history refreshes hit the same replica.
+    assert (
+        'fetch(demoUrl("/api/demo/session/items"), { cache: "no-store", headers: routingHeaders() })'
+    ) in app_script.text
+    assert (
+        'fetch(demoUrl("/api/demo/sessions"), { cache: "no-store", headers: routingHeaders() })'
+    ) in app_script.text
+    assert (
+        "fetch(demoUrl(`/api/demo/sessions/${encodeURIComponent(sessionId)}/open`), {\n"
+        '      method: "POST",\n'
+        '      credentials: "same-origin",\n'
+        "      headers: routingHeaders(),\n"
+        "    })"
+    ) in app_script.text
     styles = client.get("/ui-assets/styles.css").text
     assert "@media (min-width: 1181px)" in styles
     assert "scrollbar-gutter: stable" in styles

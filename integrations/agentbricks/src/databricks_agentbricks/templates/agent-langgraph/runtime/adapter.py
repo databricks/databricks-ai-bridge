@@ -3,11 +3,14 @@
 from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any
 
+from agent import agent as agent_module
 from agent.agent import recovery_input, run_agent
 from langchain.messages import AIMessageChunk
 from langgraph.types import Command
 
 from databricks_agentkit import InvocationContext
+from databricks_agentkit.langgraph.responses import checkpointed_messages
+from databricks_agentkit.langgraph.session_store import thread_config
 from databricks_agentkit.runtime.auth import AuthError
 
 
@@ -19,10 +22,10 @@ def _payload(value: Any) -> dict[str, Any]:
     return value
 
 
-def _session_id(payload: dict[str, Any], context: InvocationContext) -> str:
-    value = payload.get("session_id") or context.session_id
+def _session_id(context: InvocationContext) -> str:
+    value = context.session_id
     if not isinstance(value, str) or not value:
-        raise ValueError("session_id must be a non-empty string")
+        raise ValueError("session_id must be provided as a top-level invocation field")
     return value
 
 
@@ -57,7 +60,7 @@ async def recover(value: Any, context: InvocationContext) -> dict:
             "Request-user invocations cannot be recovered in the background.",
             400,
         )
-    session_id = _session_id(payload, context)
+    session_id = _session_id(context)
     actor = _actor(payload, session_id)
     agent_input = await recovery_input(
         _agent_input(payload),
@@ -85,25 +88,33 @@ async def _invoke_agent(
     payload: dict[str, Any],
     context: InvocationContext,
 ) -> dict:
-    session_id = _session_id(payload, context)
+    session_id = _session_id(context)
     actor = _actor(payload, session_id)
     auth = getattr(context, "request_auth", None)
-    internal_session_id = (
-        auth.namespace("session", session_id) if auth and payload.get("session_id") else session_id
-    )
-    actor = auth.namespace("actor", actor) if auth else actor
+    if auth and payload.get("actor"):
+        actor = auth.namespace("actor", actor)
     user_auth = auth is not None
-    auth_kwargs = {"workspace_client_for": auth.client_for} if user_auth else {}
+    run_kwargs = {"workspace_client_for": auth.client_for} if user_auth else {}
     model = payload.get("model")
+    model = model if isinstance(model, str) else None
     outputs = []
+    if agent_input is None:
+        graph = await agent_module.create_agent_graph(actor, model, **run_kwargs)
+        outputs = [
+            {"type": "message", "message": message.model_dump()}
+            for message in await checkpointed_messages(
+                graph, thread_config(session_id, actor), context.invocation_id
+            )
+        ]
+        run_kwargs["graph"] = graph
     async for event in _serialize_events(
         run_agent(
             agent_input,
-            session_id=internal_session_id,
+            session_id=session_id,
             actor=actor,
-            model=model if isinstance(model, str) else None,
+            model=model,
             invocation_id=context.invocation_id,
-            **auth_kwargs,
+            **run_kwargs,
         )
     ):
         if user_auth and event.get("type") == "interrupt":
@@ -119,7 +130,6 @@ async def _invoke_agent(
     interrupted = bool(outputs and outputs[-1].get("type") == "interrupt")
     return {
         "output": [event["message"] if event["type"] == "message" else event for event in outputs],
-        **({"session_id": session_id} if not user_auth or payload.get("session_id") else {}),
         "status": "interrupted" if interrupted else "completed",
     }
 

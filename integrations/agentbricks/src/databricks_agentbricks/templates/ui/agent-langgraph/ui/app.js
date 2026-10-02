@@ -104,6 +104,8 @@ function setSessionId(value) {
   elements.sessionId.textContent = state.sessionId;
 }
 
+setSessionId(state.sessionId);
+
 function demoUrl(path) {
   const url = new URL(path, window.location.origin);
   url.searchParams.set("session_id", ensureSessionId());
@@ -592,21 +594,25 @@ function handleOutput(output) {
   }
 }
 
+function routingHeaders() {
+  const headers = {};
+  // The UI reuses its stable session value for routing affinity, but the header is routing-only.
+  if (state.sessionId) headers["X-Routing-Key"] = state.sessionId;
+  return headers;
+}
+
 function invocationHeaders() {
-  return {
-    "Content-Type": "application/json",
-  };
+  return { "Content-Type": "application/json", ...routingHeaders() };
 }
 
 function invocationPayload(payload, transport = {}) {
   const sessionId = ensureSessionId();
   const input = {
-    session_id: sessionId,
     actor: state.config?.session.actor || sessionId,
     ...payload,
   };
   if (state.model) input.model = state.model;
-  return { id: newSessionId(), input, ...transport };
+  return { id: newSessionId(), session_id: sessionId, input, ...transport };
 }
 
 function agentResult(result) {
@@ -918,7 +924,7 @@ async function ensureManagedSession() {
   stateMessage(elements.sessionItems, "Connecting managed session…", "loading");
   const response = await fetch(demoUrl("/api/demo/sessions"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...routingHeaders() },
     body: "{}",
   });
   const result = await jsonResponse(response);
@@ -934,7 +940,7 @@ async function refreshSession({ hydrateChat = false } = {}) {
   }
   try {
     const sessionId = state.config.session.managed ? await ensureManagedSession() : ensureSessionId();
-    const response = await fetch(demoUrl("/api/demo/session/items"), { cache: "no-store" });
+    const response = await fetch(demoUrl("/api/demo/session/items"), { cache: "no-store", headers: routingHeaders() });
     const result = await jsonResponse(response);
     const items = sessionItems(result);
     renderSessionItems(items);
@@ -952,7 +958,7 @@ async function refreshSession({ hydrateChat = false } = {}) {
 async function refreshSessions() {
   stateMessage(elements.sessionList, "Loading sessions…", "loading");
   try {
-    const response = await fetch(demoUrl("/api/demo/sessions"), { cache: "no-store" });
+    const response = await fetch(demoUrl("/api/demo/sessions"), { cache: "no-store", headers: routingHeaders() });
     const result = await jsonResponse(response);
     renderSessions(sessions(result));
     addEvent("sessions.list", result);
@@ -973,7 +979,7 @@ async function recordSessionItems(items) {
     const sessionId = await ensureManagedSession();
     const response = await fetch(demoUrl("/api/demo/session/items"), {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...routingHeaders() },
       body: JSON.stringify({ items }),
     });
     const result = await jsonResponse(response);
@@ -995,7 +1001,6 @@ async function invokeSync(payload) {
   const result = await jsonResponse(response);
   const output = agentResult(result);
   addEvent("response", result);
-  if (output.session_id) setSessionId(output.session_id);
   handleOutput(output.output);
   return output;
 }
@@ -1047,12 +1052,12 @@ async function pollBackground(invocationId) {
     const response = await fetch(`/api/invocations/${encodeURIComponent(invocationId)}`, {
       cache: "no-store",
       credentials: "same-origin",
+      headers: routingHeaders(),
     });
     const result = await jsonResponse(response);
     addEvent("background.poll", result);
     if (result.status === "completed") {
       const output = agentResult(result);
-      if (output.session_id) setSessionId(output.session_id);
       handleOutput(output.output);
       return output;
     }
@@ -1186,9 +1191,10 @@ async function openSession(sessionId) {
     const response = await fetch(demoUrl(`/api/demo/sessions/${encodeURIComponent(sessionId)}/open`), {
       method: "POST",
       credentials: "same-origin",
+      headers: routingHeaders(),
     });
     const result = await jsonResponse(response);
-    setSessionId(result.session_id);
+    setSessionId(sessionId);
     resetSessionState();
     addEvent("session.open", result);
     await refreshSessionView({ hydrateChat: true });
@@ -1247,7 +1253,6 @@ async function loadConfig() {
     const config = await jsonResponse(response);
     state.config = config;
     state.instanceId = config.instance_id;
-    setSessionId(config.session_id);
     renderModels(config.models);
     void loadModels().catch((error) => addEvent("models.error", { message: String(error) }));
     setViewer(config.viewer);

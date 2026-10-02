@@ -86,3 +86,45 @@ Whenever you change the CLI surface, update `cli.md` in the same change. That in
 Check the tables against the actual `click` definitions in `src/databricks_agentbricks/cli/`; the quickest
 drift check is to compare against the CLI's own `--help` output. Purely internal changes that don't
 alter the command surface or help text need no `cli.md` update.
+
+## Adding a new agent framework
+
+`agentbricks doctor` recognizes onboarded projects per framework, so adding a new framework (a new
+`--framework` choice with its own template and adapter) means updating the doctor's static checks in
+the same change, in `src/databricks_agentbricks/cli/doctor.py`:
+
+- add the framework to the `_SUPPORTED_FRAMEWORKS` tuple;
+- add its public adapter call symbols to `_FRAMEWORK_ADAPTER_CALLS`, kept in sync with the calls the
+  generated template for that framework actually makes (prefix matching is intentionally not used —
+  every recognized symbol must be listed explicitly).
+
+Also refresh the framework references and examples in `cli.md` and `README.md`, and add doctor test
+coverage for the new framework in `tests/unit_tests/doctor_test.py`.
+
+## Cutting a release
+
+Run **Cut Agent Bricks release** from the Actions tab with a version such as `0.4.0` or
+`0.4.1`. Leave **dry_run** on first to see the source commit, branch, tag, and next
+development version. The helper's `plan` command runs for both previews and real cuts;
+`dry_run` skips the branch, tests, tag, and PR steps. Then rerun with dry_run off to make the cut.
+For a dry run, select the workflow branch to preview its workflow and release script changes.
+Run a real cut from `main`; the workflow checks this before planning.
+The workflow needs permission to write repository contents and open pull requests.
+
+The first `0.4.x` run creates `release/databricks-agentbricks/v0.4` from `main` (or
+an explicitly selected ancestor commit). Later runs use the current head of that
+branch; merge any required fixes into it before cutting a patch.
+The workflow stamps the package version and the minimum Agent Bricks dependency in
+all scaffolds, tests the pushed commit, and tags that commit as
+`databricks-agentbricks-v<version>` only after those tests pass. If tests fail, fix
+the release branch and rerun with the same version. Once a version is tagged,
+use the next patch version for any further fixes (for example, `0.4.1` after `0.4.0`).
+Do not move an existing tag.
+
+On the first cut, the workflow also opens a draft PR to change the package version
+on `main` to the next minor development version (for example, `0.5.0.dev0` after
+cutting `0.4`). That version identifies development builds; it is not a published
+release. The scaffolds continue to depend on the released package. A new minor
+series starts with a new release branch from `main`. Tagging does not publish the package. Arrange the separate
+secure public registry release and its approval to publish to PyPI. The live workspace tool-matrix tests run
+separately in the private integration runner and are not included in this gate.

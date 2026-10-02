@@ -22,6 +22,7 @@ dependencies = [
     # so this is a base dependency. Auth rides on databricks-sdk (above), so the heavier
     # mlflow[databricks] extra (boto3/azure/gcs/databricks-agents, for artifact blob I/O) isn't needed.
     "mlflow-skinny>=3.10.1",
+    "packaging>=23.2",
     "psycopg[binary]>=3.1",
     "PyYAML>=6.0",
     "rich>=13.7",
@@ -35,7 +36,7 @@ langgraph = [
     "databricks-langchain>=0.17.0",
     "langgraph>=1.1.0",
     "langchain>=1.0.0",
-    "langchain-mcp-adapters>=0.2.1",
+    "langchain-mcp-adapters>=0.3.0",
     "mlflow>=3.10.1",
     "opentelemetry-exporter-otlp-proto-grpc>=1.25.0",
     "databricks-agents>=1.9.3",

@@ -155,9 +155,21 @@ async def test_recovery_replays_input_without_current_checkpoint(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_adapter_calls_same_run_agent_for_invoke_and_recovery(monkeypatch):
+    import agent.agent as agent_module
     import runtime.adapter as adapter
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.graph import END, START, MessagesState, StateGraph
 
     calls = []
+    builder = StateGraph(MessagesState)
+    builder.add_node("answer", lambda state: {"messages": []})
+    builder.add_edge(START, "answer")
+    builder.add_edge("answer", END)
+    graph = builder.compile(checkpointer=InMemorySaver())
+
+    # Replace external model/tool construction, keeping checkpoint reads real.
+    create_graph = AsyncMock(return_value=graph)
+    monkeypatch.setattr(agent_module, "create_agent_graph", create_graph)
 
     async def fake_run_agent(agent_input, **kwargs):
         calls.append((agent_input, kwargs))
@@ -174,14 +186,19 @@ async def test_adapter_calls_same_run_agent_for_invoke_and_recovery(monkeypatch)
         session_id="runtime-session",
         emit=AsyncMock(),
     )
-    payload = {"session_id": "session-1", "messages": [{"role": "user", "content": "hi"}]}
+    payload = {"session_id": "ignored", "messages": [{"role": "user", "content": "hi"}]}
 
-    await adapter.invoke(payload, context)
-    await adapter.recover(payload, context)
+    response = await adapter.invoke(payload, context)
+    recovered = await adapter.recover(payload, context)
 
     assert calls[0][0] == {"messages": payload["messages"]}
+    assert calls[0][1]["session_id"] == "runtime-session"
+    assert calls[0][1]["actor"] == "runtime-session"
     assert calls[1][0] is None
-    assert calls[0][1] == calls[1][1]
+    assert calls[1][1] == {**calls[0][1], "graph": graph}
+    create_graph.assert_awaited_once_with("runtime-session", None)
+    assert "session_id" not in response
+    assert "session_id" not in recovered
 
 
 def _has_workspace_auth() -> bool:

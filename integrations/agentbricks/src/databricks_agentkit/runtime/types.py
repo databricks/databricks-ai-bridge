@@ -40,6 +40,8 @@ class Invocation:
     attempt: int
     request: JsonValue
     response: JsonValue
+    session_id: str | None = None
+    session_sequence_number: int | None = None  # Immutable acceptance order, not an event cursor.
 
     @property
     def is_terminal(self) -> bool:
@@ -67,6 +69,7 @@ class InvocationAttemptContext:
     invocation_id: str
     attempt: int
     _emit: InvocationEventEmitter | None = field(default=None, repr=False, compare=False)
+    session_id: str | None = None
 
     @property
     def is_recovery(self) -> bool:
@@ -85,10 +88,13 @@ InvocationExecutorFn = Callable[[JsonValue, InvocationAttemptContext], Awaitable
 
 @dataclass(frozen=True)
 class InvocationContext:
-    """Invocation/session metadata and event emission for a decorated agent function."""
+    """Invocation/session metadata and event emission for a decorated agent function.
+
+    ``session_id`` is ``None` when it is a "session-less" invocation
+    """
 
     invocation_id: str
-    session_id: str
+    session_id: str | None
     attempt: int
     _attempt_context: InvocationAttemptContext = field(repr=False, compare=False)
     request_auth: "RequestAuthContext | None" = field(default=None, repr=False, compare=False)
@@ -107,7 +113,7 @@ InvocationHook = Callable[[JsonValue, InvocationContext], Awaitable[JsonValue]]
 
 
 class InvocationConflictError(ValueError):
-    """Raised when an invocation ID is reused with a different request."""
+    """Raised when an invocation ID is reused with a different request or session."""
 
 
 class InvocationNotFoundError(LookupError):

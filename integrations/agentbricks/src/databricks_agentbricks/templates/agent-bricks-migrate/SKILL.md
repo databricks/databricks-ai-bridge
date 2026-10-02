@@ -52,12 +52,13 @@ State and durability semantics differ by framework; handle the ones that apply:
   reference assumes message-oriented events and is not a generic serializer. Implement explicit
   mappings without discarding custom results to fit the reference UI.
 - **Identity and sessions:** Preserve authentication, actor/tenant isolation, and session/thread
-  identity. The reference separates invocation UUIDs, application session IDs, and the routing
-  cookie. Map existing IDs explicitly, including reopening sessions. Derive actor identity from
-  the trusted application context; do not blindly trust a caller field or adopt a shared
+  identity. The reference separates invocation UUIDs, application session IDs, and the
+  `X-Routing-Key` sticky-routing header. Map existing IDs explicitly, including reopening sessions.
+  Derive actor identity from the trusted application context; do not blindly trust a caller field or adopt a shared
   fallback. If the existing server used a different request/response shape (e.g. a
-  `{conversation_id, message}` body), map it explicitly in `runtime/adapter.py` to the runtime's
-  `input.session_id` / `input.messages`, and preserve response fields clients depend on.
+  `{conversation_id, message}` body), translate it at the HTTP/client boundary to the runtime's
+  top-level `session_id` and `input.messages`. The runtime adapter reads session identity only from
+  `InvocationContext`. Preserve response fields clients depend on, except session identity.
 - **Recovery and durability:** Distinguish Runtime Store invocation recovery from Session Store
   persistence. Address at-least-once side effects and retain stronger existing guarantees. Do not
   silently enable replay of non-idempotent tools.
@@ -93,7 +94,9 @@ interrupt/resume and approval flows, and invocation recovery where used. Use fak
 services. Confirm the configured entrypoint starts with the project's test setup.
 
 Do not provision, deploy, make live model/tool calls, or run integration tests unless authorized.
-`agentbricks doctor` is a separate planned feature; do not implement it here.
+Run `agentbricks doctor .` after the migration and resolve every failed check. Doctor is a
+read-only, offline verification step; it does not replace the focused runtime and contract tests
+above.
 
 Report changes, validation, unresolved state or client-contract decisions, and readiness for
 `dev`, `tools add`, `sessions bind`, `memory bind`, tracing, `endpoint`, and `deploy`. Distinguish

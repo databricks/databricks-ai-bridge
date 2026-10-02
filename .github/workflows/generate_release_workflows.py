@@ -24,6 +24,12 @@ def generate_workflow(pkg: Package) -> str:
     """Generate a release workflow YAML for a package."""
     is_root = pkg.working_dir is None
     dist_path = "dist/" if is_root else f"{pkg.working_dir}/dist/"
+    # Agent Bricks tags are cut separately; publishing requires a manual dispatch.
+    trigger = (
+        "  workflow_dispatch:"
+        if pkg.name == "databricks-agentbricks"
+        else f'  push:\n    tags:\n      - "{pkg.name}-v*"\n  workflow_dispatch:'
+    )
 
     # Build the defaults section for non-root packages
     defaults_section = ""
@@ -49,10 +55,7 @@ def generate_workflow(pkg: Package) -> str:
 name: Release {pkg.name}
 
 on:
-  push:
-    tags:
-      - "{pkg.name}-v*"
-  workflow_dispatch:
+{trigger}
     inputs:
       production:
         description: "Publish to PyPI? (If unchecked, will publish to TestPyPI)"

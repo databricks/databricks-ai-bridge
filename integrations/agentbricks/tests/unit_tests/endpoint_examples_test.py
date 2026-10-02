@@ -40,7 +40,8 @@ def test_printed_invoke_command_is_shell_copyable(
     assert len(commands) == 1, buf.getvalue()
     command = commands[0]
     path = "/api/invocations" if uses_runtime_api else "/invocations"
-    ids = set()
+    invocation_ids = set()
+    session_ids = set()
     for _ in range(2):
         # Capture argv instead of reaching a workspace; functional tests exercise the real CLI/HTTP.
         result = subprocess.run(
@@ -56,8 +57,12 @@ def test_printed_invoke_command_is_shell_copyable(
         assert body.pop("input") == [{"role": "user", "content": "hi"}]
         if uses_runtime_api:
             invocation_id = uuid.UUID(body.pop("id"))
-            assert invocation_id not in ids
-            ids.add(invocation_id)
+            session_id = uuid.UUID(body.pop("session_id"))
+            assert invocation_id != session_id
+            assert invocation_id not in invocation_ids
+            assert session_id not in session_ids
+            invocation_ids.add(invocation_id)
+            session_ids.add(session_id)
         assert body == {}
 
 
