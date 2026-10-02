@@ -991,3 +991,20 @@ sync/streaming/background transport selector is manual.
 Developing Agent Bricks CLI (`agentbricks`), AgentKit, the runtime, and templates - plus the local dev loop and how to
 test unreleased changes on `agentbricks dev` and `agentbricks deploy`, is covered in
 [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Project inventory, cleanup and evaluations
+
+`agentbricks --profile <profile> status` shows project bindings without modifying resources.
+Add `--verify` for read-only workspace checks; saved configuration is clearly distinguished from
+verified resource availability. `agentbricks --profile <profile> cleanup` previews retained and
+removable resources. `cleanup --apply` asks before deleting project-created Apps and their
+owner-validated managed Runtime Stores. Shared stores, experiments, tools and source files are
+retained; see the [command reference](cli.md#agentbricks-cleanup) for the ownership boundary.
+
+Both managed-runtime scaffolds include a small extendable evaluation dataset. With the agent
+running, `uv run python evals/run.py` invokes that actual agent and records case results and
+aggregate checks in MLflow. The scaffold's `evals/README.md` explains how to extend the dataset,
+inspect failures and evaluate a deployment. These are smoke checks, not domain-quality certification.
+
+The [project overview design](docs/project-overview-design.md) scopes UI resource, cost, evaluation
+and deployed-version summaries, including required data sources and unsupported states.

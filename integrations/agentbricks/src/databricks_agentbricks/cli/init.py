@@ -107,6 +107,13 @@ def _copy_packaged_template(
         shutil.copytree(
             str(src), dest, dirs_exist_ok=index > 0, ignore=shutil.ignore_patterns("__pycache__")
         )
+    if name in {"agent-openai", "agent-langgraph"}:
+        # A scaffold may install the prior released runtime. Copy the evaluator as standalone
+        # project code rather than importing a new module absent from that release.
+        evaluator = resources.files("databricks_agentbricks").joinpath("evaluation.py")
+        (dest / "evals" / "run.py").write_text(
+            evaluator.read_text(encoding="utf-8"), encoding="utf-8"
+        )
 
 
 def _bundled_template_ref() -> str:

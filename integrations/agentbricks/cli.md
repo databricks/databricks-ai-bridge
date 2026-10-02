@@ -61,6 +61,8 @@ These options apply to every command. Pass them before the command name, for exa
 | [`logout`](#agentbricks-logout) | Forget the saved default profile |
 | [`init`](#agentbricks-init) | Scaffold a new agent project |
 | [`doctor`](#agentbricks-doctor) | Check an existing agent's Agent Bricks onboarding |
+| [`status`](#agentbricks-status) | Read project bindings and optionally verify resource availability |
+| [`cleanup`](#agentbricks-cleanup) | Preview or delete project-created deployments while retaining shared data |
 | [`dev`](#agentbricks-dev) | Run the agent locally with a chat UI |
 | [`memory`](#agentbricks-memory) | Manage an agent's long-term memory |
 | [`mcp`](#agentbricks-mcp) | Discover managed MCP services |
@@ -1425,3 +1427,74 @@ _Options_
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--source <SOURCE>` | path | `.` | no | Agent project containing agent.toml. |
+
+## `agentbricks status`
+
+Show project bindings and resources; configuration alone is not verified readiness.
+
+```sh
+agentbricks --profile <profile> status [--source DIRECTORY] [--verify]
+agentbricks --profile <profile> --output json status --verify
+```
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--source DIRECTORY` | `.` | Project directory containing `agent.toml`. |
+| `--verify` | off | Check resource availability using read-only workspace APIs. Requires a selected profile. |
+
+Without `--verify`, status reads only local configuration and provisioning receipts. It does not
+initialize authentication, refresh tokens, create stores, or write project files. The workspace host
+comes from the selected profile; no profile means an unresolved workspace. With `--verify`, status
+uses the selected profile's actual workspace and reports resource identifiers, URLs when available,
+App state, missing resources and individual check errors without losing successful results.
+`accessible` means the caller can read the resource; it does not promise the deployed App can use
+it, or that model/tool invocation has succeeded. Tool bindings remain unverified. JSON contains a
+versioned inventory with per-resource ownership, verification, error and next action.
+
+## `agentbricks cleanup`
+
+Preview cleanup of project-created deployments; retain shared stores, traces and tools.
+
+```sh
+agentbricks --profile <profile> cleanup [--source DIRECTORY]
+agentbricks --profile <profile> cleanup --apply [--yes] [--source DIRECTORY]
+```
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--source DIRECTORY` | `.` | Project directory containing `agent.toml`. |
+| `--apply` | off | Apply the previewed cleanup; default is preview only. |
+| `--yes` (`-y`) | off | Skip the confirmation prompt. Requires `--apply`. |
+
+A selected profile scopes both preview and apply to one workspace. The default preview uses only
+local files. Apply resolves the actual workspace, displays its exact targets, then asks for
+confirmation. `--output json` provides the final per-resource plan/results on stdout; the apply
+preview is written to stderr. Failed resources cause exit status 1 and can be retried.
+
+Deploy writes workspace-scoped creation/reuse receipts to `.agentbricks/resources.json`, including
+resources created before a later deploy step fails. Keep this local file to enable safe cleanup.
+Only a project-created App whose current service-principal identity still matches its receipt can
+be removed. Its managed Runtime Store is removed first, after verifying its app owner; failure
+retains the App. Successful deletes and partial failures are persisted after each resource.
+
+Existing/adopted Apps and resources with no receipt are retained. Shared-capable memory/session
+stores, experiments, tools, workspace source folders, legacy Lakebase projects and local files are
+always retained, even when this project created them. Current APIs cannot prove exclusive use.
+If the App is already missing, any residual Runtime Store is retained for manual owner inspection.
+Cleanup does not unbind resources or erase source/evaluation history.
+
+## Starter evaluations
+
+The OpenAI and LangGraph Agent Bricks server templates include `evals/cases.jsonl`, `evals/run.py`
+and extension instructions. Start the actual project agent with `agentbricks dev`, then run:
+
+```sh
+uv run python evals/run.py
+uv run python evals/run.py --app <deployment> --profile <oauth-profile>
+```
+
+The runner calls `/api/invocations`, uses fresh sessions, preserves the project model/tools, and
+records case inputs, final answers, errors, scorer feedback and aggregate results in MLflow.
+The default tracking URI is `sqlite:///.agentbricks/evaluations.db`. See the scaffold's
+`evals/README.md` for all options, results UI and workspace tracking. A failed invocation or
+expectation exits nonzero. Custom HTTP server templates require their own evaluator contract.

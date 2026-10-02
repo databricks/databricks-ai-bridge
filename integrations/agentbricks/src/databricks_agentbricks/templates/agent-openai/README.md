@@ -144,3 +144,12 @@ replacement attempt fails with `MCP_USER_AUTH_RECOVERY_UNSUPPORTED` before agent
 interruptions remain unsupported and fail with `MCP_USER_AUTH_HITL_UNSUPPORTED`, without storing a
 credential-bearing `RunState`. Existing namespaced memory and conversation-store behavior is
 unchanged; OBO does not add another saver.
+
+## Project status, cleanup and evaluations
+
+Use `agentbricks --profile <profile> status` for a non-mutating inventory; add `--verify` for
+read-only workspace checks. `agentbricks --profile <profile> cleanup` previews safe cleanup,
+and `cleanup --apply` asks before deleting project-created deployments. Shared data is retained.
+
+Run `uv run python evals/run.py` against the local agent to record a starter evaluation in MLflow.
+See [evals/README.md](evals/README.md) for per-case results, additional cases and deployed runs.

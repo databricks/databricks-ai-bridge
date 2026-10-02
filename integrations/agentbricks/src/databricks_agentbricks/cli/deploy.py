@@ -53,6 +53,7 @@ from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.project_config import (
     require_managed_tool_support,
 )
+from databricks_agentbricks.project_resources import record_resource
 from databricks_agentbricks.project_types import AgentServer
 from databricks_agentbricks.render import field
 from databricks_agentbricks.tool_access import (
@@ -116,6 +117,25 @@ def _app_url(name: str, profile: Optional[str]) -> Optional[str]:
         return None
 
 
+def _record_deployment_receipt(source, name, obj, *, created, managed_runtime) -> None:
+    principal = _app_service_principal(name, obj.profile)
+    if principal:
+        record_resource(
+            source,
+            host=obj.client().host,
+            kind="deployment",
+            name=name,
+            resource_id=principal,
+            created=created,
+            managed_runtime=managed_runtime,
+        )
+    else:
+        click.echo(
+            "Could not record the app identity; project cleanup will retain this deployment.",
+            err=True,
+        )
+
+
 def _app_compute_state(name: str, profile: Optional[str]) -> Optional[str]:
     """The app's compute state (e.g. RUNNING), or None if it can't be read."""
     result = _databricks(["apps", "get", name, "-o", "json"], profile, capture=True, check=False)
@@ -166,11 +186,11 @@ def _prefixed_name(name: str) -> str:
     return name if name.startswith(_DEPLOYMENT_PREFIX) else f"{_DEPLOYMENT_PREFIX}{name}"
 
 
-def _confirm_destroy(target: str, *, assume_yes: bool) -> None:
+def _confirm_destroy(target: str, *, assume_yes: bool, err: bool = False) -> None:
     """Prompt before a destructive deployment op; --yes/-y skips it (for scripts)."""
     if assume_yes:
         return
-    if not click.confirm(f"{target}? This cannot be undone.", default=False):
+    if not click.confirm(f"{target}? This cannot be undone.", default=False, err=err):
         raise click.Abort()
 
 
@@ -367,7 +387,11 @@ def _resolve_deployment_name(project, name: Optional[str]) -> str:
 
 
 def _reconcile_declared_stores(
-    memory_store: Optional[str], session_store: Optional[str], client
+    memory_store: Optional[str],
+    session_store: Optional[str],
+    client,
+    *,
+    source: pathlib.Path | None = None,
 ) -> Optional[str]:
     """Create any store DECLARED in agent.toml that doesn't exist yet; return the memory store's id.
 
@@ -382,11 +406,29 @@ def _reconcile_declared_stores(
         with render.status(f"Reconciling memory store '{memory_store}'…"):
             resolved, created = _ensure_memory_store(client, memory_store)
         memory_store_id = (field(resolved, "name") or "").split("/", 1)[-1] or None
+        if source is not None and memory_store_id:
+            record_resource(
+                source,
+                host=client.host,
+                kind="memory_store",
+                name=memory_store,
+                resource_id=memory_store_id,
+                created=created,
+            )
         if created:
             render.console().print(f"[green]✓[/] Created memory store {memory_store!r}")
     if session_store:
         with render.status(f"Reconciling session store '{session_store}'…"):
-            _, created = _ensure_session_store(client, session_store)
+            resolved, created = _ensure_session_store(client, session_store)
+        if source is not None:
+            record_resource(
+                source,
+                host=client.host,
+                kind="session_store",
+                name=session_store,
+                resource_id=field(resolved, "name") or session_store,
+                created=created,
+            )
         if created:
             render.console().print(f"[green]✓[/] Created session store {session_store!r}")
     return memory_store_id
@@ -586,6 +628,15 @@ def deploy(
         if deployment_exists is None:
             deployment_exists = user_scope_plan.existing_scopes is not None
         apply_app_user_scope_update(user_scope_plan, instances=instances)
+        _record_deployment_receipt(
+            source_dir,
+            name,
+            obj,
+            created=not deployment_exists,
+            managed_runtime=bool(
+                project and project.server == AgentServer.AGENTBRICKS and _USE_MANAGED_RUNTIME_STORE
+            ),
+        )
     # Persist the base name so a later `agentbricks deploy` (no NAME) resolves to the same app.
     if project is not None and project.set_deployment_name(base_name):
         project.write()
@@ -596,7 +647,9 @@ def deploy(
     # 1. Reconcile the stores DECLARED in agent.toml: create any that don't exist yet. `agentbricks deploy`
     #    is the only reconcile-to-cloud verb; agent.toml is the source of truth and is never rewritten.
     memory_store, session_store, _ = resource_bindings(source_dir)
-    memory_store_id = _reconcile_declared_stores(memory_store, session_store, client)
+    memory_store_id = _reconcile_declared_stores(
+        memory_store, session_store, client, source=source_dir
+    )
 
     # 2. Provision tracing when bound (`agentbricks init` binds a default experiment): get-or-create the
     #    experiment NAME from agent.toml and wire the two env vars the runtime reads. Resolved by name,
@@ -696,6 +749,18 @@ def deploy(
         )
         old, new = _AGENT_COMPUTE_OUTPUT
         click.echo((result.stdout or "").replace(old, new), nl=False)
+    # Record creation before later provisioning/upload steps can fail. An existing app is adopted,
+    # even when its name matches this project; cleanup must never infer ownership from a name.
+    if user_scope_plan is None:
+        _record_deployment_receipt(
+            source_dir,
+            name,
+            obj,
+            created=not deployment_exists,
+            managed_runtime=bool(
+                project and project.server == AgentServer.AGENTBRICKS and use_managed_runtime_store
+            ),
+        )
     # `apps deploy` requires the app's compute to be ACTIVE — a just-created app may still be
     # starting, and an existing one may be STOPPED — so wait either way. Returns immediately when
     with render.progress("Waiting for agent compute to start (this can take a few minutes)…"):

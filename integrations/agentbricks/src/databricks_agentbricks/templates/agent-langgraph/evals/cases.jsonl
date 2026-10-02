@@ -1,0 +1,2 @@
+{"inputs":{"query":"What is 2 + 2? Reply with the number only."},"expectations":{"contains":["4"]}}
+{"inputs":{"query":"Reply with exactly: evaluation-ready"},"expectations":{"contains":["evaluation-ready"]}}
