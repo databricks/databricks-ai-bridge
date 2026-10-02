@@ -87,6 +87,7 @@ const state = {
   model: "",
   backgroundRun: null,
   backgroundWaiting: false,
+  backgroundController: null,
   mode: "streaming",
   pendingInterrupt: null,
   sessionId: localStorage.getItem(SESSION_STORAGE_KEY) || newSessionId(),
@@ -1061,39 +1062,65 @@ async function invokeStreaming(payload) {
   return { status: state.pendingInterrupt ? "interrupted" : "completed" };
 }
 
+function waitForBackgroundPoll(signal) {
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, 850);
+    signal.addEventListener("abort", done, { once: true });
+    if (signal.aborted) done();
+  });
+}
+
 async function pollBackground(invocationId) {
+  const controller = new AbortController();
+  state.backgroundController = controller;
   state.backgroundWaiting = true;
   document.querySelector("#background-wait-toggle").textContent = "Stop waiting";
-  while (state.backgroundWaiting) {
-    await new Promise((resolve) => setTimeout(resolve, 850));
-    if (!state.backgroundWaiting) break;
-    let result;
-    try {
-      const response = await fetch(`/api/invocations/${encodeURIComponent(invocationId)}`, {
-        cache: "no-store", credentials: "same-origin", headers: routingHeaders(),
-      });
-      result = await jsonResponse(response);
-    } catch (error) {
-      throw new Error(`Could not check background run ${invocationId}: ${errorText(error.message || error)}. Its status is unknown; use Check result to try again.`);
+  try {
+    while (state.backgroundWaiting) {
+      await waitForBackgroundPoll(controller.signal);
+      if (!state.backgroundWaiting) break;
+      let result;
+      try {
+        const response = await fetch(`/api/invocations/${encodeURIComponent(invocationId)}`, {
+          cache: "no-store", credentials: "same-origin", headers: routingHeaders(),
+          signal: controller.signal,
+        });
+        if (response.status === 404) {
+          state.backgroundRun = null;
+          document.querySelector("#background-wait-toggle").hidden = true;
+          throw new Error(`Background run ${invocationId} is no longer available. A local server restart loses in-process runs. Its outcome cannot be recovered here; check any tool side effects before starting a new run.`);
+        }
+        result = await jsonResponse(response);
+      } catch (error) {
+        if (controller.signal.aborted) return { status: "waiting" };
+        if (!state.backgroundRun) throw error;
+        throw new Error(`Could not check background run ${invocationId}: ${errorText(error.message || error)}. Its status is unknown; use Check result to try again.`);
+      }
+      addEvent("background.poll", result);
+      if (result.status === "completed") {
+        const output = agentResult(result);
+        handleOutput(output.output);
+        state.backgroundRun = null;
+        document.querySelector("#background-wait-toggle").hidden = true;
+        return output;
+      }
+      if (result.status === "failed") {
+        state.backgroundRun = null;
+        document.querySelector("#background-wait-toggle").hidden = true;
+        throw new Error(`${errorText(result.error || "Background invocation failed")}. Check server logs for invocation ${invocationId}.`);
+      }
+      setStatus(`Background · ${result.status}`, "busy");
     }
-    addEvent("background.poll", result);
-    if (result.status === "completed") {
-      const output = agentResult(result);
-      handleOutput(output.output);
-      state.backgroundRun = null;
-      state.backgroundWaiting = false;
-      document.querySelector("#background-wait-toggle").hidden = true;
-      return output;
-    }
-    if (result.status === "failed") {
-      state.backgroundRun = null;
-      state.backgroundWaiting = false;
-      document.querySelector("#background-wait-toggle").hidden = true;
-      throw new Error(`${errorText(result.error || "Background invocation failed")}. Check server logs for invocation ${invocationId}.`);
-    }
-    setStatus(`Background · ${result.status}`, "busy");
+    return { status: "waiting" };
+  } finally {
+    state.backgroundWaiting = false;
+    if (state.backgroundController === controller) state.backgroundController = null;
   }
-  return { status: "waiting" };
 }
 
 async function invokeBackground(payload) {
@@ -1130,7 +1157,8 @@ async function sendText(text, mode = state.mode) {
   appendMessage("user", content, "You");
   setBusy(true, mode === "background" ? "Starting background run" : mode === "streaming" ? "Streaming" : "Running");
   try {
-    await dispatch({ messages: [{ role: "user", content }] }, mode);
+    const result = await dispatch({ messages: [{ role: "user", content }] }, mode);
+    if (result?.status === "waiting") return "";
     // The agent persists the turn to its own Session; refresh the panel to show it (no client write).
     await refreshSessionView();
     return state.lastAssistantText;
@@ -1427,13 +1455,15 @@ document.querySelector("#custom-model-input").addEventListener("input", (event) 
 document.querySelector("#background-wait-toggle").addEventListener("click", async () => {
   if (state.backgroundWaiting) {
     state.backgroundWaiting = false;
+    state.backgroundController?.abort();
     document.querySelector("#background-wait-toggle").textContent = "Check result";
     return;
   }
   if (state.busy || !state.backgroundRun) return;
   setBusy(true, "Checking background run");
   try {
-    await pollBackground(state.backgroundRun);
+    const result = await pollBackground(state.backgroundRun);
+    if (result.status === "waiting") return;
     await refreshSessionView();
   } catch (error) {
     state.backgroundWaiting = false;

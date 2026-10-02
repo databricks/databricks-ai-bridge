@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from databricks_agentkit import workspace_client
-from databricks_agentkit.runtime.model_services import list_ai_gateway_model_services
+from runtime.model_services import list_ai_gateway_model_services
 from databricks_agentkit.runtime.store import runtime_store_is_persistent_environment
 
 _UI_ROOT = Path(__file__).resolve().parent.parent / "ui"

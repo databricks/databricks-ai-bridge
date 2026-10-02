@@ -8,6 +8,8 @@ intentionally not a post-generation mutation command.
 
 - `ui/` contains the zero-build chat client.
 - `runtime/ui.py` serves the assets and exposes demo APIs for memory and sessions.
+- `runtime/model_services.py` is copied from the installing CLI so model discovery matches this UI,
+  including when the generated project installs an older released runtime.
 - `runtime/main.py` installs the chat routes on the base FastAPI runtime.
 - `tests/test_demo_ui.py` verifies the browser-facing routes.
 
@@ -24,7 +26,10 @@ The header identifies the project agent. All three invocation modes call `agent/
 its instructions and tools. **Streaming** shows text as it arrives; **Wait for result** displays the
 complete answer; **Background** submits a run and checks its status until it finishes. Background
 runs have no browser deadline. **Stop waiting** pauses status checks without cancelling the agent;
-**Check result** resumes them. The run's status link remains visible. Local runs still end when the
+**Check result** resumes them. Pausing aborts an outstanding status request, without cancelling the
+agent. If the run is no longer available, the UI unlocks the session and warns that its outcome
+cannot be recovered; check tool side effects before retrying. Transient errors retain the run for
+another status check. The run's status link remains visible. Local runs still end when the
 server process stops. A failed run or a disconnected stream is shown as an error rather than Ready.
 
 Assistant Markdown (including code blocks, lists and tables) renders during streaming and history

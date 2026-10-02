@@ -8,6 +8,7 @@ import pytest
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Browser renderer tests require Node.js")
-def test_chat_content_rendering():
-    test = Path(__file__).parents[1] / "ui/chat-content.test.cjs"
+@pytest.mark.parametrize("script", ["chat-content.test.cjs", "background-polling.test.cjs"])
+def test_chat_content_rendering(script):
+    test = Path(__file__).parents[1] / "ui" / script
     subprocess.run(["node", "--test", str(test)], check=True, capture_output=True, text=True)
