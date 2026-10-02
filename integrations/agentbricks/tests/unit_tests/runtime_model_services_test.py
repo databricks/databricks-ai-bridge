@@ -106,6 +106,38 @@ def test_empty_listing():
     assert _list([{"model_services": []}]) == []
 
 
+def test_custom_schema_and_duplicate_entries():
+    client = _Client([{"model_services": [_svc("team.models.gpt"), _svc("team.models.gpt")]}])
+    assert list_ai_gateway_model_services(cast(Any, client), schema="team.models") == [
+        "team.models.gpt"
+    ]
+    assert client.api_client.calls[0]["parent"] == "schemas/team.models"
+
+
+def test_drops_responses_and_legacy_completions_only_services():
+    assert _list(
+        [
+            {
+                "model_services": [
+                    _svc("system.ai.responses-only", api_types=["openai/v1/responses"]),
+                    _svc("system.ai.legacy", api_types=["openai/v1/completions"]),
+                    _svc("system.ai.chat"),
+                ]
+            }
+        ]
+    ) == ["system.ai.chat"]
+
+
+def test_repeated_page_token_is_an_error_instead_of_hanging():
+    with pytest.raises(ValueError, match="repeated a page token"):
+        _list(
+            [
+                {"model_services": [], "next_page_token": "1"},
+                {"model_services": [], "next_page_token": "1"},
+            ]
+        )
+
+
 def test_propagates_errors_after_retries():
     class _Boom:
         @property

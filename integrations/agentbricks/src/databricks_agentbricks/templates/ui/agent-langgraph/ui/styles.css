@@ -1911,3 +1911,21 @@ h2 {
   color: var(--ink-faint);
   font-size: 12px;
 }
+
+/* Assistant Markdown is parsed with raw HTML and remote images disabled. */
+.message.assistant .message-content { white-space: normal; }
+.message-content > :first-child { margin-top: 0; }
+.message-content > :last-child { margin-bottom: 0; }
+.message-content p { margin: 0.6em 0; }
+.message-content pre { overflow-x: auto; padding: 12px; border-radius: 6px; background: #f2f4f5; white-space: pre; }
+.message-content code { font-family: ui-monospace, monospace; font-size: 0.9em; }
+.message-content :not(pre) > code { padding: 2px 4px; background: #f2f4f5; border-radius: 3px; }
+.message-content table { border-collapse: collapse; display: block; overflow-x: auto; }
+.message-content th, .message-content td { border: 1px solid #d7dcdf; padding: 6px 10px; }
+.message-content blockquote { margin-left: 0; padding-left: 12px; border-left: 3px solid #d7dcdf; }
+.composer-help { font-size: 12px; line-height: 1.5; color: #53616a; margin: 6px 0 0; overflow-wrap: anywhere; }
+.composer-help:empty { display: none; }
+.custom-model-panel { margin-top: 10px; }
+.custom-model-panel input { max-width: 100%; padding: 6px; }
+.reasoning-summary { margin: 8px 0; font-size: 13px; color: #53616a; }
+.reasoning-summary summary { cursor: pointer; }

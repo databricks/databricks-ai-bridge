@@ -28,9 +28,12 @@ from databricks_agentkit.runtime.auth import AuthError
 logger = logging.getLogger(__name__)
 
 # A Unity Catalog AI Gateway model service, served from the `system.ai` schema and queried through
-# the gateway (see `use_ai_gateway=True` in configure()). Swap for any `system.ai.*` model service
+# the gateway (see `use_ai_gateway=True` in configure()). Swap for any `catalog.schema.model` service
 # your workspace exposes — the demo chat app's picker lists what's available.
 MODEL = "system.ai.claude-sonnet-4-5"
+# Additional catalog.schema names to discover in the chat UI. The default model's schema and
+# system.ai are always attempted independently. Only chat-completions services are offered.
+MODEL_SCHEMAS: tuple[str, ...] = ()
 
 # Tools that require human approval before they run. Add a tool's name here and the agent pauses when
 # the model calls it, emitting an `interrupt` event; the client resumes by sending `resume` with the
@@ -48,7 +51,7 @@ def configure() -> None:
     from agents import set_default_openai_api, set_default_openai_client
 
     # use_ai_gateway routes to the Unity Catalog AI Gateway (`<host>/ai-gateway/mlflow/v1`), so
-    # `MODEL` is a `system.ai.*` model name rather than a serving-endpoint name.
+    # `MODEL` is a UC model service name rather than a serving-endpoint name.
     set_default_openai_client(
         AsyncDatabricksOpenAI(
             workspace_client=workspace_client(),

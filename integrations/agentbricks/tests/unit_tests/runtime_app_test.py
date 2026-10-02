@@ -400,6 +400,8 @@ async def test_foreground_stream_returns_sse() -> None:
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.headers["cache-control"] == "no-cache"
+    assert response.headers["x-accel-buffering"] == "no"
     assert "event: run.started" in response.text
     assert 'event: delta\ndata: {"type": "delta", "content": "hello"}' in response.text
     assert "event: run.completed" in response.text
@@ -515,6 +517,35 @@ async def test_stream_closes_when_invocation_disappears() -> None:
         "run.started",
         "delta",
     ]
+
+
+@pytest.mark.asyncio
+async def test_stream_wakes_on_persisted_delta_and_releases_subscription() -> None:
+    release = asyncio.Event()
+
+    async def invoke(input, context):
+        await context.emit({"type": "delta", "content": "first"})
+        await release.wait()
+        await context.emit({"type": "delta", "content": "second"})
+        return "firstsecond"
+
+    app = make_app(invoke)
+    # A long fallback interval makes this a notification regression, not a timing benchmark.
+    app._runtime.poll_seconds = 30
+    async with running_client(app):
+        await app._runtime.submit(_RUN_1, {"input": "hello"})
+        stream = app._event_stream(_RUN_1)
+        first = await asyncio.wait_for(anext(stream), 1)
+        while '"content": "first"' not in first:
+            first = await asyncio.wait_for(anext(stream), 1)
+        second = asyncio.create_task(anext(stream))
+        await asyncio.sleep(0)
+        release.set()
+        assert '"content": "second"' in await asyncio.wait_for(second, 1)
+        # Disconnecting one reader does not cancel execution or retain a listener.
+        await stream.aclose()
+        assert app._runtime.updates._readers == {}
+        assert (await app._runtime.get_events(_RUN_1))[2].event["content"] == "second"
 
 
 @pytest.mark.asyncio
