@@ -102,6 +102,7 @@ def test_cleanup_deletes_stores_runtime_app_and_matching_lakebase_role(
 
     monkeypatch.setattr(runner, "databricks", fake_databricks)
     monkeypatch.setattr(runner, "run", fake_run)
+    monkeypatch.setattr(runner, "_wait_for_app_deleted", lambda name, **kwargs: None)
 
     runner.cleanup()
 
@@ -115,7 +116,7 @@ def test_cleanup_deletes_stores_runtime_app_and_matching_lakebase_role(
             "--yes",
         ],
         [str(runner.agentbricks), "sessions", "stores", "delete", "test-session-store", "--yes"],
-        [str(runner.agentbricks), "deployments", "delete", app, "--yes"],
+        ["databricks", "apps", "delete", app],
         [
             "databricks",
             "postgres",
@@ -137,6 +138,7 @@ def test_cleanup_keeps_role_when_store_deletion_fails(tmp_path: pathlib.Path, mo
     monkeypatch.setattr(
         runner, "_app_role_target", lambda name: "projects/test/branches/test/roles/sp"
     )
+    monkeypatch.setattr(runner, "_wait_for_app_deleted", lambda name, **kwargs: None)
     commands = []
 
     def fake_run(argv, **kwargs):
@@ -147,7 +149,7 @@ def test_cleanup_keeps_role_when_store_deletion_fails(tmp_path: pathlib.Path, mo
 
     runner.cleanup()
 
-    assert any("deployments" in command for command in commands)
+    assert ["databricks", "apps", "delete", app] in commands
     assert not any("delete-role" in command for command in commands)
 
 

@@ -127,9 +127,9 @@ agentbricks deploy my-agent     # deploy to Databricks
 local runtime so local behavior matches a deployment.
 
 `agentbricks deploy my-agent` deploys a Databricks App named `agent-bricks-my-agent`, provisions the
-stores declared in `agent.toml`, and grants the app's service principal access to them. Use
-`agentbricks deployments list` to find deployed apps, and `agentbricks deployments get agent-bricks-my-agent` to
-print an app's URL and status.
+stores declared in `agent.toml`, and grants the app's service principal access to the stores and
+direct App-auth tool resources declared there. Use `agentbricks deployments list` to find deployed
+apps, and `agentbricks deployments get agent-bricks-my-agent` to print an app's URL and status.
 
 `agentbricks init` declares default memory and session stores in `agent.toml`, so the deployed agent has
 long-term memory and durable conversation history. It creates `<name>-<6-letter-token>-memory` and
@@ -616,9 +616,41 @@ Managed-tool add commands write the selected identity to `agent.toml`; inspect t
 review configured bindings. Missing legacy auth continues to mean App identity at runtime; it is
 never silently upgraded to user identity.
 
-`DurableAgentServer` derives its request-auth policy from `agent.toml`. A managed tool with
-`auth = "user"` makes the invocation require a transient request-user credential. Code-first tools
-can declare the same requirement and any API scopes that Agent Bricks cannot infer from Python:
+### Automatic App-identity access on deploy
+
+`agentbricks deploy` reconciles least-privilege access for resources explicitly declared by App/default
+identity tool bindings. It skips every `auth = "user"` binding because those calls use the request
+user's permissions instead of the App service principal.
+
+| Explicit `agent.toml` resource | Automatic App service-principal access |
+| --- | --- |
+| UC function | Apps `uc_securable`: `FUNCTION` / `EXECUTE` |
+| Genie Agent space | Apps `genie_space`: `CAN_RUN` |
+| Sandbox table scope | Apps `uc_securable`: `TABLE` / `SELECT` or `MODIFY` |
+| Sandbox volume scope | Apps `uc_securable`: `VOLUME` / `READ_VOLUME` or `WRITE_VOLUME` |
+| Sandbox Workspace path | Workspace ACL: `CAN_READ` or `CAN_EDIT` |
+| External MCP service | Unity Catalog: effective `EXECUTE` plus `USE_SCHEMA` and `USE_CATALOG` on its named parents |
+| Built-in `system.ai` MCP service, including Sandbox and Genie One | Platform-managed access defaults; Agent Bricks does not mutate system securables |
+
+Native Genie One has no resource identifier in its binding, so it does not add a resource-specific
+grant. Use a Genie Agent binding when the App identity should be scoped to one explicit Genie Space.
+
+Apps-backed tool resources are named deterministically and reconciled to the manifest on each
+deploy: removing a binding removes that Agent Bricks-owned Apps resource while preserving Runtime
+Store, tracing, and user-owned resources. MCP and Workspace ACL grants are additive in this release
+because their permission APIs do not expose trustworthy Agent Bricks ownership metadata; removing
+those bindings does not revoke an independently valid grant.
+
+Only direct resources are automatic. Agent Bricks never discovers or grants tables and warehouses
+used by a Genie Space, objects called by a UC function, or resources wrapped by an MCP service.
+Grant those transitive dependencies manually when the called service uses the App identity. If any
+required direct grant cannot be read, applied, or verified, deploy stops before source upload and
+leaves the currently deployed version untouched.
+
+`DurableAgentServer` derives its request-auth policy directly from the managed tool bindings in
+`agent.toml`. Projects do not maintain a separate request-auth contract marker: a managed tool with
+`auth = "user"` requires a transient request-user credential. Code-first tools can declare any
+additional API scopes that Agent Bricks cannot infer from Python:
 
 ```toml
 [auth.user]
