@@ -4,7 +4,7 @@ Agent Bricks CLI takes your agent code from a local project to a hosted endpoint
 LangGraph or OpenAI Agents template, or bring an existing agent.
 
 - **Deployment:** Scaffold a project, run it locally, and deploy it to Databricks Apps. The CLI
-  provisions the stores declared in your project, grants the app access, and configures tracing.
+  provisions the stores declared in your project, attempts the App access grants, and configures tracing.
 - **Runtime:** `DurableAgentServer` provides synchronous, streaming, and background execution, with persistent
   results and automatic crash recovery on deployment. Request-user authentication is attached only
   to the active first attempt and is never persisted.
@@ -43,12 +43,12 @@ Use `--framework openai` for OpenAI Agents. Managed-server templates include a c
 pass `--disable-chat-app` for an API-only project.
 
 1. **Initialize:** `agentbricks init` generates the agent code and runtime adapter separately. It records
-   the server choice and default `my-agent-memory` / `my-agent-session` bindings in `agent.toml`.
+   the server choice and distinct default memory and session store names in `agent.toml`.
 2. **Develop:** Edit your model, prompts, and tools in `agent/`. `agentbricks dev` runs the project locally.
    Synchronous, streaming, and background requests use the same Runtime for both authorization
    policies.
-3. **Deploy:** `agentbricks deploy` creates or reuses the declared Session and Memory Stores, grants the
-   app's service principal access, configures tracing, and deploys the app. For a managed server,
+3. **Deploy:** `agentbricks deploy` creates or reuses the declared Session and Memory Stores, attempts
+   the App's service-principal grants, configures tracing, and deploys the App. For a managed server,
    it also creates or reuses the deployment's Runtime Store.
 
 The generated configuration starts with:
@@ -61,14 +61,17 @@ framework = "langgraph"
 server = "agentbricks"
 
 [memory_store]
-name = "my-agent-memory"
+name = "my-agent-abcdef-memory"
 
 [session_store]
-name = "my-agent-session"
+name = "my-agent-abcdef-sessions"
 
 [tracing]
-experiment_name = "/Shared/agentbricks_traces/my-agent"
+experiment_name = "/Shared/agentbricks_traces/my-agent-abcdef"
 ```
+
+Here `abcdef` stands for the six-letter token generated for that project. The same token
+appears in its default store and tracing names.
 
 Override store names at initialization with `--memory-store` and `--session-store`, or later with
 `agentbricks memory bind <name>` and `agentbricks sessions bind <name>`. Custom-server templates declare these
@@ -116,7 +119,8 @@ forwarded principal so users cannot collide with each other.
 Clients may also supply an optional top-level `session_id`. Runtime persists it separately from the
 opaque `input`, serializes invocations that share it, and exposes it as `context.session_id`. If it
 is omitted, the invocation remains sessionless; Runtime does not infer it from the invocation ID,
-the input payload, a handler response, or `X-Routing-Key`.
+the input payload, a handler response, or `X-Routing-Key`. The generated LangGraph and OpenAI Agents
+adapters require a nonempty top-level `session_id` on every invocation; reuse it across turns.
 
 - **Synchronous:** Wait for the result in the POST response.
 - **Streaming (`stream: true`):** Receive progress events as Server-Sent Events (SSE).
@@ -161,12 +165,14 @@ flowchart LR
 
 `agentbricks dev` supports the same invocation APIs with an **In-process Runtime Store**. Run state,
 events, and results are lost when the serving process exits. Interrupted work is not automatically
-restarted. Session and Memory Store persistence is separate from this local execution state.
+restarted. The generated templates also keep conversation state in process and leave managed
+long-term memory off during local development.
 
 ### Deployed execution
 
-`agentbricks deploy` provisions a dedicated PostgreSQL database for each deployment with `server = "agentbricks"` and
-reuses it on redeployment. Results and events survive worker restarts, and any replica can serve
+`agentbricks deploy` provisions an App-owned PostgreSQL database in the workspace's shared Lakebase
+project for each deployment with `server = "agentbricks"` and reuses it on redeployment. Results and
+events survive worker restarts, and any replica can serve
 polling and stream-reconnection requests. With a recovery handler registered, the runtime detects stale
 heartbeats and starts a replacement attempt on an available worker.
 

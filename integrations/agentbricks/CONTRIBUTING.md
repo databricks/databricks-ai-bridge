@@ -101,6 +101,32 @@ the same change, in `src/databricks_agentbricks/cli/doctor.py`:
 Also refresh the framework references and examples in `cli.md` and `README.md`, and add doctor test
 coverage for the new framework in `tests/unit_tests/doctor_test.py`.
 
+## Live tool tests
+
+Read-only tool discovery can be checked against the installed wheel without creating a
+project or deploying an agent:
+
+```sh
+AGENTBRICKS_E2E_PROFILE=<profile> .venv-functional/bin/pytest tests/e2e/tool_discovery_test.py -v
+```
+
+The checks compare default and MCP-filtered discovery with the compatibility service
+list. Set `AGENTBRICKS_E2E_SCHEMA=catalog.schema` to exercise another schema. Local
+add/review/remove flows and help pages are covered by `tests/functional/cli_smoke_test.py`.
+
+The opt-in Genie tests exercise both frameworks against an existing Genie space. From
+`integrations/agentbricks`, with both framework extras installed:
+
+```sh
+DATABRICKS_CONFIG_PROFILE=my-workspace RUN_AGENTBRICKS_GENIE_TESTS=1 \
+  AGENTBRICKS_GENIE_SPACE_ID=SPACE_ID \
+  uv run pytest tests/integration_tests/genie_tools_test.py
+```
+
+By default they ask for the row count of `samples.nyctaxi.trips`. Set
+`AGENTBRICKS_GENIE_QUESTION` for another dataset and
+`AGENTBRICKS_GENIE_EXPECTED_VALUE` to assert a known result cell.
+
 ## Cutting a release
 
 Run **Cut Agent Bricks release** from the Actions tab with a version such as `0.4.0` or

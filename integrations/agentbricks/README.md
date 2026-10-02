@@ -8,17 +8,11 @@ command.
 
 ## Prerequisites
 
-- **Python ≥3.10** — the `agentbricks` CLI installs and runs on any Python 3.10+. The
-  `memory`, `sessions`, `tools`, and `agentbricks tracing bind`/`unbind` commands need nothing else.
-  Generated agent projects require Python 3.11+.
-- **[`uv`](https://docs.astral.sh/uv/)** — needed to scaffold, run, and deploy an
-  agent (`agentbricks init` → `agentbricks dev` → `agentbricks deploy`): the scaffolded project builds
-  its environment and launches with `uv run`, both locally and in the deployed Apps
-  runtime. The store/session/tools commands and `agentbricks tracing bind`/`unbind` don't need it;
-  `agentbricks tracing list`/`get` do, to read `agentbricks dev`'s local trace store.
-- **[Databricks CLI](https://docs.databricks.com/dev-tools/cli/)** — needed for
-  browser-based `agentbricks login`. If a profile is already authenticated, the CLI uses it
-  directly and the Databricks CLI is optional.
+- **Python ≥3.10** to run the CLI; generated agent projects require Python 3.11+.
+- **[`uv`](https://docs.astral.sh/uv/)** to scaffold, run, and deploy an agent. Resource
+  commands can run without it; reading local traces requires it.
+- **[Databricks CLI](https://docs.databricks.com/dev-tools/cli/)** for browser-based
+  `agentbricks login`. An already-authenticated profile does not require it.
 
 ## Installation
 
@@ -136,59 +130,27 @@ If Databricks SDK default authentication is already configured, you can skip `ag
 You can also pass the global `--profile/-p` option before an individual command, for example
 `agentbricks --profile <profile> tools list`. Use `--output json` for scripting.
 
-## Shell completion
-Add this to `~/.zshrc`:
-```sh
-eval "$(_AGENTBRICKS_COMPLETE=zsh_source agentbricks)"
-```
+## Where to go next
 
-## Overview
+| Task | Guide |
+| --- | --- |
+| Understand local and deployed state | [Resource and state lifecycle](#resource-and-state-lifecycle) |
+| Maintain a customized project | [Project ownership and upgrades](#project-ownership-and-upgrades) |
+| Control deployment packages | [Deployment dependency inputs](#deployment-dependency-inputs) |
+| Add Databricks-managed tools | [Agent tools](#agent-tools) |
+| Bring an existing agent | [Migration](#bring-an-existing-agent) |
+| Look up commands and options | [CLI command reference](cli.md) |
 
-A managed path from your custom agent code to a production-ready, scalable, durable agent hosted on
-Databricks in minutes - with no server framework to build, no infrastructure to provision, and no
-invocation protocol to design yourself. Bring your own agent, or start from a template.
+## How it works
 
-- **Deployment** - a guided lifecycle (scaffold, run locally, deploy) that turns an agent project
-  into a hosted endpoint. Databricks provisions the compute, the stores your agent binds (session,
-  memory), then attempts the access grants, so you ship application code and get a running endpoint.
-- **Runtime** - a managed HTTP invocation contract (synchronous, streaming, background) plus optional
-  durable execution (persistence, heartbeats, crash recovery) backed by Databricks Lakebase, with no
-  database or job queue to operate. Use the opinionated `DurableAgentServer` to get it out of the box,
-  or bring your own server for full control. `AgentApp` remains available as a deprecated
-  compatibility alias; new code should use `DurableAgentServer`.
+`agentbricks init` copies a LangGraph or OpenAI Agents project that you can edit. `agentbricks dev`
+runs it locally; `agentbricks deploy` packages the project as a Databricks App and provisions
+its declared stores. The generated project uses `DurableAgentServer` for synchronous, streaming,
+and background invocations. With `--server custom`, you provide your own HTTP server and protocol.
 
-**Deployment**
+![Deployment: from a local project to a Databricks App](docs/deployment.svg)
 
-![Deployment: from a blank directory to a running service](docs/deployment.svg)
-
-- **Agent project** - `agentbricks init` scaffolds a deployable project from a framework template
-  (LangGraph or OpenAI Agents) with the runtime, tests, and an optional chat UI wired up; you edit
-  the application code (model, tools, prompts).
-- **`agent.toml`** - the declarative source of truth for the Databricks-managed infrastructure your
-  agent depends on: tool bindings (data sandbox, managed MCP services, Unity Catalog functions) and
-  memory, session, and durability resources. `agentbricks deploy` reads it to provision and wire everything
-  up (detailed under [Agent tools](#agent-tools)).
-- **`agentbricks deploy`** - provisions the bound stores, attempts to grant the App's service principal
-  access to them, provisions the durable-runtime database when durability is on, configures tracing,
-  and rolls out the App. `agentbricks deployments` covers the lifecycle (list, get, logs, start, stop,
-  delete).
-- **`agentbricks dev`** - runs the same project source and App command locally. Managed stores,
-  durable state, and tracing use different local behavior, described under
-  [Resource and state lifecycle](#resource-and-state-lifecycle).
-
-**Runtime**
-
-![Runtime: one FastAPI server, run as DurableAgentServer or your own implementation](docs/runtime.svg)
-
-The two ways to run an agent:
-
-- **`DurableAgentServer` - opinionated, batteries included.** Register one handler and get the managed
-  invocation contract (synchronous, streaming, background). Enable the durable runtime so
-  long-running and background work survives restarts, redeploys, and crashes. The framework
-  templates are thin layers over `DurableAgentServer` (HTTP contract detailed under [Runtime](#runtime)).
-- **Custom server - generic, full control.** `agentbricks init --server custom` scaffolds a minimal FastAPI
-  server with no `DurableAgentServer`: you define your own endpoints, request/response shapes, and protocol.
-  `agentbricks dev` and `agentbricks deploy` run and ship it the same way.
+See [Runtime](#runtime) for the server contract.
 
 ## Project ownership and upgrades
 
@@ -225,7 +187,7 @@ To adopt a new release while preserving your changes:
    resolved packages and startup errors. Check the agent through its URL or an
    [endpoint invocation](#invoke-http-endpoints).
 
-### Deployment dependency inputs
+## Deployment dependency inputs
 
 The generated `pyproject.toml` declares Python packages; `app.yaml` runs `uv run start-server` in
 Databricks Apps. Released packages can come from the configured package index (public PyPI by
@@ -265,10 +227,14 @@ under `/Shared/agentbricks_traces/`; `agentbricks tracing list` shows available 
 | Project files and dependencies | `init` copies a template; `dev` builds `.venv` from `pyproject.toml`. | Source files stay on disk. The local environment is reused until `dev --prepare-environment` rebuilds it. | Deploy syncs source and resolves dependencies again without the local `uv.lock`. App deletion leaves the local project alone. |
 | Databricks App | Deploy creates the named App or reuses it, then updates compute and source. | `dev` serves the project locally without creating an App. | Redeploy with the same name updates that App; `agentbricks deployments delete <app-name>` deletes it. |
 | Invocation Runtime Store | The current default deploy creates or reuses an App-owned database in the workspace's shared Lakebase project. An internal legacy path uses a per-App Lakebase project. | `dev` keeps invocation status, results, and events in process; they disappear on restart. | Deployed invocation records persist across restart and redeploy. Queued work can resume; active work needs a recovery handler and may run more than once. `agentbricks deployments delete` removes the managed store before the App; the legacy delete path does not explicitly remove its Lakebase project. |
-| Managed tool access | Deploy reconciles direct App-auth tool grants from `agent.toml` before source upload, then finalizes Agent Bricks-owned App resources after rollout; request-user tools use the caller's permissions. | `dev` creates no App service principal or Apps grants. | Removing a tool binding removes Agent Bricks-owned Apps resources on redeploy. MCP and Workspace grants are additive; see [Automatic App-identity access](#automatic-app-identity-access-on-deploy). |
+| Managed tool access | Deploy reconciles direct App-auth tool grants from `agent.toml` before source upload, then finalizes Agent Bricks-owned App resources after rollout; request-user tools use the caller's permissions. | `dev` creates no App service principal or Apps grants. | Removing a tool binding removes Agent Bricks-owned Apps resources on redeploy. MCP and Workspace grants are additive; see [automatic App-identity access](docs/agent-tools.md#automatic-app-identity-access-on-deploy). |
 | Memory Store | Deploy creates a declared store if missing or reuses an accessible store by name, then attempts the App grant. | Managed long-term memory is off in `dev`. | Memory persists independently of the App; redeploy reuses the bound store. Unbinding or deleting the App does not delete it. Remove the stale `app.yaml` setting to detach it after unbind; use the separate store delete command when appropriate. |
 | Session Store | Deploy creates or reuses a declared store by name, then attempts the App grant. | `dev` keeps conversation state in process, so a restart loses it. | A bound store preserves LangGraph checkpoints and OpenAI Agents SDK transcripts across restart and redeploy. OpenAI pending approval `RunState` stays in process. Unbinding or deleting the App does not delete the store; remove the stale `app.yaml` setting to detach it. |
 | MLflow traces | `dev` uses a local MLflow server; deploy attempts to create or reuse the bound workspace experiment and grant App access. | Local traces are recorded in `.agentbricks/`; they remain on disk after `dev` stops. | Deployed traces remain in the workspace experiment. Unbinding removes the App's tracing configuration on a later clean deploy; it does not delete the experiment. |
+
+Redeploying an older App can attach the current managed Runtime Store without migrating invocation
+records from its legacy per-App Lakebase project. Managed-store cleanup errors retain the App for
+retry; deleting the App directly bypasses that cleanup.
 
 The Runtime Store tracks HTTP invocations, status, results, and event replay. The framework's
 conversation history belongs to its Session Store when bound. The generated chat UI keeps its
@@ -283,145 +249,36 @@ worker loss; the OpenAI Agents SDK template replays the input against its saved 
 Recovery can repeat external side effects, so make tools idempotent. For request-user-authenticated
 tools, credentials are not persisted and background recovery is unsupported.
 
-To check the lifecycle in a test project, send two turns with the same session ID during `dev`,
-restart `dev`, and send another turn: local conversation state starts over. Deploy the project,
-record the store names in `agent.toml`, then send two turns with one session ID. Redeploy the same
-App name and send a third turn with that ID; the bound Session Store should retain conversation
-history, and the named stores should be reused. Use an idempotent test tool when exercising worker
-recovery, because active work can be retried. The default chat UI keeps its session ID across page
-reloads; [invoke HTTP endpoints](#invoke-http-endpoints) shows the explicit API request shape.
-
-## Public names
-
-Use `agentbricks` for the CLI and `AgentKitClient` from `databricks_agentkit` for the Python SDK. New
-projects store local state under `.agentbricks/` and `~/.agentbricks/`, use
-`server = "agentbricks"` in `agent.toml`, and deploy apps with the `agent-bricks-` prefix.
-
-## AgentKit SDK
-
-`AgentKitClient` adds a small resource-oriented layer over AgentKit APIs. Pass it an
-authenticated Databricks `WorkspaceClient`, or omit the argument to use the
-Databricks SDK's default authentication resolution:
-
-```python
-from databricks.sdk import WorkspaceClient
-from databricks_agentkit import AgentKitClient
-
-agentkit = AgentKitClient(WorkspaceClient(profile="my-workspace"))
-
-session_store = agentkit.session_stores.create("support-agent-sessions")
-session = session_store.add(actor_id="customer-123", session_id="case-456")
-session.append_items(
-    [
-        {"type": "message", "role": "user", "content": "I need help with my cluster."},
-        {"type": "message", "role": "assistant", "content": "Let's take a look."},
-    ]
-)
-
-memory_store = agentkit.memory_stores.create("coding-agent-memory")
-memory = memory_store.add(
-    actor_id="alice",
-    path="/preferences/style.md",
-    content="The user prefers concise answers.",
-)
-results = memory_store.search(
-    actor_id="alice",
-    query="response preferences",
-    limit=10,
-)
-memory = memory.update(content="The user prefers very concise answers.")
-memory.delete()
-```
-
-The root collections manage stores: `agentkit.memory_stores.create/get/list` and
-`agentkit.session_stores.create/get/list`. A returned store owns operations on its
-contents, such as `memory_store.add()`, `memory_store.get("memory-id")`,
-`memory_store.list()`, and `memory_store.search()`, or `session_store.add()`,
-`session_store.get("session-id")`, and `session_store.list()`. Returned memories,
-sessions, and stores own their `update()` and `delete()` operations.
-
-All `list()` methods return iterators that automatically consume server pages. List
-`page_size` and search `limit` values must be between 1 and 100. `session.list_items()`
-also auto-pages. `session.fork(...)` creates an independent copy, optionally through
-a specific item. Deleting a session with descendants requires
-`session.delete(force=True)` to cascade the deletion.
-
-The resource layer intentionally does not mirror every API method. Its private
-transport will be replaced by the generated `WorkspaceClient.mason` service when that
-is released, without changing this public surface. Deployment, sandbox, tracing, and
-the existing CLI commands remain separate.
+The default chat UI keeps its session ID across page reloads;
+[invoke HTTP endpoints](#invoke-http-endpoints) shows the explicit API request shape.
 
 ## Runtime
 
-`DurableAgentServer` runs your agent through one HTTP API for synchronous, streaming, and background
-invocations. Register an `@app.invoke` handler, publish progress with `await context.emit(event)`,
-and return a JSON result. You can also add your own FastAPI endpoints.
+`DurableAgentServer` exposes `POST /api/invocations` for synchronous, streaming, and background
+runs, plus status and event endpoints for polling and reconnecting. A client-generated UUID `id`
+identifies each invocation. Generated LangGraph and OpenAI Agents projects also require a nonempty
+*top-level* `session_id` on every request; reuse it across turns in one conversation.
 
-Start from a template, edit the agent code in `agent/`, and run it locally before deploying:
+During `dev`, invocation state is in process. Deployment provisions a persistent Runtime Store, so
+status, results, and events survive restarts. App-authenticated work can resume through an `@app.recover`
+handler; recovery may repeat external side effects. Request-user credentials remain process-local,
+so interrupted user-authenticated work cannot resume after worker loss. A custom server defines its
+own HTTP and recovery behavior and receives no Runtime Store.
 
-```sh
-agentbricks init my-agent --framework langgraph --server agentbricks --profile <profile>
-cd my-agent
-agentbricks dev
-# Stop the local server when ready to deploy.
-agentbricks --profile <profile> deploy my-agent
-```
+See the [runtime guide](src/databricks_agentkit/runtime/README.md) for hooks, endpoint responses,
+streaming, recovery, and custom-server setup. The [lifecycle matrix](#resource-and-state-lifecycle)
+explains what persists across local restarts, redeployments, and deletion.
 
-Use `--framework openai` for OpenAI Agents. Templates keep agent code separate from the runtime
-adapter and declare default Session and Memory Store bindings in `agent.toml`.
+## AgentKit SDK
 
-Each managed run is an **invocation**. Send a client-generated UUID `id` and your agent's `input`:
+Use `AgentKitClient` from `databricks_agentkit` with an authenticated Databricks
+`WorkspaceClient`, or omit the client to use default Databricks SDK authentication. Its
+`memory_stores` and `session_stores` collections create, get, and list stores. A returned store
+manages its entries or sessions; returned memories and sessions own their `update()` and
+`delete()` operations. The [examples below](#memory-and-sessions) show the store APIs.
 
-```json
-{
-  "id": "550e8400-e29b-41d4-a716-446655440000",
-  "session_id": "support-case-123",
-  "input": {"messages": [{"role": "user", "content": "Hello"}]},
-  "background": true,
-  "stream": true
-}
-```
-
-`DurableAgentServer` accepts an optional top-level `session_id` for generic handlers, but the generated
-LangGraph and OpenAI Agents templates require a nonempty top-level `session_id` on every invocation.
-It groups generated-agent invocations into one application session and is distinct from the invocation
-`id` and the `X-Routing-Key` sticky-routing header.
-
-| Endpoint | Behavior |
-| --- | --- |
-| `POST /api/invocations` | Defaults to synchronous execution: `200` with the result under `output`. `stream: true` returns SSE events. `background: true` returns `202` with a status URL; adding `stream: true` also includes an events URL. |
-| `GET /api/invocations/{id}` | Returns the invocation status and, when completed, its output. |
-| `GET /api/invocations/{id}/events?after={cursor}` | Streams events after the last received event ID, allowing clients to reconnect. |
-
-The UUID also acts as an idempotency key: repeating the same request reuses the existing invocation
-while its record is retained; using the ID for a different request returns `409`.
-
-`agentbricks dev` keeps execution state in process and loses it on restart. For projects with
-`[agent].server = "agentbricks"`, `agentbricks deploy` provisions a persistent Runtime Store for requests,
-status, events, and results. Register `@app.recover` to restart interrupted app-auth work after
-worker failures. Recovery is at-least-once, so external side effects must be idempotent. Session
-and Memory Stores separately preserve the state used by your agent.
-
-The current default uses the managed Runtime Store API to create or reuse an App-owned database in
-the workspace's shared Lakebase project. It initializes its own schema and tables without a manual
-Lakebase grant or Postgres App resource. An internal legacy path uses a per-App Lakebase project.
-Backend selection is an internal rollout detail, not a user-facing setting. On the managed path,
-redeploy verifies the stored App identity, and `agentbricks deployments delete` removes the managed
-store before deleting the App. Redeploying an older legacy deployment can attach the managed backend
-while leaving its old per-App Lakebase resource in place; Runtime Store data is not migrated between
-backends.
-Managed cleanup errors retain the App for retry. Direct App deletion bypasses managed store cleanup.
-
-For a tool using `auth = "user"`, the Runtime Store still records token-free invocation state,
-events, and results. The forwarded user credential remains process-local for the active attempt and
-is never written to the Runtime Store. A replacement attempt after failure recovery stops with
-`MCP_USER_AUTH_RECOVERY_UNSUPPORTED` because the original request credential is no longer present.
-
-Use `server = "custom"` to deploy your own HTTP server without provisioning a Runtime Store.
-Changing the server type of an existing deployment is not supported. To use a different server,
-scaffold a new project with the desired `agentbricks init --server` option and deploy it under a new name.
-See the [runtime guide](src/databricks_agentkit/runtime/README.md) for agent hooks, full API examples,
-and recovery behavior.
+All `list()` methods return iterators that consume server pages automatically. List `page_size`
+and search `limit` values must be between 1 and 100. `session.list_items()` also auto-pages.
 
 ## Memory and sessions
 
@@ -435,7 +292,7 @@ fully managed store for each, both backed by Lakebase and usable from agents bui
   LangGraph graph. The agent reads it at the start of a turn and appends to it as the interaction
   runs.
 - **Managed agent memory** stores durable facts, preferences, and decisions that an agent recalls in
-  later, separate conversations, retrieved by semantic search.
+  later, separate conversations through text search.
 
 The examples below use the [`AgentKitClient` Python SDK](#agentkit-sdk); the same operations are available
 as `agentbricks sessions` / `agentbricks memory` CLI commands.
@@ -550,593 +407,82 @@ agent = create_agent(model=..., tools=[*your_tools, *memory_tools(actor)])
 > actor's entries. For strict isolation between tenants or users, use a separate store per boundary.
 > Grant another principal — such as your app's service principal — access with
 > `session_store.grant_permission(principal_id)` or `memory_store.grant_permission(principal_id)`;
-> `agentbricks deploy` does this for the deployed app automatically.
+> `agentbricks deploy` attempts this grant for the deployed app.
 
 ### Declaring and provisioning stores
 
-For a deployed agent, `agent.toml` declares which stores it uses and `agentbricks deploy` provisions them —
-you don't create stores by hand. `agentbricks init` declares a default memory and session store named from
-the project; override those names, point at stores you already have, or let `deploy` create them:
-
-```sh
-# Scaffold a project with default memory and session stores declared in agent.toml.
-agentbricks init my-agent
-
-# Override the declared store names at init time.
-agentbricks init my-agent --memory-store support-agent-memory --session-store support-agent-sessions
-
-# Or point an existing project at specific stores (edits agent.toml only; creates nothing).
-agentbricks sessions bind support-agent-sessions
-agentbricks memory bind support-agent-memory
-
-# deploy creates any declared-but-missing store and attempts the App access grant.
-agentbricks deploy my-agent
-```
-
-Memory and session stores are independent resources: deleting one never affects the other.
-
-## Commands
-
-For the full command reference - every command, subcommand, argument, and option, in table form -
-see [`cli.md`](cli.md). The tree below is a quick overview.
-
-```text
-agentbricks [-p <profile>] [-o text|json]
-  login        [--profile P]
-  logout
-  init         [--framework openai|langgraph] [--server agentbricks|custom]
-               [--disable-chat-app]
-               [--memory-store NAME] [--session-store NAME]
-               [--existing] [--profile P] [directory]
-  doctor       [directory]
-  dev          [--source PATH] [--prepare-environment] [--app-port PORT]
-  memory
-    bind         STORE [--source PATH]
-    unbind       [--source PATH]
-    stores     create | list | get | update | delete
-    entries    create | get | list | search | update | delete
-  sessions     create | list | get | update | delete | fork
-    bind         STORE [--source PATH]
-    unbind       [--source PATH]
-    stores     create | list | get | update | delete
-    items      list | append | pop | clear
-  tracing
-    bind       (--experiment-name NAME | --experiment-id ID) [--source PATH]
-    unbind     [--source PATH]
-    list | get [--experiment-name NAME | --experiment-id ID] [--source PATH]
-  tools
-    add sandbox      --scope SCOPE [--scope SCOPE ...]
-                     [--no-databricks-access-token-included] [--source PATH]
-    add mcp          SERVICE [--name NAME] [--source PATH]
-    add uc-function  FUNCTION [--name NAME] [--source PATH]
-    add genie-one    [--name NAME] [--auth user|app] [--source PATH]
-    add genie-agent  SPACE_ID [--name NAME] [--auth user|app] [--source PATH]
-    list             [--kind sandbox|mcp|uc-function|genie-one|genie-agent]
-                     [--schema CATALOG.SCHEMA]
-    remove           TOOL_ID [MCP_SERVICE] [--source PATH]
-  deploy       [<name>] [--source PATH] [--instances N]
-  deployments  list | get | logs | start | stop | delete
-  endpoint
-    invoke      [APP] --path PATH [--url URL] [--json JSON] [--sse]
-```
-
-## Bring an existing agent
-
-From the existing project, prepare a migration for your coding agent:
-
-```sh
-agentbricks init --framework langgraph --existing .
-agentbricks init --framework openai --existing .
-```
-
-Before or after the conversion, inspect its progress without changing the repository or contacting
-Databricks:
-
-```sh
-agentbricks doctor .
-agentbricks -o json doctor .
-```
-
-Doctor exits 0 only when the project has a valid Agent Bricks manifest and matching project
-metadata, uses the Agent Bricks server, declares the framework-appropriate `databricks-agentbricks`
-extra and a non-empty `app.yaml` command, constructs `DurableAgentServer` with an `invoke` hook, and
-calls a recognized adapter for the selected framework in production Python source. Test, example, and
-old/stale directories do not count as source evidence. A failed report is the normal result for a
-project that still needs migration; run
-`agentbricks init --framework <framework_name> --existing <directory>` with the appropriate framework
-to prepare the migration instructions. Doctor never imports or executes the target's source, and a
-bounded source scan that exceeds a limit is reported while the evidence it already found still counts.
-Its findings are static repository evidence, not proof that the configured startup command executes
-the files it finds.
-
-This writes `agent-bricks-migrate/` containing a skill, a prompt to paste into your coding agent,
-`references/migration.json`, and a reference project generated from the templates bundled with the
-installed CLI. The bundle sits outside any single agent's configuration directory; `.claude/skills/`
-and `.agent/skills/` each receive a small skill that points at it, so Claude Code, Codex, and
-similar tools discover the same instructions without duplicating the reference. Agent Bricks CLI
-prepares the instructions; the coding agent performs and verifies the conversion. Init leaves application
-source, dependencies, `.env`, and existing `.agentbricks/project.toml` configuration intact and refuses to overwrite
-existing migration files.
-
-The bundle is scaffolding for the migration, not part of the application: delete `agent-bricks-migrate/`
-and the two pointer skills once the conversion is done, and keep them out of commits meanwhile.
-
-The skill follows the shared managed-runtime contract for the selected framework, included in new projects and
-migration references:
-[LangGraph](src/databricks_agentbricks/templates/agent-langgraph/AGENTKIT_CONTRACT.md) or
-[OpenAI Agents SDK](src/databricks_agentbricks/templates/agent-openai/AGENTKIT_CONTRACT.md). It explicitly
-handles existing history, custom state and output, recovery, and client/session contracts. For
-LangGraph, switching checkpointers does not migrate old conversations (likewise, the OpenAI Agents
-SDK keeps prior Session transcripts and RunState behind); unresolved transitions require a user
-decision.
-
-The reference honors `--disable-chat-app`, `--memory-store`, `--session-store`, and the selected
-profile. These are migration intent; init does not provision resources or change the existing
-application. Migration supports LangGraph and the OpenAI Agents SDK with the managed server (`server = "agentbricks"`);
-`--server custom` is not supported for `--existing`.
-
-## Invoke HTTP endpoints
-
-`agentbricks endpoint invoke` is a low-level HTTP command. It resolves and authenticates a deployed
-Databricks App, or targets localhost and arbitrary servers through `--url`. It does not assume an
-agent protocol: provide the method, path, query parameters, and complete JSON body required by the
-server.
-
-```sh
-agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
-  --path /api/invocations \
-  --json '{"id":"00000000-0000-4000-8000-000000000001","session_id":"support-case-123","input":[{"role":"user","content":"Hello"}]}'
-
-agentbricks endpoint invoke --url http://localhost:8000 \
-  --path /api/invocations \
-  --json '{"id":"00000000-0000-4000-8000-000000000001","session_id":"support-case-123","input":[{"role":"user","content":"Hello"}]}'
-```
-
-The JSON body remains explicit even for generated agents. For example, managed runtime agents require
-a client-generated invocation ID, and streaming servers require their own streaming field plus
-`--sse` so the CLI consumes the response as Server-Sent Events.
-
-```sh
-SESSION_ID=$(uuidgen)
-INVOCATION_ID=$(uuidgen)
-agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
-  --path /api/invocations \
-  --routing-key "$SESSION_ID" \
-  --json "{\"id\":\"$INVOCATION_ID\",\"session_id\":\"$SESSION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Run the report\"}]}"
-
-INVOCATION_ID=$(uuidgen)
-agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
-  --path /api/invocations \
-  --routing-key "$SESSION_ID" \
-  --sse \
-  --json "{\"id\":\"$INVOCATION_ID\",\"session_id\":\"$SESSION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"stream\":true}"
-```
-
-`--routing-key` keeps a session on one app replica (sticky routing): set it to your stable session id
-and it is sent verbatim in the `X-Routing-Key` request header. It is routing only and is never used
-as the session id - put the session id at the top level of the `--json` body for session continuity. This
-also works with a direct App URL and with the generated runtime on localhost. OAuth and session headers are managed by
-the runtime; arbitrary custom request headers are intentionally not exposed by this command.
-
-## Command help
-
-Use the conventional help flag at any command level. Every command's help includes runnable
-examples:
-
-```sh
-agentbricks --help
-agentbricks deploy --help
-agentbricks sessions items append --help
-```
+`init` declares default store names in `agent.toml`. Use `--memory-store` and
+`--session-store` during `init`, or `agentbricks memory bind <name>` and
+`agentbricks sessions bind <name>` later, to select other stores. Binding edits the
+manifest; `deploy` creates missing stores and attempts the App grants. Memory and
+session stores are independent resources: deleting one does not affect the other.
 
 ## Agent tools
 
-For projects with `[agent].server = "agentbricks"` (the default from `agentbricks init`), `agent.toml` is the
-declarative source of truth for Databricks-managed infrastructure: the Runtime Store, sandbox,
-managed MCP, Genie and Unity Catalog function bindings, plus memory and session resources. `agentbricks tools
-add` updates only this file; direct TOML edits have the same behavior. Both managed-server framework
-adapters read the managed bindings at runtime without generating or patching agent source:
+For generated managed-server projects, declare Databricks-managed sandbox, MCP, Unity Catalog
+function, or Genie bindings in `agent.toml`. `agentbricks tools add` edits that manifest;
+`deploy` provisions access according to each binding's App or request-user identity. Python
+tools use the framework's native decorator in `agent/tools/`, as in the
+[custom-tool quickstart](#add-a-custom-tool).
 
 ```sh
 agentbricks tools add sandbox --scope table:samples.nyctaxi.trips
 agentbricks tools add mcp system.ai.web_search
 agentbricks tools add uc-function catalog.schema.lookup_ticket
-agentbricks tools add genie-one
-agentbricks tools add genie-agent SPACE_ID
-agentbricks tools remove mcp system.ai.web_search
 agentbricks tools list
 ```
 
-### Managed tool identity and migration
+`tools list` shows integrations available to add; inspect `agent.toml` for configured bindings.
+The [Agent tools guide](docs/agent-tools.md) covers identities, grants, scopes, sandbox policies,
+Genie behavior, and migration of older bindings. For command options, see
+[the CLI reference](cli.md#agentbricks-tools).
 
-`agentbricks tools add mcp`, `agentbricks tools add sandbox`, `agentbricks tools add genie-one`, and
-`agentbricks tools add genie-agent` write explicit `auth = "user"` by default.
-Use `--auth app` for the App service principal instead. This field is on the tool entry, not
-inside `source` or `policy`:
+## Bring an existing agent
 
-```toml
-[[tools]]
-id = "web_search"
-auth = "user"
-source = { kind = "mcp", service = "system.ai.web_search" }
-```
+From an existing LangGraph or OpenAI Agents project, run `agentbricks doctor .` to inspect its
+configuration, then `agentbricks init --framework <framework> --existing .` to create migration
+instructions and a reference project. A coding agent performs the conversion; `init` leaves
+application source, dependencies, and local credentials intact. See
+[the migration guide](docs/migrating-existing-agents.md) for the generated bundle, limits, and
+state-transition decisions.
 
-Direct UC-function bindings remain app/default identity and do not accept `--auth user`.
-Managed-tool add commands write the selected identity to `agent.toml`; inspect that manifest to
-review configured bindings. Missing legacy auth continues to mean App identity at runtime; it is
-never silently upgraded to user identity.
+## Invoke HTTP endpoints
 
-### Automatic App-identity access on deploy
-
-`agentbricks deploy` reconciles least-privilege access for resources explicitly declared by App/default
-identity tool bindings. It skips every `auth = "user"` binding because those calls use the request
-user's permissions instead of the App service principal.
-
-| Explicit `agent.toml` resource | Automatic App service-principal access |
-| --- | --- |
-| UC function | Apps `uc_securable`: `FUNCTION` / `EXECUTE` |
-| Genie Agent space | Apps `genie_space`: `CAN_RUN` |
-| Sandbox table scope | Apps `uc_securable`: `TABLE` / `SELECT` or `MODIFY` |
-| Sandbox volume scope | Apps `uc_securable`: `VOLUME` / `READ_VOLUME` or `WRITE_VOLUME` |
-| Sandbox Workspace path | Workspace ACL: `CAN_READ` or `CAN_EDIT` |
-| External MCP service | Unity Catalog: effective `EXECUTE` plus `USE_SCHEMA` and `USE_CATALOG` on its named parents |
-| Built-in `system.ai` MCP service, including Sandbox and Genie One | Platform-managed access defaults; Agent Bricks does not mutate system securables |
-
-Native Genie One has no resource identifier in its binding, so it does not add a resource-specific
-grant. Use a Genie Agent binding when the App identity should be scoped to one explicit Genie Space.
-
-Apps-backed tool resources are named deterministically and reconciled to the manifest on each
-deploy: removing a binding removes that Agent Bricks-owned Apps resource while preserving Runtime
-Store, tracing, and user-owned resources. MCP and Workspace ACL grants are additive in this release
-because their permission APIs do not expose trustworthy Agent Bricks ownership metadata; removing
-those bindings does not revoke an independently valid grant.
-
-Only direct resources are automatic. Agent Bricks never discovers or grants tables and warehouses
-used by a Genie Space, objects called by a UC function, or resources wrapped by an MCP service.
-Grant those transitive dependencies manually when the called service uses the App identity. UC and
-Workspace grant checks, plus initial App-resource attachment, happen before source upload. Final
-Agent Bricks-owned App-resource reconciliation runs after rollout and can fail after the source has
-been uploaded.
-
-`DurableAgentServer` derives its request-auth policy directly from the managed tool bindings in
-`agent.toml`. Projects do not maintain a separate request-auth contract marker: a managed tool with
-`auth = "user"` requires a transient request-user credential. Code-first tools can declare any
-additional API scopes that Agent Bricks cannot infer from Python:
-
-```toml
-[auth.user]
-required = true
-additional_api_scopes = ["sql"]
-```
-
-`additional_api_scopes` is additive: deploy unions it with scopes inferred from managed bindings,
-deduplicates the result, and preserves unrelated scopes already configured on the App. Scope names
-are not restricted to a client-side allowlist; Databricks Apps validates whether a requested scope
-is supported. Entries must be non-empty strings without surrounding whitespace or control
-characters, and a non-empty list requires `required = true`. This request-auth contract is supported
-only with `[agent].server = "agentbricks"`.
-
-Generated framework adapters pass the request-bound resolver to agent construction. A code-first
-tool should obtain its user client from that resolver inside the active invocation rather than
-creating or persisting a user credential:
-
-```python
-from langchain_core.tools import tool
-
-
-def sql_tools(workspace_client_for):
-    @tool
-    def run_statement(statement: str) -> str:
-        client = workspace_client_for("user")
-        response = client.statement_execution.execute_statement(
-            warehouse_id="...",
-            statement=statement,
-        )
-        return str(response.result)
-
-    return [run_statement]
-```
-
-The resolver is request-bound and closes after the attempt. Agent Bricks does not inject it into
-arbitrary auto-discovered decorated tools; build those tools from the resolver passed to the
-generated request-aware agent function.
-
-Request-user invocations use the same synchronous, streaming, background, status, event-replay,
-and idempotency APIs as app-auth invocations. The Runtime Store records only token-free request
-state, events, and results. The forwarded credential stays process-local for the active first
-attempt and closes when that attempt completes, fails, or is cancelled. A replacement attempt after
-failure recovery stops with `MCP_USER_AUTH_RECOVERY_UNSUPPORTED` because no user credential is
-available; neither the invoke nor recovery handler runs for that attempt.
-
-Before deploying user-auth tools from an older project, migrate its request handler and framework
-adapter to the current request-auth-aware `DurableAgentServer` template, then explicitly choose `user` or
-`app` on **every** managed MCP, sandbox, or Genie entry. Changing `agent.toml` alone does not
-upgrade copied Python adapter code. Outdated adapters fail closed rather than silently using App
-identity. App-only legacy projects and generic bring-your-own source directories keep the existing
-path.
-
-Deploy derives Apps user scopes from explicit `auth = "user"` bindings and unions them with
-`[auth.user].additional_api_scopes`:
-
-| Binding | Requested Apps scopes |
-| --- | --- |
-| Managed MCP (governed ingress) | `ai-gateway` |
-| `system.ai.dbsql` | `ai-gateway`, `sql` |
-| `system.ai.genie_one_mcp` | `ai-gateway`, `genie` |
-| Sandbox with a Volume downscope | `ai-gateway`, `files` |
-| First-class Genie One or Genie Agent | `genie` |
-| Sandbox with token injection | `ai-gateway`, `workspace.workspace` |
-| Sandbox with token injection disabled | `ai-gateway` |
-
-For example, bind Genie tools in a current project with `server = "agentbricks"`:
+`agentbricks endpoint invoke` sends a complete request to a deployed App or a local URL. Generated
+agents require a new invocation UUID for each turn and a stable top-level `session_id` for the
+conversation:
 
 ```sh
-agentbricks tools add mcp system.ai.genie_one_mcp --auth user
-agentbricks tools add genie-agent SPACE_ID --auth user
+SESSION_ID=$(python3 -c 'import uuid; print(uuid.uuid4())')
+INVOCATION_ID=$(python3 -c 'import uuid; print(uuid.uuid4())')
+agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
+  --path /api/invocations \
+  --json "{\"id\":\"$INVOCATION_ID\",\"session_id\":\"$SESSION_ID\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}}"
 ```
 
-Mixed bindings and explicit additions request the union. App-auth and legacy bindings add no user
-scopes. These are
-explicit service-consent scopes, not a claim that gateway access alone authorizes the downstream
-resource. OAuth consent does not grant Unity Catalog privileges: the user still needs access to
-the configured Genie Space and its underlying data.
+For another turn, reuse `SESSION_ID` and generate a new invocation ID. `--routing-key "$SESSION_ID"`
+adds the independent `X-Routing-Key` sticky-routing header; it does not set `session_id` in the
+request body. Use `--sse` with a body containing `"stream": true`. See the
+[runtime guide](src/databricks_agentkit/runtime/README.md#invoke-stream-and-reconnect) for the
+HTTP contract and [CLI reference](cli.md#agentbricks-endpoint-invoke) for command options.
 
-For a new App, deploy explicitly enables user-token forwarding and includes these scopes in the
-initial typed SDK create request before uploading source. An existing App that is missing a required
-scope needs one-time explicit permission:
+## Commands
+
+See [the CLI command reference](cli.md) for all commands, arguments, and options. Built-in
+examples are available at each level, such as `agentbricks deploy --help`.
+
+For zsh completion, add this to `~/.zshrc`:
 
 ```sh
-agentbricks --profile my-workspace deploy my-agent --allow-user-scope-update
+eval "$(_AGENTBRICKS_COMPLETE=zsh_source agentbricks)"
 ```
 
-The `system.ai.dbsql` managed MCP additionally requests the Apps `sql` user scope. This is full SQL
-API consent, not `sql:restricted-query`; read-only enforcement remains the service policy plus the
-requesting user's Unity Catalog grants. DBSQL does not use Databricks Connect.
+## Chat app
 
-When a user-auth sandbox has `databricks_access_token_included = true`, it requests the Apps
-`workspace.workspace` user scope so the injected credential can call workspace APIs. A sandbox
-binding with a Volume downscope additionally requests the Apps `files` user scope.
-OAuth consent does not grant Volume access: the requesting user still needs the corresponding
-Unity Catalog privileges, and the sandbox downscope remains authoritative. A sandbox binding with
-token injection disabled does not request `workspace.workspace`; its other resource-derived scopes
-still apply. Databricks Apps rejects the legacy bare `workspace` scope, so Agent Bricks requests
-`workspace.workspace`. These scopes are requested only for `auth = "user"`; `auth = "app"` uses
-the App service principal's permissions instead.
-
-Review the target App's scopes and coordinate with its other owners before allowing the update. Once
-those scopes are present, later deploys do not need the flag. The CLI preserves unrelated scopes,
-updates only user scopes and any explicitly requested instance counts, and checks requested **and
-effective** scopes before source rollout. It checks for scope changes since preflight, but Apps
-read/write is **not atomic**; this is not a lock or a compare-and-swap guarantee. Polling is bounded
-and a mismatch stops source deployment.
-Users may need to sign out and **re-consent** after changing scopes; effective-scope verification
-does not refresh an existing user's consent.
-
-Apps may report `iam.access-control:read` and `iam.current-user:read` as implicit effective
-scopes. The CLI permits these platform defaults during verification but does not request them
-as configurable scopes. Explicitly disabled user-token forwarding stops deployment; enable
-forwarding and restart the App compute before retrying.
-
-Removing a tool or switching back to app-only auth **does not remove Apps scopes**. Remove
-unneeded scopes explicitly in Databricks Apps, and verify both configured and effective scopes
-before declaring removal complete. The CLI does not send empty-list scope updates: the SDK's
-`App.as_dict()` omits empty lists, so that would not prove removal succeeded. No scopes are
-managed for generic bring-your-own apps without this managed user contract.
-
-App-auth tools execute with workload privileges. Restrict App `CAN USE` to callers trusted
-for **all** App-auth tools, or deploy those tools separately. Models, custom MCP servers,
-Memory/Session Stores, and tracing keep their existing credentials.
-
-For MCP services, the remove command accepts the same service name as the add command. You can also
-remove any binding by its `id` in `agent.toml`, for example `agentbricks tools remove web_search`.
-Every successful add (including an already-configured no-op) points you to the target project's
-`agent.toml` to review configured managed tools and MCP bindings. With `--source`, the message
-points to that project's file. JSON add output includes its path in `manifest`.
-
-`agentbricks tools list` discovers **available integrations to add**, not configured bindings. By default
-it shows built-in add recipes and caller-visible MCP Services in `system.ai`. A recipe may still
-need your resources: sandbox scopes, a concrete UC function name, or a Genie Space ID. Genie One
-needs no additional argument. `system.ai.sandbox` is represented by its scoped recipe rather than
-a second unscoped add command. The list does not enumerate every workspace schema, individual
-operations inside MCP services, or custom Python tools.
-
-`agentbricks tools add mcp` looks up the service in the selected workspace before writing `agent.toml`.
-Use `agentbricks --profile <profile> tools add mcp <service>` to select a workspace. A missing service or
-failed lookup (including authentication or permission errors) leaves the project unchanged. This
-checks service metadata access, not whether every tool can be executed at runtime. Removing local
-bindings does not require workspace access.
-
-```sh
-agentbricks tools list
-agentbricks tools list --kind mcp
-agentbricks tools list --kind mcp --schema main.tools
-agentbricks tools list --kind sandbox
-agentbricks tools list --kind genie-one
-agentbricks tools list --kind genie-agent
-agentbricks --output json tools list
-```
-
-No agent project is required for discovery. MCP discovery uses your Databricks profile; the
-`sandbox`, `uc-function`, `genie-one`, and `genie-agent` kind filters show local recipes without
-authentication. `--schema` requires `--kind mcp` and replaces the default `system.ai` scope. An
-API/authentication failure returns nonzero and marks discovery incomplete, while retaining local
-recipes; it is not reported as an empty successful discovery. Listing metadata does not verify
-runtime execution permissions.
-
-**Migration:** the former configured `tools list` view and its `--source` option are removed.
-Read `agent.toml` (its `[[tools]]` entries) to inspect configured bindings. Discovery JSON uses
-`schema_version: 2`, with `available_tools` (`name`, `kind`, `add_command`), `mcp_schema` (null for
-local-only recipes), `complete`, and `errors`. Replace old scripts that read configured-list JSON
-with TOML inspection. Replace `agentbricks mcp list [--schema catalog.schema]` with
-`agentbricks tools list --kind mcp [--schema catalog.schema]`; the former command is removed. Use
-`agentbricks tools list --help` for the new discovery contract.
-
-Read-only live discovery can be checked against the installed wheel without creating a project
-or deploying an agent:
-
-```sh
-AGENTBRICKS_E2E_PROFILE=<profile> .venv-functional/bin/pytest tests/e2e/tool_discovery_test.py -v
-```
-
-The live checks compare default and MCP-filtered discovery with the compatibility service list.
-Set `AGENTBRICKS_E2E_SCHEMA=catalog.schema` to exercise an additional schema. The installed CLI's local
-add/review/remove flows and all updated help pages are covered by `tests/functional/cli_smoke_test.py`.
-
-In managed-server templates, custom Python tools are code-first. Write them with the framework's native
-decorator in `agent/tools/`: LangGraph uses `@tool`, while OpenAI Agents uses `@function_tool`. The
-templates auto-discover decorated tools from that package and add them to the agent; there is no CLI
-command or `agent.toml` entry to keep in sync. Customer-managed MCP servers are likewise ordinary
-code in `agent/mcps.py` and are joined with the managed bindings by `mcp_tools(...)` or
-`mcp_servers(...)`.
-
-Projects created with `--server custom` do not auto-discover `agent/tools/` or load managed tool
-bindings from `agent.toml`, so `agentbricks tools add` rejects those projects. Wire framework-native Python
-tools and MCP servers directly in `agent/agent.py` instead.
-
-If a manifest with `server = "agentbricks"` contains `source = { kind = "python", ... }`, remove that
-`[[tools]]` entry; the decorated tool in `agent/tools/` remains active. `agentbricks dev` and `agentbricks deploy`
-do not generate or patch Python tool code, and do not alter the manifest's `[[tools]]` bindings.
-
-Sandbox scopes default to read-only access. Repeat `--scope` to allow more than one resource, use
-`volume:` or `workspace:` for those resource types, and use `--permission read_write` only when the
-agent needs writes. Every sandbox call carries this fixed downscope in MCP `_meta`, outside the tool
-arguments controlled by the model. New sandbox bindings also expose the selected Databricks
-credential to sandbox code by default:
-
-```toml
-[[tools]]
-id = "sandbox"
-auth = "user"
-source = { kind = "sandbox", service = "system.ai.sandbox" }
-policy = { downscope = [{ resource = "workspace:/Workspace/Shared", permission = "read_only" }], databricks_access_token_included = true }
-```
-
-With `databricks_access_token_included = true`, the sandbox receives `DATABRICKS_HOST`, a short-lived
-`DATABRICKS_TOKEN`, and `DATABRICKS_AUTH_TYPE`, so code such as
-`WorkspaceClient().current_user.me()` can call workspace APIs. This policy does not choose the
-identity: `auth = "user"` uses the request user's OBO credential, while `auth = "app"` uses the
-Databricks App service principal. Use `--no-databricks-access-token-included` when adding a sandbox that
-does not need workspace API access. Existing manifests that omit `databricks_access_token_included`
-remain disabled until explicitly updated.
-
-### Genie tools
-
-Genie One and Genie Agent support ship with Agent Bricks CLI, but bindings are opt-in, like sandbox tools.
-Installing the current `databricks-agentbricks` distribution does not configure a Genie Space ID or enable a Genie binding. Add only the
-capabilities your agent needs:
-
-```sh
-agentbricks tools add genie-one --name genie_one --auth user
-agentbricks tools add genie-agent SPACE_ID --name genie_agent --auth user
-agentbricks tools list --kind genie-one
-agentbricks tools list --kind genie-agent
-agentbricks tools remove genie_one
-agentbricks tools remove genie_agent
-```
-
-`--name` is optional and defaults to `genie_one` or `genie_agent`, respectively. `--auth` defaults
-to `user`; choose `--auth app` deliberately for App service-principal execution. Existing manifests
-without `auth` preserve App/default identity. Both add commands and `remove` accept `--source PATH`
-to select a project instead of the current directory. Discovery needs no project; read that
-project's `agent.toml` to inspect configured bindings. For scripted output, put the global
-`-o json` option before `tools`, as in
-`agentbricks -o json tools add genie-one --source ./my-agent`. Adding a binding is offline: it updates
-`agent.toml` without contacting Genie or checking permissions. The corresponding sources are:
-
-```toml
-[[tools]]
-id = "genie_one"
-auth = "user"
-source = { kind = "genie_one" }
-
-[[tools]]
-id = "genie_agent"
-auth = "user"
-source = { kind = "genie_agent", space_id = "<your-space-id>" }
-```
-
-Replace `SPACE_ID` or `<your-space-id>` with an existing space's 32-character lowercase hexadecimal
-ID. `genie-one` connects to the workspace-wide MCP endpoint
-`https://<workspace-hostname>/api/2.0/mcp/genie`, without a space suffix. `genie-agent` uses the
-native Genie **Chat-mode** conversation API through the Databricks SDK, not the streaming
-Agent-mode API or the per-space MCP endpoint.
-
-Each native binding exposes `{id}_ask`, `{id}_poll`, and `{id}_query_result`, where `{id}` is its
-binding name. Ask accepts an optional `conversation_id` for follow-ups. Ask and poll share a
-120-second budget per call, including client setup and submission. If the response is still
-running, they return `timed_out` with the conversation and message IDs so the caller can poll
-again. If submission times out before a message ID is received, ask returns
-`INDETERMINATE_SUBMISSION`: the request may still complete, so do not resubmit automatically.
-`NOT_SUBMITTED` means client setup timed out before sending the question. Query results include
-the first 100 rows, column schema, a truncation indicator, and a deep link to the conversation.
-
-Both framework modules, `databricks_agentkit.langgraph` and `databricks_agentkit.openai`, export
-`genie_tools()`. New managed-server templates (`server = "agentbricks"`) use it automatically for native Genie Agent bindings;
-Genie One uses the existing managed MCP helpers. In an existing project with `server = "agentbricks"`, import
-`genie_tools` from your framework module and add `*genie_tools()` to the agent's existing tool list.
-The CLI does not patch existing Python code.
-
-Both paths use Databricks authentication and the routed workspace. Genie One requires the
-Managed MCP Servers workspace preview; delegated access requires the `genie` OAuth scope.
-The effective caller needs access to the data, the SQL warehouse, and the selected Genie space
-where applicable. Agent Bricks CLI does not grant permissions or promise a service-principal fallback when
-caller credentials lack access. An offline add succeeding does not establish runtime access.
-
-The opt-in live tests exercise both frameworks against the configured workspace and an existing
-Genie space. From `integrations/agentbricks`, with both framework extras installed:
-
-```sh
-DATABRICKS_CONFIG_PROFILE=my-workspace RUN_AGENTBRICKS_GENIE_TESTS=1 \
-  AGENTBRICKS_GENIE_SPACE_ID=SPACE_ID \
-  uv run pytest tests/integration_tests/genie_tools_test.py
-```
-
-By default they ask for the row count of `samples.nyctaxi.trips`. Set `AGENTBRICKS_GENIE_QUESTION` for
-another dataset and `AGENTBRICKS_GENIE_EXPECTED_VALUE` to assert a known result cell.
-
-## Initialize the chat app demo
-
-The chat app is a LangGraph-specific init overlay, not a command that mutates an existing project.
-It is included by default for `--framework langgraph`; pass `--disable-chat-app` to scaffold the
-API-only backend instead.
-
-```sh
-agentbricks init --framework langgraph \
-  --profile <profile> \
-  ./my-agent
-cd ./my-agent
-agentbricks dev
-```
-
-The chat app includes synchronous, SSE streaming, background polling, Session Store, Memory Store,
-and HITL resume UI. The framework-specific overlay adds `ui/`, `runtime/ui.py`, the UI-enabled
-`runtime/main.py`, and UI tests.
-
-For the full deployed demo, bind both managed stores, then deploy:
-
-```sh
-agentbricks sessions bind agent-bricks-demo-sessions
-agentbricks memory bind agent-bricks-demo-memory
-agentbricks --profile <profile> deploy agent-bricks-agent-demo --source .
-```
-
-(`bind` declares the store name in `agent.toml`; `agentbricks deploy` creates any declared-but-missing
-store and attempts to grant the App's service principal access to it. The memory store id flows to
-the runtime
-via the `AGENT_MEMORY_STORE` env var that `deploy` injects; `agentbricks dev` runs locally with memory off
-and does not inject it. The id is not persisted in `agent.toml`.)
-
-The chat UI generates a stable application session UUID in browser local storage, sends it as the
-invocation's top-level `session_id`, and creates a fresh invocation UUID per turn. The chat app also
-sends this session UUID in the `X-Routing-Key` request header, which is used verbatim to pin
-the session to one app replica (it must be non-blank and no more than 128 UTF-8 bytes). The header is neither
-authentication nor the template's application session state; it is independent sticky-routing
-plumbing.
-
-The generated `README.md` documents every request the client makes: config discovery, sync and SSE
-invocations, background submission and polling, session transcript loading, HITL resume, and memory
-entry operations. Capability colors are automatic from `/api/demo/config`; only the
-sync/streaming/background transport selector is manual.
+Both generated framework projects include a browser chat UI by default; use
+`--disable-chat-app` for an API-only project. The [LangGraph](src/databricks_agentbricks/templates/ui/agent-langgraph/CHAT_APP.md)
+and [OpenAI Agents SDK](src/databricks_agentbricks/templates/ui/agent-openai/CHAT_APP.md)
+overlay guides describe the UI, session IDs, routing, and demo endpoints.
 
 ## Contributing
 
