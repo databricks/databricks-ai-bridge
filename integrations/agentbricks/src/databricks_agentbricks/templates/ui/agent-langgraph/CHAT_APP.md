@@ -8,6 +8,8 @@ intentionally not a post-generation mutation command.
 
 - `ui/` contains the zero-build chat client.
 - `runtime/ui.py` serves the assets and exposes demo APIs for memory and sessions.
+- `runtime/model_services.py` is copied from the installing CLI so model discovery matches this UI,
+  including when the generated project installs an older released runtime.
 - `runtime/main.py` installs the chat routes on the base FastAPI runtime.
 - `tests/test_demo_ui.py` verifies the browser-facing routes.
 
@@ -20,19 +22,38 @@ entries (searchable, filterable by actor, with a modal for each entry); the othe
 in place, and Traces links out to the MLflow experiment. The transport selector is the only manual
 capability choice.
 
-The composer's model picker lists the workspace's Unity Catalog AI Gateway chat model services — the
-`system.ai.*` model services from `GET /api/2.1/unity-catalog/model-services?parent=schemas/system.ai`
-(embeddings-only services filtered out), exposed as `GET /api/demo/models` and pinned to
-`agent.agent.MODEL` as the default. Each request sends the selected model as `model` in the
-invocation body; the agent is rebuilt per turn, so the picker changes the model for the next turn
-without a restart. Discovery is best-effort: if listing is unavailable (e.g. `system.ai` isn't
-readable), the picker falls back to just the default. Omitting `model` uses `MODEL`.
+The header identifies the project agent. All three invocation modes call `agent/agent.py` with
+its instructions and tools. **Streaming** shows text as it arrives; **Wait for result** displays the
+complete answer; **Background** submits a run and checks its status until it finishes. Background
+runs have no browser deadline. **Stop waiting** pauses status checks without cancelling the agent;
+**Check result** resumes them. Pausing aborts an outstanding status request, without cancelling the
+agent. If the run is no longer available, the UI unlocks the session and warns that its outcome
+cannot be recovered; check tool side effects before retrying. Transient errors retain the run for
+another status check. The run's status link remains visible. Local runs still end when the
+server process stops. A failed run or a disconnected stream is shown as an error rather than Ready.
 
-The agent calls the chosen model through the gateway (`<host>/ai-gateway/mlflow/v1`) rather than
-`/serving-endpoints`, so `MODEL` is a `system.ai.*` model service name. The picker is capped
-(`_MODEL_LIMIT`, 20) with the default pinned first and the rest alphabetical, so truncation never
-drops the configured default. Transient list failures are retried in
-`databricks_agentkit.runtime.model_services` before the fallback applies.
+Assistant Markdown (including code blocks, lists and tables) renders during streaming and history
+replay. Raw HTML and external images are disabled. Only text/refusal content blocks enter the answer;
+explicit reasoning summaries appear separately, while opaque reasoning/signatures remain out of chat.
+The vendored renderer is markdown-it 15.0.2 (MIT); its license is in `ui/vendor/`.
+
+The model picker starts with **Project default**, which omits `input.model` so the agent uses
+`agent.agent.MODEL`. Selecting another model temporarily overrides the model on this page only;
+it preserves the project agent's instructions and tools. Choose Project default or reload to reset.
+To change the persistent default, edit `MODEL` in `agent/agent.py`.
+
+Discovery uses the public schema-scoped Unity Catalog model-services API. It independently lists
+`system.ai`, the configured default model's schema, and any additional `catalog.schema` names in
+`agent.agent.MODEL_SCHEMAS`. All pages are included, without a display cap. Services that advertise
+only embeddings, legacy completions, or Responses are excluded because these templates use chat
+completions. Missing capability metadata remains eligible; invocation is the authoritative check.
+
+A schema listing failure is visible and does not hide the default or results from other schemas.
+**Use another model service…** accepts a full `catalog.schema.model` name even when listing is
+unavailable. Both templates invoke these names through `<host>/ai-gateway/mlflow/v1`; this control
+does not select legacy serving endpoints. Discovery permission does not imply EXECUTE permission.
+An inaccessible or incompatible model reports an invocation error; switch back to Project default
+or choose a service for which you have EXECUTE permission.
 
 The UI reads local history from the LangGraph checkpoint and managed history from Session Store
 items. It keeps a stable application session UUID in browser local storage, sends it as every

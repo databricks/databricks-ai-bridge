@@ -212,6 +212,7 @@ class DurableAgentServer(FastAPI):
                 return StreamingResponse(
                     self._event_stream(runtime_invocation_id),
                     media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
                 )
             output = await self._runtime.invoke(
                 runtime_invocation_id, invocation_request, session_id=session_id
@@ -255,21 +256,29 @@ class DurableAgentServer(FastAPI):
         return StreamingResponse(
             self._event_stream(runtime_invocation_id, after),
             media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
     async def _event_stream(self, invocation_id: str, after: int = 0) -> AsyncIterator[str]:
         cursor = after
-        while True:
-            # Read state first so a terminal snapshot's committed events are drained below.
-            state = await self._runtime.get_invocation(invocation_id)
-            for event in await self._runtime.get_events(invocation_id, after_sequence=cursor):
-                cursor = event.sequence_number
-                event_type = event.event.get("type", "message")
-                yield f"id: {cursor}\nevent: {event_type}\ndata: {json.dumps(event.event)}\n\n"
+        with self._runtime.updates.subscribe(invocation_id) as changed:
+            while True:
+                changed.clear()
+                # Read state first so a terminal snapshot's committed events are drained below.
+                state = await self._runtime.get_invocation(invocation_id)
+                for event in await self._runtime.get_events(invocation_id, after_sequence=cursor):
+                    cursor = event.sequence_number
+                    event_type = event.event.get("type", "message")
+                    yield f"id: {cursor}\nevent: {event_type}\ndata: {json.dumps(event.event)}\n\n"
 
-            if state is None or state.is_terminal:
-                return
-            await asyncio.sleep(self._runtime.poll_seconds)
+                if state is None or state.is_terminal:
+                    return
+                try:
+                    # Local commits wake the stream immediately. The timeout preserves replay
+                    # when another worker owns the invocation, without increasing DB polling.
+                    await asyncio.wait_for(changed.wait(), timeout=self._runtime.poll_seconds)
+                except asyncio.TimeoutError:
+                    pass
 
     @staticmethod
     def _accepted_payload(

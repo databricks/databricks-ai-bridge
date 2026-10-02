@@ -28,9 +28,12 @@ from databricks_agentkit.langgraph.session_store import (
 from databricks_agentkit.runtime.auth import AuthError
 
 # A Unity Catalog AI Gateway model service, served from the `system.ai` schema and queried through
-# the gateway (see `use_ai_gateway=True` below). Swap for any `system.ai.*` model service your
+# the gateway (see `use_ai_gateway=True` below). Swap for any `catalog.schema.model` service your
 # workspace exposes — the demo chat app's picker lists what's available.
 MODEL = "system.ai.claude-sonnet-4-5"
+# Additional catalog.schema names to discover in the chat UI. The default model's schema and
+# system.ai are always attempted independently. Only chat-completions services are offered.
+MODEL_SCHEMAS: tuple[str, ...] = ()
 
 # Tools that require human approval before they run. Map a tool name to True to allow every decision
 # (approve / edit / reject / respond), or to a config dict to restrict them (see HumanInTheLoopMiddleware).
@@ -107,7 +110,7 @@ async def create_agent_graph(
     endpoint = model or MODEL
     return create_agent(
         # use_ai_gateway routes to the Unity Catalog AI Gateway (`<host>/ai-gateway/mlflow/v1`), so
-        # `endpoint` is a `system.ai.*` model name rather than a serving-endpoint name.
+        # `endpoint` is a UC model service name rather than a serving-endpoint name.
         model=_RoutedChatDatabricks(
             endpoint=endpoint, workspace_client=workspace_client(), use_ai_gateway=True
         ),

@@ -107,6 +107,13 @@ def _copy_packaged_template(
         shutil.copytree(
             str(src), dest, dirs_exist_ok=index > 0, ignore=shutil.ignore_patterns("__pycache__")
         )
+    if any(overlay.startswith("ui/") for overlay in overlay_names):
+        # UI templates must work with the released runtime installed by the scaffold. Keep
+        # schema discovery with its matching UI rather than requiring a new SDK signature.
+        helper = resources.files("databricks_agentkit.runtime").joinpath("model_services.py")
+        (dest / "runtime" / "model_services.py").write_text(
+            helper.read_text(encoding="utf-8"), encoding="utf-8"
+        )
 
 
 def _bundled_template_ref() -> str:
