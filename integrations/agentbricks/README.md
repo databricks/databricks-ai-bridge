@@ -6,56 +6,11 @@ command.
 
 > The underlying APIs are in preview and may need workspace enablement.
 
-## Overview
-
-A managed path from your custom agent code to a production-ready, scalable, durable agent hosted on
-Databricks in minutes - with no server framework to build, no infrastructure to provision, and no
-invocation protocol to design yourself. Bring your own agent, or start from a template.
-
-- **Deployment** - a guided lifecycle (scaffold, run locally, deploy) that turns an agent project
-  into a hosted endpoint. Databricks provisions the compute, the stores your agent binds (session,
-  memory), and the access grants, so you ship application code and get a running endpoint.
-- **Runtime** - a managed HTTP invocation contract (synchronous, streaming, background) plus optional
-  durable execution (persistence, heartbeats, crash recovery) backed by Databricks Lakebase, with no
-  database or job queue to operate. Use the opinionated `DurableAgentServer` to get it out of the box,
-  or bring your own server for full control. `AgentApp` remains available as a deprecated
-  compatibility alias; new code should use `DurableAgentServer`.
-
-**Deployment**
-
-![Deployment: from a blank directory to a running service](docs/deployment.svg)
-
-- **Agent project** - `agentbricks init` scaffolds a deployable project from a framework template
-  (LangGraph or OpenAI Agents) with the runtime, tests, and an optional chat UI wired up; you edit
-  the application code (model, tools, prompts).
-- **`agent.toml`** - the declarative source of truth for the Databricks-managed infrastructure your
-  agent depends on: tool bindings (data sandbox, managed MCP services, Unity Catalog functions) and
-  memory, session, and durability resources. `agentbricks deploy` reads it to provision and wire everything
-  up (detailed under [Agent tools](#agent-tools)).
-- **`agentbricks deploy`** - provisions the bound stores, grants the app's service principal access to
-  them, provisions the durable-runtime database when durability is on, configures tracing, and rolls
-  out the app. `agentbricks deployments` covers the lifecycle (list, get, logs, start, stop, delete).
-- **`agentbricks dev`** - runs your agent from the same manifest the deployment uses, so local behavior
-  matches what ships.
-
-**Runtime**
-
-![Runtime: one FastAPI server, run as DurableAgentServer or your own implementation](docs/runtime.svg)
-
-The two ways to run an agent:
-
-- **`DurableAgentServer` - opinionated, batteries included.** Register one handler and get the managed
-  invocation contract (synchronous, streaming, background). Enable the durable runtime so
-  long-running and background work survives restarts, redeploys, and crashes. The framework
-  templates are thin layers over `DurableAgentServer` (HTTP contract detailed under [Runtime](#runtime)).
-- **Custom server - generic, full control.** `agentbricks init --server custom` scaffolds a minimal FastAPI
-  server with no `DurableAgentServer`: you define your own endpoints, request/response shapes, and protocol.
-  `agentbricks dev` and `agentbricks deploy` run and ship it the same way.
-
 ## Prerequisites
 
 - **Python ≥3.10** — the `agentbricks` CLI installs and runs on any Python 3.10+. The
   `memory`, `sessions`, `tools`, and `agentbricks tracing bind`/`unbind` commands need nothing else.
+  Generated agent projects require Python 3.11+.
 - **[`uv`](https://docs.astral.sh/uv/)** — needed to scaffold, run, and deploy an
   agent (`agentbricks init` → `agentbricks dev` → `agentbricks deploy`): the scaffolded project builds
   its environment and launches with `uv run`, both locally and in the deployed Apps
@@ -84,11 +39,81 @@ pip install 'git+https://github.com/databricks/databricks-ai-bridge.git#subdirec
 The base package includes the CLI, store SDK, and `DurableAgentServer` HTTP runtime. Generated projects
 declare their framework dependencies automatically.
 
-## Shell completion
-Add this to `~/.zshrc`:
+## Quickstart
+
+Create a project using LangGraph (the default framework). Use `--framework openai` instead to
+create an **OpenAI Agents SDK** project. This chooses the agent framework, not the model provider;
+both templates call a Databricks AI Gateway model. Their state and recovery behavior is summarized
+under [Resource and state lifecycle](#resource-and-state-lifecycle).
+
 ```sh
-eval "$(_AGENTBRICKS_COMPLETE=zsh_source agentbricks)"
+agentbricks init my-agent --framework langgraph --profile <profile>
+cd my-agent
+agentbricks login --profile <profile>
+agentbricks dev
 ```
+
+`init` copies a project with a chat UI by default and records the chosen profile in its local `.env`.
+`agentbricks dev` serves it at the URL it prints (by default `http://localhost:8000`). Open the UI
+and send a message to verify the agent. Stop `dev` with Ctrl-C before deploying:
+
+```sh
+agentbricks deploy my-agent
+agentbricks deployments get agent-bricks-my-agent
+```
+
+`agentbricks deploy my-agent` deploys a Databricks App named `agent-bricks-my-agent`, provisions the
+stores declared in `agent.toml`, and attempts to grant the App access to them. Check the deploy
+output for access or tracing warnings. `deployments get` prints the App URL and status; open the URL
+and send a message to verify the deployed agent.
+
+## Add a custom tool
+
+In the generated project, add `agent/tools/count_words.py`. Choose the version that matches the
+framework selected during `init`:
+
+LangGraph:
+
+```python
+from langchain_core.tools import tool
+
+
+@tool
+def count_words(text: str) -> int:
+    """Count whitespace-separated words in text."""
+    return len(text.split())
+```
+
+OpenAI Agents SDK:
+
+```python
+from agents import function_tool
+
+
+@function_tool
+def count_words(text: str) -> int:
+    """Count whitespace-separated words in text."""
+    return len(text.split())
+```
+
+Both templates discover decorated tools in `agent/tools/` automatically; no registration edit is
+needed. Restart `agentbricks dev`, then run this in another terminal from the project directory:
+
+```sh
+SESSION_ID=$(python3 -c 'import uuid; print(uuid.uuid4())')
+INVOCATION_ID=$(python3 -c 'import uuid; print(uuid.uuid4())')
+agentbricks endpoint invoke --url http://localhost:8000 \
+  --path /api/invocations \
+  --json "{\"id\":\"$INVOCATION_ID\",\"session_id\":\"$SESSION_ID\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":\"Use count_words to count the words in: the quick brown fox\"}]}}"
+```
+
+The `count_words` tool returns `4` for that phrase. Keep `SESSION_ID` for later turns in the same
+conversation, and use a new invocation ID for each new request.
+Edit `agent/agent.py` to change the model, instructions, or agent logic. For Databricks-managed
+bindings, see [Agent tools](#agent-tools); for state, see [Memory and sessions](#memory-and-sessions)
+and [Resource and state lifecycle](#resource-and-state-lifecycle). See [Runtime](#runtime) for the
+HTTP contract and recovery, and [Project ownership and upgrades](#project-ownership-and-upgrades)
+when maintaining a customized scaffold.
 
 ## Authentication
 
@@ -111,38 +136,160 @@ If Databricks SDK default authentication is already configured, you can skip `ag
 You can also pass the global `--profile/-p` option before an individual command, for example
 `agentbricks --profile <profile> tools list`. Use `--output json` for scripting.
 
-## Quickstart
-
-The shortest path from a blank directory to a running and deployed agent:
-
+## Shell completion
+Add this to `~/.zshrc`:
 ```sh
-agentbricks login --profile <profile>
-agentbricks init my-agent
-cd my-agent
-agentbricks dev                 # run locally
-agentbricks deploy my-agent     # deploy to Databricks
+eval "$(_AGENTBRICKS_COMPLETE=zsh_source agentbricks)"
 ```
 
-`agentbricks dev` runs the agent locally on `http://localhost:8000`, wrapping the Databricks Apps
-local runtime so local behavior matches a deployment.
+## Overview
 
-`agentbricks deploy my-agent` deploys a Databricks App named `agent-bricks-my-agent`, provisions the
-stores declared in `agent.toml`, and grants the app's service principal access to the stores and
-direct App-auth tool resources declared there. Use `agentbricks deployments list` to find deployed
-apps, and `agentbricks deployments get agent-bricks-my-agent` to print an app's URL and status.
+A managed path from your custom agent code to a production-ready, scalable, durable agent hosted on
+Databricks in minutes - with no server framework to build, no infrastructure to provision, and no
+invocation protocol to design yourself. Bring your own agent, or start from a template.
 
-`agentbricks init` declares default memory and session stores in `agent.toml`, so the deployed agent has
-long-term memory and durable conversation history. It creates `<name>-<6-letter-token>-memory` and
-`<name>-<6-letter-token>-sessions`, and records both names in `agent.toml`.
-`agentbricks deploy` creates them if they don't exist yet. Point the agent at stores you already have with
-`agentbricks memory bind <name>` / `agentbricks sessions bind <name>`, or scaffold without stores using
-`agentbricks init --server custom` (see [Initialize the chat app demo](#initialize-the-chat-app-demo)).
+- **Deployment** - a guided lifecycle (scaffold, run locally, deploy) that turns an agent project
+  into a hosted endpoint. Databricks provisions the compute, the stores your agent binds (session,
+  memory), then attempts the access grants, so you ship application code and get a running endpoint.
+- **Runtime** - a managed HTTP invocation contract (synchronous, streaming, background) plus optional
+  durable execution (persistence, heartbeats, crash recovery) backed by Databricks Lakebase, with no
+  database or job queue to operate. Use the opinionated `DurableAgentServer` to get it out of the box,
+  or bring your own server for full control. `AgentApp` remains available as a deprecated
+  compatibility alias; new code should use `DurableAgentServer`.
 
-To exercise the agent (locally under `agentbricks dev` or once deployed), `agentbricks endpoint invoke` sends
-it an HTTP request. MLflow tracing is on by default (`agentbricks init` binds a default
-`/Shared/agentbricks_traces/<project>` experiment): `agentbricks dev` traces to a local MLflow server under
-`.agentbricks/` and `agentbricks deploy` to the bound workspace experiment; `agentbricks tracing list` shows the
-available traces.
+**Deployment**
+
+![Deployment: from a blank directory to a running service](docs/deployment.svg)
+
+- **Agent project** - `agentbricks init` scaffolds a deployable project from a framework template
+  (LangGraph or OpenAI Agents) with the runtime, tests, and an optional chat UI wired up; you edit
+  the application code (model, tools, prompts).
+- **`agent.toml`** - the declarative source of truth for the Databricks-managed infrastructure your
+  agent depends on: tool bindings (data sandbox, managed MCP services, Unity Catalog functions) and
+  memory, session, and durability resources. `agentbricks deploy` reads it to provision and wire everything
+  up (detailed under [Agent tools](#agent-tools)).
+- **`agentbricks deploy`** - provisions the bound stores, attempts to grant the App's service principal
+  access to them, provisions the durable-runtime database when durability is on, configures tracing,
+  and rolls out the App. `agentbricks deployments` covers the lifecycle (list, get, logs, start, stop,
+  delete).
+- **`agentbricks dev`** - runs the same project source and App command locally. Managed stores,
+  durable state, and tracing use different local behavior, described under
+  [Resource and state lifecycle](#resource-and-state-lifecycle).
+
+**Runtime**
+
+![Runtime: one FastAPI server, run as DurableAgentServer or your own implementation](docs/runtime.svg)
+
+The two ways to run an agent:
+
+- **`DurableAgentServer` - opinionated, batteries included.** Register one handler and get the managed
+  invocation contract (synchronous, streaming, background). Enable the durable runtime so
+  long-running and background work survives restarts, redeploys, and crashes. The framework
+  templates are thin layers over `DurableAgentServer` (HTTP contract detailed under [Runtime](#runtime)).
+- **Custom server - generic, full control.** `agentbricks init --server custom` scaffolds a minimal FastAPI
+  server with no `DurableAgentServer`: you define your own endpoints, request/response shapes, and protocol.
+  `agentbricks dev` and `agentbricks deploy` run and ship it the same way.
+
+## Project ownership and upgrades
+
+`agentbricks init` copies the template bundled with the installed CLI into your project. You own the
+copied `agent/`, `runtime/`, `app.yaml`, and `pyproject.toml` files; edit them to customize the agent.
+The installed `databricks-agentbricks` dependency supplies `databricks_agentkit`, including
+`DurableAgentServer` and the framework adapters imported by those files. Updating that dependency
+updates the library code. New template files are copied only into new projects, so review and merge
+later template changes into a customized project yourself.
+
+`agentbricks --version` shows the installed CLI version, and `init` prints the bundled template's
+package version as `Template ref`. Save that output if you need the template's exact origin:
+`.agentbricks/project.toml` records the framework and template name, but not the package version.
+The project's `pyproject.toml` declares a version range for the runtime dependency. After the first
+`dev` run, check the version actually installed in the project environment with:
+
+```sh
+.venv/bin/python -c "from importlib.metadata import version; print(version('databricks-agentbricks'))"
+```
+
+To adopt a new release while preserving your changes:
+
+1. Commit or back up the customized project. Choose the target version and update its
+   `databricks-agentbricks[langgraph]` or `databricks-agentbricks[openai]` requirement in
+   `pyproject.toml`. Pin an exact version when you need the same direct dependency on every build.
+2. Run `uv lock`, `agentbricks dev --prepare-environment`, and `uv run pytest` from the project.
+   The explicit environment rebuild is needed because later `dev` runs reuse `.venv`.
+3. Upgrade the CLI, scaffold a **different directory** with the same `--framework`, `--server`,
+   and `--disable-chat-app` choices as your project, and compare its `agent/`, `runtime/`,
+   `app.yaml`, and `pyproject.toml` with your project. Merge the template changes you want and run
+   the project tests again. `init` refuses to overwrite an existing directory; it does not upgrade
+   copied files in place.
+4. Redeploy the existing app name and inspect `agentbricks deployments logs <app-name>` for the
+   resolved packages and startup errors. Check the agent through its URL or an
+   [endpoint invocation](#invoke-http-endpoints).
+
+### Deployment dependency inputs
+
+The generated `pyproject.toml` declares Python packages; `app.yaml` runs `uv run start-server` in
+Databricks Apps. Released packages can come from the configured package index (public PyPI by
+default, or `agentbricks deploy --pip-index-url <index-url>`). For an unreleased package, use a
+`[tool.uv.sources]` Git source pinned to a pushed commit that the Apps build can reach. A local path
+or `file://` source is unavailable inside the Apps build; see the
+[development source examples](CONTRIBUTING.md#testing-sdk--runtime-changes-in-a-scaffold).
+
+`agentbricks deploy` uploads the project source but excludes the local `uv.lock`; the Apps build
+resolves dependencies against its own index. The generated `>=` requirements can therefore resolve
+to newer packages on a later deployment. Pin direct dependency versions in `pyproject.toml`, verify
+the selected package index and reachable Git commits, then compare the local environment with the
+deployed build logs. The current deploy flow does not provide a frozen transitive dependency graph
+from the local lockfile. Keep `agent.toml` bindings and the chosen app name alongside the dependency
+manifest so the same deployment targets the same managed resources.
+
+## Resource and state lifecycle
+
+The default managed-server template declares memory, session, and tracing names in `agent.toml`.
+`init` writes those declarations without creating workspace resources. `deploy` resolves them in the
+target workspace, creates missing resources, reuses accessible ones with matching names, creates or
+updates the App, rolls out the source, then attempts the App's store and trace access grants. An existing
+name that the caller cannot access causes an error. A grant failure can leave a deployed App without the
+corresponding feature; inspect deploy warnings.
+`agentbricks memory/sessions bind` and `unbind` edit `agent.toml`; they do not delete remote stores.
+After a memory or session unbind, redeploy currently leaves any earlier `AGENT_MEMORY_STORE` or
+`AGENT_SESSION_STORE` setting in `app.yaml` in place. Remove the stale setting from `app.yaml` before
+redeploying if you want the App to stop using that store. A clean tracing unbind is removed on the
+next deploy.
+Default store names contain a six-letter token (`<name>-<token>-memory` and
+`<name>-<token>-sessions`); use `agentbricks memory bind <name>` or
+`agentbricks sessions bind <name>` to select existing stores. The default tracing experiment is
+under `/Shared/agentbricks_traces/`; `agentbricks tracing list` shows available traces.
+
+| Resource or state | Created or reused | Local `dev` and restart | Redeploy and cleanup |
+| --- | --- | --- | --- |
+| Project files and dependencies | `init` copies a template; `dev` builds `.venv` from `pyproject.toml`. | Source files stay on disk. The local environment is reused until `dev --prepare-environment` rebuilds it. | Deploy syncs source and resolves dependencies again without the local `uv.lock`. App deletion leaves the local project alone. |
+| Databricks App | Deploy creates the named App or reuses it, then updates compute and source. | `dev` serves the project locally without creating an App. | Redeploy with the same name updates that App; `agentbricks deployments delete <app-name>` deletes it. |
+| Invocation Runtime Store | The current default deploy creates or reuses an App-owned database in the workspace's shared Lakebase project. An internal legacy path uses a per-App Lakebase project. | `dev` keeps invocation status, results, and events in process; they disappear on restart. | Deployed invocation records persist across restart and redeploy. Queued work can resume; active work needs a recovery handler and may run more than once. `agentbricks deployments delete` removes the managed store before the App; the legacy delete path does not explicitly remove its Lakebase project. |
+| Managed tool access | Deploy reconciles direct App-auth tool grants from `agent.toml` before source upload, then finalizes Agent Bricks-owned App resources after rollout; request-user tools use the caller's permissions. | `dev` creates no App service principal or Apps grants. | Removing a tool binding removes Agent Bricks-owned Apps resources on redeploy. MCP and Workspace grants are additive; see [Automatic App-identity access](#automatic-app-identity-access-on-deploy). |
+| Memory Store | Deploy creates a declared store if missing or reuses an accessible store by name, then attempts the App grant. | Managed long-term memory is off in `dev`. | Memory persists independently of the App; redeploy reuses the bound store. Unbinding or deleting the App does not delete it. Remove the stale `app.yaml` setting to detach it after unbind; use the separate store delete command when appropriate. |
+| Session Store | Deploy creates or reuses a declared store by name, then attempts the App grant. | `dev` keeps conversation state in process, so a restart loses it. | A bound store preserves LangGraph checkpoints and OpenAI Agents SDK transcripts across restart and redeploy. OpenAI pending approval `RunState` stays in process. Unbinding or deleting the App does not delete the store; remove the stale `app.yaml` setting to detach it. |
+| MLflow traces | `dev` uses a local MLflow server; deploy attempts to create or reuse the bound workspace experiment and grant App access. | Local traces are recorded in `.agentbricks/`; they remain on disk after `dev` stops. | Deployed traces remain in the workspace experiment. Unbinding removes the App's tracing configuration on a later clean deploy; it does not delete the experiment. |
+
+The Runtime Store tracks HTTP invocations, status, results, and event replay. The framework's
+conversation history belongs to its Session Store when bound. The generated chat UI keeps its
+session ID in browser local storage and sends that ID as the top-level `session_id` with each turn.
+`DurableAgentServer` accepts an optional top-level `session_id` for generic handlers, but the generated
+LangGraph and OpenAI Agents templates require a nonempty top-level `session_id` on every invocation.
+API clients should reuse that value for conversation continuity and send a new invocation `id` for each
+turn.
+By default, the templates use the session ID as the state actor; request-user-authenticated
+invocations namespace session state by user. LangGraph can resume from a matching checkpoint after
+worker loss; the OpenAI Agents SDK template replays the input against its saved transcript.
+Recovery can repeat external side effects, so make tools idempotent. For request-user-authenticated
+tools, credentials are not persisted and background recovery is unsupported.
+
+To check the lifecycle in a test project, send two turns with the same session ID during `dev`,
+restart `dev`, and send another turn: local conversation state starts over. Deploy the project,
+record the store names in `agent.toml`, then send two turns with one session ID. Redeploy the same
+App name and send a third turn with that ID; the bound Session Store should retain conversation
+history, and the named stores should be reused. Use an idempotent test tool when exercising worker
+recovery, because active work can be retried. The default chat UI keeps its session ID across page
+reloads; [invoke HTTP endpoints](#invoke-http-endpoints) shows the explicit API request shape.
 
 ## Public names
 
@@ -235,8 +382,10 @@ Each managed run is an **invocation**. Send a client-generated UUID `id` and you
 }
 ```
 
-The optional top-level `session_id` groups invocations into one application session. It is distinct
-from the invocation `id` and from the `X-Routing-Key` sticky-routing header.
+`DurableAgentServer` accepts an optional top-level `session_id` for generic handlers, but the generated
+LangGraph and OpenAI Agents templates require a nonempty top-level `session_id` on every invocation.
+It groups generated-agent invocations into one application session and is distinct from the invocation
+`id` and the `X-Routing-Key` sticky-routing header.
 
 | Endpoint | Behavior |
 | --- | --- |
@@ -253,14 +402,15 @@ status, events, and results. Register `@app.recover` to restart interrupted app-
 worker failures. Recovery is at-least-once, so external side effects must be idempotent. Session
 and Memory Stores separately preserve the state used by your agent.
 
-The managed path uses the internal Runtime Store API to create a dedicated database in the
-workspace's shared Lakebase project and give the app SP ownership. The managed runtime initializes its schema and
-tables; no manual Lakebase grant or Postgres app-resource attachment is needed. Backend selection
-is an internal rollout detail, not a user-facing setting; the current implementation retains the legacy
-per-app Lakebase project by default. Once enabled, redeploy reads the stored backend and verifies
-the app identity, and `agentbricks deployments delete` removes the managed store before deleting the app.
-The switch does not migrate existing deployments between backends. Managed cleanup errors retain
-the app for retry. Direct app deletion bypasses managed store cleanup.
+The current default uses the managed Runtime Store API to create or reuse an App-owned database in
+the workspace's shared Lakebase project. It initializes its own schema and tables without a manual
+Lakebase grant or Postgres App resource. An internal legacy path uses a per-App Lakebase project.
+Backend selection is an internal rollout detail, not a user-facing setting. On the managed path,
+redeploy verifies the stored App identity, and `agentbricks deployments delete` removes the managed
+store before deleting the App. Redeploying an older legacy deployment can attach the managed backend
+while leaving its old per-App Lakebase resource in place; Runtime Store data is not migrated between
+backends.
+Managed cleanup errors retain the App for retry. Direct App deletion bypasses managed store cleanup.
 
 For a tool using `auth = "user"`, the Runtime Store still records token-free invocation state,
 events, and results. The forwarded user credential remains process-local for the active attempt and
@@ -419,7 +569,7 @@ agentbricks init my-agent --memory-store support-agent-memory --session-store su
 agentbricks sessions bind support-agent-sessions
 agentbricks memory bind support-agent-memory
 
-# deploy creates any declared-but-missing store and grants the app's service principal access.
+# deploy creates any declared-but-missing store and attempts the App access grant.
 agentbricks deploy my-agent
 ```
 
@@ -643,9 +793,10 @@ those bindings does not revoke an independently valid grant.
 
 Only direct resources are automatic. Agent Bricks never discovers or grants tables and warehouses
 used by a Genie Space, objects called by a UC function, or resources wrapped by an MCP service.
-Grant those transitive dependencies manually when the called service uses the App identity. If any
-required direct grant cannot be read, applied, or verified, deploy stops before source upload and
-leaves the currently deployed version untouched.
+Grant those transitive dependencies manually when the called service uses the App identity. UC and
+Workspace grant checks, plus initial App-resource attachment, happen before source upload. Final
+Agent Bricks-owned App-resource reconciliation runs after rollout and can fail after the source has
+been uploaded.
 
 `DurableAgentServer` derives its request-auth policy directly from the managed tool bindings in
 `agent.toml`. Projects do not maintain a separate request-auth contract marker: a managed tool with
@@ -970,7 +1121,8 @@ agentbricks --profile <profile> deploy agent-bricks-agent-demo --source .
 ```
 
 (`bind` declares the store name in `agent.toml`; `agentbricks deploy` creates any declared-but-missing
-store and grants the app's service principal access to it. The memory store id flows to the runtime
+store and attempts to grant the App's service principal access to it. The memory store id flows to
+the runtime
 via the `AGENT_MEMORY_STORE` env var that `deploy` injects; `agentbricks dev` runs locally with memory off
 and does not inject it. The id is not persisted in `agent.toml`.)
 
