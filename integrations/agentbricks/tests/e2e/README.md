@@ -75,3 +75,39 @@ If the gated nightly test fails, its pytest output includes bounded tails of the
 logs so runtime exceptions are visible without accessing the runner's temporary files. For failed
 deployed cases, the matrix fetches the App's recent runtime logs before deleting it and records
 their paths in `evidence.json`; the pytest failure prioritizes those App log tails.
+
+## Declarative user-auth scope matrix
+
+`auth_scope_matrix.py` deploys four projects covering LangGraph and OpenAI Agents SDK harnesses,
+each with either an explicit-only `sql` scope or the union of explicit `sql` plus managed web-search
+`ai-gateway` inference. Every project contains a request-bound code-first SQL tool that proves the
+invoking user can read a temporary marker while the App principal is denied. Combined cases also
+invoke managed web search. The runner verifies configured and effective App scopes, a pushed source
+SHA freshness marker in App logs, OAuth invocation status, and resource cleanup.
+
+Build and push the source commit before running because deployed projects pin their runtime to that
+exact remote SHA:
+
+```bash
+cd integrations/agentbricks
+uv build --wheel --out-dir /tmp/agentbricks-auth-scope-dist
+uv run python tests/e2e/auth_scope_matrix.py \
+  --profile df1 \
+  --app-auth-profile df1-oauth-mcp \
+  --wheel /tmp/agentbricks-auth-scope-dist/databricks_agentbricks-0.3.0-py3-none-any.whl \
+  --output /tmp/agentbricks-auth-scope-matrix \
+  --uc-schema aifx_benchmarks.agentbricks_auth_scope_e2e \
+  --source-repo https://github.com/databricks/databricks-ai-bridge.git \
+  --source-ref <full-pushed-commit-sha>
+```
+
+Verify saved evidence without workspace access:
+
+```bash
+uv run python tests/e2e/auth_scope_matrix.py \
+  --verify-evidence /tmp/agentbricks-auth-scope-matrix/evidence.json
+```
+
+Success is exactly `4 passed, 0 failed, 0 skipped` with both cleanup checks true. Credentials and
+workspace identifiers are not written to `evidence.json`; detailed local logs remain under the
+output directory for diagnosis and report generation.
