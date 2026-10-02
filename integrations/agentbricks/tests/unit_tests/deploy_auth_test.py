@@ -1,5 +1,6 @@
 """Request-user deploy contract and scoped Apps reconciliation tests."""
 
+import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -34,6 +35,13 @@ def _no_tool_access_reconciliation(monkeypatch):
     reconcile = Mock()
     monkeypatch.setattr(deploy_mod, "reconcile_tool_access", reconcile, raising=False)
     return reconcile
+
+
+@pytest.fixture(autouse=True)
+def _no_tool_access_finalization(monkeypatch):
+    finalize = Mock()
+    monkeypatch.setattr(deploy_mod, "finalize_tool_access", finalize, raising=False)
+    return finalize
 
 
 def _project(root, *, auth="user", legacy=False):
@@ -614,6 +622,136 @@ def test_app_auth_reconciles_explicit_access_before_source_rollout(
     assert events == ["app-running", "tool-access", "sync", "apps-deploy"]
     assert "UC/Workspace grants" in result.output
     assert "are additive" in result.output
+
+
+@pytest.mark.parametrize("failure_point", ["sync", "apps-deploy"])
+def test_deploy_keeps_old_tool_resources_when_rollout_fails(
+    tmp_path, monkeypatch, _no_tool_access_reconciliation, failure_point
+):
+    project = _project(tmp_path, auth="app")
+    project.add_tool(ToolSpec.uc_function("query", function="catalog.schema.function"))
+    project.write()
+    events = []
+    attached_resources = [
+        {"name": "agentbricks-tool-old", "uc_securable": {"permission": "MODIFY"}}
+    ]
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda *args: True)
+    monkeypatch.setattr(deploy_mod, "_wait_for_running", lambda *args: None)
+
+    from databricks_agentbricks import app_resources, tool_access
+
+    real_reconcile = tool_access.reconcile_tool_access
+
+    def reconcile(*args):
+        events.append("prepare")
+        return real_reconcile(*args)
+
+    def finalize(*args):
+        events.append("finalize")
+        return tool_access.finalize_tool_access(*args)
+
+    def apps_databricks(arguments, profile, **kwargs):
+        if arguments[:2] == ["apps", "get"]:
+            return SimpleNamespace(
+                returncode=0, stdout=json.dumps({"resources": attached_resources}), stderr=""
+            )
+        payload = json.loads(arguments[arguments.index("--json") + 1])
+        attached_resources[:] = payload["app"]["resources"]
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(app_resources, "_databricks", apps_databricks)
+    monkeypatch.setattr(deploy_mod, "reconcile_tool_access", reconcile)
+    _no_tool_access_reconciliation.side_effect = reconcile
+    monkeypatch.setattr(deploy_mod, "finalize_tool_access", finalize)
+
+    def databricks(arguments, profile, **kwargs):
+        if arguments[0] == "sync":
+            events.append("sync")
+            if failure_point == "sync":
+                raise AgentCliError("sync failed")
+        elif arguments[:2] == ["apps", "deploy"]:
+            events.append("apps-deploy")
+            if failure_point == "apps-deploy":
+                raise AgentCliError("apps deploy failed")
+        return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(deploy_mod, "_databricks", databricks)
+    client = SimpleNamespace(
+        host="https://workspace", current_user="user@example.com", workspace_client=object()
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["test", "--source", str(tmp_path)],
+        obj=SimpleNamespace(profile="selected", output="text", client=lambda: client),
+    )
+
+    assert result.exit_code != 0
+    assert failure_point.replace("-", " ") in result.output
+    assert "agentbricks-tool-old" in {resource["name"] for resource in attached_resources}
+    assert "finalize" not in events
+
+
+def test_deploy_prunes_tool_resources_after_successful_rollout(
+    tmp_path, monkeypatch, _no_tool_access_reconciliation
+):
+    project = _project(tmp_path, auth="app")
+    project.add_tool(ToolSpec.uc_function("query", function="catalog.schema.function"))
+    project.write()
+    events = []
+    attached_resources = [
+        {"name": "agentbricks-tool-old", "uc_securable": {"permission": "MODIFY"}}
+    ]
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda *args: True)
+    monkeypatch.setattr(deploy_mod, "_wait_for_running", lambda *args: None)
+
+    from databricks_agentbricks import app_resources, tool_access
+
+    real_reconcile = tool_access.reconcile_tool_access
+
+    def reconcile(*args):
+        events.append("prepare")
+        return real_reconcile(*args)
+
+    def finalize(*args):
+        events.append("finalize")
+        return tool_access.finalize_tool_access(*args)
+
+    def apps_databricks(arguments, profile, **kwargs):
+        if arguments[:2] == ["apps", "get"]:
+            return SimpleNamespace(
+                returncode=0, stdout=json.dumps({"resources": attached_resources}), stderr=""
+            )
+        payload = json.loads(arguments[arguments.index("--json") + 1])
+        attached_resources[:] = payload["app"]["resources"]
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(app_resources, "_databricks", apps_databricks)
+    monkeypatch.setattr(deploy_mod, "reconcile_tool_access", reconcile)
+    _no_tool_access_reconciliation.side_effect = reconcile
+    monkeypatch.setattr(deploy_mod, "finalize_tool_access", finalize)
+
+    def databricks(arguments, profile, **kwargs):
+        if arguments[0] == "sync":
+            events.append("sync")
+        elif arguments[:2] == ["apps", "deploy"]:
+            events.append("apps-deploy")
+        return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(deploy_mod, "_databricks", databricks)
+    client = SimpleNamespace(
+        host="https://workspace", current_user="user@example.com", workspace_client=object()
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["test", "--source", str(tmp_path)],
+        obj=SimpleNamespace(profile="selected", output="text", client=lambda: client),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert events == ["prepare", "sync", "apps-deploy", "finalize"]
+    assert "agentbricks-tool-old" not in {resource["name"] for resource in attached_resources}
 
 
 def test_deploy_json_labels_only_uc_workspace_grants_as_additive(

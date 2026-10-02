@@ -99,6 +99,13 @@ _TRACE_EXPERIMENT_RESOURCE = "agentbricks-trace-experiment"
 _UC_TRACE_TABLE_RESOURCE_PREFIX = "agentbricks-trace-"
 
 _TOOL_RESOURCE_PREFIX = "agentbricks-tool-"
+_TOOL_PERMISSION_STRENGTH = {
+    ("FUNCTION", "EXECUTE"): 1,
+    ("TABLE", "SELECT"): 1,
+    ("TABLE", "MODIFY"): 2,
+    ("VOLUME", "READ_VOLUME"): 1,
+    ("VOLUME", "WRITE_VOLUME"): 2,
+}
 
 
 def _contains_expected_fields(actual: Any, expected: Any) -> bool:
@@ -199,7 +206,6 @@ def apply_trace_resources(
     return (result.stderr or result.stdout or "").strip() or "unknown error"
 
 
-
 def apply_tool_resources(
     app: str, resources: Sequence[dict[str, Any]], profile: Optional[str]
 ) -> Optional[str]:
@@ -257,6 +263,95 @@ def apply_tool_resources(
     if not _owned_resources_match(persisted_owned, owned):
         return "Could not verify App tool resources: Agent Bricks-owned resources do not match"
     return None
+
+
+def add_tool_resources_for_rollout(
+    app: str, resources: Sequence[dict[str, Any]], profile: Optional[str]
+) -> Optional[str]:
+    """Add or upgrade tool resources before rollout without pruning or downgrading current grants."""
+    current, read_error = _read_app_resources_strict(
+        app, profile, action="Could not read existing App resources"
+    )
+    if read_error is not None:
+        return read_error
+    assert current is not None
+
+    preserved = [
+        resource
+        for resource in current
+        if not (
+            isinstance(resource, dict)
+            and isinstance(resource.get("name"), str)
+            and resource["name"].startswith(_TOOL_RESOURCE_PREFIX)
+        )
+    ]
+    current_owned = [
+        resource
+        for resource in current
+        if isinstance(resource, dict)
+        and isinstance(resource.get("name"), str)
+        and resource["name"].startswith(_TOOL_RESOURCE_PREFIX)
+    ]
+    owned_by_name = {resource["name"]: resource for resource in current_owned}
+    for desired in resources:
+        name = desired.get("name")
+        existing = owned_by_name.get(name)
+        if existing is None:
+            owned_by_name[name] = desired
+            continue
+
+        existing_strength = _tool_resource_permission_strength(existing)
+        desired_strength = _tool_resource_permission_strength(desired)
+        if (
+            existing_strength is not None
+            and desired_strength is not None
+            and desired_strength < existing_strength
+        ):
+            continue
+        owned_by_name[name] = desired
+
+    owned = sorted(owned_by_name.values(), key=lambda resource: str(resource.get("name", "")))
+    current_owned = sorted(current_owned, key=lambda resource: str(resource.get("name", "")))
+    if _owned_resources_match(current_owned, owned):
+        return None
+
+    reconciled = [*preserved, *owned]
+    update = _update_app_resources(app, reconciled, profile)
+    if update.returncode != 0:
+        return (update.stderr or update.stdout or "").strip() or "unknown error"
+
+    persisted, verify_error = _read_app_resources_strict(
+        app, profile, action="Could not verify App tool resources"
+    )
+    if verify_error is not None:
+        return verify_error
+    assert persisted is not None
+    persisted_owned = sorted(
+        (
+            resource
+            for resource in persisted
+            if isinstance(resource, dict)
+            and isinstance(resource.get("name"), str)
+            and resource["name"].startswith(_TOOL_RESOURCE_PREFIX)
+        ),
+        key=lambda resource: str(resource.get("name", "")),
+    )
+    if not _owned_resources_match(persisted_owned, owned):
+        return "Could not verify App tool resources: Agent Bricks-owned resources do not match"
+    return None
+
+
+def _tool_resource_permission_strength(resource: dict[str, Any]) -> int | None:
+    uc_resource = resource.get("uc_securable")
+    if isinstance(uc_resource, dict):
+        return _TOOL_PERMISSION_STRENGTH.get(
+            (uc_resource.get("securable_type"), uc_resource.get("permission"))
+        )
+    genie_resource = resource.get("genie_space")
+    if isinstance(genie_resource, dict) and genie_resource.get("permission") == "CAN_RUN":
+        return 1
+    return None
+
 
 def apply_postgres_resources(
     app: str, backends: list[LakebaseBackend], profile: Optional[str]

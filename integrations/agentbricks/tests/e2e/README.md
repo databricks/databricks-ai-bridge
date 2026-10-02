@@ -65,7 +65,7 @@ The CLI path first verifies that an unavailable MCP service is rejected without 
 `agent.toml`, then checks that removing the absent binding is harmless. The subsequent dev and
 deployed tool matrix exercises valid managed tools.
 
-The deployed cases do not pre-grant the temporary UC function. They require `ab deploy` to create
+The deployed cases do not pre-grant the temporary UC function. They require `agentbricks deploy` to
 create the function/table/volume/Genie Apps resources, then inspect those permissions before
 invoking the App. Built-in `system.ai` MCP services use platform-managed access defaults and are
 validated through live Sandbox and web-search calls rather than direct grant inspection. External

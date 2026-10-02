@@ -16,7 +16,10 @@ from databricks.sdk.service.workspace import (
 )
 
 from databricks_agentbricks.agent_project import ToolSpec
-from databricks_agentbricks.app_resources import apply_tool_resources
+from databricks_agentbricks.app_resources import (
+    add_tool_resources_for_rollout,
+    apply_tool_resources,
+)
 from databricks_agentbricks.errors import AgentCliError
 
 _APP_PERMISSION_STRENGTH = {
@@ -333,7 +336,7 @@ def reconcile_tool_access(
     plan: ToolAccessPlan,
     profile: str | None,
 ) -> ToolAccessPlan:
-    """Apply and verify direct tool access before a new source rollout."""
+    """Apply direct grants and prepare App resources without pruning before a source rollout."""
     if principal is None:
         raise AgentCliError(
             f"Could not resolve App {app!r}'s service principal for tool access grants."
@@ -342,10 +345,20 @@ def reconcile_tool_access(
         _ensure_uc_grant(client, principal, grant)
     for grant in plan.workspace_grants:
         _ensure_workspace_grant(client, principal, grant)
-    resource_error = apply_tool_resources(app, plan.app_resources, profile)
+    resource_error = add_tool_resources_for_rollout(app, plan.app_resources, profile)
     if resource_error is not None:
         raise AgentCliError(
             f"Could not attach the explicit tool resources required by App {app!r}.",
             hint=resource_error,
         )
     return plan
+
+
+def finalize_tool_access(app: str, plan: ToolAccessPlan, profile: str | None) -> None:
+    """Prune removed tool resources and apply permission downgrades after a successful rollout."""
+    resource_error = apply_tool_resources(app, plan.app_resources, profile)
+    if resource_error is not None:
+        raise AgentCliError(
+            f"Could not finalize the explicit tool resources required by App {app!r}.",
+            hint=resource_error,
+        )

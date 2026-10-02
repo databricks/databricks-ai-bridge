@@ -609,7 +609,7 @@ never silently upgraded to user identity.
 
 ### Automatic App-identity access on deploy
 
-`ab deploy` reconciles least-privilege access for resources explicitly declared by App/default
+`agentbricks deploy` reconciles least-privilege access for resources explicitly declared by App/default
 identity tool bindings. It skips every `auth = "user"` binding because those calls use the request
 user's permissions instead of the App service principal.
 

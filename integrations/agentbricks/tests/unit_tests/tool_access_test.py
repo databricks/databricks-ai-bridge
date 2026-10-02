@@ -399,7 +399,7 @@ def test_reconcile_tool_access_applies_apps_uc_and_workspace_in_order(monkeypatc
     events = []
     monkeypatch.setattr(
         ta,
-        "apply_tool_resources",
+        "add_tool_resources_for_rollout",
         lambda app, resources, profile: events.append(("apps", app, resources, profile)),
     )
     monkeypatch.setattr(
@@ -436,7 +436,7 @@ def test_reconcile_tool_access_additive_failure_does_not_replace_apps_resources(
     monkeypatch, failing_step
 ):
     applied = Mock(return_value=None)
-    monkeypatch.setattr(ta, "apply_tool_resources", applied)
+    monkeypatch.setattr(ta, "add_tool_resources_for_rollout", applied)
 
     def ensure_uc(*args):
         if failing_step == "uc":
@@ -465,9 +465,19 @@ def test_reconcile_tool_access_additive_failure_does_not_replace_apps_resources(
 
 
 def test_reconcile_tool_access_surfaces_apps_resource_failure(monkeypatch):
-    monkeypatch.setattr(ta, "apply_tool_resources", lambda *args: "denied: needs MANAGE")
+    monkeypatch.setattr(ta, "add_tool_resources_for_rollout", lambda *args: "denied: needs MANAGE")
 
     with pytest.raises(AgentCliError, match="explicit tool resources") as error:
         reconcile_tool_access(Mock(), "app", "app-sp", ta.ToolAccessPlan(), "prof")
 
     assert error.value.hint == "denied: needs MANAGE"
+
+
+def test_finalize_tool_access_replaces_apps_resource_set(monkeypatch):
+    applied = Mock(return_value=None)
+    monkeypatch.setattr(ta, "apply_tool_resources", applied)
+    plan = ta.ToolAccessPlan(app_resources=({"name": "agentbricks-tool-new"},))
+
+    ta.finalize_tool_access("app", plan, "prof")
+
+    applied.assert_called_once_with("app", plan.app_resources, "prof")

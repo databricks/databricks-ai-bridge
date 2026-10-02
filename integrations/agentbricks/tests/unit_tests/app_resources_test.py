@@ -399,6 +399,78 @@ def test_apply_tool_resources_replaces_complete_owned_subset_and_preserves_unrel
     assert reads == 2  # initial state plus authoritative post-update readback
 
 
+def test_apply_tool_resources_additively_retains_stale_and_stronger_resources(monkeypatch):
+    resources: list[dict[str, Any]] = [
+        {"name": "user-owned", "secret": {"scope": "keep"}},
+        {
+            "name": "agentbricks-tool-stale",
+            "uc_securable": {"securable_type": "TABLE", "permission": "MODIFY"},
+        },
+        {
+            "name": "agentbricks-tool-current",
+            "uc_securable": {"securable_type": "TABLE", "permission": "MODIFY"},
+        },
+        {
+            "name": "agentbricks-tool-upgrade",
+            "uc_securable": {"securable_type": "TABLE", "permission": "SELECT"},
+        },
+    ]
+    desired = [
+        {
+            "name": "agentbricks-tool-current",
+            "uc_securable": {"securable_type": "TABLE", "permission": "SELECT"},
+        },
+        {
+            "name": "agentbricks-tool-upgrade",
+            "uc_securable": {"securable_type": "TABLE", "permission": "MODIFY"},
+        },
+        {
+            "name": "agentbricks-tool-new",
+            "genie_space": {"name": "genie", "space_id": "0" * 32, "permission": "CAN_RUN"},
+        },
+    ]
+    initial_resources = list(resources)
+    expected_owned = [
+        initial_resources[1],
+        initial_resources[2],
+        desired[1],
+        desired[2],
+    ]
+    expected_resources = [
+        initial_resources[0],
+        *sorted(expected_owned, key=lambda resource: resource["name"]),
+    ]
+    payloads = []
+    reads = 0
+
+    def fake_db(args, profile, **kw):
+        nonlocal reads
+        if args[:2] == ["apps", "get"]:
+            reads += 1
+            return types.SimpleNamespace(
+                returncode=0, stdout=json.dumps({"resources": resources}), stderr=""
+            )
+        payload = json.loads(args[args.index("--json") + 1])
+        payloads.append(payload)
+        resources[:] = payload["app"]["resources"]
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(sa, "_databricks", fake_db)
+
+    assert sa.add_tool_resources_for_rollout("app", desired, "prof") is None
+
+    assert resources == expected_resources
+    current_resource = next(r for r in resources if r["name"] == "agentbricks-tool-current")
+    assert current_resource["uc_securable"]["permission"] == "MODIFY"  # no pre-rollout downgrade
+    assert payloads == [
+        {
+            "app": {"resources": expected_resources},
+            "update_mask": "resources",
+        }
+    ]
+    assert reads == 2  # initial state plus authoritative post-update readback
+
+
 def test_apply_tool_resources_fails_when_readback_is_missing_desired_resource(monkeypatch):
     desired = [{"name": "agentbricks-tool-new", "uc_securable": {"permission": "SELECT"}}]
     reads = 0

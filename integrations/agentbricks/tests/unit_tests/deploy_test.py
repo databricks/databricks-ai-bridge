@@ -46,6 +46,7 @@ def _no_tool_access_reconciliation_by_default(monkeypatch):
         "reconcile_tool_access",
         lambda client, app, principal, plan, profile: plan,
     )
+    monkeypatch.setattr(deploy_mod, "finalize_tool_access", lambda app, plan, profile: None)
 
 
 def test_upsert_manifest_env_scaffolds_when_missing(tmp_path: pathlib.Path):

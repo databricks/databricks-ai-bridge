@@ -55,7 +55,11 @@ from databricks_agentbricks.project_config import (
 )
 from databricks_agentbricks.project_types import AgentServer
 from databricks_agentbricks.render import field
-from databricks_agentbricks.tool_access import plan_tool_access, reconcile_tool_access
+from databricks_agentbricks.tool_access import (
+    finalize_tool_access,
+    plan_tool_access,
+    reconcile_tool_access,
+)
 from databricks_agentkit import timefmt
 from databricks_agentkit.runtime.store import (
     RUNTIME_STORE_DATABASE_ENV,
@@ -769,6 +773,9 @@ def deploy(
         obj.profile,
         action=f"Could not deploy '{name}'.",
     )
+    if tool_access_plan is not None:
+        with render.status("Finalizing the app's explicit tool resources…"):
+            finalize_tool_access(name, tool_access_plan, obj.profile)
 
     # 7. Grant the app's service principal what it needs to run (best-effort):
     #    - stores: grant the SP read/write via the managed store API (the store service does the
