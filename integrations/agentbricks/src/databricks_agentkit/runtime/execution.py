@@ -6,6 +6,8 @@ import asyncio
 import copy
 import json
 import logging
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Protocol, cast
 
 from databricks_agentkit.runtime.auth import AuthError
@@ -20,6 +22,33 @@ from databricks_agentkit.runtime.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class InvocationUpdates:
+    """Wake local readers after persisted changes; other workers still poll the store.
+
+    Subscriptions are registered before reading, so a commit during a read cannot be missed.
+    Only active readers occupy memory, and disconnecting a stream releases its subscription.
+    """
+
+    def __init__(self) -> None:
+        self._readers: dict[str, set[asyncio.Event]] = {}
+
+    @contextmanager
+    def subscribe(self, invocation_id: str) -> Iterator[asyncio.Event]:
+        changed = asyncio.Event()
+        readers = self._readers.setdefault(invocation_id, set())
+        readers.add(changed)
+        try:
+            yield changed
+        finally:
+            readers.discard(changed)
+            if not readers:
+                self._readers.pop(invocation_id, None)
+
+    def notify(self, invocation_id: str) -> None:
+        for reader in self._readers.get(invocation_id, ()):
+            reader.set()
 
 
 def copy_json_value(value: JsonValue, name: str) -> JsonValue:
@@ -56,9 +85,16 @@ class InvocationExecutor(Protocol):
 class AttemptExecution:
     """Call the agent hook and commit one already-claimed attempt."""
 
-    def __init__(self, execute_fn: InvocationExecutorFn, *, runtime_store: RuntimeStore) -> None:
+    def __init__(
+        self,
+        execute_fn: InvocationExecutorFn,
+        *,
+        runtime_store: RuntimeStore,
+        on_change: Callable[[str], None] | None = None,
+    ) -> None:
         self._execute_fn = execute_fn
         self._runtime_store = runtime_store
+        self._on_change = on_change or (lambda _invocation_id: None)
 
     async def run(self, claimed: Invocation) -> None:
         invocation_id = claimed.invocation_id
@@ -74,6 +110,7 @@ class AttemptExecution:
                     raise RuntimeError(
                         f"invocation {invocation_id!r} no longer owns attempt {claimed.attempt}"
                     )
+                self._on_change(invocation_id)
                 return sequence_number
 
             response = await self._execute_fn(
@@ -123,6 +160,8 @@ class AttemptExecution:
                     invocation_id,
                     claimed.attempt,
                 )
+        finally:
+            self._on_change(invocation_id)
 
 
 class LocalInvocationExecutor(InvocationExecutor):

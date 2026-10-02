@@ -120,7 +120,15 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
         monkeypatch.setattr(ui, "_local_history", _session_history)
     # Keep model discovery deterministic and offline (no AI Gateway listing call).
     monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-sonnet-4-5")
-    monkeypatch.setattr(ui, "_discover_chat_models", lambda: ["system.ai.claude-sonnet-4-5"])
+    monkeypatch.setattr(
+        ui,
+        "_discover_chat_models",
+        lambda: {
+            "default": "system.ai.claude-sonnet-4-5",
+            "available": ["system.ai.claude-sonnet-4-5"],
+            "warnings": [],
+        },
+    )
 
     async def invoke_handler(request, context):
         return {"output": []}
@@ -160,10 +168,7 @@ def test_demo_ui_routes(monkeypatch):
     assert 'demoUrl("/api/demo/models")' in app_script.text
     assert 'fetch("/api/session/new"' not in app_script.text
     assert "/api/demo/sessions/${encodeURIComponent(sessionId)}/open" in app_script.text
-    assert (
-        "return { id: newSessionId(), session_id: sessionId, input, ...transport };"
-        in app_script.text
-    )
+    assert "return { id, session_id: sessionId, input, ...transport };" in app_script.text
     assert "session_id: sessionId,\n    actor:" not in app_script.text
     assert "output.session_id" not in app_script.text
     assert "result.session_id" not in app_script.text
@@ -176,13 +181,11 @@ def test_demo_ui_routes(monkeypatch):
     assert "function routingHeaders()" in app_script.text
     assert 'if (state.sessionId) headers["X-Routing-Key"] = state.sessionId;' in app_script.text
     assert 'return { "Content-Type": "application/json", ...routingHeaders() };' in app_script.text
+    assert "fetch(`/api/invocations/${encodeURIComponent(invocationId)}`, {" in app_script.text
     assert (
-        "fetch(`/api/invocations/${encodeURIComponent(invocationId)}`, {\n"
-        '      cache: "no-store",\n'
-        '      credentials: "same-origin",\n'
-        "      headers: routingHeaders(),\n"
-        "    })"
-    ) in app_script.text
+        'cache: "no-store", credentials: "same-origin", headers: routingHeaders()'
+        in app_script.text
+    )
     # Session-scoped demo GETs carry the routing key so history refreshes hit the same replica.
     assert (
         'fetch(demoUrl("/api/demo/session/items"), { cache: "no-store", headers: routingHeaders() })'
@@ -225,6 +228,7 @@ def test_demo_ui_routes(monkeypatch):
     assert client.get("/api/demo/models").json() == {
         "default": "system.ai.claude-sonnet-4-5",
         "available": ["system.ai.claude-sonnet-4-5"],
+        "warnings": [],
     }
 
     sessions = client.get("/api/demo/sessions").json()
@@ -308,7 +312,12 @@ def test_demo_config_does_not_wait_for_model_discovery(monkeypatch):
     monkeypatch.setattr(
         ui,
         "_discover_chat_models",
-        lambda: calls.append(True) or ["system.ai.claude-sonnet-4-5", "system.ai.llama-4-maverick"],
+        lambda: calls.append(True)
+        or {
+            "default": "system.ai.claude-sonnet-4-5",
+            "available": ["system.ai.claude-sonnet-4-5", "system.ai.llama-4-maverick"],
+            "warnings": [],
+        },
     )
 
     assert client.get("/api/ui/config").status_code == 200
@@ -383,11 +392,12 @@ def test_chat_session_items_exclude_non_message_items():
 
 
 def test_discover_chat_models_pins_default_and_dedups(monkeypatch):
+    monkeypatch.setattr(ui, "_model_schemas", lambda: ["system.ai"])
     monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-sonnet-4-5")
     monkeypatch.setattr(
         ui,
         "list_ai_gateway_model_services",
-        lambda _client: [
+        lambda _client, **_kwargs: [
             "system.ai.llama-4-maverick",
             "system.ai.claude-sonnet-4-5",
             "system.ai.claude-opus-4-8",
@@ -396,7 +406,7 @@ def test_discover_chat_models_pins_default_and_dedups(monkeypatch):
     monkeypatch.setattr(ui, "workspace_client", lambda: object())
 
     # Default pinned first, the rest alphabetical, and the default not repeated by discovery.
-    assert ui._discover_chat_models() == [
+    assert ui._discover_chat_models()["available"] == [
         "system.ai.claude-sonnet-4-5",
         "system.ai.claude-opus-4-8",
         "system.ai.llama-4-maverick",
@@ -404,31 +414,33 @@ def test_discover_chat_models_pins_default_and_dedups(monkeypatch):
 
 
 def test_discover_chat_models_falls_back_to_default_on_error(monkeypatch):
+    monkeypatch.setattr(ui, "_model_schemas", lambda: ["system.ai"])
     monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-sonnet-4-5")
 
-    def _boom(_client):
+    def _boom(_client, **_kwargs):
         raise PermissionError("cannot read system.ai")
 
     monkeypatch.setattr(ui, "list_ai_gateway_model_services", _boom)
     monkeypatch.setattr(ui, "workspace_client", lambda: object())
 
     # A workspace that can't list the gateway still gets a working picker.
-    assert ui._discover_chat_models() == ["system.ai.claude-sonnet-4-5"]
+    assert ui._discover_chat_models()["available"] == ["system.ai.claude-sonnet-4-5"]
 
 
-def test_discover_chat_models_caps_the_picker(monkeypatch):
+def test_discover_chat_models_includes_models_beyond_old_display_limit(monkeypatch):
+    monkeypatch.setattr(ui, "_model_schemas", lambda: ["system.ai"])
     monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-sonnet-4-5")
     monkeypatch.setattr(
         ui,
         "list_ai_gateway_model_services",
-        # More services than the cap allows; synthetic because no real catalog is this long.
-        lambda _client: [f"system.ai.test-model-{i:03d}" for i in range(30)],
+        # Regression: OpenAI models sorted after the old cap must remain selectable.
+        lambda _client, **_kwargs: [f"system.ai.test-model-{i:03d}" for i in range(30)],
     )
     monkeypatch.setattr(ui, "workspace_client", lambda: object())
 
-    result = ui._discover_chat_models()
-    assert len(result) == ui._MODEL_LIMIT
-    assert result[0] == "system.ai.claude-sonnet-4-5"  # the default survives truncation
+    result = ui._discover_chat_models()["available"]
+    assert len(result) == 31
+    assert result[0] == "system.ai.claude-sonnet-4-5"  # the default remains first
 
 
 @pytest.mark.asyncio
@@ -548,3 +560,20 @@ def test_open_session_rejects_another_actor(monkeypatch):
     response = client.post("/api/demo/sessions/s2/open")
     assert response.status_code == 403
     assert response.json()["detail"] == "Session belongs to another actor."
+
+
+def test_discovery_continues_when_system_ai_is_not_accessible(monkeypatch):
+    monkeypatch.setattr(ui, "_default_model", lambda: "team.models.default")
+    monkeypatch.setattr(ui, "_model_schemas", lambda: ["system.ai", "team.models"])
+    monkeypatch.setattr(ui, "workspace_client", lambda: object())
+
+    def discover(_client, *, schema):
+        if schema == "system.ai":
+            raise PermissionError("no access")
+        return ["team.models.openai"]
+
+    monkeypatch.setattr(ui, "list_ai_gateway_model_services", discover)
+    result = ui._discover_chat_models()
+    assert result["available"] == ["team.models.default", "team.models.openai"]
+    assert len(result["warnings"]) == 1
+    assert "system.ai" in result["warnings"][0]

@@ -171,7 +171,7 @@
                 <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><ellipse cx="12" cy="12" rx="10" ry="4.3"/><ellipse cx="12" cy="12" rx="10" ry="4.3" transform="rotate(60 12 12)"/><ellipse cx="12" cy="12" rx="10" ry="4.3" transform="rotate(120 12 12)"/></svg>
               </div>
               <h2>Start a conversation</h2>
-              <p>Test your agent with streaming, background, or sync calls. Messages stay in this session, and every run is correlated with tool and model events.</p>
+              <p>Chat with <strong id="project-agent-name">your project agent</strong>. Every request runs your agent code, instructions, and tools.</p>
               <p class="empty-prompts-label">What would you like to test?</p>
               <div class="prompt-grid">
                 <button type="button" data-prompt="Use the get_current_time tool and explain what you did.">Use a tool</button>
@@ -197,14 +197,14 @@
             <textarea id="prompt-input" rows="1" placeholder="Ask your agent anything…"></textarea>
             <div class="composer-footer">
               <div class="mode-switcher" aria-label="Invocation mode">
-                <button class="mode-button active" data-mode="streaming" type="button">Streaming</button>
-                <button class="mode-button" data-mode="background" type="button">Background</button>
-                <button class="mode-button" data-mode="sync" type="button">Sync</button>
+                <button class="mode-button active" data-mode="streaming" type="button" title="Show the answer as it is generated">Streaming</button>
+                <button class="mode-button" data-mode="background" type="button" title="Submit a run and check its status until it finishes">Background</button>
+                <button class="mode-button" data-mode="sync" type="button" title="Wait for the complete answer">Wait for result</button>
               </div>
               <div class="composer-right">
                 <span class="composer-model">
-                  <label class="sr-only" for="model-select">Model</label>
-                  <select id="model-select" aria-label="Model" disabled>
+                  <label class="sr-only" for="model-select">Agent model override</label>
+                  <select id="model-select" aria-label="Agent model override" aria-describedby="model-description model-discovery-status" disabled>
                     <option>Loading models…</option>
                   </select>
                   <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
@@ -214,6 +214,20 @@
                   <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
                 </button>
               </div>
+            </div>
+            <div id="background-run" class="composer-help" hidden>
+              <a id="background-run-link" target="_blank" rel="noopener">Run status</a>
+              <button id="background-wait-toggle" type="button">Stop waiting</button>
+              <span>Stopping the wait does not cancel the agent. Keep this page open to check the result.</span>
+            </div>
+            <p id="mode-description" class="composer-help">Streaming: show the answer as it is generated.</p>
+            <p id="model-description" class="composer-help"></p>
+            <p id="model-discovery-status" class="composer-help" role="status"></p>
+            <div id="custom-model-panel" class="custom-model-panel" hidden>
+              <label for="custom-model-input">AI Gateway model service</label>
+              <input id="custom-model-input" disabled placeholder="catalog.schema.model" pattern="[^.\s]+\.[^.\s]+\.[^.\s]+" aria-describedby="custom-model-help" />
+              <button id="custom-model-apply" type="button">Use model</button>
+              <p id="custom-model-help" class="composer-help">Enter the full name of a chat-completions model service you can execute. This changes the model for this page only.</p>
             </div>
           </form>
         </section>
@@ -276,6 +290,8 @@
       </div>
     </div>
 
-    <script src="/ui-assets/app.js?v=5" defer></script>
+    <script src="/ui-assets/vendor/markdown-it-15.0.2.min.js" defer></script>
+    <script src="/ui-assets/chat-content.js" defer></script>
+    <script src="/ui-assets/app.js?v=6" defer></script>
   </body>
 </html>

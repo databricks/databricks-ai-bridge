@@ -62,8 +62,10 @@ Agents SDK does not expose checkpoint continuation.
 
 - Invocation state/events: in-memory in `agentbricks dev`; Lakebase when `agentbricks deploy` attaches a Runtime
   Store.
-- Conversation transcript: in-process in `agentbricks dev`; managed Session Store when bound, on `agentbricks deploy`.
-- Long-term memory: off in `agentbricks dev`; managed Memory Store when bound, on `agentbricks deploy`.
+- Conversation transcript: in-process in plain `agentbricks dev`; managed Session Store when bound,
+  with `dev --workspace-stores` or `deploy`.
+- Long-term memory: off in plain `agentbricks dev`; managed Memory Store when bound,
+  with `dev --workspace-stores` or `deploy`.
 - OpenAI HITL `RunState`: process-local even with Session Store; it does not survive worker loss.
 - Recovery: replay the persisted application input against the same session.
 

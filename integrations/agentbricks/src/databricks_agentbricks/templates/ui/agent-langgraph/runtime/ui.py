@@ -16,8 +16,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from databricks_agentkit import workspace_client
-from databricks_agentkit.runtime.model_services import list_ai_gateway_model_services
-from databricks_agentkit.runtime.store import runtime_store_is_persistent_environment
+from runtime.model_services import list_ai_gateway_model_services
+from databricks_agentkit.runtime.auth import AuthError, RequestAuthContext
+from databricks_agentkit.runtime.store import (
+    RUNTIME_STORE_LOCAL_ENV,
+    runtime_store_is_persistent_environment,
+)
 
 _UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
 _INSTANCE_ID = uuid.uuid4().hex[:12]  # identifies this process in the UI
@@ -75,6 +79,8 @@ def _request_actor(request: Request) -> str:
     session views here list exactly what the agent reads/writes for the current user. Falls back to
     ``"agent"`` locally / when unauthenticated.
     """
+    if os.getenv(RUNTIME_STORE_LOCAL_ENV, "").lower() == "true":
+        return "agent"
     for header in _USER_HEADERS:
         if value := request.headers.get(header):
             return value
@@ -87,6 +93,25 @@ def _request_session_id(request: Request) -> str:
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id is required")
     return str(session_id)
+
+
+def _state_identity(
+    request: Request, *, session_id: str | None = None, actor: str | None = None
+) -> tuple[str, str, bool]:
+    """Match the invocation runtime/adapter's identity without changing browser session ids."""
+    session_id = session_id or _request_session_id(request)
+    actor = actor or _request_actor(request)
+    policy = getattr(request.app, "auth_policy", None)
+    if policy is None or not policy.requires_user:
+        return session_id, actor, False
+    try:
+        auth = RequestAuthContext.from_headers(request.headers)
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.payload()) from exc
+    try:
+        return auth.namespace("session", session_id), auth.namespace("actor", actor), True
+    finally:
+        auth.close()
 
 
 def _is_deployed() -> bool:
@@ -136,10 +161,6 @@ def _tracing() -> dict:
     return {"enabled": enabled, "experiment_id": experiment_id or None, "url": url}
 
 
-# Cap the picker: the gateway's schema can list more models than belong in a dropdown.
-_MODEL_LIMIT = 20
-
-
 def _default_model() -> str:
     """The agent's configured default endpoint (``agent.agent.MODEL``), imported lazily.
 
@@ -154,25 +175,48 @@ def _default_model() -> str:
 def _rank_models(default: str, names: list[str]) -> list[str]:
     """Pin the default first, then the remaining gateway models alphabetically, without duplicates.
 
-    Truncation therefore only ever sheds models beyond the cap, never the configured default.
+    The list is complete: do not hide models behind an alphabetical display limit.
     """
     ordered = [default, *sorted(n for n in names if n != default)]
     seen: set[str] = set()
     return [n for n in ordered if not (n in seen or seen.add(n))]
 
 
-def _discover_chat_models() -> list[str]:
-    """The AI Gateway chat models for the picker: default first, then the rest, capped.
+def _model_schemas() -> list[str]:
+    from agent import agent as agent_module
 
-    Best-effort: if listing fails (missing permission, repeated transient errors), fall back to just
-    the default so the picker still works. The default is always present and first.
+    default_schema = _default_model().rsplit(".", 1)[0]
+    configured = getattr(agent_module, "MODEL_SCHEMAS", ())
+    return list(dict.fromkeys([default_schema, *configured, "system.ai"]))
+
+
+def _agent_identity() -> dict[str, str]:
+    from databricks_agentkit.runtime.tool_manifest import project_root
+
+    try:
+        name = os.getenv("DATABRICKS_APP_NAME") or project_root().name
+    except RuntimeError:
+        name = "Project agent"
+    return {"name": name, "source": "agent/agent.py"}
+
+
+def _discover_chat_models() -> dict:
+    """Discover configured schemas independently, retaining the default on any listing failure.
+
+    Listing permission does not guarantee EXECUTE; a denied invocation is reported by the runtime.
+    Do not use the internal metastore-wide list route or silently truncate alphabetic results.
     """
     default = _default_model()
-    try:
-        names = list_ai_gateway_model_services(workspace_client())
-    except Exception:  # noqa: BLE001 - a broken listing must not break the whole config endpoint
-        names = []
-    return _rank_models(default, names)[:_MODEL_LIMIT]
+    names: list[str] = []
+    warnings = []
+    for schema in _model_schemas():
+        try:
+            names.extend(list_ai_gateway_model_services(workspace_client(), schema=schema))
+        except Exception:  # noqa: BLE001 - a failed schema must not hide other accessible models
+            warnings.append(
+                f"Could not list {schema}. You can still use the project default or enter a full model service name."
+            )
+    return {"default": default, "available": _rank_models(default, names), "warnings": warnings}
 
 
 class _ManagedStateClient:
@@ -224,7 +268,12 @@ class _ManagedStateClient:
             },
         )
 
-    def ensure_session(self, actor: str, session_id: str) -> dict:
+    def ensure_session(
+        self, actor: str, session_id: str, public_session_id: str | None = None
+    ) -> dict:
+        metadata = {"client": "agentbricks-demo-ui"}
+        if public_session_id:
+            metadata["public_session_id"] = public_session_id
         try:
             return self._do(
                 "POST",
@@ -232,7 +281,7 @@ class _ManagedStateClient:
                 query={"session_id": session_id},
                 body={
                     "actor_id": actor,
-                    "metadata": {"client": "agentbricks-demo-ui"},
+                    "metadata": metadata,
                 },
             )
         except Exception as exc:
@@ -270,11 +319,21 @@ class _ManagedStateClient:
         )
 
     def list_session_items(self, session_id: str) -> dict:
-        return self._do(
-            "GET",
-            f"{_AGENTS_API}/session-stores/{_session_store()}/sessions/{session_id}/items",
-            query={"order_by": "create_time asc", "page_size": 100},
-        )
+        items = []
+        page_token = None
+        while True:
+            query = {"order_by": "create_time asc", "page_size": 100}
+            if page_token:
+                query["page_token"] = page_token
+            page = self._do(
+                "GET",
+                f"{_AGENTS_API}/session-stores/{_session_store()}/sessions/{session_id}/items",
+                query=query,
+            )
+            items.extend(page.get("session_items", []))
+            page_token = page.get("next_page_token")
+            if not page_token:
+                return {"session_items": items}
 
 
 @lru_cache(maxsize=1)
@@ -297,7 +356,8 @@ def _require_memory() -> None:
     if not _memory_store():
         raise HTTPException(
             status_code=503,
-            detail="No memory store configured. Run `agentbricks memory bind <store>`.",
+            detail="No memory store configured. Bind an existing store with `agentbricks memory bind <store>`, "
+            "then restart with `agentbricks dev --workspace-stores` or deploy.",
         )
 
 
@@ -305,16 +365,23 @@ def _require_session() -> None:
     if not _session_store():
         raise HTTPException(
             status_code=503,
-            detail="No session store configured. Run `agentbricks sessions bind <store>`.",
+            detail="No session store configured. Bind an existing store with `agentbricks sessions bind <store>`, "
+            "then restart with `agentbricks dev --workspace-stores` or deploy.",
         )
 
 
-async def _checkpoint_history(session_id: str, actor: str) -> dict[str, Any]:
+async def _checkpoint_history(
+    session_id: str, actor: str, *, workspace_client_for=None
+) -> dict[str, Any]:
     from agent.agent import create_agent_graph
 
     from databricks_agentkit.langgraph.session_store import thread_config
 
-    graph = await create_agent_graph(actor)
+    # Use the graph's public state view: it applies pending writes and the graph's reducers,
+    # including messages completed in parallel with a paused approval. This constructs graph/tool
+    # definitions but never invokes the graph, a model, or a tool.
+    kwargs = {"workspace_client_for": workspace_client_for} if workspace_client_for else {}
+    graph = await create_agent_graph(actor, **kwargs)
     snapshot = await graph.aget_state(thread_config(session_id, actor))
     values = snapshot.values if isinstance(snapshot.values, dict) else {}
     items = []
@@ -334,16 +401,29 @@ async def _checkpoint_history(session_id: str, actor: str) -> dict[str, Any]:
     return {"session_id": session_id, "session_items": items, "interrupts": interrupts}
 
 
-def _chat_sessions(result: dict[str, Any]) -> list[dict[str, Any]]:
+def _chat_sessions(
+    result: dict[str, Any],
+    *,
+    user_scoped: bool = False,
+    current_effective_id: str | None = None,
+    current_public_id: str | None = None,
+) -> list[dict[str, Any]]:
     sessions = []
     for session in result.get("sessions", []):
         if not isinstance(session, dict):
             continue
         metadata = session.get("metadata")
         metadata = metadata if isinstance(metadata, dict) else {}
-        if metadata.get("public_session_id"):
-            continue
-        sessions.append(session)
+        public_id = metadata.get("public_session_id")
+        if user_scoped and session.get("session_id") == current_effective_id:
+            # API-created sessions may predate UI metadata. We can map the current known id.
+            public_id = current_public_id
+        if user_scoped:
+            # An opaque runtime id cannot be sent back as a public id (it would be hashed twice).
+            if isinstance(public_id, str) and public_id:
+                sessions.append({**session, "session_id": public_id})
+        elif not public_id:
+            sessions.append(session)
     return sessions
 
 
@@ -391,6 +471,7 @@ def install_ui(app: FastAPI) -> None:
             "instance_id": _INSTANCE_ID,
             "viewer": actor if actor != "agent" else "Local developer",
             "deployed": _is_deployed(),
+            "agent": _agent_identity(),
             "models": {"default": default_model, "available": [default_model]},
             "streaming": {
                 "enabled": True,
@@ -423,18 +504,13 @@ def install_ui(app: FastAPI) -> None:
     async def demo_models() -> dict:
         # Model discovery can take several seconds in a large workspace. Keep it separate from the
         # runtime config so the rest of the UI becomes interactive immediately.
-        available_models = await asyncio.to_thread(_discover_chat_models)
-        return {"default": _default_model(), "available": available_models}
+        return await asyncio.to_thread(_discover_chat_models)
 
     @app.post("/api/demo/memory/entries", include_in_schema=False)
     async def create_memory_entry(request: Request, payload: MemoryEntryRequest) -> dict:
         _require_memory()
-        return await _managed_call(
-            _state_client().create_memory_entry,
-            _request_actor(request),
-            payload,
-            _request_session_id(request),
-        )
+        session_id, actor, _ = _state_identity(request)
+        return await _managed_call(_state_client().create_memory_entry, actor, payload, session_id)
 
     @app.get("/api/demo/memory/entries", include_in_schema=False)
     async def list_memory_entries(
@@ -444,31 +520,34 @@ def install_ui(app: FastAPI) -> None:
     ) -> dict:
         # The UI can browse another actor's memories by passing ?actor=; default to the viewer.
         _require_memory()
+        _, effective_actor, _ = _state_identity(request, actor=actor)
         return await _managed_call(
-            _state_client().list_memory_entries, actor or _request_actor(request), path_prefix
+            _state_client().list_memory_entries, effective_actor, path_prefix
         )
 
     @app.post("/api/demo/memory/search", include_in_schema=False)
     async def search_memory_entries(request: Request, payload: MemorySearchRequest) -> dict:
         # payload.actor lets the UI search another actor's memories; default to the viewer.
         _require_memory()
-        return await _managed_call(
-            _state_client().search_memory_entries, payload.actor or _request_actor(request), payload
-        )
+        _, actor, _ = _state_identity(request, actor=payload.actor)
+        return await _managed_call(_state_client().search_memory_entries, actor, payload)
 
     @app.post("/api/demo/sessions", include_in_schema=False)
     async def ensure_session(request: Request) -> dict:
         _require_session()
-        return await _managed_call(
-            _state_client().ensure_session,
-            _request_actor(request),
-            _request_session_id(request),
+        session_id, actor, user_scoped = _state_identity(request)
+        args = (
+            (actor, session_id, _request_session_id(request))
+            if user_scoped
+            else (actor, session_id)
         )
+        result = await _managed_call(_state_client().ensure_session, *args)
+        return {**result, "session_id": _request_session_id(request)}
 
     @app.get("/api/demo/sessions", include_in_schema=False)
     async def list_sessions(request: Request) -> dict:
         session_id = _request_session_id(request)
-        actor = _request_actor(request)
+        effective_id, actor, user_scoped = _state_identity(request)
         if not _session_store():
             return {
                 "sessions": [
@@ -484,7 +563,12 @@ def install_ui(app: FastAPI) -> None:
         result = await _managed_call(_state_client().list_sessions, actor)
         return {
             **result,
-            "sessions": _chat_sessions(result),
+            "sessions": _chat_sessions(
+                result,
+                user_scoped=user_scoped,
+                current_effective_id=effective_id,
+                current_public_id=session_id,
+            ),
             "current_session_id": session_id,
             "managed": True,
         }
@@ -492,8 +576,9 @@ def install_ui(app: FastAPI) -> None:
     @app.post("/api/demo/sessions/{session_id}/open", include_in_schema=False)
     async def open_session(request: Request, session_id: str) -> JSONResponse:
         _require_session()
-        session = await _managed_call(_state_client().get_session, session_id)
-        if session.get("actor_id") != _request_actor(request):
+        effective_id, actor, _ = _state_identity(request, session_id=session_id)
+        session = await _managed_call(_state_client().get_session, effective_id)
+        if session.get("actor_id") != actor:
             raise HTTPException(status_code=403, detail="Session belongs to another actor.")
         return JSONResponse(
             {
@@ -506,21 +591,37 @@ def install_ui(app: FastAPI) -> None:
     @app.get("/api/demo/session", include_in_schema=False)
     async def get_session(request: Request) -> dict:
         _require_session()
-        return await _managed_call(_state_client().get_session, _request_session_id(request))
+        session_id, _, _ = _state_identity(request)
+        result = await _managed_call(_state_client().get_session, session_id)
+        return {**result, "session_id": _request_session_id(request)}
 
     @app.post("/api/demo/session/items", include_in_schema=False)
     async def append_session_items(request: Request, payload: SessionItemsRequest) -> dict:
         _require_session()
-        return await _managed_call(
-            _state_client().append_session_items,
-            _request_session_id(request),
-            payload.items,
-        )
+        session_id, _, _ = _state_identity(request)
+        return await _managed_call(_state_client().append_session_items, session_id, payload.items)
 
     @app.get("/api/demo/session/items", include_in_schema=False)
     async def list_session_items(request: Request) -> dict:
-        session_id = _request_session_id(request)
-        if _session_store():
-            result = await _managed_call(_state_client().list_session_items, session_id)
-            return _chat_session_items(result)
-        return await _checkpoint_history(session_id, _request_actor(request))
+        session_id, actor, user_scoped = _state_identity(request)
+        # Managed items are serialized checkpoints, not a second browser-written transcript.
+        auth = RequestAuthContext.from_headers(request.headers) if user_scoped else None
+        try:
+            kwargs = {"workspace_client_for": auth.client_for} if auth else {}
+            result = await _checkpoint_history(session_id, actor, **kwargs)
+            return {**result, "session_id": _request_session_id(request)}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            code = getattr(exc, "error_code", None)
+            detail = "Could not load conversation history"
+            if code:
+                detail += f" ({code})"
+            raise HTTPException(
+                status_code=502,
+                detail=detail + ". Check access to the bound session store and configured tools "
+                "using the selected workspace credentials, then retry.",
+            ) from exc
+        finally:
+            if auth:
+                auth.close()
