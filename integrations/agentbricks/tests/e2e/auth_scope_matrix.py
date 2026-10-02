@@ -25,6 +25,7 @@ from collections.abc import Callable, Sequence
 from typing import Any, cast
 
 from databricks.sdk import WorkspaceClient
+from databricks.sdk.errors import NotFound
 
 FRAMEWORKS = ("langgraph", "openai")
 SCOPE_SOURCES = ("explicit", "combined")
@@ -129,7 +130,8 @@ class Runner:
         self.catalog: str | None = None
         self.schema: str | None = None
         self.host: str | None = None
-        self.headers: dict[str, str] = {}
+        self.workspace: WorkspaceClient | None = None
+        self._authenticate: Callable[[], dict[str, str]] | None = None
         self.cleanup_state = {"apps_deleted": False, "sql_asset_deleted": False}
 
     def run(
@@ -238,6 +240,7 @@ class Runner:
         )
         workspace = WorkspaceClient(profile=self.profile)
         app_auth = WorkspaceClient(profile=self.app_auth_profile)
+        self.workspace = workspace
         if not workspace.config.host or not app_auth.config.host:
             raise MatrixError("Both workspace profiles must resolve a Databricks host.")
         self.host = workspace.config.host.rstrip("/")
@@ -245,10 +248,16 @@ class Runner:
             raise MatrixError("--app-auth-profile must target the same workspace as --profile.")
         if app_auth.config.auth_type == "pat":
             raise MatrixError("Deployed App API calls require an OAuth profile, not PAT auth.")
-        authorization = app_auth.config.authenticate().get("Authorization")
+        self._authenticate = app_auth.config.authenticate
+        self._oauth_headers()
+
+    def _oauth_headers(self) -> dict[str, str]:
+        if self._authenticate is None:
+            raise MatrixError("OAuth credentials were not initialized for deployed App calls.")
+        authorization = self._authenticate().get("Authorization")
         if not authorization:
             raise MatrixError("Could not resolve OAuth credentials for deployed App calls.")
-        self.headers = {"Authorization": authorization}
+        return {"Authorization": authorization}
 
     def select_warehouse(self, override: str | None) -> str:
         if override:
@@ -632,7 +641,7 @@ def auth_scope_tools(
         url = f"{base_url}/api/invocations"
         response, status = _invoke_with_readiness_retry(
             label,
-            lambda: _http_json(url, body, self.headers),
+            lambda: _http_json(url, body, self._oauth_headers()),
             self.transcript,
             timeout=360,
             retry_interval=15,
@@ -716,16 +725,14 @@ def auth_scope_tools(
             self.cleanup_state["sql_asset_deleted"] = bool(data and str(data[0][0]) == "0")
 
     def _wait_for_app_absence(self, name: str) -> bool:
+        if self.workspace is None:
+            raise MatrixError("Workspace client was not initialized for cleanup verification.")
         started = time.monotonic()
         next_tick = 60.0
         while time.monotonic() - started < 600:
-            result = self.run(
-                ["databricks", "apps", "get", name, "--profile", self.profile],
-                timeout=60,
-                check=False,
-                log_output=False,
-            )
-            if result.returncode != 0:
+            try:
+                self.workspace.apps.get(name)
+            except NotFound:
                 return True
             elapsed = time.monotonic() - started
             if elapsed >= next_tick:

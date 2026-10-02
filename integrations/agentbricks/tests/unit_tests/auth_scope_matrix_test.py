@@ -463,3 +463,57 @@ def test_invocation_readiness_does_not_retry_functional_4xx(tmp_path: pathlib.Pa
         )
 
     assert attempts == 1
+
+
+def test_invocation_refreshes_oauth_headers_for_each_readiness_attempt(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    matrix = _load_matrix_module()
+    runner = matrix.Runner.__new__(matrix.Runner)
+    runner.headers = {"Authorization": "Bearer stale-token"}
+    runner.transcript = matrix.Transcript(tmp_path / "commands.log")
+    authorizations = iter(["Bearer token-1", "Bearer token-2"])
+    runner._authenticate = lambda: {"Authorization": next(authorizations)}
+    observed_headers = []
+
+    def fake_http_json(url, body, headers):
+        observed_headers.append(headers)
+        if len(observed_headers) == 1:
+            raise matrix.InvocationHTTPError(503, "App starting")
+        return {"status": "completed"}, 200
+
+    monkeypatch.setattr(matrix, "_http_json", fake_http_json)
+    monkeypatch.setattr(matrix.time, "sleep", lambda _: None)
+
+    response, status = runner._invoke("invoke-sql", "https://example.test", "prompt")
+
+    assert (response, status) == ({"status": "completed"}, 200)
+    assert observed_headers == [
+        {"Authorization": "Bearer token-1"},
+        {"Authorization": "Bearer token-2"},
+    ]
+
+
+def test_app_absence_requires_sdk_not_found():
+    from databricks.sdk.errors import NotFound
+
+    matrix = _load_matrix_module()
+    runner = matrix.Runner.__new__(matrix.Runner)
+    runner.workspace = SimpleNamespace(
+        apps=SimpleNamespace(get=lambda _: (_ for _ in ()).throw(NotFound("absent")))
+    )
+
+    assert runner._wait_for_app_absence("deleted-app") is True
+
+
+def test_app_absence_propagates_permission_denied():
+    from databricks.sdk.errors import PermissionDenied
+
+    matrix = _load_matrix_module()
+    runner = matrix.Runner.__new__(matrix.Runner)
+    runner.workspace = SimpleNamespace(
+        apps=SimpleNamespace(get=lambda _: (_ for _ in ()).throw(PermissionDenied("denied")))
+    )
+
+    with pytest.raises(PermissionDenied, match="denied"):
+        runner._wait_for_app_absence("unknown-app")
