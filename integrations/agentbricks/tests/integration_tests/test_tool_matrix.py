@@ -11,9 +11,11 @@ Environment:
     RUN_AGENTBRICKS_INTEGRATION_TESTS   "1" to enable this suite
     DATABRICKS_HOST / _CLIENT_ID / _CLIENT_SECRET   service-principal auth for the CLIs and SDK
     AGENTBRICKS_INTEGRATION_UC_SCHEMA   two-part ``catalog.schema`` for a scratch function
-    AGENTBRICKS_INTEGRATION_BRIDGE_SHA   optional; pin generated App packages to this bridge commit
+    AGENTBRICKS_INTEGRATION_BRIDGE_SHA   pin generated App packages to this bridge commit; also the
+        provenance commit asserted against the checkout HEAD (falls back to HEAD when unset)
     AGENTBRICKS_INTEGRATION_PREPROVISIONED_APP_CATALOG_ACCESS   "1" when Apps have USE CATALOG
     AGENTBRICKS_INTEGRATION_WAREHOUSE_ID   optional; overrides warehouse discovery
+    AGENTBRICKS_E2E_GENIE_SPACE_ID   32-char Genie space the matrix grants the App CAN_RUN and queries
     AGENTBRICKS_WHEEL   optional; a prebuilt databricks-agentbricks wheel (else built here)
 """
 
@@ -35,11 +37,30 @@ pytestmark = pytest.mark.skipif(
 )
 
 _AGENTBRICKS_PKG = pathlib.Path(__file__).resolve().parents[2]
+# The bridge checkout root; tool_matrix verifies its HEAD and the wheel's contents for provenance.
+_SOURCE_ROOT = _AGENTBRICKS_PKG.parents[1]
 _TOOL_MATRIX = _AGENTBRICKS_PKG / "tests" / "e2e" / "tool_matrix.py"
 # A two-part catalog.schema the CI service principal can create a scratch UC function in.
 _UC_SCHEMA = os.environ.get("AGENTBRICKS_INTEGRATION_UC_SCHEMA", "main.agentbricks_agent_tools_e2e")
 _MATRIX_TIMEOUT_SECONDS = 45 * 60
 _CLEANUP_GRACE_SECONDS = 10 * 60
+
+
+def _commit_sha() -> str:
+    """Full SHA of the source under test, which tool_matrix requires to equal --source-root's HEAD.
+
+    Uses the CI-provided bridge commit when set; otherwise reads the checkout's own HEAD.
+    """
+    sha = os.environ.get("AGENTBRICKS_INTEGRATION_BRIDGE_SHA")
+    if sha:
+        return sha
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=_SOURCE_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
 
 
 def _wheel(tmp_path: pathlib.Path) -> pathlib.Path:
@@ -186,6 +207,10 @@ def test_tool_matrix_deploy_and_invoke(tmp_path: pathlib.Path) -> None:
         str(output),
         "--uc-schema",
         _UC_SCHEMA,
+        "--source-root",
+        str(_SOURCE_ROOT),
+        "--commit-sha",
+        _commit_sha(),
     ]
     warehouse = os.environ.get("AGENTBRICKS_INTEGRATION_WAREHOUSE_ID")
     if warehouse:
