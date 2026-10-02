@@ -1147,8 +1147,9 @@ class Runner:
         invocation_id = str(uuid.uuid4())
         body = {
             "id": invocation_id,
+            # session_id is a top-level invocation field; the adapter rejects it nested in input.
+            "session_id": invocation_id,
             "input": {
-                "session_id": invocation_id,
                 "model": E2E_MODEL,
                 "messages": [{"role": "user", "content": prompt}],
             },
@@ -1611,8 +1612,8 @@ def _curl_command(invocation_url: str, prompt: str, authenticated: bool) -> str:
     body = json.dumps(
         {
             "id": "<client-generated-uuid>",
+            "session_id": "<stable-session-id>",
             "input": {
-                "session_id": "<stable-session-id>",
                 "model": E2E_MODEL,
                 "messages": [{"role": "user", "content": prompt}],
             },
