@@ -520,7 +520,5 @@ def install_ui(app: FastAPI) -> None:
     @app.get("/api/demo/session/items", include_in_schema=False)
     async def list_session_items(request: Request) -> dict:
         session_id = _request_session_id(request)
-        if _session_store():
-            result = await _managed_call(_state_client().list_session_items, session_id)
-            return _chat_session_items(result)
+        # Managed session items contain checkpoints; the graph applies pending writes and reducers.
         return await _checkpoint_history(session_id, _request_actor(request))

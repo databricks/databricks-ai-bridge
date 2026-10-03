@@ -88,7 +88,7 @@ def sessions_bind(obj, store: str, source: pathlib.Path) -> None:
                 f"agentbricks sessions stores create --name {store}",
                 "Create the store now without deploying",
             ),
-            ("agentbricks dev", "Re-run to pick up the store locally"),
+            ("agentbricks dev", "Local development keeps history in-process (lost on restart)"),
             ("agentbricks deploy <name>", "Create it if missing and grant the app access"),
         ],
     )
@@ -164,7 +164,7 @@ def stores_create(obj, name, description, metadata) -> None:
             (f"agentbricks sessions stores get {name}", "View this store's details"),
             (
                 f"agentbricks sessions bind {name}",
-                "Bind this store to the agent (wired in on dev/deploy)",
+                "Bind this store to the agent (used after deploy)",
             ),
         ],
     )
