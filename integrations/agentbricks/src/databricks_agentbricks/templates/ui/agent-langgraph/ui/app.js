@@ -973,24 +973,6 @@ async function refreshSessionView({ hydrateChat = false } = {}) {
   await refreshSessions();
 }
 
-async function recordSessionItems(items) {
-  if (!state.config?.session.managed || !items.length) return;
-  try {
-    const sessionId = await ensureManagedSession();
-    const response = await fetch(demoUrl("/api/demo/session/items"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...routingHeaders() },
-      body: JSON.stringify({ items }),
-    });
-    const result = await jsonResponse(response);
-    addEvent("session.items.append", result);
-    await refreshSessionView();
-  } catch (error) {
-    stateMessage(elements.sessionItems, error instanceof Error ? error.message : String(error), "error");
-    addEvent("session.error", { message: String(error) });
-  }
-}
-
 async function invokeSync(payload) {
   const response = await fetch("/api/invocations", {
     method: "POST",
@@ -1096,16 +1078,7 @@ async function sendText(text, mode = state.mode) {
   setBusy(true, mode === "background" ? "Starting background run" : mode === "streaming" ? "Streaming" : "Running");
   try {
     await dispatch({ messages: [{ role: "user", content }] }, mode);
-    const items = [{ role: "user", content, transport: mode, instance_id: state.instanceId }];
-    if (state.lastAssistantText) {
-      items.push({
-        role: "assistant",
-        content: state.lastAssistantText,
-        transport: mode,
-        instance_id: state.instanceId,
-      });
-    }
-    await recordSessionItems(items);
+    await refreshSessionView();
     return state.lastAssistantText;
   } catch (error) {
     finishDraft();
@@ -1130,18 +1103,7 @@ async function resume(decision) {
   setBusy(true, "Resuming");
   try {
     await dispatch(payload, "streaming");
-    const items = [
-      { role: "human_decision", content: decision, instance_id: state.instanceId },
-    ];
-    if (state.lastAssistantText) {
-      items.push({
-        role: "assistant",
-        content: state.lastAssistantText,
-        transport: "streaming",
-        instance_id: state.instanceId,
-      });
-    }
-    await recordSessionItems(items);
+    await refreshSessionView();
   } catch (error) {
     appendError(error);
   } finally {
