@@ -144,6 +144,28 @@ it an HTTP request. MLflow tracing is on by default (`agentbricks init` binds a 
 `.agentbricks/` and `agentbricks deploy` to the bound workspace experiment; `agentbricks tracing list` shows the
 available traces.
 
+## Inspect and clean up a project
+
+Read `agent.toml` for the recorded agent name, declared memory/session stores, tracing, and tool
+bindings. A declaration does not confirm that the resource exists or that the deployed app can use it.
+
+| Inspect | Command |
+| --- | --- |
+| Local onboarding checks | `agentbricks doctor .` |
+| Agent Bricks apps in a workspace | `agentbricks -p <profile> deployments list` |
+| App status and URL | `agentbricks -p <profile> deployments get agent-bricks-<name>` |
+| Memory store IDs and details | `agentbricks -p <profile> memory stores list`, then `agentbricks -p <profile> memory stores get <resource-name>` |
+| Session store names and details | `agentbricks -p <profile> sessions stores list`, then `agentbricks -p <profile> sessions stores get <name>` |
+
+Doctor checks local onboarding files offline; it does not verify bindings or deployed resources.
+The resource commands query the selected workspace, which can include other projects' resources.
+
+To remove a deployment, run `agentbricks -p <profile> deployments delete agent-bricks-<name>` and review the confirmation.
+Managed Runtime Store cleanup checks the app identity and runs before app deletion; a cleanup failure retains the app for retry.
+Memory/session stores, tracing experiments, tools, and source files are retained. Delete a store separately
+only after confirming that you own it and no other agent needs it: use [`memory stores delete`](cli.md#agentbricks-memory-stores-delete)
+or [`sessions stores delete`](cli.md#agentbricks-sessions-stores-delete), with the same profile and identifier used to inspect it.
+
 ## Public names
 
 Use `agentbricks` for the CLI and `AgentKitClient` from `databricks_agentkit` for the Python SDK. New
