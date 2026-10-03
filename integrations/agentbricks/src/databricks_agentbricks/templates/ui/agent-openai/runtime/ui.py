@@ -136,10 +136,6 @@ def _tracing() -> dict:
     return {"enabled": enabled, "experiment_id": experiment_id or None, "url": url}
 
 
-# Cap the picker: the gateway's schema can list more models than belong in a dropdown.
-_MODEL_LIMIT = 20
-
-
 def _default_model() -> str:
     """The agent's configured default endpoint (``agent.agent.MODEL``), imported lazily.
 
@@ -152,17 +148,14 @@ def _default_model() -> str:
 
 
 def _rank_models(default: str, names: list[str]) -> list[str]:
-    """Pin the default first, then the remaining gateway models alphabetically, without duplicates.
-
-    Truncation therefore only ever sheds models beyond the cap, never the configured default.
-    """
+    """Pin the default first, then every remaining gateway model, without duplicates."""
     ordered = [default, *sorted(n for n in names if n != default)]
     seen: set[str] = set()
     return [n for n in ordered if not (n in seen or seen.add(n))]
 
 
 def _discover_chat_models() -> list[str]:
-    """The AI Gateway chat models for the picker: default first, then the rest, capped.
+    """The AI Gateway chat models for the picker: default first, then every listed model.
 
     Best-effort: if listing fails (missing permission, repeated transient errors), fall back to just
     the default so the picker still works. The default is always present and first.
@@ -172,7 +165,7 @@ def _discover_chat_models() -> list[str]:
         names = list_ai_gateway_model_services(workspace_client())
     except Exception:  # noqa: BLE001 - a broken listing must not break the whole config endpoint
         names = []
-    return _rank_models(default, names)[:_MODEL_LIMIT]
+    return _rank_models(default, names)
 
 
 class _ManagedStateClient:

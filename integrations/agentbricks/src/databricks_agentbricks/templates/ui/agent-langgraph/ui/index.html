@@ -171,7 +171,7 @@
                 <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><ellipse cx="12" cy="12" rx="10" ry="4.3"/><ellipse cx="12" cy="12" rx="10" ry="4.3" transform="rotate(60 12 12)"/><ellipse cx="12" cy="12" rx="10" ry="4.3" transform="rotate(120 12 12)"/></svg>
               </div>
               <h2>Start a conversation</h2>
-              <p>Test your agent with streaming, background, or sync calls. Messages stay in this session, and every run is correlated with tool and model events.</p>
+              <p>Chat with your project agent from agent/agent.py. Every mode runs its instructions and tools; the model picker changes only the model for this page.</p>
               <p class="empty-prompts-label">What would you like to test?</p>
               <div class="prompt-grid">
                 <button type="button" data-prompt="Use the get_current_time tool and explain what you did.">Use a tool</button>
@@ -197,14 +197,14 @@
             <textarea id="prompt-input" rows="1" placeholder="Ask your agent anything…"></textarea>
             <div class="composer-footer">
               <div class="mode-switcher" aria-label="Invocation mode">
-                <button class="mode-button active" data-mode="streaming" type="button">Streaming</button>
-                <button class="mode-button" data-mode="background" type="button">Background</button>
-                <button class="mode-button" data-mode="sync" type="button">Sync</button>
+                <button class="mode-button active" data-mode="streaming" type="button" title="Show the answer as it is generated">Streaming</button>
+                <button class="mode-button" data-mode="background" type="button" title="Submit a run and wait for its result">Background</button>
+                <button class="mode-button" data-mode="sync" type="button" title="Wait for the complete answer">Wait for result</button>
               </div>
               <div class="composer-right">
                 <span class="composer-model">
-                  <label class="sr-only" for="model-select">Model</label>
-                  <select id="model-select" aria-label="Model" disabled>
+                  <label class="sr-only" for="model-select">Agent model</label>
+                  <select id="model-select" aria-label="Agent model" title="Changes the model for this page; agent instructions and tools still run. Reload to reset." disabled>
                     <option>Loading models…</option>
                   </select>
                   <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>

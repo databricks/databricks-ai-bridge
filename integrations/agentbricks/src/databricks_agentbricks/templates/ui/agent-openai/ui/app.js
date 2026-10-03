@@ -398,12 +398,15 @@ function normalizeRole(message) {
 function extractText(content) {
   if (content == null) return "";
   if (typeof content === "string") return content;
+  if (content?.type) return extractText([content]);
   if (Array.isArray(content)) {
     return content
       .map((part) => {
         if (typeof part === "string") return part;
-        if (typeof part?.text === "string") return part.text;
-        if (typeof part?.content === "string") return part.content;
+        // Only answer content belongs in chat; reasoning/signature blocks are opaque.
+        if (!["text", "input_text", "output_text", "refusal"].includes(part?.type)) return "";
+        if (typeof part.text === "string") return part.text;
+        if (typeof part.refusal === "string") return part.refusal;
         return "";
       })
       .filter(Boolean)
@@ -998,16 +1001,18 @@ function parseSseFrame(frame) {
 }
 
 async function invokeStreaming(payload) {
+  const invocation = invocationPayload(payload, { stream: true });
   const response = await fetch("/api/invocations", {
     method: "POST",
     credentials: "same-origin",
     headers: invocationHeaders(),
-    body: JSON.stringify(invocationPayload(payload, { stream: true })),
+    body: JSON.stringify(invocation),
   });
   if (!response.ok || !response.body) await jsonResponse(response);
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let terminal = null;
   while (true) {
     const { value, done } = await reader.read();
     buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
@@ -1015,27 +1020,37 @@ async function invokeStreaming(payload) {
     buffer = frames.pop() || "";
     for (const frame of frames) {
       const event = parseSseFrame(frame);
+      if (["run.failed", "run.completed"].includes(event?.type)) terminal = event.type;
       if (event) handleEvent(event);
     }
     if (done) break;
   }
   if (buffer.trim()) {
     const event = parseSseFrame(buffer);
+    if (["run.failed", "run.completed"].includes(event?.type)) terminal = event.type;
     if (event) handleEvent(event);
+  }
+  if (terminal === "run.failed") {
+    throw new Error(`Agent invocation ${invocation.id} failed. Check server logs for details.`);
+  }
+  if (terminal !== "run.completed") {
+    throw new Error(`Stream disconnected before invocation ${invocation.id} completed. Check its status before retrying.`);
   }
   finishDraft();
   return { status: state.pendingInterrupt ? "interrupted" : "completed" };
 }
 
 async function pollBackground(invocationId) {
-  const deadline = Date.now() + 180000;
-  while (Date.now() < deadline) {
+  while (true) {
     await new Promise((resolve) => setTimeout(resolve, 850));
     const response = await fetch(`/api/invocations/${encodeURIComponent(invocationId)}`, {
       cache: "no-store",
       credentials: "same-origin",
       headers: routingHeaders(),
     });
+    if (response.status === 404) {
+      throw new Error(`Background invocation ${invocationId} is no longer available. Check server logs and tool side effects before retrying.`);
+    }
     const result = await jsonResponse(response);
     addEvent("background.poll", result);
     if (result.status === "completed") {
@@ -1043,10 +1058,9 @@ async function pollBackground(invocationId) {
       handleOutput(output.output);
       return output;
     }
-    if (result.status === "failed") throw new Error(result.error || "Background invocation failed");
+    if (result.status === "failed") throw new Error(`Background invocation ${invocationId} failed. ${result.error?.message || result.error || "Check server logs for details."}`);
     setStatus(`Background · ${result.status}`, "busy");
   }
-  throw new Error("Background invocation did not finish within three minutes.");
 }
 
 async function invokeBackground(payload) {
@@ -1176,7 +1190,7 @@ function renderModels(models) {
   for (const name of available) {
     const option = document.createElement("option");
     option.value = name;
-    option.textContent = name;
+    option.textContent = name === models?.default ? `${name} (project default)` : name;
     option.selected = name === state.model;
     elements.modelSelect.append(option);
   }
