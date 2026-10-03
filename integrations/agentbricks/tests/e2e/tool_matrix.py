@@ -1332,7 +1332,36 @@ class Runner:
             if stores_ok:
                 cleaned_stores.add(case.app_name)
 
+        deleted_runtime_stores: set[str] = set()
         for app in self.apps:
+            if app in apps_with_stores:
+                # The deploy-created Runtime Store owns a dedicated Lakebase database; it must be
+                # deleted before the role, or the role delete fails on database ownership.
+                result = self.run(
+                    [
+                        "databricks",
+                        "api",
+                        "delete",
+                        f"/api/2.0/agents/runtime-stores/{app}",
+                        *self._profile_args(),
+                    ],
+                    timeout=600,
+                    check=False,
+                )
+                output = f"{result.stdout}\n{result.stderr}".strip()
+                if result.returncode == 0 or "404" in output or "not_found" in output.lower():
+                    deleted_runtime_stores.add(app)
+                    self.cleanup_results.append(
+                        {"resource": f"runtime-store:{app}", "status": "deleted"}
+                    )
+                else:
+                    self.cleanup_results.append(
+                        {
+                            "resource": f"runtime-store:{app}",
+                            "status": "failed",
+                            "detail": output,
+                        }
+                    )
             result = self.run(
                 ["databricks", "apps", "delete", app, *self._profile_args()],
                 timeout=600,
@@ -1362,7 +1391,7 @@ class Runner:
                 }
             )
             role_target = role_targets.get(app)
-            if role_target and app in cleaned_stores:
+            if role_target and app in cleaned_stores and app in deleted_runtime_stores:
                 try:
                     result = self.run(
                         [
@@ -1864,6 +1893,21 @@ def verify_evidence(path: pathlib.Path, *, require_cleanup: bool = True) -> int:
         )
     ):
         sys.stdout.write("cleanup evidence: required cleanup is incomplete or failed\n")
+        if isinstance(cleanup, list):
+            for result in cleanup:
+                if result.get("status") == "failed":
+                    sys.stdout.write(
+                        f"cleanup failed | {result.get('resource')} | {result.get('detail')}\n"
+                    )
+                elif (
+                    result.get("resource", "").startswith("app:")
+                    and result.get("status") == "deleted"
+                    and not result.get("confirmed_absent_at")
+                ):
+                    sys.stdout.write(
+                        f"cleanup unconfirmed | {result.get('resource')} |"
+                        " missing confirmed_absent_at\n"
+                    )
         return 1
     sys.stdout.write(
         f"{len(grant_checks)} grant snapshots passed; {len(repeated)} repeat deploy idempotent\n"
