@@ -85,9 +85,6 @@ const state = {
   lastAssistantText: "",
   managedSessionId: "",
   model: "",
-  backgroundRun: null,
-  backgroundWaiting: false,
-  backgroundController: null,
   mode: "streaming",
   pendingInterrupt: null,
   sessionId: localStorage.getItem(SESSION_STORAGE_KEY) || newSessionId(),
@@ -122,7 +119,7 @@ function setStatus(label, type = "ready") {
 
 // The send button is enabled only when there is text to send and no run is in flight.
 function updateSendState() {
-  elements.sendButton.disabled = state.busy || !!state.backgroundRun || !elements.promptInput.value.trim();
+  elements.sendButton.disabled = state.busy || !elements.promptInput.value.trim();
 }
 
 function setBusy(busy, label = "Working") {
@@ -130,18 +127,17 @@ function setBusy(busy, label = "Working") {
   elements.chatLog.setAttribute("aria-busy", String(busy));
   updateSendState();
   elements.promptInput.disabled = busy;
-  elements.approveAction.disabled = busy || !!state.backgroundRun;
-  elements.rejectAction.disabled = busy || !!state.backgroundRun;
-  elements.newSession.disabled = busy || !!state.backgroundRun;
+  elements.approveAction.disabled = busy;
+  elements.rejectAction.disabled = busy;
+  elements.newSession.disabled = busy;
   elements.modelSelect.disabled = busy || elements.modelSelect.options.length <= 1;
-  elements.refreshSession.disabled = busy || !!state.backgroundRun || !state.config?.session.history;
-  elements.resumeSession.disabled = busy || !!state.backgroundRun || !state.config?.session.durable;
-  elements.rejectSession.disabled = busy || !!state.backgroundRun || !state.config?.session.durable;
+  elements.refreshSession.disabled = busy || !state.config?.session.history;
+  elements.resumeSession.disabled = busy || !state.config?.session.durable;
+  elements.rejectSession.disabled = busy || !state.config?.session.durable;
   document.querySelectorAll(".session-open-button").forEach((button) => {
-    button.disabled = busy || !!state.backgroundRun;
+    button.disabled = busy;
   });
   if (busy) setStatus(label, "busy");
-  else if (state.backgroundRun) setStatus("Background wait paused");
   else if (!elements.runStatus.classList.contains("error")) setStatus("Ready");
 }
 
@@ -399,25 +395,24 @@ function normalizeRole(message) {
   return "assistant";
 }
 
-const { extractText, reasoningSummary, errorText, renderMarkdown } = ChatContent;
-
-function renderMessageText(element, content, markdown = false) {
-  element.dataset.source = content;
-  if (markdown) element.innerHTML = renderMarkdown(content);
-  else element.textContent = content;
-}
-
-function appendReasoningSummary(content) {
-  const summary = reasoningSummary(content);
-  if (!summary) return;
-  const details = document.createElement("details");
-  details.className = "reasoning-summary";
-  const label = document.createElement("summary");
-  label.textContent = "Reasoning summary";
-  const body = document.createElement("div");
-  renderMessageText(body, summary, true);
-  details.append(label, body);
-  elements.chatLog.append(details);
+function extractText(content) {
+  if (content == null) return "";
+  if (typeof content === "string") return content;
+  if (content?.type) return extractText([content]);
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        // Only answer content belongs in chat; reasoning/signature blocks are opaque.
+        if (!["text", "input_text", "output_text", "refusal"].includes(part?.type)) return "";
+        if (typeof part.text === "string") return part.text;
+        if (typeof part.refusal === "string") return part.refusal;
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  return typeof content === "object" ? formatJson(content) : String(content);
 }
 
 function hideEmptyState() {
@@ -464,7 +459,7 @@ function buildMessageActions(textEl) {
     '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Copy</span>';
   copy.addEventListener("click", async () => {
     try {
-      await navigator.clipboard.writeText(textEl.dataset.source || textEl.textContent || "");
+      await navigator.clipboard.writeText(textEl.textContent || "");
     } catch {
       /* clipboard may be unavailable */
     }
@@ -486,7 +481,7 @@ function appendMessage(role, content, label, { time } = {}) {
   wrapper.className = `message ${role}`;
   const text = document.createElement("div");
   text.className = "message-content";
-  renderMessageText(text, content, role === "assistant");
+  text.textContent = content;
 
   if (role === "user") {
     wrapper.append(text);
@@ -531,14 +526,8 @@ function appendDelta(content) {
   const draft = startDraft();
   state.draftText += text;
   state.lastAssistantText = state.draftText;
-  if (!draft.frame) {
-    draft.frame = requestAnimationFrame(() => {
-      draft.frame = null;
-      if (state.draft !== draft) return;
-      renderMessageText(draft.text, state.draftText, true);
-      elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
-    });
-  }
+  draft.text.textContent = state.draftText;
+  elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
 }
 
 function finishDraft(finalText = "") {
@@ -546,9 +535,8 @@ function finishDraft(finalText = "") {
   if (finalText) {
     state.draftText = finalText;
     state.lastAssistantText = finalText;
+    state.draft.text.textContent = finalText;
   }
-  if (state.draft.frame) cancelAnimationFrame(state.draft.frame);
-  renderMessageText(state.draft.text, state.draftText, true);
   state.draft.wrapper.classList.remove("streaming");
   state.draft = null;
   return true;
@@ -566,7 +554,6 @@ function handleAgentMessage(message) {
   const role = normalizeRole(message);
   if (role === "user") return;
   if (role === "assistant") {
-    appendReasoningSummary(message?.content);
     const text = extractText(message?.content);
     if (finishDraft(text)) return;
     if (text) {
@@ -600,7 +587,7 @@ function handleEvent(event) {
   if (event?.type === "delta") appendDelta(event.content);
   if (event?.type === "message") handleAgentMessage(event.message);
   if (event?.type === "interrupt") handleInterrupt(event);
-  if (event?.error) throw new Error(errorText(event.error));
+  if (event?.error) throw new Error(event.error);
 }
 
 function handleOutput(output) {
@@ -628,9 +615,7 @@ function invocationPayload(payload, transport = {}) {
     ...payload,
   };
   if (state.model) input.model = state.model;
-  const id = newSessionId();
-  state.invocationId = id;
-  return { id, session_id: sessionId, input, ...transport };
+  return { id: newSessionId(), session_id: sessionId, input, ...transport };
 }
 
 function agentResult(result) {
@@ -639,7 +624,7 @@ function agentResult(result) {
 
 async function jsonResponse(response) {
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(errorText(body.detail || body.error || `Request failed with ${response.status}`));
+  if (!response.ok) throw new Error(body.detail || body.error || `Request failed with ${response.status}`);
   return body;
 }
 
@@ -889,7 +874,7 @@ function renderSessionList() {
     row.className = `session-item${current ? " current" : ""}${canOpen ? " session-open-button" : ""}`;
     if (canOpen) {
       row.type = "button";
-      row.disabled = state.busy || !!state.backgroundRun;
+      row.disabled = state.busy;
       row.addEventListener("click", () => openSession(session.session_id));
     }
     const top = document.createElement("div");
@@ -920,7 +905,6 @@ function renderSessionTranscript(items) {
     const data = item?.data || {};
     const storedRole = String(data.role || data.type || "").toLowerCase();
     const content = extractText(data.content ?? data);
-    if (normalizeRole(data) === "assistant") appendReasoningSummary(data.content);
     if (!content) continue;
     if (storedRole === "human_decision") {
       appendMessage("system", content, "Human decision");
@@ -992,7 +976,7 @@ async function refreshSessionView({ hydrateChat = false } = {}) {
   await refreshSessions();
 }
 
-async function recordSessionItems(items, { refresh = true } = {}) {
+async function recordSessionItems(items) {
   if (!state.config?.session.managed || !items.length) return;
   try {
     const sessionId = await ensureManagedSession();
@@ -1003,7 +987,7 @@ async function recordSessionItems(items, { refresh = true } = {}) {
     });
     const result = await jsonResponse(response);
     addEvent("session.items.append", result);
-    if (refresh) await refreshSessionView();
+    await refreshSessionView();
   } catch (error) {
     stateMessage(elements.sessionItems, error instanceof Error ? error.message : String(error), "error");
     addEvent("session.error", { message: String(error) });
@@ -1035,109 +1019,65 @@ function parseSseFrame(frame) {
 }
 
 async function invokeStreaming(payload) {
+  const invocation = invocationPayload(payload, { stream: true });
   const response = await fetch("/api/invocations", {
     method: "POST",
     credentials: "same-origin",
     headers: invocationHeaders(),
-    body: JSON.stringify(invocationPayload(payload, { stream: true })),
+    body: JSON.stringify(invocation),
   });
   if (!response.ok || !response.body) await jsonResponse(response);
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let terminal = null;
-  function consume(frame) {
-    const event = parseSseFrame(frame);
-    if (!event) return;
-    if (["run.failed", "run.completed"].includes(event.type)) terminal = event.type;
-    handleEvent(event);
-  }
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-      const frames = buffer.split(/\r?\n\r?\n/);
-      buffer = frames.pop() || "";
-      for (const frame of frames) consume(frame);
-      if (done) break;
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() || "";
+    for (const frame of frames) {
+      const event = parseSseFrame(frame);
+      if (["run.failed", "run.completed"].includes(event?.type)) terminal = event.type;
+      if (event) handleEvent(event);
     }
-    if (buffer.trim()) consume(buffer);
-  } finally {
-    await reader.cancel();
-    reader.releaseLock();
+    if (done) break;
+  }
+  if (buffer.trim()) {
+    const event = parseSseFrame(buffer);
+    if (["run.failed", "run.completed"].includes(event?.type)) terminal = event.type;
+    if (event) handleEvent(event);
   }
   if (terminal === "run.failed") {
-    const response = await fetch(`/api/invocations/${encodeURIComponent(state.invocationId)}`, {
-      cache: "no-store", credentials: "same-origin", headers: routingHeaders(),
-    });
-    const result = await jsonResponse(response);
-    throw new Error(`${errorText(result.error)}. Check server logs for invocation ${state.invocationId}.`);
+    throw new Error(`Agent invocation ${invocation.id} failed. Check server logs for details.`);
   }
   if (terminal !== "run.completed") {
-    throw new Error(`The stream disconnected before completion. Check invocation ${state.invocationId} before retrying; it may still be running.`);
+    throw new Error(`Stream disconnected before invocation ${invocation.id} completed. Check its status before retrying.`);
   }
   finishDraft();
   return { status: state.pendingInterrupt ? "interrupted" : "completed" };
 }
 
-function waitForBackgroundPoll(signal) {
-  return new Promise((resolve) => {
-    const done = () => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", done);
-      resolve();
-    };
-    const timer = setTimeout(done, 850);
-    signal.addEventListener("abort", done, { once: true });
-    if (signal.aborted) done();
-  });
-}
-
 async function pollBackground(invocationId) {
-  const controller = new AbortController();
-  state.backgroundController = controller;
-  state.backgroundWaiting = true;
-  document.querySelector("#background-wait-toggle").textContent = "Stop waiting";
-  try {
-    while (state.backgroundWaiting) {
-      await waitForBackgroundPoll(controller.signal);
-      if (!state.backgroundWaiting) break;
-      let result;
-      try {
-        const response = await fetch(`/api/invocations/${encodeURIComponent(invocationId)}`, {
-          cache: "no-store", credentials: "same-origin", headers: routingHeaders(),
-          signal: controller.signal,
-        });
-        if (response.status === 404) {
-          state.backgroundRun = null;
-          document.querySelector("#background-wait-toggle").hidden = true;
-          throw new Error(`Background run ${invocationId} is no longer available. A local server restart loses in-process runs. Its outcome cannot be recovered here; check any tool side effects before starting a new run.`);
-        }
-        result = await jsonResponse(response);
-      } catch (error) {
-        if (controller.signal.aborted) return { status: "waiting" };
-        if (!state.backgroundRun) throw error;
-        throw new Error(`Could not check background run ${invocationId}: ${errorText(error.message || error)}. Its status is unknown; use Check result to try again.`);
-      }
-      addEvent("background.poll", result);
-      if (result.status === "completed") {
-        const output = agentResult(result);
-        handleOutput(output.output);
-        state.backgroundRun = null;
-        document.querySelector("#background-wait-toggle").hidden = true;
-        return output;
-      }
-      if (result.status === "failed") {
-        state.backgroundRun = null;
-        document.querySelector("#background-wait-toggle").hidden = true;
-        throw new Error(`${errorText(result.error || "Background invocation failed")}. Check server logs for invocation ${invocationId}.`);
-      }
-      setStatus(`Background · ${result.status}`, "busy");
+  while (true) {
+    await new Promise((resolve) => setTimeout(resolve, 850));
+    const response = await fetch(`/api/invocations/${encodeURIComponent(invocationId)}`, {
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: routingHeaders(),
+    });
+    if (response.status === 404) {
+      throw new Error(`Background invocation ${invocationId} is no longer available. Check server logs and tool side effects before retrying.`);
     }
-    return { status: "waiting" };
-  } finally {
-    state.backgroundWaiting = false;
-    if (state.backgroundController === controller) state.backgroundController = null;
+    const result = await jsonResponse(response);
+    addEvent("background.poll", result);
+    if (result.status === "completed") {
+      const output = agentResult(result);
+      handleOutput(output.output);
+      return output;
+    }
+    if (result.status === "failed") throw new Error(`Background invocation ${invocationId} failed. ${result.error?.message || result.error || "Check server logs for details."}`);
+    setStatus(`Background · ${result.status}`, "busy");
   }
 }
 
@@ -1150,13 +1090,6 @@ async function invokeBackground(payload) {
   });
   const started = await jsonResponse(response);
   addEvent("background.started", started);
-  state.backgroundRun = started.id;
-  state.backgroundMessages = payload.messages || [];
-  document.querySelector("#background-run").hidden = false;
-  const link = document.querySelector("#background-run-link");
-  link.href = `/api/invocations/${encodeURIComponent(started.id)}`;
-  link.textContent = `Run ${started.id}`;
-  document.querySelector("#background-wait-toggle").hidden = false;
   setStatus(`Background · ${started.id}`, "busy");
   return pollBackground(started.id);
 }
@@ -1172,12 +1105,11 @@ async function dispatch(payload, mode = state.mode) {
 
 async function sendText(text, mode = state.mode) {
   const content = text.trim();
-  if (!content || state.busy || state.backgroundRun) return "";
+  if (!content || state.busy) return "";
   appendMessage("user", content, "You");
   setBusy(true, mode === "background" ? "Starting background run" : mode === "streaming" ? "Streaming" : "Running");
   try {
-    const result = await dispatch({ messages: [{ role: "user", content }] }, mode);
-    if (result?.status === "waiting") return "";
+    await dispatch({ messages: [{ role: "user", content }] }, mode);
     const items = [{ role: "user", content, transport: mode, instance_id: state.instanceId }];
     if (state.lastAssistantText) {
       items.push({
@@ -1190,8 +1122,6 @@ async function sendText(text, mode = state.mode) {
     await recordSessionItems(items);
     return state.lastAssistantText;
   } catch (error) {
-    state.backgroundWaiting = false;
-    document.querySelector("#background-wait-toggle").textContent = "Check result";
     finishDraft();
     appendError(error);
     throw error;
@@ -1201,7 +1131,7 @@ async function sendText(text, mode = state.mode) {
 }
 
 async function resume(decision) {
-  if (state.busy || state.backgroundRun) return;
+  if (state.busy) return;
   if (!state.pendingInterrupt && !state.config?.session.durable) {
     appendError(new Error("No paused run is loaded for the current routing session."));
     return;
@@ -1252,7 +1182,7 @@ function resetSessionState() {
 }
 
 async function createNewSession() {
-  if (state.busy || state.backgroundRun) return;
+  if (state.busy) return;
   setBusy(true, "Creating session");
   try {
     const previousSessionId = ensureSessionId();
@@ -1269,7 +1199,7 @@ async function createNewSession() {
 }
 
 async function openSession(sessionId) {
-  if (state.busy || state.backgroundRun || !sessionId || sessionId === state.sessionId) return;
+  if (state.busy || !sessionId || sessionId === state.sessionId) return;
   setBusy(true, "Opening session");
   try {
     const response = await fetch(demoUrl(`/api/demo/sessions/${encodeURIComponent(sessionId)}/open`), {
@@ -1290,45 +1220,20 @@ async function openSession(sessionId) {
 }
 
 function renderModels(models) {
-  const available = [...new Set([models?.default, ...(models?.available || [])].filter(Boolean))];
-  state.defaultModel = models?.default || "";
-  if (state.model === state.defaultModel) state.model = "";
-  // The empty value means omit the override and let the project agent use its own default.
-  // Keep a manually entered override even when discovery does not have permission to list it.
-  if (state.model && !available.includes(state.model)) available.push(state.model);
+  const available = models?.available?.length ? models.available : [models?.default].filter(Boolean);
+  state.model = available.includes(state.model) ? state.model : models?.default || available[0] || "";
   elements.modelSelect.replaceChildren();
-  const defaultOption = document.createElement("option");
-  defaultOption.value = "";
-  defaultOption.textContent = `Project default · ${state.defaultModel}`;
-  elements.modelSelect.append(defaultOption);
-  for (const name of available.filter((name) => name !== state.defaultModel)) {
+  for (const name of available) {
     const option = document.createElement("option");
     option.value = name;
-    option.textContent = name;
+    option.textContent = name === models?.default ? `${name} (project default)` : name;
+    option.selected = name === state.model;
     elements.modelSelect.append(option);
   }
-  const custom = document.createElement("option");
-  custom.value = "__custom__";
-  custom.textContent = "Use another model service…";
-  elements.modelSelect.append(custom);
-  elements.modelSelect.value = state.model;
-  elements.modelSelect.disabled = state.busy;
-  document.querySelector("#model-discovery-status").textContent = (models?.warnings || []).join(" ");
-  updateModelDescription();
+  // A single choice is informational, not a decision to make.
+  elements.modelSelect.disabled = state.busy || available.length <= 1;
   sizeModelSelect();
 }
-
-function updateModelDescription() {
-  document.querySelector("#model-description").textContent = state.model
-    ? `Temporary model override: ${state.model}. The project agent's instructions and tools still run. Reload or choose Project default to reset.`
-    : `Using the project agent's default model: ${state.defaultModel}. Its instructions and tools run on every request.`;
-}
-
-const MODE_DESCRIPTIONS = {
-  streaming: "Streaming: show the answer as it is generated.",
-  sync: "Wait for result: show the complete answer when the agent finishes.",
-  background: "Background: submit the run, then check its status until the result is ready. Locally, runs end when the server stops.",
-};
 
 // Native selects size to their widest option, which leaves a gap between a short
 // selected name and the chevron. Size the control to the selected option instead.
@@ -1362,14 +1267,8 @@ async function loadConfig() {
     const config = await jsonResponse(response);
     state.config = config;
     state.instanceId = config.instance_id;
-    const agentName = config.agent?.name || "Project agent";
-    document.querySelector("#project-agent-name").textContent = agentName;
-    elements.brandSub.textContent = `${agentName} · ${AGENT_FRAMEWORK} · ${window.location.host}`;
     renderModels(config.models);
-    void loadModels().catch((error) => {
-      document.querySelector("#model-discovery-status").textContent = "Model discovery failed. The project default and full model service names are still available.";
-      addEvent("models.error", { message: String(error) });
-    });
+    void loadModels().catch((error) => addEvent("models.error", { message: String(error) }));
     setViewer(config.viewer);
     elements.streamingMode.textContent = config.streaming.mode;
     elements.backgroundMode.textContent = config.background.mode;
@@ -1466,63 +1365,13 @@ elements.promptInput.addEventListener("keydown", (event) => {
 document.querySelectorAll(".mode-button").forEach((button) => {
   button.addEventListener("click", () => {
     state.mode = button.dataset.mode;
-    document.querySelector("#mode-description").textContent = MODE_DESCRIPTIONS[state.mode];
     document.querySelectorAll(".mode-button").forEach((item) => item.classList.toggle("active", item === button));
   });
 });
 
 elements.modelSelect.addEventListener("change", () => {
-  if (elements.modelSelect.value === "__custom__") {
-    elements.modelSelect.value = state.model;
-    document.querySelector("#custom-model-panel").hidden = false;
-    document.querySelector("#custom-model-input").disabled = false;
-    document.querySelector("#custom-model-input").focus();
-    return;
-  }
   state.model = elements.modelSelect.value;
-  document.querySelector("#custom-model-panel").hidden = true;
-  document.querySelector("#custom-model-input").disabled = true;
-  updateModelDescription();
   sizeModelSelect();
-  addEvent("model.selected", { model: state.model });
-});
-
-document.querySelector("#custom-model-input").addEventListener("input", (event) => event.target.setCustomValidity(""));
-
-document.querySelector("#background-wait-toggle").addEventListener("click", async () => {
-  if (state.backgroundWaiting) {
-    state.backgroundWaiting = false;
-    state.backgroundController?.abort();
-    document.querySelector("#background-wait-toggle").textContent = "Check result";
-    return;
-  }
-  if (state.busy || !state.backgroundRun) return;
-  setBusy(true, "Checking background run");
-  try {
-    const result = await pollBackground(state.backgroundRun);
-    if (result.status === "waiting") return;
-    const items = [...(state.backgroundMessages || [])];
-    if (state.lastAssistantText) items.push({ role: "assistant", content: state.lastAssistantText, transport: "background", instance_id: state.instanceId });
-    await recordSessionItems(items, { refresh: false });
-    await refreshSessionView();
-  } catch (error) {
-    state.backgroundWaiting = false;
-    document.querySelector("#background-wait-toggle").textContent = "Check result";
-    appendError(error);
-  } finally {
-    setBusy(false);
-  }
-});
-
-document.querySelector("#custom-model-apply").addEventListener("click", () => {
-  const input = document.querySelector("#custom-model-input");
-  input.setCustomValidity(input.value.trim() ? "" : "Enter a model service name.");
-  if (!input.reportValidity()) return;
-  state.model = input.value.trim();
-  renderModels({ default: state.defaultModel, available: Array.from(elements.modelSelect.options).map((option) => option.value).filter((value) => value && value !== "__custom__") });
-  document.querySelector("#custom-model-panel").hidden = true;
-  document.querySelector("#custom-model-input").disabled = true;
-  input.value = "";
   addEvent("model.selected", { model: state.model });
 });
 

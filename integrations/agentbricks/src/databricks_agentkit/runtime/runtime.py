@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING
 from databricks_agentkit.runtime.execution import (
     AttemptExecution,
     InvocationExecutor,
-    InvocationUpdates,
     LocalInvocationExecutor,
     copy_json_value,
 )
@@ -50,14 +49,12 @@ class Runtime:
         runtime_store: RuntimeStore,
         executor: InvocationExecutor,
         poll_seconds: float = 1.0,
-        updates: InvocationUpdates | None = None,
     ) -> None:
         if poll_seconds <= 0:
             raise ValueError("poll_seconds must be positive")
         self.runtime_store = runtime_store
         self.executor = executor
         self.poll_seconds = poll_seconds
-        self.updates = updates or InvocationUpdates()
         self._started = False
 
     @classmethod
@@ -78,13 +75,11 @@ class Runtime:
 
         if isinstance(store, DurableRuntimeStore):
             raise TypeError("Runtime.local requires a non-durable RuntimeStore")
-        updates = InvocationUpdates()
-        execution = AttemptExecution(execute_fn, runtime_store=store, on_change=updates.notify)
+        execution = AttemptExecution(execute_fn, runtime_store=store)
         return cls(
             runtime_store=store,
             executor=LocalInvocationExecutor(execution, runtime_store=store),
             poll_seconds=poll_seconds,
-            updates=updates,
         )
 
     @classmethod
@@ -110,10 +105,7 @@ class Runtime:
 
         if not isinstance(runtime_store, DurableRuntimeStore):
             raise TypeError("Runtime.durable requires a DurableRuntimeStore")
-        updates = InvocationUpdates()
-        execution = AttemptExecution(
-            execute_fn, runtime_store=runtime_store, on_change=updates.notify
-        )
+        execution = AttemptExecution(execute_fn, runtime_store=runtime_store)
         return cls(
             runtime_store=runtime_store,
             executor=DurableInvocationExecutor(
@@ -125,7 +117,6 @@ class Runtime:
                 scan_seconds=scan_seconds,
             ),
             poll_seconds=poll_seconds,
-            updates=updates,
         )
 
     @classmethod

@@ -1,37 +1,5 @@
 # Agent Bricks CLI agent-tool matrix
 
-## Chat browser regression checks
-
-`chat_browser.py` scaffolds a real OpenAI Agents SDK or LangGraph project, installs the checkout's
-runtime, and drives its chat UI with Playwright. Only model serving/discovery is a deterministic
-localhost HTTP fixture: these checks do not claim live workspace coverage. The fixture emits six
-text chunks 160 ms apart, exercises a real framework tool call, and returns explicit model failures.
-
-From `integrations/agentbricks` after `uv sync --all-extras`:
-
-```bash
-uv run playwright install chromium  # unnecessary when Google Chrome is already installed
-uv run python tests/e2e/chat_browser.py --source ../.. \
-  --framework openai --expect-fixed --output /tmp/chat-openai-evidence
-uv run python tests/e2e/chat_browser.py --source ../.. \
-  --framework langgraph --expect-fixed --output /tmp/chat-langgraph-evidence
-uv run python tests/e2e/chat_browser.py --source ../.. \
-  --framework openai --expect-fixed --pause-background --output /tmp/chat-pause-evidence
-uv run python tests/e2e/chat_browser.py --source ../.. \
-  --framework openai --expect-fixed --long-background --output /tmp/chat-long-evidence
-```
-
-The default checks Markdown, paced visible updates, all three invocation modes, streaming and
-background failures, uncapped discovery, and custom instructions/tool execution under a model
-override. `--pause-background` checks pause/resume without extra submissions or a session switch.
-`--long-background` deliberately takes over three minutes and verifies a 185-second run completes
-without a false timeout. Use a fresh output directory per run. JSON evidence, browser screenshots,
-Playwright traces, and server/install logs are saved there. Pass `--browser-executable` to choose a
-browser binary.
-
-To record the before-fix behavior, point `--source` at a baseline worktree and omit `--expect-fixed`.
-The harness installs that source into its generated project and records its Git SHA in the evidence.
-
 ## MCP registration validation
 
 For a focused check of `agentbricks tools add mcp`, install the current `databricks-agentbricks` wheel and pytest

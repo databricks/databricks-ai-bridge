@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from databricks_agentkit import workspace_client
-from runtime.model_services import list_ai_gateway_model_services
+from databricks_agentkit.runtime.model_services import list_ai_gateway_model_services
 from databricks_agentkit.runtime.store import runtime_store_is_persistent_environment
 
 _UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
@@ -148,50 +148,24 @@ def _default_model() -> str:
 
 
 def _rank_models(default: str, names: list[str]) -> list[str]:
-    """Pin the default first, then the remaining gateway models alphabetically, without duplicates.
-
-    The list is complete: do not hide models behind an alphabetical display limit.
-    """
+    """Pin the default first, then every remaining gateway model, without duplicates."""
     ordered = [default, *sorted(n for n in names if n != default)]
     seen: set[str] = set()
     return [n for n in ordered if not (n in seen or seen.add(n))]
 
 
-def _model_schemas() -> list[str]:
-    from agent import agent as agent_module
+def _discover_chat_models() -> list[str]:
+    """The AI Gateway chat models for the picker: default first, then every listed model.
 
-    default_schema = _default_model().rsplit(".", 1)[0]
-    configured = getattr(agent_module, "MODEL_SCHEMAS", ())
-    return list(dict.fromkeys([default_schema, *configured, "system.ai"]))
-
-
-def _agent_identity() -> dict[str, str]:
-    from databricks_agentkit.runtime.tool_manifest import project_root
-
-    try:
-        name = os.getenv("DATABRICKS_APP_NAME") or project_root().name
-    except RuntimeError:
-        name = "Project agent"
-    return {"name": name, "source": "agent/agent.py"}
-
-
-def _discover_chat_models() -> dict:
-    """Discover configured schemas independently, retaining the default on any listing failure.
-
-    Listing permission does not guarantee EXECUTE; a denied invocation is reported by the runtime.
-    Do not use the internal metastore-wide list route or silently truncate alphabetic results.
+    Best-effort: if listing fails (missing permission, repeated transient errors), fall back to just
+    the default so the picker still works. The default is always present and first.
     """
     default = _default_model()
-    names: list[str] = []
-    warnings = []
-    for schema in _model_schemas():
-        try:
-            names.extend(list_ai_gateway_model_services(workspace_client(), schema=schema))
-        except Exception:  # noqa: BLE001 - a failed schema must not hide other accessible models
-            warnings.append(
-                f"Could not list {schema}. You can still use the project default or enter a full model service name."
-            )
-    return {"default": default, "available": _rank_models(default, names), "warnings": warnings}
+    try:
+        names = list_ai_gateway_model_services(workspace_client())
+    except Exception:  # noqa: BLE001 - a broken listing must not break the whole config endpoint
+        names = []
+    return _rank_models(default, names)
 
 
 class _ManagedStateClient:
@@ -410,7 +384,6 @@ def install_ui(app: FastAPI) -> None:
             "instance_id": _INSTANCE_ID,
             "viewer": actor if actor != "agent" else "Local developer",
             "deployed": _is_deployed(),
-            "agent": _agent_identity(),
             "models": {"default": default_model, "available": [default_model]},
             "streaming": {
                 "enabled": True,
@@ -443,7 +416,8 @@ def install_ui(app: FastAPI) -> None:
     async def demo_models() -> dict:
         # Model discovery can take several seconds in a large workspace. Keep it separate from the
         # runtime config so the rest of the UI becomes interactive immediately.
-        return await asyncio.to_thread(_discover_chat_models)
+        available_models = await asyncio.to_thread(_discover_chat_models)
+        return {"default": _default_model(), "available": available_models}
 
     @app.post("/api/demo/memory/entries", include_in_schema=False)
     async def create_memory_entry(request: Request, payload: MemoryEntryRequest) -> dict:

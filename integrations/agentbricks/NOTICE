@@ -22,11 +22,6 @@ Package: tomlkit
 Project URL: https://github.com/python-poetry/tomlkit
 Copyright: 2018 Sébastien Eustace
 
-Package: markdown-it 15.0.2 (vendored browser renderer)
-Project URL: https://github.com/markdown-it/markdown-it
-Copyright: 2014 Vitaly Puzrin, Alex Kocharin
-License text: src/databricks_agentbricks/templates/ui/agent-openai/ui/vendor/markdown-it-LICENSE.txt
-
 # Apache License 2.0
 
 This Software contains code from the following open source projects, licensed under the Apache License 2.0 license (https://www.apache.org/licenses/LICENSE-2.0).
