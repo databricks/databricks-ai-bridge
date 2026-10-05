@@ -1332,7 +1332,7 @@ class Runner:
             if stores_ok:
                 cleaned_stores.add(case.app_name)
 
-        deleted_runtime_stores: set[str] = set()
+        apps_with_deleted_runtime_stores: set[str] = set()
         for app in self.apps:
             if app in apps_with_stores:
                 # The deploy-created Runtime Store owns a dedicated Lakebase database; it must be
@@ -1350,7 +1350,7 @@ class Runner:
                 )
                 output = f"{result.stdout}\n{result.stderr}".strip()
                 if result.returncode == 0 or "404" in output or "not_found" in output.lower():
-                    deleted_runtime_stores.add(app)
+                    apps_with_deleted_runtime_stores.add(app)
                     self.cleanup_results.append(
                         {"resource": f"runtime-store:{app}", "status": "deleted"}
                     )
@@ -1391,7 +1391,7 @@ class Runner:
                 }
             )
             role_target = role_targets.get(app)
-            if role_target and app in cleaned_stores and app in deleted_runtime_stores:
+            if role_target and app in cleaned_stores and app in apps_with_deleted_runtime_stores:
                 try:
                     result = self.run(
                         [
@@ -1899,6 +1899,8 @@ def verify_evidence(path: pathlib.Path, *, require_cleanup: bool = True) -> int:
                     sys.stdout.write(
                         f"cleanup failed | {result.get('resource')} | {result.get('detail')}\n"
                     )
+                # cleanup() always stamps confirmed_absent_at on deleted apps, so
+                # this only fires for evidence from an older runner or a hand-edited file.
                 elif (
                     result.get("resource", "").startswith("app:")
                     and result.get("status") == "deleted"
