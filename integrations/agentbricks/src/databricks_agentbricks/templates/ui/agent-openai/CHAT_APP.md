@@ -35,7 +35,8 @@ model for this page; the project agent's instructions and tools still run. Reloa
 
 **Foreground** displays the complete answer; **Background** checks the run status until it
 finishes, without a browser deadline. Failed or disconnected streams show an error. Chat displays
-answer text blocks and excludes opaque reasoning/signature blocks.
+answer text blocks as Markdown and excludes opaque reasoning/signature blocks. Raw HTML is escaped
+and images are not loaded; Copy preserves the original Markdown.
 
 The UI reads local history from the agent's in-process session (`SQLiteSession`) and managed history
 from Session Store items. It keeps a stable application session UUID in browser local storage,

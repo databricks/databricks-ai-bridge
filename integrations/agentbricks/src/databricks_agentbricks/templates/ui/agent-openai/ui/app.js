@@ -459,7 +459,7 @@ function buildMessageActions(textEl) {
     '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Copy</span>';
   copy.addEventListener("click", async () => {
     try {
-      await navigator.clipboard.writeText(textEl.textContent || "");
+      await navigator.clipboard.writeText(textEl.dataset.source ?? textEl.textContent ?? "");
     } catch {
       /* clipboard may be unavailable */
     }
@@ -475,13 +475,21 @@ function buildMessageActions(textEl) {
   return actions;
 }
 
+const markdown = window.markdownit({ html: false }).disable("image");
+
+function renderMessageText(element, content) {
+  element.dataset.source = content;
+  element.innerHTML = markdown.render(content);
+}
+
 function appendMessage(role, content, label, { time } = {}) {
   hideEmptyState();
   const wrapper = document.createElement("article");
   wrapper.className = `message ${role}`;
   const text = document.createElement("div");
   text.className = "message-content";
-  text.textContent = content;
+  if (role === "assistant") renderMessageText(text, content);
+  else text.textContent = content;
 
   if (role === "user") {
     wrapper.append(text);
@@ -526,7 +534,7 @@ function appendDelta(content) {
   const draft = startDraft();
   state.draftText += text;
   state.lastAssistantText = state.draftText;
-  draft.text.textContent = state.draftText;
+  renderMessageText(draft.text, state.draftText);
   elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
 }
 
@@ -535,7 +543,7 @@ function finishDraft(finalText = "") {
   if (finalText) {
     state.draftText = finalText;
     state.lastAssistantText = finalText;
-    state.draft.text.textContent = finalText;
+    renderMessageText(state.draft.text, finalText);
   }
   state.draft.wrapper.classList.remove("streaming");
   state.draft = null;
