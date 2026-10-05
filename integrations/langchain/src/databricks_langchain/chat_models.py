@@ -694,13 +694,16 @@ class ChatDatabricks(BaseChatModel):
                 reasoning=usage.output_tokens_details.reasoning_tokens or 0,
             )
 
-        return UsageMetadata(
+        result = UsageMetadata(
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
             total_tokens=usage.total_tokens,
-            input_token_details=input_token_details,
-            output_token_details=output_token_details,
         )
+        if input_token_details is not None:
+            result["input_token_details"] = input_token_details
+        if output_token_details is not None:
+            result["output_token_details"] = output_token_details
+        return result
 
     def _convert_response_to_chat_result(self, response: ChatCompletion) -> ChatResult:
         # Check if this is a ChatAgent response (has messages but no choices)
@@ -889,8 +892,8 @@ class ChatDatabricks(BaseChatModel):
             stream: Stream[ResponseStreamEvent] = self.client.responses.create(**data)
             for chunk in stream:
                 chunk_message = _convert_responses_api_chunk_to_lc_chunk(chunk, prev_chunk)
-                prev_chunk = chunk
                 if chunk_message:
+                    prev_chunk = chunk
                     yield ChatGenerationChunk(message=chunk_message)
                 # Check for usage in the chunk if available
                 usage = self._extract_response_usage_from_chunk(chunk, stream_usage)
@@ -997,8 +1000,8 @@ class ChatDatabricks(BaseChatModel):
             )
             async for chunk in stream:
                 chunk_message = _convert_responses_api_chunk_to_lc_chunk(chunk, prev_chunk)
-                prev_chunk = chunk
                 if chunk_message:
+                    prev_chunk = chunk
                     yield ChatGenerationChunk(message=chunk_message)
                 # Check for usage in the chunk if available
                 usage = self._extract_response_usage_from_chunk(chunk, stream_usage)
@@ -1737,6 +1740,7 @@ def _convert_responses_api_chunk_to_lc_chunk(
             {
                 "type": "text",
                 "text": chunk.delta,  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
+                "index": chunk.output_index,  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
             }
         )
     elif chunk.type == "response.output_item.done":
