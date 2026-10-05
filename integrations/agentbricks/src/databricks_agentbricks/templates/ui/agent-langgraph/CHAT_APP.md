@@ -33,7 +33,7 @@ The agent calls the chosen model through the gateway (`<host>/ai-gateway/mlflow/
 model, with the project default first and the rest alphabetical. Selecting a model changes only the
 model for this page; the project agent's instructions and tools still run. Reload to reset.
 
-**Wait for result** displays the complete answer; **Background** checks the run status until it
+**Foreground** displays the complete answer; **Background** checks the run status until it
 finishes, without a browser deadline. Failed or disconnected streams show an error. Chat displays
 answer text blocks and excludes opaque reasoning/signature blocks.
 
