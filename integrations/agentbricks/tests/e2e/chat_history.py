@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import logging
 from collections.abc import Mapping
@@ -23,7 +24,7 @@ def run_case(
     output: Path,
 ) -> dict[str, Any]:
     """Run the same user journey against an unfixed or fixed deployed project."""
-    from playwright.sync_api import sync_playwright
+    sync_playwright = importlib.import_module("playwright.sync_api").sync_playwright
 
     parsed = urlsplit(url)
     if (
@@ -65,6 +66,7 @@ def run_case(
             response = invocation.value
             assert response.status == 200, response.text()
             request = response.request.post_data_json
+            assert isinstance(request, dict), "Expected a JSON invocation request"
             result = page.request.get(
                 url + "/api/invocations/" + request["id"], headers=dict(headers), timeout=60000
             )
