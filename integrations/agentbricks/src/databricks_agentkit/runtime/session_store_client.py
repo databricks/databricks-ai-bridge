@@ -12,6 +12,7 @@ callers store whatever shape they like (the saver stores checkpoint fragments).
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any, Iterator, Optional, Sequence
@@ -31,6 +32,8 @@ _API_ROOT = "/api/2.0/agents"
 _TRANSIENT_TRANSPORT_ERRORS = (ChunkedEncodingError, RequestsConnectionError)
 _DO_ATTEMPTS = 3
 _RETRY_DELAY_S = 0.5
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -99,9 +102,7 @@ class SessionStoreClient:
         page_token: Optional[str] = None
         while True:
             query = {k: v for k, v in {"order_by": order_by, "page_token": page_token}.items() if v}
-            resp: dict[str, Any] = self._do(
-                "GET", self._items_path(session), query=query or None
-            )  # type: ignore[assignment]
+            resp: dict[str, Any] = self._do("GET", self._items_path(session), query=query or None)  # type: ignore[assignment]
             for item in resp.get("session_items", []):
                 if "data" in item:
                     yield SessionItem(item_id=item.get("item_id", ""), data=item["data"])
@@ -127,6 +128,14 @@ class SessionStoreClient:
             except _TRANSIENT_TRANSPORT_ERRORS as exc:
                 last_error = exc
                 if attempt < _DO_ATTEMPTS - 1:
+                    _logger.warning(
+                        "Session Store %s %s truncated (%s); retry %d/%d",
+                        method,
+                        path,
+                        type(exc).__name__,
+                        attempt + 1,
+                        _DO_ATTEMPTS - 1,
+                    )
                     time.sleep(_RETRY_DELAY_S)
         raise last_error  # type: ignore[misc]
 
