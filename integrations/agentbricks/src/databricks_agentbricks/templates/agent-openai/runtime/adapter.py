@@ -152,8 +152,10 @@ def _tool_args(item: ToolApprovalItem) -> Any:
 
 def _normalize_item(item: Any) -> dict | None:
     from agents import ItemHelpers
-    from agents.items import MessageOutputItem, ToolCallItem, ToolCallOutputItem
+    from agents.items import MessageOutputItem, ReasoningItem, ToolCallItem, ToolCallOutputItem
 
+    if isinstance(item, ReasoningItem):
+        return {"role": "assistant", "content": [item.raw_item.model_dump()]}
     if isinstance(item, MessageOutputItem):
         return {"role": "assistant", "content": ItemHelpers.text_message_output(item)}
     if isinstance(item, ToolCallItem):

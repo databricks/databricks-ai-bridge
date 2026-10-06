@@ -117,7 +117,7 @@ The shortest path from a blank directory to a running and deployed agent:
 
 ```sh
 agentbricks login --profile <profile>
-agentbricks init my-agent
+agentbricks init my-agent       # Defaults to LangGraph; add --framework=openai for OpenAI Agents SDK
 cd my-agent
 agentbricks dev                 # run locally
 agentbricks deploy my-agent     # deploy to Databricks
