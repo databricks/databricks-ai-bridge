@@ -421,19 +421,19 @@ def test_discover_chat_models_falls_back_to_default_on_error(monkeypatch):
     assert ui._discover_chat_models() == ["system.ai.claude-sonnet-4-5"]
 
 
-def test_discover_chat_models_caps_the_picker(monkeypatch):
+def test_discover_chat_models_keeps_every_model(monkeypatch):
     monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-sonnet-4-5")
     monkeypatch.setattr(
         ui,
         "list_ai_gateway_model_services",
-        # More services than the cap allows; synthetic because no real catalog is this long.
         lambda _client: [f"system.ai.test-model-{i:03d}" for i in range(30)],
     )
     monkeypatch.setattr(ui, "workspace_client", lambda: object())
 
     result = ui._discover_chat_models()
-    assert len(result) == ui._MODEL_LIMIT
-    assert result[0] == "system.ai.claude-sonnet-4-5"  # the default survives truncation
+    assert result == ["system.ai.claude-sonnet-4-5"] + [
+        f"system.ai.test-model-{i:03d}" for i in range(30)
+    ]
 
 
 @pytest.mark.asyncio

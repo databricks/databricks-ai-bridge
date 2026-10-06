@@ -6,8 +6,9 @@ import asyncio
 import copy
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -67,6 +68,7 @@ class DurableAgentServer(FastAPI):
         self._invoke_hook: InvocationHook | None = None
         self._recovery_hook: InvocationHook | None = None
         self._request_auth: dict[str, RequestAuthContext] = {}
+        self._stream_updates: dict[str, set[asyncio.Event]] = {}
         if runtime_store is None:
             self._runtime = Runtime.from_environment(
                 self._execute,
@@ -156,11 +158,17 @@ class DurableAgentServer(FastAPI):
                 request_auth.close()
                 raise TypeError("request-user invocation must contain invocation_id")
 
+        async def emit(event: JsonObject) -> int:
+            sequence = await attempt_context.emit(event)
+            for reader in self._stream_updates.get(attempt_context.invocation_id, ()):
+                reader.set()
+            return sequence
+
         context = InvocationContext(
             invocation_id=invocation_id,
             session_id=attempt_context.session_id,
             attempt=attempt_context.attempt,
-            _attempt_context=attempt_context,
+            _attempt_context=replace(attempt_context, _emit=emit),
             request_auth=request_auth,
         )
         function = self._recovery_hook if context.is_recovery else self._invoke_hook
@@ -257,19 +265,33 @@ class DurableAgentServer(FastAPI):
             media_type="text/event-stream",
         )
 
-    async def _event_stream(self, invocation_id: str, after: int = 0) -> AsyncIterator[str]:
+    async def _event_stream(self, invocation_id: str, after: int = 0) -> AsyncGenerator[str, None]:
         cursor = after
-        while True:
-            # Read state first so a terminal snapshot's committed events are drained below.
-            state = await self._runtime.get_invocation(invocation_id)
-            for event in await self._runtime.get_events(invocation_id, after_sequence=cursor):
-                cursor = event.sequence_number
-                event_type = event.event.get("type", "message")
-                yield f"id: {cursor}\nevent: {event_type}\ndata: {json.dumps(event.event)}\n\n"
+        changed = asyncio.Event()
+        readers = self._stream_updates.setdefault(invocation_id, set())
+        readers.add(changed)
+        try:
+            while True:
+                # Register/clear before reading so a persisted delta cannot miss the waiter.
+                changed.clear()
+                # Read state first so a terminal snapshot's committed events are drained below.
+                state = await self._runtime.get_invocation(invocation_id)
+                for event in await self._runtime.get_events(invocation_id, after_sequence=cursor):
+                    cursor = event.sequence_number
+                    event_type = event.event.get("type", "message")
+                    yield f"id: {cursor}\nevent: {event_type}\ndata: {json.dumps(event.event)}\n\n"
 
-            if state is None or state.is_terminal:
-                return
-            await asyncio.sleep(self._runtime.poll_seconds)
+                if state is None or state.is_terminal:
+                    return
+                try:
+                    # Other workers and terminal state changes retain the polling fallback.
+                    await asyncio.wait_for(changed.wait(), timeout=self._runtime.poll_seconds)
+                except asyncio.TimeoutError:
+                    pass
+        finally:
+            readers.discard(changed)
+            if not readers:
+                self._stream_updates.pop(invocation_id, None)
 
     @staticmethod
     def _accepted_payload(
