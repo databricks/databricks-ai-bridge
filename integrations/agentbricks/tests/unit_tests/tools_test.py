@@ -9,6 +9,7 @@ import pytest
 from click.testing import CliRunner
 
 from databricks_agentbricks.agent_project import AgentProject, ToolSpec
+from databricks_agentbricks.cli.sandbox import add_sandbox
 from databricks_agentbricks.cli.tools import tools
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.project_config import write_project_metadata
@@ -40,7 +41,7 @@ class _Client:
 
 @pytest.mark.parametrize("auth", [None, "app", "user"])
 @pytest.mark.parametrize(
-    "arguments", [["mcp", "system.ai.web_search"], ["sandbox", "--scope", "table:main.data.table"]]
+    "arguments", [["mcp", "system.ai.web_search"], ["sandbox", "--scope", "volume:main.data.files"]]
 )
 def test_add_managed_tool_writes_explicit_auth(tmp_path, arguments, auth):
     project = _project(tmp_path)
@@ -85,17 +86,49 @@ def test_add_sandbox_only_updates_manifest(tmp_path: pathlib.Path):
 
     result = CliRunner().invoke(
         tools,
-        ["add", "sandbox", "--scope", "table:samples.nyctaxi.trips", "--source", str(project)],
+        ["add", "sandbox", "--scope", "volume:main.data.files", "--source", str(project)],
         obj=_Ctx(),
     )
 
     assert result.exit_code == 0, result.output
     loaded = AgentProject.load(project)
     assert loaded.tools[0].source.kind == "sandbox"
-    assert loaded.tools[0].policy.downscope[0].resource == "table:samples.nyctaxi.trips"
+    assert loaded.tools[0].policy.downscope[0].resource == "volume:main.data.files"
     assert loaded.tools[0].policy.databricks_access_token_included is True
     assert "databricks_access_token_included = true" in (project / "agent.toml").read_text()
     assert (project / "agent" / "mcps.py").read_text(encoding="utf-8") == "ORIGINAL = True\n"
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("auth", ["user", "app"])
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("permission", ["read_only", "read_write"])
+def test_add_sandbox_rejects_table_scope_without_project_changes(
+    tmp_path, framework, auth, legacy, permission
+):
+    project = _project(tmp_path, framework)
+    before = {path: path.read_bytes() for path in project.rglob("*") if path.is_file()}
+    args = [
+        "--scope",
+        "volume:main.data.files",
+        "--scope",
+        "table:main.data.rows",
+        "--permission",
+        permission,
+        "--source",
+        str(project),
+    ]
+    if legacy:
+        command = add_sandbox
+    else:
+        command = tools
+        args = ["add", "sandbox", *args, "--auth", auth]
+
+    result = CliRunner().invoke(command, args, obj=_Ctx())
+
+    assert result.exit_code != 0
+    assert "Table sandbox scopes are not supported" in result.output
+    assert {path: path.read_bytes() for path in project.rglob("*") if path.is_file()} == before
 
 
 def test_add_sandbox_can_disable_databricks_token_env(tmp_path: pathlib.Path):
@@ -131,7 +164,7 @@ def test_generic_mcp_rejects_sandbox_scope(tmp_path: pathlib.Path):
             "mcp",
             "system.ai.web_search",
             "--scope",
-            "table:samples.nyctaxi.trips",
+            "volume:main.data.files",
             "--source",
             str(project),
         ],
@@ -177,7 +210,7 @@ def test_add_mcp_and_uc_function_write_typed_manifest_records(tmp_path: pathlib.
 @pytest.mark.parametrize(
     "command",
     [
-        ["add", "sandbox", "--scope", "table:samples.nyctaxi.trips"],
+        ["add", "sandbox", "--scope", "volume:main.data.files"],
         ["add", "mcp", "system.ai.web_search"],
         ["add", "uc-function", "main.tools.lookup_ticket"],
         ["add", "genie-one"],
@@ -209,7 +242,7 @@ def test_add_manifest_tool_works_for_any_framework(tmp_path: pathlib.Path, comma
 @pytest.mark.parametrize(
     "command",
     [
-        ["add", "sandbox", "--scope", "table:samples.nyctaxi.trips"],
+        ["add", "sandbox", "--scope", "volume:main.data.files"],
         ["add", "mcp", "system.ai.web_search"],
         ["add", "uc-function", "main.tools.lookup_ticket"],
         ["add", "genie-one"],
@@ -564,7 +597,7 @@ def test_configured_tools_are_inspected_in_manifest(tmp_path: pathlib.Path):
     "args",
     [
         ["mcp", "system.ai.web_search"],
-        ["sandbox", "--scope", "table:catalog.schema.table"],
+        ["sandbox", "--scope", "volume:catalog.schema.volume"],
         ["uc-function", "catalog.schema.function"],
     ],
 )

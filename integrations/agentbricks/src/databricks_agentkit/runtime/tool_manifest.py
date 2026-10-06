@@ -185,7 +185,13 @@ def _scope(value: object) -> ScopeRecord:
     value = cast(dict[str, Any], value)
     resource = _required_string(value.get("resource"), "a downscope resource")
     kind, separator, resource_value = resource.partition(":")
-    if not separator or kind not in {"table", "volume", "workspace"} or not resource_value:
+    if kind == "table" and separator:
+        raise ToolManifestError(
+            "Table sandbox scopes are not supported yet. "
+            "Databricks Connect does not support table downscoping. "
+            "Use volume:<name> or workspace:<path> instead."
+        )
+    if not separator or kind not in {"volume", "workspace"} or not resource_value:
         raise RuntimeError(f"Invalid agent.toml downscope resource: {resource!r}.")
     permission = _required_string(value.get("permission", "read_only"), "a permission")
     if permission not in {"read_only", "read_write"}:
@@ -301,7 +307,6 @@ def resolve_session_store(explicit: str | None = None) -> str | None:
 def downscope_wire(tool: ToolRecord) -> dict[str, list[dict[str, str]]]:
     """Convert protected policy into the system.ai.sandbox MCP ``_meta`` shape."""
     fields = {
-        "table": ("tables", "name"),
         "volume": ("volumes", "name"),
         "workspace": ("workspace_paths", "path"),
     }

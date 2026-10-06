@@ -24,8 +24,6 @@ from databricks_agentbricks.errors import AgentCliError
 
 _APP_PERMISSION_STRENGTH = {
     "EXECUTE": 1,
-    "SELECT": 1,
-    "MODIFY": 2,
     "READ_VOLUME": 1,
     "WRITE_VOLUME": 2,
 }
@@ -138,10 +136,7 @@ def plan_tool_access(tools: Sequence[ToolSpec]) -> ToolAccessPlan:
         elif kind == "sandbox":
             uc_grants.update(_mcp_grants(tool.source.service or ""))
             for scope in tool.policy.downscope:
-                if scope.kind == "table":
-                    permission = "SELECT" if scope.permission == "read_only" else "MODIFY"
-                    add_uc_resource("TABLE", scope.value, permission)
-                elif scope.kind == "volume":
+                if scope.kind == "volume":
                     permission = (
                         "READ_VOLUME" if scope.permission == "read_only" else "WRITE_VOLUME"
                     )

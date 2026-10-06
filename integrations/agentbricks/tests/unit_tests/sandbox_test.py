@@ -106,7 +106,7 @@ def test_add_sandbox_uses_langgraph_adapter_and_injects_fixed_meta(
 
     result = CliRunner().invoke(
         add_sandbox,
-        ["--source", str(project), "--scope", "table:samples.nyctaxi.trips"],
+        ["--source", str(project), "--scope", "volume:main.data.files"],
         obj=_TextCtx(),
     )
 
@@ -197,9 +197,9 @@ def test_add_sandbox_uses_langgraph_adapter_and_injects_fixed_meta(
         {
             "meta": {
                 "downscope": {
-                    "tables": [
+                    "volumes": [
                         {
-                            "name": "samples.nyctaxi.trips",
+                            "name": "main.data.files",
                             "permission": "read_only",
                         }
                     ]
@@ -217,7 +217,7 @@ def test_add_sandbox_infers_legacy_langgraph_project_from_dependencies(tmp_path:
 
     result = CliRunner().invoke(
         add_sandbox,
-        ["--source", str(project), "--scope", "table:samples.nyctaxi.trips"],
+        ["--source", str(project), "--scope", "volume:main.data.files"],
         obj=_TextCtx(),
     )
 
@@ -411,7 +411,7 @@ def test_generated_server_overrides_caller_downscope_without_changing_arguments(
     assert server.connection["tool_filter"] == {"allowed_tool_names": ["sandbox", "run_code"]}
 
 
-def test_add_sandbox_supports_workspace_table_and_read_write_scopes(tmp_path: pathlib.Path):
+def test_add_sandbox_supports_workspace_volume_and_read_write_scopes(tmp_path: pathlib.Path):
     project, mcps = _project(tmp_path)
 
     result = CliRunner().invoke(
@@ -422,7 +422,7 @@ def test_add_sandbox_supports_workspace_table_and_read_write_scopes(tmp_path: pa
             "--scope",
             "/Workspace/Users/alice@example.com",
             "--scope",
-            "table:catalog.schema.records",
+            "volume:catalog.schema.files",
             "--permission",
             "read_write",
         ],
@@ -433,9 +433,22 @@ def test_add_sandbox_supports_workspace_table_and_read_write_scopes(tmp_path: pa
     generated = mcps.read_text()
     assert '"workspace_paths": [' in generated
     assert '"path": "/Workspace/Users/alice@example.com"' in generated
-    assert '"tables": [' in generated
-    assert '"name": "catalog.schema.records"' in generated
+    assert '"volumes": [' in generated
+    assert '"name": "catalog.schema.files"' in generated
     assert generated.count('"permission": "read_write"') == 2
+
+
+def test_legacy_add_sandbox_preserves_colons_in_workspace_paths(tmp_path):
+    project, mcps = _project(tmp_path)
+
+    result = CliRunner().invoke(
+        add_sandbox,
+        ["--source", str(project), "--scope", "/Workspace/Shared/report:2026"],
+        obj=_TextCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert '"path": "/Workspace/Shared/report:2026"' in mcps.read_text()
 
 
 def test_add_sandbox_appends_to_existing_server_list(tmp_path: pathlib.Path):
@@ -598,6 +611,35 @@ def test_add_sandbox_rejects_invalid_scope_without_touching_file(tmp_path: pathl
     assert result.exit_code != 0
     assert "catalog.schema.volume" in result.output
     assert mcps.read_text() == _EMPTY_MCPS
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("permission", ["read_only", "read_write"])
+def test_legacy_add_sandbox_rejects_table_scope_without_writes(tmp_path, framework, permission):
+    if framework == "langgraph":
+        project, _, _ = _langgraph_project(tmp_path)
+    else:
+        project, _ = _project(tmp_path)
+    before = {path: path.read_bytes() for path in project.rglob("*") if path.is_file()}
+
+    result = CliRunner().invoke(
+        add_sandbox,
+        [
+            "--source",
+            str(project),
+            "--scope",
+            "volume:main.data.files",
+            "--scope",
+            "table:main.data.rows",
+            "--permission",
+            permission,
+        ],
+        obj=_TextCtx(),
+    )
+
+    assert result.exit_code != 0
+    assert "Table sandbox scopes are not supported" in result.output
+    assert {path: path.read_bytes() for path in project.rglob("*") if path.is_file()} == before
 
 
 @pytest.mark.parametrize(

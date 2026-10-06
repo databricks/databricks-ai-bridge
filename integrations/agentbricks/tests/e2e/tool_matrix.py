@@ -36,11 +36,10 @@ from databricks.sdk.service.catalog import SecurableType
 FRAMEWORKS = ("langgraph",)
 AUTHORING_PATHS = ("cli", "direct")
 RUNTIMES = ("dev", "deploy")
-TOOL_KINDS = ("sandbox_table", "sandbox_volume", "mcp", "python", "uc_function", "genie")
+TOOL_KINDS = ("sandbox_volume", "mcp", "python", "uc_function", "genie")
 E2E_MODEL = "system.ai.gpt-5-2"
 
 PROMPTS = {
-    "sandbox_table": "",
     "sandbox_volume": "",
     "mcp": (
         "You must use a tool from the configured system.ai.web_search MCP server. "
@@ -58,7 +57,6 @@ PROMPTS = {
 }
 
 EXPECTED = {
-    "sandbox_table": "the exact hidden marker read from the temporary UC table",
     "sandbox_volume": "the exact hidden marker read from the temporary UC volume file",
     "python": "AGENTBRICKS_PYTHON_OK",
     "uc_function": "AGENTBRICKS_UC_OK:matrix",
@@ -170,9 +168,7 @@ class Runner:
         self.cases: list[ProjectCase] = []
         self.uc_function: str | None = None
         self.transitive_uc_function: str | None = None
-        self.uc_table: str | None = None
         self.uc_volume: str | None = None
-        self.table_marker: str | None = None
         self.volume_marker: str | None = None
         self.volume_file_path: str | None = None
         self.warehouse_id: str | None = None
@@ -397,13 +393,6 @@ class Runner:
         # Leave room for catalog and schema in the 64-character MCP tool name.
         function_name = f"ab_uc_{suffix}"
         self.uc_function = f"{catalog}.{schema_name}.{function_name}"
-        table_name = f"agentbricks_table_{suffix}"
-        self.uc_table = f"{catalog}.{schema_name}.{table_name}"
-        self.table_marker = f"AGENTBRICKS_TABLE_{uuid.uuid4().hex}"
-        self.sql(
-            f"CREATE TABLE `{catalog}`.`{schema_name}`.`{table_name}` "
-            f"AS SELECT '{self.table_marker}' AS marker"
-        )
         volume_name = f"agentbricks_volume_{suffix}"
         self.uc_volume = f"{catalog}.{schema_name}.{volume_name}"
         self.sql(f"CREATE VOLUME `{catalog}`.`{schema_name}`.`{volume_name}`")
@@ -566,8 +555,8 @@ class Runner:
         pyproject.write_text(tomlkit.dumps(document), encoding="utf-8")
 
     def _author_cli(self, project: pathlib.Path) -> None:
-        if self.uc_table is None or self.uc_volume is None:
-            raise MatrixError("Sandbox table and volume were not created.")
+        if self.uc_volume is None:
+            raise MatrixError("Sandbox volume was not created.")
         manifest = project / "agent.toml"
         before = manifest.read_bytes()
         rejected = self.run(
@@ -617,8 +606,6 @@ class Runner:
                 "add",
                 "sandbox",
                 "--scope",
-                f"table:{self.uc_table}",
-                "--scope",
                 f"volume:{self.uc_volume}",
                 "--auth",
                 "app",
@@ -666,8 +653,8 @@ class Runner:
                 raise MatrixError(f"CLI-authored {tool_id} binding is not App-auth.")
 
     def _author_direct(self, project: pathlib.Path, framework: str, run_suffix: str) -> None:
-        if self.uc_table is None or self.uc_volume is None:
-            raise MatrixError("Sandbox table and volume were not created.")
+        if self.uc_volume is None:
+            raise MatrixError("Sandbox volume was not created.")
         # `agentbricks init` binds a default tracing experiment, which deploy attaches as a non-tool
         # App resource; mirror that here so the direct path also carries one (and the deploy-resource
         # preservation check has something to preserve). Follows default_experiment_name's shape.
@@ -679,7 +666,6 @@ class Runner:
             .replace("__FRAMEWORK__", framework)
             .replace("__UC_FUNCTION__", self.uc_function or "")
             .replace("__GENIE_SPACE_ID__", self.genie_space_id or "")
-            .replace("__UC_TABLE__", self.uc_table)
             .replace("__UC_VOLUME__", self.uc_volume)
             .replace("__EXPERIMENT_NAME__", experiment_name)
         )
@@ -953,7 +939,6 @@ class Runner:
             raise MatrixError("Expected a non-tool App resource to prove preservation on redeploy.")
         expected_app_resources = {
             ("uc_securable", self.uc_function, "FUNCTION", "EXECUTE"),
-            ("uc_securable", self.uc_table, "TABLE", "SELECT"),
             ("uc_securable", self.uc_volume, "VOLUME", "READ_VOLUME"),
             ("genie_space", self.genie_space_id or "", "GENIE_SPACE", "CAN_RUN"),
         }
@@ -1087,16 +1072,7 @@ class Runner:
             started = time.monotonic()
             prompt = PROMPTS[tool_kind]
             expected_marker: str | None = None
-            if tool_kind == "sandbox_table":
-                if self.uc_table is None or self.table_marker is None:
-                    raise MatrixError("Sandbox table marker was not created.")
-                prompt = (
-                    "You must call the sandbox tool. In the sandbox, use Python and Spark SQL "
-                    f"to run SELECT marker FROM {self.uc_table} and read its sole row. "
-                    "Return only the exact value read from the table; do not fabricate it."
-                )
-                expected_marker = self.table_marker
-            elif tool_kind == "sandbox_volume":
+            if tool_kind == "sandbox_volume":
                 if self.volume_file_path is None or self.volume_marker is None:
                     raise MatrixError("Sandbox volume marker was not created.")
                 prompt = (
@@ -1231,9 +1207,7 @@ class Runner:
             "wheel_sha256": _sha256(self.wheel),
             "uc_function": self.uc_function,
             "transitive_uc_function": self.transitive_uc_function,
-            "uc_table": self.uc_table,
             "uc_volume": self.uc_volume,
-            "table_marker": self.table_marker,
             "volume_marker": self.volume_marker,
             "volume_file_path": self.volume_file_path,
             "genie_space_id": self.genie_space_id,
@@ -1426,22 +1400,6 @@ class Runner:
                         "detail": str(exc),
                     }
                 )
-        if self.uc_table:
-            catalog, schema, table_name = self.uc_table.split(".")
-            try:
-                self.sql(f"DROP TABLE IF EXISTS `{catalog}`.`{schema}`.`{table_name}`")
-                self.cleanup_results.append(
-                    {"resource": f"table:{self.uc_table}", "status": "deleted"}
-                )
-            except Exception as exc:
-                self.transcript.write(f"cleanup warning | UC table | {exc}")
-                self.cleanup_results.append(
-                    {
-                        "resource": f"table:{self.uc_table}",
-                        "status": "failed",
-                        "detail": str(exc),
-                    }
-                )
         if self.uc_volume:
             catalog, schema, volume_name = self.uc_volume.split(".")
             if self.volume_file_path:
@@ -1570,7 +1528,7 @@ def _http_json(url: str, body: dict[str, Any], headers: dict[str, str]) -> dict[
 
 def _assert_semantics(tool_kind: str, serialized: str, expected_marker: str | None = None) -> None:
     lowered = serialized.lower()
-    if tool_kind in {"sandbox_table", "sandbox_volume"}:
+    if tool_kind == "sandbox_volume":
         if expected_marker is None:
             raise MatrixError(f"No hidden marker was provided for {tool_kind!r}.")
         if expected_marker not in serialized:
@@ -1797,13 +1755,11 @@ def verify_evidence(path: pathlib.Path, *, require_cleanup: bool = True) -> int:
             sys.stdout.write(f"duplicate rows: {duplicates}\n")
         return 1
     sandbox_markers = {
-        "sandbox_table": document.get("table_marker"),
         "sandbox_volume": document.get("volume_marker"),
     }
     volume_file_path = document.get("volume_file_path")
     if (
         any(not isinstance(marker, str) or not marker for marker in sandbox_markers.values())
-        or sandbox_markers["sandbox_table"] == sandbox_markers["sandbox_volume"]
         or not isinstance(volume_file_path, str)
         or not volume_file_path.startswith("/Volumes/")
     ):

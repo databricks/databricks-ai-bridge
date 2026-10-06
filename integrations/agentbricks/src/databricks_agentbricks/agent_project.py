@@ -33,7 +33,7 @@ TRACING_TABLE = "tracing"
 EXPERIMENT_NAME_KEY = "experiment_name"
 
 _SCHEMA_VERSION = 1
-_SUPPORTED_SCOPE_KINDS = {"table", "volume", "workspace"}
+_SUPPORTED_SCOPE_KINDS = {"volume", "workspace"}
 _SUPPORTED_PERMISSIONS = {"read_only", "read_write"}
 _TOOL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
@@ -61,6 +61,12 @@ class Scope:
     permission: str = "read_only"
 
     def __post_init__(self) -> None:
+        if self.kind == "table":
+            raise AgentCliError(
+                "Table sandbox scopes are not supported yet.",
+                hint="Databricks Connect does not support table downscoping. "
+                "Use volume:<name> or workspace:<path> instead.",
+            )
         if self.kind not in _SUPPORTED_SCOPE_KINDS:
             raise AgentCliError(
                 f"Unsupported sandbox scope kind {self.kind!r}.",
@@ -80,10 +86,6 @@ class Scope:
             _three_part_name(self.value, f"{self.kind} scope")
 
     @classmethod
-    def table(cls, value: str, permission: str = "read_only") -> "Scope":
-        return cls(kind="table", value=value, permission=permission)
-
-    @classmethod
     def volume(cls, value: str, permission: str = "read_only") -> "Scope":
         return cls(kind="volume", value=value, permission=permission)
 
@@ -97,11 +99,11 @@ class Scope:
         original = value.strip()
         if not original:
             raise AgentCliError("Sandbox scopes cannot be empty.")
-        prefix, separator, remainder = original.partition(":")
-        if separator and prefix in _SUPPORTED_SCOPE_KINDS:
-            return cls(prefix, remainder.strip(), permission)
         if original.startswith("/Workspace/"):
             return cls.workspace(original, permission)
+        prefix, separator, remainder = original.partition(":")
+        if separator:
+            return cls(prefix, remainder.strip(), permission)
         return cls.volume(original, permission)
 
     @property
@@ -290,7 +292,7 @@ def _scope_from_manifest(value: object) -> Scope:
     if not separator:
         raise AgentCliError(
             f"Invalid sandbox downscope resource {resource!r}.",
-            hint="Use table:<name>, volume:<name>, or workspace:<path>.",
+            hint="Use volume:<name> or workspace:<path>.",
         )
     return Scope(prefix, name, permission)
 

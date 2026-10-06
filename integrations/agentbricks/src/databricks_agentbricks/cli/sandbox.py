@@ -15,6 +15,7 @@ from typing import Protocol
 import click
 
 from databricks_agentbricks import render
+from databricks_agentbricks.agent_project import Scope
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.project_config import load_project_metadata
 from databricks_agentbricks.project_types import AgentFramework
@@ -44,42 +45,18 @@ def _parse_scopes(scopes: Sequence[str], permission: str) -> dict[str, list[dict
     """Convert CLI scope values to the MCP ``_meta.downscope`` wire shape."""
     parsed: dict[str, list[dict[str, str]]] = {
         "volumes": [],
-        "tables": [],
         "workspace_paths": [],
     }
     seen: set[tuple[str, str]] = set()
 
     for original in scopes:
-        value = original.strip()
-        if not value:
-            raise AgentCliError("Sandbox scopes cannot be empty.")
-
-        prefix, separator, remainder = value.partition(":")
-        explicit_type = prefix if separator and prefix in {"volume", "table", "workspace"} else None
-        if explicit_type:
-            value = remainder.strip()
-
-        if explicit_type == "workspace" or (
-            explicit_type is None and value.startswith("/Workspace/")
-        ):
-            if not value.startswith("/Workspace/") or any(
-                character in value for character in ("\r", "\n", "\t")
-            ):
-                raise AgentCliError(
-                    f"Invalid workspace scope '{value}'.",
-                    hint="Workspace paths must begin with /Workspace/ and cannot contain tabs or newlines.",
-                )
-            key, field = "workspace_paths", "path"
-        else:
-            resource_type = explicit_type or "volume"
-            if resource_type == "workspace":  # Handled above; keeps the type narrow below.
-                raise AssertionError("unreachable")
-            value = _validate_uc_name(value, resource_type)
-            key, field = ("tables", "name") if resource_type == "table" else ("volumes", "name")
-
-        identity = (key, value)
+        scope = Scope.parse(original, permission)
+        key, field = (
+            ("workspace_paths", "path") if scope.kind == "workspace" else ("volumes", "name")
+        )
+        identity = (key, scope.value)
         if identity not in seen:
-            parsed[key].append({field: value, "permission": permission})
+            parsed[key].append({field: scope.value, "permission": scope.permission})
             seen.add(identity)
 
     return {key: values for key, values in parsed.items() if values}
@@ -396,7 +373,6 @@ def _existing_policy(
 
     expected_fields = {
         "volumes": "name",
-        "tables": "name",
         "workspace_paths": "path",
     }
     if not policy or any(key not in expected_fields for key in policy):
@@ -466,10 +442,10 @@ def _policy_cli_values(
 ) -> tuple[list[str], str]:
     scopes: list[str] = []
     permissions: set[str] = set()
-    for resource_type, entries in policy.items():
+    for entries in policy.values():
         for entry in entries:
             value = entry.get("path") or entry.get("name", "")
-            scopes.append(f"table:{value}" if resource_type == "tables" else value)
+            scopes.append(value)
             permissions.add(entry.get("permission", ""))
     if len(permissions) != 1:
         raise AgentCliError("The existing sandbox downscope has inconsistent permissions.")
@@ -753,8 +729,7 @@ _SANDBOX_ADAPTERS: dict[AgentFramework, _SandboxAdapter] = {
     multiple=True,
     required=True,
     help=(
-        "Allowed volume (catalog.schema.volume) or /Workspace/ path. Repeat for multiple scopes; "
-        "use table:catalog.schema.table for a table."
+        "Allowed volume (catalog.schema.volume) or /Workspace/ path. Repeat for multiple scopes."
     ),
 )
 @click.option(

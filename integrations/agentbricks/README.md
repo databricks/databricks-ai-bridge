@@ -588,7 +588,7 @@ add` updates only this file; direct TOML edits have the same behavior. Both mana
 adapters read the managed bindings at runtime without generating or patching agent source:
 
 ```sh
-agentbricks tools add sandbox --scope table:samples.nyctaxi.trips
+agentbricks tools add sandbox --scope volume:main.data.files
 agentbricks tools add mcp system.ai.web_search
 agentbricks tools add uc-function catalog.schema.lookup_ticket
 agentbricks tools add genie-one
@@ -626,7 +626,6 @@ user's permissions instead of the App service principal.
 | --- | --- |
 | UC function | Apps `uc_securable`: `FUNCTION` / `EXECUTE` |
 | Genie Agent space | Apps `genie_space`: `CAN_RUN` |
-| Sandbox table scope | Apps `uc_securable`: `TABLE` / `SELECT` or `MODIFY` |
 | Sandbox volume scope | Apps `uc_securable`: `VOLUME` / `READ_VOLUME` or `WRITE_VOLUME` |
 | Sandbox Workspace path | Workspace ACL: `CAN_READ` or `CAN_EDIT` |
 | External MCP service | Unity Catalog: effective `EXECUTE` plus `USE_SCHEMA` and `USE_CATALOG` on its named parents |
@@ -859,6 +858,10 @@ auth = "user"
 source = { kind = "sandbox", service = "system.ai.sandbox" }
 policy = { downscope = [{ resource = "workspace:/Workspace/Shared", permission = "read_only" }], databricks_access_token_included = true }
 ```
+
+Table sandbox scopes are not supported yet because Databricks Connect does not support table
+downscoping. Use a volume or workspace path instead. Existing `table:` entries must be removed
+from `agent.toml` before using `agentbricks dev` or `agentbricks deploy`.
 
 With `databricks_access_token_included = true`, the sandbox receives `DATABRICKS_HOST`, a short-lived
 `DATABRICKS_TOKEN`, and `DATABRICKS_AUTH_TYPE`, so code such as

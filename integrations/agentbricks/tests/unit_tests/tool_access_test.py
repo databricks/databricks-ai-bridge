@@ -44,7 +44,6 @@ def test_plan_maps_only_explicit_app_auth_resources_to_least_privilege():
             ToolSpec.sandbox(
                 "sandbox",
                 scopes=[
-                    Scope.table("main.data.rows"),
                     Scope.volume("main.data.files"),
                     Scope.workspace("/Workspace/Shared/input", "read_write"),
                 ],
@@ -65,7 +64,6 @@ def test_plan_maps_only_explicit_app_auth_resources_to_least_privilege():
     }
     assert uc_resources == {
         ("supervisor_agent.tools.search", "FUNCTION", "EXECUTE"),
-        ("main.data.rows", "TABLE", "SELECT"),
         ("main.data.files", "VOLUME", "READ_VOLUME"),
     }
     assert [
@@ -92,7 +90,6 @@ def test_plan_deduplicates_targets_and_keeps_strongest_permission():
         ToolSpec.sandbox(
             "read",
             scopes=[
-                Scope.table("main.data.rows"),
                 Scope.volume("main.data.files"),
                 Scope.workspace("/Workspace/Shared/input"),
             ],
@@ -100,7 +97,6 @@ def test_plan_deduplicates_targets_and_keeps_strongest_permission():
         ToolSpec.sandbox(
             "write",
             scopes=[
-                Scope.table("main.data.rows", "read_write"),
                 Scope.volume("main.data.files", "read_write"),
                 Scope.workspace("/Workspace/Shared/input", "read_write"),
             ],
@@ -115,8 +111,8 @@ def test_plan_deduplicates_targets_and_keeps_strongest_permission():
         resource["uc_securable"]["permission"]
         for resource in first.app_resources
         if "uc_securable" in resource
-    } == {"MODIFY", "WRITE_VOLUME"}
-    assert len(first.app_resources) == 2
+    } == {"WRITE_VOLUME"}
+    assert len(first.app_resources) == 1
     assert first.workspace_grants == (
         WorkspaceGrant(
             path="/Workspace/Shared/input",
@@ -132,7 +128,7 @@ def test_plan_ignores_user_auth_and_genie_one_without_an_explicit_resource():
             ToolSpec.mcp("search", service="system.ai.web_search", auth="user"),
             ToolSpec.sandbox(
                 "sandbox",
-                scopes=[Scope.table("main.data.rows")],
+                scopes=[Scope.volume("main.data.files")],
                 auth="user",
             ),
             ToolSpec.genie_agent("genie", space_id="0" * 32, auth="user"),
@@ -151,7 +147,7 @@ def test_plan_uses_platform_defaults_for_system_mcp_services():
             ToolSpec.mcp("search", service="system.ai.web_search"),
             ToolSpec.sandbox(
                 "sandbox",
-                scopes=[Scope.table("supervisor_agent.tools.rows")],
+                scopes=[Scope.volume("supervisor_agent.tools.files")],
             ),
         ]
     )
