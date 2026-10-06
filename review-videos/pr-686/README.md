@@ -1,4 +1,4 @@
-# PR #686 test evidence
+# PR #686 regression report
 
 Recorded 2026-10-06 with live Sonnet 4.5 models and real managed session/memory stores on e2-dogfood-apps. No model responses or cloud stores were mocked.
 
@@ -41,3 +41,12 @@ Both videos show the same generated project locally, its real deployment, then t
 The recordings test the exact PR head. Its merge with main (`209dec3ea126fb769a9c5ee468aa745658f95c8e`) was checked separately in a temporary checkout without modifying the PR branch.
 
 Scope: the PR changes CLI setup wording; browser capability wording is unchanged. Local memory is still disabled and local history is still lost on restart. Deployed process restart/crash recovery and cross-user access were not part of these tests.
+
+## Focused PR demonstrations
+
+The PR description links only the two changed behaviors. These clips are trimmed from the deployed browser chapters above, with BEFORE / AFTER labels:
+
+- [Saved messages: empty chat before, restored messages after (15 seconds)](686-history-before-after.mp4)
+- [Pending approval: missing before, restored and approved after (19 seconds)](686-approval-before-after.mp4)
+
+The recordings are at original speed, with brief end-frame holds. The event-log pane and old captions are cropped out; new labels sit outside the application UI. No UI contents were simulated or replaced. [Source cut ranges and hashes](short-video-manifest.json).

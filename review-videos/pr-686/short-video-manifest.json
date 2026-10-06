@@ -1,0 +1,40 @@
+{
+  "recorded_at": "2026-10-06",
+  "baseline": "ed3ed6b742ac1633cd05afa335870abaf98f6233",
+  "head": "c71b6b2451b4e3216e6bc1f1e1f83e577678bd54",
+  "editing": "Actual deployed browser footage at original speed. Right-hand event log and original captions cropped out; explanatory labels added outside the UI. End frames held for reading. No UI content replaced or simulated.",
+  "segments": [
+    {
+      "name": "history-before",
+      "source": "before/deployed.mp4",
+      "source_sha256": "da8ba98556e520a9671a3048040a37194d6e9381f9644c64c977f78068ebd0f7",
+      "start_seconds": 39.0,
+      "end_seconds": 44.8,
+      "end_frame_hold_seconds": 2.0
+    },
+    {
+      "name": "history-after",
+      "source": "after/deployed.mp4",
+      "source_sha256": "9d431070ca0ee91c5ad0cd9da82f93ed983d0b60ad667f00a314e473c3ca527c",
+      "start_seconds": 39.0,
+      "end_seconds": 44.04,
+      "end_frame_hold_seconds": 2.0
+    },
+    {
+      "name": "approval-before",
+      "source": "before/deployed.mp4",
+      "source_sha256": "da8ba98556e520a9671a3048040a37194d6e9381f9644c64c977f78068ebd0f7",
+      "start_seconds": 49.0,
+      "end_seconds": 53.04,
+      "end_frame_hold_seconds": 2.0
+    },
+    {
+      "name": "approval-after",
+      "source": "after/deployed.mp4",
+      "source_sha256": "9d431070ca0ee91c5ad0cd9da82f93ed983d0b60ad667f00a314e473c3ca527c",
+      "start_seconds": 49.0,
+      "end_seconds": 60.0,
+      "end_frame_hold_seconds": 1.5
+    }
+  ]
+}
