@@ -384,6 +384,14 @@ def init(
     selected_framework = parse_framework(framework or AgentFramework.LANGGRAPH)
     selected_server = parse_server(server)
     agentbricks_server = selected_server == AgentServer.AGENTBRICKS
+    # Keep only static project selections on the shared context for invocation telemetry.  The
+    # directory, generated names, profile, and command options remain local to the command.
+    if hasattr(obj, "set_telemetry_project"):
+        obj.set_telemetry_project(
+            framework=selected_framework.value,
+            server=selected_server.value,
+            tracing_configured=agentbricks_server if not existing else None,
+        )
     template = _TEMPLATES[selected_framework]
     template_name = template.agentbricks_server if agentbricks_server else template.custom_server
     chat_app_enabled = agentbricks_server and not disable_chat_app

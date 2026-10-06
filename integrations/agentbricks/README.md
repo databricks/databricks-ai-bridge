@@ -108,6 +108,11 @@ If Databricks SDK default authentication is already configured, you can skip `ag
 You can also pass the global `--profile/-p` option before an individual command, for example
 `agentbricks --profile <profile> tools list`. Use `--output json` for scripting.
 
+The CLI sends best effort command usage telemetry after leaf commands. It records the command path,
+package version, operating system, duration, outcome, and bounded project selections; command
+arguments, option values, paths, and error messages are not included. Set
+`AGENTBRICKS_DISABLE_TELEMETRY=1` to disable these uploads.
+
 ## Quickstart
 
 The shortest path from a blank directory to a running and deployed agent:

@@ -539,6 +539,15 @@ def deploy(
     """
     source_dir = pathlib.Path(source)
     project = _load_project(source_dir)
+    # Record only the project's bounded enum selections for the shared invocation telemetry hook.
+    # The source path and deployment name stay in the command implementation and are never logged.
+    if project is not None:
+        if hasattr(obj, "set_telemetry_project"):
+            obj.set_telemetry_project(
+                framework=project.framework.value,
+                server=project.server.value,
+                tracing_configured=bool(project.trace_experiment_name),
+            )
     if project is not None and project.tools:
         require_managed_tool_support(source_dir)
     user_auth = requires_user_auth(project)

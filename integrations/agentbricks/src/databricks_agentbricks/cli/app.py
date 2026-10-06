@@ -32,6 +32,25 @@ class CliContext:
         self.profile = profile
         self.output = output
         self._client: Optional[_AgentBricksApiClient] = None
+        # Safe, enum-like project metadata for the invocation telemetry hook.  Command callbacks
+        # set these after resolving their project; names, paths, and raw parameters never enter the
+        # telemetry record.
+        self.telemetry_framework: Optional[str] = None
+        self.telemetry_server: Optional[str] = None
+        self.telemetry_tracing_configured: Optional[bool] = None
+
+    def set_telemetry_project(
+        self,
+        *,
+        framework: Optional[str],
+        server: Optional[str],
+        tracing_configured: Optional[bool],
+    ) -> None:
+        """Set the bounded project fields allowed in the CLI invocation log."""
+
+        self.telemetry_framework = framework
+        self.telemetry_server = server
+        self.telemetry_tracing_configured = tracing_configured
 
     def client(self) -> _AgentBricksApiClient:
         if self._client is None:
