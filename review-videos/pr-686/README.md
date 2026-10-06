@@ -12,9 +12,9 @@ Both videos show the same generated project locally, its real deployment, then t
 
 - 0:00 — local-initial
 - 0:38 — cli-deploy
-- 0:44 — deployed
-- 1:43 — local-again
-- 2:22 — cli-hints
+- 0:46 — deployed
+- 1:45 — local-again
+- 2:24 — cli-hints
 
 ## After
 
@@ -22,9 +22,9 @@ Both videos show the same generated project locally, its real deployment, then t
 
 - 0:00 — local-initial
 - 0:38 — cli-deploy
-- 0:39 — deployed
-- 1:44 — local-again
-- 2:25 — cli-hints
+- 0:46 — deployed
+- 1:51 — local-again
+- 2:32 — cli-hints
 
 ## Results
 
