@@ -67,19 +67,16 @@ The two ways to run an agent:
 
 ## Installation
 
-From PyPI:
-
 The `databricks-agentbricks` Python distribution installs the `agentbricks` command and AgentKit.
 
 ```sh
 pip install databricks-agentbricks
 ```
 
-From source:
-
-```sh
-pip install 'git+https://github.com/databricks/databricks-ai-bridge.git#subdirectory=integrations/agentbricks'
-```
+Install from PyPI rather than from this repository. Templates on `main` can depend on SDK changes that
+are not yet released, while generated projects install the released SDK from PyPI, so a CLI installed
+from source can scaffold projects that fail to start. To work on Agent Bricks itself, see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 The base package includes the CLI, store SDK, and `DurableAgentServer` HTTP runtime. Generated projects
 declare their framework dependencies automatically.

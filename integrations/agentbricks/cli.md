@@ -22,7 +22,7 @@ pip install databricks-agentbricks
 
 The `databricks-agentbricks` distribution provides the `agentbricks` command and AgentKit SDK.
 
-See [Installation](README.md#installation) for installing from source and for shell completion.
+See [Installation](README.md#installation) for installation details and shell completion.
 
 ## Authentication
 
