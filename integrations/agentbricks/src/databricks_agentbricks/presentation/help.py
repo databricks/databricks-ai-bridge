@@ -16,7 +16,7 @@ CommandPath = tuple[str, ...]
 # getting-started path. Any command missing here still lists under "Other commands" (see
 # `_group.AgentBricksGroup`).
 _COMMAND_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("SETUP", ("login", "logout", "init", "doctor")),
+    ("SETUP", ("init", "profile", "doctor")),
     ("DEVELOP", ("dev", "tools", "memory", "sessions", "tracing")),
     ("SHIP", ("deploy", "deployments")),
 )
@@ -28,20 +28,41 @@ Example = str | tuple[str, str]
 
 _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     (): (
-        ("agentbricks login --profile <profile>", "authenticate and save a default profile"),
-        ("agentbricks init my-agent", "scaffold a new agent project"),
+        ("agentbricks profile login <profile>", "sign in to a Databricks profile"),
+        (
+            "agentbricks init my-agent --profile <profile>",
+            "scaffold a new agent project",
+        ),
         ("cd my-agent", "enter the project directory"),
         ("agentbricks dev", "run the agent locally with a chat UI"),
         ("agentbricks deploy my-agent", "deploy the agent to Databricks Apps"),
     ),
-    ("login",): (("agentbricks login --profile <profile>", "save a profile as your default"),),
-    ("logout",): (("agentbricks logout", "forget the saved default profile"),),
     ("init",): (
         ("agentbricks init my-agent", "scaffold a new agent project"),
         (
             "agentbricks init --framework langgraph --existing .",
             "prepare a coding-agent migration bundle for an existing agent",
         ),
+    ),
+    ("profile",): (
+        ("agentbricks profile login <profile>", "sign in to a Databricks profile"),
+        ("agentbricks profile set <profile>", "use that profile for the current project"),
+        ("agentbricks profile get", "show the profile this directory would use"),
+    ),
+    ("profile", "set"): (
+        ("agentbricks profile set <profile>", "write the profile to the project's .env"),
+        (
+            "agentbricks profile set <profile> --source my-agent",
+            "set it for a project in another directory",
+        ),
+    ),
+    ("profile", "get"): (
+        ("agentbricks profile get", "show the profile, its source, and its workspace"),
+        ("agentbricks -o json profile get --source my-agent", "script against another project"),
+    ),
+    ("profile", "login"): (
+        ("agentbricks profile login <profile>", "validate it, signing in if needed"),
+        ("agentbricks profile login", "sign in to the project's .env profile"),
     ),
     ("doctor",): (
         ("agentbricks doctor .", "check an existing repository's Agent Bricks onboarding"),
@@ -411,9 +432,8 @@ _ISSUES_URL = "https://github.com/databricks/databricks-ai-bridge/issues"
 # crisp while the command's own `--help` page still shows its full docstring. Keep these under ~45
 # chars so they never truncate.
 _SHORT_HELP: dict[CommandPath, str] = {
-    ("login",): "Authenticate and save a default profile",
-    ("logout",): "Forget the saved default profile",
     ("init",): "Scaffold a new agent project",
+    ("profile",): "Choose and sign in to a Databricks profile",
     ("doctor",): "Check an existing agent's onboarding",
     ("dev",): "Run the agent locally with a chat UI",
     ("deploy",): "Deploy an agent to Databricks Apps",
@@ -470,7 +490,7 @@ def _example_epilog(examples: tuple[Example, ...]) -> str:
 
 
 def _getting_started_epilog() -> str:
-    """The root's numbered "Getting started" path: login → init → cd → dev → deploy.
+    """The root's numbered "Getting started" path: sign in → init → cd → dev → deploy.
 
     A numbered, ordered path — rather than an unlabeled grab-bag of examples — removes the
     "blank-page problem" for a first-time reader: it says *start here, in this order*. Reuses the
@@ -498,9 +518,9 @@ def _root_epilog() -> str:
     auth = "\n".join(
         [
             "\b",
-            "Not authenticated yet? Create a profile with the Databricks CLI first:",
-            "  databricks auth login --profile <profile>",
-            "Then `agentbricks login --profile <profile>` saves it as your default.",
+            "Not authenticated yet? Sign in to a profile first (creates it if needed):",
+            "  agentbricks profile login <profile>",
+            "Then `agentbricks init <dir> --profile <profile>` records it in the project's .env.",
         ]
     )
     links = "\n".join(["\b", f"Docs:   {_DOCS_URL}", f"Issues: {_ISSUES_URL}"])

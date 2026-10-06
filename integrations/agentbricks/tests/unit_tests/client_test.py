@@ -652,7 +652,7 @@ def test_auth_error_hint_explains_profile_selection_and_login(_workspace_client)
     hint = exc_info.value.hint
     assert hint is not None
     assert "`agentbricks --profile <name> <command>`" in hint
-    assert "`agentbricks login --profile <name>`" in hint
+    assert "`agentbricks profile login <name>`" in hint
     assert "`databricks auth login --profile <name>`" not in hint
 
 

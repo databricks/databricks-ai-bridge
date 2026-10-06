@@ -17,7 +17,10 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
+from databricks_agentbricks.cli import auth
 from databricks_agentbricks.cli import deploy as deploy_mod
+from databricks_agentbricks.cli.app import CliContext
+from databricks_agentbricks.cli.auth import ProfileInfo
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.conversation_store_client import (
@@ -53,13 +56,15 @@ class _FakeApiClient:
     current_user = "me@example.com"
 
 
-class _Ctx:
-    profile = "prof"
-    output = "text"
-
-    def __init__(self, *, output: str = "text"):
-        self.output = output
+class _Ctx(CliContext):
+    def __init__(self, *, output: str = "text", profile: str | None = "prof"):
+        super().__init__(profile, output)
         self.api_client_provider = types.SimpleNamespace(get=lambda: _FakeApiClient())
+
+
+@pytest.fixture(autouse=True)
+def _authenticated_profile(validated_profile, monkeypatch: pytest.MonkeyPatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
 
 
 def _result(*, deployment: str = "agent-bricks-demo") -> DeployResult:
@@ -169,11 +174,9 @@ class _DeployRunner:
 
 
 def _real_deploy_context(api: _DeployApi, *, output: str = "text"):
-    return types.SimpleNamespace(
-        profile="prof",
-        output=output,
-        api_client_provider=types.SimpleNamespace(get=lambda: api),
-    )
+    ctx = CliContext("prof", output)
+    ctx.api_client_provider = types.SimpleNamespace(get=lambda: api)
+    return ctx
 
 
 def test_manifest_env_scaffolds_when_missing(tmp_path: pathlib.Path):
@@ -370,6 +373,67 @@ def test_deploy_cli_passes_request_to_service_and_presents_json(tmp_path: pathli
         allow_user_scope_update=True,
     )
     assert json.loads(result.output)["deployment"] == "agent-bricks-demo"
+
+
+def _deploy_with_service(tmp_path: pathlib.Path, ctx: _Ctx, *extra: str):
+    service = mock.Mock()
+    service.deploy.return_value = _result()
+    with mock.patch.object(deploy_mod, "build_deploy_service", return_value=service) as build:
+        result = CliRunner().invoke(
+            deploy_mod.deploy, ["demo", "--source", str(tmp_path), *extra], obj=ctx
+        )
+    return result, service, build
+
+
+def test_deploy_uses_the_source_projects_env_profile(
+    tmp_path: pathlib.Path, validated_profile, write_databrickscfg
+):
+    write_databrickscfg("[proj]\nhost = https://proj.example\n")
+    (tmp_path / ".env").write_text("DATABRICKS_CONFIG_PROFILE=proj\n")
+    ctx = _Ctx(profile=None)
+
+    result, _, build = _deploy_with_service(tmp_path, ctx)
+
+    assert result.exit_code == 0, result.output
+    assert ctx.profile_info == ProfileInfo("proj", ".env")
+    assert build.call_args.args[0] is ctx
+    validated_profile.assert_called_once_with("proj")
+    out = " ".join(result.output.split())
+    assert "Profile proj (from .env)" in out
+    assert "Host https://proj.example" in out
+
+
+def test_deploy_flag_profile_beats_the_source_env_file(tmp_path: pathlib.Path, validated_profile):
+    (tmp_path / ".env").write_text("DATABRICKS_CONFIG_PROFILE=proj\n")
+
+    result, _, _ = _deploy_with_service(tmp_path, _Ctx(profile="flag"))
+
+    assert result.exit_code == 0, result.output
+    validated_profile.assert_called_once_with("flag")
+    assert "Profile flag (from --profile)" in " ".join(result.output.split())
+
+
+def test_deploy_json_output_is_not_changed_by_profile_details(
+    tmp_path: pathlib.Path, validated_profile
+):
+    result, _, _ = _deploy_with_service(tmp_path, _Ctx(output="json"))
+
+    assert "profile" not in json.loads(result.output)
+
+
+def test_deploy_unauthenticated_profile_fails_before_any_deploy_work(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    monkeypatch.setattr(auth, "_validate_bounded", lambda profile: (None, RuntimeError("expired")))
+
+    result, service, build = _deploy_with_service(tmp_path, _Ctx(profile="prof"))
+
+    assert result.exit_code != 0
+    out = " ".join(result.output.split())
+    assert "'prof' (from --profile) isn't authenticated" in out
+    assert "agentbricks -p prof deploy" in out
+    build.assert_not_called()
+    service.deploy.assert_not_called()
 
 
 def test_deploy_json_preserves_additive_tool_access_contract(tmp_path: pathlib.Path):

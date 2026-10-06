@@ -104,16 +104,26 @@ def memory_entry_path(store: str, entry: str) -> str:
     return f"{memory_store_path(store)}/entries/{entry}"
 
 
-def _profile_host(profile: str) -> Optional[str]:
-    config_path = pathlib.Path(
-        os.getenv("DATABRICKS_CONFIG_FILE", pathlib.Path.home() / ".databrickscfg")
-    )
-    parser = configparser.ConfigParser()
+def _databricks_config_parser() -> configparser.ConfigParser:
+    """The parsed Databricks config file, or an empty parser on any problem (never raises).
+
+    expanduser: the SDK expands `~` in DATABRICKS_CONFIG_FILE; without it a tilde path reads
+    nothing. No interpolation: values are taken verbatim — a `%` must not raise at get-time.
+    """
+    parser = configparser.ConfigParser(interpolation=None)
     try:
-        parser.read(config_path)
+        parser.read(
+            pathlib.Path(
+                os.getenv("DATABRICKS_CONFIG_FILE", str(pathlib.Path.home() / ".databrickscfg"))
+            ).expanduser()
+        )
     except (OSError, configparser.Error):
-        return None
-    return parser.get(profile, "host", fallback=None)
+        pass
+    return parser
+
+
+def _profile_host(profile: str) -> Optional[str]:
+    return _databricks_config_parser().get(profile, "host", fallback=None)
 
 
 def _bound_retry_timeout(client: WorkspaceClient) -> WorkspaceClient:
@@ -166,7 +176,7 @@ class _AgentBricksApiClient:
             raise AgentCliError(
                 f"Could not initialize Databricks auth: {exc}",
                 hint="Select an existing profile with `agentbricks --profile <name> <command>` "
-                "or authenticate and save it with `agentbricks login --profile <name>`.",
+                "or sign in with `agentbricks profile login <name>`.",
             ) from exc
 
     @property

@@ -119,6 +119,61 @@ def test_prepare_builds_local_plan_and_run_uses_injected_apps_client(
     )
 
 
+def test_prepare_puts_local_env_in_the_local_manifest(
+    service_fixture: SimpleNamespace, tmp_path: pathlib.Path
+) -> None:
+    request = DevRequest(
+        source=str(tmp_path),
+        prepare_environment=None,
+        app_port=None,
+        local_env={"DATABRICKS_CONFIG_PROFILE": "ml"},
+    )
+
+    with service_fixture.service.prepare(request) as plan:
+        env = _manifest_env(plan.entry_point)
+
+    assert env["DATABRICKS_CONFIG_PROFILE"] == "ml"
+    assert env["MLFLOW_TRACKING_URI"] == "http://127.0.0.1:5599"
+    assert "DATABRICKS_CONFIG_PROFILE" not in (tmp_path / "app.yaml").read_text()
+
+
+def test_preflight_runs_before_the_project_is_loaded(
+    service_fixture: SimpleNamespace, tmp_path: pathlib.Path
+) -> None:
+    order: list[str] = []
+    service_fixture.resolver.load.side_effect = lambda source: order.append("load")
+    service = DevService(
+        project_resolver=service_fixture.resolver,
+        apps_client=service_fixture.apps,
+        local_tracing=service_fixture.tracing,
+        preflight=lambda: order.append("preflight"),
+    )
+
+    with service.prepare(DevRequest(str(tmp_path), None, None)):
+        pass
+
+    assert order == ["preflight", "load"]
+
+
+def test_failed_preflight_stops_before_any_local_resource(
+    service_fixture: SimpleNamespace, tmp_path: pathlib.Path
+) -> None:
+    service = DevService(
+        project_resolver=service_fixture.resolver,
+        apps_client=service_fixture.apps,
+        local_tracing=service_fixture.tracing,
+        preflight=Mock(side_effect=AgentCliError("profile isn't authenticated")),
+    )
+
+    with pytest.raises(AgentCliError, match="isn't authenticated"):
+        with service.prepare(DevRequest(str(tmp_path), None, None)):
+            pytest.fail("prepare should fail before yielding a plan")
+
+    service_fixture.resolver.load.assert_not_called()
+    service_fixture.tracing.start.assert_not_called()
+    service_fixture.apps.run_local.assert_not_called()
+
+
 def test_prepare_honors_explicit_environment_flag_and_default_port(
     service_fixture: SimpleNamespace, tmp_path: pathlib.Path
 ) -> None:

@@ -11,10 +11,10 @@ from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.errors import AgentCliError
 
 
-def _runner(calls, *, returncode=0, stdout=""):
+def _runner(calls, *, returncode=0, stdout="", stderr=""):
     def run(args, profile, **kwargs):
         calls.append((args, profile, kwargs))
-        return types.SimpleNamespace(returncode=returncode, stdout=stdout, stderr="")
+        return types.SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
 
     return run
 
@@ -34,10 +34,27 @@ def test_exists_true_on_zero_returncode():
     assert client.exists("agent-bricks-myapp") is True
 
 
-def test_exists_false_on_nonzero_returncode():
-    calls = []
-    client = AppsClient("prof", runner=_runner(calls, returncode=1))
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "Error: App with name agent-bricks-myapp does not exist or is deleted.",
+        "Error: RESOURCE_DOES_NOT_EXIST: app missing",
+        "Error: not found",
+    ],
+)
+def test_exists_false_on_definitive_not_found(stderr):
+    client = AppsClient("prof", runner=_runner([], returncode=1, stderr=stderr))
     assert client.exists("agent-bricks-myapp") is False
+
+
+@pytest.mark.parametrize("stderr", ["Error: 401 Unauthorized", "connection refused", ""])
+def test_exists_raises_when_the_probe_fails_for_another_reason(stderr):
+    client = AppsClient("prof", runner=_runner([], returncode=1, stderr=stderr))
+    with pytest.raises(AgentCliError, match="Could not check whether deployment") as raised:
+        client.exists("agent-bricks-myapp")
+    assert raised.value.hint == (
+        stderr or "The `databricks apps get` command failed without a message."
+    )
 
 
 def test_service_principal_parses_from_json():

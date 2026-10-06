@@ -18,8 +18,11 @@ that is not part of the Agent Bricks CLI surface).
 
 from __future__ import annotations
 
+import pathlib
+
 import click
 
+from databricks_agentbricks.cli.auth import preflight_auth, profile_host
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.apps_user_auth_client import AppsUserAuthClient
 from databricks_agentbricks.clients.conversation_store_client import (
@@ -162,6 +165,12 @@ def deploy(
     not authentication and not the session id itself (send the session id in the request body):
       X-Routing-Key: <uuid>
     """
+    # Fold the project's `.env` into the profile resolution before the profile is used, matching
+    # `agentbricks dev` so both commands deploy and run against the same workspace.
+    obj.use_project_profile(pathlib.Path(source))
+    # Validate auth before any deployment work: an unauthenticated profile would otherwise fail
+    # deep into the deploy (or hang on a browser flow), far from anything actionable.
+    preflight_auth(obj.profile, obj.profile_info.source, action="deploy")
     request = DeployRequest(
         name=name,
         source=source,
@@ -171,7 +180,13 @@ def deploy(
         allow_user_scope_update=allow_user_scope_update,
     )
     result = build_deploy_service(obj).deploy(request)
-    present_deploy_result(result, output=obj.output)
+    present_deploy_result(
+        result,
+        output=obj.output,
+        profile=obj.profile,
+        profile_source=obj.profile_info.source,
+        host=profile_host(obj.profile),
+    )
 
 
 # --- agentbricks deployments <lifecycle> ------------------------------------------

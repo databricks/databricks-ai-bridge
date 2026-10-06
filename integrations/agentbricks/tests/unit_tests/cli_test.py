@@ -29,8 +29,7 @@ def test_sessions_verbs_are_flat_no_redundant_subgroup():
 def test_root_registers_supported_commands():
     names = set(cli.agentbricks.commands)
     assert {
-        "login",
-        "logout",
+        "profile",
         "init",
         "doctor",
         "dev",
@@ -42,6 +41,7 @@ def test_root_registers_supported_commands():
         "endpoint",
         "tools",
     } <= names
+    assert {"login", "logout"}.isdisjoint(names)
     assert "mcp" not in names
     assert "pipeline" not in names
     assert "durability" not in names
@@ -158,8 +158,8 @@ def test_help_examples_recommend_the_default_happy_path():
     runner = CliRunner()
     expected_examples = {
         (): (
-            "agentbricks login --profile <profile>",
-            "agentbricks init my-agent",
+            "agentbricks profile login <profile>",
+            "agentbricks init my-agent --profile <profile>",
             "cd my-agent",
             "agentbricks dev",
             "agentbricks deploy my-agent",
@@ -267,7 +267,7 @@ def test_unknown_command_suggests_close_match():
 
 
 def test_doubled_invocation_is_named_directly():
-    result = CliRunner().invoke(cli.agentbricks, ["agentbricks", "login"])
+    result = CliRunner().invoke(cli.agentbricks, ["agentbricks", "profile"])
     assert result.exit_code != 0
     assert "you typed `agentbricks` twice" in result.output
 
@@ -312,12 +312,12 @@ def test_root_help_shows_numbered_getting_started_path():
     assert result.exit_code == 0, result.output
     out = result.output
     assert "GETTING STARTED" in out
-    # Read just the numbered block (login/init/deploy also appear in the prose description above).
+    # Read just the numbered block (profile login/init/deploy also appear in the prose description above).
     block = out[out.index("GETTING STARTED") :]
     block = block[: block.index("Not authenticated")]
     numbered = [ln.strip() for ln in block.splitlines() if ln.strip()[:1].isdigit()]
-    # The path is numbered and ordered: login (1) → init (2) → cd (3) → dev (4) → deploy (5).
-    assert numbered[0].startswith("1") and "agentbricks login --profile" in numbered[0]
+    # The path is numbered and ordered: sign in (1) → init (2) → cd (3) → dev (4) → deploy (5).
+    assert numbered[0].startswith("1") and "agentbricks profile login" in numbered[0]
     assert numbered[1].startswith("2") and "agentbricks init my-agent" in numbered[1]
     assert numbered[4].startswith("5") and "agentbricks deploy my-agent" in numbered[4]
 
@@ -337,9 +337,9 @@ def test_help_dims_headings_and_descriptions_not_names():
     setup = next(ln for ln in lines if click.unstyle(ln).strip() == "SETUP")
     assert setup.startswith(dim)
     # A command row dims the description but not the name.
-    login = next(ln for ln in lines if click.unstyle(ln).strip().startswith("login"))
-    assert dim in login  # the description is dimmed
-    assert not login.startswith(dim)  # the `login` name is at full intensity
+    profile = next(ln for ln in lines if click.unstyle(ln).strip().startswith("profile"))
+    assert dim in profile  # the description is dimmed
+    assert not profile.startswith(dim)  # the `profile` name is at full intensity
 
 
 def test_epilog_headings_align_flush_left_with_sections():
@@ -358,7 +358,7 @@ def test_epilog_headings_align_flush_left_with_sections():
         line = next(ln for ln in lines if ln.strip() == name)
         assert indent(line) == 0, (name, line)
     # A numbered getting-started row aligns with an OPTIONS/command row at column 2.
-    row = next(ln for ln in lines if ln.strip().startswith("1  agentbricks login"))
+    row = next(ln for ln in lines if ln.strip().startswith("1  agentbricks profile login"))
     assert indent(row) == 2, row
 
 
@@ -391,6 +391,6 @@ def test_root_help_groups_commands_by_intent():
     assert out.index("SETUP") < out.index("DEVELOP") < out.index("SHIP")
     # Commands land under their section.
     setup_to_develop = out[out.index("SETUP") : out.index("DEVELOP")]
-    assert "login" in setup_to_develop and "init" in setup_to_develop
+    assert "profile" in setup_to_develop and "init" in setup_to_develop
     ship_onward = out[out.index("SHIP") :]
     assert "deploy" in ship_onward

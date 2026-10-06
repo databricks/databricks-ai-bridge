@@ -129,14 +129,23 @@ class AppsClient:
         return payload if isinstance(payload, dict) else None
 
     def exists(self, name: str) -> bool:
-        """Whether the workspace has an app by this name, probed with a non-raising `apps get`.
+        """Whether the workspace has an app by this name — True/False only on a definitive answer.
 
-        A failed read is reported as "absent": the probe can't distinguish a missing app from a
-        workspace it can't reach, and the callers treat both as "nothing to reuse".
+        Only a definitive not-found counts as False; any other failure (bad auth, network) is raised
+        so it can't masquerade as "doesn't exist" and steer the caller into an app create.
         """
-        return (
-            self._run(["apps", "get", name], self._profile, capture=True, check=False).returncode
-            == 0
+        result = self._run(["apps", "get", name], self._profile, capture=True, check=False)
+        if result.returncode == 0:
+            return True
+        detail = (result.stderr or result.stdout or "").strip()
+        if any(
+            marker in detail.lower()
+            for marker in ("does not exist", "does_not_exist", "not found", "not_found")
+        ):
+            return False
+        raise AgentCliError(
+            f"Could not check whether deployment '{name}' exists.",
+            hint=detail or "The `databricks apps get` command failed without a message.",
         )
 
     def list_all(self) -> list[dict]:

@@ -62,7 +62,7 @@ The two ways to run an agent:
   runtime. The store/session/tools commands and `agentbricks tracing bind`/`unbind` don't need it;
   `agentbricks tracing list`/`get` do, to read `agentbricks dev`'s local trace store.
 - **[Databricks CLI](https://docs.databricks.com/dev-tools/cli/)** — needed for
-  browser-based `agentbricks login`. If a profile is already authenticated, the CLI uses it
+  browser-based `agentbricks profile login`. If a profile is already authenticated, the CLI uses it
   directly and the Databricks CLI is optional.
 
 ## Installation
@@ -90,35 +90,49 @@ eval "$(_AGENTBRICKS_COMPLETE=zsh_source agentbricks)"
 ## Authentication
 
 Agent Bricks CLI uses [Databricks authentication](https://docs.databricks.com/aws/en/dev-tools/cli/authentication).
-Ask the CLI to authenticate and remember a named profile:
+Sign in to a profile, then scaffold a project that records it in its `.env`:
 
 ```sh
-agentbricks login --profile <profile>
-agentbricks sessions stores list
+agentbricks profile login <profile>
+agentbricks init my-agent --profile <profile>
 ```
 
-`agentbricks login` validates existing credentials first. If credentials are missing or rejected in
-an interactive terminal, the CLI runs `databricks auth login --profile <profile>`, revalidates the
-profile, and stores the selection in the existing `~/.agentbricks/config.json` state file. This
-browser-based setup requires the Databricks CLI. In non-interactive environments, authenticate the
-profile before running `agentbricks`. `agentbricks logout` forgets the saved selection without revoking the underlying
-credentials.
+`agentbricks profile login` validates the profile and, in an interactive terminal, runs
+`databricks auth login --profile <profile>` if it is not authenticated yet (this needs the Databricks
+CLI; in CI or without a terminal, authenticate the profile beforehand). It saves nothing. To change a
+project's profile later, run `agentbricks profile set <profile>` in the project directory, and
+`agentbricks profile get` shows which profile (and workspace) a directory would use.
 
-If Databricks SDK default authentication is already configured, you can skip `agentbricks login`.
-You can also pass the global `--profile/-p` option before an individual command, for example
-`agentbricks --profile <profile> tools list`. Use `--output json` for scripting.
+Inside an Agent Bricks project (a directory with `.agentbricks/project.toml` or `app.yaml`), every
+command uses the profile in the project's `.env`. Outside a project, pass the global `--profile/-p`
+option before a command, for example `agentbricks --profile <profile> tools list`, or set
+`DATABRICKS_CONFIG_PROFILE`. Use `--output json` for scripting.
+
+The profile is resolved in this order, most to least specific: the `--profile/-p` flag, the project
+`.env`'s `DATABRICKS_CONFIG_PROFILE` (inside an Agent Bricks project; `dev` and `deploy` resolve
+against their source directory so the CLI and the locally running agent use one profile), the
+`DATABRICKS_CONFIG_PROFILE` environment variable, and finally the Databricks SDK's default
+authentication resolution (`[DEFAULT]` in `~/.databrickscfg`). `dev` passes the resolved profile to
+the agent (unless `.env` sets `DATABRICKS_TOKEN`) and prints the resolved profile and its host;
+`deploy` prints them in its success output.
 
 ## Quickstart
 
 The shortest path from a blank directory to a running and deployed agent:
 
 ```sh
-agentbricks login --profile <profile>
-agentbricks init my-agent       # Defaults to LangGraph; add --framework=openai for OpenAI Agents SDK
+agentbricks profile login <profile>
+agentbricks init my-agent --profile <profile>  # LangGraph by default; add --framework=openai for OpenAI Agents SDK
 cd my-agent
 agentbricks dev                 # run locally
 agentbricks deploy my-agent     # deploy to Databricks
 ```
+
+To move an existing project to a different workspace later, run `agentbricks profile set <other>` in
+its directory. Rerunning `agentbricks init` on a project it scaffolded changes nothing. (`--existing`
+is different: it prepares a migration for a project Agent Bricks didn't generate.)
+
+`dev` and `deploy` validate the resolved profile's authentication up front and fail fast with the `agentbricks profile login` command to run - an unauthenticated external-browser profile would otherwise hang on a browser login that never completes.
 
 `agentbricks dev` runs the agent locally on `http://localhost:8000`, wrapping the Databricks Apps
 local runtime so local behavior matches a deployment.
