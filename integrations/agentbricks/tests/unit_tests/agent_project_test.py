@@ -140,6 +140,44 @@ def test_scope_rejects_unsupported_table_resource():
         Scope(kind="table", value="main.data.rows")
 
 
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("permission", ["read_only", "read_write"])
+def test_table_scopes_round_trip_when_gate_is_enabled(tmp_path, monkeypatch, framework, permission):
+    monkeypatch.setattr(tool_manifest, "SANDBOX_TABLE_SCOPES_ENABLED", True)
+    project = AgentProject.create(tmp_path, framework=framework, server="agentbricks")
+    project.add_tool(
+        ToolSpec.sandbox(
+            "sandbox",
+            scopes=[
+                Scope.parse("table:main.data.rows", permission),
+                Scope.volume("main.data.files"),
+            ],
+        )
+    )
+    manifest = project.write()
+    before = manifest.read_bytes()
+    monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
+
+    assert (
+        AgentProject.load(tmp_path).tools[0].policy.downscope[0].resource == "table:main.data.rows"
+    )
+    record = load_tools(expected_framework=framework)[0]
+    assert tool_manifest.sandbox_meta(record) == {
+        "downscope": {
+            "tables": [{"name": "main.data.rows", "permission": permission}],
+            "volumes": [{"name": "main.data.files", "permission": "read_only"}],
+        },
+        "databricks_access_token_included": True,
+    }
+
+    monkeypatch.setattr(tool_manifest, "SANDBOX_TABLE_SCOPES_ENABLED", False)
+    with pytest.raises(AgentCliError, match="Table sandbox scopes are not supported"):
+        AgentProject.load(tmp_path)
+    with pytest.raises(ToolManifestError, match="Table sandbox scopes are not supported"):
+        load_tools(expected_framework=framework)
+    assert manifest.read_bytes() == before
+
+
 def test_scope_rejects_unsupported_workspace_resource():
     with pytest.raises(AgentCliError, match="Workspace sandbox scopes are not supported"):
         Scope(kind="workspace", value="/Workspace/Shared")

@@ -61,7 +61,7 @@ class Scope:
     permission: str = "read_only"
 
     def __post_init__(self) -> None:
-        if self.kind == "table":
+        if self.kind == "table" and not tool_manifest.SANDBOX_TABLE_SCOPES_ENABLED:
             raise AgentCliError(
                 "Table sandbox scopes are not supported yet.",
                 hint="Databricks Connect does not support table downscoping. "
@@ -72,14 +72,21 @@ class Scope:
                 "Workspace sandbox scopes are not supported yet.",
                 hint="Use volume:<name> instead.",
             )
-        if self.kind not in _SUPPORTED_SCOPE_KINDS:
+        supported_kinds = _SUPPORTED_SCOPE_KINDS
+        if tool_manifest.SANDBOX_TABLE_SCOPES_ENABLED:
+            supported_kinds = supported_kinds | {"table"}
+        if self.kind not in supported_kinds:
             raise AgentCliError(
                 f"Unsupported sandbox scope kind {self.kind!r}.",
-                hint=f"Supported scope kinds: {', '.join(sorted(_SUPPORTED_SCOPE_KINDS))}.",
+                hint=f"Supported scope kinds: {', '.join(sorted(supported_kinds))}.",
             )
         if self.permission not in _SUPPORTED_PERMISSIONS:
             raise AgentCliError(f"Unsupported sandbox permission {self.permission!r}.")
         _three_part_name(self.value, f"{self.kind} scope")
+
+    @classmethod
+    def table(cls, value: str, permission: str = "read_only") -> "Scope":
+        return cls(kind="table", value=value, permission=permission)
 
     @classmethod
     def volume(cls, value: str, permission: str = "read_only") -> "Scope":

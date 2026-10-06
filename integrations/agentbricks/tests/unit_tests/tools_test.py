@@ -13,6 +13,7 @@ from databricks_agentbricks.cli.sandbox import add_sandbox
 from databricks_agentbricks.cli.tools import tools
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.project_config import write_project_metadata
+from databricks_agentkit.runtime import tool_manifest
 
 
 class _Ctx:
@@ -97,6 +98,45 @@ def test_add_sandbox_only_updates_manifest(tmp_path: pathlib.Path):
     assert loaded.tools[0].policy.databricks_access_token_included is True
     assert "databricks_access_token_included = true" in (project / "agent.toml").read_text()
     assert (project / "agent" / "mcps.py").read_text(encoding="utf-8") == "ORIGINAL = True\n"
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("permission", ["read_only", "read_write"])
+def test_add_table_sandbox_when_gate_is_enabled(
+    tmp_path, monkeypatch, framework, legacy, permission
+):
+    monkeypatch.setattr(tool_manifest, "SANDBOX_TABLE_SCOPES_ENABLED", True)
+    project = _project(tmp_path, framework)
+    args = [
+        "--scope",
+        "table:main.data.rows",
+        "--scope",
+        "volume:main.data.files",
+        "--scope",
+        "table:main.data.rows",
+        "--permission",
+        permission,
+        "--source",
+        str(project),
+    ]
+    command = add_sandbox if legacy else tools
+    if not legacy:
+        args = ["add", "sandbox", *args]
+
+    result = CliRunner().invoke(command, args, obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    loaded = AgentProject.load(project)
+    assert [(scope.resource, scope.permission) for scope in loaded.tools[0].policy.downscope] == [
+        ("table:main.data.rows", permission),
+        ("volume:main.data.files", permission),
+    ]
+    assert (project / "agent" / "mcps.py").read_text() == "ORIGINAL = True\n"
+    before = (project / "agent.toml").read_bytes()
+    repeated = CliRunner().invoke(command, args, obj=_Ctx())
+    assert repeated.exit_code == 0, repeated.output
+    assert (project / "agent.toml").read_bytes() == before
 
 
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])

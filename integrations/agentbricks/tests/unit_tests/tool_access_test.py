@@ -34,6 +34,7 @@ from databricks_agentbricks.tool_access import (
     plan_tool_access,
     reconcile_tool_access,
 )
+from databricks_agentkit.runtime import tool_manifest
 
 
 def test_plan_maps_only_explicit_app_auth_resources_to_least_privilege():
@@ -81,18 +82,21 @@ def test_plan_maps_only_explicit_app_auth_resources_to_least_privilege():
     )
 
 
-def test_plan_deduplicates_targets_and_keeps_strongest_permission():
+@pytest.mark.parametrize(("kind", "expected"), [("volume", "WRITE_VOLUME"), ("table", "MODIFY")])
+def test_plan_deduplicates_targets_and_keeps_strongest_permission(monkeypatch, kind, expected):
+    if kind == "table":
+        monkeypatch.setattr(tool_manifest, "SANDBOX_TABLE_SCOPES_ENABLED", True)
     tools = [
         ToolSpec.sandbox(
             "read",
             scopes=[
-                Scope.volume("main.data.files"),
+                Scope(kind, "main.data.files"),
             ],
         ),
         ToolSpec.sandbox(
             "write",
             scopes=[
-                Scope.volume("main.data.files", "read_write"),
+                Scope(kind, "main.data.files", "read_write"),
             ],
         ),
     ]
@@ -105,10 +109,39 @@ def test_plan_deduplicates_targets_and_keeps_strongest_permission():
         resource["uc_securable"]["permission"]
         for resource in first.app_resources
         if "uc_securable" in resource
-    } == {"WRITE_VOLUME"}
+    } == {expected}
     assert len(first.app_resources) == 1
     assert first.workspace_grants == ()
     assert first.uc_grants == ()
+
+
+@pytest.mark.parametrize(
+    ("permission", "expected"), [("read_only", "SELECT"), ("read_write", "MODIFY")]
+)
+@pytest.mark.parametrize("auth", [None, "app", "user"])
+def test_plan_table_resource_when_gate_is_enabled(monkeypatch, permission, expected, auth):
+    monkeypatch.setattr(tool_manifest, "SANDBOX_TABLE_SCOPES_ENABLED", True)
+    plan = plan_tool_access(
+        [
+            ToolSpec.sandbox(
+                "sandbox", scopes=[Scope("table", "main.data.rows", permission)], auth=auth
+            )
+        ]
+    )
+
+    assert [resource["uc_securable"] for resource in plan.app_resources] == (
+        []
+        if auth == "user"
+        else [
+            {
+                "securable_full_name": "main.data.rows",
+                "securable_type": "TABLE",
+                "permission": expected,
+            }
+        ]
+    )
+    assert plan.uc_grants == ()
+    assert plan.workspace_grants == ()
 
 
 def test_plan_ignores_user_auth_and_genie_one_without_an_explicit_resource():

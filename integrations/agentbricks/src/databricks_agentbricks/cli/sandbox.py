@@ -19,6 +19,7 @@ from databricks_agentbricks.agent_project import Scope
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.project_config import load_project_metadata
 from databricks_agentbricks.project_types import AgentFramework
+from databricks_agentkit.runtime import tool_manifest
 
 _BEGIN_MARKER = "# BEGIN: agentbricks add-sandbox"
 _END_MARKER = "# END: agentbricks add-sandbox"
@@ -45,6 +46,7 @@ def _parse_scopes(scopes: Sequence[str], permission: str) -> dict[str, list[dict
     """Convert CLI scope values to the MCP ``_meta.downscope`` wire shape."""
     parsed: dict[str, list[dict[str, str]]] = {
         "volumes": [],
+        "tables": [],
     }
     seen: set[tuple[str, str]] = set()
 
@@ -52,7 +54,8 @@ def _parse_scopes(scopes: Sequence[str], permission: str) -> dict[str, list[dict
         scope = Scope.parse(original, permission)
         identity = (scope.kind, scope.value)
         if identity not in seen:
-            parsed["volumes"].append({"name": scope.value, "permission": scope.permission})
+            key = "tables" if scope.kind == "table" else "volumes"
+            parsed[key].append({"name": scope.value, "permission": scope.permission})
             seen.add(identity)
 
     return {key: values for key, values in parsed.items() if values}
@@ -370,6 +373,8 @@ def _existing_policy(
     expected_fields = {
         "volumes": "name",
     }
+    if tool_manifest.SANDBOX_TABLE_SCOPES_ENABLED:
+        expected_fields["tables"] = "name"
     if not policy or any(key not in expected_fields for key in policy):
         raise AgentCliError("The existing sandbox downscope has an invalid resource type.")
     for resource_type, entries in policy.items():
@@ -428,10 +433,10 @@ def _policy_cli_values(
 ) -> tuple[list[str], str]:
     scopes: list[str] = []
     permissions: set[str] = set()
-    for entries in policy.values():
+    for resource_type, entries in policy.items():
         for entry in entries:
             value = entry.get("name", "")
-            scopes.append(value)
+            scopes.append(f"table:{value}" if resource_type == "tables" else value)
             permissions.add(entry.get("permission", ""))
     if len(permissions) != 1:
         raise AgentCliError("The existing sandbox downscope has inconsistent permissions.")

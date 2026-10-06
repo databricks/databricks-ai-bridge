@@ -863,6 +863,9 @@ downscoping. Workspace sandbox scopes are also not supported yet; they have not 
 against a live workspace. Use a volume instead. Existing `table:` and `workspace:` entries must be
 removed from `agent.toml` before using `agentbricks dev` or `agentbricks deploy`.
 
+The table implementation is retained behind a disabled code-level gate so it can be enabled when
+Databricks Connect supports table downscoping. There is no CLI option to bypass that gate.
+
 With `databricks_access_token_included = true`, the sandbox receives `DATABRICKS_HOST`, a short-lived
 `DATABRICKS_TOKEN`, and `DATABRICKS_AUTH_TYPE`, so code such as
 `WorkspaceClient().current_user.me()` can call workspace APIs. This policy does not choose the

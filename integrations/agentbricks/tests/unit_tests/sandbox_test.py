@@ -16,6 +16,7 @@ from click.testing import CliRunner
 
 from databricks_agentbricks.cli import sandbox as sandbox_mod
 from databricks_agentbricks.cli.sandbox import add_sandbox
+from databricks_agentkit.runtime import tool_manifest
 
 _EMPTY_MCPS = '''"""MCP servers to offer the agent."""
 
@@ -435,6 +436,52 @@ def test_add_sandbox_supports_multiple_volumes_and_read_write_scopes(tmp_path: p
     assert '"name": "catalog.schema.input"' in generated
     assert '"name": "catalog.schema.files"' in generated
     assert generated.count('"permission": "read_write"') == 2
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("permission", ["read_only", "read_write"])
+def test_legacy_table_policy_is_reused_only_when_gate_is_enabled(
+    tmp_path, monkeypatch, framework, permission
+):
+    monkeypatch.setattr(tool_manifest, "SANDBOX_TABLE_SCOPES_ENABLED", True)
+    if framework == "langgraph":
+        project, mcps, _ = _langgraph_project(tmp_path)
+        template = "sandbox_mcp_langgraph.py"
+    else:
+        project, mcps = _project(tmp_path)
+        template = "sandbox_mcp.py"
+    args = [
+        "--source",
+        str(project),
+        "--scope",
+        "table:main.data.rows",
+        "--scope",
+        "volume:main.data.files",
+        "--permission",
+        permission,
+    ]
+    result = CliRunner().invoke(add_sandbox, args, obj=_JsonCtx())
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["scopes"] == ["main.data.files", "table:main.data.rows"]
+    assert sandbox_mod._existing_policy(mcps.read_text(), template_name=template) == {
+        "volumes": [{"name": "main.data.files", "permission": permission}],
+        "tables": [{"name": "main.data.rows", "permission": permission}],
+    }
+    before = {path: path.read_bytes() for path in project.rglob("*") if path.is_file()}
+    repeated = CliRunner().invoke(add_sandbox, args, obj=_JsonCtx())
+    assert repeated.exit_code == 0, repeated.output
+    assert json.loads(repeated.output)["status"] == "already_configured"
+    assert {path: path.read_bytes() for path in project.rglob("*") if path.is_file()} == before
+
+    monkeypatch.setattr(tool_manifest, "SANDBOX_TABLE_SCOPES_ENABLED", False)
+    rejected = CliRunner().invoke(
+        add_sandbox,
+        ["--source", str(project), "--scope", "volume:main.data.files"],
+        obj=_TextCtx(),
+    )
+    assert rejected.exit_code != 0
+    assert {path: path.read_bytes() for path in project.rglob("*") if path.is_file()} == before
 
 
 def test_legacy_add_sandbox_rejects_workspace_paths_containing_colons_without_writes(tmp_path):
