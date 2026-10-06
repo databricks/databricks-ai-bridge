@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+from typing import Optional
 
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.endpoint import print_agent_invoke_command
@@ -38,6 +39,26 @@ def announce_bound_resources(preview: DevPreview) -> None:
         )
 
 
+def announce_agent_profile(
+    profile: Optional[str],
+    profile_source: str,
+    env_file_profile: Optional[str],
+    *,
+    uses_env_credentials: bool,
+) -> None:
+    """Note when the agent's credentials differ from what `.env` alone would suggest."""
+    if uses_env_credentials:
+        render.console().print(
+            "[dim]The agent authenticates with the DATABRICKS_TOKEN credential in .env, "
+            "not the resolved profile.[/]"
+        )
+    elif profile and env_file_profile and env_file_profile != profile:
+        render.console().print(
+            f"[dim]The agent will run with profile '{profile}' (from {profile_source}), "
+            f"not .env's '{env_file_profile}'.[/]"
+        )
+
+
 def announce_local_url(
     source_dir: pathlib.Path,
     port: int,
@@ -45,8 +66,14 @@ def announce_local_url(
     trace_url: str | None = None,
     *,
     has_chat_ui: bool | None = None,
+    profile: str | None = None,
+    profile_source: str | None = None,
+    host: str | None = None,
 ) -> None:
-    """Show the chat URL or an invocation example before run-local blocks."""
+    """Show the chat URL or an invocation example before run-local blocks.
+
+    ``profile``/``host`` surface which workspace the run is against.
+    """
     base = f"http://localhost:{port}"
     deploy_name = source_dir.resolve().name
     if has_chat_ui is None:
@@ -56,8 +83,16 @@ def announce_local_url(
         if server == AgentServer.CUSTOM
         else ("agentbricks tools add mcp <service>", "Give the agent a tool")
     )
+
+    def _auth_fields(fields: dict[str, str]) -> None:
+        if profile:
+            fields["Profile"] = f"{profile} (from {profile_source})"
+            if host:
+                fields["Host"] = host
+
     if has_chat_ui:
         fields = {"Chat UI": base}
+        _auth_fields(fields)
         if trace_url:
             fields["Traces"] = trace_url
         render.success(
@@ -81,6 +116,7 @@ def announce_local_url(
         )
         sample = f"curl -X POST {endpoint} -H 'Content-Type: application/json' -d '{body}'"
         fields = {"Invoke": f"POST {endpoint}"}
+        _auth_fields(fields)
         if trace_url:
             fields["Traces"] = trace_url
         render.success(
