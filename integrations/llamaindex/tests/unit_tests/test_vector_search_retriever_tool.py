@@ -181,17 +181,44 @@ def test_vector_search_client_non_model_serving_environment():
         )
         mockVSClient.assert_called_once_with(disable_notice=True, credential_strategy=None)
 
+
+def test_vector_search_client_with_pat_workspace_client():
     w = WorkspaceClient(host="testDogfod.com", token="fakeToken")
     with patch("databricks.ai_search.client.VectorSearchClient") as mockVSClient:
-        with patch("databricks.sdk.service.serving.ServingEndpointsAPI.get", return_value=None):
-            vsTool = VectorSearchRetrieverTool(
-                index_name="catalog.schema.my_index_name",
-                text_column="abc",
-                embedding_model_name="text-embedding-3-small",
-                tool_description="desc",
-                workspace_client=w,
-            )
-            mockVSClient.assert_called_once_with(disable_notice=True, credential_strategy=None)
+        VectorSearchRetrieverTool(
+            index_name="catalog.schema.my_index_name",
+            text_column="abc",
+            tool_description="desc",
+            workspace_client=w,
+        )
+        mockVSClient.assert_called_once_with(
+            disable_notice=True,
+            credential_strategy=None,
+            workspace_url="https://testDogfod.com",
+            personal_access_token="fakeToken",
+        )
+
+
+def test_vector_search_client_with_sp_workspace_client():
+    w = create_autospec(WorkspaceClient, instance=True)
+    w.config.auth_type = "oauth-m2m"
+    w.config.host = "https://testDogfod.com"
+    w.config.client_id = "fakeClientId"
+    w.config.client_secret = "fakeClientSecret"
+    with patch("databricks.ai_search.client.VectorSearchClient") as mockVSClient:
+        VectorSearchRetrieverTool(
+            index_name="catalog.schema.my_index_name",
+            text_column="abc",
+            tool_description="desc",
+            workspace_client=w,
+        )
+        mockVSClient.assert_called_once_with(
+            disable_notice=True,
+            credential_strategy=None,
+            workspace_url="https://testDogfod.com",
+            service_principal_client_id="fakeClientId",
+            service_principal_client_secret="fakeClientSecret",
+        )
 
 
 def test_kwargs_are_passed_through() -> None:
