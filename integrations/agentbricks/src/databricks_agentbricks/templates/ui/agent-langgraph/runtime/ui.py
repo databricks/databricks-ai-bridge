@@ -303,15 +303,24 @@ def _require_session() -> None:
 
 
 async def _checkpoint_history(session_id: str, actor: str) -> dict[str, Any]:
-    from agent.agent import create_agent_graph
+    from langgraph.graph.message import add_messages
 
-    from databricks_agentkit.langgraph.session_store import thread_config
+    from databricks_agentkit.langgraph.session_store import checkpointer, thread_config
 
-    graph = await create_agent_graph(actor)
-    snapshot = await graph.aget_state(thread_config(session_id, actor))
-    values = snapshot.values if isinstance(snapshot.values, dict) else {}
+    saved = await checkpointer().aget_tuple(thread_config(session_id, actor))
+    messages = []
+    interrupts = []
+    if saved is not None:
+        messages = add_messages([], saved.checkpoint["channel_values"].get("messages", []))
+        # The latest checkpoint can have successful task outputs alongside paused/failed work.
+        # Reduce these writes without building (or executing) the live model and tool graph.
+        for _task_id, channel, value in saved.pending_writes or []:
+            if channel == "messages":
+                messages = add_messages(messages, value)
+            elif channel == "__interrupt__":
+                interrupts.extend({"id": item.id, "value": item.value} for item in value)
     items = []
-    for index, message in enumerate(values.get("messages", [])):
+    for index, message in enumerate(messages):
         data = message.model_dump() if hasattr(message, "model_dump") else message
         items.append(
             {
@@ -319,11 +328,6 @@ async def _checkpoint_history(session_id: str, actor: str) -> dict[str, Any]:
                 "data": data if isinstance(data, dict) else {"content": str(data)},
             }
         )
-    interrupts = [
-        {"id": interrupt.id, "value": interrupt.value}
-        for task in getattr(snapshot, "tasks", ())
-        for interrupt in getattr(task, "interrupts", ())
-    ]
     return {"session_id": session_id, "session_items": items, "interrupts": interrupts}
 
 
@@ -513,5 +517,17 @@ def install_ui(app: FastAPI) -> None:
     @app.get("/api/demo/session/items", include_in_schema=False)
     async def list_session_items(request: Request) -> dict:
         session_id = _request_session_id(request)
-        # Managed session items contain checkpoints; the graph applies pending writes and reducers.
-        return await _checkpoint_history(session_id, _request_actor(request))
+        actor = _request_actor(request)
+        if not app.auth_policy.requires_user:
+            return await _checkpoint_history(session_id, actor)
+
+        from databricks_agentkit.runtime.auth import RequestAuthContext
+
+        auth = RequestAuthContext.from_headers(request.headers)
+        try:
+            result = await _checkpoint_history(
+                auth.namespace("session", session_id), auth.namespace("actor", actor)
+            )
+            return {**result, "session_id": session_id}
+        finally:
+            auth.close()
