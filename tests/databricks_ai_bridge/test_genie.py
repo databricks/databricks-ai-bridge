@@ -1,7 +1,7 @@
 import random
 from datetime import datetime, timedelta
-from io import StringIO
-from unittest.mock import MagicMock, patch
+from io import BytesIO, StringIO
+from unittest.mock import MagicMock, call, patch
 
 import mlflow
 import pandas as pd
@@ -9,6 +9,7 @@ import pytest
 
 from databricks_ai_bridge.genie import (
     Genie,
+    GenieVizAttachment,
     _count_tokens,
     _extract_suggested_questions_from_attachment,
     _extract_text_attachment_content_from_attachments,
@@ -51,6 +52,32 @@ def test_create_message(genie, mock_workspace_client):
         body={"content": "Hello again"},
         headers=genie.headers,
     )
+
+
+def test_visualizations_are_enabled_on_new_and_follow_up_messages(mock_workspace_client):
+    genie = Genie(space_id="test_space_id", enable_visualization=True)
+    mock_workspace_client.genie._api.do.side_effect = [
+        {"conversation_id": "123", "message_id": "456"},
+        {"conversation_id": "123", "message_id": "789"},
+    ]
+
+    genie.start_conversation("Show sales")
+    genie.create_message("123", "Break it down")
+
+    assert mock_workspace_client.genie._api.do.call_args_list == [
+        call(
+            "POST",
+            "/api/2.0/genie/spaces/test_space_id/start-conversation",
+            body={"content": "Show sales", "enable_visualization": True},
+            headers=genie.headers,
+        ),
+        call(
+            "POST",
+            "/api/2.0/genie/spaces/test_space_id/conversations/123/messages",
+            body={"content": "Break it down", "enable_visualization": True},
+            headers=genie.headers,
+        ),
+    ]
 
 
 def test_poll_for_result_completed_with_text(genie, mock_workspace_client):
@@ -831,9 +858,9 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
 
 # Parametrized tests for _parse_attachments
 @pytest.mark.parametrize(
-    "resp,exp_query,exp_texts,exp_questions",
+    "resp,exp_query,exp_texts,exp_questions,exp_visualizations",
     [
-        # All three attachment types
+        # Query, text, and suggested-question attachment types
         (
             {
                 "attachments": [
@@ -848,6 +875,7 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
             {"attachment_id": "1", "query": {"query": "SELECT *", "description": "Test"}},
             [{"attachment_id": "2", "text": {"content": "Summary text"}}],
             {"attachment_id": "3", "suggested_questions": {"questions": ["Q1?", "Q2?", "Q3?"]}},
+            [],
         ),
         # Only query
         (
@@ -859,6 +887,7 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
             {"attachment_id": "1", "query": {"query": "SELECT 1", "description": "Desc"}},
             [],
             None,
+            [],
         ),
         # Only text
         (
@@ -866,6 +895,7 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
             None,
             [{"attachment_id": "2", "text": {"content": "Text only"}}],
             None,
+            [],
         ),
         # Only suggested questions
         (
@@ -877,18 +907,20 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
             None,
             [],
             {"attachment_id": "3", "suggested_questions": {"questions": ["Question?"]}},
+            [],
         ),
         # Edge cases - empty text list and None for the single-valued fields
-        ({"attachments": []}, None, [], None),
-        ({}, None, [], None),
-        ({"attachments": None}, None, [], None),
-        ({"attachments": "not a list"}, None, [], None),
+        ({"attachments": []}, None, [], None, []),
+        ({}, None, [], None, []),
+        ({"attachments": None}, None, [], None, []),
+        ({"attachments": "not a list"}, None, [], None, []),
         # Invalid items - only valid dict is parsed
         (
             {"attachments": ["string", 123, None, {"query": {"query": "SELECT 1"}}]},
             {"query": {"query": "SELECT 1"}},
             [],
             None,
+            [],
         ),
         # Multiple query attachments (self-correction) - should return the LAST one
         (
@@ -910,6 +942,7 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
             },
             [],
             None,
+            [],
         ),
         # Self-correction: text between the first and last query is superseded and
         # dropped; text after the final query is kept in order.
@@ -937,6 +970,7 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
                 {"attachment_id": "6", "text": {"content": "follow-up prompt"}},
             ],
             {"attachment_id": "7", "suggested_questions": {"questions": ["Q2?"]}},
+            [],
         ),
         # A summary text before the query and a trailing text after it must both be
         # kept (the leading summary was previously overwritten).
@@ -954,15 +988,43 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
                 {"attachment_id": "3", "text": {"content": "Anything else?"}},
             ],
             None,
+            [],
+        ),
+        # Visualization attachments are identified by the API's viz field.
+        (
+            {
+                "attachments": [
+                    {
+                        "attachment_id": "4",
+                        "viz": {
+                            "title": "Sales by region",
+                            "query_attachment_id": "query_1",
+                        },
+                    }
+                ]
+            },
+            None,
+            [],
+            None,
+            [
+                {
+                    "attachment_id": "4",
+                    "viz": {
+                        "title": "Sales by region",
+                        "query_attachment_id": "query_1",
+                    },
+                }
+            ],
         ),
     ],
 )
-def test_parse_attachments(resp, exp_query, exp_texts, exp_questions):
+def test_parse_attachments(resp, exp_query, exp_texts, exp_questions, exp_visualizations):
     """Test parsing attachments with various input scenarios."""
     result = _parse_attachments(resp)
     assert result["query_attachment"] == exp_query
     assert result["text_attachments"] == exp_texts
     assert result["suggested_questions_attachment"] == exp_questions
+    assert result["visualization_attachments"] == exp_visualizations
 
 
 # Parametrized tests for _extract_suggested_questions_from_attachment
@@ -1049,6 +1111,52 @@ def test_poll_with_all_attachments(genie, mock_workspace_client):
     assert result.text_attachment_content == "Summary"
     assert result.conversation_id == "conv_123"
     assert isinstance(result.result, str)
+
+
+def test_poll_returns_visualizations_with_query_result(genie, mock_workspace_client):
+    visualization = {
+        "attachment_id": "viz_1",
+        "viz": {
+            "title": "Sales by region",
+            "query_attachment_id": "query_1",
+        },
+    }
+    mock_workspace_client.genie._api.do.side_effect = [
+        {
+            "status": "COMPLETED",
+            "conversation_id": "conv_123",
+            "attachments": [
+                {"attachment_id": "query_1", "query": {"query": "SELECT *"}},
+                visualization,
+            ],
+        },
+        {"contents": BytesIO(b"\x89PNG\r\n")},
+        {
+            "statement_response": {
+                "status": {"state": "SUCCEEDED"},
+                "conversation_id": "conv_123",
+                "manifest": {"schema": {"columns": []}},
+                "result": {"data_array": []},
+            }
+        },
+    ]
+
+    result = genie.poll_for_result("conv_123", "msg_456")
+
+    assert result.visualizations == [
+        GenieVizAttachment(
+            attachment_id="viz_1",
+            query_attachment_id="query_1",
+            title="Sales by region",
+            content=b"\x89PNG\r\n",
+        )
+    ]
+    mock_workspace_client.genie._api.do.assert_any_call(
+        "GET",
+        "/api/2.0/genie/spaces/test_space_id/conversations/conv_123/messages/msg_456/attachments/viz_1/download-visualization",
+        headers={"Accept": "application/octet-stream"},
+        raw=True,
+    )
 
 
 def test_poll_text_only_no_query(genie, mock_workspace_client):
