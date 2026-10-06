@@ -29,10 +29,14 @@ without a restart. Discovery is best-effort: if listing is unavailable (e.g. `sy
 readable), the picker falls back to just the default. Omitting `model` uses `MODEL`.
 
 The agent calls the chosen model through the gateway (`<host>/ai-gateway/mlflow/v1`) rather than
-`/serving-endpoints`, so `MODEL` is a `system.ai.*` model service name. The picker is capped
-(`_MODEL_LIMIT`, 20) with the default pinned first and the rest alphabetical, so truncation never
-drops the configured default. Transient list failures are retried in
-`databricks_agentkit.runtime.model_services` before the fallback applies.
+`/serving-endpoints`, so `MODEL` is a `system.ai.*` model service name. The picker includes every listed
+model, with the project default first and the rest alphabetical. Selecting a model changes only the
+model for this page; the project agent's instructions and tools still run. Reload to reset.
+
+**Foreground** displays the complete answer; **Background** checks the run status until it
+finishes, without a browser deadline. Failed or disconnected streams show an error. Chat displays
+answer text blocks as Markdown and excludes opaque reasoning/signature blocks. Raw HTML is escaped
+and images are not loaded; Copy preserves the original Markdown.
 
 The UI reads local history from the LangGraph checkpoint and managed history from Session Store
 items. It keeps a stable application session UUID in browser local storage, sends it as every

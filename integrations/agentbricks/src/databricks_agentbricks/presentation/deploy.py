@@ -122,6 +122,17 @@ def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> Non
                 if not store_grant_attempted
                 else ("granted" if store_grant_error is None else "failed"),
                 "store_grant_error": store_grant_error,
+                "tool_access": None
+                if result.tool_access is None
+                else {
+                    "app_resources": result.tool_access.app_resources,
+                    "uc_grants": result.tool_access.uc_grants,
+                    "workspace_grants": result.tool_access.workspace_grants,
+                    "direct_resources_only": True,
+                    "uc_workspace_grants_additive": bool(
+                        result.tool_access.uc_grants or result.tool_access.workspace_grants
+                    ),
+                },
             }
         )
         return
@@ -140,6 +151,22 @@ def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> Non
         provisioned["Package index"] = result.pip_index_url
     if result.instance_count is not None:
         provisioned["Instances"] = str(result.instance_count)
+    if result.tool_access is not None:
+        target_count = (
+            result.tool_access.app_resources
+            + result.tool_access.uc_grants
+            + result.tool_access.workspace_grants
+        )
+        if target_count:
+            additive_note = (
+                "; UC/Workspace grants are additive"
+                if result.tool_access.uc_grants or result.tool_access.workspace_grants
+                else ""
+            )
+            provisioned["Tool access"] = (
+                f"{target_count} explicit grant target"
+                f"{'s' if target_count != 1 else ''} reconciled{additive_note}"
+            )
 
     steps: list[str | tuple[str, str]] = [
         (f"agentbricks deployments get {result.deployment}", "Check its status and URL"),

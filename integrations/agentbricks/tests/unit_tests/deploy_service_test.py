@@ -27,12 +27,14 @@ from databricks_agentbricks.deployment.provisioners import (
     TracingProvisioner,
     TracingState,
 )
+from databricks_agentbricks.deployment.tool_access_provisioner import ToolAccessProvisioner
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.agent_project import AgentProject, ToolSpec
 from databricks_agentbricks.projects.app_manifest import AppManifest
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.reporting import Reporter
 from databricks_agentbricks.services.deploy_service import DeployRequest, DeployService
+from databricks_agentbricks.tool_access import ToolAccessPlan
 
 
 @pytest.fixture
@@ -53,7 +55,9 @@ def deployment_fixture(tmp_path: pathlib.Path) -> SimpleNamespace:
     apps.get_app_url.return_value = "https://demo.example"
     provider = Mock(spec=ApiClientProvider)
     provider.get.return_value = SimpleNamespace(
-        host="https://workspace.example", current_user="james@example.com"
+        host="https://workspace.example",
+        current_user="james@example.com",
+        workspace_client=object(),
     )
 
     memory = Mock(spec=MemoryStoreProvisioner)
@@ -68,6 +72,8 @@ def deployment_fixture(tmp_path: pathlib.Path) -> SimpleNamespace:
     runtime = Mock(spec=RuntimeStoreProvisioner)
     runtime.reconcile.return_value = RuntimeStoreState(False, None, ManifestPatch({}))
     runtime.after_app_ready.return_value = ManifestPatch({})
+    tool_access = Mock(spec=ToolAccessProvisioner)
+    tool_access.plan.return_value = ToolAccessPlan()
 
     app = Mock(spec=AppProvisioner)
     app.resolve_workspace_path.return_value = "/Workspace/demo"
@@ -84,6 +90,7 @@ def deployment_fixture(tmp_path: pathlib.Path) -> SimpleNamespace:
         session_store_provisioner=session,
         tracing_provisioner=tracing,
         runtime_store_provisioner=runtime,
+        tool_access_provisioner=tool_access,
         reporter=reporter,
     )
     return SimpleNamespace(
@@ -97,6 +104,7 @@ def deployment_fixture(tmp_path: pathlib.Path) -> SimpleNamespace:
         session=session,
         tracing=tracing,
         runtime=runtime,
+        tool_access=tool_access,
         reporter=reporter,
         service=service,
     )
@@ -144,7 +152,10 @@ def test_deploy_passes_returned_state_between_phases(tmp_path: pathlib.Path) -> 
     apps.exists.return_value = False
     apps.get_app_url.return_value = "https://demo.example"
     provider = Mock(spec=ApiClientProvider)
-    provider.get.return_value = SimpleNamespace(host="https://workspace.example")
+    workspace_client = object()
+    provider.get.return_value = SimpleNamespace(
+        host="https://workspace.example", workspace_client=workspace_client
+    )
 
     memory_state = MemoryStoreState("memory", ManifestPatch({"AGENT_MEMORY_STORE": "mem-id"}))
     session_state = SessionStoreState("session", ManifestPatch({"AGENT_SESSION_STORE": "session"}))
@@ -162,6 +173,9 @@ def test_deploy_passes_returned_state_between_phases(tmp_path: pathlib.Path) -> 
     runtime = Mock(spec=RuntimeStoreProvisioner)
     runtime.reconcile.return_value = runtime_state
     runtime.after_app_ready.return_value = ManifestPatch({"RUNTIME_STORE_DATABASE": "db-id"})
+    tool_access = Mock(spec=ToolAccessProvisioner)
+    tool_plan = ToolAccessPlan(app_resources=({"name": "tool"},))
+    tool_access.plan.return_value = tool_plan
 
     app = Mock(spec=AppProvisioner)
     app.resolve_workspace_path.return_value = "/Workspace/demo"
@@ -184,8 +198,11 @@ def test_deploy_passes_returned_state_between_phases(tmp_path: pathlib.Path) -> 
         ("runtime_reconcile", runtime.reconcile),
         ("app_ready", app.ensure_app_ready),
         ("runtime_after_app", runtime.after_app_ready),
+        ("tool_access_plan", tool_access.plan),
+        ("tool_access_reconcile", tool_access.reconcile_before_rollout),
         ("workspace_path", app.resolve_workspace_path),
         ("deploy_source", app.deploy_source),
+        ("tool_access_finalize", tool_access.finalize_after_rollout),
         ("memory_grant", memory.grant),
         ("session_grant", session.grant),
         ("tracing_grant", tracing.grant),
@@ -202,6 +219,7 @@ def test_deploy_passes_returned_state_between_phases(tmp_path: pathlib.Path) -> 
         session_store_provisioner=session,
         tracing_provisioner=tracing,
         runtime_store_provisioner=runtime,
+        tool_access_provisioner=tool_access,
         reporter=Mock(spec=Reporter),
     )
     result = service.deploy(
@@ -222,13 +240,25 @@ def test_deploy_passes_returned_state_between_phases(tmp_path: pathlib.Path) -> 
         "runtime_reconcile",
         "app_ready",
         "runtime_after_app",
+        "tool_access_plan",
+        "tool_access_reconcile",
         "workspace_path",
         "deploy_source",
+        "tool_access_finalize",
         "memory_grant",
         "session_grant",
         "tracing_grant",
     ]
     assert runtime.after_app_ready.call_args.args[1] is runtime_state
+    tool_access.plan.assert_called_once_with(project.tools)
+    assert tool_access.reconcile_before_rollout.call_args.args == (
+        DeploymentName("agent-bricks-demo"),
+        tool_plan,
+        workspace_client,
+    )
+    tool_access.finalize_after_rollout.assert_called_once_with(
+        DeploymentName("agent-bricks-demo"), tool_plan
+    )
     assert memory.grant.call_args.args[1] is memory_state
     assert session.grant.call_args.args[1] is session_state
     assert tracing.grant.call_args.args[1] is tracing_state
@@ -237,6 +267,7 @@ def test_deploy_passes_returned_state_between_phases(tmp_path: pathlib.Path) -> 
     assert result.workspace_path == "/Workspace/demo"
     assert result.env["RUNTIME_STORE_DATABASE"] == "db-id"
     assert result.session_grant_error == "grant denied"
+    assert result.tool_access is not None and result.tool_access.app_resources == 1
     assert result.created_app_yaml is True
     assert result.uses_runtime_api is True
 
@@ -495,6 +526,20 @@ def test_deploy_with_no_manifest_changes_does_not_scaffold_app_yaml(
     deployment_fixture.provider.get.assert_called_once_with()
 
 
+def test_tool_access_failure_stops_before_source_rollout(
+    deployment_fixture, tmp_path: pathlib.Path
+):
+    deployment_fixture.tool_access.reconcile_before_rollout.side_effect = AgentCliError(
+        "tool grant denied"
+    )
+
+    with pytest.raises(AgentCliError, match="tool grant denied"):
+        deployment_fixture.service.deploy(_request(tmp_path))
+
+    deployment_fixture.app.deploy_source.assert_not_called()
+    deployment_fixture.tool_access.finalize_after_rollout.assert_not_called()
+
+
 def test_deploy_retains_grant_errors_and_attempt_flags(deployment_fixture, tmp_path: pathlib.Path):
     deployment_fixture.resolver.resource_bindings.return_value = ("memory", "session", "trace")
     deployment_fixture.memory.reconcile.return_value = MemoryStoreState("memory", ManifestPatch({}))
@@ -528,6 +573,9 @@ def test_deploy_without_agent_project_still_deploys_named_source(
 
     assert result.deployment == "agent-bricks-standalone"
     assert result.uses_runtime_api is False
+    assert result.tool_access is None
+    deployment_fixture.tool_access.plan.assert_not_called()
+    deployment_fixture.tool_access.reconcile_before_rollout.assert_not_called()
     deployment_fixture.auth.ensure_user_auth.assert_called_once_with(
         DeploymentName("agent-bricks-standalone"),
         None,

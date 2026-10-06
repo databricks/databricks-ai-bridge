@@ -35,7 +35,7 @@ def test_generated_project_pins_app_packages_to_bridge_sha(
 
     monkeypatch.setattr(runner, "run_long", scaffold)
     monkeypatch.setattr(runner, "_author_cli", lambda _project: None)
-    monkeypatch.setattr(runner, "_author_direct", lambda _project, _framework: None)
+    monkeypatch.setattr(runner, "_author_direct", lambda _project, _framework, _run_suffix: None)
     monkeypatch.setattr(runner, "_provision_stores", lambda _case: None)
 
     cases = runner.create_projects()

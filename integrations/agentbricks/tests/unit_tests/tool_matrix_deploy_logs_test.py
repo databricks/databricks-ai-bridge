@@ -11,6 +11,17 @@ ProjectCase = _NAMESPACE["ProjectCase"]
 EvidenceRow = _NAMESPACE["EvidenceRow"]
 
 
+def _stub_grant_snapshot(monkeypatch, runner) -> None:
+    snapshot = {
+        "tool_resources": [],
+        "unrelated_resources": [],
+        "uc_effective": {},
+        "transitive_direct_privileges": [],
+        "transitive_effective_privileges": [],
+    }
+    monkeypatch.setattr(runner, "_grant_snapshot", lambda app: snapshot)
+
+
 def test_deploy_invocation_failure_captures_app_logs(tmp_path: pathlib.Path, monkeypatch) -> None:
     wheel = tmp_path / "agentbricks.whl"
     wheel.write_bytes(b"test wheel")
@@ -22,7 +33,8 @@ def test_deploy_invocation_failure_captures_app_logs(tmp_path: pathlib.Path, mon
     monkeypatch.setattr(runner, "run_long", lambda *args, **kwargs: "")
     monkeypatch.setattr(runner, "_assert_app_absent", lambda name: None)
     monkeypatch.setattr(runner, "_wait_for_app", lambda name: {"url": "https://test-app"})
-    monkeypatch.setattr(runner, "_grant_function", lambda app: None)
+    monkeypatch.setattr(runner, "_grant_transitive_function", lambda app: {})
+    _stub_grant_snapshot(monkeypatch, runner)
 
     def fail_invocation(*args, **kwargs):
         runner.rows.append(
@@ -92,7 +104,8 @@ def test_successful_deploy_does_not_fetch_app_logs(tmp_path: pathlib.Path, monke
     monkeypatch.setattr(runner, "run_long", lambda *args, **kwargs: "")
     monkeypatch.setattr(runner, "_assert_app_absent", lambda name: None)
     monkeypatch.setattr(runner, "_wait_for_app", lambda name: {"url": "https://test-app"})
-    monkeypatch.setattr(runner, "_grant_function", lambda app: None)
+    monkeypatch.setattr(runner, "_grant_transitive_function", lambda app: {})
+    _stub_grant_snapshot(monkeypatch, runner)
     monkeypatch.setattr(runner, "_exercise", lambda *args, **kwargs: None)
     log_fetches = []
 

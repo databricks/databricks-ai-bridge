@@ -1,5 +1,6 @@
 """Request-user deploy contract and scoped Apps reconciliation tests."""
 
+import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -29,6 +30,20 @@ def _no_remote_provisioning(monkeypatch):
     return runtime_store
 
 
+@pytest.fixture(autouse=True)
+def _no_tool_access_reconciliation(monkeypatch):
+    reconcile = Mock()
+    monkeypatch.setattr(deploy_mod, "reconcile_tool_access", reconcile, raising=False)
+    return reconcile
+
+
+@pytest.fixture(autouse=True)
+def _no_tool_access_finalization(monkeypatch):
+    finalize = Mock()
+    monkeypatch.setattr(deploy_mod, "finalize_tool_access", finalize, raising=False)
+    return finalize
+
+
 def _project(root, *, auth="user", legacy=False):
     project = AgentProject.create(root, framework="langgraph", server="agentbricks")
     project.add_tool(ToolSpec.mcp("search", service="system.ai.web_search", auth=auth))
@@ -36,6 +51,73 @@ def _project(root, *, auth="user", legacy=False):
         project.add_tool(ToolSpec.mcp("legacy", service="system.ai.python_exec"))
     project.write()
     return project
+
+
+def _project_with_user_auth(root, *, server="agentbricks", scopes=("sql",)):
+    project = AgentProject.create(root, framework="langgraph", server=server)
+    project.write()
+    rendered_scopes = ", ".join(f'"{scope}"' for scope in scopes)
+    with project.path.open("a", encoding="utf-8") as manifest:
+        manifest.write(
+            f"\n[auth.user]\nrequired = true\nadditional_api_scopes = [{rendered_scopes}]\n"
+        )
+    return AgentProject.load(root)
+
+
+def test_declarative_user_auth_requires_no_managed_binding(tmp_path):
+    from databricks_agentbricks.cli.app_auth import (
+        required_user_api_scopes,
+        requires_user_auth,
+    )
+
+    project = _project_with_user_auth(tmp_path)
+
+    assert requires_user_auth(project) is True
+    assert required_user_api_scopes(project) == {"sql"}
+
+
+def test_declarative_scopes_union_with_managed_inference(tmp_path):
+    from databricks_agentbricks.cli.app_auth import required_user_api_scopes
+
+    project = _project_with_user_auth(tmp_path, scopes=("sql", "ai-gateway", "sql"))
+    project.add_tool(ToolSpec.mcp("search", service="system.ai.web_search", auth="user"))
+
+    assert required_user_api_scopes(project) == {"sql", "ai-gateway"}
+
+
+def test_declarative_user_auth_requires_agentbricks_server(tmp_path):
+    from databricks_agentbricks.cli.app_auth import requires_user_auth
+
+    project = _project_with_user_auth(tmp_path, server="custom")
+
+    with pytest.raises(AgentCliError, match="server = 'agentbricks'"):
+        requires_user_auth(project)
+
+
+def test_scope_update_flag_accepts_declarative_user_auth(tmp_path, monkeypatch):
+    _project_with_user_auth(tmp_path)
+    _, apps, _ = _sdk(
+        monkeypatch,
+        App(
+            name="agent-bricks-test",
+            user_api_scopes=["sql"],
+            effective_user_api_scopes=["sql"],
+            forward_user_access_token=False,
+        ),
+    )
+    client = Mock()
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["agent-bricks-test", "--source", str(tmp_path), "--allow-user-scope-update"],
+        obj=SimpleNamespace(profile="selected", output="text", client=client),
+    )
+
+    assert result.exit_code != 0
+    assert "forward_user_access_token" in result.output
+    assert "requires a managed tool" not in result.output
+    apps.get.assert_called_once_with("agent-bricks-test")
+    client.assert_not_called()
 
 
 def test_user_auth_requires_explicit_auth_on_every_managed_binding(tmp_path, monkeypatch):
@@ -313,6 +395,27 @@ def test_empty_scope_removal_stops_before_sdk_drops_empty_list(monkeypatch):
     assert App(name="app", user_api_scopes=[]).as_dict() == {"name": "app"}
 
 
+def test_new_app_allows_credential_only_user_auth_without_explicit_scopes(monkeypatch):
+    app_auth, apps, _ = _sdk(monkeypatch)
+    plan = app_auth.plan_app_user_scope_update(
+        "app", "selected", allow_existing_app_update=False, required_scopes=set()
+    )
+    apps.get.side_effect = None
+    apps.get.return_value = App(
+        name="app",
+        user_api_scopes=[],
+        effective_user_api_scopes=["iam.access-control:read", "iam.current-user:read"],
+        forward_user_access_token=True,
+    )
+
+    app_auth.apply_app_user_scope_update(plan, attempts=1)
+
+    assert apps.create.call_args.args[0].as_dict() == {
+        "name": "app",
+        "forward_user_access_token": True,
+    }
+
+
 def test_nonempty_scope_removal_also_requires_manual_action(monkeypatch):
     from dataclasses import replace
 
@@ -501,7 +604,9 @@ def test_app_only_tools_keep_deployment_path(tmp_path, monkeypatch, auth, _no_re
         return SimpleNamespace(returncode=0, stdout="{}", stderr="")
 
     monkeypatch.setattr(deploy_mod, "_databricks", databricks)
-    client = SimpleNamespace(host="https://workspace", current_user="user@example.com")
+    client = SimpleNamespace(
+        host="https://workspace", current_user="user@example.com", workspace_client=object()
+    )
     result = CliRunner().invoke(
         deploy_mod.deploy,
         ["test", "--source", str(tmp_path)],
@@ -544,7 +649,9 @@ def test_user_deploy_creates_scoped_app_and_runtime_store_before_source(
         calls.append(("runtime-store", args)),
         runtime_backend,
     )[1]
-    client = SimpleNamespace(host="https://workspace", current_user="user@example.com")
+    client = SimpleNamespace(
+        host="https://workspace", current_user="user@example.com", workspace_client=object()
+    )
     result = CliRunner().invoke(
         deploy_mod.deploy,
         ["test", "--source", str(tmp_path), "--instances", "2"],
@@ -569,3 +676,245 @@ def test_user_deploy_creates_scoped_app_and_runtime_store_before_source(
         "sync"
     )
     assert "re-consent" in result.output
+
+
+def test_app_auth_reconciles_explicit_access_before_source_rollout(
+    tmp_path, monkeypatch, _no_tool_access_reconciliation
+):
+    project = _project(tmp_path, auth="app")
+    project.add_tool(ToolSpec.mcp("external", service="supervisor_agent.tools.search"))
+    project.write()
+    events = []
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda *args: True)
+    monkeypatch.setattr(deploy_mod, "_wait_for_running", lambda *args: events.append("app-running"))
+
+    def databricks(arguments, profile, **kwargs):
+        if arguments[0] == "sync":
+            events.append("sync")
+        elif arguments[:2] == ["apps", "deploy"]:
+            events.append("apps-deploy")
+        return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(deploy_mod, "_databricks", databricks)
+
+    def reconcile(client, app, principal, plan, profile):
+        events.append("tool-access")
+        assert client is workspace_client
+        assert app == "agent-bricks-test"
+        assert principal == "app-sp"
+        assert profile == "selected"
+        assert {grant.full_name for grant in plan.uc_grants} == {
+            "supervisor_agent",
+            "supervisor_agent.tools",
+            "supervisor_agent.tools.search",
+        }
+        return plan
+
+    _no_tool_access_reconciliation.side_effect = reconcile
+    workspace_client = object()
+    client = SimpleNamespace(
+        host="https://workspace",
+        current_user="user@example.com",
+        workspace_client=workspace_client,
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["test", "--source", str(tmp_path)],
+        obj=SimpleNamespace(profile="selected", output="text", client=lambda: client),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert events == ["app-running", "tool-access", "sync", "apps-deploy"]
+    assert "UC/Workspace grants" in result.output
+    assert "are additive" in result.output
+
+
+@pytest.mark.parametrize("failure_point", ["sync", "apps-deploy"])
+def test_deploy_keeps_old_tool_resources_when_rollout_fails(
+    tmp_path, monkeypatch, _no_tool_access_reconciliation, failure_point
+):
+    project = _project(tmp_path, auth="app")
+    project.add_tool(ToolSpec.uc_function("query", function="catalog.schema.function"))
+    project.write()
+    events = []
+    attached_resources = [
+        {"name": "agentbricks-tool-old", "uc_securable": {"permission": "MODIFY"}}
+    ]
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda *args: True)
+    monkeypatch.setattr(deploy_mod, "_wait_for_running", lambda *args: None)
+
+    from databricks_agentbricks import app_resources, tool_access
+
+    real_reconcile = tool_access.reconcile_tool_access
+
+    def reconcile(*args):
+        events.append("prepare")
+        return real_reconcile(*args)
+
+    def finalize(*args):
+        events.append("finalize")
+        return tool_access.finalize_tool_access(*args)
+
+    def apps_databricks(arguments, profile, **kwargs):
+        if arguments[:2] == ["apps", "get"]:
+            return SimpleNamespace(
+                returncode=0, stdout=json.dumps({"resources": attached_resources}), stderr=""
+            )
+        payload = json.loads(arguments[arguments.index("--json") + 1])
+        attached_resources[:] = payload["app"]["resources"]
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(app_resources, "_databricks", apps_databricks)
+    monkeypatch.setattr(deploy_mod, "reconcile_tool_access", reconcile)
+    _no_tool_access_reconciliation.side_effect = reconcile
+    monkeypatch.setattr(deploy_mod, "finalize_tool_access", finalize)
+
+    def databricks(arguments, profile, **kwargs):
+        if arguments[0] == "sync":
+            events.append("sync")
+            if failure_point == "sync":
+                raise AgentCliError("sync failed")
+        elif arguments[:2] == ["apps", "deploy"]:
+            events.append("apps-deploy")
+            if failure_point == "apps-deploy":
+                raise AgentCliError("apps deploy failed")
+        return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(deploy_mod, "_databricks", databricks)
+    client = SimpleNamespace(
+        host="https://workspace", current_user="user@example.com", workspace_client=object()
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["test", "--source", str(tmp_path)],
+        obj=SimpleNamespace(profile="selected", output="text", client=lambda: client),
+    )
+
+    assert result.exit_code != 0
+    assert failure_point.replace("-", " ") in result.output
+    assert "agentbricks-tool-old" in {resource["name"] for resource in attached_resources}
+    assert "finalize" not in events
+
+
+def test_deploy_prunes_tool_resources_after_successful_rollout(
+    tmp_path, monkeypatch, _no_tool_access_reconciliation
+):
+    project = _project(tmp_path, auth="app")
+    project.add_tool(ToolSpec.uc_function("query", function="catalog.schema.function"))
+    project.write()
+    events = []
+    attached_resources = [
+        {"name": "agentbricks-tool-old", "uc_securable": {"permission": "MODIFY"}}
+    ]
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda *args: True)
+    monkeypatch.setattr(deploy_mod, "_wait_for_running", lambda *args: None)
+
+    from databricks_agentbricks import app_resources, tool_access
+
+    real_reconcile = tool_access.reconcile_tool_access
+
+    def reconcile(*args):
+        events.append("prepare")
+        return real_reconcile(*args)
+
+    def finalize(*args):
+        events.append("finalize")
+        return tool_access.finalize_tool_access(*args)
+
+    def apps_databricks(arguments, profile, **kwargs):
+        if arguments[:2] == ["apps", "get"]:
+            return SimpleNamespace(
+                returncode=0, stdout=json.dumps({"resources": attached_resources}), stderr=""
+            )
+        payload = json.loads(arguments[arguments.index("--json") + 1])
+        attached_resources[:] = payload["app"]["resources"]
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(app_resources, "_databricks", apps_databricks)
+    monkeypatch.setattr(deploy_mod, "reconcile_tool_access", reconcile)
+    _no_tool_access_reconciliation.side_effect = reconcile
+    monkeypatch.setattr(deploy_mod, "finalize_tool_access", finalize)
+
+    def databricks(arguments, profile, **kwargs):
+        if arguments[0] == "sync":
+            events.append("sync")
+        elif arguments[:2] == ["apps", "deploy"]:
+            events.append("apps-deploy")
+        return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(deploy_mod, "_databricks", databricks)
+    client = SimpleNamespace(
+        host="https://workspace", current_user="user@example.com", workspace_client=object()
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["test", "--source", str(tmp_path)],
+        obj=SimpleNamespace(profile="selected", output="text", client=lambda: client),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert events == ["prepare", "sync", "apps-deploy", "finalize"]
+    assert "agentbricks-tool-old" not in {resource["name"] for resource in attached_resources}
+
+
+def test_deploy_json_labels_only_uc_workspace_grants_as_additive(
+    tmp_path, monkeypatch, _no_tool_access_reconciliation
+):
+    project = _project(tmp_path, auth="app")
+    project.add_tool(ToolSpec.mcp("external", service="supervisor_agent.tools.search"))
+    project.write()
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda *args: True)
+    monkeypatch.setattr(deploy_mod, "_wait_for_running", lambda *args: None)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="{}", stderr=""),
+    )
+    captured = {}
+    monkeypatch.setattr(deploy_mod.render, "emit_json", lambda value: captured.update(value))
+    client = SimpleNamespace(
+        host="https://workspace", current_user="user@example.com", workspace_client=object()
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["test", "--source", str(tmp_path)],
+        obj=SimpleNamespace(profile="selected", output="json", client=lambda: client),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["tool_access"]["uc_workspace_grants_additive"] is True
+    assert "direct_grants_additive" not in captured["tool_access"]
+
+
+def test_tool_access_failure_stops_before_source_rollout(
+    tmp_path, monkeypatch, _no_tool_access_reconciliation
+):
+    _project(tmp_path, auth="app")
+    calls = []
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda *args: True)
+    monkeypatch.setattr(deploy_mod, "_wait_for_running", lambda *args: None)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda arguments, profile, **kwargs: (
+            calls.append(arguments) or SimpleNamespace(returncode=0, stdout="{}", stderr="")
+        ),
+    )
+    _no_tool_access_reconciliation.side_effect = AgentCliError("tool grant denied")
+    client = SimpleNamespace(
+        host="https://workspace", current_user="user@example.com", workspace_client=object()
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["test", "--source", str(tmp_path)],
+        obj=SimpleNamespace(profile="selected", output="text", client=lambda: client),
+    )
+
+    assert result.exit_code != 0
+    assert "tool grant denied" in result.output
+    assert not any(call[0] == "sync" or call[:2] == ["apps", "deploy"] for call in calls)

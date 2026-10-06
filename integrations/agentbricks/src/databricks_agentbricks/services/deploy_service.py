@@ -46,6 +46,7 @@ from databricks_agentbricks.deployment.provisioners import (
     SessionStoreProvisioner,
     TracingProvisioner,
 )
+from databricks_agentbricks.deployment.tool_access_provisioner import ToolAccessProvisioner
 from databricks_agentbricks.projects.agent_project import AgentProject
 from databricks_agentbricks.projects.app_manifest import AppManifest
 from databricks_agentbricks.projects.config import require_managed_tool_support
@@ -82,6 +83,15 @@ class DeployRequest:
 
 
 @dataclass(frozen=True)
+class ToolAccessSummary:
+    """Counts of explicit tool grant targets reconciled during one deployment."""
+
+    app_resources: int
+    uc_grants: int
+    workspace_grants: int
+
+
+@dataclass(frozen=True)
 class DeployResult:
     """What a deploy did, as raw facts: no formatted strings, no display-only derivations.
 
@@ -105,6 +115,7 @@ class DeployResult:
     session_grant_error: Optional[str]
     memory_grant_attempted: bool
     session_grant_attempted: bool
+    tool_access: Optional[ToolAccessSummary]
     # True only when deploy created a missing app.yaml with a placeholder command.
     created_app_yaml: bool
     pip_index_url: Optional[str]
@@ -149,6 +160,7 @@ class DeployService:
         session_store_provisioner: SessionStoreProvisioner,
         tracing_provisioner: TracingProvisioner,
         runtime_store_provisioner: RuntimeStoreProvisioner,
+        tool_access_provisioner: ToolAccessProvisioner,
         reporter: Reporter,
     ) -> None:
         self._project_resolver = project_resolver
@@ -160,6 +172,7 @@ class DeployService:
         self._session_store_provisioner = session_store_provisioner
         self._tracing_provisioner = tracing_provisioner
         self._runtime_store_provisioner = runtime_store_provisioner
+        self._tool_access_provisioner = tool_access_provisioner
         self._reporter = reporter
 
     # --- lifecycle verbs ----------------------------------------------------
@@ -222,9 +235,10 @@ class DeployService:
         3. Write the initial resource env into app.yaml, then ensure the App exists and its
            compute is active. A managed Runtime Store needs the App's service principal, so
            finish that resource and write its late env only after the App is ready.
-        4. Resolve the workspace destination, upload the source, and roll out the App.
-        5. Attempt resource grants after rollout. Grant failures are reported in the result
-           rather than undoing a successful deployment.
+        4. Reconcile explicit tool access without pruning grants used by the running version.
+           Upload and roll out the source, then remove stale App tool resources.
+        5. Attempt store and tracing grants after rollout. Their failures are reported in the
+           result rather than undoing a successful deployment.
 
         The service owns the intermediate state, manifest writes, and phase order; provisioners
         own individual resource operations and return typed results for later phases.
@@ -300,9 +314,20 @@ class DeployService:
                 or created_app_yaml
             )
 
+        # Direct tool grants must exist before the new source can use them. Delay removals and
+        # permission downgrades until after a successful rollout so the old version keeps access.
+        tool_plan = None
+        if prepared.agent_project is not None:
+            tool_plan = self._tool_access_provisioner.plan(prepared.agent_project.tools)
+            self._tool_access_provisioner.reconcile_before_rollout(
+                name, tool_plan, client.workspace_client
+            )
+
         # 5. Resolve the upload destination explicitly, then roll out source to the app.
         workspace_path = self._app_provisioner.resolve_workspace_path(ctx, request.workspace_path)
         self._app_provisioner.deploy_source(ctx, workspace_path)
+        if tool_plan is not None:
+            self._tool_access_provisioner.finalize_after_rollout(name, tool_plan)
 
         # 6. Grants remain best-effort. The service retains each outcome for presentation.
         memory_grant = self._memory_store_provisioner.grant(ctx, memory)
@@ -326,6 +351,13 @@ class DeployService:
             session_grant_error=session_grant.error,
             memory_grant_attempted=memory_grant.attempted,
             session_grant_attempted=session_grant.attempted,
+            tool_access=ToolAccessSummary(
+                app_resources=len(tool_plan.app_resources),
+                uc_grants=len(tool_plan.uc_grants),
+                workspace_grants=len(tool_plan.workspace_grants),
+            )
+            if tool_plan is not None
+            else None,
             created_app_yaml=created_app_yaml,
             pip_index_url=request.pip_index_url,
             instance_count=instance_count,

@@ -47,6 +47,7 @@ from databricks_agentbricks.deployment.provisioners import (
     SessionStoreProvisioner,
     TracingProvisioner,
 )
+from databricks_agentbricks.deployment.tool_access_provisioner import ToolAccessProvisioner
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.deploy import (
     present_deleted,
@@ -84,6 +85,7 @@ def build_deploy_service(obj) -> DeployService:
         runtime_store_provisioner=RuntimeStoreProvisioner(
             api_client_provider, apps_client, obj.profile, _USE_MANAGED_RUNTIME_STORE, reporter
         ),
+        tool_access_provisioner=ToolAccessProvisioner(apps_client, obj.profile, reporter),
         reporter=reporter,
     )
 
@@ -121,8 +123,8 @@ def build_deploy_service(obj) -> DeployService:
 @click.option(
     "--allow-user-scope-update",
     is_flag=True,
-    help="Allow Agent Bricks to add missing user API scopes to an existing App for tools configured with "
-    "auth = 'user'. Once added, later deploys do not need this flag.",
+    help="Allow Agent Bricks to add missing user API scopes to an existing App from managed-tool "
+    "inference and [auth.user] additions. Once added, later deploys do not need this flag.",
 )
 @click.pass_obj
 def deploy(
