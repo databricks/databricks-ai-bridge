@@ -165,8 +165,6 @@ class ToolSpec:
         if kind == "sandbox":
             if self.source.service != "system.ai.sandbox":
                 raise AgentCliError("Sandbox tools must bind system.ai.sandbox.")
-            if not self.policy.downscope:
-                raise AgentCliError("Sandbox tools require at least one scope.")
         elif kind == "mcp":
             if self.source.service is None:
                 raise AgentCliError("MCP tools require a service.")
@@ -319,6 +317,8 @@ def _tool_from_manifest(value: object) -> ToolSpec:
     downscope_value = policy_value.get("downscope", [])
     if not isinstance(downscope_value, list):
         raise AgentCliError("Tool policy downscope must be an array.")
+    if kind == "sandbox" and "downscope" in policy_value and not downscope_value:
+        raise AgentCliError("Sandbox policy.downscope cannot be empty; omit it for caller grants.")
     databricks_access_token_included = policy_value.get("databricks_access_token_included", False)
     if not isinstance(databricks_access_token_included, bool):
         raise AgentCliError("Tool policy databricks_access_token_included must be a boolean.")
@@ -358,14 +358,15 @@ def _tool_table(spec: ToolSpec) -> Any:
         if value is not None:
             source_values[key] = value
     table.add("source", _inline_table(source_values))
-    if spec.policy.downscope:
-        downscope = tomlkit.array()
-        for scope in spec.policy.downscope:
-            downscope.append(
-                _inline_table({"resource": scope.resource, "permission": scope.permission})
-            )
+    if spec.policy.downscope or spec.source.kind == "sandbox":
         policy = tomlkit.inline_table()
-        policy["downscope"] = downscope
+        if spec.policy.downscope:
+            downscope = tomlkit.array()
+            for scope in spec.policy.downscope:
+                downscope.append(
+                    _inline_table({"resource": scope.resource, "permission": scope.permission})
+                )
+            policy["downscope"] = downscope
         policy["databricks_access_token_included"] = spec.policy.databricks_access_token_included
         table.add("policy", policy)
     return table

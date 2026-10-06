@@ -92,11 +92,16 @@ def required_user_api_scopes(project: AgentProject | None) -> set[str]:
             scopes.add("sql")
         if tool.source.service == "system.ai.genie_one_mcp":
             scopes.add("genie")
-        if tool.source.kind == "sandbox" and any(
-            scope.kind == "volume" for scope in tool.policy.downscope
+        if tool.source.kind == "sandbox" and (
+            tool.policy.databricks_access_token_included
+            or any(scope.kind == "volume" for scope in tool.policy.downscope)
         ):
             scopes.add("files")
-        if tool.source.kind == "sandbox" and tool.policy.databricks_access_token_included:
+        if (
+            tool.source.kind == "sandbox"
+            and tool.policy.databricks_access_token_included
+            and not tool.policy.downscope
+        ):
             scopes.add("workspace.workspace")
     return scopes
 

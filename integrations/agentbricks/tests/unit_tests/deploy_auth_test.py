@@ -209,7 +209,7 @@ def test_scope_update_plan_uses_exact_required_scopes(monkeypatch):
     [
         (
             ToolSpec.sandbox("volume", scopes=[Scope.volume("cat.sch.vol")], auth="user"),
-            {"ai-gateway", "files", "workspace.workspace"},
+            {"ai-gateway", "files"},
         ),
         (
             ToolSpec.sandbox(
@@ -228,6 +228,25 @@ def test_sandbox_policy_requests_resource_and_token_scopes(tmp_path, binding, ex
 
     project = AgentProject.create(tmp_path, framework="langgraph", server="agentbricks")
     project.add_tool(binding)
+    assert required_user_api_scopes(project) == expected
+
+
+@pytest.mark.parametrize(
+    ("token_included", "expected"),
+    [
+        (True, {"ai-gateway", "files", "workspace.workspace"}),
+        (False, {"ai-gateway"}),
+    ],
+)
+def test_unscoped_sandbox_requests_files_for_token_injection(tmp_path, token_included, expected):
+    from databricks_agentbricks.cli.app_auth import required_user_api_scopes
+
+    project = AgentProject.create(tmp_path, framework="langgraph", server="agentbricks")
+    project.add_tool(
+        ToolSpec.sandbox(
+            "unscoped", scopes=[], auth="user", databricks_access_token_included=token_included
+        )
+    )
     assert required_user_api_scopes(project) == expected
 
 

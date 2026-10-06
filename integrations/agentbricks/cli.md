@@ -1245,7 +1245,7 @@ Discover available integrations and manage an agent's tool bindings.
 
 Tools are what let an agent act beyond the language model itself - query governed data, call a service, or run a function - and each one is recorded in agent.toml so `agentbricks dev` / `agentbricks deploy` wire it in. `agentbricks tools add` manages these Databricks-managed tool types:
 
-sandbox Query Unity Catalog data via system.ai.sandbox, scoped to the volumes you choose. mcp A Databricks-managed MCP service (see `agentbricks tools list --kind mcp`), e.g. system.ai.web_search. uc-function An existing Unity Catalog function (catalog.schema.function). genie-one Workspace-wide Genie One MCP tools. genie-agent Native Genie conversation tools for a configured space ID.
+sandbox Query Unity Catalog data via system.ai.sandbox with caller grants, or restrict access to volumes you choose. mcp A Databricks-managed MCP service (see `agentbricks tools list --kind mcp`), e.g. system.ai.web_search. uc-function An existing Unity Catalog function (catalog.schema.function). genie-one Workspace-wide Genie One MCP tools. genie-agent Native Genie conversation tools for a configured space ID.
 
 Browse available integrations with `agentbricks tools list`, add one with `agentbricks tools add <type>`, and drop a binding with `agentbricks tools remove`. Review agent.toml for configured managed tools and MCP bindings. The list shows addable integrations, not configured bindings or individual operations inside an MCP service. Custom Python tools are code-first - write them directly in your project's code rather than through the CLI.
 
@@ -1267,7 +1267,7 @@ Review that project's agent.toml to check configured managed tools and MCP bindi
 
 | Subcommand | Description |
 | --- | --- |
-| [`tools add sandbox`](#agentbricks-tools-add-sandbox) | Add a data sandbox tool (system.ai.sandbox), scoped to specific Unity Catalog resources. |
+| [`tools add sandbox`](#agentbricks-tools-add-sandbox) | Add a data sandbox tool (system.ai.sandbox) with caller grants by default. |
 | [`tools add mcp`](#agentbricks-tools-add-mcp) | Validate and add a Databricks-managed MCP service as a tool. |
 | [`tools add uc-function`](#agentbricks-tools-add-uc-function) | Add an existing Unity Catalog function (catalog.schema.function) as a tool. |
 | [`tools add genie-one`](#agentbricks-tools-add-genie-one) | Add workspace-wide Genie One MCP tools. |
@@ -1275,7 +1275,9 @@ Review that project's agent.toml to check configured managed tools and MCP bindi
 
 ##### `agentbricks tools add sandbox`
 
-Add a data sandbox tool (system.ai.sandbox), scoped to specific Unity Catalog resources.
+Add a data sandbox tool (system.ai.sandbox) with caller grants by default.
+
+Use `--scope` to restrict it to specific Unity Catalog volumes.
 
 Review the target project's agent.toml to check configured managed tools and MCP bindings.
 
@@ -1288,7 +1290,7 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
-| `--scope <SCOPES>` | string | - | yes | Allowed volume: resource. Repeat for multiple scopes. |
+| `--scope <SCOPES>` | string | - | no | Restrict to an allowed volume: resource. Repeat for multiple scopes. |
 | `--permission <read_only|read_write>` | `read_only` \| `read_write` | `read_only` | no | - |
 | `--name <TOOL_ID>` | string | `sandbox` | no | - |
 | `--auth <user|app>` | `user` \| `app` | `user` | no | - |
