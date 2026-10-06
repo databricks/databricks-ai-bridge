@@ -398,12 +398,15 @@ function normalizeRole(message) {
 function extractText(content) {
   if (content == null) return "";
   if (typeof content === "string") return content;
+  if (content?.type) return extractText([content]);
   if (Array.isArray(content)) {
     return content
       .map((part) => {
         if (typeof part === "string") return part;
-        if (typeof part?.text === "string") return part.text;
-        if (typeof part?.content === "string") return part.content;
+        // Only answer content belongs in chat; reasoning/signature blocks are opaque.
+        if (!["text", "input_text", "output_text", "refusal"].includes(part?.type)) return "";
+        if (typeof part.text === "string") return part.text;
+        if (typeof part.refusal === "string") return part.refusal;
         return "";
       })
       .filter(Boolean)
@@ -456,7 +459,7 @@ function buildMessageActions(textEl) {
     '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Copy</span>';
   copy.addEventListener("click", async () => {
     try {
-      await navigator.clipboard.writeText(textEl.textContent || "");
+      await navigator.clipboard.writeText(textEl.dataset.source ?? textEl.textContent ?? "");
     } catch {
       /* clipboard may be unavailable */
     }
@@ -472,13 +475,21 @@ function buildMessageActions(textEl) {
   return actions;
 }
 
+const markdown = window.markdownit({ html: false }).disable("image");
+
+function renderMessageText(element, content) {
+  element.dataset.source = content;
+  element.innerHTML = markdown.render(content);
+}
+
 function appendMessage(role, content, label, { time } = {}) {
   hideEmptyState();
   const wrapper = document.createElement("article");
   wrapper.className = `message ${role}`;
   const text = document.createElement("div");
   text.className = "message-content";
-  text.textContent = content;
+  if (role === "assistant") renderMessageText(text, content);
+  else text.textContent = content;
 
   if (role === "user") {
     wrapper.append(text);
@@ -523,7 +534,7 @@ function appendDelta(content) {
   const draft = startDraft();
   state.draftText += text;
   state.lastAssistantText = state.draftText;
-  draft.text.textContent = state.draftText;
+  renderMessageText(draft.text, state.draftText);
   elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
 }
 
@@ -532,7 +543,7 @@ function finishDraft(finalText = "") {
   if (finalText) {
     state.draftText = finalText;
     state.lastAssistantText = finalText;
-    state.draft.text.textContent = finalText;
+    renderMessageText(state.draft.text, finalText);
   }
   state.draft.wrapper.classList.remove("streaming");
   state.draft = null;
@@ -998,16 +1009,18 @@ function parseSseFrame(frame) {
 }
 
 async function invokeStreaming(payload) {
+  const invocation = invocationPayload(payload, { stream: true });
   const response = await fetch("/api/invocations", {
     method: "POST",
     credentials: "same-origin",
     headers: invocationHeaders(),
-    body: JSON.stringify(invocationPayload(payload, { stream: true })),
+    body: JSON.stringify(invocation),
   });
   if (!response.ok || !response.body) await jsonResponse(response);
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let terminal = null;
   while (true) {
     const { value, done } = await reader.read();
     buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
@@ -1015,27 +1028,38 @@ async function invokeStreaming(payload) {
     buffer = frames.pop() || "";
     for (const frame of frames) {
       const event = parseSseFrame(frame);
+      if (["run.failed", "run.completed"].includes(event?.type)) terminal = event.type;
       if (event) handleEvent(event);
     }
     if (done) break;
   }
   if (buffer.trim()) {
     const event = parseSseFrame(buffer);
+    if (["run.failed", "run.completed"].includes(event?.type)) terminal = event.type;
     if (event) handleEvent(event);
+  }
+  if (terminal === "run.failed") {
+    throw new Error(`Agent invocation ${invocation.id} failed. Check server logs for details.`);
+  }
+  if (terminal !== "run.completed") {
+    throw new Error(`Stream disconnected before invocation ${invocation.id} completed. Check its status before retrying.`);
   }
   finishDraft();
   return { status: state.pendingInterrupt ? "interrupted" : "completed" };
 }
 
 async function pollBackground(invocationId) {
-  const deadline = Date.now() + 180000;
-  while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 850));
+  let delay = 850;
+  while (true) {
+    await new Promise((resolve) => setTimeout(resolve, delay));
     const response = await fetch(`/api/invocations/${encodeURIComponent(invocationId)}`, {
       cache: "no-store",
       credentials: "same-origin",
       headers: routingHeaders(),
     });
+    if (response.status === 404) {
+      throw new Error(`Background invocation ${invocationId} is no longer available. Check server logs and tool side effects before retrying.`);
+    }
     const result = await jsonResponse(response);
     addEvent("background.poll", result);
     if (result.status === "completed") {
@@ -1043,10 +1067,11 @@ async function pollBackground(invocationId) {
       handleOutput(output.output);
       return output;
     }
-    if (result.status === "failed") throw new Error(result.error || "Background invocation failed");
+    if (result.status === "failed") throw new Error(`Background invocation ${invocationId} failed. ${result.error?.message || result.error || "Check server logs for details."}`);
     setStatus(`Background · ${result.status}`, "busy");
+    // Reduce polling load for long runs without imposing an execution deadline.
+    delay = Math.min(delay * 1.5, 5000);
   }
-  throw new Error("Background invocation did not finish within three minutes.");
 }
 
 async function invokeBackground(payload) {
@@ -1176,7 +1201,7 @@ function renderModels(models) {
   for (const name of available) {
     const option = document.createElement("option");
     option.value = name;
-    option.textContent = name;
+    option.textContent = name === models?.default ? `${name} (project default)` : name;
     option.selected = name === state.model;
     elements.modelSelect.append(option);
   }

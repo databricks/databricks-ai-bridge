@@ -976,6 +976,23 @@ h2 {
   white-space: pre-wrap;
 }
 
+.message.assistant .message-content { white-space: normal; }
+.message.assistant .message-content h1 { font-size: 1.5em; margin: 1em 0 0.5em; }
+.message.assistant .message-content h2 { font-size: 1.25em; margin: 1em 0 0.5em; }
+.message.assistant .message-content h3 { font-size: 1.1em; margin: 1em 0 0.5em; }
+.message.assistant .message-content > :first-child { margin-top: 0; }
+.message.assistant .message-content > :last-child { margin-bottom: 0; }
+.message.assistant .message-content pre {
+  white-space: pre;
+  overflow-x: auto;
+  padding: 12px;
+  background: var(--surface-muted);
+  border-radius: var(--radius-small);
+}
+.message.assistant .message-content code { font-family: "SFMono-Regular", Consolas, monospace; }
+.message.assistant .message-content table { display: block; overflow-x: auto; border-collapse: collapse; }
+.message.assistant .message-content :is(th, td) { padding: 6px 10px; border: 1px solid var(--line); }
+
 .message.tool .message-content,
 .message.system .message-content {
   padding: 10px 13px;

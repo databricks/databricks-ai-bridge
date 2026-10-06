@@ -116,6 +116,7 @@ def test_cleanup_deletes_stores_runtime_app_and_matching_lakebase_role(
             "--yes",
         ],
         [str(runner.agentbricks), "sessions", "stores", "delete", "test-session-store", "--yes"],
+        ["databricks", "api", "delete", f"/api/2.0/agents/runtime-stores/{app}"],
         ["databricks", "apps", "delete", app],
         [
             "databricks",
@@ -151,6 +152,76 @@ def test_cleanup_keeps_role_when_store_deletion_fails(tmp_path: pathlib.Path, mo
 
     assert ["databricks", "apps", "delete", app] in commands
     assert not any("delete-role" in command for command in commands)
+
+
+def test_cleanup_keeps_role_when_runtime_store_deletion_fails(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    wheel = tmp_path / "agentbricks.whl"
+    wheel.write_bytes(b"wheel")
+    runner = Runner(None, tmp_path, wheel)
+    app = "agent-bricks-t-la-cl-123456"
+    runner.apps.append(app)
+    runner.cases.append(
+        ProjectCase("langgraph", "cli", tmp_path, app, memory_store_name="memory-stores/owned")
+    )
+    monkeypatch.setattr(
+        runner, "_app_role_target", lambda name: "projects/test/branches/test/roles/sp"
+    )
+    monkeypatch.setattr(runner, "_wait_for_app_deleted", lambda name, **kwargs: None)
+    commands = []
+
+    def fake_run(argv, **kwargs):
+        commands.append(list(argv))
+        failed = subprocess.CompletedProcess(argv, 1, "", "409 Conflict: resource is in use")
+        if argv[:2] == ["databricks", "api"]:
+            return failed
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(runner, "run", fake_run)
+
+    runner.cleanup()
+
+    assert ["databricks", "apps", "delete", app] in commands
+    assert not any("delete-role" in command for command in commands)
+    assert {
+        "resource": f"runtime-store:{app}",
+        "status": "failed",
+        "detail": "409 Conflict: resource is in use",
+    } in runner.cleanup_results
+    assert runner.cleanup_complete is False
+
+
+def test_cleanup_treats_missing_runtime_store_as_deleted(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    wheel = tmp_path / "agentbricks.whl"
+    wheel.write_bytes(b"wheel")
+    runner = Runner(None, tmp_path, wheel)
+    app = "agent-bricks-t-la-cl-123456"
+    runner.apps.append(app)
+    runner.cases.append(
+        ProjectCase("langgraph", "cli", tmp_path, app, memory_store_name="memory-stores/owned")
+    )
+    monkeypatch.setattr(
+        runner, "_app_role_target", lambda name: "projects/test/branches/test/roles/sp"
+    )
+    monkeypatch.setattr(runner, "_wait_for_app_deleted", lambda name, **kwargs: None)
+    commands = []
+
+    def fake_run(argv, **kwargs):
+        commands.append(list(argv))
+        if argv[:2] == ["databricks", "api"]:
+            return subprocess.CompletedProcess(argv, 1, "", "Error: 404 Not Found")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(runner, "run", fake_run)
+
+    runner.cleanup()
+
+    assert any("delete-role" in command for command in commands)
+    assert {"resource": f"runtime-store:{app}", "status": "deleted"} in runner.cleanup_results
+    assert runner.cleanup_complete is True
 
 
 def test_role_lookup_rejects_other_app_owner(tmp_path: pathlib.Path, monkeypatch) -> None:
