@@ -45,7 +45,7 @@ def test_plan_maps_only_explicit_app_auth_resources_to_least_privilege():
                 "sandbox",
                 scopes=[
                     Scope.volume("main.data.files"),
-                    Scope.workspace("/Workspace/Shared/input", "read_write"),
+                    Scope.volume("main.data.input", "read_write"),
                 ],
             ),
             ToolSpec.mcp("search", service="supervisor_agent.tools.search"),
@@ -65,6 +65,7 @@ def test_plan_maps_only_explicit_app_auth_resources_to_least_privilege():
     assert uc_resources == {
         ("supervisor_agent.tools.search", "FUNCTION", "EXECUTE"),
         ("main.data.files", "VOLUME", "READ_VOLUME"),
+        ("main.data.input", "VOLUME", "WRITE_VOLUME"),
     }
     assert [
         resource["genie_space"] for resource in plan.app_resources if "genie_space" in resource
@@ -74,12 +75,7 @@ def test_plan_maps_only_explicit_app_auth_resources_to_least_privilege():
         UcGrant(SecurableType.SCHEMA, "supervisor_agent.tools", Privilege.USE_SCHEMA),
         UcGrant("MCP_SERVICE", "supervisor_agent.tools.search", Privilege.EXECUTE),
     }
-    assert plan.workspace_grants == (
-        WorkspaceGrant(
-            path="/Workspace/Shared/input",
-            permission=WorkspaceObjectPermissionLevel.CAN_EDIT,
-        ),
-    )
+    assert plan.workspace_grants == ()
     assert all(
         re.fullmatch(r"agentbricks-tool-[0-9a-f]{13}", r["name"]) for r in plan.app_resources
     )
@@ -91,14 +87,12 @@ def test_plan_deduplicates_targets_and_keeps_strongest_permission():
             "read",
             scopes=[
                 Scope.volume("main.data.files"),
-                Scope.workspace("/Workspace/Shared/input"),
             ],
         ),
         ToolSpec.sandbox(
             "write",
             scopes=[
                 Scope.volume("main.data.files", "read_write"),
-                Scope.workspace("/Workspace/Shared/input", "read_write"),
             ],
         ),
     ]
@@ -113,12 +107,7 @@ def test_plan_deduplicates_targets_and_keeps_strongest_permission():
         if "uc_securable" in resource
     } == {"WRITE_VOLUME"}
     assert len(first.app_resources) == 1
-    assert first.workspace_grants == (
-        WorkspaceGrant(
-            path="/Workspace/Shared/input",
-            permission=WorkspaceObjectPermissionLevel.CAN_EDIT,
-        ),
-    )
+    assert first.workspace_grants == ()
     assert first.uc_grants == ()
 
 
@@ -408,14 +397,15 @@ def test_reconcile_tool_access_applies_apps_uc_and_workspace_in_order(monkeypatc
         "_ensure_workspace_grant",
         lambda client, principal, grant: events.append(("workspace", principal, grant)),
     )
-    plan = plan_tool_access(
-        [
-            ToolSpec.mcp("search", service="supervisor_agent.tools.search"),
-            ToolSpec.sandbox(
-                "sandbox",
-                scopes=[Scope.workspace("/Workspace/Shared/input")],
-            ),
-        ]
+    plan = ta.ToolAccessPlan(
+        uc_grants=(
+            UcGrant(SecurableType.CATALOG, "supervisor_agent", Privilege.USE_CATALOG),
+            UcGrant(SecurableType.SCHEMA, "supervisor_agent.tools", Privilege.USE_SCHEMA),
+            UcGrant("MCP_SERVICE", "supervisor_agent.tools.search", Privilege.EXECUTE),
+        ),
+        workspace_grants=(
+            WorkspaceGrant("/Workspace/Shared/input", WorkspaceObjectPermissionLevel.CAN_READ),
+        ),
     )
 
     assert reconcile_tool_access(Mock(), "app", "app-sp", plan, "prof") == plan
@@ -444,14 +434,15 @@ def test_reconcile_tool_access_additive_failure_does_not_replace_apps_resources(
 
     monkeypatch.setattr(ta, "_ensure_uc_grant", ensure_uc)
     monkeypatch.setattr(ta, "_ensure_workspace_grant", ensure_workspace)
-    plan = plan_tool_access(
-        [
-            ToolSpec.mcp("search", service="supervisor_agent.tools.search"),
-            ToolSpec.sandbox(
-                "sandbox",
-                scopes=[Scope.workspace("/Workspace/Shared/input")],
-            ),
-        ]
+    plan = ta.ToolAccessPlan(
+        uc_grants=(
+            UcGrant(SecurableType.CATALOG, "supervisor_agent", Privilege.USE_CATALOG),
+            UcGrant(SecurableType.SCHEMA, "supervisor_agent.tools", Privilege.USE_SCHEMA),
+            UcGrant("MCP_SERVICE", "supervisor_agent.tools.search", Privilege.EXECUTE),
+        ),
+        workspace_grants=(
+            WorkspaceGrant("/Workspace/Shared/input", WorkspaceObjectPermissionLevel.CAN_READ),
+        ),
     )
 
     with pytest.raises(AgentCliError, match="grant failed"):

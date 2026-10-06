@@ -45,18 +45,14 @@ def _parse_scopes(scopes: Sequence[str], permission: str) -> dict[str, list[dict
     """Convert CLI scope values to the MCP ``_meta.downscope`` wire shape."""
     parsed: dict[str, list[dict[str, str]]] = {
         "volumes": [],
-        "workspace_paths": [],
     }
     seen: set[tuple[str, str]] = set()
 
     for original in scopes:
         scope = Scope.parse(original, permission)
-        key, field = (
-            ("workspace_paths", "path") if scope.kind == "workspace" else ("volumes", "name")
-        )
-        identity = (key, scope.value)
+        identity = (scope.kind, scope.value)
         if identity not in seen:
-            parsed[key].append({field: scope.value, "permission": scope.permission})
+            parsed["volumes"].append({"name": scope.value, "permission": scope.permission})
             seen.add(identity)
 
     return {key: values for key, values in parsed.items() if values}
@@ -373,7 +369,6 @@ def _existing_policy(
 
     expected_fields = {
         "volumes": "name",
-        "workspace_paths": "path",
     }
     if not policy or any(key not in expected_fields for key in policy):
         raise AgentCliError("The existing sandbox downscope has an invalid resource type.")
@@ -386,16 +381,7 @@ def _existing_policy(
                 raise AgentCliError("The existing sandbox downscope has an invalid resource entry.")
             if entry["permission"] not in {"read_only", "read_write"}:
                 raise AgentCliError("The existing sandbox downscope has an invalid permission.")
-            if resource_type == "workspace_paths":
-                path = entry[expected_field]
-                if not path.startswith("/Workspace/") or any(
-                    character in path for character in ("\r", "\n", "\t")
-                ):
-                    raise AgentCliError(
-                        "The existing sandbox downscope has an invalid workspace path."
-                    )
-            else:
-                _validate_uc_name(entry[expected_field], resource_type.removesuffix("s"))
+            _validate_uc_name(entry[expected_field], resource_type.removesuffix("s"))
 
     block_start = source.index(_BEGIN_MARKER)
     block_end = source.index(_END_MARKER) + len(_END_MARKER)
@@ -431,7 +417,7 @@ def _policy_signature(
     policy: dict[str, list[dict[str, str]]],
 ) -> frozenset[tuple[str, str, str]]:
     return frozenset(
-        (resource_type, entry.get("name", entry.get("path", "")), entry.get("permission", ""))
+        (resource_type, entry.get("name", ""), entry.get("permission", ""))
         for resource_type, entries in policy.items()
         for entry in entries
     )
@@ -444,7 +430,7 @@ def _policy_cli_values(
     permissions: set[str] = set()
     for entries in policy.values():
         for entry in entries:
-            value = entry.get("path") or entry.get("name", "")
+            value = entry.get("name", "")
             scopes.append(value)
             permissions.add(entry.get("permission", ""))
     if len(permissions) != 1:
@@ -728,9 +714,7 @@ _SANDBOX_ADAPTERS: dict[AgentFramework, _SandboxAdapter] = {
     "scopes",
     multiple=True,
     required=True,
-    help=(
-        "Allowed volume (catalog.schema.volume) or /Workspace/ path. Repeat for multiple scopes."
-    ),
+    help="Allowed volume (catalog.schema.volume). Repeat for multiple scopes.",
 )
 @click.option(
     "--permission",

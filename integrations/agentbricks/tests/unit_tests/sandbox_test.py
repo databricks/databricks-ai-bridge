@@ -411,7 +411,7 @@ def test_generated_server_overrides_caller_downscope_without_changing_arguments(
     assert server.connection["tool_filter"] == {"allowed_tool_names": ["sandbox", "run_code"]}
 
 
-def test_add_sandbox_supports_workspace_volume_and_read_write_scopes(tmp_path: pathlib.Path):
+def test_add_sandbox_supports_multiple_volumes_and_read_write_scopes(tmp_path: pathlib.Path):
     project, mcps = _project(tmp_path)
 
     result = CliRunner().invoke(
@@ -420,7 +420,7 @@ def test_add_sandbox_supports_workspace_volume_and_read_write_scopes(tmp_path: p
             "--source",
             str(project),
             "--scope",
-            "/Workspace/Users/alice@example.com",
+            "volume:catalog.schema.input",
             "--scope",
             "volume:catalog.schema.files",
             "--permission",
@@ -431,15 +431,15 @@ def test_add_sandbox_supports_workspace_volume_and_read_write_scopes(tmp_path: p
 
     assert result.exit_code == 0, result.output
     generated = mcps.read_text()
-    assert '"workspace_paths": [' in generated
-    assert '"path": "/Workspace/Users/alice@example.com"' in generated
     assert '"volumes": [' in generated
+    assert '"name": "catalog.schema.input"' in generated
     assert '"name": "catalog.schema.files"' in generated
     assert generated.count('"permission": "read_write"') == 2
 
 
-def test_legacy_add_sandbox_preserves_colons_in_workspace_paths(tmp_path):
+def test_legacy_add_sandbox_rejects_workspace_paths_containing_colons_without_writes(tmp_path):
     project, mcps = _project(tmp_path)
+    before = mcps.read_bytes()
 
     result = CliRunner().invoke(
         add_sandbox,
@@ -447,8 +447,9 @@ def test_legacy_add_sandbox_preserves_colons_in_workspace_paths(tmp_path):
         obj=_TextCtx(),
     )
 
-    assert result.exit_code == 0, result.output
-    assert '"path": "/Workspace/Shared/report:2026"' in mcps.read_text()
+    assert result.exit_code != 0
+    assert "Workspace sandbox scopes are not supported" in result.output
+    assert mcps.read_bytes() == before
 
 
 def test_add_sandbox_appends_to_existing_server_list(tmp_path: pathlib.Path):
@@ -615,7 +616,17 @@ def test_add_sandbox_rejects_invalid_scope_without_touching_file(tmp_path: pathl
 
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
 @pytest.mark.parametrize("permission", ["read_only", "read_write"])
-def test_legacy_add_sandbox_rejects_table_scope_without_writes(tmp_path, framework, permission):
+@pytest.mark.parametrize(
+    ("scope", "message"),
+    [
+        ("table:main.data.rows", "Table sandbox scopes are not supported"),
+        ("workspace:/Workspace/Shared", "Workspace sandbox scopes are not supported"),
+        ("/Workspace/Shared", "Workspace sandbox scopes are not supported"),
+    ],
+)
+def test_legacy_add_sandbox_rejects_unsupported_scope_without_writes(
+    tmp_path, framework, permission, scope, message
+):
     if framework == "langgraph":
         project, _, _ = _langgraph_project(tmp_path)
     else:
@@ -630,7 +641,7 @@ def test_legacy_add_sandbox_rejects_table_scope_without_writes(tmp_path, framewo
             "--scope",
             "volume:main.data.files",
             "--scope",
-            "table:main.data.rows",
+            scope,
             "--permission",
             permission,
         ],
@@ -638,7 +649,7 @@ def test_legacy_add_sandbox_rejects_table_scope_without_writes(tmp_path, framewo
     )
 
     assert result.exit_code != 0
-    assert "Table sandbox scopes are not supported" in result.output
+    assert message in result.output
     assert {path: path.read_bytes() for path in project.rglob("*") if path.is_file()} == before
 
 

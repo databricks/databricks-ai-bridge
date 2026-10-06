@@ -141,7 +141,7 @@ def tools() -> None:
 
     \b
       sandbox       Query Unity Catalog data via system.ai.sandbox, scoped
-                    to the volumes or workspace paths you choose.
+                    to the volumes you choose.
       mcp           A Databricks-managed MCP service (see `agentbricks tools list --kind mcp`),
                     e.g. system.ai.web_search.
       uc-function   An existing Unity Catalog function (catalog.schema.function).
@@ -184,7 +184,7 @@ def _source_option(function):
     "scopes",
     multiple=True,
     required=True,
-    help="Allowed volume: or workspace: resource. Repeat for multiple scopes.",
+    help="Allowed volume: resource. Repeat for multiple scopes.",
 )
 @click.option(
     "--permission",

@@ -98,8 +98,15 @@ def _write_manifest(root: pathlib.Path, body: str | None = None) -> pathlib.Path
 
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
 @pytest.mark.parametrize("reader", ["project", "runtime"])
-def test_manifest_rejects_unsupported_table_downscope_without_writes(
-    tmp_path, monkeypatch, framework, reader
+@pytest.mark.parametrize(
+    ("resource", "message"),
+    [
+        ("table:main.data.rows", "Table sandbox scopes are not supported"),
+        ("workspace:/Workspace/Shared", "Workspace sandbox scopes are not supported"),
+    ],
+)
+def test_manifest_rejects_unsupported_downscope_without_writes(
+    tmp_path, monkeypatch, framework, reader, resource, message
 ):
     manifest = _write_manifest(
         tmp_path,
@@ -112,14 +119,14 @@ server = "agentbricks"
 [[tools]]
 id = "sandbox"
 source = {{ kind = "sandbox", service = "system.ai.sandbox" }}
-policy = {{ downscope = [{{ resource = "table:main.data.rows", permission = "read_only" }}] }}
+policy = {{ downscope = [{{ resource = "{resource}", permission = "read_only" }}] }}
 """,
     )
     before = manifest.read_bytes()
     monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
     error_type = AgentCliError if reader == "project" else RuntimeError
 
-    with pytest.raises(error_type, match="Table sandbox scopes are not supported"):
+    with pytest.raises(error_type, match=message):
         if reader == "project":
             AgentProject.load(tmp_path)
         else:
@@ -133,11 +140,17 @@ def test_scope_rejects_unsupported_table_resource():
         Scope(kind="table", value="main.data.rows")
 
 
+def test_scope_rejects_unsupported_workspace_resource():
+    with pytest.raises(AgentCliError, match="Workspace sandbox scopes are not supported"):
+        Scope(kind="workspace", value="/Workspace/Shared")
+
+
 @pytest.mark.parametrize(
     "value", ["/Workspace/Shared/report:2026", "workspace:/Workspace/Shared/report:2026"]
 )
-def test_scope_parse_preserves_colons_in_workspace_paths(value):
-    assert Scope.parse(value) == Scope.workspace("/Workspace/Shared/report:2026")
+def test_scope_parse_rejects_workspace_paths_containing_colons(value):
+    with pytest.raises(AgentCliError, match="Workspace sandbox scopes are not supported"):
+        Scope.parse(value)
 
 
 def test_user_auth_defaults_match_across_cli_and_runtime(tmp_path, monkeypatch):
@@ -267,7 +280,7 @@ server = "agentbricks"
 [[tools]]
 id = "sandbox"
 source = { kind = "sandbox", service = "system.ai.sandbox" }
-policy = { downscope = [{ resource = "workspace:/Workspace/Shared" }] }
+policy = { downscope = [{ resource = "volume:main.data.files" }] }
 """,
     )
 
@@ -289,7 +302,7 @@ server = "agentbricks"
 [[tools]]
 id = "sandbox"
 source = {{ kind = "sandbox", service = "system.ai.sandbox" }}
-policy = {{ downscope = [{{ resource = "workspace:/Workspace/Shared" }}], databricks_access_token_included = {value} }}
+policy = {{ downscope = [{{ resource = "volume:main.data.files" }}], databricks_access_token_included = {value} }}
 """,
     )
 

@@ -213,18 +213,12 @@ def test_scope_update_plan_uses_exact_required_scopes(monkeypatch):
         ),
         (
             ToolSpec.sandbox(
-                "workspace", scopes=[Scope.workspace("/Workspace/Shared")], auth="user"
-            ),
-            {"ai-gateway", "workspace.workspace"},
-        ),
-        (
-            ToolSpec.sandbox(
-                "workspace-no-token",
-                scopes=[Scope.workspace("/Workspace/Shared")],
+                "volume-no-token",
+                scopes=[Scope.volume("cat.sch.vol")],
                 auth="user",
                 databricks_access_token_included=False,
             ),
-            {"ai-gateway"},
+            {"ai-gateway", "files"},
         ),
         (ToolSpec.sandbox("volume", scopes=[Scope.volume("cat.sch.vol")], auth="app"), set()),
     ],

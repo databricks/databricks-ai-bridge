@@ -51,7 +51,7 @@ class UcGrant:
 
 @dataclass(frozen=True)
 class WorkspaceGrant:
-    """One additive Workspace ACL required by an explicit Sandbox path."""
+    """One additive Workspace ACL for an explicit access plan."""
 
     path: str
     permission: WorkspaceObjectPermissionLevel
@@ -106,7 +106,6 @@ def plan_tool_access(tools: Sequence[ToolSpec]) -> ToolAccessPlan:
     app_resources: dict[tuple[str, str], dict[str, Any]] = {}
     genie_names: dict[str, str] = {}
     uc_grants: set[UcGrant] = set()
-    workspace_grants: dict[str, WorkspaceObjectPermissionLevel] = {}
 
     def add_uc_resource(securable_type: str, full_name: str, permission: str) -> None:
         """Keep the strongest requested Apps permission for one UC securable."""
@@ -141,18 +140,6 @@ def plan_tool_access(tools: Sequence[ToolSpec]) -> ToolAccessPlan:
                         "READ_VOLUME" if scope.permission == "read_only" else "WRITE_VOLUME"
                     )
                     add_uc_resource("VOLUME", scope.value, permission)
-                elif scope.kind == "workspace":
-                    permission = (
-                        WorkspaceObjectPermissionLevel.CAN_READ
-                        if scope.permission == "read_only"
-                        else WorkspaceObjectPermissionLevel.CAN_EDIT
-                    )
-                    current = workspace_grants.get(scope.value)
-                    if current is None or (
-                        _WORKSPACE_PERMISSION_STRENGTH[permission]
-                        > _WORKSPACE_PERMISSION_STRENGTH[current]
-                    ):
-                        workspace_grants[scope.value] = permission
 
     for space_id, name in genie_names.items():
         app_resources[("GENIE_SPACE", space_id)] = {
@@ -171,9 +158,6 @@ def plan_tool_access(tools: Sequence[ToolSpec]) -> ToolAccessPlan:
                     grant.privilege.value,
                 ),
             )
-        ),
-        workspace_grants=tuple(
-            WorkspaceGrant(path, workspace_grants[path]) for path in sorted(workspace_grants)
         ),
     )
 
@@ -291,7 +275,7 @@ def _ensure_workspace_grant(client: Any, principal: str, grant: WorkspaceGrant) 
     if status.object_id is None or object_type is None:
         raise AgentCliError(
             f"Workspace object {grant.path!r} cannot be granted automatically.",
-            hint="Sandbox Workspace scopes must resolve to a directory, file, or notebook.",
+            hint="Workspace grants must resolve to a directory, file, or notebook.",
         )
     object_id = str(status.object_id)
     try:

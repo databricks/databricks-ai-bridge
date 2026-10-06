@@ -103,8 +103,17 @@ def test_add_sandbox_only_updates_manifest(tmp_path: pathlib.Path):
 @pytest.mark.parametrize("auth", ["user", "app"])
 @pytest.mark.parametrize("legacy", [False, True])
 @pytest.mark.parametrize("permission", ["read_only", "read_write"])
-def test_add_sandbox_rejects_table_scope_without_project_changes(
-    tmp_path, framework, auth, legacy, permission
+@pytest.mark.parametrize(
+    ("scope", "message"),
+    [
+        ("table:main.data.rows", "Table sandbox scopes are not supported"),
+        ("workspace:/Workspace/Shared", "Workspace sandbox scopes are not supported"),
+        ("/Workspace/Shared", "Workspace sandbox scopes are not supported"),
+        ("/Workspace/Shared/report:2026", "Workspace sandbox scopes are not supported"),
+    ],
+)
+def test_add_sandbox_rejects_unsupported_scope_without_project_changes(
+    tmp_path, framework, auth, legacy, permission, scope, message
 ):
     project = _project(tmp_path, framework)
     before = {path: path.read_bytes() for path in project.rglob("*") if path.is_file()}
@@ -112,7 +121,7 @@ def test_add_sandbox_rejects_table_scope_without_project_changes(
         "--scope",
         "volume:main.data.files",
         "--scope",
-        "table:main.data.rows",
+        scope,
         "--permission",
         permission,
         "--source",
@@ -127,7 +136,7 @@ def test_add_sandbox_rejects_table_scope_without_project_changes(
     result = CliRunner().invoke(command, args, obj=_Ctx())
 
     assert result.exit_code != 0
-    assert "Table sandbox scopes are not supported" in result.output
+    assert message in result.output
     assert {path: path.read_bytes() for path in project.rglob("*") if path.is_file()} == before
 
 
@@ -140,7 +149,7 @@ def test_add_sandbox_can_disable_databricks_token_env(tmp_path: pathlib.Path):
             "add",
             "sandbox",
             "--scope",
-            "workspace:/Workspace/Shared",
+            "volume:main.data.files",
             "--no-databricks-access-token-included",
             "--source",
             str(project),

@@ -180,8 +180,15 @@ def test_tools_local_discovery_without_project_or_auth(run_agentbricks, kind):
 
 
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
-def test_sandbox_table_scope_is_rejected_without_manifest_change(
-    run_agentbricks, tmp_path, framework
+@pytest.mark.parametrize(
+    ("scope", "message"),
+    [
+        ("table:main.data.rows", "Table sandbox scopes are not supported"),
+        ("workspace:/Workspace/Shared", "Workspace sandbox scopes are not supported"),
+    ],
+)
+def test_sandbox_unsupported_scope_is_rejected_without_manifest_change(
+    run_agentbricks, tmp_path, framework, scope, message
 ):
     project = tmp_path / "agent"
     run_agentbricks("init", "--framework", framework, str(project))
@@ -193,14 +200,14 @@ def test_sandbox_table_scope_is_rejected_without_manifest_change(
         "add",
         "sandbox",
         "--scope",
-        "table:main.data.rows",
+        scope,
         "--source",
         str(project),
         check=False,
     )
 
     assert result.returncode != 0
-    assert "Table sandbox scopes are not supported" in result.stderr
+    assert message in result.stderr
     assert manifest.read_bytes() == before
 
 
