@@ -438,39 +438,28 @@ def test_discover_chat_models_keeps_every_model(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_checkpoint_history_reads_messages_and_interrupts(monkeypatch):
-    import agent.agent as agent_module
+    from types import SimpleNamespace
 
-    class Message:
-        id = "message-1"
+    from langchain_core.messages import HumanMessage
 
-        def model_dump(self):
-            return {"type": "human", "content": "saved message"}
+    from databricks_agentkit.langgraph import session_store
 
-    class Snapshot:
-        values = {"messages": [Message()]}
-        tasks = [
-            type(
-                "Task",
-                (),
-                {"interrupts": [_FakeInterrupt({"approval": True}, "int-1")]},
-            )()
-        ]
+    message = HumanMessage(content="saved message", id="message-1")
 
-    class FakeAgent:
-        async def aget_state(self, config):
+    class Saver:
+        async def aget_tuple(self, config):
             assert config == {
                 "configurable": {
                     "thread_id": "saved-session",
                     "actor_id": "alice",
                 }
             }
-            return Snapshot()
+            return SimpleNamespace(
+                checkpoint={"channel_values": {"messages": [message]}},
+                pending_writes=[("task", "__interrupt__", [_FakeInterrupt({"approval": True}, "int-1")])],
+            )
 
-    async def fake_create_agent_graph(actor):
-        assert actor == "alice"
-        return FakeAgent()
-
-    monkeypatch.setattr(agent_module, "create_agent_graph", fake_create_agent_graph)
+    monkeypatch.setattr(session_store, "checkpointer", lambda: Saver())
     result = await ui._checkpoint_history("saved-session", "alice")
 
     assert result == {
@@ -478,7 +467,7 @@ async def test_checkpoint_history_reads_messages_and_interrupts(monkeypatch):
         "session_items": [
             {
                 "item_id": "message-1",
-                "data": {"type": "human", "content": "saved message"},
+                "data": message.model_dump(),
             }
         ],
         "interrupts": [{"id": "int-1", "value": {"approval": True}}],
