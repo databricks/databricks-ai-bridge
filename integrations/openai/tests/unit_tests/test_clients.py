@@ -604,6 +604,26 @@ class TestAppsRouting:
             client.responses.create(model="apps/my-agent", input=[{"role": "user", "content": "2"}])
             assert mock_workspace_client_with_oauth.apps.get.call_count == 1
 
+    @pytest.mark.parametrize("client_cls", [DatabricksOpenAI, AsyncDatabricksOpenAI])
+    def test_app_client_inherits_client_options(self, mock_workspace_client_with_oauth, client_cls):
+        client = client_cls(
+            workspace_client=mock_workspace_client_with_oauth,
+            timeout=1234.0,
+            max_retries=7,
+            default_headers={"X-Custom-Header": "value"},
+            default_query={"custom-param": "value"},
+            follow_redirects=False,
+        )
+
+        app_client = client.responses._get_app_client("my-agent")
+
+        assert str(app_client.base_url).startswith("https://my-app.aws.databricksapps.com")
+        assert app_client.timeout == 1234.0
+        assert app_client.max_retries == 7
+        assert app_client.default_headers["X-Custom-Header"] == "value"
+        assert app_client.default_query == {"custom-param": "value"}
+        assert app_client._client.follow_redirects is False
+
     def test_sync_responses_validates_oauth_for_apps_prefix(self, mock_workspace_client_no_oauth):
         client = DatabricksOpenAI(workspace_client=mock_workspace_client_no_oauth)
         with pytest.raises(ValueError, match="OAuth authentication"):
