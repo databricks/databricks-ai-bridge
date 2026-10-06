@@ -444,6 +444,22 @@ agentbricks deploy my-agent
 
 Memory and session stores are independent resources: deleting one never affects the other.
 
+## Model services
+
+Point each of the agent's LLM calls at a Unity Catalog AI Gateway model service you own, and the
+model behind it can change without a code change or redeploy. A one-model agent binds one service;
+a compound agent binds one per call site, each under a role:
+
+```sh
+agentbricks models bind main.my_agent.router_llm --role router --default system.ai.claude-haiku-4-5
+agentbricks models bind main.my_agent.writer_llm --role writer --default system.ai.claude-sonnet-4-5
+agentbricks deploy my-agent      # creates the services and grants the app EXECUTE on them
+agentbricks models set claude-sonnet-4-5 --role router   # switch one role's model, no redeploy
+```
+
+Each LLM call uses its role's service through `resolve_model_service("<role>")`, which reads the
+`AGENT_MODEL_SERVICE_<ROLE>` env var that deploy sets.
+
 ## Commands
 
 For the full command reference - every command, subcommand, argument, and option, in table form -
@@ -483,6 +499,10 @@ agentbricks [-p <profile>] [-o text|json]
     list             [--kind sandbox|mcp|uc-function|genie-one|genie-agent]
                      [--schema CATALOG.SCHEMA]
     remove           TOOL_ID [MCP_SERVICE] [--source PATH]
+  models
+    bind       SERVICE [--role ROLE] [--default MODEL] [--source PATH]
+    unbind | list | status
+    set        MODEL [--role ROLE] [--yes]
   deploy       [<name>] [--source PATH] [--instances N]
   deployments  list | get | logs | start | stop | delete
   endpoint

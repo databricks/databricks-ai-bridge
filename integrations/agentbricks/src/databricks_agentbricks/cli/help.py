@@ -19,6 +19,7 @@ _COMMAND_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("SETUP", ("login", "logout", "init", "doctor")),
     ("DEVELOP", ("dev", "tools", "memory", "sessions", "tracing")),
     ("SHIP", ("deploy", "deployments")),
+    ("IMPROVE", ("models",)),
 )
 
 # Each example is either a bare command, or a (command, comment) pair. The comment is a short gloss
@@ -287,6 +288,35 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("agentbricks tracing bind --experiment-id 12345", "or by experiment id"),
     ),
     ("tracing", "unbind"): (("agentbricks tracing unbind", "turn tracing off"),),
+    ("models",): (
+        (
+            "agentbricks models bind main.my_agent.llm --default system.ai.claude-sonnet-4-5",
+            "call a model service you own (deploy creates it)",
+        ),
+        ("agentbricks models status", "each role's model service and the model behind it"),
+        ("agentbricks models set claude-haiku-4-5", "switch the model, no redeploy"),
+    ),
+    ("models", "bind"): (
+        (
+            "agentbricks models bind main.my_agent.llm --default system.ai.claude-sonnet-4-5",
+            "declare the agent's model service in agent.toml",
+        ),
+        (
+            "agentbricks models bind main.my_agent.router_llm --role router "
+            "--default system.ai.claude-haiku-4-5",
+            "one service per LLM call in a compound agent",
+        ),
+    ),
+    ("models", "unbind"): (
+        ("agentbricks models unbind", "remove the agent's only binding"),
+        ("agentbricks models unbind --role router", "remove one role's binding"),
+    ),
+    ("models", "list"): (("agentbricks models list", "models you can route a service to"),),
+    ("models", "status"): (("agentbricks models status", "each role's model service and model"),),
+    ("models", "set"): (
+        ("agentbricks models set system.ai.claude-haiku-4-5", "switch the model by name"),
+        ("agentbricks models set claude-haiku-4-5 --role router", "switch one role's model"),
+    ),
     ("tracing", "list"): (
         (
             "agentbricks tracing list --experiment-name /Shared/agentbricks_traces/my-agent",
