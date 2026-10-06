@@ -1,0 +1,42 @@
+[
+  {
+    "pr": 681,
+    "path": "review-videos/pr-681/681-markdown-and-modes.mp4",
+    "title": "Markdown and invocation modes \u2014 before/after",
+    "description": "1:48. Main baseline at 0:00; OpenAI after at 0:36; LangGraph after at 1:12. Local model fixtures through the actual generated apps/runtime: all modes, Copy, controlled history, failures, and model override with a local tool roundtrip.",
+    "size": 3284713,
+    "sha256": "ba3e73b14b5c7d1e80e5123e7c7d6debbc0033edd54312e23ff4bc74f910dadd"
+  },
+  {
+    "pr": 681,
+    "path": "review-videos/pr-681/681-live-opus-before-after.mp4",
+    "title": "Live Opus 5.5 \u2014 before/after",
+    "description": "2:30. Real ml-inference-staging models: LangGraph main baseline at 0:00, OpenAI after at 0:45, LangGraph after at 1:39. All three modes, Markdown and exact code, codeword continuity after switching models, and real encrypted reasoning kept outside chat. The reproduced baseline issues are duplicated output and invocation failures; the original visible-ciphertext symptom did not recur.",
+    "size": 4016170,
+    "sha256": "00b97043719bb4145275abe7699580137369af0f76f7bb8dcf40aaac0bd83163"
+  },
+  {
+    "pr": 681,
+    "path": "review-videos/pr-681/681-background-185-seconds.mp4",
+    "title": "Background invocation beyond three minutes",
+    "description": "3:17, uncut. Local model fixture with a real 185-second delay; still active at 181 seconds, then one final answer. Polling backs off to five seconds, with 41 polls over approximately 191 seconds.",
+    "size": 1340397,
+    "sha256": "955ce1da569a795d65b8fac521dc6dfdf07ba62ea397b8fea14f5a77c038dee6"
+  },
+  {
+    "pr": 681,
+    "path": "review-videos/pr-681/681-error-handling.mp4",
+    "title": "HTTP/network failures and disconnected streams",
+    "description": "0:59. Controlled browser-response fixtures in OpenAI then LangGraph: 404, 503, network failure, and premature SSE closure. Waiting stops and the composer becomes usable again.",
+    "size": 1259951,
+    "sha256": "7e3e7c3f1fb35ca41b4152ad46a204929379416d92cb5ad824bda936a78e77b3"
+  },
+  {
+    "pr": 687,
+    "path": "review-videos/pr-687/pr687-docs-and-cli-verification.mp4",
+    "title": "Inspection/cleanup tables and CLI verification",
+    "description": "1:29. Rendered README at 5bcc0436; actual doctor runs pass 7/7 for both frameworks, deletion help commands succeed, and 14 mocked cleanup/confirmation tests pass. No live cloud resources are deleted.",
+    "size": 1852223,
+    "sha256": "88c9b1c720b485b832af1d99e0cc0a27d7408ef61055e7e8ed35939ee92478ad"
+  }
+]
