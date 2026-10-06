@@ -114,6 +114,7 @@ jobs:
   cut:
     if: ${{ !inputs.dry_run }}
     needs: plan
+    # The org IP allow list rejects pushes from GitHub-hosted runners; protected runners are allow-listed.
     runs-on:
       group: databricks-protected-runner-group
       labels: linux-ubuntu-latest
@@ -268,6 +269,7 @@ jobs:
 
   tag:
     needs: [plan, cut, unit_tests, framework_tests, functional_tests]
+    # Pushes the tag and bump branch, so it needs an allow-listed protected runner like `cut`.
     runs-on:
       group: databricks-protected-runner-group
       labels: linux-ubuntu-latest

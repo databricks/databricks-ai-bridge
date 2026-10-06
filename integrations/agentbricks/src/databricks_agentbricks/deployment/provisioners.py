@@ -8,7 +8,7 @@ single provisioner instance safe to reuse for successive deploys.
 The contexts passed to phases are immutable data, split small on purpose (no kitchen-sink object,
 no methods, no collaborators): :class:`ProjectContext` is the deploy identity and
 :class:`ResourceContext` adds the bindings read from ``agent.toml`` plus whether the app pre-existed
-this deploy. The shared Apps client caches service-principal lookups needed by grant phases.
+this deploy. The deploy service passes resolved identities explicitly to store grant phases.
 
 The module also holds :class:`AppProvisioner`, which owns the deployed app itself and is deliberately
 separate from the typed resource provisioners.
@@ -19,13 +19,24 @@ from __future__ import annotations
 import pathlib
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import timedelta
 from types import MappingProxyType
 from typing import Optional
+
+from databricks.sdk.errors import DatabricksError
+from databricks.sdk.service.apps import App
 
 import databricks_agentbricks.clients.legacy_runtime_store as legacy_runtime_store
 import databricks_agentbricks.clients.managed_runtime_store as managed_runtime_store
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
 from databricks_agentbricks.clients.apps_client import AppsClient
+from databricks_agentbricks.clients.apps_user_auth_client import (
+    AppAuthPlan,
+    AppsUserAuthClient,
+    AppUserScopeUpdatePlan,
+    validate_app_user_scope_drift,
+    wait_for_app_user_scopes,
+)
 from databricks_agentbricks.clients.conversation_store_client import (
     MemoryStoreClient,
     SessionStoreClient,
@@ -94,6 +105,7 @@ class MemoryStoreState:
 
     store_name: Optional[str]
     manifest: ManifestPatch
+    resource_name: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -102,6 +114,7 @@ class SessionStoreState:
 
     store_name: Optional[str]
     manifest: ManifestPatch
+    resource_name: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -164,10 +177,14 @@ class MemoryStoreProvisioner:
         env: dict[str, str] = {}
         if result.store_id:
             env[MEMORY_STORE_ENV] = result.store_id
-        return MemoryStoreState(store_name=store_name, manifest=ManifestPatch(env=env))
+        return MemoryStoreState(
+            store_name=store_name,
+            manifest=ManifestPatch(env=env),
+            resource_name=result.resource_name,
+        )
 
-    def grant(self, ctx: ResourceContext, state: MemoryStoreState) -> GrantOutcome:
-        """Grant the app's service principal read/write on the memory store (best-effort).
+    def grant(self, state: MemoryStoreState, service_principal_id: Optional[str]) -> GrantOutcome:
+        """Grant a resolved service principal access to the resolved memory store (best-effort).
 
         Goes through the managed store API, so the store service performs the underlying Lakebase grant
         - no store ownership or Lakebase MANAGE required of the deployer. A failure is recorded, not
@@ -175,8 +192,17 @@ class MemoryStoreProvisioner:
         """
         if not state.store_name:
             return GrantOutcome.skipped()
+        if not service_principal_id:
+            return GrantOutcome(
+                attempted=True, error="could not resolve the app's service principal."
+            )
+        if not state.resource_name:
+            return GrantOutcome(
+                attempted=True,
+                error=f"memory store {state.store_name!r} did not return a resource identifier.",
+            )
         with self._reporter.status("Granting the app access to its memory store…"):
-            error = self._memory_store_client.grant(ctx.project.name, state.store_name)
+            error = self._memory_store_client.grant(state.resource_name, service_principal_id)
         return GrantOutcome(attempted=True, error=error)
 
 
@@ -203,18 +229,27 @@ class SessionStoreProvisioner:
         return SessionStoreState(
             store_name=store_name,
             manifest=ManifestPatch(env={SESSION_STORE_ENV: store_name}),
+            resource_name=result.store_name,
         )
 
-    def grant(self, ctx: ResourceContext, state: SessionStoreState) -> GrantOutcome:
-        """Grant the app's service principal read/write on the session store (best-effort).
+    def grant(self, state: SessionStoreState, service_principal_id: Optional[str]) -> GrantOutcome:
+        """Grant a resolved service principal access to the resolved session store (best-effort).
 
-        Same managed-store-API path and best-effort contract as the memory grant; the service principal
-        is resolved once and cached in ``AppsClient``, so this and the memory grant share the one lookup.
+        Same managed-store-API path and best-effort contract as the memory grant.
         """
         if not state.store_name:
             return GrantOutcome.skipped()
+        if not service_principal_id:
+            return GrantOutcome(
+                attempted=True, error="could not resolve the app's service principal."
+            )
+        if not state.resource_name:
+            return GrantOutcome(
+                attempted=True,
+                error=f"session store {state.store_name!r} did not return a resource identifier.",
+            )
         with self._reporter.status("Granting the app access to its session store…"):
-            error = self._session_store_client.grant(ctx.project.name, state.store_name)
+            error = self._session_store_client.grant(state.resource_name, service_principal_id)
         return GrantOutcome(attempted=True, error=error)
 
 
@@ -407,53 +442,108 @@ class AppProvisioner:
     provisioners.
 
     Like the rest of the services layer it talks to the terminal only through the injected
-    :class:`Reporter`; it shells out through the injected ``AppsClient`` and opens a workspace
-    client only through the explicit per-command ``ApiClientProvider``.
+    :class:`Reporter`. Non-auth Apps use the injected CLI-backed ``AppsClient``; request-user Apps
+    use the SDK-backed scope plan so creation and masked updates retain the required scopes.
     """
 
     def __init__(
         self,
         apps_client: AppsClient,
         api_client_provider: ApiClientProvider,
+        apps_user_auth_client: AppsUserAuthClient,
         reporter: Reporter,
     ) -> None:
         self._apps_client = apps_client
         self._api_client_provider = api_client_provider
+        self._apps_user_auth_client = apps_user_auth_client
         self._reporter = reporter
+
+    def prepare_app_auth(
+        self,
+        name: DeploymentName,
+        project: Optional[AgentProject],
+        *,
+        allow_existing_app_update: bool,
+    ) -> AppAuthPlan:
+        """Validate request-user requirements and read App scopes before any deployment mutation."""
+        return self._apps_user_auth_client.plan_user_auth(
+            name, project, allow_existing_app_update=allow_existing_app_update
+        )
+
+    @staticmethod
+    def _reconcile_scoped_app(plan: AppUserScopeUpdatePlan, instance_count: Optional[int]) -> None:
+        """Create or update a request-user App with only the required scopes and explicit scale.
+
+        The SDK path is necessary for scoped creation. Existing Apps receive a masked update that
+        preserves unrelated settings; known scope drift fails before that update. Apps has no
+        compare-and-swap contract, so owners must still coordinate concurrent changes.
+        """
+        if not set(plan.existing_scopes or ()).issubset(plan.scopes):
+            raise AgentCliError(
+                "Automatic removal of Apps user scopes is unsupported.",
+                hint="Remove scopes explicitly in Databricks Apps and verify the effective scopes. "
+                "The SDK omits empty lists when serializing App; no removal was sent.",
+            )
+        desired = App(
+            name=plan.name,
+            user_api_scopes=list(plan.scopes),
+            forward_user_access_token=True if plan.existing_scopes is None else None,
+        )
+        if instance_count is not None:
+            desired.compute_min_instances = instance_count
+            desired.compute_max_instances = instance_count
+        try:
+            if plan.existing_scopes is None:
+                plan.apps.create(desired)
+            else:
+                validate_app_user_scope_drift(plan)
+                mask = []
+                if plan.scopes != plan.existing_scopes:
+                    mask.append("user_api_scopes")
+                if instance_count is not None:
+                    mask.extend(("compute_min_instances", "compute_max_instances"))
+                if mask:
+                    plan.apps.create_update(
+                        plan.name, update_mask=",".join(mask), app=desired
+                    ).result(timeout=timedelta(minutes=5))
+        except (DatabricksError, TimeoutError) as exc:
+            raise AgentCliError(f"Could not reconcile Apps user scopes for '{plan.name}'.") from exc
+        wait_for_app_user_scopes(plan)
 
     def ensure_app_ready(
         self,
         ctx: ResourceContext,
         *,
-        app_reconciled_by_auth: bool,
+        auth_plan: AppAuthPlan,
         instance_count: Optional[int],
     ) -> None:
-        """Ensure the App exists, apply an explicit scale, and wait for ACTIVE compute.
+        """Own App creation, optional scale and scope updates, and ACTIVE-compute readiness.
 
-        Request-user auth may already have created or updated the App through the SDK; the explicit
-        boolean prevents a duplicate CLI mutation without leaking the SDK update plan into this
-        collaborator. An omitted instance count preserves an existing App's scale.
+        A request-user App takes the SDK path for scoped creation or masked update; other Apps use
+        the CLI. An omitted instance count preserves an existing App's scale on either path.
         """
         name = ctx.project.name
         deployment_exists = ctx.deployment_exists
-        #    `apps create` itself blocks for minutes (it provisions and waits for compute) and we capture
-        #    its output to relabel "App compute" → "Agent compute", so nothing streams meanwhile. Wrap it
-        #    in progress (persistent line + spinner) so the CLI isn't silent for the whole provision.
-        if not app_reconciled_by_auth and not deployment_exists:
+        # `apps create` blocks for minutes, so show progress while captured output is unavailable.
+        if auth_plan.scope_update is not None:
+            if auth_plan.scope_update.name != name:
+                raise AgentCliError("App auth plan does not match the deployment being prepared.")
+            with self._reporter.progress(
+                "Configuring the agent's request-user access (this can take a few minutes)…"
+            ):
+                self._reconcile_scoped_app(auth_plan.scope_update, instance_count)
+        elif not deployment_exists:
             with self._reporter.progress(
                 "Creating the agent and starting its compute (this can take a few minutes)…"
             ):
                 out = self._apps_client.create(name, instance_count)
             old, new = _AGENT_COMPUTE_OUTPUT
             self._reporter.echo(out.replace(old, new), add_newline=False)
-        # Preserve an existing App's scale when --instances was omitted. Request-user auth already
-        # applied an explicit count as part of its SDK update.
-        elif not app_reconciled_by_auth and instance_count is not None:
+        elif instance_count is not None:
             out = self._apps_client.create_update_instances(name, instance_count)
             old, new = _AGENT_COMPUTE_OUTPUT
             self._reporter.echo(out.replace(old, new), add_newline=False)
-        # `apps deploy` requires the app's compute to be ACTIVE — a just-created app may still be
-        # starting, and an existing one may be STOPPED — so wait either way. Returns immediately when
+        # `apps deploy` requires ACTIVE compute, whether the App is new or was previously stopped.
         with self._reporter.progress(
             "Waiting for agent compute to start (this can take a few minutes)…"
         ):

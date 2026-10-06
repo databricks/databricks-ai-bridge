@@ -993,6 +993,9 @@ h2 {
 .message.assistant .message-content table { display: block; overflow-x: auto; border-collapse: collapse; }
 .message.assistant .message-content :is(th, td) { padding: 6px 10px; border: 1px solid var(--line); }
 
+.message-reasoning { margin-bottom: 12px; color: var(--ink-soft); }
+.message-reasoning summary { cursor: pointer; }
+
 .message.tool .message-content,
 .message.system .message-content {
   padding: 10px 13px;
@@ -1011,7 +1014,7 @@ h2 {
   color: var(--danger);
 }
 
-.message.streaming .message-content::after {
+.message.streaming > .message-content::after {
   content: "";
   display: inline-block;
   width: 7px;

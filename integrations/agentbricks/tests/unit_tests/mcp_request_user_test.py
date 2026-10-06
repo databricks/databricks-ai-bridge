@@ -193,14 +193,12 @@ def test_sandbox_metadata_protects_token_env_policy_for_both_identities(adapter,
         "sandbox",
         "sandbox",
         downscope=(
-            SimpleNamespace(kind="workspace", value="/Workspace/Shared", permission="read_only"),
+            SimpleNamespace(kind="volume", value="main.data.files", permission="read_only"),
         ),
         databricks_access_token_included=True,
     )
     expected_meta = {
-        "downscope": {
-            "workspace_paths": [{"path": "/Workspace/Shared", "permission": "read_only"}]
-        },
+        "downscope": {"volumes": [{"name": "main.data.files", "permission": "read_only"}]},
         "databricks_access_token_included": True,
     }
     server = adapter._server_from_tool(sandbox, workspace_client_for=resolver)

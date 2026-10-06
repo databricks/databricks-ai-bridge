@@ -1,6 +1,6 @@
 """Managed conversation-store clients for memory and session stores.
 
-Both use the same API client provider, Apps service-principal lookup, and error mapping.
+Both use the same API client provider and error mapping.
 Deployment-specific Runtime Store coordination lives in ``deployment.provisioners``.
 """
 
@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
-from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.errors import AgentCliError
 
 _MEMORY_STORE_PAGE_SIZE = 100  # the memory-stores list API caps page_size at 100
@@ -35,6 +34,7 @@ class MemoryStoreReconcileResult:
     """Facts produced while reconciling a memory store."""
 
     store_id: Optional[str]
+    resource_name: Optional[str]
     created: bool
 
 
@@ -42,6 +42,7 @@ class MemoryStoreReconcileResult:
 class SessionStoreReconcileResult:
     """Facts produced while reconciling a session store."""
 
+    store_name: str
     created: bool
 
 
@@ -73,15 +74,12 @@ def _store_access_error(name: str, kind: str) -> AgentCliError:
 class MemoryStoreClient:
     """Provisions and grants access to the memory store declared in agent.toml.
 
-    Holds its connections - the per-command API client provider, invoked lazily on first use,
-    and the apps client the grant resolves the app's service principal through - so its methods
-    take only resource names, and a single instance is injected into the deploy service and
-    driven by ``MemoryStoreProvisioner``.
+    Holds the per-command API client provider, invoked lazily on first use. The deployment
+    workflow supplies the App identity and reconciled store resource name to ``grant``.
     """
 
-    def __init__(self, api_client_provider: ApiClientProvider, apps_client: AppsClient) -> None:
+    def __init__(self, api_client_provider: ApiClientProvider) -> None:
         self._api_client_provider = api_client_provider
-        self._apps = apps_client
 
     def resolve(self, display_name: str) -> Optional[dict]:
         """Find the memory store by display name, paging through the list, or None if none matches.
@@ -120,34 +118,32 @@ class MemoryStoreClient:
         return store, False
 
     def reconcile(self, display_name: str) -> MemoryStoreReconcileResult:
-        """Create the declared memory store if absent and return its id plus creation status.
+        """Create the declared memory store if absent and return its identifiers and status.
 
         `agentbricks deploy` is the only verb that provisions stores. It reconciles to the name declared
         in agent.toml (by `agentbricks init` or `agentbricks memory bind`) - never inventing a name and
         never writing bindings back into the manifest. Presentation belongs to the provisioner; this
-        client returns facts only. The bare id lets the caller wire AGENT_MEMORY_STORE (the entries
-        API is keyed by id, not display name).
+        client returns facts only. The bare id wires AGENT_MEMORY_STORE (the entries API is keyed
+        by id), while the full resource name is retained for the later grant.
         """
         resolved, created = self.ensure(display_name)
-        store_id = (_field(resolved, "name") or "").split("/", 1)[-1] or None
-        return MemoryStoreReconcileResult(store_id=store_id, created=created)
+        resource_name = _field(resolved, "name") or None
+        store_id = resource_name.split("/", 1)[-1] if resource_name else None
+        return MemoryStoreReconcileResult(
+            store_id=store_id, resource_name=resource_name, created=created
+        )
 
-    def grant(self, app_name: str, store_name: str) -> Optional[str]:
-        """Grant the app's service principal read/write on the memory store; return any error hint.
+    def grant(self, resource_name: str, service_principal_id: str) -> Optional[str]:
+        """Grant a service principal read/write on a resolved memory store.
 
-        Resolves the service principal itself, through the injected apps client. Goes through the
-        managed store API, so the store service owns the SP's Lakebase role and runs the GRANT
-        itself - no store ownership or Lakebase MANAGE required of the deployer. Best-effort:
-        a failure is returned, not raised, so a missing grant is reported as a next step.
+        The managed store API owns the SP's Lakebase role and runs the GRANT itself - no store
+        ownership or Lakebase MANAGE required of the deployer. A failure is returned, not raised,
+        so a missing grant can be reported as a next step.
         """
-        sp = self._apps.get_service_principal(app_name)
-        if sp is None:
-            return "could not resolve the app's service principal."
         try:
-            store = self.resolve(store_name)
-            if store is None:
-                return f"memory store {store_name!r} could not be resolved."
-            self._api_client_provider.get().grant_memory_store_permission(_field(store, "name"), sp)
+            self._api_client_provider.get().grant_memory_store_permission(
+                resource_name, service_principal_id
+            )
         except AgentCliError as exc:
             return exc.hint or str(exc)
         return None
@@ -156,13 +152,12 @@ class MemoryStoreClient:
 class SessionStoreClient:
     """Provisions and grants access to the session store declared in agent.toml.
 
-    The memory store's sibling: same connection-holding shape, driven by
-    ``SessionStoreProvisioner``. Session stores resolve by name, so there is no id to return.
+    The memory store's sibling, driven by ``SessionStoreProvisioner``. Session stores resolve by
+    name, so that name is their grant identifier.
     """
 
-    def __init__(self, api_client_provider: ApiClientProvider, apps_client: AppsClient) -> None:
+    def __init__(self, api_client_provider: ApiClientProvider) -> None:
         self._api_client_provider = api_client_provider
-        self._apps = apps_client
 
     def ensure(self, name: str) -> tuple[dict, bool]:
         """Create the session store, or resolve it if it already exists. Returns (store, created)."""
@@ -183,25 +178,25 @@ class SessionStoreClient:
             raise
 
     def reconcile(self, name: str) -> SessionStoreReconcileResult:
-        """Create the declared session store if absent and return whether it was created.
+        """Create the declared session store if absent and return its name and creation status.
 
         Like the memory store, reconciled to the name in agent.toml and never written back. Session
         stores resolve by name, so no resource id is needed. Presentation belongs to the provisioner.
         """
-        _, created = self.ensure(name)
-        return SessionStoreReconcileResult(created=created)
+        store, created = self.ensure(name)
+        return SessionStoreReconcileResult(
+            store_name=_field(store, "name") or name, created=created
+        )
 
-    def grant(self, app_name: str, store_name: str) -> Optional[str]:
-        """Grant the app's service principal read/write on the session store; return any error hint.
+    def grant(self, store_name: str, service_principal_id: str) -> Optional[str]:
+        """Grant a service principal read/write on a resolved session store.
 
-        Same managed-store-API path and best-effort contract as the memory grant, including
-        resolving the service principal itself through the injected apps client.
+        Same managed-store-API path and best-effort contract as the memory grant.
         """
-        sp = self._apps.get_service_principal(app_name)
-        if sp is None:
-            return "could not resolve the app's service principal."
         try:
-            self._api_client_provider.get().grant_session_store_permission(store_name, sp)
+            self._api_client_provider.get().grant_session_store_permission(
+                store_name, service_principal_id
+            )
         except AgentCliError as exc:
             return exc.hint or str(exc)
         return None

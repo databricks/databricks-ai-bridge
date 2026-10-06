@@ -55,6 +55,24 @@ def test_normalize_message_item():
     assert _normalize_item(item) == {"role": "assistant", "content": "hello"}
 
 
+@pytest.mark.parametrize("text", ["", "I checked the result."])
+def test_normalize_reasoning_item_preserves_summary_and_metadata(text):
+    from agents.items import ReasoningItem
+    from openai.types.responses import ResponseReasoningItem
+
+    item = object.__new__(ReasoningItem)
+    item.raw_item = ResponseReasoningItem(
+        id="r1",
+        type="reasoning",
+        summary=[{"type": "summary_text", "text": text, "signature": "opaque-signature"}],
+        encrypted_content="opaque-content",
+    )
+    assert _normalize_item(item) == {
+        "role": "assistant",
+        "content": [item.raw_item.model_dump()],
+    }
+
+
 class _FakeToolApproval:
     def __init__(self, name, args, call_id):
         self.tool_name, self.arguments, self.call_id = name, args, call_id

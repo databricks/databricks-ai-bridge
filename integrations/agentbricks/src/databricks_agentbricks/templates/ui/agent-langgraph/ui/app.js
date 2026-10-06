@@ -403,7 +403,7 @@ function extractText(content) {
     return content
       .map((part) => {
         if (typeof part === "string") return part;
-        // Only answer content belongs in chat; reasoning/signature blocks are opaque.
+        // Reasoning is displayed separately; metadata never belongs in the answer.
         if (!["text", "input_text", "output_text", "refusal"].includes(part?.type)) return "";
         if (typeof part.text === "string") return part.text;
         if (typeof part.refusal === "string") return part.refusal;
@@ -413,6 +413,33 @@ function extractText(content) {
       .join("\n");
   }
   return typeof content === "object" ? formatJson(content) : String(content);
+}
+
+function extractReasoning(content) {
+  return (Array.isArray(content) ? content : [content])
+    .filter((part) => ["reasoning", "thinking"].includes(part?.type))
+    .map((part) => {
+      // Read only public text fields, never signature/encrypted_content or extras.
+      const text = part.reasoning ?? part.thinking ?? part.text;
+      if (typeof text === "string") return text;
+      const parts = part.summary?.length ? part.summary : part.content;
+      return (Array.isArray(parts) ? parts : [])
+        .filter((item) => ["summary_text", "reasoning_text", "text"].includes(item?.type))
+        .map((item) => typeof item.text === "string" ? item.text : "").join("\n");
+    }).filter(Boolean).join("\n");
+}
+
+function renderReasoning(answer, reasoning, append = false) {
+  if (!reasoning) return;
+  let details = answer.parentElement.querySelector(".message-reasoning");
+  if (!details) {
+    details = document.createElement("details");
+    details.className = "message-reasoning";
+    details.innerHTML = '<summary>Reasoning</summary><div class="message-content"></div>';
+    answer.before(details);
+  }
+  const body = details.lastElementChild;
+  renderMessageText(body, (append ? body.dataset.source || "" : "") + reasoning);
 }
 
 function hideEmptyState() {
@@ -530,8 +557,10 @@ function startDraft() {
 
 function appendDelta(content) {
   const text = extractText(content);
-  if (!text) return;
+  const reasoning = extractReasoning(content);
+  if (!text && !reasoning) return;
   const draft = startDraft();
+  renderReasoning(draft.text, reasoning, true);
   state.draftText += text;
   state.lastAssistantText = state.draftText;
   renderMessageText(draft.text, state.draftText);
@@ -563,8 +592,11 @@ function handleAgentMessage(message) {
   if (role === "user") return;
   if (role === "assistant") {
     const text = extractText(message?.content);
-    if (finishDraft(text)) return;
-    if (text) {
+    const reasoning = extractReasoning(message) || extractReasoning(message?.content);
+    if (reasoning) renderReasoning(startDraft().text, reasoning);
+    if (!text && !message?.tool_calls?.length) return;
+    const finished = finishDraft(text);
+    if (text && !finished) {
       state.lastAssistantText = text;
       appendMessage("assistant", text, "Agent");
     }
@@ -603,6 +635,7 @@ function handleOutput(output) {
     if (item?.type === "interrupt") handleInterrupt(item);
     else handleAgentMessage(item);
   }
+  finishDraft();
 }
 
 function routingHeaders() {
@@ -913,18 +946,20 @@ function renderSessionTranscript(items) {
     const data = item?.data || {};
     const storedRole = String(data.role || data.type || "").toLowerCase();
     const content = extractText(data.content ?? data);
-    if (!content) continue;
+    const reasoning = extractReasoning(data) || extractReasoning(data.content);
+    if (!content && !reasoning) continue;
     if (storedRole === "human_decision") {
       appendMessage("system", content, "Human decision");
       continue;
     }
     const role = normalizeRole(data);
     if (role === "assistant") state.lastAssistantText = content;
-    appendMessage(
+    const message = appendMessage(
       role,
       role === "tool" ? toolSummary(data) : content,
       role === "user" ? "You" : role === "assistant" ? "Agent" : role === "tool" ? "Tool result" : "System",
     );
+    if (role === "assistant") renderReasoning(message.text, reasoning);
   }
 }
 
@@ -982,24 +1017,6 @@ async function refreshSessions() {
 async function refreshSessionView({ hydrateChat = false } = {}) {
   await refreshSession({ hydrateChat });
   await refreshSessions();
-}
-
-async function recordSessionItems(items) {
-  if (!state.config?.session.managed || !items.length) return;
-  try {
-    const sessionId = await ensureManagedSession();
-    const response = await fetch(demoUrl("/api/demo/session/items"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...routingHeaders() },
-      body: JSON.stringify({ items }),
-    });
-    const result = await jsonResponse(response);
-    addEvent("session.items.append", result);
-    await refreshSessionView();
-  } catch (error) {
-    stateMessage(elements.sessionItems, error instanceof Error ? error.message : String(error), "error");
-    addEvent("session.error", { message: String(error) });
-  }
 }
 
 async function invokeSync(payload) {
@@ -1121,16 +1138,7 @@ async function sendText(text, mode = state.mode) {
   setBusy(true, mode === "background" ? "Starting background run" : mode === "streaming" ? "Streaming" : "Running");
   try {
     await dispatch({ messages: [{ role: "user", content }] }, mode);
-    const items = [{ role: "user", content, transport: mode, instance_id: state.instanceId }];
-    if (state.lastAssistantText) {
-      items.push({
-        role: "assistant",
-        content: state.lastAssistantText,
-        transport: mode,
-        instance_id: state.instanceId,
-      });
-    }
-    await recordSessionItems(items);
+    await refreshSessionView();
     return state.lastAssistantText;
   } catch (error) {
     finishDraft();
@@ -1155,18 +1163,7 @@ async function resume(decision) {
   setBusy(true, "Resuming");
   try {
     await dispatch(payload, "streaming");
-    const items = [
-      { role: "human_decision", content: decision, instance_id: state.instanceId },
-    ];
-    if (state.lastAssistantText) {
-      items.push({
-        role: "assistant",
-        content: state.lastAssistantText,
-        transport: "streaming",
-        instance_id: state.instanceId,
-      });
-    }
-    await recordSessionItems(items);
+    await refreshSessionView();
   } catch (error) {
     appendError(error);
   } finally {

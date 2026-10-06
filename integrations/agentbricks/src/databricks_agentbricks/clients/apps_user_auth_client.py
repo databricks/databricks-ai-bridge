@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from datetime import timedelta
 from typing import Optional
 
 from databricks.sdk import WorkspaceClient
@@ -77,17 +76,20 @@ class AppUserScopeUpdatePlan:
 
 
 @dataclass(frozen=True)
-class AppAuthResult:
-    """Outcome of preparing Apps request-user auth for one deployment.
+class AppAuthPlan:
+    """Validated request-user scope preflight, carried to App setup without mutating it."""
 
-    ``app_reconciled`` tells the app lifecycle that creation and any requested scale update were
-    already handled through the SDK auth operation. ``app_existed`` describes the state before that
-    operation; it is unknown when the project does not require request-user auth.
-    """
+    scope_update: Optional[AppUserScopeUpdatePlan]
 
-    required: bool
-    app_reconciled: bool
-    app_existed: Optional[bool]
+    @property
+    def required(self) -> bool:
+        return self.scope_update is not None
+
+    @property
+    def app_existed(self) -> Optional[bool]:
+        if self.scope_update is None:
+            return None
+        return self.scope_update.existing_scopes is not None
 
 
 def required_user_api_scopes(project: AgentProject | None) -> set[str]:
@@ -155,45 +157,21 @@ def plan_app_user_scope_update(
     return AppUserScopeUpdatePlan(apps=apps, name=name, existing_scopes=configured, scopes=scopes)
 
 
-def apply_app_user_scope_update(
-    plan: AppUserScopeUpdatePlan, *, instances: int | None = None, attempts: int = 12
-) -> None:
-    """Create a scoped App or add missing user API scopes to an existing App.
-
-    New Apps enable user-token forwarding at creation. Existing Apps retain unrelated scopes and
-    settings; the update mask includes only user API scopes and explicitly requested instance
-    fields. The read-before-write check detects known drift, but Apps has no compare-and-swap
-    contract, so owners must still coordinate concurrent updates. Scope removal is never automatic.
-    """
-    if not set(plan.existing_scopes or ()).issubset(plan.scopes):
-        raise AgentCliError(
-            "Automatic removal of Apps user scopes is unsupported.",
-            hint="Remove scopes explicitly in Databricks Apps and verify the effective scopes. "
-            "The SDK omits empty lists when serializing App; no removal was sent.",
-        )
-    desired = App(
-        name=plan.name,
-        user_api_scopes=list(plan.scopes),
-        forward_user_access_token=True if plan.existing_scopes is None else None,
-    )
-    mask = ["user_api_scopes"]
-    if instances is not None:
-        desired.compute_min_instances = instances
-        desired.compute_max_instances = instances
-        mask.extend(["compute_min_instances", "compute_max_instances"])
+def validate_app_user_scope_drift(plan: AppUserScopeUpdatePlan) -> None:
+    """Re-read an existing App before update so known scope or forwarding drift fails closed."""
     try:
-        if plan.existing_scopes is None:
-            plan.apps.create(desired)
-        else:
-            current = plan.apps.get(plan.name)
-            _validate_forwarding(current)
-            _validate_implicit_identity_scopes(current)
-            if tuple(sorted(set(current.user_api_scopes or []))) != plan.existing_scopes:
-                raise AgentCliError("Apps user scopes changed since preflight; review and retry.")
-            if plan.scopes != plan.existing_scopes or instances is not None:
-                plan.apps.create_update(plan.name, update_mask=",".join(mask), app=desired).result(
-                    timeout=timedelta(minutes=5)
-                )
+        current = plan.apps.get(plan.name)
+    except (DatabricksError, ValueError) as exc:
+        raise AgentCliError(f"Could not read Apps user scopes for '{plan.name}'.") from exc
+    _validate_forwarding(current)
+    _validate_implicit_identity_scopes(current)
+    if tuple(sorted(set(current.user_api_scopes or []))) != plan.existing_scopes:
+        raise AgentCliError("Apps user scopes changed since preflight; review and retry.")
+
+
+def wait_for_app_user_scopes(plan: AppUserScopeUpdatePlan, *, attempts: int = 12) -> None:
+    """Verify configured and effective scopes converge before source rollout."""
+    try:
         for attempt in range(attempts):
             current = plan.apps.get(plan.name)
             _validate_forwarding(current)
@@ -217,12 +195,10 @@ def apply_app_user_scope_update(
 
 
 class AppsUserAuthClient:
-    """The low-level Apps identity/auth client for request-user tools.
+    """Plan request-user App scopes and validate them without owning App lifecycle writes.
 
-    It is Python SDK based (``WorkspaceClient``/``AppsAPI``), distinct from
-    :class:`~databricks_agentbricks.clients.apps_client.AppsClient`, which shells out to ``databricks apps``.
-    It holds the profile and wraps this module's helpers so the service can be injected with it
-    instead of importing the module functions. It is render-free: it never touches the terminal.
+    Preflight uses the Python SDK to read an App and check scopes. The resulting plan is handed to
+    ``AppProvisioner``, which owns creation, scaling, and readiness. This client is render-free.
     """
 
     def __init__(self, profile: Optional[str]) -> None:
@@ -245,27 +221,21 @@ class AppsUserAuthClient:
         """
         return required_user_api_scopes(project)
 
-    def ensure_user_auth(
+    def plan_user_auth(
         self,
         name: str,
         project: AgentProject | None,
         *,
         allow_existing_app_update: bool,
-        instance_count: Optional[int],
-    ) -> AppAuthResult:
-        """Validate and reconcile request-user auth, returning only deploy-level facts.
-
-        The SDK-backed update plan stays private to this collaborator. Callers learn whether auth
-        was required, whether this operation already reconciled the App, and whether it existed
-        beforehand; they do not coordinate an ``AppsAPI`` plan themselves.
-        """
+    ) -> AppAuthPlan:
+        """Validate request-user auth and plan scopes without creating or scaling an App."""
         required = self.requires_user_auth(project)
         if allow_existing_app_update and not required:
             raise AgentCliError(
                 "--allow-user-scope-update requires a managed tool with auth = 'user' in agent.toml."
             )
         if not required:
-            return AppAuthResult(required=False, app_reconciled=False, app_existed=None)
+            return AppAuthPlan(scope_update=None)
 
         plan = plan_app_user_scope_update(
             name,
@@ -273,9 +243,4 @@ class AppsUserAuthClient:
             allow_existing_app_update=allow_existing_app_update,
             required_scopes=self.required_user_api_scopes(project),
         )
-        apply_app_user_scope_update(plan, instances=instance_count)
-        return AppAuthResult(
-            required=True,
-            app_reconciled=True,
-            app_existed=plan.existing_scopes is not None,
-        )
+        return AppAuthPlan(scope_update=plan)

@@ -24,7 +24,7 @@ server = "agentbricks"
 [[tools]]
 id = "sandbox"
 source = { kind = "sandbox", service = "system.ai.sandbox" }
-policy = { downscope = [{ resource = "table:samples.nyctaxi.trips", permission = "read_only" }], databricks_access_token_included = true }
+policy = { downscope = [{ resource = "volume:main.data.files", permission = "read_only" }], databricks_access_token_included = true }
 
 [[tools]]
 id = "web"
@@ -172,7 +172,7 @@ def test_langgraph_runtime_loads_direct_manifest_and_protects_sandbox_meta(
     assert name == "sandbox"
     assert arguments == {"code": 'print("ok")'}
     assert kwargs["meta"] == {
-        "downscope": {"tables": [{"name": "samples.nyctaxi.trips", "permission": "read_only"}]},
+        "downscope": {"volumes": [{"name": "main.data.files", "permission": "read_only"}]},
         "databricks_access_token_included": True,
     }
 

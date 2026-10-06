@@ -30,7 +30,7 @@ from typing import Any, Optional
 
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
 from databricks_agentbricks.clients.apps_client import AppsClient
-from databricks_agentbricks.clients.apps_user_auth_client import AppsUserAuthClient
+from databricks_agentbricks.clients.apps_user_auth_client import AppAuthPlan
 from databricks_agentbricks.deployment.config import _PIP_INDEX_ENVS
 from databricks_agentbricks.deployment.names import (
     _DEPLOYMENT_PREFIX,
@@ -134,11 +134,11 @@ class _ResolvedDeployment:
 
 @dataclass(frozen=True)
 class _PreparedDeployment:
-    """Deployment facts after tool/auth preflight has prepared any request-user App."""
+    """Deployment facts after tool/auth preflight has planned any request-user App."""
 
     agent_project: Optional[AgentProject]
     name: DeploymentName
-    app_reconciled_by_auth: bool
+    auth_plan: AppAuthPlan
     deployment_exists: Optional[bool]
 
 
@@ -155,7 +155,6 @@ class DeployService:
         apps_client: AppsClient,
         api_client_provider: ApiClientProvider,
         app_provisioner: AppProvisioner,
-        apps_user_auth_client: AppsUserAuthClient,
         memory_store_provisioner: MemoryStoreProvisioner,
         session_store_provisioner: SessionStoreProvisioner,
         tracing_provisioner: TracingProvisioner,
@@ -167,7 +166,6 @@ class DeployService:
         self._apps_client = apps_client
         self._api_client_provider = api_client_provider
         self._app_provisioner = app_provisioner
-        self._apps_user_auth_client = apps_user_auth_client
         self._memory_store_provisioner = memory_store_provisioner
         self._session_store_provisioner = session_store_provisioner
         self._tracing_provisioner = tracing_provisioner
@@ -228,8 +226,8 @@ class DeployService:
 
         The order matters:
 
-        1. Resolve and validate the project/name, prepare request-user auth, persist the name,
-           and read the resource bindings. Auth may have already created or updated the App.
+        1. Resolve and validate the project/name, plan request-user scopes without mutating the
+           App, persist the name, and read the resource bindings.
         2. Reconcile the bound memory and session stores, tracing, and Runtime Store. Each
            provisioner returns its own facts and manifest changes; this service retains them.
         3. Write the initial resource env into app.yaml, then ensure the App exists and its
@@ -298,7 +296,7 @@ class DeployService:
         ctx = dataclasses.replace(ctx, deployment_exists=deployment_exists)
         self._app_provisioner.ensure_app_ready(
             ctx,
-            app_reconciled_by_auth=prepared.app_reconciled_by_auth,
+            auth_plan=prepared.auth_plan,
             instance_count=instance_count,
         )
 
@@ -329,9 +327,15 @@ class DeployService:
         if tool_plan is not None:
             self._tool_access_provisioner.finalize_after_rollout(name, tool_plan)
 
-        # 6. Grants remain best-effort. The service retains each outcome for presentation.
-        memory_grant = self._memory_store_provisioner.grant(ctx, memory)
-        session_grant = self._session_store_provisioner.grant(ctx, session)
+        # 6. Grants remain best-effort. Resolve the App identity once and pass it with each
+        #    reconciled store identifier; store clients need no knowledge of Apps.
+        store_service_principal = (
+            self._apps_client.get_service_principal(name)
+            if memory.store_name or session.store_name
+            else None
+        )
+        memory_grant = self._memory_store_provisioner.grant(memory, store_service_principal)
+        session_grant = self._session_store_provisioner.grant(session, store_service_principal)
         trace_grant = self._tracing_provisioner.grant(ctx, tracing)
 
         return DeployResult(
@@ -382,17 +386,16 @@ class DeployService:
     def _prepare_deployment(
         self, source_dir: pathlib.Path, request: DeployRequest
     ) -> _PreparedDeployment:
-        """Validate the project and prepare request-user auth before resource provisioning."""
+        """Validate the project and plan request-user auth before resource provisioning."""
         resolved = self._resolve_deployment(source_dir, request.name)
         agent_project = resolved.agent_project
         if agent_project is not None and agent_project.tools:
             require_managed_tool_support(source_dir)
 
-        auth = self._apps_user_auth_client.ensure_user_auth(
+        auth = self._app_provisioner.prepare_app_auth(
             resolved.name,
             agent_project,
             allow_existing_app_update=request.allow_user_scope_update,
-            instance_count=request.instance_count,
         )
         if auth.required:
             self._reporter.note(
@@ -418,6 +421,6 @@ class DeployService:
         return _PreparedDeployment(
             agent_project=agent_project,
             name=resolved.name,
-            app_reconciled_by_auth=auth.app_reconciled,
+            auth_plan=auth,
             deployment_exists=deployment_exists,
         )

@@ -84,7 +84,7 @@ def test_live_mcp_filter_returns_valid_inventory(live_agentbricks, explicit_sche
     )
     for tool in discovered["available_tools"]:
         assert tool["add_command"] == (
-            "agentbricks tools add sandbox --scope table:catalog.schema.table"
+            "agentbricks tools add sandbox --scope volume:catalog.schema.volume"
             if tool["name"] == "system.ai.sandbox"
             else f"agentbricks tools add mcp {tool['name']}"
         )

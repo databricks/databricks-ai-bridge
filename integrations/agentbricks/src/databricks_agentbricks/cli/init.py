@@ -307,7 +307,7 @@ def _prepare_migration(
     "--framework",
     type=click.Choice([framework.value for framework in AgentFramework]),
     default=None,
-    help="Agent framework to scaffold (defaults to langgraph).",
+    help="Agent framework: langgraph (LangGraph, default) or openai (OpenAI Agents SDK).",
 )
 @click.option(
     "--server",

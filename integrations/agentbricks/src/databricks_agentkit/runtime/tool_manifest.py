@@ -19,6 +19,9 @@ except ModuleNotFoundError:
 MEMORY_STORE_ENV = "AGENT_MEMORY_STORE"
 SESSION_STORE_ENV = "AGENT_SESSION_STORE"
 
+# Enable only once Databricks Connect supports table downscoping.
+SANDBOX_TABLE_SCOPES_ENABLED = False
+
 
 class ToolManifestError(RuntimeError):
     """Invalid declarative tool configuration that runtime adapters must surface."""
@@ -185,7 +188,17 @@ def _scope(value: object) -> ScopeRecord:
     value = cast(dict[str, Any], value)
     resource = _required_string(value.get("resource"), "a downscope resource")
     kind, separator, resource_value = resource.partition(":")
-    if not separator or kind not in {"table", "volume", "workspace"} or not resource_value:
+    if kind == "table" and separator and not SANDBOX_TABLE_SCOPES_ENABLED:
+        raise ToolManifestError(
+            "Table sandbox scopes are not supported yet. "
+            "Databricks Connect does not support table downscoping. "
+            "Use volume:<name> instead."
+        )
+    if kind == "workspace" and separator:
+        raise ToolManifestError(
+            "Workspace sandbox scopes are not supported yet. Use volume:<name> instead."
+        )
+    if not separator or kind not in {"table", "volume"} or not resource_value:
         raise RuntimeError(f"Invalid agent.toml downscope resource: {resource!r}.")
     permission = _required_string(value.get("permission", "read_only"), "a permission")
     if permission not in {"read_only", "read_write"}:
@@ -303,7 +316,6 @@ def downscope_wire(tool: ToolRecord) -> dict[str, list[dict[str, str]]]:
     fields = {
         "table": ("tables", "name"),
         "volume": ("volumes", "name"),
-        "workspace": ("workspace_paths", "path"),
     }
     result: dict[str, list[dict[str, str]]] = {}
     for scope in tool.downscope:

@@ -66,18 +66,20 @@ def build_deploy_service(obj) -> DeployService:
     """Compose a deployment service for this CLI invocation without opening an API client."""
     api_client_provider = obj.api_client_provider
     apps_client = AppsClient(obj.profile, runner=_databricks)
+    apps_user_auth_client = AppsUserAuthClient(obj.profile)
     reporter = ClickReporter()
     return DeployService(
         project_resolver=ProjectResolver(),
         apps_client=apps_client,
         api_client_provider=api_client_provider,
-        app_provisioner=AppProvisioner(apps_client, api_client_provider, reporter),
-        apps_user_auth_client=AppsUserAuthClient(obj.profile),
+        app_provisioner=AppProvisioner(
+            apps_client, api_client_provider, apps_user_auth_client, reporter
+        ),
         memory_store_provisioner=MemoryStoreProvisioner(
-            MemoryStoreClient(api_client_provider, apps_client), reporter
+            MemoryStoreClient(api_client_provider), reporter
         ),
         session_store_provisioner=SessionStoreProvisioner(
-            SessionStoreClient(api_client_provider, apps_client), reporter
+            SessionStoreClient(api_client_provider), reporter
         ),
         tracing_provisioner=TracingProvisioner(
             TracingClient(api_client_provider, apps_client, obj.profile), reporter

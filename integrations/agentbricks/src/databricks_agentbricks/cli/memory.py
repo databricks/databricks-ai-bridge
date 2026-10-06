@@ -122,7 +122,7 @@ def memory_bind(obj, store: str, source: pathlib.Path) -> None:
                 f"agentbricks memory stores create --name {store}",
                 "Create the store now without deploying",
             ),
-            ("agentbricks dev", "Re-run to pick up the store locally"),
+            ("agentbricks dev", "Local development keeps long-term memory off"),
             ("agentbricks deploy <name>", "Create it if missing and grant the app access"),
         ],
     )
@@ -233,7 +233,7 @@ def stores_create(obj, display_name, description) -> None:
             (f"agentbricks memory stores get {store_id}", "View this store's details"),
             (
                 f"agentbricks memory bind {display_name}",
-                "Bind this store to the agent (wired in on dev/deploy)",
+                "Bind this store to the agent (used after deploy)",
             ),
         ],
     )

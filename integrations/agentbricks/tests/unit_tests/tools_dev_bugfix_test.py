@@ -43,12 +43,12 @@ def test_sandbox_manifest_retains_scopes(tmp_path):
     project = _project(tmp_path)
     result = CliRunner().invoke(
         tools,
-        ["add", "sandbox", "--scope", "table:samples.nyctaxi.trips", "--source", str(project)],
+        ["add", "sandbox", "--scope", "volume:main.data.files", "--source", str(project)],
         obj=_Ctx(),
     )
     assert result.exit_code == 0, result.output
     binding = AgentProject.load(project).tools[0]
-    assert [scope.resource for scope in binding.policy.downscope] == ["table:samples.nyctaxi.trips"]
+    assert [scope.resource for scope in binding.policy.downscope] == ["volume:main.data.files"]
 
 
 # --- ML-69256: outside-project hint ------------------------------------------
