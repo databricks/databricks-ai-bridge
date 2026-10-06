@@ -1067,8 +1067,9 @@ async function invokeStreaming(payload) {
 }
 
 async function pollBackground(invocationId) {
+  let delay = 850;
   while (true) {
-    await new Promise((resolve) => setTimeout(resolve, 850));
+    await new Promise((resolve) => setTimeout(resolve, delay));
     const response = await fetch(`/api/invocations/${encodeURIComponent(invocationId)}`, {
       cache: "no-store",
       credentials: "same-origin",
@@ -1086,6 +1087,8 @@ async function pollBackground(invocationId) {
     }
     if (result.status === "failed") throw new Error(`Background invocation ${invocationId} failed. ${result.error?.message || result.error || "Check server logs for details."}`);
     setStatus(`Background · ${result.status}`, "busy");
+    // Reduce polling load for long runs without imposing an execution deadline.
+    delay = Math.min(delay * 1.5, 5000);
   }
 }
 
