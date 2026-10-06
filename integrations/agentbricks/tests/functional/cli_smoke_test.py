@@ -127,7 +127,7 @@ def test_existing_init_includes_migration_skill_from_wheel(
 @pytest.mark.parametrize(
     "args",
     [
-        ["sandbox", "--scope", "table:catalog.schema.table"],
+        ["sandbox", "--scope", "volume:catalog.schema.volume"],
         ["uc-function", "catalog.schema.function"],
         ["genie-one"],
         ["genie-agent", "0" * 32],
@@ -177,6 +177,38 @@ def test_tools_local_discovery_without_project_or_auth(run_agentbricks, kind):
     assert payload["mcp_schema"] is None
     assert payload["errors"] == []
     assert [tool["kind"] for tool in payload["available_tools"]] == [kind]
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize(
+    ("scope", "message"),
+    [
+        ("table:main.data.rows", "Table sandbox scopes are not supported"),
+        ("workspace:/Workspace/Shared", "Workspace sandbox scopes are not supported"),
+    ],
+)
+def test_sandbox_unsupported_scope_is_rejected_without_manifest_change(
+    run_agentbricks, tmp_path, framework, scope, message
+):
+    project = tmp_path / "agent"
+    run_agentbricks("init", "--framework", framework, str(project))
+    manifest = project / "agent.toml"
+    before = manifest.read_bytes()
+
+    result = run_agentbricks(
+        "tools",
+        "add",
+        "sandbox",
+        "--scope",
+        scope,
+        "--source",
+        str(project),
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert message in result.stderr
+    assert manifest.read_bytes() == before
 
 
 def test_tools_text_discovery_suggests_mcp_filters(run_agentbricks):

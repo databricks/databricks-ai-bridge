@@ -21,7 +21,6 @@ _SPEC.loader.exec_module(tool_matrix)
 
 
 def _evidence(*, cleanup_required: bool, cleanup_status: str = "deleted") -> dict:
-    table_marker = "AGENTBRICKS_TABLE_0123456789abcdef"
     volume_marker = "AGENTBRICKS_VOLUME_fedcba9876543210"
     rows = [
         {
@@ -31,11 +30,9 @@ def _evidence(*, cleanup_required: bool, cleanup_status: str = "deleted") -> dic
             "tool_kind": tool,
             "status": "pass",
             "expected": {
-                "sandbox_table": table_marker,
                 "sandbox_volume": volume_marker,
             }.get(tool, "semantic result"),
             "actual": {
-                "sandbox_table": json.dumps({"output": table_marker}),
                 "sandbox_volume": json.dumps({"output": volume_marker}),
             }.get(tool, json.dumps({"output": "semantic result"})),
         }
@@ -83,7 +80,6 @@ def _evidence(*, cleanup_required: bool, cleanup_status: str = "deleted") -> dic
             "uv": "uv 0.8",
             "python": "Python 3.12",
         },
-        "table_marker": table_marker,
         "volume_marker": volume_marker,
         "volume_file_path": (
             "/Volumes/supervisor_agent/mason_agent_tools_e2e/matrix_volume/marker.txt"
@@ -400,7 +396,6 @@ def test_cli_authoring_records_app_auth_for_managed_deployed_tools(tmp_path):
     )
     runner = tool_matrix.Runner("profile", tmp_path / "out", tmp_path / "wheel.whl")
     runner.uc_function = "supervisor_agent.mason_agent_tools_e2e.marker"
-    runner.uc_table = "supervisor_agent.mason_agent_tools_e2e.matrix_table"
     runner.uc_volume = "supervisor_agent.mason_agent_tools_e2e.matrix_volume"
     runner.genie_space_id = "0" * 32
     bindings = []
@@ -453,7 +448,6 @@ def test_cli_authoring_includes_temporary_volume_scope(tmp_path):
     )
     runner = tool_matrix.Runner("profile", tmp_path / "out", tmp_path / "wheel.whl")
     runner.uc_function = "supervisor_agent.mason_agent_tools_e2e.marker"
-    runner.uc_table = "supervisor_agent.mason_agent_tools_e2e.matrix_table"
     runner.uc_volume = "supervisor_agent.mason_agent_tools_e2e.matrix_volume"
     runner.genie_space_id = "0" * 32
     commands: list[list[str]] = []
@@ -496,7 +490,6 @@ def test_cli_authoring_includes_temporary_volume_scope(tmp_path):
     sandbox = next(command for command in commands if "sandbox" in command and "add" in command)
     scopes = [sandbox[index + 1] for index, value in enumerate(sandbox) if value == "--scope"]
     assert scopes == [
-        "table:supervisor_agent.mason_agent_tools_e2e.matrix_table",
         "volume:supervisor_agent.mason_agent_tools_e2e.matrix_volume",
     ]
 
@@ -506,7 +499,6 @@ def test_direct_authoring_includes_temporary_volume_scope(tmp_path):
     project.mkdir()
     runner = tool_matrix.Runner("profile", tmp_path / "out", tmp_path / "wheel.whl")
     runner.uc_function = "supervisor_agent.mason_agent_tools_e2e.marker"
-    runner.uc_table = "supervisor_agent.mason_agent_tools_e2e.matrix_table"
     runner.uc_volume = "supervisor_agent.mason_agent_tools_e2e.matrix_volume"
     runner.genie_space_id = "0" * 32
 
@@ -516,17 +508,13 @@ def test_direct_authoring_includes_temporary_volume_scope(tmp_path):
     sandbox = next(tool for tool in manifest["tools"] if tool["id"] == "sandbox")
     assert sandbox["policy"]["downscope"] == [
         {
-            "resource": "table:supervisor_agent.mason_agent_tools_e2e.matrix_table",
-            "permission": "read_only",
-        },
-        {
             "resource": "volume:supervisor_agent.mason_agent_tools_e2e.matrix_volume",
             "permission": "read_only",
         },
     ]
 
 
-def test_create_uc_function_seeds_hidden_table_and_volume_markers(monkeypatch, tmp_path):
+def test_create_uc_function_seeds_hidden_volume_marker(monkeypatch, tmp_path):
     wheel = tmp_path / "wheel.whl"
     wheel.write_bytes(b"wheel")
     runner = tool_matrix.Runner("profile", tmp_path / "out", wheel)
@@ -544,13 +532,8 @@ def test_create_uc_function_seeds_hidden_table_and_volume_markers(monkeypatch, t
 
     runner.create_uc_function("supervisor_agent.mason_agent_tools_e2e")
 
-    assert runner.table_marker
     assert runner.volume_marker
-    assert runner.table_marker != runner.volume_marker
-    table_statement = next(
-        statement for statement in statements if statement.startswith("CREATE TABLE")
-    )
-    assert f"SELECT '{runner.table_marker}' AS marker" in table_statement
+    assert not any(statement.startswith("CREATE TABLE") for statement in statements)
     assert uploads == [
         (
             runner.volume_file_path,
@@ -564,14 +547,12 @@ def test_create_uc_function_seeds_hidden_table_and_volume_markers(monkeypatch, t
     )
 
 
-def test_exercise_reads_table_and_volume_without_disclosing_markers(tmp_path):
+def test_exercise_reads_volume_without_disclosing_marker(tmp_path):
     wheel = tmp_path / "wheel.whl"
     wheel.write_bytes(b"wheel")
     runner = tool_matrix.Runner("profile", tmp_path / "out", wheel)
     runner.uc_function = "supervisor_agent.mason_agent_tools_e2e.marker"
-    runner.uc_table = "supervisor_agent.mason_agent_tools_e2e.matrix_table"
     runner.uc_volume = "supervisor_agent.mason_agent_tools_e2e.matrix_volume"
-    runner.table_marker = "AGENTBRICKS_TABLE_0123456789abcdef"
     runner.volume_marker = "AGENTBRICKS_VOLUME_fedcba9876543210"
     runner.volume_file_path = (
         "/Volumes/supervisor_agent/mason_agent_tools_e2e/matrix_volume/marker.txt"
@@ -579,9 +560,6 @@ def test_exercise_reads_table_and_volume_without_disclosing_markers(tmp_path):
     prompts: dict[str, str] = {}
 
     responses = {
-        "sandbox_table": {
-            "output": "AnalysisException: initial incorrect query\n" * 200 + runner.table_marker
-        },
         "sandbox_volume": {"output": runner.volume_marker},
         "mcp": {
             "output": "web_search returned Databricks Model Context Protocol documentation "
@@ -609,12 +587,10 @@ def test_exercise_reads_table_and_volume_without_disclosing_markers(tmp_path):
     sandbox_rows = {
         row.tool_kind: row for row in runner.rows if row.tool_kind.startswith("sandbox_")
     }
-    assert set(sandbox_rows) == {"sandbox_table", "sandbox_volume"}
+    assert set(sandbox_rows) == {"sandbox_volume"}
     assert {row.status for row in sandbox_rows.values()} == {"pass"}
-    assert runner.table_marker in sandbox_rows["sandbox_table"].actual
-    assert f"SELECT marker FROM {runner.uc_table}" in prompts["sandbox_table"]
+    assert runner.volume_marker in sandbox_rows["sandbox_volume"].actual
     assert runner.volume_file_path in prompts["sandbox_volume"]
-    assert all(runner.table_marker not in prompt for prompt in prompts.values())
     assert all(runner.volume_marker not in prompt for prompt in prompts.values())
 
 
@@ -623,9 +599,7 @@ def test_exercise_rejects_sandbox_response_without_exact_hidden_marker(tmp_path)
     wheel.write_bytes(b"wheel")
     runner = tool_matrix.Runner("profile", tmp_path / "out", wheel)
     runner.uc_function = "supervisor_agent.mason_agent_tools_e2e.marker"
-    runner.uc_table = "supervisor_agent.mason_agent_tools_e2e.matrix_table"
     runner.uc_volume = "supervisor_agent.mason_agent_tools_e2e.matrix_volume"
-    runner.table_marker = "AGENTBRICKS_TABLE_0123456789abcdef"
     runner.volume_marker = "AGENTBRICKS_VOLUME_fedcba9876543210"
     runner.volume_file_path = (
         "/Volumes/supervisor_agent/mason_agent_tools_e2e/matrix_volume/marker.txt"
@@ -633,8 +607,6 @@ def test_exercise_rejects_sandbox_response_without_exact_hidden_marker(tmp_path)
 
     def invoke(label, url, prompt, headers):
         tool_kind = label.rsplit("-", 1)[-1]
-        if tool_kind == "sandbox_table":
-            return {"output": runner.table_marker}
         if tool_kind == "sandbox_volume":
             return {"output": "volume read succeeded"}
         if tool_kind == "mcp":
@@ -658,7 +630,6 @@ def test_exercise_rejects_sandbox_response_without_exact_hidden_marker(tmp_path)
     runner._exercise(case, "dev", "http://localhost:8400", {}, tmp_path / "dev.log")
 
     rows = {row.tool_kind: row for row in runner.rows}
-    assert rows["sandbox_table"].status == "pass"
     assert rows["sandbox_volume"].status == "fail"
     assert runner.volume_marker in rows["sandbox_volume"].error
 

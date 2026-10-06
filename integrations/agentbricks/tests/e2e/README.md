@@ -20,10 +20,11 @@ remotely; no tools are invoked and no workspace resources are created.
 
 This suite proves that CLI edits and direct `agent.toml` edits reach the same runtime code.
 It creates two LangGraph projects (CLI/direct), runs each with `agentbricks dev`, deploys each to
-Databricks Apps, and semantically exercises separate Sandbox table and volume reads,
+Databricks Apps, and semantically exercises Sandbox volume reads,
 `system.ai.web_search`, a local Python tool, a temporary Unity Catalog function, and a configured
-Genie Agent space. It also verifies automatic Apps resources for the temporary Sandbox table and
-volume scopes. The result is 24 evidence rows plus deploy-time grant snapshots.
+Genie Agent space. It also verifies automatic Apps resources for the temporary Sandbox volume
+scope. The result is 20 evidence rows plus deploy-time grant snapshots. Sandbox table scopes are
+excluded until Databricks Connect supports table downscoping.
 
 ## Run
 
@@ -46,7 +47,7 @@ uv run python tests/e2e/tool_matrix.py \
 
 The profile must identify a workspace with Databricks Apps, `system.ai.sandbox`,
 `system.ai.web_search`, a 32-character Genie Space ID, and permission to create a schema, functions,
-a table, and a volume.
+and a volume.
 Pass the space with `--genie-space-id` or `AGENTBRICKS_E2E_GENIE_SPACE_ID`. The suite discovers and starts
 a SQL warehouse. Override its defaults with `--warehouse-id` or `--uc-schema catalog.schema`.
 Deployed Databricks Apps accept programmatic calls under `/api/*` with OAuth Bearer tokens. If the
@@ -72,7 +73,7 @@ The CLI path first verifies that an unavailable MCP service is rejected without 
 deployed tool matrix exercises valid managed tools.
 
 The deployed cases do not pre-grant the temporary UC function. They require `agentbricks deploy` to
-create the function/table/volume/Genie Apps resources, then inspect those permissions before
+create the function/volume/Genie Apps resources, then inspect those permissions before
 invoking the App. Built-in `system.ai` MCP services use platform-managed access defaults and are
 validated through live Sandbox and web-search calls rather than direct grant inspection. External
 MCP services still receive direct service/catalog/schema grants. The temporary declared function
@@ -88,7 +89,7 @@ uv run python tests/e2e/tool_matrix.py \
   --verify-evidence /tmp/agentbricks-tool-matrix-df1/evidence.json
 ```
 
-Success is exactly `24 passed, 0 failed, 0 skipped`, two deploy grant snapshots, and one idempotent
+Success is exactly `20 passed, 0 failed, 0 skipped`, two deploy grant snapshots, and one idempotent
 repeat deploy. Temporary Apps and UC resources are deleted after a successful run, with cleanup results
 saved in `evidence.json`; App deletion is not considered complete until a follow-up read confirms
 absence. A failed run retains resources for diagnosis. Pass `--keep-resources` to retain resources after

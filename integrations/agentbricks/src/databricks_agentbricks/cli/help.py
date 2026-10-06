@@ -339,7 +339,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("tools",): (
         ("agentbricks tools add --help", "see all tool types you can add"),
         (
-            "agentbricks tools add sandbox --scope table:samples.nyctaxi.trips",
+            "agentbricks tools add sandbox --scope volume:main.data.files",
             "add a data sandbox tool",
         ),
         ("agentbricks tools add mcp system.ai.web_search", "add a managed MCP tool"),
@@ -348,7 +348,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("tools", "add"): (
         (
-            "agentbricks tools add sandbox --scope table:samples.nyctaxi.trips",
+            "agentbricks tools add sandbox --scope volume:main.data.files",
             "add a data sandbox tool",
         ),
         ("agentbricks tools add mcp system.ai.web_search", "add a managed MCP tool"),
@@ -361,7 +361,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("tools", "add", "sandbox"): (
         (
-            "agentbricks tools add sandbox --scope table:samples.nyctaxi.trips",
+            "agentbricks tools add sandbox --scope volume:main.data.files",
             "add a data sandbox tool",
         ),
     ),

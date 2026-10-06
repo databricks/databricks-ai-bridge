@@ -8,7 +8,6 @@ server = "agentbricks"
 id = "sandbox"
 source = { kind = "sandbox", service = "system.ai.sandbox" }
 policy = { downscope = [
-  { resource = "table:__UC_TABLE__", permission = "read_only" },
   { resource = "volume:__UC_VOLUME__", permission = "read_only" },
 ] }
 
