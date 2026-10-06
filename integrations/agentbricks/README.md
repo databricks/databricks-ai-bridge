@@ -117,7 +117,7 @@ The shortest path from a blank directory to a running and deployed agent:
 
 ```sh
 agentbricks login --profile <profile>
-agentbricks init my-agent
+agentbricks init my-agent       # Defaults to LangGraph; add --framework=openai for OpenAI Agents SDK
 cd my-agent
 agentbricks dev                 # run locally
 agentbricks deploy my-agent     # deploy to Databricks
@@ -143,6 +143,28 @@ it an HTTP request. MLflow tracing is on by default (`agentbricks init` binds a 
 `/Shared/agentbricks_traces/<project>` experiment): `agentbricks dev` traces to a local MLflow server under
 `.agentbricks/` and `agentbricks deploy` to the bound workspace experiment; `agentbricks tracing list` shows the
 available traces.
+
+## Inspect and clean up a project
+
+Read `agent.toml` for the recorded agent name, declared memory/session stores, tracing, and tool
+bindings. A declaration does not confirm that the resource exists or that the deployed app can use it.
+
+| Inspect | Command | Details |
+| --- | --- | --- |
+| Local onboarding checks | `agentbricks doctor .` | Offline; does not verify bindings or deployed resources. |
+| Agent Bricks apps in a workspace | `agentbricks -p <profile> deployments list` | Lists apps with the `agent-bricks-` prefix in the selected workspace, including other projects. |
+| App status and URL | `agentbricks -p <profile> deployments get agent-bricks-<name>` | Queries the selected workspace for the named app. |
+| Memory store IDs and details | `agentbricks -p <profile> memory stores list`, then `agentbricks -p <profile> memory stores get <resource-name>` | Workspace-wide; can include other projects' stores. Use the ID or resource name, not the display name. |
+| Session store names and details | `agentbricks -p <profile> sessions stores list`, then `agentbricks -p <profile> sessions stores get <name>` | Workspace-wide; can include other projects' stores. Use the store name. |
+
+Review each confirmation. Delete a store only after confirming that you own it and no other agent
+needs it, using the same profile and identifier used to inspect it.
+
+| Clean up | Command | Details |
+| --- | --- | --- |
+| Deployment | `agentbricks -p <profile> deployments delete agent-bricks-<name>` | Managed Runtime Store cleanup checks the app identity and runs before app deletion; a cleanup failure retains the app for retry. Memory/session stores, tracing experiments, tools, and source files are retained. |
+| [Memory store](cli.md#agentbricks-memory-stores-delete) | `agentbricks -p <profile> memory stores delete <resource-name>` | Soft-deletes the store after confirmation. |
+| [Session store](cli.md#agentbricks-sessions-stores-delete) | `agentbricks -p <profile> sessions stores delete <name>` | Deletes the store after confirmation. |
 
 ## Public names
 

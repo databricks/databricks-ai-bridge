@@ -35,7 +35,8 @@ model for this page; the project agent's instructions and tools still run. Reloa
 
 **Foreground** displays the complete answer; **Background** checks the run status until it
 finishes, without a browser deadline. Failed or disconnected streams show an error. Chat displays
-answer text blocks as Markdown and excludes opaque reasoning/signature blocks. Raw HTML is escaped
+answer text blocks as Markdown, with readable reasoning in a collapsed **Reasoning** section.
+Signatures and encrypted reasoning are excluded from the chat display. Raw HTML is escaped
 and images are not loaded; Copy preserves the original Markdown.
 
 The UI reads local history from the LangGraph checkpoint and managed history from Session Store
