@@ -18,6 +18,8 @@ re-run:
 ## Editable install (CLI + templates)
 
 ```sh
+git clone https://github.com/databricks/databricks-ai-bridge.git
+cd databricks-ai-bridge
 pip install -e integrations/agentbricks     # editable install of the CLI
 agentbricks init /tmp/scratch-agent         # scaffolds from your working-tree template
 cd /tmp/scratch-agent && agentbricks dev
