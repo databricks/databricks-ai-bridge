@@ -1,0 +1,485 @@
+[
+  {
+    "variant": "before",
+    "phase": "local-initial",
+    "name": "correct_memory_and_session_mode",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "local-initial",
+    "name": "live_sync",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "local-initial",
+    "name": "live_streaming",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "local-initial",
+    "name": "live_background",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "local-initial",
+    "name": "ui_history_reload_without_duplicate_answers",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "local-initial",
+    "name": "api_invocation_succeeds",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "local-initial",
+    "name": "api_turn_visible_in_history",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "local-initial",
+    "name": "approval_api_invocation_succeeds",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "local-initial",
+    "name": "pending_approval_restored_from_history",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "local-initial",
+    "name": "approval_resume_completes",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "local-initial",
+    "name": "no_browser_javascript_errors",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "deployed",
+    "name": "correct_memory_and_session_mode",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "deployed",
+    "name": "live_sync",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "deployed",
+    "name": "live_streaming",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "deployed",
+    "name": "live_background",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "deployed",
+    "name": "ui_history_reload_without_duplicate_answers",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "deployed",
+    "name": "api_invocation_succeeds",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "deployed",
+    "name": "api_turn_visible_in_history",
+    "passed": false,
+    "expected_baseline_failure": true
+  },
+  {
+    "variant": "before",
+    "phase": "deployed",
+    "name": "approval_api_invocation_succeeds",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "deployed",
+    "name": "pending_approval_restored_from_history",
+    "passed": false,
+    "expected_baseline_failure": true
+  },
+  {
+    "variant": "before",
+    "phase": "deployed",
+    "name": "deployed_memory_write_and_read",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "deployed",
+    "name": "no_browser_javascript_errors",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "local-again",
+    "name": "correct_memory_and_session_mode",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "local-again",
+    "name": "local_restart_does_not_reuse_saved_cloud_history",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "local-again",
+    "name": "live_sync",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "local-again",
+    "name": "live_streaming",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "local-again",
+    "name": "live_background",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "local-again",
+    "name": "ui_history_reload_without_duplicate_answers",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "local-again",
+    "name": "api_invocation_succeeds",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "local-again",
+    "name": "api_turn_visible_in_history",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "local-again",
+    "name": "approval_api_invocation_succeeds",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "local-again",
+    "name": "pending_approval_restored_from_history",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "local-again",
+    "name": "approval_resume_completes",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "before",
+    "phase": "local-again",
+    "name": "no_browser_javascript_errors",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "local-initial",
+    "name": "correct_memory_and_session_mode",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "local-initial",
+    "name": "live_sync",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "local-initial",
+    "name": "live_streaming",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "local-initial",
+    "name": "live_background",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "local-initial",
+    "name": "ui_history_reload_without_duplicate_answers",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "local-initial",
+    "name": "api_invocation_succeeds",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "local-initial",
+    "name": "api_turn_visible_in_history",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "local-initial",
+    "name": "approval_api_invocation_succeeds",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "local-initial",
+    "name": "pending_approval_restored_from_history",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "local-initial",
+    "name": "approval_resume_completes",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "local-initial",
+    "name": "no_browser_javascript_errors",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "deployed",
+    "name": "correct_memory_and_session_mode",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "deployed",
+    "name": "live_sync",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "deployed",
+    "name": "live_streaming",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "deployed",
+    "name": "live_background",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "deployed",
+    "name": "ui_history_reload_without_duplicate_answers",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "deployed",
+    "name": "api_invocation_succeeds",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "deployed",
+    "name": "api_turn_visible_in_history",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "deployed",
+    "name": "approval_api_invocation_succeeds",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "deployed",
+    "name": "pending_approval_restored_from_history",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "deployed",
+    "name": "approval_resume_completes",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "deployed",
+    "name": "deployed_memory_write_and_read",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "deployed",
+    "name": "no_browser_javascript_errors",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "local-again",
+    "name": "correct_memory_and_session_mode",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "local-again",
+    "name": "local_restart_does_not_reuse_saved_cloud_history",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "local-again",
+    "name": "live_sync",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "local-again",
+    "name": "live_streaming",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "local-again",
+    "name": "live_background",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "local-again",
+    "name": "ui_history_reload_without_duplicate_answers",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "local-again",
+    "name": "api_invocation_succeeds",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "local-again",
+    "name": "api_turn_visible_in_history",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "local-again",
+    "name": "approval_api_invocation_succeeds",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "local-again",
+    "name": "pending_approval_restored_from_history",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "local-again",
+    "name": "approval_resume_completes",
+    "passed": true,
+    "expected_baseline_failure": false
+  },
+  {
+    "variant": "after",
+    "phase": "local-again",
+    "name": "no_browser_javascript_errors",
+    "passed": true,
+    "expected_baseline_failure": false
+  }
+]

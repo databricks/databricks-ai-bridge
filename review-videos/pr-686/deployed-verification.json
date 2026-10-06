@@ -1,0 +1,18 @@
+[
+  {
+    "variant": "before",
+    "deployed_js_matches_tested_source": true,
+    "history_http_status": 200,
+    "saved_history_items": 0,
+    "memory_http_status": 200,
+    "memory_entries": 2
+  },
+  {
+    "variant": "after",
+    "deployed_js_matches_tested_source": true,
+    "history_http_status": 200,
+    "saved_history_items": 4,
+    "memory_http_status": 200,
+    "memory_entries": 2
+  }
+]

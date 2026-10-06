@@ -1,0 +1,17 @@
+{
+  "before": "ed3ed6b742ac1633cd05afa335870abaf98f6233",
+  "after": "c71b6b2451b4e3216e6bc1f1e1f83e577678bd54",
+  "main": "209dec3ea126fb769a9c5ee468aa745658f95c8e",
+  "profile": "e2-dogfood-apps",
+  "workspace": "https://e2-dogfood.staging.cloud.databricks.com",
+  "files": {
+    "before": {
+      "ui/app.js": "88ee66693d9dccc3aa7b49ba061d9a8de1f70f3231770d4447030b4d60cee901",
+      "runtime/ui.py": "f4c93399c2c6e0246cd25702122221b6ea977ccd49629a7e1e774dd484b466e7"
+    },
+    "after": {
+      "ui/app.js": "e45d5e7b22064bf2dd83617515a730058f4a7e9265c74ab8b568804497238ec7",
+      "runtime/ui.py": "7a8816299d9e3d34a8150ebf24e866a2b11a1ca4e15b672a31cc9783e8d0acf3"
+    }
+  }
+}
