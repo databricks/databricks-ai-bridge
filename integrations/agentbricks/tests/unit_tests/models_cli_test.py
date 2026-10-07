@@ -1036,6 +1036,39 @@ def test_upgrade_models_only_skips_the_bound_prompts(tmp_path, stub_job):
     assert config.prompt_uris == []
 
 
+def test_upgrade_without_candidates_optimizes_only_the_bound_prompts(tmp_path, stub_job):
+    project = _project(tmp_path)
+    _invoke_prompts(["bind", "main.my_agent.writer", "--source", str(project)], _Ctx())
+    result = _invoke(
+        ["upgrade", *_EVAL_FLAGS, "--source", str(project)],
+        _Ctx(_JobClient(), "json"),
+    )
+    assert result.exit_code == 0, result.output
+    _, config, _ = stub_job["submit"]
+    assert config.candidates == {}
+    assert config.prompt_uris == ["prompts:/main.my_agent.writer@production"]
+
+
+def test_upgrade_without_candidates_or_prompts_errors(tmp_path, stub_job):
+    project = _project(tmp_path)
+    result = _invoke(
+        ["upgrade", *_EVAL_FLAGS, "--source", str(project)],
+        _Ctx(_JobClient(), "json"),
+    )
+    assert result.exit_code != 0
+    assert "submit" not in stub_job
+
+
+def test_upgrade_models_only_without_candidates_errors(tmp_path, stub_job):
+    project = _project(tmp_path)
+    result = _invoke(
+        ["upgrade", *_EVAL_FLAGS, "--models-only", "--source", str(project)],
+        _Ctx(_JobClient(), "json"),
+    )
+    assert result.exit_code != 0
+    assert "submit" not in stub_job
+
+
 def test_prompts_list_shows_each_bound_prompts_production_version(tmp_path, monkeypatch):
     project = _project(tmp_path)
     _invoke_prompts(["bind", "main.my_agent.writer", "--source", str(project)], _Ctx())

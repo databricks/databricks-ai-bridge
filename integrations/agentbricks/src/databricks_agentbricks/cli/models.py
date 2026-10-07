@@ -729,10 +729,10 @@ def _render_applied(result: dict) -> None:
     "-c",
     "candidates",
     multiple=True,
-    required=True,
     help="system.ai.* models to evaluate for one role, as ROLE=MODEL[,MODEL...] (e.g. "
     "router=claude-haiku-4-5,gpt-5-4-nano). Repeat per role; the ROLE= prefix is optional when "
-    "only one role is bound. Each role's current model is always included as its baseline. See "
+    "only one role is bound. Each role's current model is always included as its baseline. "
+    "Required for a model search; omit it to optimize the agent's prompts only. See "
     "`agentbricks experimental models list`.",
 )
 @click.option(
@@ -836,6 +836,8 @@ def models_upgrade(
 ) -> None:
     """Search models for each of the agent's LLM calls, and with --prompt its prompts, jointly.
 
+    Omit --candidates to leave every role's model alone and optimize prompts only.
+
     Uploads the project to your workspace and submits a serverless one-time run. The job imports
     your predict_fn, eval data, and scorers from the project and runs the whole agent on each eval
     record per candidate combination, against temporary copies of the model services (production
@@ -869,6 +871,11 @@ def models_upgrade(
     if not prompt_uris and not models_only:
         # The prompts the agent declares it loads: optimize them alongside the models by default.
         prompt_uris = tuple(f"prompts:/{name}@production" for name in project.prompts.values())
+    if not candidates and not prompt_uris:
+        raise click.UsageError(
+            "Nothing to search: pass --candidates to search models, or bind prompts "
+            "(`agentbricks experimental prompts bind`) / pass --prompt to search prompts."
+        )
     services = {role: b.name for role, b in project.model_services.items()}
     by_role = _parse_candidates(candidates, list(services))
     client = obj.client()

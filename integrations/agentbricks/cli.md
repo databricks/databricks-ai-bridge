@@ -1219,7 +1219,7 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
-| `--candidates <ROLE=MODEL,...>` (`-c`) | string | - | yes | `system.ai.*` models to evaluate for one role, e.g. `router=claude-haiku-4-5,gpt-5-4-nano`. Repeat per role; the `ROLE=` prefix is optional when only one role is bound. Roles you don't list keep their current model. Each role's current model is always its baseline. |
+| `--candidates <ROLE=MODEL,...>` (`-c`) | string | - | for a model search | `system.ai.*` models to evaluate for one role, e.g. `router=claude-haiku-4-5,gpt-5-4-nano`. Repeat per role; the `ROLE=` prefix is optional when only one role is bound. Roles you don't list keep their current model. Each role's current model is always its baseline. Omit to optimize the agent's prompts only. |
 | `--prompt <URI>` | `prompts:/` URI | prompts bound in agent.toml | no | Prompt Registry prompt to optimize alongside the models (e.g. `prompts:/main.my_agent.system@production`). Repeat for more. Defaults to the prompts bound with `prompts bind`, at `@production`. The agent must load it with `load_prompt` and call `.format()` on every call. |
 | `--models-only` | flag | - | no | Search models only, leaving the agent's prompts as they are. |
 | `--predict <REF>` | `module:attr` | - | yes | Your agent's `predict_fn`: a sync callable taking one eval record's `inputs` dict. |
