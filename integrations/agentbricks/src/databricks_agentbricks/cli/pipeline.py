@@ -165,18 +165,24 @@ def get(obj, name) -> None:
 @click.argument("name")
 @click.option("--display-name", default=None)
 @click.option(
+    "--model",
+    default=None,
+    help="Model service for distillation; empty string clears the override.",
+)
+@click.option(
     "--instructions",
     default=None,
     callback=_resolve_instructions,
     help="Instructions steering distillation: inline text or @path to a UTF-8 file.",
 )
 @click.pass_obj
-def update(obj, name, display_name, instructions) -> None:
-    """Update a pipeline's display name or instructions."""
+def update(obj, name, display_name, instructions, model) -> None:
+    """Update a pipeline's display name, instructions, or model."""
     data = obj.client().update_memory_pipeline(
         name,
         display_name=display_name,
         instructions=instructions,
+        model=model,
     )
     if obj.output == "json":
         render.emit_json(data)

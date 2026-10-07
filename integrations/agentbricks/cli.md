@@ -489,7 +489,7 @@ Manage pipelines that distill session history into long-term memory.
 | [`memory pipeline create`](#agentbricks-memory-pipeline-create) | Create a Dreamer memory pipeline. |
 | [`memory pipeline list`](#agentbricks-memory-pipeline-list) | List Dreamer memory pipelines in the workspace. |
 | [`memory pipeline get`](#agentbricks-memory-pipeline-get) | Get a Dreamer memory pipeline by id or resource name. |
-| [`memory pipeline update`](#agentbricks-memory-pipeline-update) | Update a pipeline's display name or instructions. |
+| [`memory pipeline update`](#agentbricks-memory-pipeline-update) | Update a pipeline's display name, instructions, or model. |
 | [`memory pipeline delete`](#agentbricks-memory-pipeline-delete) | Delete a Dreamer memory pipeline and its backing job. |
 | [`memory pipeline run`](#agentbricks-memory-pipeline-run) | Manually run a Dreamer memory pipeline. |
 
@@ -548,13 +548,18 @@ agentbricks memory pipeline update NAME [options]
 | Option | Type | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--display-name` | string | - | no | New human-readable pipeline name. |
+| `--model` | string | - | no | Model service for distillation; empty string clears the override. |
 | `--instructions` | string | - | no | Instructions steering distillation: inline text or @path to a UTF-8 file. |
 
 Load complex instructions from a UTF-8 file (also supported by `create`):
 
 ```sh
-agentbricks memory pipeline update p-123 --instructions @/path/to/instructions.md
+agentbricks memory pipeline update p-123 --instructions @/path/to/instructions.md \
+  --model system.ai.gpt-5-6-sol
 ```
+
+Instructions are sent as `dreamer_policy.instructions` with that leaf field in the update mask.
+`--model` updates the top-level `model` field; `--model ""` clears the override.
 
 ##### `agentbricks memory pipeline delete`
 

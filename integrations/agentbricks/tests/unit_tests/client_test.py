@@ -304,6 +304,27 @@ def test_memory_pipeline_instructions_map_to_dreamer_policy(workspace_client):
     ]
 
 
+@pytest.mark.parametrize("model", ["system.ai.gpt-5-6-sol", ""])
+@pytest.mark.parametrize("instructions", [None, "Keep durable facts.", ""])
+@mock.patch("databricks.sdk.WorkspaceClient")
+def test_update_memory_pipeline_model_and_instructions(workspace_client, model, instructions):
+    c, do = _client(workspace_client)
+
+    c.update_memory_pipeline("p-123", model=model, instructions=instructions)
+
+    body = {"name": "memory-pipelines/p-123", "model": model}
+    mask = "model"
+    if instructions is not None:
+        body["dreamer_policy"] = {"instructions": instructions}
+        mask += ",dreamer_policy.instructions"
+    do.assert_called_once_with(
+        "PATCH",
+        "/api/2.0/agents/memory-pipelines/p-123",
+        query={"update_mask": mask},
+        body=body,
+    )
+
+
 @mock.patch("databricks.sdk.WorkspaceClient")
 def test_memory_pipeline_trigger_maps_to_api_enum(workspace_client):
     c, do = _client(workspace_client)

@@ -155,9 +155,28 @@ def test_list_get_update_and_delete_expose_crud_workflow():
         (
             "update",
             "p-123",
-            {"display_name": None, "instructions": "Only durable facts."},
+            {"display_name": None, "instructions": "Only durable facts.", "model": None},
         ),
         ("delete", "p-123"),
+    ]
+
+
+@pytest.mark.parametrize("model", ["system.ai.gpt-5-6-sol", ""])
+def test_update_accepts_model_and_instructions_file(model, tmp_path):
+    path = tmp_path / "instructions.md"
+    instructions = "# Distillation\nKeep durable facts.\n"
+    path.write_text(instructions, encoding="utf-8")
+    client = _Client()
+
+    result = CliRunner().invoke(
+        _pipeline(),
+        ["update", "p-123", "--model", model, "--instructions", f"@{path}"],
+        obj=_Ctx(client),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert client.calls == [
+        ("update", "p-123", {"display_name": None, "instructions": instructions, "model": model})
     ]
 
 

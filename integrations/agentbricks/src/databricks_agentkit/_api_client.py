@@ -554,8 +554,9 @@ class _AgentBricksApiClient:
         *,
         display_name: Optional[str] = None,
         instructions: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> dict:
-        body = _body(display_name=display_name)
+        body = _body(display_name=display_name, model=model)
         mask = list(body)
         if instructions is not None:
             # Instructions live in dreamer_policy, and the API accepts only this leaf as a mask
@@ -564,7 +565,9 @@ class _AgentBricksApiClient:
             body["dreamer_policy"] = {"instructions": instructions}
             mask.append("dreamer_policy.instructions")
         if not body:
-            raise AgentCliError("No fields to update. Provide --display-name or --instructions.")
+            raise AgentCliError(
+                "No fields to update. Provide --display-name, --instructions, or --model."
+            )
         return self._do(
             "PATCH",
             f"{_BASE}/{memory_pipeline_path(name)}",
