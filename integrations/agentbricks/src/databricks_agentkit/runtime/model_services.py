@@ -151,7 +151,10 @@ def foundation_model(client: WorkspaceClient | None, model: str) -> str:
     resolved = f"{_SYSTEM_AI_PREFIX}{_FOUNDATION_PREFIX}{leaf}"
     if client is not None:
         try:
-            raw = client.api_client.do("GET", service_path(f"{_SYSTEM_AI_PREFIX}{leaf}"))
+            raw = cast(
+                "dict[str, Any]",
+                client.api_client.do("GET", service_path(f"{_SYSTEM_AI_PREFIX}{leaf}")),
+            )
             destinations = (raw.get("config") or {}).get("routing", {}).get("destinations") or []
             target = (
                 (destinations[0].get("pay_per_token_config") or {}).get("model")
@@ -230,10 +233,13 @@ def can_execute(client: WorkspaceClient, model: str, principal: str) -> bool | N
     """
     foundation = foundation_model(client, model)
     try:
-        raw = client.api_client.do(
-            "GET",
-            f"/api/2.1/unity-catalog/effective-permissions/function/{foundation}",
-            query={"principal": principal},
+        raw = cast(
+            "dict[str, Any]",
+            client.api_client.do(
+                "GET",
+                f"/api/2.1/unity-catalog/effective-permissions/function/{foundation}",
+                query={"principal": principal},
+            ),
         )
     except Exception:  # noqa: BLE001 - unreadable grants aren't a denial
         return None
@@ -262,7 +268,9 @@ def ensure_schema(client: WorkspaceClient, name: str) -> None:
 
 def get_model(client: WorkspaceClient, name: str) -> str:
     """The ``system.ai.*`` model model service ``name`` routes to. Raises if it has none."""
-    model = destination_model(client.api_client.do("GET", service_path(name)))
+    model = destination_model(
+        cast("dict[str, Any]", client.api_client.do("GET", service_path(name)))
+    )
     if model is None:
         raise ValueError(f"Model service {name!r} has no foundation-model destination")
     return model
@@ -272,13 +280,19 @@ def create(client: WorkspaceClient, name: str, model: str, comment: str | None =
     """Create model service ``name`` routed to ``model``, creating its schema if missing."""
     ensure_schema(client, name)
     query, body = create_request(name, foundation_model(client, model), comment)
-    return client.api_client.do("POST", _MODEL_SERVICES_PATH, query=query, body=body)
+    return cast(
+        "dict[str, Any]",
+        client.api_client.do("POST", _MODEL_SERVICES_PATH, query=query, body=body),
+    )
 
 
 def set_model(client: WorkspaceClient, name: str, model: str) -> dict:
     """Repoint model service ``name`` to ``model``."""
     query, body = set_model_request(foundation_model(client, model))
-    return client.api_client.do("PATCH", service_path(name), query=query, body=body)
+    return cast(
+        "dict[str, Any]",
+        client.api_client.do("PATCH", service_path(name), query=query, body=body),
+    )
 
 
 def delete(client: WorkspaceClient, name: str) -> None:

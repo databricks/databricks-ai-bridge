@@ -135,7 +135,7 @@ def test_run_scorers_passes_trace_to_mlflow_scorer(mocker):
         def __call__(self, *args, **kwargs):  # pragma: no cover -- abstract guard
             return 1.0
 
-        def run(self, *, inputs=None, outputs=None, expectations=None, trace=None):
+        def run(self, *, inputs=None, outputs=None, expectations=None, trace=None):  # ty: ignore[invalid-method-override]
             captured["inputs"] = inputs
             captured["outputs"] = outputs
             captured["expectations"] = expectations
@@ -170,7 +170,7 @@ def test_run_scorers_trace_defaults_to_none_for_mlflow_scorer():
         def __call__(self, *args, **kwargs):  # pragma: no cover
             return 1.0
 
-        def run(self, *, inputs=None, outputs=None, expectations=None, trace=None):
+        def run(self, *, inputs=None, outputs=None, expectations=None, trace=None):  # ty: ignore[invalid-method-override]
             captured["trace"] = trace
             return 1.0
 

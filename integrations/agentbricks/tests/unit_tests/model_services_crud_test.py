@@ -6,6 +6,8 @@ model-upgrade optimizer both build on them), so the shapes are pinned here.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from databricks_agentkit.runtime import model_services as ms
@@ -46,6 +48,10 @@ class _Client:
         self.schemas = _Schemas(schema_error)
 
 
+def _fake_client(responses=None, schema_error=None) -> Any:
+    return _Client(responses, schema_error)
+
+
 def _service(model):
     """A model service routed to ``model`` (a model-service name), as UC returns it."""
     return {
@@ -77,7 +83,9 @@ def test_ppt_destination_shape():
 def test_foundation_model_reads_the_system_services_destination():
     # Agents call system.ai.claude-sonnet-4-5; its destination is the registered model behind it.
     routed = ms.ppt_destination("system.ai.databricks-claude-sonnet-4-5")
-    client = _Client({("GET", SYSTEM_SONNET): {"config": {"routing": {"destinations": [routed]}}}})
+    client = _fake_client(
+        {("GET", SYSTEM_SONNET): {"config": {"routing": {"destinations": [routed]}}}}
+    )
     for name in ("claude-sonnet-4-5", "system.ai.claude-sonnet-4-5"):
         assert ms.foundation_model(client, name) == "system.ai.databricks-claude-sonnet-4-5"
     assert len(client.api_client.calls) == 1  # cached
@@ -96,7 +104,7 @@ def test_destination_model_maps_back_to_the_model_service_name():
 
 
 def test_create_makes_schema_then_posts_under_parent():
-    client = _Client()
+    client = _fake_client()
     ms.create(client, SERVICE, "claude-sonnet-4-5", comment="managed_by=x")
     assert client.schemas.created == [("main", "my_agent")]
     (method, path, query, body) = client.api_client.calls[-1]
@@ -114,13 +122,13 @@ def test_create_makes_schema_then_posts_under_parent():
     [Exception("Schema 'my_agent' already exists"), Exception("ALREADY_EXISTS: already exists")],
 )
 def test_create_tolerates_existing_schema(error):
-    client = _Client(schema_error=error)
+    client = _fake_client(schema_error=error)
     ms.create(client, SERVICE, "claude-sonnet-4-5")
     assert client.api_client.calls[-1][0] == "POST"
 
 
 def test_create_surfaces_real_schema_errors():
-    client = _Client(schema_error=PermissionError("no USE CATALOG on main"))
+    client = _fake_client(schema_error=PermissionError("no USE CATALOG on main"))
     with pytest.raises(PermissionError):
         ms.create(client, SERVICE, "claude-sonnet-4-5")
     assert not [c for c in client.api_client.calls if c[0] == "POST"]
@@ -128,7 +136,7 @@ def test_create_surfaces_real_schema_errors():
 
 def test_get_set_delete():
     path = "/api/2.1/unity-catalog/model-services/main.my_agent.llm"
-    client = _Client({("GET", path): _service("claude-sonnet-4-5")})
+    client = _fake_client({("GET", path): _service("claude-sonnet-4-5")})
     assert ms.get_model(client, SERVICE) == "system.ai.claude-sonnet-4-5"
 
     ms.set_model(client, SERVICE, "claude-haiku-4-5")
@@ -145,7 +153,7 @@ def test_get_set_delete():
 
 def test_get_model_without_destination_raises():
     path = "/api/2.1/unity-catalog/model-services/main.my_agent.llm"
-    client = _Client({("GET", path): {"config": {}}})
+    client = _fake_client({("GET", path): {"config": {}}})
     with pytest.raises(ValueError, match="no foundation-model destination"):
         ms.get_model(client, SERVICE)
 
@@ -164,8 +172,8 @@ def test_can_execute_reads_effective_permissions():
     perms = "/api/2.1/unity-catalog/effective-permissions/function/system.ai.databricks-gpt-5"
     granted = {"privilege_assignments": [{"privileges": [{"privilege": "EXECUTE"}]}]}
     manage_only = {"privilege_assignments": [{"privileges": [{"privilege": "MANAGE"}]}]}
-    assert ms.can_execute(_Client({("GET", perms): granted}), "gpt-5", "me") is True
-    assert ms.can_execute(_Client({("GET", perms): manage_only}), "gpt-5", "me") is False
+    assert ms.can_execute(_fake_client({("GET", perms): granted}), "gpt-5", "me") is True
+    assert ms.can_execute(_fake_client({("GET", perms): manage_only}), "gpt-5", "me") is False
 
 
 def test_can_execute_is_unknown_when_grants_are_unreadable():
@@ -175,7 +183,7 @@ def test_can_execute_is_unknown_when_grants_are_unreadable():
                 raise PermissionError("no")
             return super().do(method, path, query, body)
 
-    client = _Client()
+    client = _fake_client()
     client.api_client = _Denied()
     assert ms.can_execute(client, "gpt-5", "me") is None
 

@@ -51,10 +51,14 @@ def test_actions_are_undone_newest_first(tmp_path):
         models=[],
         prompts=[{"name": "a.b.p", "alias": "production", "prior_version": 2}],
     )
-    index, action = model_upgrade.last_undoable_action(tmp_path)
+    last = model_upgrade.last_undoable_action(tmp_path)
+    assert last is not None
+    index, action = last
     assert (index, action["kind"]) == (1, "apply")
     model_upgrade.mark_rolled_back(tmp_path, index)
-    index, action = model_upgrade.last_undoable_action(tmp_path)
+    last = model_upgrade.last_undoable_action(tmp_path)
+    assert last is not None
+    index, action = last
     assert (index, action["kind"]) == (0, "set")
 
 

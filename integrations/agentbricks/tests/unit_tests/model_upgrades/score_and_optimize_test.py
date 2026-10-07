@@ -29,7 +29,7 @@ def test_score_returns_zero_on_empty(fake_predict, fake_scorers):
 
 def test_score_requires_scorers(fake_predict):
     with pytest.raises(TypeError):
-        score(fake_predict, [])
+        score(fake_predict, [])  # ty: ignore[missing-argument]
 
 
 def test_optimize_prompts_and_models_requires_at_least_one_target(fake_predict, fake_scorers):
@@ -45,7 +45,7 @@ def test_optimize_prompts_and_models_requires_at_least_one_target(fake_predict, 
 
 def test_optimize_prompts_and_models_requires_scorers(fake_predict):
     with pytest.raises(TypeError):
-        optimize_prompts_and_models(fake_predict, [], [], max_metric_calls=10)
+        optimize_prompts_and_models(fake_predict, [], [], max_metric_calls=10)  # ty: ignore[missing-argument]
 
 
 def test_optimize_prompts_and_models_rejects_unbalanced_weights(fake_predict, fake_scorers):

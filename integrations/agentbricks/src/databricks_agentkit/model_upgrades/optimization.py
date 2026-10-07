@@ -24,7 +24,7 @@ import warnings
 from collections import Counter, defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional
+from typing import Any, Callable, List, Optional, cast
 
 import gepa
 import mlflow
@@ -501,7 +501,7 @@ def _patched_prompts(candidate, prompt_targets):
             return overrides[self.name]
         return original_getter(self)
 
-    PromptVersion.template = _patched
+    PromptVersion.template = _patched  # ty: ignore[invalid-assignment]
     try:
         yield
     finally:
@@ -1227,7 +1227,7 @@ def _make_litellm_reflection_lm(reflection_model):
     build the LM ourselves. Imported lazily so bandit runs with no prompt
     components (and the mocked test suite) never require litellm.
     """
-    import litellm
+    import litellm  # ty: ignore[unresolved-import] - GEPA's reflection LM dependency
 
     model = f"databricks/{reflection_model}"
 
@@ -1517,7 +1517,7 @@ def optimize_prompts_and_models(
         seed = _seed_candidate(state)
         adapter = _AgentAdapter(state)
         templates = _build_reflection_templates(state)
-        defaults = {
+        defaults: dict[str, Any] = {
             "seed_candidate": seed,
             "trainset": train_data,
             "valset": val_data,
@@ -1566,7 +1566,7 @@ def optimize_prompts_and_models(
             )
 
         return Result(
-            best_candidate=gepa_result.best_candidate,
+            best_candidate=cast(dict, gepa_result.best_candidate),
             best_score=best_score,
             baseline_score=baseline_score,
             prompt_uris=list(prompt_uris or []),
