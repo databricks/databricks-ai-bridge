@@ -37,7 +37,13 @@ def run_case(
         raise ValueError("Use OAuth at Apps ingress, never caller-supplied forwarded headers")
     url = url.rstrip("/")
     output.mkdir(parents=True, exist_ok=True)
-    evidence: dict[str, Any] = {"url": url, "expected": expected, "prompt": prompt, "model": model}
+    evidence: dict[str, Any] = {
+        "url": url,
+        "expected": expected,
+        "prompt": prompt,
+        "model": model,
+        "verdict": "FAIL",
+    }
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(channel="chrome")
         try:
@@ -53,9 +59,23 @@ def run_case(
             initial = page.goto(url, wait_until="networkidle", timeout=60000)
             assert initial and initial.status == 200
             page.wait_for_function(
-                "!document.querySelector('#model-select').disabled", timeout=60000
+                """model => {
+                    const select = document.querySelector('#model-select');
+                    return Array.from(select.options).some(option => option.value === model)
+                        && !document.querySelector('#prompt-input').disabled;
+                }""",
+                arg=model,
+                timeout=60000,
             )
-            page.locator("#model-select").select_option(model)
+            if page.locator("#model-select").input_value() != model:
+                page.locator("#model-select").select_option(model)
+            evidence["model_picker"] = page.locator("#model-select").evaluate(
+                """select => ({
+                    selected: select.value,
+                    disabled: select.disabled,
+                    options: Array.from(select.options).map(option => option.value)
+                })"""
+            )
             page.locator("#prompt-input").fill(prompt)
             with page.expect_response(
                 lambda response: response.request.method == "POST"
@@ -67,24 +87,27 @@ def run_case(
             assert response.status == 200, response.text()
             request = response.request.post_data_json
             assert isinstance(request, dict), "Expected a JSON invocation request"
+            page.wait_for_function(
+                "!document.querySelector('#prompt-input').disabled", timeout=600000
+            )
             result = page.request.get(
                 url + "/api/invocations/" + request["id"], headers=dict(headers), timeout=60000
             )
             assert result.status == 200, result.text()
             body = result.json()
+            evidence.update(request=request, invocation=body)
             assert body["status"] == "completed", body
             messages = body["output"]["output"]
             tools = [item for item in messages if item.get("type") == "tool"]
+            results = [item for item in tools if item.get("name") == tool]
             assert any(
                 item.get("name") == tool and item.get("status") != "error" for item in tools
             ), tools
+            assert any(answer_marker in json.dumps(item) for item in results), results
             assistant = "\n".join(
                 str(item.get("content", "")) for item in messages if item.get("type") == "ai"
             )
             assert answer_marker in assistant, assistant
-            page.wait_for_function(
-                "!document.querySelector('#prompt-input').disabled", timeout=60000
-            )
             page.screenshot(path=str(output / "before-reopen.png"))
             submissions: list[str] = []
             page.on(
