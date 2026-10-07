@@ -39,7 +39,7 @@ MODEL = "system.ai.claude-sonnet-4-5"
 # how the runtime knows which pending calls to surface. Empty it to disable approval gating.
 REQUIRE_APPROVAL = {"send_message"}
 
-# Native callers keep pauses local; the runtime supplies durable, attempt-fenced state callbacks.
+# Native callers keep pauses local; the example adapter supplies Session Store checkpoints.
 _pending_runs: dict[str, dict[str, Any]] = {}
 
 

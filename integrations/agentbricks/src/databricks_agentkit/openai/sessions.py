@@ -16,8 +16,8 @@ durable across restarts and replicas. Setting the env var is the only change; th
 identical.
 
 Note — unlike the LangGraph checkpointer, a Session persists only the conversation transcript, not
-paused human-in-the-loop run state. The OpenAI template persists paused ``RunState`` separately
-through the Runtime Store; a Session Store binding alone does not make approvals durable.
+paused human-in-the-loop run state. The OpenAI example's harness persists ``RunState`` separately
+in a namespaced Session Store session; those checkpoint items never enter this transcript adapter.
 
 The durable store uses a vendored REST client (``session_store_client.py``) so the template needs no
 unpublished dependency; swap it for the published package when it lands.

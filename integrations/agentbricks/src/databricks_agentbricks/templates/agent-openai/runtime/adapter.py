@@ -4,6 +4,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 from agent.agent import run_agent
+from agent.checkpoints import Checkpoints
 from agents import RunResultStreaming
 from agents.items import ToolApprovalItem
 from openai.types.responses import ResponseTextDeltaEvent
@@ -94,7 +95,10 @@ async def _invoke_agent(
     auth_kwargs = {"workspace_client_for": auth.client_for} if user_auth else {}
     model = payload.get("model")
     outputs = []
-    saved = await context.load_session_state()
+    checkpoints = Checkpoints(
+        session_id, actor, context.invocation_id, context.attempt, context.emit
+    )
+    saved = await checkpoints.load()
     if (
         isinstance(saved, dict)
         and saved.get("status") == "completed"
@@ -106,7 +110,7 @@ async def _invoke_agent(
     async def save_state(snapshot):
         if snapshot is not None and snapshot.get("status") == "completed":
             snapshot = {**snapshot, "response": {"output": outputs, "status": "completed"}}
-        await context.save_session_state(snapshot)
+        await checkpoints.save(snapshot)
 
     async with run_agent(
         _agent_input(payload, recovery=recovery),
@@ -114,7 +118,7 @@ async def _invoke_agent(
         actor=actor,
         model=model if isinstance(model, str) else None,
         resume=payload.get("resume"),
-        load_state=context.load_session_state,
+        load_state=checkpoints.load,
         save_state=save_state,
         invocation_id=context.invocation_id,
         **auth_kwargs,

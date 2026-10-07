@@ -12,6 +12,7 @@ client -> runtime/main.py -> runtime/adapter.py -> agent/agent.py:run_agent
 
 - `agent/agent.py` owns the framework-native agent, sessions, tools, MCP lifetime, HITL state, and
   `run_agent`.
+- `agent/checkpoints.py` persists the example's checkpoints through the Session Store.
 - `runtime/adapter.py` owns the agent-author integration hooks: runtime input/output translation plus
   `invoke` and `recover`.
 - `runtime/main.py` constructs the server and registers those hooks.
@@ -85,14 +86,19 @@ new invocation with the same application session:
 Supply one decision per `action_requests` entry, in order, using its `call_id`. A decision's `type`
 must be `approve` or `reject`; rejections may include a string `message`.
 
-The runtime saves paused `RunState` separately from transcript history, before emitting the approval
-prompt. With a Lakebase Runtime Store, it survives restarts and replica changes. Invalid decisions
+The example harness saves paused `RunState` in a separate session in the bound Session Store,
+before emitting the approval prompt. It survives restarts and replica changes. Invalid decisions
 leave the pause intact; a valid continuation claims it for its invocation ID. Reuse that ID to check
 or recover an accepted continuation. If the continuation fails, retry with the same decisions in a
 new invocation; completed tool outputs in the saved state are retained.
 If storage fails after approval was accepted, check the invocation and tool side effects before
-retrying; the runtime cannot safely reopen a continuation without its latest state.
-`agentbricks dev` and direct `run_agent` calls without storage callbacks keep pauses process-local.
+retrying; the harness cannot safely reopen a continuation without its latest state.
+
+Without a Session Store binding, or for direct `run_agent` calls without storage callbacks, pauses
+remain process-local. `agent/checkpoints.py` owns the checkpoint format; the runtime only owns
+invocation scheduling, attempt ownership, and event delivery. Internal checkpoint sessions are
+separate from model history and are hidden from the chat session picker.
+Concurrent workers still need a shared Runtime Store to serialize invocations within a session.
 
 ## Crash recovery
 

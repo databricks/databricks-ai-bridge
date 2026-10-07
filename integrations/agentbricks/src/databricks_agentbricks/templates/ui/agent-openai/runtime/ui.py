@@ -307,7 +307,7 @@ async def _local_history(session_id: str) -> dict[str, Any]:
 
     Reads the Responses items the agent stored in its ``SQLiteSession`` for this browser session and
     shapes each into a ``{item_id, data}`` entry the UI renders. Pending approval state belongs to the
-    Runtime Store, not the transcript, so this transcript-only route returns no ``interrupts``.
+    example's checkpoint session, not the transcript, so this route returns no ``interrupts``.
     """
     from databricks_agentkit.openai.sessions import session_store
 

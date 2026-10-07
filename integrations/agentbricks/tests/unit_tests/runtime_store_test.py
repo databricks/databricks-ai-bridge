@@ -2,7 +2,6 @@
 
 import json
 from contextlib import asynccontextmanager
-from dataclasses import replace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -62,63 +61,6 @@ def scalar_result(value):
     result.scalar_one.return_value = value
     result.scalar_one_or_none.return_value = value
     return result
-
-
-@pytest.mark.asyncio
-async def test_local_session_state_preserves_order_copies_and_explicit_clearing():
-    store = InMemoryRuntimeStore()
-    assert await store.load_session_state("conversation") is None
-    await store.accept("z-first", {}, session_id="conversation")
-    await store.claim("z-first")
-    pending = {"calls": ["send-message"]}
-    assert await store.save_session_state("z-first", 1, pending)
-    pending["calls"].clear()
-    restored = await store.load_session_state("conversation")
-    assert restored == {"calls": ["send-message"]}
-    assert isinstance(restored, dict)
-    restored_calls = restored["calls"]
-    assert isinstance(restored_calls, list)
-    restored_calls.clear()
-    assert await store.load_session_state("conversation") == {"calls": ["send-message"]}
-    await store.complete("z-first", 1, {"status": "interrupted"})
-
-    await store.accept("validation-failure", {}, session_id="conversation")
-    await store.claim("validation-failure")
-    await store.fail("validation-failure", 1)
-    assert await store.load_session_state("conversation") == {"calls": ["send-message"]}
-    assert await store.load_session_state("another-conversation") is None
-
-    await store.accept("a-next", {}, session_id="conversation")
-    await store.claim("a-next")
-    assert await store.save_session_state("a-next", 1, {"calls": ["next-call"]})
-    assert await store.load_session_state("conversation") == {"calls": ["next-call"]}
-    assert await store.save_session_state("a-next", 1, None)
-    await store.complete("a-next", 1, {})
-    assert await store.load_session_state("conversation") is None
-    assert not await store.save_session_state("z-first", 1, pending)
-    assert await store.load_session_state("conversation") is None
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "case", ["missing", "queued", "stale", "completed", "failed", "sessionless"]
-)
-async def test_local_session_state_rejects_writes_without_active_session_ownership(case):
-    store = InMemoryRuntimeStore()
-    if case != "missing":
-        await store.accept("invocation", {}, session_id=None if case == "sessionless" else "s")
-        if case != "queued":
-            active = await store.claim("invocation")
-            assert active is not None
-            if case == "stale":
-                store.states["invocation"] = replace(active, attempt=2)
-            elif case == "completed":
-                await store.complete("invocation", 1, {})
-            elif case == "failed":
-                await store.fail("invocation", 1)
-
-    assert not await store.save_session_state("invocation", 1, {"pending": True})
-    assert await store.load_session_state("s") is None
 
 
 def test_environment_store_is_local_without_an_attached_resource(monkeypatch):
@@ -369,7 +311,6 @@ async def test_initialize_creates_invocation_and_event_tables():
     assert "invocation_id TEXT PRIMARY KEY" in sql
     assert "ADD COLUMN IF NOT EXISTS session_id TEXT" in sql
     assert "ADD COLUMN IF NOT EXISTS session_sequence_number BIGINT" in sql
-    assert "ADD COLUMN IF NOT EXISTS session_state JSONB" in sql
     assert "request JSONB NOT NULL" in sql
     assert "response JSONB" in sql
     assert "jsonb_typeof(request)" not in sql
@@ -575,46 +516,6 @@ async def test_heartbeat_is_fenced_by_invocation_and_attempt():
     query = str(connection.execute.await_args.args[0])
     assert "WHERE invocation_id=:invocation_id" in query
     assert connection.execute.await_args.args[1] == {"invocation_id": "session-1", "attempt": 2}
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("serialized", [None, "null", '{"pending": ["call-1"]}'])
-async def test_load_session_state_reads_latest_saved_state_including_json_null(serialized):
-    lakebase, connection = mock_lakebase()
-    connection.execute.return_value = scalar_result(serialized)
-    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
-
-    assert await store.load_session_state("s") == (
-        json.loads(serialized) if serialized is not None else None
-    )
-    query = str(connection.execute.await_args.args[0])
-    assert "session_id=:session_id AND session_state IS NOT NULL" in query
-    assert "ORDER BY session_sequence_number DESC" in query
-    assert "LIMIT 1" in query
-    assert connection.execute.await_args.args[1] == {"session_id": "s"}
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("rowcount", [0, 1])
-@pytest.mark.parametrize("state", [None, {"pending": ["call-1"]}])
-async def test_save_session_state_fences_writes_and_persists_json_null(rowcount, state):
-    lakebase, connection = mock_lakebase()
-    connection.execute.return_value = MagicMock(rowcount=rowcount)
-    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
-
-    assert await store.save_session_state("invocation", 2, state) is (rowcount == 1)
-    query = str(connection.execute.await_args.args[0])
-    assert "session_state=CAST(:state AS JSONB)" in query
-    assert "invocation_id=:invocation_id" in query
-    assert "attempt=:attempt" in query
-    assert "status='ACTIVE'" in query
-    assert "session_id IS NOT NULL" in query
-    assert connection.execute.await_args.args[1] == {
-        "invocation_id": "invocation",
-        "attempt": 2,
-        "state": json.dumps(state),
-    }
-    connection.execute.assert_awaited_once()
 
 
 @pytest.mark.asyncio

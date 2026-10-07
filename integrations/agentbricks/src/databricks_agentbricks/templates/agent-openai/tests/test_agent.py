@@ -316,6 +316,12 @@ def approval_run(monkeypatch):
         store["state"] = json.loads(json.dumps(value))
 
     save_state = AsyncMock(side_effect=save)
+    import runtime.adapter as adapter
+
+    checkpoints = SimpleNamespace(
+        load=AsyncMock(side_effect=lambda: store["state"]), save=save_state
+    )
+    monkeypatch.setattr(adapter, "Checkpoints", lambda *_args: checkpoints)
     monkeypatch.setattr(agent_module, "create_agent", create_agent)
     monkeypatch.setattr(agent_module, "build_mcp_servers", lambda: [])
     monkeypatch.setattr(agent_module, "mcp_servers", AsyncMock(return_value=[]))
@@ -420,13 +426,9 @@ async def test_approval_model_failure_continues_without_repeating_tool(approval_
     assert run.store["state"]["status"] == "completed"
 
 
-def _approval_context(run):
+def _approval_context():
     return SimpleNamespace(
-        session_id="approval-test",
-        invocation_id="start",
-        emit=AsyncMock(),
-        load_session_state=AsyncMock(side_effect=lambda: run.store["state"]),
-        save_session_state=run.save_state,
+        session_id="approval-test", invocation_id="start", attempt=1, emit=AsyncMock()
     )
 
 
@@ -435,7 +437,7 @@ async def test_adapter_recovery_replays_completed_response_without_model_call(ap
     import runtime.adapter as adapter
 
     run = approval_run
-    context = _approval_context(run)
+    context = _approval_context()
     await adapter.invoke(
         {
             "messages": [{"role": "user", "content": "Send a message"}],
@@ -472,7 +474,7 @@ async def test_adapter_recovery_replays_completed_response_without_model_call(ap
 async def test_initial_pause_storage_failure_does_not_emit_interrupt(approval_run):
     import runtime.adapter as adapter
 
-    run, context = approval_run, _approval_context(approval_run)
+    run, context = approval_run, _approval_context()
     run.save_state.side_effect = OSError("store unavailable")
     with pytest.raises(OSError, match="store unavailable"):
         await adapter.invoke(
@@ -610,12 +612,10 @@ async def test_adapter_recovery_marks_replayed_agent_input(monkeypatch):
     monkeypatch.setattr(adapter, "run_agent", fake_run_agent)
     payload = {"session_id": "ignored", "messages": [{"role": "user", "content": "hi"}]}
     context = SimpleNamespace(
-        session_id="runtime-session",
-        emit=AsyncMock(),
-        load_session_state=AsyncMock(),
-        save_session_state=AsyncMock(),
-        invocation_id="invocation",
+        session_id="runtime-session", emit=AsyncMock(), invocation_id="invocation", attempt=1
     )
+    checkpoints = SimpleNamespace(load=AsyncMock(return_value=None), save=AsyncMock())
+    monkeypatch.setattr(adapter, "Checkpoints", lambda *_args: checkpoints)
 
     response = await adapter.invoke(payload, context)
     recovered = await adapter.recover(payload, context)
@@ -625,7 +625,7 @@ async def test_adapter_recovery_marks_replayed_agent_input(monkeypatch):
         "actor": "runtime-session",
         "model": None,
         "resume": None,
-        "load_state": context.load_session_state,
+        "load_state": checkpoints.load,
         "save_state": ANY,
         "invocation_id": context.invocation_id,
     }

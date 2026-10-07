@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, TypeAlias
 
 if TYPE_CHECKING:
     from databricks_agentkit.runtime.auth import RequestAuthContext
-    from databricks_agentkit.runtime.store import RuntimeStore
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 JsonObject = dict[str, JsonValue]
@@ -71,7 +70,6 @@ class InvocationAttemptContext:
     attempt: int
     _emit: InvocationEventEmitter | None = field(default=None, repr=False, compare=False)
     session_id: str | None = None
-    _runtime_store: "RuntimeStore | None" = field(default=None, repr=False, compare=False)
 
     @property
     def is_recovery(self) -> bool:
@@ -83,23 +81,6 @@ class InvocationAttemptContext:
         if self._emit is None:
             raise RuntimeError("event emission is not available for this invocation context")
         return await self._emit(event)
-
-    async def load_session_state(self) -> JsonValue:
-        """Load private application state, separate from responses and replayed events."""
-        if self._runtime_store is None or self.session_id is None:
-            raise RuntimeError("session state requires a Runtime Store and session_id")
-        return await self._runtime_store.load_session_state(self.session_id)
-
-    async def save_session_state(self, state: JsonValue) -> None:
-        """Save private application state only while this attempt still owns the session."""
-        if self._runtime_store is None or self.session_id is None:
-            raise RuntimeError("session state requires a Runtime Store and session_id")
-        if not await self._runtime_store.save_session_state(
-            self.invocation_id, self.attempt, state
-        ):
-            raise RuntimeError(
-                f"invocation {self.invocation_id!r} no longer owns attempt {self.attempt}"
-            )
 
 
 InvocationExecutorFn = Callable[[JsonValue, InvocationAttemptContext], Awaitable[JsonValue]]
@@ -126,14 +107,6 @@ class InvocationContext:
     async def emit(self, event: JsonObject) -> int:
         """Persist an ordered application event and return its replay cursor."""
         return await self._attempt_context.emit(event)
-
-    async def load_session_state(self) -> JsonValue:
-        """Load private application state for this session."""
-        return await self._attempt_context.load_session_state()
-
-    async def save_session_state(self, state: JsonValue) -> None:
-        """Persist private state with attempt fencing; None clears a previous snapshot."""
-        await self._attempt_context.save_session_state(state)
 
 
 InvocationHook = Callable[[JsonValue, InvocationContext], Awaitable[JsonValue]]

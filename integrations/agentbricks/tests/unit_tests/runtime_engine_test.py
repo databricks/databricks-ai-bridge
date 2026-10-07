@@ -25,11 +25,10 @@ from databricks_agentkit.runtime.types import (
 )
 
 
-class MemoryDurableRuntimeStore(InMemoryRuntimeStore):
+class MemoryDurableRuntimeStore:
     """Durable-store fake that keeps heartbeat leases separate from invocations."""
 
     def __init__(self) -> None:
-        super().__init__()
         self.states: dict[str, Invocation] = {}
         self.initialized = False
         self.closed = False
@@ -291,6 +290,10 @@ class MemoryDurableRuntimeStore(InMemoryRuntimeStore):
         return heartbeat_at is None or datetime.now(timezone.utc) - heartbeat_at >= timedelta(
             seconds=stale_seconds
         )
+
+    @staticmethod
+    def _owns_attempt(state: Invocation, attempt: int) -> bool:
+        return state.status == InvocationStatus.ACTIVE and state.attempt == attempt
 
     def _append_event(
         self,

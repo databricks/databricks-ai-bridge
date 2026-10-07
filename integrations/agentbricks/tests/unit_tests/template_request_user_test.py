@@ -68,8 +68,7 @@ async def test_adapter_uses_context_session_and_namespaces_untrusted_actor(templ
             session_id=f"private:{owner}:session:public",
             invocation_id="run",
             emit=AsyncMock(),
-            load_session_state=AsyncMock(return_value=None),
-            save_session_state=AsyncMock(),
+            attempt=1,
         )
         response = await adapter.invoke(payload, context)
         kwargs = calls[0][1]
@@ -136,8 +135,7 @@ async def test_context_session_and_default_actor_are_already_private(template, m
         session_id="already-private",
         invocation_id="public-run",
         emit=AsyncMock(),
-        load_session_state=AsyncMock(return_value=None),
-        save_session_state=AsyncMock(),
+        attempt=1,
     )
     payload = {"messages": []}
     if actor is not None:

@@ -83,7 +83,6 @@ class AttemptExecution:
                     attempt=claimed.attempt,
                     session_id=claimed.session_id,
                     _emit=emit,
-                    _runtime_store=self._runtime_store,
                 ),
             )
             response = copy_json_value(response, "executor response")

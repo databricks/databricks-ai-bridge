@@ -94,11 +94,15 @@ outputs, and interruptions require explicit mappings and must not be discarded t
 
 ### Recovery and durability
 
-Runtime Store persistence covers invocations and emitted events. Session Store persistence covers
-the conversation transcript, not in-flight run state. The Agents SDK has no node-level checkpoint
-continuation. The template persists paused OpenAI HITL `RunState` through the invocation context's
-private session state before emitting interrupts; writes require active attempt ownership. This
-state survives worker loss with a Lakebase Runtime Store. `dev` uses process-local storage.
+Runtime Store persistence covers invocations and emitted events. The harness defines checkpoint
+contents: the OpenAI example saves its paused `RunState` in a namespaced Session Store session,
+separate from the transcript, before emitting interrupts. Its `agent/checkpoints.py` helper uses
+append-only records ordered by invocation generation, attempt, and write index. It reserves the
+generation before checking attempt ownership through `context.emit`, so delayed old writes cannot
+replace newer checkpoints. The runtime does not interpret or store framework checkpoints.
+With a Session Store binding, pauses survive worker loss; without one they stay process-local.
+Concurrent workers still require shared Runtime Store scheduling. The Agents SDK has no node-level
+checkpoint continuation.
 
 Register recovery when intended. The recover hook replays the persisted application input against
 the same session (or restores the saved approval continuation) and prepends a developer instruction

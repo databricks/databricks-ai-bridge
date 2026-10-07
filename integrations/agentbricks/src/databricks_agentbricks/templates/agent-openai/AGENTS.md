@@ -44,6 +44,7 @@ application session state.
 | Change | File |
 | --- | --- |
 | Framework-native agent and `run_agent` | `agent/agent.py` |
+| Harness checkpoint persistence through the Session Store | `agent/checkpoints.py` |
 | Local tools | `agent/tools/` |
 | MCP servers | `agent/mcps.py` |
 | Managed runtime `invoke`/`recover` hooks and input/output translation | `runtime/adapter.py` |
@@ -54,9 +55,9 @@ application session state.
 Keep `agent/agent.py` runnable without runtime request or context types. If you bring an existing agent,
 put its framework-native execution in `run_agent`. The small `runtime/adapter.py` is the agent-author
 integration point: it translates the application payload, calls `run_agent`, emits runtime events, and
-shapes the response. Its `recover` hook calls the same `run_agent` with the original application input
-plus a developer instruction warning that the prior attempt may have partially completed because the
-Agents SDK does not expose checkpoint continuation.
+shapes the response. Its `recover` hook calls the same `run_agent`, restoring saved approval state
+when present. Otherwise it replays the original input with a developer instruction warning that
+the prior attempt may have partially completed; the Agents SDK has no node-level checkpoints.
 
 ## State and recovery
 
@@ -64,8 +65,8 @@ Agents SDK does not expose checkpoint continuation.
   Store.
 - Conversation transcript: in-process in `agentbricks dev`; managed Session Store when bound, on `agentbricks deploy`.
 - Long-term memory: off in `agentbricks dev`; managed Memory Store when bound, on `agentbricks deploy`.
-- OpenAI HITL `RunState`: saved in the Runtime Store, independently of Session Store transcripts;
-  survives worker loss when the runtime uses Lakebase, and stays process-local in `agentbricks dev`.
+- OpenAI HITL `RunState`: the example harness saves it in a separate Session Store session;
+  survives worker loss when a Session Store is bound, and stays process-local otherwise.
 - Recovery: replay the persisted application input against the same session.
 
 The adapter sends every translated framework event through `context.emit()` before delivery. OpenAI
