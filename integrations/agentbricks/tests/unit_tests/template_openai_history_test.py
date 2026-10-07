@@ -56,7 +56,7 @@ def template(request, monkeypatch):
         ),
     )
     monkeypatch.setattr(agent, "start_trace", lambda **_kwargs: nullcontext())
-    yield ui, agent, adapter
+    yield ui, agent, adapter, transport
     for session in sessions._local_sessions.values():
         session.close()
     for name in list(sys.modules):
@@ -76,7 +76,11 @@ async def test_obo_history_reads_native_session_without_live_tools(template, mon
     )
 
     from databricks_agentkit import DurableAgentServer
-    from databricks_agentkit.runtime.auth import AuthError, InvocationAuthPolicy
+    from databricks_agentkit.runtime.auth import (
+        AuthError,
+        InvocationAuthPolicy,
+        RequestAuthContext,
+    )
     from databricks_agentkit.runtime.store import InMemoryRuntimeStore
 
     class ReplyModel(Model):
@@ -106,7 +110,7 @@ async def test_obo_history_reads_native_session_without_live_tools(template, mon
         type="message",
         content=[ResponseOutputText(text="saved answer", type="output_text", annotations=[])],
     )
-    ui, agent, adapter = template
+    ui, agent, adapter, transport = template
     monkeypatch.setenv("DATABRICKS_APP_NAME", "history-test")
     monkeypatch.setenv("DATABRICKS_HOST", "https://workspace.example")
     monkeypatch.setattr(
@@ -149,6 +153,13 @@ async def test_obo_history_reads_native_session_without_live_tools(template, mon
             assert invocation.json()["output"]["output"] == [
                 {"role": "assistant", "content": "saved answer"}
             ]
+            if transport.sessions:
+                auth = RequestAuthContext.from_headers(headers)
+                try:
+                    saved = transport.get_session(session_id=auth.namespace("session", "public"))
+                    assert saved.actor_id == auth.namespace("actor", "alice@example.com")
+                finally:
+                    auth.close()
 
             def unavailable(*_args, **_kwargs):
                 raise AuthError(
@@ -174,6 +185,13 @@ async def test_obo_history_reads_native_session_without_live_tools(template, mon
             )
             assert other.status_code == 200, other.text
             assert other.json()["session_items"] == []
+            if transport.sessions:
+                auth = RequestAuthContext.from_headers({**headers, "x-forwarded-user": "bob-id"})
+                try:
+                    saved = transport.get_session(session_id=auth.namespace("session", "public"))
+                    assert saved.actor_id == auth.namespace("actor", "alice@example.com")
+                finally:
+                    auth.close()
             missing = await client.get("/api/demo/session/items?session_id=public")
             assert missing.status_code == 401
     finally:
