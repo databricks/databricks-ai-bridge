@@ -302,17 +302,16 @@ def _require_session() -> None:
         )
 
 
-async def _local_history(session_id: str) -> dict[str, Any]:
-    """Reconstruct the transcript from the in-process session (no managed Session Store).
+async def _local_history(session_id: str, actor: str | None = None) -> dict[str, Any]:
+    """Read native session items without constructing live model or tool clients.
 
-    Reads the Responses items the agent stored in its ``SQLiteSession`` for this browser session and
-    shapes each into a ``{item_id, data}`` entry the UI renders. There are no durable interrupts here:
-    a paused human-in-the-loop run is held in-process by ``agent.py`` and is not part of the session
-    transcript, so ``interrupts`` is always empty for the unmanaged path.
+    Uses the same SQLite or managed Session Store selection as invocation. Authenticated callers
+    supply private session/actor identities. A paused OpenAI run is held separately in process and
+    is not part of the session transcript, so history never reports durable interrupts.
     """
     from databricks_agentkit.openai.sessions import session_store
 
-    session = session_store(session_id)
+    session = session_store(session_id, actor)
     items = []
     for index, message in enumerate(await session.get_items()):
         data = message if isinstance(message, dict) else {"content": str(message)}
@@ -506,6 +505,18 @@ def install_ui(app: FastAPI) -> None:
     @app.get("/api/demo/session/items", include_in_schema=False)
     async def list_session_items(request: Request) -> dict:
         session_id = _request_session_id(request)
+        if app.auth_policy.requires_user:
+            from databricks_agentkit.runtime.auth import RequestAuthContext
+
+            auth = RequestAuthContext.from_headers(request.headers)
+            try:
+                result = await _local_history(
+                    auth.namespace("session", session_id),
+                    auth.namespace("actor", _request_actor(request)),
+                )
+                return {**result, "session_id": session_id}
+            finally:
+                auth.close()
         if _session_store():
             result = await _managed_call(_state_client().list_session_items, session_id)
             return _chat_session_items(result)
