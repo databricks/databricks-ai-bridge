@@ -12,6 +12,19 @@ from typing import Any
 from urllib.parse import urlsplit
 
 
+def _content_text(message: Mapping[str, Any]) -> str:
+    content = message.get("content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            part if isinstance(part, str) else str(part.get("text", ""))
+            for part in content
+            if isinstance(part, (str, dict))
+        )
+    return ""
+
+
 def run_case(
     *,
     url: str,
@@ -22,6 +35,7 @@ def run_case(
     answer_marker: str,
     expected: str,
     output: Path,
+    framework: str = "langgraph",
 ) -> dict[str, Any]:
     """Run the same user journey against an unfixed or fixed deployed project."""
     sync_playwright = importlib.import_module("playwright.sync_api").sync_playwright
@@ -42,6 +56,7 @@ def run_case(
         "expected": expected,
         "prompt": prompt,
         "model": model,
+        "framework": framework,
         "verdict": "FAIL",
     }
     with sync_playwright() as playwright:
@@ -91,23 +106,42 @@ def run_case(
                 "!document.querySelector('#prompt-input').disabled", timeout=600000
             )
             result = page.request.get(
-                url + "/api/invocations/" + request["id"], headers=dict(headers), timeout=60000
+                url + "/api/invocations/" + request["id"],
+                headers={**headers, "X-Routing-Key": request["session_id"]},
+                timeout=60000,
             )
             assert result.status == 200, result.text()
             body = result.json()
             evidence.update(request=request, invocation=body)
             assert body["status"] == "completed", body
             messages = body["output"]["output"]
-            tools = [item for item in messages if item.get("type") == "tool"]
-            results = [item for item in tools if item.get("name") == tool]
-            assert any(
-                item.get("name") == tool and item.get("status") != "error" for item in tools
-            ), tools
+            tools = [item for item in messages if (item.get("type") or item.get("role")) == "tool"]
+            if framework == "openai":
+                called_tools = [
+                    call["name"] for item in messages for call in item.get("tool_calls", [])
+                ]
+                assert tool in called_tools, called_tools
+                # OpenAI's template output omits call IDs and can omit tool-result names. Verify
+                # the requested query-result call and grounded result separately; retain raw items.
+                results = tools
+                evidence["called_tools"] = called_tools
+            else:
+                results = [item for item in tools if item.get("name") == tool]
+                assert any(item.get("status") != "error" for item in results), results
             assert any(answer_marker in json.dumps(item) for item in results), results
             assistant = "\n".join(
-                str(item.get("content", "")) for item in messages if item.get("type") == "ai"
+                _content_text(item)
+                for item in messages
+                if (item.get("type") or item.get("role")) in ("ai", "assistant")
             )
             assert answer_marker in assistant, assistant
+            history_before = page.request.get(
+                url + "/api/demo/session/items",
+                params={"session_id": request["session_id"]},
+                headers={**headers, "X-Routing-Key": request["session_id"]},
+                timeout=60000,
+            )
+            evidence["history_before_reopen"] = history_before.json()
             page.screenshot(path=str(output / "before-reopen.png"))
             submissions: list[str] = []
             page.on(
@@ -133,12 +167,24 @@ def run_case(
             if expected == "auth-error":
                 assert history_response.status == 401, history
                 assert history["error"]["code"] == "MCP_USER_AUTHORIZATION_MISSING", history
+            elif expected == "empty-history":
+                assert history_response.status == 200, history
+                assert history["session_items"] == [], history
             else:
                 assert history_response.status == 200, history
                 assert history["session_id"] == request["session_id"]
                 restored_messages = [item["data"] for item in history["session_items"]]
                 assert restored_messages[0]["content"] == prompt, restored_messages
-                assert restored_messages[1:] == messages, restored_messages
+                if framework == "openai":
+                    assert history == evidence["history_before_reopen"]
+                    restored_assistant = "\n".join(
+                        _content_text(item)
+                        for item in restored_messages
+                        if item.get("role") == "assistant"
+                    )
+                    assert restored_assistant == assistant, restored_messages
+                else:
+                    assert restored_messages[1:] == messages, restored_messages
                 page.locator("#chat-log").get_by_text(answer_marker, exact=False).first.wait_for(
                     timeout=60000
                 )
@@ -164,7 +210,10 @@ def main() -> None:
     parser.add_argument("--model", required=True)
     parser.add_argument("--tool", required=True)
     parser.add_argument("--answer-marker", required=True)
-    parser.add_argument("--expect", choices=("auth-error", "restored"), default="restored")
+    parser.add_argument("--framework", choices=("langgraph", "openai"), default="langgraph")
+    parser.add_argument(
+        "--expect", choices=("auth-error", "empty-history", "restored"), default="restored"
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     config = WorkspaceClient(profile=args.app_auth_profile).config
@@ -182,6 +231,7 @@ def main() -> None:
         answer_marker=args.answer_marker,
         expected=args.expect,
         output=args.output,
+        framework=args.framework,
     )
     logging.basicConfig(level=logging.INFO)
     logging.info("PASS: %s; evidence: %s", args.expect, args.output / "evidence.json")

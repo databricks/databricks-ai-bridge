@@ -3,9 +3,7 @@
 import asyncio
 import importlib
 import importlib.util
-import json
 import sys
-from collections.abc import Iterator, Sequence
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, cast
@@ -13,33 +11,9 @@ from uuid import uuid4
 
 import httpx
 import pytest
-
-from databricks_agentkit.runtime.session_store_client import (
-    Session,
-    SessionItem,
-    SessionStoreClient,
-)
+from template_history_fixtures import SessionStoreTransport
 
 TEMPLATES = Path(__file__).parents[2] / "src/databricks_agentbricks/templates"
-
-
-class SessionStoreTransport(SessionStoreClient):
-    """Replace REST transport only; retain managed checkpoint serialization."""
-
-    def __init__(self):
-        self.items = {}
-        self._store_name = None
-
-    def get_session(self, *, session_id: str) -> Session:
-        return Session("test", session_id, "actor")
-
-    def append_items(self, session: Session, *, items: Sequence[Any]) -> None:
-        self.items.setdefault(session.session_id, []).extend(json.loads(json.dumps(items)))
-
-    def list_items(self, session: Session, *, order_by: str | None = None) -> Iterator[SessionItem]:
-        assert order_by == "create_time asc"
-        for index, item in enumerate(self.items.get(session.session_id, [])):
-            yield SessionItem(str(index), item)
 
 
 @pytest.fixture(params=["memory", "managed"])
