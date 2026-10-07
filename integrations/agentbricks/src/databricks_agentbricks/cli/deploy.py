@@ -61,6 +61,7 @@ from databricks_agentbricks.tool_access import (
     reconcile_tool_access,
 )
 from databricks_agentkit import timefmt
+from databricks_agentkit.runtime import prompt_registry
 from databricks_agentkit.runtime.store import (
     RUNTIME_STORE_DATABASE_ENV,
     RUNTIME_STORE_LAKEBASE_BRANCH_ENV,
@@ -866,6 +867,24 @@ def deploy(
                     except AgentCliError as exc:
                         failed.append(f"{service}: {exc.hint or exc}")
                 model_grant_error = "; ".join(failed) or None
+    # Each bound prompt's schema: the Prompt Registry needs CREATE FUNCTION, EXECUTE, and MANAGE on
+    # it even to load a prompt, so without this the agent fails at its first LLM call.
+    prompts = dict(project.prompts) if project is not None else {}
+    prompt_schemas = sorted({prompt_registry.schema_of(p) for p in prompts.values()})
+    prompt_grant_error: Optional[str] = None
+    if prompt_schemas:
+        with render.status("Granting the app access to its prompts…"):
+            sp = _app_service_principal(name, obj.profile)
+            if sp is None:
+                prompt_grant_error = "could not resolve the app's service principal."
+            else:
+                failed = []
+                for schema in prompt_schemas:
+                    try:
+                        client.grant_prompt_access(schema, sp)
+                    except AgentCliError as exc:
+                        failed.append(f"{schema}: {exc.hint or exc}")
+                prompt_grant_error = "; ".join(failed) or None
     trace_grant_error: Optional[str] = None
     if trace_setup_error is None:
         with render.status("Granting the agent runtime access to its trace experiment…"):
@@ -909,6 +928,11 @@ def deploy(
                 if not model_services
                 else ("granted" if model_grant_error is None else "failed"),
                 "model_service_grant_error": model_grant_error,
+                "prompts": prompts,
+                "prompt_grant": None
+                if not prompt_schemas
+                else ("granted" if prompt_grant_error is None else "failed"),
+                "prompt_grant_error": prompt_grant_error,
             }
         )
         return
@@ -956,6 +980,17 @@ def deploy(
         )
     if model_services and model_grant_error is None:
         provisioned["Model access"] = "granted to app service principal"
+    if prompt_schemas and prompt_grant_error is not None:
+        steps.insert(
+            0,
+            "The app's service principal needs USE SCHEMA, EXECUTE, CREATE FUNCTION, and MANAGE on "
+            f"its prompt schemas ({', '.join(prompt_schemas)}) to load its prompts; that grant "
+            f"couldn't be applied automatically. Cause: {prompt_grant_error}",
+        )
+    if prompt_schemas and prompt_grant_error is None:
+        provisioned["Prompt access"] = (
+            f"granted to app service principal on {', '.join(prompt_schemas)}"
+        )
     if grants_stores and grant_error is None:
         provisioned["Store access"] = "granted to app service principal"
     if trace_experiment_id and trace_grant_error is None:

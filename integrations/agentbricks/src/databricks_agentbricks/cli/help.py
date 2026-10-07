@@ -320,6 +320,15 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("agentbricks experimental models unbind", "remove the agent's only binding"),
         ("agentbricks experimental models unbind --role router", "remove one role's binding"),
     ),
+    ("experimental", "models", "bind-prompt"): (
+        (
+            "agentbricks experimental models bind-prompt main.my_agent.writer",
+            "declare a Prompt Registry prompt the agent loads",
+        ),
+    ),
+    ("experimental", "models", "unbind-prompt"): (
+        ("agentbricks experimental models unbind-prompt writer", "remove a prompt binding"),
+    ),
     ("experimental", "models", "list"): (
         ("agentbricks experimental models list", "models you can route a service to"),
     ),

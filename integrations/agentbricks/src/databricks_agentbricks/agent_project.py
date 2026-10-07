@@ -40,6 +40,10 @@ MODEL_SERVICES_TABLE = "model_services"
 MODEL_SERVICE_DEFAULT_KEY = "default"
 DEFAULT_MODEL_ROLE = tool_manifest.DEFAULT_MODEL_ROLE
 _ROLE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+# The prompt bindings (`agentbricks experimental models bind-prompt`): MLflow Prompt Registry prompts
+# the agent loads, as `<key> = "catalog.schema.name"` under [prompts]. `agentbricks deploy` grants
+# the app access to their schemas, and `models upgrade` optimizes them by default.
+PROMPTS_TABLE = "prompts"
 
 _SCHEMA_VERSION = 1
 _SUPPORTED_SCOPE_KINDS = {"volume"}
@@ -298,6 +302,22 @@ def _store_name_from_manifest(value: object, table: str) -> str | None:
     return _required_string(cast(Mapping[str, Any], value).get("name"), f"[{table}] name")
 
 
+def _prompts_from_manifest(value: object) -> dict[str, str]:
+    """Read the ``[prompts]`` table (``key = "catalog.schema.name"``), or {} if there is none."""
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise AgentCliError(f"agent.toml [{PROMPTS_TABLE}] must be a table of key = prompt name.")
+    prompts: dict[str, str] = {}
+    for key, name in cast(Mapping[str, Any], value).items():
+        model_role(key)
+        # Plain str, not tomlkit's String (see _model_services_from_manifest).
+        prompts[str(key)] = str(
+            _three_part_name(_required_string(name, f"[{PROMPTS_TABLE}] {key}"), "prompt")
+        )
+    return prompts
+
+
 def _model_services_from_manifest(value: object) -> dict[str, ModelServiceBinding]:
     """Read the ``[model_services.<role>]`` tables, or {} if there are none."""
     if value is None:
@@ -441,6 +461,7 @@ class AgentProject:
         trace_experiment_name: str | None = None,
         user_auth: tool_manifest.UserAuthConfig | None = None,
         model_services: dict[str, ModelServiceBinding] | None = None,
+        prompts: dict[str, str] | None = None,
     ) -> None:
         self.root = root
         self.path = root / "agent.toml"
@@ -467,6 +488,8 @@ class AgentProject:
         # the model deploy routes it to on first create. Empty = unbound (the agent calls its own
         # default models directly).
         self.model_services: dict[str, ModelServiceBinding] = dict(model_services or {})
+        # Prompt bindings by key: the three-part Prompt Registry name of each prompt the agent loads.
+        self.prompts: dict[str, str] = dict(prompts or {})
 
     @classmethod
     def load(cls, root: pathlib.Path | str | None = None) -> "AgentProject":
@@ -530,6 +553,7 @@ class AgentProject:
                 str(raw_experiment) if isinstance(raw_experiment, str) and raw_experiment else None
             )
         model_services = _model_services_from_manifest(document.get(MODEL_SERVICES_TABLE))
+        prompts = _prompts_from_manifest(document.get(PROMPTS_TABLE))
         return cls(
             project_root,
             document,
@@ -543,6 +567,7 @@ class AgentProject:
             trace_experiment_name,
             user_auth,
             model_services,
+            prompts,
         )
 
     @classmethod
@@ -691,6 +716,36 @@ class AgentProject:
         elif MODEL_SERVICE_DEFAULT_KEY in table:
             del table[MODEL_SERVICE_DEFAULT_KEY]
         self.model_services[role] = binding
+        return True
+
+    def bind_prompt(self, name: str, key: str | None = None) -> str:
+        """Declare Prompt Registry prompt ``name`` (catalog.schema.name) in agent.toml; returns its key.
+
+        ``key`` defaults to the prompt's own name (its last part).
+        """
+        name = _three_part_name(_required_string(name, f"[{PROMPTS_TABLE}] prompt"), "prompt")
+        key = model_role(key or name.rsplit(".", 1)[1])
+        for other_key, other_name in self.prompts.items():
+            if other_name == name and other_key != key:
+                raise AgentCliError(f"Prompt '{name}' is already bound as '{other_key}'.")
+        table = self._document.get(PROMPTS_TABLE)
+        if not isinstance(table, Mapping):
+            table = tomlkit.table()
+            self._document.append(PROMPTS_TABLE, table)
+        table[key] = name
+        self.prompts[key] = name
+        return key
+
+    def unbind_prompt(self, key: str) -> bool:
+        """Remove prompt binding ``key`` from agent.toml. True if it was present."""
+        if key not in self.prompts:
+            return False
+        table = self._document.get(PROMPTS_TABLE)
+        if isinstance(table, Mapping) and key in table:
+            del table[key]
+            if not table:
+                del self._document[PROMPTS_TABLE]
+        del self.prompts[key]
         return True
 
     def unbind_model_service(self, role: str = DEFAULT_MODEL_ROLE) -> bool:

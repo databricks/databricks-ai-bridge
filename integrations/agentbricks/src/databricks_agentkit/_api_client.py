@@ -17,7 +17,7 @@ from urllib.parse import quote
 
 from databricks_agentbricks.errors import TRANSIENT_ERROR_CODES, AgentCliError, wrap_api_error
 from databricks_agentkit import models
-from databricks_agentkit.runtime import model_services
+from databricks_agentkit.runtime import model_services, prompt_registry
 
 if TYPE_CHECKING:
     from databricks.sdk import WorkspaceClient
@@ -306,6 +306,19 @@ class _AgentBricksApiClient:
         The parent grants are best-effort (see ``model_services.grant_requests``); EXECUTE raises.
         """
         for path, body, required in model_services.grant_requests(name, principal):
+            try:
+                self._do("PATCH", path, body=body, safe_to_retry=True)
+            except AgentCliError:
+                if required:
+                    raise
+
+    def grant_prompt_access(self, schema: str, principal: str) -> None:
+        """Let ``principal`` load Prompt Registry prompts in ``catalog.schema``.
+
+        Grants the schema privileges the Prompt Registry requires (see ``prompt_registry``), plus
+        best-effort USE CATALOG.
+        """
+        for path, body, required in prompt_registry.grant_requests(schema, principal):
             try:
                 self._do("PATCH", path, body=body, safe_to_retry=True)
             except AgentCliError:

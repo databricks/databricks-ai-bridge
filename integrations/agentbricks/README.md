@@ -460,6 +460,10 @@ agentbricks experimental models set claude-sonnet-4-5 --role router   # switch o
 Each LLM call uses its role's service through `resolve_model_service("<role>")`, which reads the
 `AGENT_MODEL_SERVICE_<ROLE>` env var that deploy sets.
 
+Prompts the agent loads from the MLflow Prompt Registry go under `[prompts]`
+(`agentbricks experimental models bind-prompt main.my_agent.writer`), and deploy grants the app
+the schema privileges the registry requires to load them.
+
 ## Commands
 
 For the full command reference - every command, subcommand, argument, and option, in table form -
@@ -501,6 +505,7 @@ agentbricks [-p <profile>] [-o text|json]
     remove           TOOL_ID [MCP_SERVICE] [--source PATH]
   models
     bind       SERVICE [--role ROLE] [--default MODEL] [--source PATH]
+    bind-prompt PROMPT [--key KEY] | unbind-prompt KEY
     unbind | list | status
     set        MODEL [--role ROLE] [--yes]
   deploy       [<name>] [--source PATH] [--instances N]

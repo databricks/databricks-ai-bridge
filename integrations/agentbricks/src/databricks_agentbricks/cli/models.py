@@ -198,6 +198,54 @@ def models_unbind(obj, role: Optional[str], source: pathlib.Path) -> None:
     render.success(f"Unbound role '{role}'" if removed else "No model service was bound")
 
 
+@models.command("bind-prompt")
+@click.argument("prompt")
+@click.option(
+    "--key",
+    default=None,
+    help="Name for this prompt in agent.toml (default: the prompt's own name, e.g. writer).",
+)
+@_source_option
+@click.pass_obj
+def models_bind_prompt(obj, prompt: str, key: Optional[str], source: pathlib.Path) -> None:
+    """Declare MLflow Prompt Registry prompt PROMPT (catalog.schema.name) that the agent loads.
+
+    This only edits agent.toml. `agentbricks deploy` grants the app's service principal what the
+    Prompt Registry requires to load prompts (USE SCHEMA, EXECUTE, CREATE FUNCTION, and MANAGE on
+    the prompt's schema), and `agentbricks experimental models upgrade` optimizes bound prompts.
+    """
+    from databricks_agentbricks.agent_project import AgentProject  # noqa: PLC0415
+
+    project = AgentProject.load(source)
+    key = project.bind_prompt(prompt, key)
+    project.write()
+    if obj.output == "json":
+        render.emit_json({"key": key, "prompt": prompt, "manifest": str(project.path)})
+        return
+    render.success(
+        f"Bound prompt '{prompt}' as '{key}'",
+        fields={"agent.toml": str(project.path)},
+        next_steps=[("agentbricks deploy <name>", "Grant the app access to it")],
+    )
+
+
+@models.command("unbind-prompt")
+@click.argument("key")
+@_source_option
+@click.pass_obj
+def models_unbind_prompt(obj, key: str, source: pathlib.Path) -> None:
+    """Remove prompt binding KEY from agent.toml (the prompt itself is left in place)."""
+    from databricks_agentbricks.agent_project import AgentProject  # noqa: PLC0415
+
+    project = AgentProject.load(source)
+    removed = project.unbind_prompt(key)
+    project.write()
+    if obj.output == "json":
+        render.emit_json({"key": key, "removed": removed})
+        return
+    render.success(f"Unbound prompt '{key}'" if removed else f"No prompt was bound as '{key}'")
+
+
 @models.command("list")
 @click.pass_obj
 def models_list(obj) -> None:
@@ -223,13 +271,19 @@ def models_status(obj, source: pathlib.Path) -> None:
         for role, b in project.model_services.items()
     }
     if obj.output == "json":
-        render.emit_json({"model_services": bound})
+        render.emit_json({"model_services": bound, "prompts": project.prompts})
         return
     render.resource_table(
         "Model services",
         [("Role", "left"), ("Model service", "left"), ("Current model", "left")],
         [[role, b["model_service"], b["model"]] for role, b in bound.items()],
     )
+    if project.prompts:
+        render.resource_table(
+            "Prompts",
+            [("Key", "left"), ("Prompt", "left")],
+            [[key, name] for key, name in project.prompts.items()],
+        )
 
 
 @models.command("set")

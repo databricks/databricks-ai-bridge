@@ -178,3 +178,15 @@ def test_can_execute_is_unknown_when_grants_are_unreadable():
     client = _Client()
     client.api_client = _Denied()
     assert ms.can_execute(client, "gpt-5", "me") is None
+
+
+def test_prompt_access_grants_the_schema_privileges_the_registry_requires():
+    from databricks_agentkit.runtime import prompt_registry
+
+    requests = prompt_registry.grant_requests("main.my_agent", "sp-1")
+    (catalog_path, catalog_body, catalog_required), (schema_path, schema_body, required) = requests
+    assert catalog_path.endswith("/catalog/main") and catalog_required is False
+    assert schema_path.endswith("/schema/main.my_agent") and required is True
+    privileges = schema_body["changes"][0]["add"]
+    assert set(privileges) == {"USE_SCHEMA", "EXECUTE", "CREATE_FUNCTION", "MANAGE"}
+    assert prompt_registry.schema_of("main.my_agent.writer") == "main.my_agent"

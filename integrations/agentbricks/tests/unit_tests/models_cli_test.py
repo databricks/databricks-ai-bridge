@@ -272,3 +272,37 @@ def test_set_switches_the_model_behind_the_service(tmp_path):
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)["changed"] is True
     assert client.model == "system.ai.claude-haiku-4-5"
+
+
+# --- prompt bindings ---------------------------------------------------------------------
+
+
+def test_bind_prompt_writes_agent_toml_and_status_lists_it(tmp_path):
+    project = _project(tmp_path)
+    result = _invoke(["bind-prompt", "main.my_agent.writer", "--source", str(project)], _Ctx())
+    assert result.exit_code == 0, result.output
+    assert AgentProject.load(project).prompts == {"writer": "main.my_agent.writer"}
+    assert '[prompts]\nwriter = "main.my_agent.writer"' in (project / "agent.toml").read_text()
+    status = _invoke(["status", "--source", str(project)], _Ctx(_FakeClient(), "json"))
+    assert json.loads(status.output)["prompts"] == {"writer": "main.my_agent.writer"}
+
+
+def test_bind_prompt_takes_an_explicit_key_and_rejects_bad_names(tmp_path):
+    project = _project(tmp_path)
+    result = _invoke(
+        ["bind-prompt", "main.my_agent.v2_writer", "--key", "writer", "--source", str(project)],
+        _Ctx(),
+    )
+    assert result.exit_code == 0, result.output
+    assert AgentProject.load(project).prompts == {"writer": "main.my_agent.v2_writer"}
+    bad = _invoke(["bind-prompt", "just-a-name", "--source", str(project)], _Ctx())
+    assert bad.exit_code != 0
+
+
+def test_unbind_prompt_removes_the_table_when_empty(tmp_path):
+    project = _project(tmp_path)
+    _invoke(["bind-prompt", "main.my_agent.writer", "--source", str(project)], _Ctx())
+    result = _invoke(["unbind-prompt", "writer", "--source", str(project)], _Ctx())
+    assert result.exit_code == 0, result.output
+    assert AgentProject.load(project).prompts == {}
+    assert "[prompts]" not in (project / "agent.toml").read_text()
