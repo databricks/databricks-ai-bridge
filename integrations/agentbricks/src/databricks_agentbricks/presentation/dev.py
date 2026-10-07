@@ -7,7 +7,7 @@ import pathlib
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.endpoint import print_agent_invoke_command
 from databricks_agentbricks.projects.types import AgentServer
-from databricks_agentbricks.services.dev_service import DevPreview
+from databricks_agentbricks.services.dev.dev_service import DevPreview
 
 
 def local_trace_label(preview: DevPreview) -> str | None:

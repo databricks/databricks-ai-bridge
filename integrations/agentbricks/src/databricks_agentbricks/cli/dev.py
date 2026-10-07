@@ -26,7 +26,7 @@ from databricks_agentbricks.presentation.dev import (
     announce_local_url as _announce_local_url,
 )
 from databricks_agentbricks.projects.resolver import ProjectResolver
-from databricks_agentbricks.services.dev_service import (
+from databricks_agentbricks.services.dev.dev_service import (
     DevRequest,
     DevService,
     _dev_entry_point,  # noqa: F401 - compatibility re-export for existing callers

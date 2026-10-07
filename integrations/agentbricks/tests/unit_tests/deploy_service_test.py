@@ -16,8 +16,14 @@ from databricks_agentbricks.clients.apps_user_auth_client import (
     AppUserScopeUpdatePlan,
 )
 from databricks_agentbricks.clients.tracing_client import TraceTable, TraceTableKind
-from databricks_agentbricks.deployment.names import DeploymentName
-from databricks_agentbricks.deployment.provisioners import (
+from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.projects.agent_project import AgentProject, ToolSpec
+from databricks_agentbricks.projects.app_manifest import AppManifest
+from databricks_agentbricks.projects.resolver import ProjectResolver
+from databricks_agentbricks.reporting import Reporter
+from databricks_agentbricks.services.deployment.deploy_service import DeployRequest, DeployService
+from databricks_agentbricks.services.deployment.names import DeploymentName
+from databricks_agentbricks.services.deployment.provisioners import (
     AppProvisioner,
     GrantOutcome,
     ManifestPatch,
@@ -32,14 +38,8 @@ from databricks_agentbricks.deployment.provisioners import (
     TracingProvisioner,
     TracingState,
 )
-from databricks_agentbricks.deployment.tool_access_provisioner import ToolAccessProvisioner
-from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.projects.agent_project import AgentProject, ToolSpec
-from databricks_agentbricks.projects.app_manifest import AppManifest
-from databricks_agentbricks.projects.resolver import ProjectResolver
-from databricks_agentbricks.reporting import Reporter
-from databricks_agentbricks.services.deploy_service import DeployRequest, DeployService
-from databricks_agentbricks.tool_access import ToolAccessPlan
+from databricks_agentbricks.services.deployment.tool_access import ToolAccessPlan
+from databricks_agentbricks.services.deployment.tool_access_provisioner import ToolAccessProvisioner
 
 
 def _auth_plan(
@@ -372,7 +372,7 @@ def test_preflight_managed_tool_failure_is_before_workspace_client(
     )
     require_support = Mock(side_effect=AgentCliError("unsupported managed tool"))
     monkeypatch.setattr(
-        "databricks_agentbricks.services.deploy_service.require_managed_tool_support",
+        "databricks_agentbricks.services.deployment.deploy_service.require_managed_tool_support",
         require_support,
     )
 

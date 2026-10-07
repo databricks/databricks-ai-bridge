@@ -15,7 +15,7 @@ from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.endpoint import print_agent_invoke_command
 from databricks_agentbricks.presentation.render import field
 from databricks_agentbricks.presentation.tracing import TRACING_BIND_COMMAND, experiment_url
-from databricks_agentbricks.services.deploy_service import DeployResult
+from databricks_agentbricks.services.deployment.deploy_service import DeployResult
 from databricks_agentkit import timefmt
 
 

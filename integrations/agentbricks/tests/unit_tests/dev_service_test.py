@@ -13,8 +13,8 @@ from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.projects.types import AgentServer
-from databricks_agentbricks.services import dev_service as dev_service_module
-from databricks_agentbricks.services.dev_service import (
+from databricks_agentbricks.services.dev import dev_service as dev_service_module
+from databricks_agentbricks.services.dev.dev_service import (
     DevRequest,
     DevService,
     LocalTracing,

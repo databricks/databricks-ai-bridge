@@ -8,7 +8,7 @@ from typing import Any, Optional
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.projects.agent_project import ToolSpec
 from databricks_agentbricks.reporting import Reporter
-from databricks_agentbricks.tool_access import (
+from databricks_agentbricks.services.deployment.tool_access import (
     ToolAccessPlan,
     finalize_tool_access,
     plan_tool_access,

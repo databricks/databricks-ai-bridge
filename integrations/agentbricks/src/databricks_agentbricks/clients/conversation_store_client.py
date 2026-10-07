@@ -1,7 +1,7 @@
 """Managed conversation-store clients for memory and session stores.
 
 Both use the same API client provider and error mapping.
-Deployment-specific Runtime Store coordination lives in ``deployment.provisioners``.
+Deployment-specific Runtime Store coordination lives in ``services.deployment.provisioners``.
 """
 
 from __future__ import annotations

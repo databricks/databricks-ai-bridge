@@ -28,26 +28,6 @@ from databricks_agentbricks.clients.conversation_store_client import (
 )
 from databricks_agentbricks.clients.databricks_cli import _databricks
 from databricks_agentbricks.clients.tracing_client import TracingClient
-from databricks_agentbricks.deployment.config import (
-    _DEFAULT_PIP_INDEX_URL,
-    _USE_MANAGED_RUNTIME_STORE,
-    TRACES_EXPERIMENT_ID_ENV,  # noqa: F401 - compatibility re-export
-    TRACES_TRACKING_URI_ENV,  # noqa: F401 - compatibility re-export
-    MlflowTracingConfig,  # noqa: F401 - compatibility re-export
-    mlflow_tracing_config,  # noqa: F401 - compatibility re-export
-)
-from databricks_agentbricks.deployment.names import (
-    DeploymentName,
-    _prefixed_name,  # noqa: F401 - compatibility re-export
-)
-from databricks_agentbricks.deployment.provisioners import (
-    AppProvisioner,
-    MemoryStoreProvisioner,
-    RuntimeStoreProvisioner,
-    SessionStoreProvisioner,
-    TracingProvisioner,
-)
-from databricks_agentbricks.deployment.tool_access_provisioner import ToolAccessProvisioner
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.deploy import (
     present_deleted,
@@ -59,7 +39,27 @@ from databricks_agentbricks.presentation.deploy import (
 )
 from databricks_agentbricks.presentation.reporter import ClickReporter
 from databricks_agentbricks.projects.resolver import ProjectResolver
-from databricks_agentbricks.services.deploy_service import DeployRequest, DeployService
+from databricks_agentbricks.services.deployment.config import (
+    _DEFAULT_PIP_INDEX_URL,
+    _USE_MANAGED_RUNTIME_STORE,
+    TRACES_EXPERIMENT_ID_ENV,  # noqa: F401 - compatibility re-export
+    TRACES_TRACKING_URI_ENV,  # noqa: F401 - compatibility re-export
+    MlflowTracingConfig,  # noqa: F401 - compatibility re-export
+    mlflow_tracing_config,  # noqa: F401 - compatibility re-export
+)
+from databricks_agentbricks.services.deployment.deploy_service import DeployRequest, DeployService
+from databricks_agentbricks.services.deployment.names import (
+    DeploymentName,
+    _prefixed_name,  # noqa: F401 - compatibility re-export
+)
+from databricks_agentbricks.services.deployment.provisioners import (
+    AppProvisioner,
+    MemoryStoreProvisioner,
+    RuntimeStoreProvisioner,
+    SessionStoreProvisioner,
+    TracingProvisioner,
+)
+from databricks_agentbricks.services.deployment.tool_access_provisioner import ToolAccessProvisioner
 
 
 def build_deploy_service(obj) -> DeployService:

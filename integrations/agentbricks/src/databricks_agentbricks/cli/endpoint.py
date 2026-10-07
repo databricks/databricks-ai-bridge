@@ -1,76 +1,26 @@
-"""CLI entry point for invoking arbitrary HTTP endpoints."""
+"""Thin Click entry point for invoking arbitrary HTTP endpoints."""
 
 from __future__ import annotations
-
-import json
-from dataclasses import replace
-from typing import Optional
-from uuid import uuid4
 
 import click
 
 from databricks_agentbricks.clients.apps_client import AppsClient
-from databricks_agentbricks.deployment.names import _prefixed_name
-from databricks_agentbricks.endpoints.request import build_request
-from databricks_agentbricks.endpoints.transport import HttpSession
-from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation.endpoint import SsePrinter, render_response
-from databricks_agentkit._api_client import _workspace_client
-
-_ROUTING_KEY_HEADER = "X-Routing-Key"
-
-
-def _resolve_endpoint(
-    app: str | None,
-    url: str | None,
-    profile: Optional[str],
-) -> tuple[str, bool]:
-    if app and url:
-        raise AgentCliError("APP and --url are mutually exclusive.")
-    if url:
-        return url.rstrip("/"), False
-    if not app:
-        raise AgentCliError(
-            "Provide a Databricks App name or --url.",
-            hint="Use --url http://localhost:8000 when running the agent locally.",
-        )
-    app_name = _prefixed_name(app)
-    resolved_url = AppsClient(profile).get_app_url(app_name)
-    if not resolved_url:
-        raise AgentCliError(f"Could not resolve a URL for Databricks App {app_name!r}.")
-    return resolved_url.rstrip("/"), True
+from databricks_agentbricks.services.invoke.invoke_service import (
+    InvokeRequest,
+    InvokeService,
+    WorkspaceOAuthAuthenticator,
+)
+from databricks_agentbricks.services.invoke.transport import HttpSession
 
 
-def _authorization_header(profile: Optional[str]) -> str:
-    try:
-        client = _workspace_client(profile)
-        if client.config.auth_type == "pat":
-            raise AgentCliError(
-                "Databricks Apps API routes require OAuth; the selected profile uses a PAT.",
-                hint="Authenticate the same workspace with `databricks auth login`.",
-            )
-        authorization = client.config.authenticate().get("Authorization")
-    except AgentCliError:
-        raise
-    except Exception as exc:  # noqa: BLE001 - render auth failures without a traceback
-        raise AgentCliError(f"Could not initialize endpoint authentication: {exc}.") from exc
-    if not authorization:
-        raise AgentCliError("Could not resolve an OAuth access token for the endpoint request.")
-    return authorization
-
-
-def _platform_headers(
-    *,
-    authenticate: bool,
-    profile: Optional[str],
-    routing_key: str | None,
-) -> dict[str, str]:
-    headers: dict[str, str] = {}
-    if authenticate:
-        headers["Authorization"] = _authorization_header(profile)
-    if routing_key:
-        headers[_ROUTING_KEY_HEADER] = routing_key
-    return headers
+def build_invoke_service(obj) -> InvokeService:
+    """Compose the endpoint workflow for one CLI invocation."""
+    return InvokeService(
+        apps_client=AppsClient(obj.profile),
+        authenticator=WorkspaceOAuthAuthenticator(obj.profile),
+        transport=HttpSession(),
+    )
 
 
 @click.group()
@@ -113,38 +63,21 @@ def invoke(
     auth,
 ) -> None:
     """Send one HTTP request to a Databricks App or arbitrary URL."""
-    base_url, is_app = _resolve_endpoint(app, url, obj.profile)
-    authenticate = is_app if auth is None else auth
-    routing_key = routing_key or (str(uuid4()) if is_app else None)
-    request = build_request(
-        base_url=base_url,
+    service = build_invoke_service(obj)
+    request = InvokeRequest(
+        app=app,
+        url=url,
         method=method,
         path=path,
         query=query,
         json_value=json_value,
-        timeout=timeout,
         sse=sse,
-    )
-    request = replace(
-        request,
-        headers={
-            **request.headers,
-            **_platform_headers(
-                authenticate=authenticate,
-                profile=obj.profile,
-                routing_key=routing_key,
-            ),
-        },
+        routing_key=routing_key,
+        timeout=timeout,
+        auth=auth,
     )
     printer = SsePrinter(enabled=sse and obj.output == "text")
-    response = HttpSession().send(request, on_event=printer)
-    if not 200 <= response.status_code < 300:
-        raise AgentCliError(
-            f"Endpoint returned HTTP {response.status_code}.",
-            hint=json.dumps(response.body, default=str)[:1000]
-            if response.body is not None
-            else None,
-        )
+    response = service.invoke(request, on_event=printer)
     render_response(response, output=obj.output, streamed=sse)
 
 

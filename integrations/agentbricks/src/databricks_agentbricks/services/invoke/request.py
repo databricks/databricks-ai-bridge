@@ -1,13 +1,35 @@
-"""Generic HTTP request construction for Agent Bricks endpoint commands."""
+"""Input validation and HTTP request construction for endpoint invocation."""
 
 from __future__ import annotations
 
 import json
 import urllib.parse
+from dataclasses import dataclass
 from typing import Any, Mapping
 
-from databricks_agentbricks.endpoints.transport import EndpointRequest
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.services.invoke.transport import EndpointRequest
+
+
+@dataclass(frozen=True)
+class InvokeRequest:
+    """The framework-independent inputs for one ``endpoint invoke`` operation.
+
+    ``json_value`` intentionally remains text at this boundary. ``build_request`` validates
+    and decodes it immediately before creating the wire request, which lets callers distinguish an
+    omitted body from an explicit JSON ``null``.
+    """
+
+    path: str
+    app: str | None = None
+    url: str | None = None
+    method: str = "POST"
+    query: tuple[str, ...] = ()
+    json_value: str | None = None
+    sse: bool = False
+    routing_key: str | None = None
+    timeout: float = 300.0
+    auth: bool | None = None
 
 
 def parse_pairs(values: tuple[str, ...], *, separator: str, description: str) -> dict[str, str]:

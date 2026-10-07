@@ -8,7 +8,7 @@ lifecycle verbs (``list_deployments``, ``get``, ``logs``, ``start``, ``stop``, `
 but they live here too so that the policy they carry - what counts as an agent deployment and that
 a managed Runtime Store is torn down before its app - is stated once instead of in each command.
 Which name shapes are legal is no longer among those policies: lifecycle verbs require a
-:class:`~databricks_agentbricks.deployment.DeploymentName`, a value object that is valid by
+:class:`~databricks_agentbricks.services.deployment.DeploymentName`, a value object that is valid by
 construction, so a name is validated once at the boundary instead of re-checked in each verb.
 
 It reports progress through the injected :class:`Reporter` port and hands back raw facts (a
@@ -31,13 +31,19 @@ from typing import Any, Optional
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.apps_user_auth_client import AppAuthPlan
-from databricks_agentbricks.deployment.config import _PIP_INDEX_ENVS
-from databricks_agentbricks.deployment.names import (
+from databricks_agentbricks.projects.agent_project import AgentProject
+from databricks_agentbricks.projects.app_manifest import AppManifest
+from databricks_agentbricks.projects.config import require_managed_tool_support
+from databricks_agentbricks.projects.resolver import ProjectResolver
+from databricks_agentbricks.projects.types import AgentServer
+from databricks_agentbricks.reporting import Reporter
+from databricks_agentbricks.services.deployment.config import _PIP_INDEX_ENVS
+from databricks_agentbricks.services.deployment.names import (
     _DEPLOYMENT_PREFIX,
     DeploymentName,
     _prefixed_name,
 )
-from databricks_agentbricks.deployment.provisioners import (
+from databricks_agentbricks.services.deployment.provisioners import (
     AppProvisioner,
     MemoryStoreProvisioner,
     ProjectContext,
@@ -46,13 +52,7 @@ from databricks_agentbricks.deployment.provisioners import (
     SessionStoreProvisioner,
     TracingProvisioner,
 )
-from databricks_agentbricks.deployment.tool_access_provisioner import ToolAccessProvisioner
-from databricks_agentbricks.projects.agent_project import AgentProject
-from databricks_agentbricks.projects.app_manifest import AppManifest
-from databricks_agentbricks.projects.config import require_managed_tool_support
-from databricks_agentbricks.projects.resolver import ProjectResolver
-from databricks_agentbricks.projects.types import AgentServer
-from databricks_agentbricks.reporting import Reporter
+from databricks_agentbricks.services.deployment.tool_access_provisioner import ToolAccessProvisioner
 
 
 def _field(obj: Any, name: str) -> Any:

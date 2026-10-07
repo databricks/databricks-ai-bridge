@@ -43,16 +43,16 @@ from databricks_agentbricks.clients.conversation_store_client import (
 )
 from databricks_agentbricks.clients.legacy_runtime_store import LakebaseBackend
 from databricks_agentbricks.clients.tracing_client import TraceTable, TracingClient
-from databricks_agentbricks.deployment.config import (
-    _AGENT_COMPUTE_OUTPUT,
-    _AGENTKIT_RUNTIME_STORE_SCHEMA,
-    mlflow_tracing_config,
-)
-from databricks_agentbricks.deployment.names import _DEPLOYMENT_PREFIX, DeploymentName
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.agent_project import AgentProject
 from databricks_agentbricks.projects.types import AgentServer
 from databricks_agentbricks.reporting import Reporter
+from databricks_agentbricks.services.deployment.config import (
+    _AGENT_COMPUTE_OUTPUT,
+    _AGENTKIT_RUNTIME_STORE_SCHEMA,
+    mlflow_tracing_config,
+)
+from databricks_agentbricks.services.deployment.names import _DEPLOYMENT_PREFIX, DeploymentName
 from databricks_agentkit.runtime.store import (
     RUNTIME_STORE_DATABASE_ENV,
     RUNTIME_STORE_LAKEBASE_BRANCH_ENV,

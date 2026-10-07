@@ -12,7 +12,7 @@ from rich.text import Text
 from databricks_agentbricks.presentation import render
 
 if TYPE_CHECKING:
-    from databricks_agentbricks.endpoints.transport import EndpointResponse
+    from databricks_agentbricks.services.invoke.transport import EndpointResponse
 
 
 def render_response(response: EndpointResponse, *, output: str, streamed: bool) -> None:
