@@ -1,4 +1,4 @@
-"""`agentbricks models` — bind the agent's LLM calls to swappable model services.
+"""`agentbricks experimental models` — bind the agent's LLM calls to swappable model services.
 
 Each LLM call site in the agent (a *role*, e.g. ``router`` and ``writer`` in a compound agent, or
 the single ``agent`` role in a one-model agent) calls a user-owned Unity Catalog AI Gateway *model
@@ -20,7 +20,7 @@ from databricks_agentbricks.errors import AgentCliError
 from databricks_agentkit.runtime.model_services import destination_model
 
 _BIND_COMMAND = (
-    "agentbricks models bind <catalog>.<schema>.<name> [--role <role>] --default system.ai.<model>"
+    "agentbricks experimental models bind <catalog>.<schema>.<name> [--role <role>] --default system.ai.<model>"
 )
 
 
@@ -171,7 +171,7 @@ def models_bind(
         fields=fields,
         next_steps=[
             ("agentbricks deploy <name>", "Create it if missing and grant the app access"),
-            ("agentbricks models set <model>", "Then switch it to another model"),
+            ("agentbricks experimental models set <model>", "Then switch it to another model"),
         ],
     )
 

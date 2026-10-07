@@ -404,7 +404,7 @@ def _reconcile_model_services(project, client) -> dict[str, str]:
     """Create each model service DECLARED in agent.toml that doesn't exist yet; return {role: name}.
 
     A new service routes to its binding's ``default`` model. An existing one is left alone: its
-    destination belongs to `agentbricks models upgrade` / `set` after the first deploy, so a redeploy must
+    destination belongs to `agentbricks experimental models upgrade` / `set` after the first deploy, so a redeploy must
     never reset an upgrade. Returns {} when no model service is bound.
     """
     if project is None or not project.model_services:
@@ -424,13 +424,13 @@ def _reconcile_model_services(project, client) -> dict[str, str]:
                 raise AgentCliError(
                     f"Model service '{name}' doesn't exist and agent.toml declares no default "
                     f"model for role '{role}'.",
-                    hint=f"Run `agentbricks models bind {name} --role {role} --default "
+                    hint=f"Run `agentbricks experimental models bind {name} --role {role} --default "
                     "system.ai.<model>` so deploy can create it.",
                 )
             client.create_model_service(
                 name,
                 binding.default,
-                comment="Managed by agentbricks; repoint with `agentbricks models`.",
+                comment="Managed by agentbricks; repoint with `agentbricks experimental models`.",
             )
         render.console().print(
             f"[green]✓[/] Created model service {name!r} → {binding.default}"

@@ -451,10 +451,10 @@ model behind it can change without a code change or redeploy. A one-model agent 
 a compound agent binds one per call site, each under a role:
 
 ```sh
-agentbricks models bind main.my_agent.router_llm --role router --default system.ai.claude-haiku-4-5
-agentbricks models bind main.my_agent.writer_llm --role writer --default system.ai.claude-sonnet-4-5
+agentbricks experimental models bind main.my_agent.router_llm --role router --default system.ai.claude-haiku-4-5
+agentbricks experimental models bind main.my_agent.writer_llm --role writer --default system.ai.claude-sonnet-4-5
 agentbricks deploy my-agent      # creates the services and grants the app EXECUTE on them
-agentbricks models set claude-sonnet-4-5 --role router   # switch one role's model, no redeploy
+agentbricks experimental models set claude-sonnet-4-5 --role router   # switch one role's model, no redeploy
 ```
 
 Each LLM call uses its role's service through `resolve_model_service("<role>")`, which reads the

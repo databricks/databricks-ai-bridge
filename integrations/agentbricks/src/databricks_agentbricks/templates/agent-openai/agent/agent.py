@@ -31,8 +31,8 @@ logger = logging.getLogger(__name__)
 # A Unity Catalog AI Gateway model service, served from the `system.ai` schema and queried through
 # the gateway (see `use_ai_gateway=True` in configure()). Swap for any `system.ai.*` model service
 # your workspace exposes — the demo chat app's picker lists what's available.
-# `agentbricks models bind` swaps this for a model service you own (wired in by `agentbricks deploy`
-# as AGENT_MODEL_SERVICE_AGENT), so `agentbricks models upgrade` can change the model without a code
+# `agentbricks experimental models bind` swaps this for a model service you own (wired in by `agentbricks deploy`
+# as AGENT_MODEL_SERVICE_AGENT), so `agentbricks experimental models upgrade` can change the model without a code
 # change.
 MODEL = resolve_model_service() or "system.ai.claude-sonnet-4-5"
 

@@ -31,10 +31,10 @@ SESSION_STORE_TABLE = "session_store"
 # init` bootstraps a default name.
 TRACING_TABLE = "tracing"
 EXPERIMENT_NAME_KEY = "experiment_name"
-# The model-service bindings (`agentbricks models bind`), one `[model_services.<role>]` table per
+# The model-service bindings (`agentbricks experimental models bind`), one `[model_services.<role>]` table per
 # LLM call site: `name` is the user-owned UC model service that call goes through
 # (catalog.schema.name); `default` is the system.ai.* model deploy routes it to when it first
-# creates the service. `agentbricks models upgrade` / `set` repoint them afterwards. A single-model
+# creates the service. `agentbricks experimental models upgrade` / `set` repoint them afterwards. A single-model
 # agent uses one role, DEFAULT_MODEL_ROLE.
 MODEL_SERVICES_TABLE = "model_services"
 MODEL_SERVICE_DEFAULT_KEY = "default"

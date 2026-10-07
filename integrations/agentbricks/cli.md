@@ -70,7 +70,7 @@ These options apply to every command. Pass them before the command name, for exa
 | [`deployments`](#agentbricks-deployments) | Manage deployed agents |
 | [`endpoint`](#agentbricks-endpoint) | Invoke arbitrary HTTP endpoints. |
 | [`tools`](#agentbricks-tools) | Manage an agent's tools |
-| [`models`](#agentbricks-models) | Bind the agent's LLM calls to model services you can switch |
+| [`experimental`](#agentbricks-experimental) | Commands whose interface is still being designed: `experimental models` |
 
 ## Commands
 
@@ -1068,7 +1068,15 @@ _Options_
 | `--warehouse <WAREHOUSE_ID>` | string | - | no | SQL warehouse id used to read traces from a UC-backed experiment (required for UC experiments; ignored for managed). Falls back to the MLFLOW_TRACING_SQL_WAREHOUSE_ID env var. |
 | `--source <SOURCE>` | path | `.` | no | Project directory to resolve the experiment from (default: current dir). |
 
-### `agentbricks models`
+### `agentbricks experimental`
+
+Commands whose interface is still being designed. They work and are tested, but their names, options, and behavior may change between releases without a deprecation period.
+
+| Subcommand | Description |
+| --- | --- |
+| [`experimental models`](#agentbricks-experimental-models) | Choose, evaluate, and upgrade the models behind your agent |
+
+### `agentbricks experimental models`
 
 Choose the models behind your agent. Each LLM call site in the agent (a *role*: for example `router` and `writer` in a compound agent, or the single `agent` role in a one-model agent) calls a Unity Catalog AI Gateway model service you own (`catalog.schema.name`, declared under `[model_services.<role>]` in agent.toml) instead of a hardcoded `system.ai.*` model:
 
@@ -1086,18 +1094,18 @@ default = "system.ai.claude-sonnet-4-5"
 
 | Subcommand | Description |
 | --- | --- |
-| [`models bind`](#agentbricks-models-bind) | Declare the model service for one of the agent's LLM calls in agent.toml (creates nothing; deploy provisions it). |
-| [`models unbind`](#agentbricks-models-unbind) | Remove a model-service binding from agent.toml (the service is left in place). |
-| [`models list`](#agentbricks-models-list) | List the `system.ai.*` chat models you can route the agent to. |
-| [`models status`](#agentbricks-models-status) | Show each bound model service and the model behind it now. |
-| [`models set`](#agentbricks-models-set) | Switch one model service to a named model. |
+| [`models bind`](#agentbricks-experimental-models-bind) | Declare the model service for one of the agent's LLM calls in agent.toml (creates nothing; deploy provisions it). |
+| [`models unbind`](#agentbricks-experimental-models-unbind) | Remove a model-service binding from agent.toml (the service is left in place). |
+| [`models list`](#agentbricks-experimental-models-list) | List the `system.ai.*` chat models you can route the agent to. |
+| [`models status`](#agentbricks-experimental-models-status) | Show each bound model service and the model behind it now. |
+| [`models set`](#agentbricks-experimental-models-set) | Switch one model service to a named model. |
 
-#### `agentbricks models bind`
+#### `agentbricks experimental models bind`
 
 Bind model service SERVICE to one of the agent's LLM calls by declaring it in agent.toml. Bind one service per call site in a compound agent, each under its own `--role`. This only edits agent.toml; `agentbricks deploy` creates the service if it doesn't exist, routed to `--default`. Deploy never repoints an existing service, so a redeploy can't undo an upgrade.
 
 ```
-agentbricks models bind SERVICE [options]
+agentbricks experimental models bind SERVICE [options]
 ```
 
 _Arguments_
@@ -1114,12 +1122,12 @@ _Options_
 | `--default <MODEL>` | string | - | no | `system.ai.*` model deploy routes the service to when it creates it (the `system.ai.` prefix is optional). Omit to keep a recorded default. |
 | `--source <SOURCE>` | path | `.` | no | Agent Bricks project containing agent.toml. |
 
-#### `agentbricks models unbind`
+#### `agentbricks experimental models unbind`
 
 Remove a model-service binding from agent.toml. After the next deploy that LLM call uses its own default model directly again.
 
 ```
-agentbricks models unbind [options]
+agentbricks experimental models unbind [options]
 ```
 
 _Options_
@@ -1129,20 +1137,20 @@ _Options_
 | `--role <ROLE>` | string | only bound role | no | Which bound LLM call site. Required when more than one role is bound. |
 | `--source <SOURCE>` | path | `.` | no | Agent Bricks project containing agent.toml. |
 
-#### `agentbricks models list`
+#### `agentbricks experimental models list`
 
 List the chat-capable `system.ai.*` models in the workspace.
 
 ```
-agentbricks models list
+agentbricks experimental models list
 ```
 
-#### `agentbricks models status`
+#### `agentbricks experimental models status`
 
 Show each bound model service and the model it routes to now.
 
 ```
-agentbricks models status [options]
+agentbricks experimental models status [options]
 ```
 
 _Options_
@@ -1151,12 +1159,12 @@ _Options_
 | --- | --- | --- | --- | --- |
 | `--source <SOURCE>` | path | `.` | no | Agent Bricks project containing agent.toml. |
 
-#### `agentbricks models set`
+#### `agentbricks experimental models set`
 
 Switch one bound model service to MODEL. Prompts for confirmation; `-o json` switches only with `--yes`.
 
 ```
-agentbricks models set MODEL [options]
+agentbricks experimental models set MODEL [options]
 ```
 
 _Arguments_

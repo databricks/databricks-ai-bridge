@@ -1,4 +1,4 @@
-"""CLI tests for `agentbricks models` bindings (bind / unbind / list / status / set).
+"""CLI tests for `agentbricks experimental models` bindings (bind / unbind / list / status / set).
 
 Uses a real temp AgentProject and a fake client holding each model service's destination.
 """

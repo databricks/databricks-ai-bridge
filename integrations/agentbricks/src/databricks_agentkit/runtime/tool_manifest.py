@@ -327,7 +327,7 @@ def resolve_model_service(
     """``role``'s model service: ``explicit`` arg → ``AGENT_MODEL_SERVICE_<ROLE>`` env → None.
 
     None means "no bound model service": that call site falls back to its own default model. A bound
-    service is a user-owned UC model service whose destination `agentbricks models` can repoint,
+    service is a user-owned UC model service whose destination `agentbricks experimental models` can repoint,
     so upgrading the model needs no code change or redeploy. A compound agent resolves one per call
     site, e.g. ``resolve_model_service("router")`` and ``resolve_model_service("writer")``.
     """

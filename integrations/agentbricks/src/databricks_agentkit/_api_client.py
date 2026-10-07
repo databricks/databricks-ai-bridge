@@ -320,7 +320,7 @@ class _AgentBricksApiClient:
         """The chat-capable ``system.ai.*`` model services in this workspace, sorted."""
         return model_services.list_ai_gateway_model_services(self._w)
 
-    # --- workspace files + one-time job runs (used by `agentbricks models upgrade`) --------
+    # --- workspace files + one-time job runs (used by `agentbricks experimental models upgrade`) --------
 
     def create_memory_store(
         self,
