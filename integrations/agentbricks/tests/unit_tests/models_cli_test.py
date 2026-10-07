@@ -832,3 +832,28 @@ def test_unbind_prompt_removes_the_table_when_empty(tmp_path):
     assert result.exit_code == 0, result.output
     assert AgentProject.load(project).prompts == {}
     assert "[prompts]" not in (project / "agent.toml").read_text()
+
+
+def test_upgrade_optimizes_the_bound_prompts_by_default(tmp_path, stub_job):
+    project = _project(tmp_path)
+    _invoke(["bind-prompt", "main.my_agent.writer", "--source", str(project)], _Ctx())
+    result = _invoke(
+        ["upgrade", *_EVAL_FLAGS, "-c", "claude-haiku-4-5", "--source", str(project)],
+        _Ctx(_JobClient(), "json"),
+    )
+    assert result.exit_code == 0, result.output
+    _, config, _ = stub_job["submit"]
+    assert config.prompt_uris == ["prompts:/main.my_agent.writer@production"]
+
+
+def test_upgrade_models_only_skips_the_bound_prompts(tmp_path, stub_job):
+    project = _project(tmp_path)
+    _invoke(["bind-prompt", "main.my_agent.writer", "--source", str(project)], _Ctx())
+    result = _invoke(
+        ["upgrade", *_EVAL_FLAGS, "-c", "claude-haiku-4-5", "--models-only",
+         "--source", str(project)],
+        _Ctx(_JobClient(), "json"),
+    )  # fmt: skip
+    assert result.exit_code == 0, result.output
+    _, config, _ = stub_job["submit"]
+    assert config.prompt_uris == []

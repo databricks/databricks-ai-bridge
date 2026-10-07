@@ -788,8 +788,14 @@ def _render_applied(result: dict) -> None:
     "prompt_uris",
     multiple=True,
     help="MLflow Prompt Registry prompt to optimize alongside the model, as a prompts:/ URI (e.g. "
-    "prompts:/main.my_agent.system@production). Repeat for more. The agent must load it with "
-    "load_prompt and call .format() on each call.",
+    "prompts:/main.my_agent.system@production). Repeat for more. Defaults to the prompts bound in "
+    "agent.toml (`models bind-prompt`) at @production. The agent must load it with load_prompt and "
+    "call .format() on each call.",
+)
+@click.option(
+    "--models-only",
+    is_flag=True,
+    help="Search models only; leave the agent's prompts as they are.",
 )
 @click.option(
     "--predict",
@@ -863,6 +869,7 @@ def models_upgrade(
     obj,
     candidates: tuple[str, ...],
     prompt_uris: tuple[str, ...],
+    models_only: bool,
     predict_fn: str,
     train_data: str,
     val_data: str,
@@ -905,6 +912,11 @@ def models_upgrade(
             "models upgrade logs next to the agent's trace experiment, but tracing isn't bound.",
             hint="Run `agentbricks tracing bind --experiment-name <path>` first.",
         )
+    if models_only and prompt_uris:
+        raise click.UsageError("--models-only can't be combined with --prompt.")
+    if not prompt_uris and not models_only:
+        # The prompts the agent declares it loads: optimize them alongside the models by default.
+        prompt_uris = tuple(f"prompts:/{name}@production" for name in project.prompts.values())
     services = {role: b.name for role, b in project.model_services.items()}
     by_role = _parse_candidates(candidates, list(services))
     client = obj.client()

@@ -547,7 +547,7 @@ agentbricks [-p <profile>] [-o text|json]
     unbind | list | status
     set        MODEL [--role ROLE] [--yes]
     rollback   [--role ROLE] [--yes]
-    upgrade    --candidates [ROLE=]MODEL[,...] [...] [--prompt URI ...] --predict REF --train-data REF --val-data REF
+    upgrade    --candidates [ROLE=]MODEL[,...] [...] [--prompt URI ... | --models-only] --predict REF --train-data REF --val-data REF
                --scorer REF [...] [--budget N] [--weights Q,L,C] [--timeout-hours H]
                [--run-on job|local] [--apply never|ask|auto] [--wait]
     apply      [--yes]
