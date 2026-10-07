@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from databricks_agentkit.openai.genie import genie_tools
+    from databricks_agentkit.openai.history import read_history
     from databricks_agentkit.openai.mcp import mcp_servers
     from databricks_agentkit.openai.memory import memory_tools
     from databricks_agentkit.openai.sessions import session_store
@@ -62,6 +63,8 @@ __all__ = [
     "memory_tools",
     # Session persistence — pass session_store(session_id) to Runner.run(session=...).
     "session_store",
+    # Saved transcript reads without constructing the live agent.
+    "read_history",
     # MLflow tracing (OpenAI autolog bound in) — call configure_tracing() once at startup.
     "configure_tracing",
     # Wrap each invocation in start_trace() so a trace is recorded (pass session_id= to tag it).
@@ -78,6 +81,7 @@ _MODULE_BY_NAME = {
     "mcp_servers": "databricks_agentkit.openai.mcp",
     "memory_tools": "databricks_agentkit.openai.memory",
     "session_store": "databricks_agentkit.openai.sessions",
+    "read_history": "databricks_agentkit.openai.history",
     "start_trace": "databricks_agentkit.runtime",
     "workspace_client": "databricks_agentkit.runtime",
     "workspace_headers": "databricks_agentkit.runtime",

@@ -65,6 +65,21 @@ def template(request, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ui_history_delegates_storage_errors_to_framework_adapter(template, monkeypatch):
+    from databricks_agentkit.openai import history
+
+    ui, _agent, _adapter, _transport = template
+
+    async def unavailable(session_id, actor):
+        assert (session_id, actor) == ("conversation", "alice")
+        raise RuntimeError("History storage unavailable")
+
+    monkeypatch.setattr(history, "read_history", unavailable)
+    with pytest.raises(RuntimeError, match="History storage unavailable"):
+        await ui._local_history("conversation", "alice")
+
+
+@pytest.mark.asyncio
 async def test_obo_history_reads_native_session_without_live_tools(template, monkeypatch):
     from agents import Agent, Model, ModelResponse
     from agents.usage import Usage
@@ -76,6 +91,7 @@ async def test_obo_history_reads_native_session_without_live_tools(template, mon
     )
 
     from databricks_agentkit import DurableAgentServer
+    from databricks_agentkit.openai import read_history
     from databricks_agentkit.runtime.auth import (
         AuthError,
         InvocationAuthPolicy,
@@ -153,6 +169,19 @@ async def test_obo_history_reads_native_session_without_live_tools(template, mon
             assert invocation.json()["output"]["output"] == [
                 {"role": "assistant", "content": "saved answer"}
             ]
+            auth = RequestAuthContext.from_headers(headers)
+            try:
+                history = await read_history(
+                    auth.namespace("session", "public"),
+                    auth.namespace("actor", "alice@example.com"),
+                )
+                assert [item["data"] for item in history["session_items"]] == [
+                    {"role": "user", "content": "saved prompt"},
+                    message.model_dump(exclude_unset=True),
+                ]
+                assert history["interrupts"] == []
+            finally:
+                auth.close()
             if transport.sessions:
                 auth = RequestAuthContext.from_headers(headers)
                 try:

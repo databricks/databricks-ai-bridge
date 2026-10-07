@@ -303,20 +303,9 @@ def _require_session() -> None:
 
 
 async def _local_history(session_id: str, actor: str | None = None) -> dict[str, Any]:
-    """Read native session items without constructing live model or tool clients.
+    from databricks_agentkit.openai import read_history
 
-    Uses the same SQLite or managed Session Store selection as invocation. Authenticated callers
-    supply private session/actor identities. A paused OpenAI run is held separately in process and
-    is not part of the session transcript, so history never reports durable interrupts.
-    """
-    from databricks_agentkit.openai.sessions import session_store
-
-    session = session_store(session_id, actor)
-    items = []
-    for index, message in enumerate(await session.get_items()):
-        data = message if isinstance(message, dict) else {"content": str(message)}
-        items.append({"item_id": str(data.get("id") or index), "data": data})
-    return {"session_id": session_id, "session_items": items, "interrupts": []}
+    return await read_history(session_id, actor)
 
 
 def _chat_sessions(result: dict[str, Any]) -> list[dict[str, Any]]:

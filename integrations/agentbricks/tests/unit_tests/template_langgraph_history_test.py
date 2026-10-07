@@ -70,7 +70,7 @@ async def test_history_reads_completed_messages_without_live_tools(template):
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
     from langgraph.graph import END, START
 
-    from databricks_agentkit.langgraph import thread_config
+    from databricks_agentkit.langgraph import read_history, thread_config
 
     ui, _agent, _adapter, saver = template
 
@@ -95,12 +95,12 @@ async def test_history_reads_completed_messages_without_live_tools(template):
         {"messages": [HumanMessage(content="Find the total.", id="prompt")]}, config
     )
     expected = await graph.aget_state(config)
-    result = await ui._checkpoint_history("conversation", "alice")
+    result = await read_history("conversation", "alice")
     assert [item["data"] for item in result["session_items"]] == [
         message.model_dump() for message in expected.values["messages"]
     ]
     assert result["interrupts"] == []
-    assert (await ui._checkpoint_history("unused", "alice"))["session_items"] == []
+    assert (await read_history("unused", "alice"))["session_items"] == []
 
 
 @pytest.mark.asyncio
@@ -109,7 +109,7 @@ async def test_history_reduces_pending_writes_and_preserves_interrupts(template)
     from langgraph.graph import END, START
     from langgraph.types import interrupt
 
-    from databricks_agentkit.langgraph import thread_config
+    from databricks_agentkit.langgraph import read_history, thread_config
 
     ui, _agent, _adapter, saver = template
     executions = []
@@ -146,7 +146,7 @@ async def test_history_reduces_pending_writes_and_preserves_interrupts(template)
     expected = await graph.aget_state(config)
     before = list(executions)
     for _attempt in range(2):
-        result = await ui._checkpoint_history("conversation", "alice")
+        result = await read_history("conversation", "alice")
         assert [item["data"] for item in result["session_items"]] == [
             message.model_dump() for message in expected.values["messages"]
         ]
@@ -170,7 +170,7 @@ async def test_history_orders_parallel_pending_messages(
     from langgraph.graph import END, START
     from langgraph.types import Send, interrupt
 
-    from databricks_agentkit.langgraph import thread_config
+    from databricks_agentkit.langgraph import read_history, thread_config
 
     ui, _agent, _adapter, saver = template
     last_written = asyncio.Event()
@@ -239,13 +239,28 @@ async def test_history_orders_parallel_pending_messages(
     pending = [value for _, channel, value in saved.pending_writes if channel == "messages"]
     assert [value[0].id for value in pending] == ["last", "first"]
     expected = await graph.aget_state(config)
-    result = await ui._checkpoint_history("parallel", "alice")
+    result = await read_history("parallel", "alice")
     assert [item["data"] for item in result["session_items"]] == [
         message.model_dump() for message in expected.values["messages"]
     ]
     assert result["interrupts"] == [
         {"id": item.id, "value": item.value} for item in expected.interrupts
     ]
+
+
+@pytest.mark.asyncio
+async def test_ui_history_delegates_storage_errors_to_framework_adapter(template, monkeypatch):
+    from databricks_agentkit.langgraph import history
+
+    ui, _agent, _adapter, _saver = template
+
+    async def unavailable(session_id, actor):
+        assert (session_id, actor) == ("conversation", "alice")
+        raise RuntimeError("History storage unavailable")
+
+    monkeypatch.setattr(history, "read_history", unavailable)
+    with pytest.raises(RuntimeError, match="History storage unavailable"):
+        await ui._checkpoint_history("conversation", "alice")
 
 
 @pytest.mark.asyncio
