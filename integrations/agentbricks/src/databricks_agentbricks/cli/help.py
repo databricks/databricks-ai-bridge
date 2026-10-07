@@ -135,6 +135,11 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
             "--model system.ai.gpt-5-6-sol",
             "create a memory pipeline",
         ),
+        (
+            "agentbricks memory pipeline create --memory-store agent-memory "
+            "--session-store agent-sessions --trigger scheduled",
+            "run it automatically about every 24 hours",
+        ),
     ),
     ("memory", "pipeline", "list"): (
         ("agentbricks memory pipeline list", "list memory pipelines"),

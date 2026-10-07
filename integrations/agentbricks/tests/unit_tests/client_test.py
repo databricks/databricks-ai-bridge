@@ -244,10 +244,10 @@ def test_memory_pipeline_crud_uses_v2_resource_contract(workspace_client):
         mock.call(
             "PATCH",
             "/api/2.0/agents/memory-pipelines/p-123",
-            query={"update_mask": "instructions"},
+            query={"update_mask": "dreamer_policy.instructions"},
             body={
                 "name": "memory-pipelines/p-123",
-                "instructions": "Only durable facts.",
+                "dreamer_policy": {"instructions": "Only durable facts."},
             },
         ),
         mock.call("DELETE", "/api/2.0/agents/memory-pipelines/p-123", query=None, body=None),
@@ -257,6 +257,67 @@ def test_memory_pipeline_crud_uses_v2_resource_contract(workspace_client):
             query=None,
             body={},
         ),
+    ]
+
+
+@mock.patch("databricks.sdk.WorkspaceClient")
+def test_memory_pipeline_instructions_map_to_dreamer_policy(workspace_client):
+    # The API nests instructions in dreamer_policy and only accepts that leaf as an update path;
+    # a top-level `instructions` field or a bare `dreamer_policy` mask path is rejected.
+    c, do = _client(workspace_client)
+
+    c.create_memory_pipeline(
+        memory_store="support-memory",
+        session_store="support-sessions",
+        instructions="Keep durable customer preferences.",
+    )
+    c.update_memory_pipeline("p-123", display_name="support-pipeline")
+    c.update_memory_pipeline("p-123", display_name="support-pipeline", instructions="")
+
+    assert do.call_args_list == [
+        mock.call(
+            "POST",
+            "/api/2.0/agents/memory-pipelines",
+            query=None,
+            body={
+                "session_store": "session-stores/support-sessions",
+                "memory_store": "memory-stores/support-memory",
+                "dreamer_policy": {"instructions": "Keep durable customer preferences."},
+            },
+        ),
+        mock.call(
+            "PATCH",
+            "/api/2.0/agents/memory-pipelines/p-123",
+            query={"update_mask": "display_name"},
+            body={"name": "memory-pipelines/p-123", "display_name": "support-pipeline"},
+        ),
+        mock.call(
+            "PATCH",
+            "/api/2.0/agents/memory-pipelines/p-123",
+            query={"update_mask": "display_name,dreamer_policy.instructions"},
+            body={
+                "name": "memory-pipelines/p-123",
+                "display_name": "support-pipeline",
+                "dreamer_policy": {"instructions": ""},
+            },
+        ),
+    ]
+
+
+@mock.patch("databricks.sdk.WorkspaceClient")
+def test_memory_pipeline_trigger_maps_to_api_enum(workspace_client):
+    c, do = _client(workspace_client)
+
+    c.create_memory_pipeline(
+        memory_store="m", session_store="s", trigger="scheduled", instructions="Only durable facts."
+    )
+    c.create_memory_pipeline(memory_store="m", session_store="s", trigger="manual")
+    with pytest.raises(AgentCliError, match="hourly"):
+        c.create_memory_pipeline(memory_store="m", session_store="s", trigger="hourly")
+
+    assert [call.kwargs["body"]["dreamer_policy"] for call in do.call_args_list] == [
+        {"trigger": "SCHEDULED", "instructions": "Only durable facts."},
+        {"trigger": "MANUAL_ONLY"},
     ]
 
 

@@ -12,9 +12,12 @@ PIPELINE = {
     "display_name": "support-pipeline",
     "session_store": "session-stores/support-sessions",
     "memory_store": "memory-stores/support-memory",
-    "instructions": "Keep durable customer preferences.",
     "model": "system.ai.gpt-5-6-sol",
-    "dreamer_policy": {"enabled": True, "trigger": "MANUAL_ONLY"},
+    "dreamer_policy": {
+        "enabled": True,
+        "trigger": "MANUAL_ONLY",
+        "instructions": "Keep durable customer preferences.",
+    },
     "etag": "etag-1",
     "create_time": "2026-09-24T01:00:00Z",
     "update_time": "2026-09-24T02:00:00Z",
@@ -96,10 +99,36 @@ def test_create_accepts_store_names_and_model():
                 "model": "system.ai.gpt-5-6-sol",
                 "display_name": None,
                 "instructions": None,
+                "trigger": "manual",
             },
         )
     ]
     assert "memory-pipelines/p-123" in result.output
+
+
+def test_create_with_scheduled_trigger():
+    client = _Client()
+    result = CliRunner().invoke(
+        _pipeline(),
+        ["create", "--memory-store", "m", "--session-store", "s", "--trigger", "scheduled"],
+        obj=_Ctx(client),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert client.calls[0][1]["trigger"] == "scheduled"
+
+
+def test_create_rejects_unknown_trigger_before_api_call():
+    client = _Client()
+    result = CliRunner().invoke(
+        _pipeline(),
+        ["create", "--memory-store", "m", "--session-store", "s", "--trigger", "hourly"],
+        obj=_Ctx(client),
+    )
+
+    assert result.exit_code == 2
+    assert "Invalid value for '--trigger'" in result.output
+    assert client.calls == []
 
 
 def test_list_get_update_and_delete_expose_crud_workflow():
@@ -119,6 +148,7 @@ def test_list_get_update_and_delete_expose_crud_workflow():
 
     for result in (listed, fetched, updated, deleted):
         assert result.exit_code == 0, result.output
+    assert "Keep durable customer preferences." in fetched.output
     assert client.calls == [
         ("list", 10, None),
         ("get", "p-123"),
