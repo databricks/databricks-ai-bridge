@@ -48,7 +48,11 @@ class _Client:
 
 def _service(model):
     """A model service routed to ``model`` (a model-service name), as UC returns it."""
-    return {"config": {"routing": {"destinations": [ms.ppt_destination(ms.foundation_model(None, model))]}}}
+    return {
+        "config": {
+            "routing": {"destinations": [ms.ppt_destination(ms.foundation_model(None, model))]}
+        }
+    }
 
 
 def test_names():
@@ -106,7 +110,8 @@ def test_create_makes_schema_then_posts_under_parent():
 
 
 @pytest.mark.parametrize(
-    "error", [Exception("Schema 'my_agent' already exists"), Exception("ALREADY_EXISTS: already exists")]
+    "error",
+    [Exception("Schema 'my_agent' already exists"), Exception("ALREADY_EXISTS: already exists")],
 )
 def test_create_tolerates_existing_schema(error):
     client = _Client(schema_error=error)

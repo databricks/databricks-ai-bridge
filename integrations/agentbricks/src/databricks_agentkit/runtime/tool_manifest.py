@@ -29,6 +29,7 @@ def model_service_env(role: str = DEFAULT_MODEL_ROLE) -> str:
     """The env var carrying ``role``'s model service name, e.g. ``AGENT_MODEL_SERVICE_ROUTER``."""
     return f"{MODEL_SERVICE_ENV_PREFIX}{role.upper()}"
 
+
 # Enable only once Databricks Connect supports table downscoping.
 SANDBOX_TABLE_SCOPES_ENABLED = False
 

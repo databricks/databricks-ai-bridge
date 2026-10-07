@@ -91,4 +91,3 @@ def test_loaded_bindings_are_plain_strings_deploy_can_write_to_app_yaml(tmp_path
     assert type(binding.name) is str and type(binding.default) is str
     services = deploy_mod._reconcile_model_services(project, _FakeClient(exists=True))
     yaml.safe_dump({"env": [{"name": "AGENT_MODEL_SERVICE_AGENT", "value": services["agent"]}]})
-

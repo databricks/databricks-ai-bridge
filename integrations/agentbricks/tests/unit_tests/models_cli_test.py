@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import pathlib
-from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
@@ -209,7 +208,10 @@ _EVAL_FLAGS = [
 def test_list_shows_chat_models(tmp_path):
     result = _invoke(["list"], _Ctx(_FakeClient(), "json"))
     assert result.exit_code == 0, result.output
-    assert json.loads(result.output) == ["system.ai.claude-haiku-4-5", "system.ai.claude-sonnet-4-5"]
+    assert json.loads(result.output) == [
+        "system.ai.claude-haiku-4-5",
+        "system.ai.claude-sonnet-4-5",
+    ]
 
 
 # --- compound agents: one model service per LLM call site ------------------------------------
@@ -246,8 +248,16 @@ def test_set_needs_a_role_when_several_are_bound(tmp_path):
     assert result.exit_code != 0
     assert "--role" in result.output
     result = _invoke(
-        ["set", "claude-haiku-4-5", "--role", "router", "--yes", "--source", str(project)],  # fmt: skip
-        _Ctx(client)
+        [
+            "set",
+            "claude-haiku-4-5",
+            "--role",
+            "router",
+            "--yes",
+            "--source",
+            str(project),
+        ],  # fmt: skip
+        _Ctx(client),
     )
     assert result.exit_code == 0, result.output
     assert client.models == {ROUTER: "system.ai.claude-haiku-4-5"}

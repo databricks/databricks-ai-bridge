@@ -299,7 +299,10 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
             "agentbricks experimental models bind main.my_agent.llm --default system.ai.claude-sonnet-4-5",
             "call a model service you own (deploy creates it)",
         ),
-        ("agentbricks experimental models status", "each role's model service and the model behind it"),
+        (
+            "agentbricks experimental models status",
+            "each role's model service and the model behind it",
+        ),
         ("agentbricks experimental models set claude-haiku-4-5", "switch the model, no redeploy"),
     ),
     ("experimental", "models", "bind"): (
@@ -317,11 +320,21 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("agentbricks experimental models unbind", "remove the agent's only binding"),
         ("agentbricks experimental models unbind --role router", "remove one role's binding"),
     ),
-    ("experimental", "models", "list"): (("agentbricks experimental models list", "models you can route a service to"),),
-    ("experimental", "models", "status"): (("agentbricks experimental models status", "each role's model service and model"),),
+    ("experimental", "models", "list"): (
+        ("agentbricks experimental models list", "models you can route a service to"),
+    ),
+    ("experimental", "models", "status"): (
+        ("agentbricks experimental models status", "each role's model service and model"),
+    ),
     ("experimental", "models", "set"): (
-        ("agentbricks experimental models set system.ai.claude-haiku-4-5", "switch the model by name"),
-        ("agentbricks experimental models set claude-haiku-4-5 --role router", "switch one role's model"),
+        (
+            "agentbricks experimental models set system.ai.claude-haiku-4-5",
+            "switch the model by name",
+        ),
+        (
+            "agentbricks experimental models set claude-haiku-4-5 --role router",
+            "switch one role's model",
+        ),
     ),
     ("tracing", "list"): (
         (

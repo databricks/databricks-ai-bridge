@@ -132,7 +132,9 @@ def service_path(name: str) -> str:
 
 def _service_leaf(model: str) -> str:
     """``system.ai.databricks-claude-sonnet-4-5`` / ``claude-sonnet-4-5`` → ``claude-sonnet-4-5``."""
-    return model.removeprefix("models/").removeprefix(_SYSTEM_AI_PREFIX).removeprefix(_FOUNDATION_PREFIX)
+    for prefix in ("models/", _SYSTEM_AI_PREFIX, _FOUNDATION_PREFIX):
+        model = model.removeprefix(prefix)
+    return model
 
 
 def foundation_model(client: WorkspaceClient | None, model: str) -> str:
@@ -150,7 +152,11 @@ def foundation_model(client: WorkspaceClient | None, model: str) -> str:
         try:
             raw = client.api_client.do("GET", service_path(f"{_SYSTEM_AI_PREFIX}{leaf}"))
             destinations = (raw.get("config") or {}).get("routing", {}).get("destinations") or []
-            target = (destinations[0].get("pay_per_token_config") or {}).get("model") if destinations else None
+            target = (
+                (destinations[0].get("pay_per_token_config") or {}).get("model")
+                if destinations
+                else None
+            )
             if target:
                 resolved = target.removeprefix("models/")
         except Exception:  # noqa: BLE001 - fall back to the naming convention

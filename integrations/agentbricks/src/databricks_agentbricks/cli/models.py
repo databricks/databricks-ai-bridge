@@ -19,9 +19,7 @@ from databricks_agentbricks import render
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentkit.runtime.model_services import destination_model
 
-_BIND_COMMAND = (
-    "agentbricks experimental models bind <catalog>.<schema>.<name> [--role <role>] --default system.ai.<model>"
-)
+_BIND_COMMAND = "agentbricks experimental models bind <catalog>.<schema>.<name> [--role <role>] --default system.ai.<model>"
 
 
 def _source_option(function):
@@ -208,7 +206,9 @@ def models_list(obj) -> None:
     if obj.output == "json":
         render.emit_json(names)
         return
-    render.resource_table("AI Gateway Models · system.ai", [("Model", "left")], [[n] for n in names])
+    render.resource_table(
+        "AI Gateway Models · system.ai", [("Model", "left")], [[n] for n in names]
+    )
 
 
 @models.command("status")

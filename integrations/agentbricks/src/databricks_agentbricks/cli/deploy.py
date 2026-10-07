@@ -432,9 +432,7 @@ def _reconcile_model_services(project, client) -> dict[str, str]:
                 binding.default,
                 comment="Managed by agentbricks; repoint with `agentbricks experimental models`.",
             )
-        render.console().print(
-            f"[green]✓[/] Created model service {name!r} → {binding.default}"
-        )
+        render.console().print(f"[green]✓[/] Created model service {name!r} → {binding.default}")
         services[role] = name
     return services
 

@@ -16,10 +16,10 @@ from databricks_agentbricks.cli.deploy import deploy, deployments
 from databricks_agentbricks.cli.dev import dev
 from databricks_agentbricks.cli.doctor import doctor
 from databricks_agentbricks.cli.endpoint import endpoint
+from databricks_agentbricks.cli.experimental import experimental
 from databricks_agentbricks.cli.help import configure_help
 from databricks_agentbricks.cli.init import init
 from databricks_agentbricks.cli.memory import memory
-from databricks_agentbricks.cli.experimental import experimental
 from databricks_agentbricks.cli.sessions import sessions
 from databricks_agentbricks.cli.tools import tools
 from databricks_agentbricks.cli.tracing import tracing
