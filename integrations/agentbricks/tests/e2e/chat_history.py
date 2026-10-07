@@ -130,9 +130,10 @@ def run_case(
                 assert any(item.get("status") != "error" for item in results), results
             assert any(answer_marker in json.dumps(item) for item in results), results
             assistant = "\n".join(
-                _content_text(item)
+                text
                 for item in messages
                 if (item.get("type") or item.get("role")) in ("ai", "assistant")
+                and (text := _content_text(item))
             )
             assert answer_marker in assistant, assistant
             history_before = page.request.get(
@@ -178,9 +179,9 @@ def run_case(
                 if framework == "openai":
                     assert history == evidence["history_before_reopen"]
                     restored_assistant = "\n".join(
-                        _content_text(item)
+                        text
                         for item in restored_messages
-                        if item.get("role") == "assistant"
+                        if item.get("role") == "assistant" and (text := _content_text(item))
                     )
                     assert restored_assistant == assistant, restored_messages
                 else:

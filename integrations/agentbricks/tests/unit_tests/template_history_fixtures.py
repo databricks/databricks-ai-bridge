@@ -4,6 +4,8 @@ import json
 from collections.abc import Iterator, Sequence
 from typing import Any
 
+from databricks.sdk.errors import NotFound
+
 from databricks_agentkit.runtime.session_store_client import (
     Session,
     SessionItem,
@@ -16,10 +18,21 @@ class SessionStoreTransport(SessionStoreClient):
 
     def __init__(self):
         self.items = {}
+        self.sessions = {}
         self._store_name = None
 
     def get_session(self, *, session_id: str) -> Session:
-        return Session("test", session_id, "actor")
+        if session_id not in self.sessions:
+            raise NotFound("Session does not exist")
+        return self.sessions[session_id]
+
+    def create_session(
+        self, *, actor_id: str, session_id: str | None = None, metadata=None
+    ) -> Session:
+        assert self._store_name and session_id
+        session = Session(self._store_name, session_id, actor_id, metadata or {})
+        self.sessions[session_id] = session
+        return session
 
     def append_items(self, session: Session, *, items: Sequence[Any]) -> None:
         self.items.setdefault(session.session_id, []).extend(json.loads(json.dumps(items)))
