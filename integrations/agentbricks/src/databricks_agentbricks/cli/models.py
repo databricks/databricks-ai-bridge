@@ -861,6 +861,8 @@ def models_upgrade(
             param_hint="--prompt",
         )
     project = _bound_project(source)
+    for ref in (predict_fn, train_data, val_data, *scorers):
+        model_upgrade.check_ref(project.root, ref)
     if not project.trace_experiment_name:
         raise AgentCliError(
             "models upgrade logs next to the agent's trace experiment, but tracing isn't bound.",
@@ -884,6 +886,16 @@ def models_upgrade(
     # A model service can only route to models its owner can execute; catch that now rather than
     # an hour into the job.
     names = sorted({name for models_ in by_role.values() for name in models_})
+    try:
+        available = set(client.list_chat_model_services())
+    except AgentCliError:
+        available = set()  # an unreadable list isn't a rejection; the EXECUTE check still runs
+    unknown = [name for name in names if available and name not in available]
+    if unknown:
+        raise AgentCliError(
+            f"No such model: {', '.join(unknown)}.",
+            hint="See `agentbricks experimental models list` for the models you can route to.",
+        )
     denied = [name for name in names if client.can_execute_model(name) is False]
     if denied:
         raise AgentCliError(

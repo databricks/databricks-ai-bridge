@@ -68,7 +68,12 @@ class _FakeClient:
         return _service(model, name)
 
     def list_chat_model_services(self):
-        return ["system.ai.claude-haiku-4-5", "system.ai.claude-sonnet-4-5"]
+        return [
+            "system.ai.claude-haiku-4-5",
+            "system.ai.claude-sonnet-4-5",
+            "system.ai.gpt-5-4-mini",
+            "system.ai.gpt-5-4-nano",
+        ]
 
 
 class _Ctx:
@@ -86,6 +91,10 @@ class _Ctx:
 def _project(tmp_path: pathlib.Path, *, bind=True, tracing=True, compound=False) -> pathlib.Path:
     project = tmp_path / "agent-langgraph"
     (project / "agent").mkdir(parents=True)
+    # The module:attr references the upgrade tests pass (_EVAL_FLAGS); upgrade checks them statically.
+    (project / "agent" / "eval.py").write_text(
+        "def predict(inputs):\n    return ''\n\n\nTRAIN = []\nVAL = []\nSCORERS = []\n"
+    )
     write_project_metadata(project, framework="langgraph", template="agent-langgraph")
     created = AgentProject.create(
         project,
@@ -487,10 +496,7 @@ def test_upgrade_rejects_bad_weights(tmp_path, stub_job):
 def test_list_shows_chat_models(tmp_path):
     result = _invoke(["list"], _Ctx(_FakeClient(), "json"))
     assert result.exit_code == 0, result.output
-    assert json.loads(result.output) == [
-        "system.ai.claude-haiku-4-5",
-        "system.ai.claude-sonnet-4-5",
-    ]
+    assert json.loads(result.output) == _FakeClient().list_chat_model_services()
 
 
 def test_upgrade_passes_prompt_uris_to_the_job(tmp_path, stub_job):
@@ -1089,3 +1095,47 @@ def test_prompts_list_shows_each_bound_prompts_production_version(tmp_path, monk
         "writer": {"prompt": "main.my_agent.writer", "production_version": "3"},
         "router": {"prompt": "main.my_agent.router", "production_version": None},
     }
+
+
+def test_upgrade_rejects_a_model_the_workspace_doesnt_have(tmp_path, stub_job):
+    project = _project(tmp_path)
+    result = _invoke(
+        ["upgrade", *_EVAL_FLAGS, "-c", "not-a-real-model", "--source", str(project)],
+        _Ctx(_JobClient()),
+    )
+    assert result.exit_code != 0
+    assert "No such model: system.ai.not-a-real-model" in result.output
+    assert "submit" not in stub_job
+
+
+@pytest.mark.parametrize(
+    ("ref", "message"),
+    [
+        ("agent.nope:predict", "No module 'agent.nope'"),
+        ("agent.eval:predikt", "doesn't define 'predikt'"),
+        ("agent.eval", "isn't a module:attr reference"),
+    ],
+)
+def test_upgrade_rejects_a_reference_that_cant_resolve(tmp_path, stub_job, ref, message):
+    project = _project(tmp_path)
+    flags = list(_EVAL_FLAGS)
+    flags[1] = ref
+    result = _invoke(
+        ["upgrade", *flags, "-c", "claude-haiku-4-5", "--source", str(project)],
+        _Ctx(_JobClient()),
+    )
+    assert result.exit_code != 0
+    assert message in result.output
+    assert "submit" not in stub_job
+
+
+def test_check_ref_follows_imports_and_star_imports(tmp_path):
+    (tmp_path / "agent").mkdir()
+    (tmp_path / "agent" / "__init__.py").write_text("")
+    (tmp_path / "agent" / "small.py").write_text("from agent.eval import TRAIN as T, VAL\n")
+    (tmp_path / "agent" / "star.py").write_text("from agent.eval import *\n")
+    model_upgrade.check_ref(tmp_path, "agent.small:T")
+    model_upgrade.check_ref(tmp_path, "agent.small:VAL")
+    model_upgrade.check_ref(tmp_path, "agent.star:ANYTHING")  # a star import can define any name
+    with pytest.raises(AgentCliError, match="doesn't define 'TRAIN'"):
+        model_upgrade.check_ref(tmp_path, "agent.small:TRAIN")

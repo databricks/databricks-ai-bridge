@@ -17,8 +17,10 @@ light.
 
 from __future__ import annotations
 
+import ast
 import dataclasses
 import importlib
+import importlib.util
 import json
 import os
 import pathlib
@@ -159,6 +161,69 @@ def _optimizer():
             "The model search requires the 'upgrade' extra.", hint=UPGRADE_EXTRA_HINT
         ) from exc
     return model_upgrades
+
+
+def _defined_names(path: pathlib.Path) -> Optional[set[str]]:
+    """Names a module defines at top level, read from its source. None if it can define any name
+    (a star import or a module ``__getattr__``), or if the source doesn't parse."""
+    try:
+        tree = ast.parse(path.read_text())
+    except (OSError, SyntaxError, ValueError):
+        return None
+    names: set[str] = set()
+    stack: list[ast.stmt] = list(tree.body)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name == "__getattr__":
+                return None
+            names.add(node.name)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                names.update(n.id for n in ast.walk(target) if isinstance(n, ast.Name))
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                if alias.name == "*":
+                    return None
+                names.add(alias.asname or alias.name.split(".")[0])
+        elif isinstance(node, (ast.If, ast.Try, ast.With, ast.For, ast.While)):
+            for field_name in ("body", "orelse", "finalbody", "handlers"):
+                for child in getattr(node, field_name, []) or []:
+                    stack.extend(child.body if isinstance(child, ast.ExceptHandler) else [child])
+    return names
+
+
+def check_ref(root: pathlib.Path, ref: str) -> None:
+    """Fail fast when ``module:attr`` can't resolve in the project, without importing it.
+
+    A job run imports the reference on the cluster an hour or more after submission, and the agent's
+    dependencies needn't be installed here, so we read the module's source instead of importing it.
+    """
+    module_name, _, attr = ref.partition(":")
+    if not module_name or not attr:
+        raise AgentCliError(f"'{ref}' isn't a module:attr reference (e.g. agent.eval:predict).")
+    parts = module_name.split(".")
+    in_project = False
+    for base in (root, root / "src"):
+        top = base / parts[0]
+        in_project = in_project or top.is_dir() or top.with_suffix(".py").is_file()
+        stem = base.joinpath(*parts)
+        for source in (stem.with_suffix(".py"), stem / "__init__.py"):
+            if source.is_file():
+                names = _defined_names(source)
+                if names is not None and attr not in names:
+                    raise AgentCliError(
+                        f"{source.relative_to(root)} doesn't define '{attr}' ({ref}).",
+                        hint="Check the name after the colon.",
+                    )
+                return
+    # A package that lives in the project must hold the module; otherwise it may be installed.
+    if in_project or importlib.util.find_spec(parts[0]) is None:
+        raise AgentCliError(
+            f"No module '{module_name}' in the project ({ref}).",
+            hint="Use a module path relative to the project root, e.g. agent.eval:predict.",
+        )
 
 
 def load_object(root: pathlib.Path, ref: str) -> Any:
