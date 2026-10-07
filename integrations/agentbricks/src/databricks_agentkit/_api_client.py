@@ -358,7 +358,6 @@ class _AgentBricksApiClient:
         dependencies: list[str],
         environment_version: str,
         timeout_seconds: int,
-        tags: Optional[dict[str, str]] = None,
     ) -> int:
         """Submit a one-time serverless run of a workspace Python file; returns the run id.
 
@@ -390,7 +389,6 @@ class _AgentBricksApiClient:
                     )
                 ],
                 timeout_seconds=timeout_seconds,
-                tags=tags,
             )
         except Exception as exc:  # noqa: BLE001 - normalized to AgentCliError
             raise wrap_api_error(exc) from exc

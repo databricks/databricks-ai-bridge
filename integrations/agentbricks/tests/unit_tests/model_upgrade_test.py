@@ -253,3 +253,34 @@ def test_submit_upgrade_run_uploads_runner_and_installs_project(monkeypatch):
         "databricks-agentbricks[upgrade]==9.9",
     ]
     assert client.submitted["environment_version"] == model_upgrade.SERVERLESS_ENVIRONMENT_VERSION
+
+
+def test_job_submission_only_passes_arguments_the_sdk_accepts(monkeypatch):
+    # A live run failed with "JobsAPI.submit() got an unexpected keyword argument 'tags'": check the
+    # call against the installed SDK's real signature, not a fake.
+    import inspect
+
+    from databricks.sdk.service.jobs import JobsAPI
+
+    from databricks_agentkit._api_client import _AgentBricksApiClient
+
+    accepted = set(inspect.signature(JobsAPI.submit).parameters) - {"self"}
+    seen = {}
+
+    class _Jobs:
+        def submit(self, **kwargs):
+            seen.update(kwargs)
+            return SimpleNamespace(run_id=7)
+
+    client = object.__new__(_AgentBricksApiClient)
+    client._w = SimpleNamespace(jobs=_Jobs())
+    run_id = client.submit_serverless_python_run(
+        run_name="r",
+        python_file="/Workspace/p.py",
+        parameters=[],
+        dependencies=[],
+        environment_version="5",
+        timeout_seconds=60,
+    )
+    assert run_id == 7
+    assert set(seen) <= accepted, set(seen) - accepted

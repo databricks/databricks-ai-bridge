@@ -420,7 +420,6 @@ def submit_upgrade_run(
         dependencies=[workspace_path, upgrade_requirement()],
         environment_version=SERVERLESS_ENVIRONMENT_VERSION,
         timeout_seconds=int(timeout_hours * 3600),
-        tags={UPGRADE_ID_TAG.replace(".", "_"): config.upgrade_id},
     )
     run = client.get_run(run_id)
     return run_id, getattr(run, "run_page_url", None)
