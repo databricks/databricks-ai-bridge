@@ -145,6 +145,8 @@ def _exit_code(exc: BaseException) -> int:
     if isinstance(exc, KeyboardInterrupt):
         # Click converts an uncaught KeyboardInterrupt to Abort, whose process exit code is 1.
         return 1
+    if isinstance(exc, SystemExit) and exc.code is None:
+        return 0
     value = getattr(exc, "exit_code", None)
     if isinstance(value, int):
         return value
@@ -207,7 +209,7 @@ def _static_command_path(contexts: tuple[Any, ...]) -> str | None:
             name = getattr(command, "name", None)
         except BaseException:
             return None
-        if not _is_static_name(name):
+        if not isinstance(name, str) or not _is_static_name(name):
             return None
         names.append(name)
     if not names:
@@ -247,8 +249,6 @@ def _parameter_entry(
     name: str,
     parameter: Any,
     value: object,
-    supplied: bool,
-    framework: object | None,
 ) -> dict[str, Any] | None:
     """Create one allowlisted parameter entry, dropping every unsafe value."""
 
@@ -267,32 +267,16 @@ def _parameter_entry(
 
     if is_bool_flag:
         if type(value) is bool:
-            return {
-                "name": name,
-                "supplied_on_command_line": supplied,
-                "bool_value": value,
-            }
-        return {"name": name, "supplied_on_command_line": True} if supplied else None
-
-    # init resolves its default framework in the callback after Click has populated ctx.params.
-    # Reuse only the already allowlisted project metadata for that one static parameter; do not
-    # infer values for other options from callback state.
-    if value is None and name == "agentbricks init.framework":
-        raw_framework = getattr(framework, "value", framework)
-        if isinstance(raw_framework, str):
-            value = raw_framework
+            return {"name": name, "bool_value": value}
+        return {"name": name}
 
     if isinstance(parameter_type, click.Choice):
         allowed = _SAFE_CHOICE_VALUES.get(name)
         if allowed is not None and not multiple and isinstance(value, str) and value in allowed:
-            return {
-                "name": name,
-                "supplied_on_command_line": supplied,
-                "choice_value": value,
-            }
+            return {"name": name, "choice_value": value}
         # An unallowlisted Choice is handled like free text: its static presence may be useful,
         # while its value is never sent.
-        return {"name": name, "supplied_on_command_line": True} if supplied else None
+        return {"name": name}
 
     bounds = _SAFE_BOUNDED_INT_RANGES.get(name)
     if bounds is not None:
@@ -301,16 +285,12 @@ def _parameter_entry(
             and type(value) is int
             and bounds[0] <= value <= bounds[1]
         ):
-            return {
-                "name": name,
-                "supplied_on_command_line": supplied,
-                "bounded_int_value": value,
-            }
-        return {"name": name, "supplied_on_command_line": True} if supplied else None
+            return {"name": name, "bounded_int_value": value}
+        return {"name": name}
 
     # Arbitrary strings, paths, IDs, secrets, JSON, and unallowlisted numeric values are presence
-    # signals only.  Defaults are omitted so a default project path or identifier cannot leak.
-    return {"name": name, "supplied_on_command_line": True} if supplied else None
+    # signals only.  The caller has already excluded defaults and environment values.
+    return {"name": name}
 
 
 def _collect_parameters(ctx: Any) -> list[dict[str, Any]]:
@@ -321,7 +301,6 @@ def _collect_parameters(ctx: Any) -> list[dict[str, Any]]:
         command_path = _static_command_path(contexts)
         if not contexts or command_path is None:
             return []
-        framework, _, _ = _project_context(ctx)
         entries: list[dict[str, Any]] = []
         seen_names: set[str] = set()
         for context_index, context in enumerate(contexts):
@@ -334,7 +313,7 @@ def _collect_parameters(ctx: Any) -> list[dict[str, Any]]:
                 return []
             for parameter in parameters:
                 parameter_name = getattr(parameter, "name", None)
-                if not _is_static_name(parameter_name):
+                if not isinstance(parameter_name, str) or not _is_static_name(parameter_name):
                     continue
                 name = f"{context_command}.{parameter_name}"
                 if len(name) > _MAX_STATIC_NAME_LENGTH or name in seen_names:
@@ -342,13 +321,12 @@ def _collect_parameters(ctx: Any) -> list[dict[str, Any]]:
                 has_value, value = _parameter_value(context, parameter_name)
                 if not has_value:
                     continue
-                supplied = _supplied_on_command_line(_parameter_source(context, parameter_name))
+                if not _supplied_on_command_line(_parameter_source(context, parameter_name)):
+                    continue
                 entry = _parameter_entry(
                     name=name,
                     parameter=parameter,
                     value=value,
-                    supplied=supplied,
-                    framework=framework,
                 )
                 if entry is None:
                     continue
@@ -366,7 +344,6 @@ def build_log(
     ctx: Any,
     *,
     execution_time_ms: int,
-    success: bool,
     exit_code: int,
     error_category: str | None = None,
 ) -> dict[str, Any]:
@@ -380,9 +357,8 @@ def build_log(
         "operating_system": platform.system().lower(),
         "execution_time_ms": max(0, int(execution_time_ms)),
         "exit_code": int(exit_code),
-        "success": bool(success),
     }
-    if not success:
+    if exit_code != 0:
         log["error_category"] = error_category or "ERROR_CATEGORY_OTHER"
     framework_name = _enum_name(framework, _FRAMEWORK_ENUMS, "FRAMEWORK_OTHER")
     server_name = _enum_name(server, _SERVER_ENUMS, "SERVER_OTHER")
@@ -544,7 +520,6 @@ def emit_command(
     ctx: Any,
     *,
     execution_time_ms: int,
-    success: bool,
     exit_code: int,
     error_category: str | None = None,
 ) -> None:
@@ -555,7 +530,6 @@ def emit_command(
     log = build_log(
         ctx,
         execution_time_ms=execution_time_ms,
-        success=success,
         exit_code=exit_code,
         error_category=error_category,
     )

@@ -166,16 +166,18 @@ class AgentBricksCommand(_FlushEpilog, click.Command):
         except BaseException as exc:
             exit_code = self._telemetry_exit_code(exc)
             success = isinstance(exc, (click.exceptions.Exit, SystemExit)) and exit_code == 0
+            if not success and exit_code == 0:
+                # An exception with a zero-valued `code` still failed the command.
+                exit_code = 1
             self._emit_telemetry(
                 ctx,
                 started,
-                success=success,
                 exit_code=exit_code,
                 error_category=None if success else self._telemetry_error_category(exc),
             )
             raise
         else:
-            self._emit_telemetry(ctx, started, success=True, exit_code=0)
+            self._emit_telemetry(ctx, started, exit_code=0)
             return result
 
     @staticmethod
@@ -201,7 +203,6 @@ class AgentBricksCommand(_FlushEpilog, click.Command):
         ctx: click.Context,
         started: float,
         *,
-        success: bool,
         exit_code: int,
         error_category: Optional[str] = None,
     ) -> None:
@@ -215,7 +216,6 @@ class AgentBricksCommand(_FlushEpilog, click.Command):
             telemetry.emit_command(
                 ctx,
                 execution_time_ms=elapsed_ms,
-                success=success,
                 exit_code=exit_code,
                 error_category=error_category,
             )

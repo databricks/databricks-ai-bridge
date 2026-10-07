@@ -109,11 +109,11 @@ You can also pass the global `--profile/-p` option before an individual command,
 `agentbricks --profile <profile> tools list`. Use `--output json` for scripting.
 
 The CLI sends best effort command usage telemetry after leaf commands. It records the command path,
-package version, operating system, duration, outcome, and bounded project selections. Parameter
-telemetry uses static Click parameter names: arbitrary arguments and option values (including paths,
-IDs, secrets, and JSON) are omitted, while explicitly supplied parameters may contribute only their
-static name. Declared boolean flags contribute their effective boolean state, and a small reviewed
-set of static choices and bounded integers contributes its effective value. Hidden and deprecated
+package version, operating system, duration, exit code, and bounded project selections. Parameter
+telemetry records only options explicitly supplied on the command line. Arbitrary arguments and
+option values (including paths, IDs, secrets, and JSON) are omitted, while eligible options may
+contribute their static name. Boolean flags can also contribute their selected value, and a small
+reviewed set of static choices and bounded integers can contribute a value. Hidden and deprecated
 parameters are excluded. Set `AGENTBRICKS_DISABLE_TELEMETRY=1` to disable these uploads.
 
 ## Quickstart
