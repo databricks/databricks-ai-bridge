@@ -318,7 +318,9 @@ def _model_services_from_manifest(value: object) -> dict[str, ModelServiceBindin
             raise AgentCliError(
                 f"agent.toml {where} {MODEL_SERVICE_DEFAULT_KEY} must be a non-empty string."
             )
-        bindings[role] = ModelServiceBinding(name, default or None)
+        # Plain str, not tomlkit's String: deploy writes these into app.yaml, and yaml.safe_dump
+        # can't represent tomlkit types.
+        bindings[role] = ModelServiceBinding(str(name), str(default) if default else None)
     return bindings
 
 
