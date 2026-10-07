@@ -1,5 +1,6 @@
 """Read template history through real checkpoints, without live tool discovery."""
 
+import asyncio
 import importlib
 import importlib.util
 import json
@@ -183,6 +184,94 @@ async def test_history_reduces_pending_writes_and_preserves_interrupts(template)
         "revised answer",
     ]
     assert executions == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["append", "replace", "remove"])
+@pytest.mark.parametrize("scheduling", ["pull", "send"])
+async def test_history_orders_parallel_pending_messages(
+    template, monkeypatch, operation, scheduling
+):
+    from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, RemoveMessage
+    from langgraph.graph import END, START
+    from langgraph.types import Send, interrupt
+
+    from databricks_agentkit.langgraph import thread_config
+
+    ui, _agent, _adapter, saver = template
+    last_written = asyncio.Event()
+    put_writes = saver.aput_writes
+
+    async def persist(config, writes, task_id, task_path=""):
+        await put_writes(config, writes, task_id, task_path)
+        if any(
+            channel == "messages" and any(message.id == "last" for message in value)
+            for channel, value in writes
+        ):
+            last_written.set()
+
+    monkeypatch.setattr(saver, "aput_writes", persist)
+
+    async def first(_state):
+        await last_written.wait()
+        messages = [AIMessage(content="first", id="first")]
+        if operation != "append":
+            messages.append(AIMessage(content="first revision", id="shared"))
+        return {"messages": messages}
+
+    async def last(_state):
+        messages: list[BaseMessage] = [AIMessage(content="last", id="last")]
+        if operation == "replace":
+            messages.append(AIMessage(content="last revision", id="shared"))
+        elif operation == "remove":
+            messages.append(RemoveMessage(id="shared"))
+        return {"messages": messages}
+
+    def approve(_state):
+        interrupt("approval required")
+        raise AssertionError("Reading history must not resume the graph")
+
+    builder = graph_builder()
+    if scheduling == "pull":
+        builder.add_node("a_first", first)
+        builder.add_node("z_last", last)
+        builder.add_edge(START, "a_first")
+        builder.add_edge(START, "z_last")
+        builder.add_edge("a_first", END)
+        builder.add_edge("z_last", END)
+        builder.add_edge(START, "approve")
+    else:
+
+        async def writer(state):
+            return await (first(state) if state["position"] == "first" else last(state))
+
+        builder.add_node("writer", writer)
+        builder.add_conditional_edges(
+            START,
+            lambda _: [
+                Send("writer", {"position": "first"}),
+                Send("writer", {"position": "last"}),
+                Send("approve", {}),
+            ],
+        )
+        builder.add_edge("writer", END)
+    builder.add_node("approve", approve)
+    builder.add_edge("approve", END)
+    graph = builder.compile(checkpointer=saver)
+    config = thread_config("parallel", "alice")
+    await graph.ainvoke({"messages": [HumanMessage(content="hello", id="prompt")]}, config)
+    saved = await saver.aget_tuple(config)
+    assert saved is not None
+    pending = [value for _, channel, value in saved.pending_writes if channel == "messages"]
+    assert [value[0].id for value in pending] == ["last", "first"]
+    expected = await graph.aget_state(config)
+    result = await ui._checkpoint_history("parallel", "alice")
+    assert [item["data"] for item in result["session_items"]] == [
+        message.model_dump() for message in expected.values["messages"]
+    ]
+    assert result["interrupts"] == [
+        {"id": item.id, "value": item.value} for item in expected.interrupts
+    ]
 
 
 @pytest.mark.asyncio

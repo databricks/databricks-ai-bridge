@@ -101,6 +101,45 @@ def thread_config(session_id: str, actor: str | None = None) -> dict:
     return {"configurable": {"thread_id": session_id, "actor_id": actor or session_id}}
 
 
+async def history_checkpoint(config: RunnableConfig) -> CheckpointTuple | None:
+    """Read message-oriented history with pending writes in LangGraph task order.
+
+    CheckpointTuple omits the task paths needed for ordered message reduction. Keep backend-specific
+    access here; this reader supports the generated StateGraph and the two configured savers, not
+    arbitrary graph topologies or custom reducers.
+    """
+    saver = checkpointer()
+    if isinstance(saver, DatabricksSessionStoreSaver):
+        return await _run_sync(saver.get_history_tuple, config)
+    if isinstance(saver, InMemorySaver):
+        return await _run_sync(_memory_history_tuple, saver, config)
+    raise TypeError("History requires an in-memory or managed Session Store checkpointer")
+
+
+def _ordered_history_tuple(
+    saved: CheckpointTuple, task_paths: Mapping[str, str]
+) -> CheckpointTuple:
+    # StateGraph PULL/Send paths contain the framework's ordering components. Stable sorting keeps
+    # writes within each task in their original order; null-task input writes have an empty path.
+    return saved._replace(
+        pending_writes=sorted(
+            saved.pending_writes or [], key=lambda write: task_paths.get(write[0], "")
+        )
+    )
+
+
+def _memory_history_tuple(saver: InMemorySaver, config: RunnableConfig) -> CheckpointTuple | None:
+    saved = saver.get_tuple(config)
+    if saved is None:
+        return None
+    identity = saved.config["configurable"]
+    writes = saver.writes[
+        (identity["thread_id"], identity.get("checkpoint_ns", ""), identity["checkpoint_id"])
+    ]
+    task_paths = {task_id: task_path for task_id, _channel, _value, task_path in writes.values()}
+    return _ordered_history_tuple(saved, task_paths)
+
+
 class DatabricksSessionStoreSaver(BaseCheckpointSaver[str]):
     """LangGraph ``BaseCheckpointSaver`` over the Databricks Session Store REST API.
 
@@ -208,6 +247,15 @@ class DatabricksSessionStoreSaver(BaseCheckpointSaver[str]):
 
     def get_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
         """Return the checkpoint named in ``config``, or the latest one."""
+        return self._get_tuple(config)
+
+    def get_history_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
+        """Read a checkpoint and its pending task paths from the same store snapshot."""
+        return self._get_tuple(config, history=True)
+
+    def _get_tuple(
+        self, config: RunnableConfig, *, history: bool = False
+    ) -> Optional[CheckpointTuple]:
         thread_id, actor_id, checkpoint_ns = _parse_config(config)
         session = self._resolve_session(thread_id, actor_id, checkpoint_ns)
         checkpoints, writes_by_ckpt, channel_data = self._read(session)
@@ -222,14 +270,20 @@ class DatabricksSessionStoreSaver(BaseCheckpointSaver[str]):
         else:
             event = checkpoints[max(checkpoints)]
 
-        return self._build_tuple(
+        writes = writes_by_ckpt.get(event["checkpoint_id"], [])
+        saved = self._build_tuple(
             event,
-            writes_by_ckpt.get(event["checkpoint_id"], []),
+            writes,
             channel_data,
             thread_id,
             actor_id,
             checkpoint_ns,
         )
+        if history:
+            return _ordered_history_tuple(
+                saved, {write["task_id"]: write.get("task_path", "") for write in writes}
+            )
+        return saved
 
     def list(
         self,

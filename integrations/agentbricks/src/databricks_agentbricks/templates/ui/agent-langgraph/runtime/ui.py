@@ -305,9 +305,9 @@ def _require_session() -> None:
 async def _checkpoint_history(session_id: str, actor: str) -> dict[str, Any]:
     from langgraph.graph.message import add_messages
 
-    from databricks_agentkit.langgraph.session_store import checkpointer, thread_config
+    from databricks_agentkit.langgraph.session_store import history_checkpoint, thread_config
 
-    saved = await checkpointer().aget_tuple(thread_config(session_id, actor))
+    saved = await history_checkpoint(thread_config(session_id, actor))
     messages = []
     interrupts = []
     if saved is not None:
