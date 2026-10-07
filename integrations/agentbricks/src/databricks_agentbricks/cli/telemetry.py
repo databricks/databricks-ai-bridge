@@ -11,7 +11,6 @@ from __future__ import annotations
 import configparser
 import json
 import os
-import platform
 import threading
 import time
 import uuid
@@ -20,8 +19,6 @@ from importlib.metadata import version as _installed_version
 from pathlib import Path
 from typing import Any
 
-import click
-
 _DISABLE_ENV = "AGENTBRICKS_DISABLE_TELEMETRY"
 _TELEMETRY_PATH = "/telemetry-ext"
 
@@ -29,43 +26,8 @@ _TELEMETRY_PATH = "/telemetry-ext"
 # the CLI process open after this bound expires.
 _MAX_FOREGROUND_WAIT_S = 0.25
 
-# Telemetry parameter values are opt-in.  A Click ``Choice`` is not automatically safe to report:
-# a command can construct one from a workspace value, and adding a value to a Click choice does not
-# make that value appropriate for telemetry.  Keep this map literal and keyed by the static command
-# path produced below.  New safe values should be reviewed and added here explicitly.
-_SAFE_CHOICE_VALUES: dict[str, frozenset[str]] = {
-    "agentbricks.output": frozenset({"text", "json"}),
-    "agentbricks init.framework": frozenset({"langgraph", "openai"}),
-    "agentbricks init.server": frozenset({"agentbricks", "custom"}),
-    "agentbricks tools add sandbox.permission": frozenset({"read_only", "read_write"}),
-    "agentbricks tools add sandbox.auth": frozenset({"user", "app"}),
-    "agentbricks tools add mcp.auth": frozenset({"user", "app"}),
-    "agentbricks tools add genie-one.auth": frozenset({"user", "app"}),
-    "agentbricks tools add genie-agent.auth": frozenset({"user", "app"}),
-    "agentbricks tools list.kind": frozenset(
-        {"sandbox", "mcp", "uc-function", "genie-one", "genie-agent"}
-    ),
-}
-
-# ``deploy --instances`` is intentionally the only integer value currently allowlisted.  Keeping
-# the range here, instead of deriving it from Click's type, makes adding a future bounded option an
-# explicit privacy review.
-_SAFE_BOUNDED_INT_RANGES: dict[str, tuple[int, int]] = {
-    "agentbricks deploy.instances": (1, 5),
-}
-
-_MAX_PARAMETER_ENTRIES = 64
 _MAX_CONTEXT_DEPTH = 32
 _MAX_STATIC_NAME_LENGTH = 128
-
-_FRAMEWORK_ENUMS = {
-    "openai": "FRAMEWORK_OPENAI",
-    "langgraph": "FRAMEWORK_LANGGRAPH",
-}
-_SERVER_ENUMS = {
-    "agentbricks": "SERVER_AGENTBRICKS",
-    "custom": "SERVER_CUSTOM",
-}
 
 
 def telemetry_disabled() -> bool:
@@ -84,15 +46,6 @@ def _package_version() -> str:
         return _installed_version("databricks-agentbricks")
     except PackageNotFoundError:
         return "unknown"
-
-
-def _enum_name(value: object, values: dict[str, str], other: str) -> str | None:
-    if value is None:
-        return None
-    raw = getattr(value, "value", value)
-    if not isinstance(raw, str):
-        return other
-    return values.get(raw.lower(), other)
 
 
 def _error_category(exc: BaseException) -> str:
@@ -156,19 +109,8 @@ def _exit_code(exc: BaseException) -> int:
     return 1
 
 
-def _project_context(ctx: Any) -> tuple[object | None, object | None, object | None]:
-    """Read only the safe, enum-like project values put on ``CliContext`` by callbacks."""
-
-    obj = getattr(ctx, "obj", None)
-    return (
-        getattr(obj, "telemetry_framework", None),
-        getattr(obj, "telemetry_server", None),
-        getattr(obj, "telemetry_tracing_configured", None),
-    )
-
-
 def _is_static_name(value: object) -> bool:
-    """Whether a command or parameter name is safe to put in an event."""
+    """Whether a Click command name is safe to put in an event."""
 
     if not isinstance(value, str) or not value or len(value) > _MAX_STATIC_NAME_LENGTH:
         return False
@@ -218,159 +160,22 @@ def _static_command_path(contexts: tuple[Any, ...]) -> str | None:
     return path if len(path) <= _MAX_STATIC_NAME_LENGTH else None
 
 
-def _parameter_source(context: Any, name: str) -> object | None:
-    """Read Click's source marker without falling back to argv or ``ctx.args``."""
-
-    try:
-        get_parameter_source = context.get_parameter_source
-        return get_parameter_source(name) if callable(get_parameter_source) else None
-    except BaseException:
-        return None
-
-
-def _supplied_on_command_line(source: object | None) -> bool:
-    # Comparing the enum name keeps this compatible with Click's supported versions while still
-    # treating a malformed source marker as untrusted.
-    return getattr(source, "name", None) == "COMMANDLINE"
-
-
-def _parameter_value(context: Any, name: str) -> tuple[bool, object]:
-    try:
-        params = context.params
-        if not isinstance(params, dict) or name not in params:
-            return False, None
-        return True, params[name]
-    except BaseException:
-        return False, None
-
-
-def _parameter_entry(
-    *,
-    name: str,
-    parameter: Any,
-    value: object,
-) -> dict[str, Any] | None:
-    """Create one allowlisted parameter entry, dropping every unsafe value."""
-
-    try:
-        if bool(getattr(parameter, "hidden", False)) or bool(
-            getattr(parameter, "deprecated", False)
-        ):
-            return None
-        # A repeated option has one static parameter identity.  Its individual values are never
-        # represented, including when the option happens to use a safe Choice type.
-        multiple = bool(getattr(parameter, "multiple", False))
-        is_bool_flag = bool(getattr(parameter, "is_bool_flag", False))
-        parameter_type = getattr(parameter, "type", None)
-    except BaseException:
-        return None
-
-    if is_bool_flag:
-        if type(value) is bool:
-            return {"name": name, "bool_value": value}
-        return {"name": name}
-
-    if isinstance(parameter_type, click.Choice):
-        allowed = _SAFE_CHOICE_VALUES.get(name)
-        if allowed is not None and not multiple and isinstance(value, str) and value in allowed:
-            return {"name": name, "choice_value": value}
-        # An unallowlisted Choice is handled like free text: its static presence may be useful,
-        # while its value is never sent.
-        return {"name": name}
-
-    bounds = _SAFE_BOUNDED_INT_RANGES.get(name)
-    if bounds is not None:
-        if (
-            isinstance(parameter_type, click.IntRange)
-            and type(value) is int
-            and bounds[0] <= value <= bounds[1]
-        ):
-            return {"name": name, "bounded_int_value": value}
-        return {"name": name}
-
-    # Arbitrary strings, paths, IDs, secrets, JSON, and unallowlisted numeric values are presence
-    # signals only.  The caller has already excluded defaults and environment values.
-    return {"name": name}
-
-
-def _collect_parameters(ctx: Any) -> list[dict[str, Any]]:
-    """Collect bounded Click parameter metadata without reading raw invocation text."""
-
-    try:
-        contexts = _context_chain(ctx)
-        command_path = _static_command_path(contexts)
-        if not contexts or command_path is None:
-            return []
-        entries: list[dict[str, Any]] = []
-        seen_names: set[str] = set()
-        for context_index, context in enumerate(contexts):
-            command = getattr(context, "command", None)
-            parameters = getattr(command, "params", None)
-            if not isinstance(parameters, (list, tuple)):
-                continue
-            context_command = _static_command_path(contexts[: context_index + 1])
-            if context_command is None:
-                return []
-            for parameter in parameters:
-                parameter_name = getattr(parameter, "name", None)
-                if not isinstance(parameter_name, str) or not _is_static_name(parameter_name):
-                    continue
-                name = f"{context_command}.{parameter_name}"
-                if len(name) > _MAX_STATIC_NAME_LENGTH or name in seen_names:
-                    continue
-                has_value, value = _parameter_value(context, parameter_name)
-                if not has_value:
-                    continue
-                if not _supplied_on_command_line(_parameter_source(context, parameter_name)):
-                    continue
-                entry = _parameter_entry(
-                    name=name,
-                    parameter=parameter,
-                    value=value,
-                )
-                if entry is None:
-                    continue
-                entries.append(entry)
-                seen_names.add(name)
-                if len(entries) >= _MAX_PARAMETER_ENTRIES:
-                    return entries
-        return entries
-    except BaseException:
-        # Telemetry must fail closed if Click or an extension gives us an unexpected object shape.
-        return []
-
-
 def build_log(
     ctx: Any,
     *,
-    execution_time_ms: int,
     exit_code: int,
     error_category: str | None = None,
 ) -> dict[str, Any]:
     """Build the allowlisted snake_case ``AgentBricksCliLog`` JSON object."""
 
-    framework, server, tracing_configured = _project_context(ctx)
     command_path = _static_command_path(_context_chain(ctx)) or "agentbricks"
     log: dict[str, Any] = {
         "command_path": command_path,
         "package_version": _package_version(),
-        "operating_system": platform.system().lower(),
-        "execution_time_ms": max(0, int(execution_time_ms)),
         "exit_code": int(exit_code),
     }
     if exit_code != 0:
         log["error_category"] = error_category or "ERROR_CATEGORY_OTHER"
-    framework_name = _enum_name(framework, _FRAMEWORK_ENUMS, "FRAMEWORK_OTHER")
-    server_name = _enum_name(server, _SERVER_ENUMS, "SERVER_OTHER")
-    if framework_name is not None:
-        log["framework"] = framework_name
-    if server_name is not None:
-        log["server"] = server_name
-    if tracing_configured is not None:
-        log["tracing_configured"] = bool(tracing_configured)
-    parameters = _collect_parameters(ctx)
-    if parameters:
-        log["parameters"] = parameters
     return log
 
 
@@ -519,7 +324,6 @@ def _send(ctx: Any, payload: dict[str, Any]) -> None:
 def emit_command(
     ctx: Any,
     *,
-    execution_time_ms: int,
     exit_code: int,
     error_category: str | None = None,
 ) -> None:
@@ -529,7 +333,6 @@ def emit_command(
         return
     log = build_log(
         ctx,
-        execution_time_ms=execution_time_ms,
         exit_code=exit_code,
         error_category=error_category,
     )

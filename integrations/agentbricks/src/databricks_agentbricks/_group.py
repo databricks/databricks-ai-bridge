@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import difflib
 import inspect
-import time
 from typing import Iterable, Optional
 
 import click
@@ -160,7 +159,6 @@ class AgentBricksCommand(_FlushEpilog, click.Command):
     def invoke(self, ctx: click.Context):
         """Run one leaf and record its outcome without changing Click's exception behavior."""
 
-        started = time.monotonic()
         try:
             result = super().invoke(ctx)
         except BaseException as exc:
@@ -171,13 +169,12 @@ class AgentBricksCommand(_FlushEpilog, click.Command):
                 exit_code = 1
             self._emit_telemetry(
                 ctx,
-                started,
                 exit_code=exit_code,
                 error_category=None if success else self._telemetry_error_category(exc),
             )
             raise
         else:
-            self._emit_telemetry(ctx, started, exit_code=0)
+            self._emit_telemetry(ctx, exit_code=0)
             return result
 
     @staticmethod
@@ -201,7 +198,6 @@ class AgentBricksCommand(_FlushEpilog, click.Command):
     @staticmethod
     def _emit_telemetry(
         ctx: click.Context,
-        started: float,
         *,
         exit_code: int,
         error_category: Optional[str] = None,
@@ -212,10 +208,8 @@ class AgentBricksCommand(_FlushEpilog, click.Command):
         try:
             from databricks_agentbricks.cli import telemetry
 
-            elapsed_ms = int(max(0.0, time.monotonic() - started) * 1000)
             telemetry.emit_command(
                 ctx,
-                execution_time_ms=elapsed_ms,
                 exit_code=exit_code,
                 error_category=error_category,
             )

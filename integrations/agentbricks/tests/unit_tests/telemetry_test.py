@@ -40,9 +40,6 @@ class _Context:
             _client=SimpleNamespace(workspace_client=workspace_client)
             if workspace_client is not None
             else None,
-            telemetry_framework="openai",
-            telemetry_server="agentbricks",
-            telemetry_tracing_configured=True,
         )
         self.command = SimpleNamespace(name="init", params=())
         self.parent = SimpleNamespace(
@@ -61,11 +58,10 @@ def _inner(body: dict) -> dict:
     return json.loads(body["protoLogs"][0])["entry"]
 
 
-def test_build_payload_matches_frontend_log_schema_and_allowlist():
+def test_build_payload_matches_frontend_log_schema():
     context = _Context()
     log = telemetry.build_log(
         context,
-        execution_time_ms=17,
         exit_code=0,
     )
     payload = telemetry.build_payload(log, upload_time_ms=123)
@@ -76,13 +72,8 @@ def test_build_payload_matches_frontend_log_schema_and_allowlist():
     assert _inner(payload) == {
         "agentbricks_cli_log": {
             "command_path": "agentbricks init",
-            "execution_time_ms": 17,
             "exit_code": 0,
-            "framework": "FRAMEWORK_OPENAI",
-            "operating_system": telemetry.platform.system().lower(),
             "package_version": telemetry._package_version(),
-            "server": "SERVER_AGENTBRICKS",
-            "tracing_configured": True,
         }
     }
     assert "/tmp" not in json.dumps(payload)
@@ -95,7 +86,6 @@ def test_build_log_uses_static_click_path_instead_of_raw_context_path():
 
     log = telemetry.build_log(
         context,
-        execution_time_ms=1,
         exit_code=0,
     )
 
@@ -105,17 +95,49 @@ def test_build_log_uses_static_click_path_instead_of_raw_context_path():
     context.command = SimpleNamespace(name="init --private-profile", params=())
     fallback_log = telemetry.build_log(
         context,
-        execution_time_ms=1,
         exit_code=0,
     )
     assert fallback_log["command_path"] == "agentbricks"
+
+
+def test_real_init_telemetry_omits_private_invocation_values(monkeypatch, tmp_path):
+    records = []
+
+    monkeypatch.setattr(
+        telemetry,
+        "emit_command",
+        lambda ctx, **kwargs: records.append(telemetry.build_log(ctx, **kwargs)),
+    )
+    private_directory = tmp_path / "private-project-name"
+    result = CliRunner().invoke(
+        cli.agentbricks,
+        [
+            "init",
+            str(private_directory),
+            "--framework",
+            "openai",
+            "--server",
+            "custom",
+            "--profile",
+            "private-profile-name",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(records) == 1
+    log = records[0]
+    assert set(log) == {"command_path", "package_version", "exit_code"}
+    assert log["command_path"] == "agentbricks init"
+    assert log["exit_code"] == 0
+    encoded = json.dumps(log)
+    assert "private-project-name" not in encoded
+    assert "private-profile-name" not in encoded
 
 
 def test_failed_payload_uses_bounded_category_and_no_message():
     context = _Context()
     log = telemetry.build_log(
         context,
-        execution_time_ms=4,
         exit_code=1,
         error_category=telemetry._error_category(
             AgentCliError("secret message /tmp/private", error_code="PERMISSION_DENIED")
@@ -141,7 +163,7 @@ def test_existing_workspace_client_receives_exact_transport_request(monkeypatch)
     monkeypatch.setattr(telemetry, "_MAX_FOREGROUND_WAIT_S", 1)
     monkeypatch.setattr(telemetry.time, "time", lambda: 12.3)
 
-    telemetry.emit_command(context, execution_time_ms=5, exit_code=0)
+    telemetry.emit_command(context, exit_code=0)
 
     assert len(api_client.calls) == 1
     method, path, body = api_client.calls[0]
@@ -154,7 +176,7 @@ def test_opt_out_does_not_construct_or_send(monkeypatch):
     context = _Context(_ApiClient())
     monkeypatch.setenv("AGENTBRICKS_DISABLE_TELEMETRY", "true")
     with mock.patch.object(telemetry, "_workspace_client") as workspace_client:
-        telemetry.emit_command(context, execution_time_ms=1, exit_code=0)
+        telemetry.emit_command(context, exit_code=0)
     workspace_client.assert_not_called()
 
 
@@ -164,17 +186,17 @@ def test_no_auth_skips_client_creation(monkeypatch):
     monkeypatch.delenv("DATABRICKS_CONFIG_PROFILE", raising=False)
     monkeypatch.delenv("DATABRICKS_HOST", raising=False)
     with mock.patch.object(telemetry, "_workspace_client", return_value=None) as workspace_client:
-        telemetry.emit_command(context, execution_time_ms=1, exit_code=0)
+        telemetry.emit_command(context, exit_code=0)
     workspace_client.assert_called_once_with(context)
 
 
 def test_transport_failure_is_silent_and_does_not_change_result(monkeypatch):
     context = _Context(_ApiClient(RuntimeError("transport detail")))
     monkeypatch.setattr(telemetry, "_MAX_FOREGROUND_WAIT_S", 1)
-    telemetry.emit_command(context, execution_time_ms=1, exit_code=0)
+    telemetry.emit_command(context, exit_code=0)
 
 
-def test_agentbricks_command_records_success_and_failed_attempt(monkeypatch):
+def test_agentbricks_command_records_exit_outcome(monkeypatch):
     records = []
     monkeypatch.setattr(
         telemetry,
@@ -223,132 +245,3 @@ def test_agentbricks_command_rethrows_unexpected_exception(monkeypatch):
 
     assert result.exit_code == 1
     assert result.exception is failure
-
-
-def test_build_log_collects_real_init_parameters_without_values(monkeypatch, tmp_path):
-    records = []
-
-    def capture(ctx, **kwargs):
-        records.append(telemetry.build_log(ctx, **kwargs))
-
-    monkeypatch.setattr(telemetry, "emit_command", capture)
-    private_directory = tmp_path / "private-project-name"
-    result = CliRunner().invoke(
-        cli.agentbricks,
-        [
-            "init",
-            str(private_directory),
-            "--framework",
-            "openai",
-            "--server",
-            "custom",
-            "--profile",
-            "private-profile-name",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert len(records) == 1
-    log = records[0]
-    parameters = {parameter["name"]: parameter for parameter in log["parameters"]}
-    assert "agentbricks.output" not in parameters
-    assert parameters["agentbricks init.framework"]["choice_value"] == "openai"
-    assert parameters["agentbricks init.server"]["choice_value"] == "custom"
-    assert parameters["agentbricks init.profile"] == {
-        "name": "agentbricks init.profile",
-    }
-    encoded = json.dumps(log)
-    assert "private-project-name" not in encoded
-    assert "private-profile-name" not in encoded
-
-
-def test_build_log_includes_only_explicit_parameters_and_omits_hidden_or_deprecated(monkeypatch):
-    captured = []
-
-    @click.group(name="agentbricks")
-    @click.pass_context
-    def root(ctx):
-        ctx.obj = SimpleNamespace(
-            telemetry_framework=None,
-            telemetry_server=None,
-            telemetry_tracing_configured=None,
-        )
-
-    @root.command(name="deploy", cls=AgentBricksCommand)
-    @click.option("--instances", type=click.IntRange(min=1, max=5), default=2)
-    @click.option("--default-secret", default="secret-default")
-    @click.option("--enabled", is_flag=True)
-    @click.option("--hidden", is_flag=True, hidden=True)
-    @click.option("--deprecated", is_flag=True, deprecated=True)
-    @click.pass_context
-    def deploy(ctx, instances, default_secret, enabled, hidden, deprecated):
-        del ctx, instances, default_secret, enabled, hidden, deprecated
-
-    monkeypatch.setattr(
-        telemetry,
-        "emit_command",
-        lambda ctx, **kwargs: captured.append(telemetry.build_log(ctx, **kwargs)),
-    )
-    default_result = CliRunner().invoke(root, ["deploy"])
-    result = CliRunner().invoke(
-        root, ["deploy", "--instances", "2", "--enabled", "--hidden", "--deprecated"]
-    )
-
-    assert default_result.exit_code == 0, default_result.output
-    assert "parameters" not in captured[0]
-    assert result.exit_code == 0, result.output
-    parameters = {parameter["name"]: parameter for parameter in captured[1]["parameters"]}
-    assert parameters["agentbricks deploy.instances"] == {
-        "name": "agentbricks deploy.instances",
-        "bounded_int_value": 2,
-    }
-    assert parameters["agentbricks deploy.enabled"] == {
-        "name": "agentbricks deploy.enabled",
-        "bool_value": True,
-    }
-    assert "agentbricks deploy.default_secret" not in parameters
-    assert "agentbricks deploy.hidden" not in parameters
-    assert "agentbricks deploy.deprecated" not in parameters
-
-
-def test_unallowlisted_choice_is_presence_only(monkeypatch):
-    captured = []
-
-    @click.command(name="inventory", cls=AgentBricksCommand)
-    @click.option(
-        "--source",
-        type=click.Choice(["private-choice"]),
-        default=None,
-    )
-    @click.pass_context
-    def inventory(ctx, source):
-        del ctx, source
-
-    monkeypatch.setattr(
-        telemetry,
-        "emit_command",
-        lambda ctx, **kwargs: captured.append(telemetry.build_log(ctx, **kwargs)),
-    )
-    result = CliRunner().invoke(inventory, ["--source", "private-choice"])
-
-    assert result.exit_code == 0, result.output
-    assert captured[0]["parameters"] == [{"name": "inventory.source"}]
-    assert "private-choice" not in json.dumps(captured[0])
-
-
-def test_safe_choice_allowlist_is_a_subset_of_current_click_choices():
-    declared_choices = {}
-
-    def collect(command, path):
-        for parameter in command.params:
-            if isinstance(parameter.type, click.Choice):
-                declared_choices[f"{' '.join(path)}.{parameter.name}"] = set(parameter.type.choices)
-        if isinstance(command, click.Group):
-            for child_name, child in command.commands.items():
-                collect(child, (*path, child_name))
-
-    collect(cli.agentbricks, ("agentbricks",))
-
-    for name, values in telemetry._SAFE_CHOICE_VALUES.items():
-        assert name in declared_choices
-        assert values <= declared_choices[name]
