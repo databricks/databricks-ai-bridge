@@ -10,6 +10,7 @@ from unittest import mock
 import click
 from click.testing import CliRunner
 
+import databricks_agentbricks.cli.app as cli
 from databricks_agentbricks._group import AgentBricksCommand
 from databricks_agentbricks.cli import telemetry
 from databricks_agentbricks.errors import AgentCliError
@@ -42,6 +43,12 @@ class _Context:
             telemetry_framework="openai",
             telemetry_server="agentbricks",
             telemetry_tracing_configured=True,
+        )
+        self.command = SimpleNamespace(name="init", params=())
+        self.parent = SimpleNamespace(
+            command=SimpleNamespace(name="agentbricks", params=()),
+            parent=None,
+            obj=self.obj,
         )
 
     def find_root(self):
@@ -82,6 +89,30 @@ def test_build_payload_matches_frontend_log_schema_and_allowlist():
     }
     assert "/tmp" not in json.dumps(payload)
     assert "secret" not in json.dumps(payload)
+
+
+def test_build_log_uses_static_click_path_instead_of_raw_context_path():
+    context = _Context()
+    context.command_path = "agentbricks init --profile private-profile"
+
+    log = telemetry.build_log(
+        context,
+        execution_time_ms=1,
+        success=True,
+        exit_code=0,
+    )
+
+    assert log["command_path"] == "agentbricks init"
+    assert "private-profile" not in json.dumps(log)
+
+    context.command = SimpleNamespace(name="init --private-profile", params=())
+    fallback_log = telemetry.build_log(
+        context,
+        execution_time_ms=1,
+        success=True,
+        exit_code=0,
+    )
+    assert fallback_log["command_path"] == "agentbricks"
 
 
 def test_failed_payload_uses_bounded_category_and_no_message():
@@ -188,3 +219,140 @@ def test_agentbricks_command_rethrows_unexpected_exception(monkeypatch):
 
     assert result.exit_code == 1
     assert result.exception is failure
+
+
+def test_build_log_collects_real_init_parameters_without_values(monkeypatch, tmp_path):
+    records = []
+
+    def capture(ctx, **kwargs):
+        records.append(telemetry.build_log(ctx, **kwargs))
+
+    monkeypatch.setattr(telemetry, "emit_command", capture)
+    private_directory = tmp_path / "private-project-name"
+    result = CliRunner().invoke(
+        cli.agentbricks,
+        [
+            "init",
+            str(private_directory),
+            "--framework",
+            "openai",
+            "--server",
+            "custom",
+            "--profile",
+            "private-profile-name",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(records) == 1
+    log = records[0]
+    parameters = {parameter["name"]: parameter for parameter in log["parameters"]}
+    assert parameters["agentbricks.output"] == {
+        "name": "agentbricks.output",
+        "supplied_on_command_line": False,
+        "choice_value": "text",
+    }
+    assert parameters["agentbricks init.framework"]["choice_value"] == "openai"
+    assert parameters["agentbricks init.server"]["choice_value"] == "custom"
+    assert parameters["agentbricks init.profile"] == {
+        "name": "agentbricks init.profile",
+        "supplied_on_command_line": True,
+    }
+    encoded = json.dumps(log)
+    assert "private-project-name" not in encoded
+    assert "private-profile-name" not in encoded
+
+
+def test_build_log_includes_safe_defaults_and_omits_hidden_or_deprecated_parameters():
+    captured = []
+
+    @click.group(name="agentbricks")
+    @click.pass_context
+    def root(ctx):
+        ctx.obj = SimpleNamespace(
+            telemetry_framework=None,
+            telemetry_server=None,
+            telemetry_tracing_configured=None,
+        )
+
+    @root.command(name="deploy", cls=AgentBricksCommand)
+    @click.option("--instances", type=click.IntRange(min=1, max=5), default=2)
+    @click.option("--default-secret", default="secret-default")
+    @click.option("--enabled", is_flag=True)
+    @click.option("--hidden", is_flag=True, hidden=True)
+    @click.option("--deprecated", is_flag=True, deprecated=True)
+    @click.pass_context
+    def deploy(ctx, instances, default_secret, enabled, hidden, deprecated):
+        del ctx, instances, default_secret, enabled, hidden, deprecated
+
+    original_emit = telemetry.emit_command
+    try:
+        telemetry.emit_command = lambda ctx, **kwargs: captured.append(
+            telemetry.build_log(ctx, **kwargs)
+        )
+        result = CliRunner().invoke(root, ["deploy"])
+    finally:
+        telemetry.emit_command = original_emit
+
+    assert result.exit_code == 0, result.output
+    parameters = {parameter["name"]: parameter for parameter in captured[0]["parameters"]}
+    assert parameters["agentbricks deploy.instances"] == {
+        "name": "agentbricks deploy.instances",
+        "supplied_on_command_line": False,
+        "bounded_int_value": 2,
+    }
+    assert parameters["agentbricks deploy.enabled"] == {
+        "name": "agentbricks deploy.enabled",
+        "supplied_on_command_line": False,
+        "bool_value": False,
+    }
+    assert "agentbricks deploy.default_secret" not in parameters
+    assert "agentbricks deploy.hidden" not in parameters
+    assert "agentbricks deploy.deprecated" not in parameters
+
+
+def test_unallowlisted_choice_is_presence_only():
+    captured = []
+
+    @click.command(name="inventory", cls=AgentBricksCommand)
+    @click.option(
+        "--source",
+        type=click.Choice(["private-choice"]),
+        default=None,
+    )
+    @click.pass_context
+    def inventory(ctx, source):
+        del ctx, source
+
+    original_emit = telemetry.emit_command
+    try:
+        telemetry.emit_command = lambda ctx, **kwargs: captured.append(
+            telemetry.build_log(ctx, **kwargs)
+        )
+        result = CliRunner().invoke(inventory, ["--source", "private-choice"])
+    finally:
+        telemetry.emit_command = original_emit
+
+    assert result.exit_code == 0, result.output
+    assert captured[0]["parameters"] == [
+        {"name": "inventory.source", "supplied_on_command_line": True}
+    ]
+    assert "private-choice" not in json.dumps(captured[0])
+
+
+def test_safe_choice_allowlist_is_a_subset_of_current_click_choices():
+    declared_choices = {}
+
+    def collect(command, path):
+        for parameter in command.params:
+            if isinstance(parameter.type, click.Choice):
+                declared_choices[f"{' '.join(path)}.{parameter.name}"] = set(parameter.type.choices)
+        if isinstance(command, click.Group):
+            for child_name, child in command.commands.items():
+                collect(child, (*path, child_name))
+
+    collect(cli.agentbricks, ("agentbricks",))
+
+    for name, values in telemetry._SAFE_CHOICE_VALUES.items():
+        assert name in declared_choices
+        assert values <= declared_choices[name]
