@@ -2,7 +2,8 @@
 
 Agent Bricks CLI is an experimental command-line interface for building and deploying custom
 agents on Databricks. It manages memory, sessions, tracing, and deployments from one authenticated
-command.
+command. Under `agentbricks experimental`, it also picks the model and prompt behind each of the
+agent's LLM calls by searching candidates on your own eval set.
 
 > The underlying APIs are in preview and may need workspace enablement.
 
@@ -29,8 +30,9 @@ invocation protocol to design yourself. Bring your own agent, or start from a te
   (LangGraph or OpenAI Agents) with the runtime, tests, and an optional chat UI wired up; you edit
   the application code (model, tools, prompts).
 - **`agent.toml`** - the declarative source of truth for the Databricks-managed infrastructure your
-  agent depends on: tool bindings (data sandbox, managed MCP services, Unity Catalog functions) and
-  memory, session, and durability resources. `agentbricks deploy` reads it to provision and wire everything
+  agent depends on: tool bindings (data sandbox, managed MCP services, Unity Catalog functions),
+  memory, session, and durability resources, and the model services and Prompt Registry prompts
+  each LLM call uses. `agentbricks deploy` reads it to provision and wire everything
   up (detailed under [Agent tools](#agent-tools)).
 - **`agentbricks deploy`** - provisions the bound stores, grants the app's service principal access to
   them, provisions the durable-runtime database when durability is on, configures tracing, and rolls
@@ -444,31 +446,38 @@ agentbricks deploy my-agent
 
 Memory and session stores are independent resources: deleting one never affects the other.
 
-## Model upgrades
+## Model and prompt upgrades (experimental)
 
-Point each of the agent's LLM calls at a Unity Catalog AI Gateway model service you own, and the
-models behind them can change without a code change or redeploy. A one-model agent binds one service;
-a compound agent binds one per call site, each under a role:
+`agentbricks experimental models` and `agentbricks experimental prompts` find the best model and
+prompt for each LLM call in your agent and swap them in. They live under `experimental` because
+their flags and output may still change between releases without a deprecation period.
+
+Point each of the agent's LLM calls at a Unity Gateway model service you own (Unity Gateway was
+formerly AI Gateway), and the models behind them can change without a code change or redeploy. A
+one-model agent binds one service. A compound agent binds one per call site, each under a role,
+and declares the Prompt Registry prompts it loads so the search can rewrite them too:
 
 ```sh
 agentbricks experimental models bind main.my_agent.router_llm --role router --default system.ai.claude-haiku-4-5
 agentbricks experimental models bind main.my_agent.writer_llm --role writer --default system.ai.claude-sonnet-4-5
-agentbricks deploy my-agent      # creates the services and grants the app EXECUTE on them
+agentbricks experimental prompts bind main.my_agent.writer
+agentbricks deploy my-agent      # creates the services and grants the app access to them and the prompt
 agentbricks experimental models upgrade -c router=claude-haiku-4-5,gpt-5-4-nano -c writer=claude-haiku-4-5 \
-  --prompt prompts:/main.my_agent.writer@production \
   --predict agent.eval:predict --train-data agent.eval:TRAIN --val-data agent.eval:VAL \
   --scorer agent.eval:SCORERS
 agentbricks experimental models status        # the job's state, then its recommendation
 agentbricks experimental models apply         # switch to it
 ```
 
-`models upgrade` uploads the project to your workspace and runs the search as a serverless
-Databricks job (it can take hours, so it never runs locally). The job imports the `predict_fn`,
+By default `models upgrade` uploads the project to your workspace and runs the search as a
+serverless Databricks job, because a search can take hours. `--run-on local` runs it in your
+terminal instead, which needs the `upgrade` extra and the agent's dependencies installed. The job imports the `predict_fn`,
 eval data, and scorers you name from the project (the same inputs `optimize_prompts_and_models`
 takes, below) and runs each eval record once per candidate, against a temporary `<service>_exp_<id>`
 clone. Each LLM call must use its role's service, `resolve_model_service("<role>")`, which reads the
 `AGENT_MODEL_SERVICE_<ROLE>` env var that deploy (and the job, before importing your code) sets.
-With `--prompt`, GEPA rewrites those prompts for each candidate model too. `models apply` switches
+GEPA also rewrites every prompt bound with `prompts bind` for each candidate model. Pass
+`--prompt` to pick specific prompts instead, or `--models-only` to leave prompts alone. `models apply` switches
 to the best quality / latency / cost trade-off and registers any rewritten prompts (prior versions
 keep `@production_previous`). `models rollback` undoes the whole last apply: it switches every
 model back and moves each prompt's alias back to its prior version. Apply refuses recommendations
@@ -504,7 +513,8 @@ instead); prompts are rewritten by GEPA's reflection loop, which uses Claude Opu
 
 Prompts the agent loads from the MLflow Prompt Registry go under `[prompts]`
 (`agentbricks experimental prompts bind main.my_agent.writer`), and deploy grants the app
-the schema privileges the registry requires to load them.
+the schema privileges the registry requires to load them. `agentbricks experimental prompts list`
+shows each bound prompt and the version its `@production` alias points at.
 
 ## Commands
 
