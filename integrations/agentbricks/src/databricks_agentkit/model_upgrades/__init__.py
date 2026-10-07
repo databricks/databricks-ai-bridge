@@ -21,7 +21,7 @@ agent's production services are untouched until ``promote_to_prod``.
     promote_to_prod(result)
 
 Needs the ``upgrade`` extra (``gepa`` and full ``mlflow``): ``pip install
-'databricks-agentbricks[upgrade]'``. `agentbricks models upgrade` drives this for Agent Bricks
+'databricks-agentbricks[upgrade]'``. `agentbricks experimental models upgrade` drives this for Agent Bricks
 projects.
 """
 

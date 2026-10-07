@@ -444,21 +444,59 @@ agentbricks deploy my-agent
 
 Memory and session stores are independent resources: deleting one never affects the other.
 
-## Model services
+## Model upgrades
 
 Point each of the agent's LLM calls at a Unity Catalog AI Gateway model service you own, and the
-model behind it can change without a code change or redeploy. A one-model agent binds one service;
+models behind them can change without a code change or redeploy. A one-model agent binds one service;
 a compound agent binds one per call site, each under a role:
 
 ```sh
 agentbricks experimental models bind main.my_agent.router_llm --role router --default system.ai.claude-haiku-4-5
 agentbricks experimental models bind main.my_agent.writer_llm --role writer --default system.ai.claude-sonnet-4-5
 agentbricks deploy my-agent      # creates the services and grants the app EXECUTE on them
-agentbricks experimental models set claude-sonnet-4-5 --role router   # switch one role's model, no redeploy
+agentbricks experimental models upgrade -c router=claude-haiku-4-5,gpt-5-4-nano -c writer=claude-haiku-4-5 \
+  --prompt prompts:/main.my_agent.writer@production \
+  --predict agent.eval:predict --train-data agent.eval:TRAIN --val-data agent.eval:VAL \
+  --scorer agent.eval:SCORERS
+agentbricks experimental models status        # the job's state, then its recommendation
+agentbricks experimental models apply         # switch to it
 ```
 
-Each LLM call uses its role's service through `resolve_model_service("<role>")`, which reads the
-`AGENT_MODEL_SERVICE_<ROLE>` env var that deploy sets.
+`models upgrade` uploads the project to your workspace and runs the search as a serverless
+Databricks job (it can take hours, so it never runs locally). The job imports the `predict_fn`,
+eval data, and scorers you name from the project (the same inputs `optimize_prompts_and_models`
+takes, below) and runs each eval record once per candidate, against a temporary `<service>_exp`
+clone. Each LLM call must use its role's service, `resolve_model_service("<role>")`, which reads the
+`AGENT_MODEL_SERVICE_<ROLE>` env var that deploy (and the job, before importing your code) sets.
+With `--prompt`, GEPA rewrites those prompts for each candidate model too. `models apply` switches
+to the best quality / latency / cost trade-off and registers any rewritten prompts (prior versions
+keep `@production_previous`). `models rollback` undoes the whole last apply: it switches every
+model back and moves each prompt's alias back to its prior version.
+
+The search is `databricks_agentkit.model_upgrades`, which you can also call directly (for example
+from a notebook) to tune several model services and MLflow Prompt Registry prompts together:
+
+```python
+from databricks_agentkit.model_upgrades import optimize_prompts_and_models, promote_to_prod
+
+result = optimize_prompts_and_models(
+    predict,  # predict(inputs: dict) -> answer
+    train_data,  # [{"inputs": {...}, "expectations": {"expected_response": ...}}, ...]
+    val_data,
+    prompt_uris=["prompts:/main.my_agent.router@production"],
+    gateway_endpoints={
+        "main.my_agent.router_llm": ["claude-haiku-4-5", "gpt-5-4-mini"],
+        "main.my_agent.writer_llm": ["claude-sonnet-4-5", "claude-haiku-4-5"],
+    },
+    scorers=scorers,  # MLflow scorers, or (inputs, expectations, answer) -> float
+    max_metric_calls=200,
+)
+promote_to_prod(result)  # repoints the services, registers and aliases the winning prompts
+```
+
+Model choices use a UCB1 bandit by default (`model_selection="reflection"` asks the reflection LLM
+instead); prompts are rewritten by GEPA's reflection loop. Both need the `upgrade` extra:
+`pip install 'databricks-agentbricks[upgrade]'`.
 
 Prompts the agent loads from the MLflow Prompt Registry go under `[prompts]`
 (`agentbricks experimental models bind-prompt main.my_agent.writer`), and deploy grants the app
@@ -508,6 +546,11 @@ agentbricks [-p <profile>] [-o text|json]
     bind-prompt PROMPT [--key KEY] | unbind-prompt KEY
     unbind | list | status
     set        MODEL [--role ROLE] [--yes]
+    rollback   [--role ROLE] [--yes]
+    upgrade    --candidates [ROLE=]MODEL[,...] [...] [--prompt URI ...] --predict REF --train-data REF --val-data REF
+               --scorer REF [...] [--budget N] [--weights Q,L,C] [--timeout-hours H]
+               [--run-on job|local] [--apply never|ask|auto] [--wait]
+    apply      [--yes]
   deploy       [<name>] [--source PATH] [--instances N]
   deployments  list | get | logs | start | stop | delete
   endpoint

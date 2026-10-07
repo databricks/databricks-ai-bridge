@@ -73,7 +73,8 @@ def agentbricks(ctx: click.Context, profile: Optional[str], output: str) -> None
     \b
       Models       Call Databricks model serving out of the box, routed through
                    the AI Gateway for capacity on your existing Databricks auth;
-                   bind each LLM call to a model service you can switch any time.
+                   bind each LLM call to a model service, then search models and
+                   prompts for every call on your own eval set.
       Tools        Data sandboxes, managed MCP services, Unity Catalog
                    functions, and local Python tools the agent can call.
       Memory       Long-term memory the agent recalls across conversations.

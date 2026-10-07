@@ -300,10 +300,13 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
             "call a model service you own (deploy creates it)",
         ),
         (
-            "agentbricks experimental models status",
-            "each role's model service and the model behind it",
+            "agentbricks experimental models upgrade -c claude-haiku-4-5 --predict agent.eval:predict "
+            "--train-data agent.eval:TRAIN --val-data agent.eval:VAL --scorer agent.eval:SCORERS",
+            "search models (and prompts) on your eval set, as a Databricks job",
         ),
-        ("agentbricks experimental models set claude-haiku-4-5", "switch the model, no redeploy"),
+        ("agentbricks experimental models status", "check on the job and see its recommendation"),
+        ("agentbricks experimental models apply", "apply the recommendation"),
+        ("agentbricks experimental models rollback", "undo the last apply or set"),
     ),
     ("experimental", "models", "bind"): (
         (
@@ -333,7 +336,31 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("agentbricks experimental models list", "models you can route a service to"),
     ),
     ("experimental", "models", "status"): (
-        ("agentbricks experimental models status", "each role's model service and model"),
+        ("agentbricks experimental models status", "each role's model and the latest run"),
+    ),
+    ("experimental", "models", "upgrade"): (
+        (
+            "agentbricks experimental models upgrade -c router=claude-haiku-4-5,gpt-5-4-nano "
+            "-c writer=claude-haiku-4-5 --prompt prompts:/main.my_agent.writer@production "
+            "--predict agent.eval:predict --train-data agent.eval:TRAIN "
+            "--val-data agent.eval:VAL --scorer agent.eval:SCORERS",
+            "search every role's model and a prompt together",
+        ),
+        (
+            "agentbricks experimental models upgrade -c claude-haiku-4-5 --predict agent.eval:predict "
+            "--train-data agent.eval:TRAIN --val-data agent.eval:VAL --scorer agent.eval:SCORERS "
+            "--apply ask",
+            "wait for the result and confirm before applying it",
+        ),
+        (
+            "agentbricks experimental models upgrade -c claude-haiku-4-5 --predict agent.eval:predict "
+            "--train-data agent.eval:TRAIN --val-data agent.eval:VAL --scorer agent.eval:SCORERS "
+            "--run-on local",
+            "run the search in this process instead of a job",
+        ),
+    ),
+    ("experimental", "models", "apply"): (
+        ("agentbricks experimental models apply", "promote every model and prompt that won"),
     ),
     ("experimental", "models", "set"): (
         (
@@ -343,6 +370,13 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         (
             "agentbricks experimental models set claude-haiku-4-5 --role router",
             "switch one role's model",
+        ),
+    ),
+    ("experimental", "models", "rollback"): (
+        ("agentbricks experimental models rollback", "undo the last apply: its models and prompts"),
+        (
+            "agentbricks experimental models rollback --role router",
+            "undo one role's last model switch",
         ),
     ),
     ("tracing", "list"): (
