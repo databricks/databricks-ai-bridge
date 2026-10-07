@@ -41,6 +41,9 @@ SERVERLESS_ENVIRONMENT_VERSION = "5"
 # override (e.g. with a git URL) to run an unreleased build.
 UPGRADE_REQUIREMENT_ENV = "AGENTBRICKS_UPGRADE_REQUIREMENT"
 DEFAULT_TIMEOUT_HOURS = 6
+# Default search budget, in agent runs per eval record. GEPA proposes one prompt or model at a time,
+# so a compound agent needs room for every prompt and every role's candidates to get a turn.
+BUDGET_PER_RECORD = 10
 # MLflow tags on the job's run: the id the CLI looks the run up by, and the report itself.
 UPGRADE_ID_TAG = "agentbricks.upgrade_id"
 REPORT_TAG = "agentbricks.upgrade_report"
@@ -227,7 +230,7 @@ def run_upgrade(
             if models
         },
         scorers=scorers,
-        max_metric_calls=budget or 4 * (len(train_data) + len(val_data)),
+        max_metric_calls=budget or BUDGET_PER_RECORD * (len(train_data) + len(val_data)),
         weight_quality=weight_quality,
         weight_latency=weight_latency,
         weight_cost=weight_cost,

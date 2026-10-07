@@ -262,7 +262,7 @@ def test_invalid_model_selection_rejected(mocker, fake_predict, fake_scorers):
 
 def test_patched_endpoints_rewrites_known_models_and_restores():
     """The context manager should rewrite `model=<ep>` to `<ep>_exp` and restore on exit."""
-    from openai.resources.chat.completions import Completions
+    Completions = pytest.importorskip("openai.resources.chat.completions").Completions
 
     from databricks_agentkit.model_upgrades.optimization import _EndpointTarget, _patched_endpoints
 
@@ -292,7 +292,7 @@ def test_patched_endpoints_rewrites_known_models_and_restores():
 
 def test_patched_endpoints_covers_responses_api():
     """Responses.create should be patched alongside Completions.create."""
-    from openai.resources.responses import Responses
+    Responses = pytest.importorskip("openai.resources.responses").Responses
 
     from databricks_agentkit.model_upgrades.optimization import _EndpointTarget, _patched_endpoints
 
@@ -410,7 +410,7 @@ def test_preflight_warns_but_does_not_abort_on_predict_failure(mocker, fake_scor
 
 def test_patched_endpoints_no_targets_is_noop():
     """Passing an empty target list should not touch the OpenAI client."""
-    from openai.resources.chat.completions import Completions
+    Completions = pytest.importorskip("openai.resources.chat.completions").Completions
 
     from databricks_agentkit.model_upgrades.optimization import _patched_endpoints
 

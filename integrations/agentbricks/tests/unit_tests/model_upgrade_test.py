@@ -156,7 +156,7 @@ def test_run_upgrade_searches_every_role_jointly(monkeypatch):
     # Only roles with candidates are searched; both services are reported.
     assert calls["gateway_endpoints"] == {"a.b.router": ["claude-haiku-4-5"]}
     assert calls["prompt_uris"] == ["prompts:/a.b.system@production"]
-    assert calls["max_metric_calls"] == 20
+    assert calls["max_metric_calls"] == 50
     assert report.recommendations["router"].recommended_model == "system.ai.claude-haiku-4-5"
     assert not report.recommendations["writer"].changed
     assert report.prompt_changes == ["a.b.system"]

@@ -826,7 +826,7 @@ def _render_applied(result: dict) -> None:
     "--budget",
     type=click.IntRange(min=1),
     default=None,
-    help="Evaluation budget (agent runs). Default: 4 x the number of eval records.",
+    help="Evaluation budget (agent runs). Default: 10 x the number of eval records.",
 )
 @click.option(
     "--weights",

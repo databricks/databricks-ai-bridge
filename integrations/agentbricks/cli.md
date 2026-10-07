@@ -1271,7 +1271,7 @@ _Options_
 | `--train-data <REF>` | `module:attr` | - | yes | Training records: a list of `{"inputs": ..., "expectations": ...}`. |
 | `--val-data <REF>` | `module:attr` | - | yes | Validation records, same shape as `--train-data`. |
 | `--scorer <REF>` | `module:attr` | - | yes | A scorer or list of scorers (MLflow scorers, or `(inputs, expectations, answer) -> float`). Repeat for more. |
-| `--budget <N>` | integer >= 1 | 4 x eval records | no | Evaluation budget, in agent runs. |
+| `--budget <N>` | integer >= 1 | 10 x eval records | no | Evaluation budget, in agent runs. |
 | `--weights <Q,L,C>` | string | `0.7,0.2,0.1` | no | Quality, latency, cost weights; non-negative, summing to 1. |
 | `--timeout-hours <H>` | number >= 0.1 | `6` | no | Cancel the job if it runs longer than this. |
 | `--run-on <WHERE>` | `job`, `local` | `job` | no | Where the search runs: a serverless Databricks job, or this process. |
