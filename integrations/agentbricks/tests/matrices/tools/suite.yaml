@@ -1,0 +1,25 @@
+# Dependency manifest for the LangGraph x CLI/direct x dev/deploy tool matrix. run_suites.py
+# provisions these in order; `existing` is only validated, never created or deleted.
+name: tools
+tests: [matrices/tools/]
+runs:
+  nightly:
+    timeout_minutes: 240
+requires:
+  - name: catalog
+    kind: existing
+    value: ${AGENTBRICKS_E2E_CATALOG:-main}
+    check: [catalogs, get]
+  - name: scratch_schema
+    kind: dab
+    bundle: bundle
+    catalog: catalog
+  # Nested + marker functions and a volume, created imperatively in the schema and swept by its destroy.
+  - name: uc_function
+    kind: uc_function
+    schema: scratch_schema
+  - name: genie_space
+    kind: existing
+    value: ${AGENTBRICKS_E2E_GENIE_SPACE_ID}
+    check: [genie, get-space]
+    pattern: "^[0-9a-f]{32}$"
