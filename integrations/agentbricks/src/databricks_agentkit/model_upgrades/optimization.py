@@ -662,6 +662,10 @@ def _get_active_trace():
         trace_id = mlflow.get_last_active_trace_id()
         if not trace_id:
             return None
+        # With async trace logging (MLflow's default outside Databricks), the trace may still be in
+        # the export queue; reading it back first returns "span data is corrupted" and drops its
+        # token usage and latency from the score.
+        mlflow.flush_trace_async_logging()
         return mlflow.get_trace(trace_id)
     except Exception:
         return None

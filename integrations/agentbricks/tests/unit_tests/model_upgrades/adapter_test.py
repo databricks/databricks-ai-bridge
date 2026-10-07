@@ -7,6 +7,7 @@ behaviors that the optimize_prompts_and_models tests mock out.
 
 import pytest
 
+from databricks_agentkit.model_upgrades import optimization as opt
 from databricks_agentkit.model_upgrades.optimization import (
     _DBU_TO_USD,
     _SCORER_WARNINGS_SEEN,
@@ -781,3 +782,13 @@ def test_bandit_proposer_independent_per_endpoint(mocker):
         ["model:ep1", "model:ep2"],
     )
     assert out == {"model:ep1": "a1", "model:ep2": "b2"}
+
+
+def test_get_active_trace_flushes_async_logging_before_reading(monkeypatch):
+    """A trace still in MLflow's async export queue reads back as corrupted, so flush first."""
+    calls = []
+    monkeypatch.setattr(opt.mlflow, "get_last_active_trace_id", lambda: "tr-1")
+    monkeypatch.setattr(opt.mlflow, "flush_trace_async_logging", lambda: calls.append("flush"))
+    monkeypatch.setattr(opt.mlflow, "get_trace", lambda trace_id: calls.append(trace_id) or "trace")
+    assert opt._get_active_trace() == "trace"
+    assert calls == ["flush", "tr-1"]
