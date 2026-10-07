@@ -4,41 +4,38 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, replace
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 from uuid import uuid4
 
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.services.deployment.names import _prefixed_name
-from databricks_agentbricks.services.invoke.request import InvokeRequest, build_request
+from databricks_agentbricks.services.invoke.auth import WorkspaceOAuthAuthenticator
+from databricks_agentbricks.services.invoke.request import build_request
 from databricks_agentbricks.services.invoke.transport import EndpointResponse, HttpSession
-from databricks_agentkit._api_client import _workspace_client
 
 _ROUTING_KEY_HEADER = "X-Routing-Key"
 
 
-class WorkspaceOAuthAuthenticator:
-    """Resolve an OAuth header from one selected Databricks workspace profile."""
+@dataclass(frozen=True)
+class InvokeRequest:
+    """The framework-independent inputs for one ``endpoint invoke`` operation.
 
-    def __init__(self, profile: Optional[str]) -> None:
-        self._profile = profile
+    ``json_value`` intentionally remains text at this boundary. ``build_request`` validates
+    and decodes it immediately before creating the wire request, which lets callers distinguish an
+    omitted body from an explicit JSON ``null``.
+    """
 
-    def authorization_header(self) -> str:
-        try:
-            client = _workspace_client(self._profile)
-            if client.config.auth_type == "pat":
-                raise AgentCliError(
-                    "Databricks Apps API routes require OAuth; the selected profile uses a PAT.",
-                    hint="Authenticate the same workspace with `databricks auth login`.",
-                )
-            authorization = client.config.authenticate().get("Authorization")
-        except AgentCliError:
-            raise
-        except Exception as exc:  # noqa: BLE001 - render auth failures without a traceback
-            raise AgentCliError(f"Could not initialize endpoint authentication: {exc}.") from exc
-        if not authorization:
-            raise AgentCliError("Could not resolve an OAuth access token for the endpoint request.")
-        return authorization
+    path: str
+    app: str | None = None
+    url: str | None = None
+    method: str = "POST"
+    query: tuple[str, ...] = ()
+    json_value: str | None = None
+    sse: bool = False
+    routing_key: str | None = None
+    timeout: float = 300.0
+    auth: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -138,5 +135,4 @@ __all__ = [
     "InvokeRequest",
     "InvokeService",
     "ResolvedEndpoint",
-    "WorkspaceOAuthAuthenticator",
 ]

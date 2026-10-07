@@ -39,6 +39,7 @@ from databricks_agentbricks.presentation.deploy import (
 )
 from databricks_agentbricks.presentation.reporter import ClickReporter
 from databricks_agentbricks.projects.resolver import ProjectResolver
+from databricks_agentbricks.services.deploy_service import DeployRequest, DeployService
 from databricks_agentbricks.services.deployment.config import (
     _DEFAULT_PIP_INDEX_URL,
     _USE_MANAGED_RUNTIME_STORE,
@@ -47,7 +48,6 @@ from databricks_agentbricks.services.deployment.config import (
     MlflowTracingConfig,  # noqa: F401 - compatibility re-export
     mlflow_tracing_config,  # noqa: F401 - compatibility re-export
 )
-from databricks_agentbricks.services.deployment.deploy_service import DeployRequest, DeployService
 from databricks_agentbricks.services.deployment.names import (
     DeploymentName,
     _prefixed_name,  # noqa: F401 - compatibility re-export

@@ -6,12 +6,9 @@ import click
 
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.presentation.endpoint import SsePrinter, render_response
-from databricks_agentbricks.services.invoke.invoke_service import (
-    InvokeRequest,
-    InvokeService,
-    WorkspaceOAuthAuthenticator,
-)
+from databricks_agentbricks.services.invoke.auth import WorkspaceOAuthAuthenticator
 from databricks_agentbricks.services.invoke.transport import HttpSession
+from databricks_agentbricks.services.invoke_service import InvokeRequest, InvokeService
 
 
 def build_invoke_service(obj) -> InvokeService:

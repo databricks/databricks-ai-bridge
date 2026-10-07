@@ -1,1 +1,1 @@
-"""Service and HTTP adapters for ``agentbricks endpoint invoke``."""
+"""HTTP and authentication adapters for ``agentbricks endpoint invoke``."""
