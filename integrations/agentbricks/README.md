@@ -730,8 +730,8 @@ Deploy derives Apps user scopes from explicit `auth = "user"` bindings and union
 | Managed MCP (governed ingress) | `ai-gateway` |
 | `system.ai.dbsql` | `ai-gateway`, `sql` |
 | `system.ai.genie_one_mcp` | `ai-gateway`, `genie` |
-| Unscoped sandbox with token injection (default) | `ai-gateway`, `files`, `workspace.workspace` |
-| Volume-scoped sandbox, with or without token injection | `ai-gateway`, `files` |
+| Sandbox with token injection (default), with or without a Volume policy | `ai-gateway`, `files`, `workspace.workspace` |
+| Volume-scoped sandbox with token injection disabled | `ai-gateway`, `files` |
 | First-class Genie One or Genie Agent | `genie` |
 | Unscoped sandbox with token injection disabled | `ai-gateway` |
 
@@ -760,15 +760,16 @@ The `system.ai.dbsql` managed MCP additionally requests the Apps `sql` user scop
 API consent, not `sql:restricted-query`; read-only enforcement remains the service policy plus the
 requesting user's Unity Catalog grants. DBSQL does not use Databricks Connect.
 
-An unscoped user-auth sandbox with `databricks_access_token_included = true` requests the Apps
-`files` and `workspace.workspace` user scopes. An explicit Volume downscope requests `files` only,
-even when token injection is enabled; the injected credential cannot access unrelated workspace
-APIs. It also requests `files` when token injection is disabled.
+Any user-auth sandbox with `databricks_access_token_included = true` requests the Apps
+`files` and `workspace.workspace` user scopes, even with an explicit Volume policy.
+Volume downscoping restricts only Unity Catalog Volumes; Workspace access remains governed by
+the caller's permissions. An explicit Volume downscope still requests `files` when token injection
+is disabled.
 OAuth consent does not grant Volume access: the requesting user still needs the corresponding
-Unity Catalog privileges. An explicit sandbox downscope remains authoritative; with no downscope,
-the sandbox uses the caller's grants. A sandbox binding with token injection disabled does not
-request `workspace.workspace`; its other resource-derived scopes still apply. Databricks Apps rejects
-the legacy bare `workspace` scope, so Agent Bricks requests
+Unity Catalog privileges. An explicit Volume downscope remains authoritative for UC Volume access;
+with no downscope, the sandbox uses the caller's grants. A sandbox binding with token injection
+disabled does not request `workspace.workspace`; its other resource-derived scopes still apply.
+Databricks Apps rejects the legacy bare `workspace` scope, so Agent Bricks requests
 `workspace.workspace`. These scopes are requested only for `auth = "user"`; `auth = "app"` uses
 the App service principal's permissions instead.
 
@@ -867,10 +868,10 @@ If a manifest with `server = "agentbricks"` contains `source = { kind = "python"
 do not generate or patch Python tool code, and do not alter the manifest's `[[tools]]` bindings.
 
 By default, a sandbox has no downscope and uses the requesting user's Unity Catalog grants. Pass
-`--scope volume:catalog.schema.volume` to restrict it to that volume; repeat the option for more
-volumes. Explicit volume scopes default to read-only access. Use `--permission read_write` only when
-the agent needs writes. Each scoped call carries the fixed downscope in MCP `_meta`, outside the
-tool arguments controlled by the model. Unscoped calls omit `_meta.downscope` entirely. New sandbox
+`--scope volume:catalog.schema.volume` to restrict UC Volume access to that volume; repeat the option
+for more volumes. Explicit volume scopes default to read-only access. Use `--permission read_write`
+only when the agent needs writes. Each scoped call carries the fixed downscope in MCP `_meta`,
+outside the tool arguments controlled by the model. Unscoped calls omit `_meta.downscope` entirely. New sandbox
 bindings expose the selected Databricks credential to sandbox code by default:
 
 ```toml
@@ -903,9 +904,10 @@ The table implementation is retained behind a disabled code-level gate so it can
 Databricks Connect supports table downscoping. There is no CLI option to bypass that gate.
 
 With `databricks_access_token_included = true`, the sandbox receives `DATABRICKS_HOST`, a short-lived
-`DATABRICKS_TOKEN`, and `DATABRICKS_AUTH_TYPE`. An unscoped user-auth sandbox can use that credential
-for workspace APIs permitted by the user's grants; an explicit Volume policy limits it to the
-configured volumes. This policy does not choose the identity: `auth = "user"` uses the request user's
+`DATABRICKS_TOKEN`, and `DATABRICKS_AUTH_TYPE`. A user-auth sandbox can use that credential
+for Workspace APIs permitted by the caller's permissions, even with an explicit Volume policy.
+The Volume policy limits only UC Volume access to the configured volumes; it does not restrict
+Workspace access or choose the identity: `auth = "user"` uses the request user's
 OBO credential, while `auth = "app"` uses the Databricks App service principal. Use
 `--no-databricks-access-token-included` to prevent token export to sandbox code. The backend can
 still mint internal credentials for compute execution and mounts. Existing manifests that omit
