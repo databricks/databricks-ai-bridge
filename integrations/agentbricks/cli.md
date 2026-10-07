@@ -70,7 +70,7 @@ These options apply to every command. Pass them before the command name, for exa
 | [`deployments`](#agentbricks-deployments) | Manage deployed agents |
 | [`endpoint`](#agentbricks-endpoint) | Invoke arbitrary HTTP endpoints. |
 | [`tools`](#agentbricks-tools) | Manage an agent's tools |
-| [`experimental`](#agentbricks-experimental) | Commands whose interface is still being designed: `experimental models` |
+| [`experimental`](#agentbricks-experimental) | Commands whose interface is still being designed: `experimental models`, `experimental prompts` |
 
 ## Commands
 
@@ -1075,6 +1075,7 @@ Commands whose interface is still being designed. They work and are tested, but 
 | Subcommand | Description |
 | --- | --- |
 | [`experimental models`](#agentbricks-experimental-models) | Choose, evaluate, and upgrade the models behind your agent |
+| [`experimental prompts`](#agentbricks-experimental-prompts) | Declare the Prompt Registry prompts your agent loads |
 
 ### `agentbricks experimental models`
 
@@ -1090,23 +1091,12 @@ name = "main.my_agent.writer_llm"
 default = "system.ai.claude-sonnet-4-5"
 ```
 
-`agentbricks deploy` creates each service if it's missing (routed to its binding's default model), grants the app's service principal EXECUTE on it, and wires it in as `AGENT_MODEL_SERVICE_<ROLE>`; the agent reads it with `resolve_model_service("<role>")`. After that, switching the model behind a service takes effect without a code change or redeploy, and `models upgrade` searches every role's model, plus any prompts you name, together. Upgrade runs and switches are recorded in `.agentbricks/model_upgrades.json`; switches can be rolled back.
-
-Prompts the agent loads from the MLflow Prompt Registry are declared the same way, under `[prompts]`:
-
-```toml
-[prompts]
-writer = "main.my_agent.writer"
-```
-
-`agentbricks deploy` grants the app's service principal what the Prompt Registry requires to load them: USE SCHEMA, EXECUTE, CREATE FUNCTION, and MANAGE on each prompt's schema, plus USE CATALOG.
+`agentbricks deploy` creates each service if it's missing (routed to its binding's default model), grants the app's service principal EXECUTE on it, and wires it in as `AGENT_MODEL_SERVICE_<ROLE>`; the agent reads it with `resolve_model_service("<role>")`. After that, switching the model behind a service takes effect without a code change or redeploy, and `models upgrade` searches every role's model, plus the prompts bound with [`experimental prompts`](#agentbricks-experimental-prompts), together. Upgrade runs and switches are recorded in `.agentbricks/model_upgrades.json`; switches can be rolled back.
 
 | Subcommand | Description |
 | --- | --- |
 | [`models bind`](#agentbricks-experimental-models-bind) | Declare the model service for one of the agent's LLM calls in agent.toml (creates nothing; deploy provisions it). |
 | [`models unbind`](#agentbricks-experimental-models-unbind) | Remove a model-service binding from agent.toml (the service is left in place). |
-| [`models bind-prompt`](#agentbricks-experimental-models-bind-prompt) | Declare a Prompt Registry prompt the agent loads, so deploy grants the app access to it. |
-| [`models unbind-prompt`](#agentbricks-experimental-models-unbind-prompt) | Remove a prompt binding from agent.toml (the prompt is left in place). |
 | [`models list`](#agentbricks-experimental-models-list) | List the `system.ai.*` chat models you can route the agent to. |
 | [`models status`](#agentbricks-experimental-models-status) | Show each bound model service, the model behind it now, and the latest upgrade run with its recommendation. |
 | [`models set`](#agentbricks-experimental-models-set) | Switch one model service to a named model. |
@@ -1149,41 +1139,6 @@ _Options_
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--role <ROLE>` | string | only bound role | no | Which bound LLM call site. Required when more than one role is bound. |
-| `--source <SOURCE>` | path | `.` | no | Agent Bricks project containing agent.toml. |
-
-#### `agentbricks experimental models bind-prompt`
-
-Declare MLflow Prompt Registry prompt PROMPT (`catalog.schema.name`) that the agent loads. This only edits agent.toml. `agentbricks deploy` grants the app's service principal USE SCHEMA, EXECUTE, CREATE FUNCTION, and MANAGE on the prompt's schema, which the Prompt Registry requires even to load a prompt.
-
-```
-agentbricks experimental models bind-prompt PROMPT [options]
-```
-
-_Arguments_
-
-| Argument | Required | Description |
-| --- | --- | --- |
-| `PROMPT` | yes | Three-part Prompt Registry name: `catalog.schema.name`. |
-
-_Options_
-
-| Option | Values | Default | Required | Description |
-| --- | --- | --- | --- | --- |
-| `--key <KEY>` | string | prompt's own name | no | Name for this prompt in agent.toml (lowercase identifier, e.g. `writer`). |
-| `--source <SOURCE>` | path | `.` | no | Agent Bricks project containing agent.toml. |
-
-#### `agentbricks experimental models unbind-prompt`
-
-Remove prompt binding KEY from agent.toml. The prompt itself, and any grants already applied, are left in place.
-
-```
-agentbricks experimental models unbind-prompt KEY [options]
-```
-
-_Options_
-
-| Option | Values | Default | Required | Description |
-| --- | --- | --- | --- | --- |
 | `--source <SOURCE>` | path | `.` | no | Agent Bricks project containing agent.toml. |
 
 #### `agentbricks experimental models list`
@@ -1265,7 +1220,7 @@ _Options_
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--candidates <ROLE=MODEL,...>` (`-c`) | string | - | yes | `system.ai.*` models to evaluate for one role, e.g. `router=claude-haiku-4-5,gpt-5-4-nano`. Repeat per role; the `ROLE=` prefix is optional when only one role is bound. Roles you don't list keep their current model. Each role's current model is always its baseline. |
-| `--prompt <URI>` | `prompts:/` URI | prompts bound in agent.toml | no | Prompt Registry prompt to optimize alongside the models (e.g. `prompts:/main.my_agent.system@production`). Repeat for more. Defaults to the prompts bound with `models bind-prompt`, at `@production`. The agent must load it with `load_prompt` and call `.format()` on every call. |
+| `--prompt <URI>` | `prompts:/` URI | prompts bound in agent.toml | no | Prompt Registry prompt to optimize alongside the models (e.g. `prompts:/main.my_agent.system@production`). Repeat for more. Defaults to the prompts bound with `prompts bind`, at `@production`. The agent must load it with `load_prompt` and call `.format()` on every call. |
 | `--models-only` | flag | - | no | Search models only, leaving the agent's prompts as they are. |
 | `--predict <REF>` | `module:attr` | - | yes | Your agent's `predict_fn`: a sync callable taking one eval record's `inputs` dict. |
 | `--train-data <REF>` | `module:attr` | - | yes | Training records: a list of `{"inputs": ..., "expectations": ...}`. |
@@ -1292,6 +1247,74 @@ _Options_
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--yes` (`-y`) | flag | - | no | Switch without asking for confirmation. |
+| `--source <SOURCE>` | path | `.` | no | Agent Bricks project containing agent.toml. |
+
+### `agentbricks experimental prompts`
+
+Declare the MLflow Prompt Registry prompts your agent loads. Each one is a binding under `[prompts]` in agent.toml, keyed by a short name:
+
+```toml
+[prompts]
+writer = "main.my_agent.writer"
+```
+
+`agentbricks deploy` grants the app's service principal what the Prompt Registry requires to load them: USE SCHEMA, EXECUTE, CREATE FUNCTION, and MANAGE on each prompt's schema, plus USE CATALOG.
+
+Bound prompts are what [`models upgrade`](#agentbricks-experimental-models-upgrade) rewrites by default, and what [`models apply`](#agentbricks-experimental-models-apply) and [`models rollback`](#agentbricks-experimental-models-rollback) move the `@production` alias of.
+
+| Subcommand | Description |
+| --- | --- |
+| [`prompts bind`](#agentbricks-experimental-prompts-bind) | Declare a Prompt Registry prompt the agent loads, so deploy grants the app access to it. |
+| [`prompts unbind`](#agentbricks-experimental-prompts-unbind) | Remove a prompt binding from agent.toml (the prompt is left in place). |
+| [`prompts list`](#agentbricks-experimental-prompts-list) | List the bound prompts and the version each one's `@production` alias points at. |
+
+#### `agentbricks experimental prompts bind`
+
+Declare MLflow Prompt Registry prompt PROMPT (`catalog.schema.name`) that the agent loads. This only edits agent.toml. `agentbricks deploy` grants the app's service principal USE SCHEMA, EXECUTE, CREATE FUNCTION, and MANAGE on the prompt's schema, which the Prompt Registry requires even to load a prompt.
+
+```
+agentbricks experimental prompts bind PROMPT [options]
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `PROMPT` | yes | Three-part Prompt Registry name: `catalog.schema.name`. |
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--key <KEY>` | string | prompt's own name | no | Name for this prompt in agent.toml (lowercase identifier, e.g. `writer`). |
+| `--source <SOURCE>` | path | `.` | no | Agent Bricks project containing agent.toml. |
+
+#### `agentbricks experimental prompts unbind`
+
+Remove prompt binding KEY from agent.toml. The prompt itself, and any grants already applied, are left in place.
+
+```
+agentbricks experimental prompts unbind KEY [options]
+```
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--source <SOURCE>` | path | `.` | no | Agent Bricks project containing agent.toml. |
+
+#### `agentbricks experimental prompts list`
+
+List the prompts bound in agent.toml and the version each one's `@production` alias points at (`-` when the prompt or alias doesn't exist yet).
+
+```
+agentbricks experimental prompts list [options]
+```
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
 | `--source <SOURCE>` | path | `.` | no | Agent Bricks project containing agent.toml. |
 
 ### `agentbricks deploy`

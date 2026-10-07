@@ -40,7 +40,7 @@ MODEL_SERVICES_TABLE = "model_services"
 MODEL_SERVICE_DEFAULT_KEY = "default"
 DEFAULT_MODEL_ROLE = tool_manifest.DEFAULT_MODEL_ROLE
 _ROLE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
-# The prompt bindings (`agentbricks experimental models bind-prompt`): MLflow Prompt Registry prompts
+# The prompt bindings (`agentbricks experimental prompts bind`): MLflow Prompt Registry prompts
 # the agent loads, as `<key> = "catalog.schema.name"` under [prompts]. `agentbricks deploy` grants
 # the app access to their schemas, and `models upgrade` optimizes them by default.
 PROMPTS_TABLE = "prompts"

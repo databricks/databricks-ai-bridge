@@ -27,6 +27,7 @@ from typing import Optional
 import click
 
 from databricks_agentbricks import render
+from databricks_agentbricks.cli import prompts as prompt_registry
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentkit.runtime.model_services import destination_model
 
@@ -128,21 +129,6 @@ def _confirm(obj, yes: bool, question: str) -> bool:
     return click.confirm(question, default=False)
 
 
-def _registry_mlflow(obj):
-    """MLflow pointed at the workspace and its Unity Catalog prompt registry, honoring --profile."""
-    import os  # noqa: PLC0415
-
-    from databricks_agentbricks.cli import tracing  # noqa: PLC0415
-
-    if obj.profile:
-        # promote_to_prod's workspace client and MLflow both resolve auth from the environment.
-        os.environ["DATABRICKS_CONFIG_PROFILE"] = obj.profile
-    mlflow = tracing._mlflow()
-    tracing._set_tracking_uri(mlflow, obj.profile)
-    mlflow.set_registry_uri("databricks-uc")
-    return mlflow
-
-
 def _promote(obj, report) -> list[dict]:
     """Apply an upgrade report with the optimizer's own ``promote_to_prod``.
 
@@ -163,7 +149,7 @@ def _promote(obj, report) -> list[dict]:
             "Applying an upgrade requires the 'upgrade' extra.",
             hint=model_upgrade.UPGRADE_EXTRA_HINT,
         ) from exc
-    _registry_mlflow(obj)
+    prompt_registry.registry_mlflow(obj)
     result = model_upgrade.load_promotion(str(report.mlflow_run_id))
     # promote_to_prod prints its plan; keep stdout clean for -o json.
     with render.status("Applying the recommendation…"):
@@ -175,16 +161,6 @@ def _promote(obj, report) -> list[dict]:
         if target.alias
         and result.best_candidate.get(f"prompt:{target.short_name}") not in (None, target.template)
     ]
-
-
-def _restore_prompts(obj, prompts: list[dict]) -> None:
-    """Move each prompt's alias back to the version it pointed at before an apply."""
-    mlflow = _registry_mlflow(obj)
-    with render.status("Moving prompt aliases back…"):
-        for prompt in prompts:
-            mlflow.genai.set_prompt_alias(
-                name=prompt["name"], alias=prompt["alias"], version=prompt["prior_version"]
-            )
 
 
 @click.group()
@@ -285,54 +261,6 @@ def models_unbind(obj, role: Optional[str], source: pathlib.Path) -> None:
         render.emit_json({"role": role, "removed": removed})
         return
     render.success(f"Unbound role '{role}'" if removed else "No model service was bound")
-
-
-@models.command("bind-prompt")
-@click.argument("prompt")
-@click.option(
-    "--key",
-    default=None,
-    help="Name for this prompt in agent.toml (default: the prompt's own name, e.g. writer).",
-)
-@_source_option
-@click.pass_obj
-def models_bind_prompt(obj, prompt: str, key: Optional[str], source: pathlib.Path) -> None:
-    """Declare MLflow Prompt Registry prompt PROMPT (catalog.schema.name) that the agent loads.
-
-    This only edits agent.toml. `agentbricks deploy` grants the app's service principal what the
-    Prompt Registry requires to load prompts (USE SCHEMA, EXECUTE, CREATE FUNCTION, and MANAGE on
-    the prompt's schema), and `agentbricks experimental models upgrade` optimizes bound prompts.
-    """
-    from databricks_agentbricks.agent_project import AgentProject  # noqa: PLC0415
-
-    project = AgentProject.load(source)
-    key = project.bind_prompt(prompt, key)
-    project.write()
-    if obj.output == "json":
-        render.emit_json({"key": key, "prompt": prompt, "manifest": str(project.path)})
-        return
-    render.success(
-        f"Bound prompt '{prompt}' as '{key}'",
-        fields={"agent.toml": str(project.path)},
-        next_steps=[("agentbricks deploy <name>", "Grant the app access to it")],
-    )
-
-
-@models.command("unbind-prompt")
-@click.argument("key")
-@_source_option
-@click.pass_obj
-def models_unbind_prompt(obj, key: str, source: pathlib.Path) -> None:
-    """Remove prompt binding KEY from agent.toml (the prompt itself is left in place)."""
-    from databricks_agentbricks.agent_project import AgentProject  # noqa: PLC0415
-
-    project = AgentProject.load(source)
-    removed = project.unbind_prompt(key)
-    project.write()
-    if obj.output == "json":
-        render.emit_json({"key": key, "removed": removed})
-        return
-    render.success(f"Unbound prompt '{key}'" if removed else f"No prompt was bound as '{key}'")
 
 
 @models.command("list")
@@ -498,7 +426,7 @@ def models_rollback(obj, role: Optional[str], yes: bool, source: pathlib.Path) -
             obj, project, m["model_service"], m["model"], m["previous_model"], reason="rollback"
         )
     if action["prompts"]:
-        _restore_prompts(obj, action["prompts"])
+        prompt_registry.restore_prompt_aliases(obj, action["prompts"])
     model_upgrade.mark_rolled_back(project.root, index)
     if obj.output == "json":
         render.emit_json(
@@ -789,7 +717,7 @@ def _render_applied(result: dict) -> None:
     multiple=True,
     help="MLflow Prompt Registry prompt to optimize alongside the model, as a prompts:/ URI (e.g. "
     "prompts:/main.my_agent.system@production). Repeat for more. Defaults to the prompts bound in "
-    "agent.toml (`models bind-prompt`) at @production. The agent must load it with load_prompt and "
+    "agent.toml (`prompts bind`) at @production. The agent must load it with load_prompt and "
     "call .format() on each call.",
 )
 @click.option(

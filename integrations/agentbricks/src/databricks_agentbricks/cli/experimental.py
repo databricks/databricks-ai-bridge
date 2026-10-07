@@ -9,6 +9,7 @@ from __future__ import annotations
 import click
 
 from databricks_agentbricks.cli.models import models
+from databricks_agentbricks.cli.prompts import prompts
 
 
 @click.group()
@@ -17,3 +18,4 @@ def experimental() -> None:
 
 
 experimental.add_command(models)
+experimental.add_command(prompts)

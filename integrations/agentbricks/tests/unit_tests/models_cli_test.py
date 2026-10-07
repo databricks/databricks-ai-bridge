@@ -16,6 +16,7 @@ from click.testing import CliRunner
 from databricks_agentbricks import model_upgrade
 from databricks_agentbricks.agent_project import AgentProject, ModelServiceBinding
 from databricks_agentbricks.cli.models import models
+from databricks_agentbricks.cli.prompts import prompts
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.project_config import write_project_metadata
 
@@ -103,6 +104,10 @@ def _project(tmp_path: pathlib.Path, *, bind=True, tracing=True, compound=False)
 
 def _invoke(args, obj):
     return CliRunner().invoke(models, args, obj=obj)
+
+
+def _invoke_prompts(args, obj):
+    return CliRunner().invoke(prompts, args, obj=obj)
 
 
 # --- bind / unbind ----------------------------------------------------------------
@@ -293,7 +298,7 @@ def stub_restore(monkeypatch):
     """Records the prompt-alias moves `models rollback` reverses."""
     restored: list = []
     monkeypatch.setattr(
-        "databricks_agentbricks.cli.models._restore_prompts",
+        "databricks_agentbricks.cli.prompts.restore_prompt_aliases",
         lambda obj, prompts: restored.extend(prompts),
     )
     return restored
@@ -805,7 +810,7 @@ def test_upgrade_summary_shows_each_roles_change_and_the_score(tmp_path, stub_jo
 
 def test_bind_prompt_writes_agent_toml_and_status_lists_it(tmp_path):
     project = _project(tmp_path)
-    result = _invoke(["bind-prompt", "main.my_agent.writer", "--source", str(project)], _Ctx())
+    result = _invoke_prompts(["bind", "main.my_agent.writer", "--source", str(project)], _Ctx())
     assert result.exit_code == 0, result.output
     assert AgentProject.load(project).prompts == {"writer": "main.my_agent.writer"}
     assert '[prompts]\nwriter = "main.my_agent.writer"' in (project / "agent.toml").read_text()
@@ -815,20 +820,20 @@ def test_bind_prompt_writes_agent_toml_and_status_lists_it(tmp_path):
 
 def test_bind_prompt_takes_an_explicit_key_and_rejects_bad_names(tmp_path):
     project = _project(tmp_path)
-    result = _invoke(
-        ["bind-prompt", "main.my_agent.v2_writer", "--key", "writer", "--source", str(project)],
+    result = _invoke_prompts(
+        ["bind", "main.my_agent.v2_writer", "--key", "writer", "--source", str(project)],
         _Ctx(),
     )
     assert result.exit_code == 0, result.output
     assert AgentProject.load(project).prompts == {"writer": "main.my_agent.v2_writer"}
-    bad = _invoke(["bind-prompt", "just-a-name", "--source", str(project)], _Ctx())
+    bad = _invoke_prompts(["bind", "just-a-name", "--source", str(project)], _Ctx())
     assert bad.exit_code != 0
 
 
 def test_unbind_prompt_removes_the_table_when_empty(tmp_path):
     project = _project(tmp_path)
-    _invoke(["bind-prompt", "main.my_agent.writer", "--source", str(project)], _Ctx())
-    result = _invoke(["unbind-prompt", "writer", "--source", str(project)], _Ctx())
+    _invoke_prompts(["bind", "main.my_agent.writer", "--source", str(project)], _Ctx())
+    result = _invoke_prompts(["unbind", "writer", "--source", str(project)], _Ctx())
     assert result.exit_code == 0, result.output
     assert AgentProject.load(project).prompts == {}
     assert "[prompts]" not in (project / "agent.toml").read_text()
@@ -836,7 +841,7 @@ def test_unbind_prompt_removes_the_table_when_empty(tmp_path):
 
 def test_upgrade_optimizes_the_bound_prompts_by_default(tmp_path, stub_job):
     project = _project(tmp_path)
-    _invoke(["bind-prompt", "main.my_agent.writer", "--source", str(project)], _Ctx())
+    _invoke_prompts(["bind", "main.my_agent.writer", "--source", str(project)], _Ctx())
     result = _invoke(
         ["upgrade", *_EVAL_FLAGS, "-c", "claude-haiku-4-5", "--source", str(project)],
         _Ctx(_JobClient(), "json"),
@@ -848,7 +853,7 @@ def test_upgrade_optimizes_the_bound_prompts_by_default(tmp_path, stub_job):
 
 def test_upgrade_models_only_skips_the_bound_prompts(tmp_path, stub_job):
     project = _project(tmp_path)
-    _invoke(["bind-prompt", "main.my_agent.writer", "--source", str(project)], _Ctx())
+    _invoke_prompts(["bind", "main.my_agent.writer", "--source", str(project)], _Ctx())
     result = _invoke(
         ["upgrade", *_EVAL_FLAGS, "-c", "claude-haiku-4-5", "--models-only",
          "--source", str(project)],
@@ -857,3 +862,25 @@ def test_upgrade_models_only_skips_the_bound_prompts(tmp_path, stub_job):
     assert result.exit_code == 0, result.output
     _, config, _ = stub_job["submit"]
     assert config.prompt_uris == []
+
+
+def test_prompts_list_shows_each_bound_prompts_production_version(tmp_path, monkeypatch):
+    project = _project(tmp_path)
+    _invoke_prompts(["bind", "main.my_agent.writer", "--source", str(project)], _Ctx())
+    _invoke_prompts(["bind", "main.my_agent.router", "--source", str(project)], _Ctx())
+
+    def _load_prompt(uri):
+        if "router" in uri:
+            raise RuntimeError("alias not found")
+        return SimpleNamespace(version=3)
+
+    fake_mlflow = SimpleNamespace(genai=SimpleNamespace(load_prompt=_load_prompt))
+    monkeypatch.setattr(
+        "databricks_agentbricks.cli.prompts.registry_mlflow", lambda obj: fake_mlflow
+    )
+    result = _invoke_prompts(["list", "--source", str(project)], _Ctx(output="json"))
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == {
+        "writer": {"prompt": "main.my_agent.writer", "production_version": "3"},
+        "router": {"prompt": "main.my_agent.router", "production_version": None},
+    }

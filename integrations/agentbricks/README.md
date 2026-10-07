@@ -499,7 +499,7 @@ instead); prompts are rewritten by GEPA's reflection loop. Both need the `upgrad
 `pip install 'databricks-agentbricks[upgrade]'`.
 
 Prompts the agent loads from the MLflow Prompt Registry go under `[prompts]`
-(`agentbricks experimental models bind-prompt main.my_agent.writer`), and deploy grants the app
+(`agentbricks experimental prompts bind main.my_agent.writer`), and deploy grants the app
 the schema privileges the registry requires to load them.
 
 ## Commands
@@ -543,7 +543,6 @@ agentbricks [-p <profile>] [-o text|json]
     remove           TOOL_ID [MCP_SERVICE] [--source PATH]
   models
     bind       SERVICE [--role ROLE] [--default MODEL] [--source PATH]
-    bind-prompt PROMPT [--key KEY] | unbind-prompt KEY
     unbind | list | status
     set        MODEL [--role ROLE] [--yes]
     rollback   [--role ROLE] [--yes]
@@ -551,6 +550,10 @@ agentbricks [-p <profile>] [-o text|json]
                --scorer REF [...] [--budget N] [--weights Q,L,C] [--timeout-hours H]
                [--run-on job|local] [--apply never|ask|auto] [--wait]
     apply      [--yes]
+  prompts
+    bind       PROMPT [--key KEY] [--source PATH]
+    unbind     KEY [--source PATH]
+    list       [--source PATH]
   deploy       [<name>] [--source PATH] [--instances N]
   deployments  list | get | logs | start | stop | delete
   endpoint
