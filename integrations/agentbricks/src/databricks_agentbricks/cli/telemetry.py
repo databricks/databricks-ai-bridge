@@ -11,6 +11,7 @@ from __future__ import annotations
 import configparser
 import json
 import os
+import platform
 import threading
 import time
 import uuid
@@ -19,6 +20,8 @@ from importlib.metadata import version as _installed_version
 from pathlib import Path
 from typing import Any
 
+import click
+
 _DISABLE_ENV = "AGENTBRICKS_DISABLE_TELEMETRY"
 _TELEMETRY_PATH = "/telemetry-ext"
 
@@ -26,8 +29,55 @@ _TELEMETRY_PATH = "/telemetry-ext"
 # the CLI process open after this bound expires.
 _MAX_FOREGROUND_WAIT_S = 0.25
 
+# Parameter values are opt-in. A Click ``Choice`` is not automatically safe to report because a
+# command can construct one from a workspace value. Keep this map literal and keyed by the static
+# command path produced below so every value sent in telemetry receives an explicit review.
+_SAFE_CHOICE_VALUES: dict[str, frozenset[str]] = {
+    "agentbricks.output": frozenset({"text", "json"}),
+    "agentbricks init.framework": frozenset({"langgraph", "openai"}),
+    "agentbricks init.server": frozenset({"agentbricks", "custom"}),
+    "agentbricks tools add sandbox.permission": frozenset({"read_only", "read_write"}),
+    "agentbricks tools add sandbox.auth": frozenset({"user", "app"}),
+    "agentbricks tools add mcp.auth": frozenset({"user", "app"}),
+    "agentbricks tools add genie-one.auth": frozenset({"user", "app"}),
+    "agentbricks tools add genie-agent.auth": frozenset({"user", "app"}),
+    "agentbricks tools list.kind": frozenset(
+        {"sandbox", "mcp", "uc-function", "genie-one", "genie-agent"}
+    ),
+}
+
+# Keep integer telemetry explicitly bounded even when the Click range later changes. This is a
+# privacy review boundary, rather than an inferred copy of the command's type declaration.
+_SAFE_BOUNDED_INT_RANGES: dict[str, tuple[int, int]] = {
+    "agentbricks deploy.instances": (1, 5),
+}
+
+# Boolean values are also opt-in. Keep this literal allowlist limited to the reviewed, low-risk
+# init flags; future flags contribute only their static name until explicitly reviewed.
+_SAFE_BOOL_PARAMETER_NAMES = frozenset(
+    {
+        "agentbricks init.existing",
+        "agentbricks init.disable_chat_app",
+    }
+)
+
+_MAX_PARAMETER_ENTRIES = 64
 _MAX_CONTEXT_DEPTH = 32
 _MAX_STATIC_NAME_LENGTH = 128
+
+_ERROR_CATEGORIES = frozenset(
+    {
+        "ERROR_CATEGORY_OTHER",
+        "ERROR_CATEGORY_USAGE",
+        "ERROR_CATEGORY_INTERRUPTED",
+        "ERROR_CATEGORY_DEPENDENCY",
+        "ERROR_CATEGORY_NETWORK",
+        "ERROR_CATEGORY_CONFIGURATION",
+        "ERROR_CATEGORY_AUTHENTICATION",
+        "ERROR_CATEGORY_AUTHORIZATION",
+        "ERROR_CATEGORY_RUNTIME",
+    }
+)
 
 
 def telemetry_disabled() -> bool:
@@ -46,6 +96,12 @@ def _package_version() -> str:
         return _installed_version("databricks-agentbricks")
     except PackageNotFoundError:
         return "unknown"
+
+
+def _bounded_error_category(value: object | None) -> str:
+    return (
+        value if isinstance(value, str) and value in _ERROR_CATEGORIES else "ERROR_CATEGORY_OTHER"
+    )
 
 
 def _error_category(exc: BaseException) -> str:
@@ -160,22 +216,154 @@ def _static_command_path(contexts: tuple[Any, ...]) -> str | None:
     return path if len(path) <= _MAX_STATIC_NAME_LENGTH else None
 
 
+def _parameter_source(context: Any, name: str) -> object | None:
+    """Read Click's source marker without falling back to argv or ``ctx.args``."""
+
+    try:
+        get_parameter_source = context.get_parameter_source
+        return get_parameter_source(name) if callable(get_parameter_source) else None
+    except BaseException:
+        return None
+
+
+def _supplied_on_command_line(source: object | None) -> bool:
+    # Comparing the enum name keeps this compatible with Click's supported versions while treating
+    # a malformed source marker as untrusted.
+    return getattr(source, "name", None) == "COMMANDLINE"
+
+
+def _parameter_value(context: Any, name: str) -> tuple[bool, object]:
+    try:
+        params = context.params
+        if not isinstance(params, dict) or name not in params:
+            return False, None
+        return True, params[name]
+    except BaseException:
+        return False, None
+
+
+def _parameter_entry(*, name: str, parameter: Any, value: object) -> dict[str, Any] | None:
+    """Create one bounded parameter entry, dropping every unsafe value."""
+
+    try:
+        if bool(getattr(parameter, "hidden", False)) or bool(
+            getattr(parameter, "deprecated", False)
+        ):
+            return None
+        # A repeated option has one static parameter identity. Its individual values are never
+        # represented, including when the option happens to use a safe Choice type.
+        multiple = bool(getattr(parameter, "multiple", False))
+        is_bool_flag = bool(getattr(parameter, "is_bool_flag", False))
+        parameter_type = getattr(parameter, "type", None)
+    except BaseException:
+        return None
+
+    if is_bool_flag:
+        if name in _SAFE_BOOL_PARAMETER_NAMES and type(value) is bool:
+            return {"name": name, "bool_value": value}
+        return {"name": name}
+
+    if isinstance(parameter_type, click.Choice):
+        allowed = _SAFE_CHOICE_VALUES.get(name)
+        if allowed is not None and not multiple and isinstance(value, str) and value in allowed:
+            return {"name": name, "choice_value": value}
+        # An unallowlisted Choice is handled like free text: its static presence may be useful,
+        # while its value is never sent.
+        return {"name": name}
+
+    bounds = _SAFE_BOUNDED_INT_RANGES.get(name)
+    if bounds is not None:
+        if (
+            isinstance(parameter_type, click.IntRange)
+            and type(value) is int
+            and bounds[0] <= value <= bounds[1]
+        ):
+            return {"name": name, "bounded_int_value": value}
+        return {"name": name}
+
+    # Arbitrary strings, paths, IDs, secrets, JSON, and unallowlisted numeric values are presence
+    # signals only. The caller has already excluded defaults and environment values.
+    return {"name": name}
+
+
+def _collect_parameters(ctx: Any) -> list[dict[str, Any]]:
+    """Collect bounded Click option metadata without reading raw invocation text."""
+
+    try:
+        contexts = _context_chain(ctx)
+        command_path = _static_command_path(contexts)
+        if not contexts or command_path is None:
+            return []
+        entries: list[dict[str, Any]] = []
+        seen_names: set[str] = set()
+        for context_index, context in enumerate(contexts):
+            command = getattr(context, "command", None)
+            parameters = getattr(command, "params", None)
+            if not isinstance(parameters, (list, tuple)):
+                continue
+            context_command = _static_command_path(contexts[: context_index + 1])
+            if context_command is None:
+                return []
+            for parameter in parameters:
+                # Positional arguments can carry paths, IDs, and other arbitrary user data. The
+                # telemetry contract records static option names only.
+                if not isinstance(parameter, click.Option):
+                    continue
+                parameter_name = getattr(parameter, "name", None)
+                if not isinstance(parameter_name, str) or not _is_static_name(parameter_name):
+                    continue
+                name = f"{context_command}.{parameter_name}"
+                if len(name) > _MAX_STATIC_NAME_LENGTH or name in seen_names:
+                    continue
+                if not _supplied_on_command_line(_parameter_source(context, parameter_name)):
+                    continue
+                has_value, value = _parameter_value(context, parameter_name)
+                if not has_value:
+                    continue
+                entry = _parameter_entry(name=name, parameter=parameter, value=value)
+                if entry is None:
+                    continue
+                entries.append(entry)
+                seen_names.add(name)
+                if len(entries) >= _MAX_PARAMETER_ENTRIES:
+                    return entries
+        return entries
+    except BaseException:
+        # Telemetry must fail closed if Click or an extension gives us an unexpected object shape.
+        return []
+
+
 def build_log(
     ctx: Any,
     *,
+    execution_time_ms: int = 0,
     exit_code: int,
     error_category: str | None = None,
 ) -> dict[str, Any]:
     """Build the allowlisted snake_case ``AgentBricksCliLog`` JSON object."""
 
     command_path = _static_command_path(_context_chain(ctx)) or "agentbricks"
-    log: dict[str, Any] = {
+    try:
+        duration_ms = max(0, int(execution_time_ms))
+    except (TypeError, ValueError, OverflowError):
+        duration_ms = 0
+    try:
+        command_exit_code = int(exit_code)
+    except (TypeError, ValueError, OverflowError):
+        command_exit_code = 1
+    execution_context: dict[str, Any] = {
         "command_path": command_path,
         "package_version": _package_version(),
-        "exit_code": int(exit_code),
+        "operating_system": platform.system().lower(),
+        "execution_time_ms": duration_ms,
+        "exit_code": command_exit_code,
     }
-    if exit_code != 0:
-        log["error_category"] = error_category or "ERROR_CATEGORY_OTHER"
+    if command_exit_code != 0:
+        execution_context["error_category"] = _bounded_error_category(error_category)
+    log: dict[str, Any] = {"execution_context": execution_context}
+    parameters = _collect_parameters(ctx)
+    if parameters:
+        log["parameters"] = parameters
     return log
 
 
@@ -324,6 +512,7 @@ def _send(ctx: Any, payload: dict[str, Any]) -> None:
 def emit_command(
     ctx: Any,
     *,
+    execution_time_ms: int = 0,
     exit_code: int,
     error_category: str | None = None,
 ) -> None:
@@ -333,6 +522,7 @@ def emit_command(
         return
     log = build_log(
         ctx,
+        execution_time_ms=execution_time_ms,
         exit_code=exit_code,
         error_category=error_category,
     )
