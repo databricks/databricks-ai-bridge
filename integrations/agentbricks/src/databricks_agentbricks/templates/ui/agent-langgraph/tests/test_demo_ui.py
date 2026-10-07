@@ -449,20 +449,19 @@ async def test_checkpoint_history_reads_messages_and_interrupts(monkeypatch):
 
     message = HumanMessage(content="saved message", id="message-1")
 
-    class Saver:
-        async def aget_tuple(self, config):
-            assert config == {
-                "configurable": {
-                    "thread_id": "saved-session",
-                    "actor_id": "alice",
-                }
+    async def saved_checkpoint(config):
+        assert config == {
+            "configurable": {
+                "thread_id": "saved-session",
+                "actor_id": "alice",
             }
-            return SimpleNamespace(
-                checkpoint={"channel_values": {"messages": [message]}},
-                pending_writes=[("task", "__interrupt__", [_FakeInterrupt({"approval": True}, "int-1")])],
-            )
+        }
+        return SimpleNamespace(
+            checkpoint={"channel_values": {"messages": [message]}},
+            pending_writes=[("task", "__interrupt__", [_FakeInterrupt({"approval": True}, "int-1")])],
+        )
 
-    monkeypatch.setattr(session_store, "checkpointer", lambda: Saver())
+    monkeypatch.setattr(session_store, "history_checkpoint", saved_checkpoint)
     result = await ui._checkpoint_history("saved-session", "alice")
 
     assert result == {
