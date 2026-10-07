@@ -90,7 +90,7 @@ def checkpointer(store: str | None = None) -> BaseCheckpointSaver:
     return _saver
 
 
-def thread_config(session_id: str, actor: str | None = None) -> dict:
+def thread_config(session_id: str, actor: str | None = None) -> RunnableConfig:
     """Run config that anchors this request to ``session_id``'s conversation thread.
 
     Includes ``actor_id`` because the durable saver maps it onto the Session's actor; it's ignored by
