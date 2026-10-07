@@ -273,7 +273,12 @@ def _report(recommended: str, **roles: str) -> model_upgrade.UpgradeReport:
     )
 
 
-PROMPT_MOVE = {"name": "main.my_agent.system", "alias": "production", "prior_version": 3}
+PROMPT_MOVE = {
+    "name": "main.my_agent.system",
+    "alias": "production",
+    "prior_version": 3,
+    "applied_version": 4,
+}
 
 
 @pytest.fixture
@@ -297,6 +302,10 @@ def stub_promote(monkeypatch):
 def stub_restore(monkeypatch):
     """Records the prompt-alias moves `models rollback` reverses."""
     restored: list = []
+    monkeypatch.setattr(
+        "databricks_agentbricks.cli.prompts.prompt_alias_version",
+        lambda obj, prompt: prompt["applied_version"],
+    )
     monkeypatch.setattr(
         "databricks_agentbricks.cli.prompts.restore_prompt_aliases",
         lambda obj, prompts: restored.extend(prompts),
@@ -530,6 +539,49 @@ def test_apply_with_rewritten_prompts_promotes_through_promote_to_prod(
 # --- compound agents: one model service per LLM call site ------------------------------------
 
 
+def test_promote_records_registered_version_and_alias_reads_bypass_cache(mocker):
+    from databricks_agentbricks.cli import models as models_mod
+    from databricks_agentbricks.cli import prompts as prompts_mod
+    from databricks_agentkit.model_upgrades import optimization as opt
+
+    target = opt._PromptTarget(
+        uri="prompts:/main.my_agent.system@production",
+        name="main.my_agent.system",
+        alias="production",
+        version=None,
+        short_name="system",
+        template="old",
+        required_vars=[],
+        prior_version=2,
+    )
+    result = opt.Result(
+        best_candidate={"prompt:system": "rewritten"},
+        best_score=0.9,
+        baseline_score=0.5,
+        prompt_uris=[target.uri],
+        gateway_endpoints={},
+        prompt_targets=[target],
+        endpoint_targets=[],
+        gepa_result=None,
+    )
+    mocker.patch.object(model_upgrade, "load_promotion", return_value=result)
+    mocker.patch.object(prompts_mod, "registry_mlflow", return_value=opt.mlflow)
+    load = mocker.patch.object(
+        opt.mlflow.genai, "load_prompt", return_value=SimpleNamespace(version=2)
+    )
+    mocker.patch.object(
+        opt.mlflow.genai, "register_prompt", return_value=SimpleNamespace(version=5)
+    )
+    mocker.patch.object(opt.mlflow.genai, "set_prompt_alias")
+    moves = models_mod._promote(_Ctx(), SimpleNamespace(mlflow_run_id="run"))
+    assert moves == [
+        {"name": target.name, "alias": target.alias, "prior_version": 2, "applied_version": 5}
+    ]
+    load.return_value.version = 5
+    assert prompts_mod.prompt_alias_version(_Ctx(), moves[0]) == 5
+    assert load.call_args_list == [mocker.call(target.uri, cache_ttl_seconds=0)] * 2
+
+
 def test_bind_two_roles_writes_one_table_each(tmp_path):
     project = _project(tmp_path, bind=False)
     for service, role in ((ROUTER, "router"), (WRITER, "writer")):
@@ -721,6 +773,126 @@ def test_rollback_with_a_role_switches_only_that_model(
         WRITER: "system.ai.gpt-5-4-mini",
     }
     assert stub_restore == []
+
+    remaining = _invoke(["rollback", "--yes", "--source", str(project)], _Ctx(client, "json"))
+    assert remaining.exit_code == 0, remaining.output
+    assert client.models == {
+        ROUTER: "system.ai.claude-sonnet-4-5",
+        WRITER: "system.ai.claude-sonnet-4-5",
+    }
+    assert stub_restore == [PROMPT_MOVE]
+    assert model_upgrade.read_history(project)["actions"][-1]["rolled_back"] is True
+
+
+def test_failed_rollback_resumes_without_switching_restored_roles_again(
+    tmp_path, stub_job, stub_promote, stub_restore, monkeypatch
+):
+    report = _report("", router="system.ai.claude-haiku-4-5", writer="system.ai.gpt-5-4-mini")
+    report.prompt_changes = ["main.my_agent.system"]
+    project, client = _applied(tmp_path, monkeypatch, report, compound=True)
+    original = client.set_model_service_model
+    fail = True
+
+    def set_model(name, model):
+        if name == WRITER and fail:
+            raise AgentCliError("temporary failure")
+        return original(name, model)
+
+    monkeypatch.setattr(client, "set_model_service_model", set_model)
+    first = _invoke(["rollback", "--yes", "--source", str(project)], _Ctx(client, "json"))
+    assert first.exit_code != 0
+    action = model_upgrade.read_history(project)["actions"][-1]
+    assert action["models"][0]["rolled_back"] is True
+    assert action["rolled_back"] is False
+    assert stub_restore == []
+    calls = list(client.calls)
+    fail = False
+    retry = _invoke(["rollback", "--yes", "--source", str(project)], _Ctx(client, "json"))
+    assert retry.exit_code == 0, retry.output
+    assert not any(call[:2] == ("set", ROUTER) for call in client.calls[len(calls) :])
+    assert client.models == {
+        ROUTER: "system.ai.claude-sonnet-4-5",
+        WRITER: "system.ai.claude-sonnet-4-5",
+    }
+    assert stub_restore == [PROMPT_MOVE]
+    assert model_upgrade.read_history(project)["actions"][-1]["rolled_back"] is True
+
+
+def test_rollback_resumes_after_prompt_failure(
+    tmp_path, stub_job, stub_promote, stub_restore, monkeypatch
+):
+    report = _report("system.ai.claude-haiku-4-5")
+    report.prompt_changes = ["main.my_agent.system", "main.my_agent.writer"]
+    project, client = _applied(tmp_path, monkeypatch, report)
+    restored = []
+    fail = True
+
+    def restore(obj, prompts):
+        prompt = prompts[0]
+        if prompt["name"] == "main.my_agent.writer" and fail:
+            raise AgentCliError("registry unavailable")
+        restored.append(prompt["name"])
+
+    monkeypatch.setattr("databricks_agentbricks.cli.prompts.restore_prompt_aliases", restore)
+    first = _invoke(["rollback", "--yes", "--source", str(project)], _Ctx(client, "json"))
+    assert first.exit_code != 0
+    assert restored == ["main.my_agent.system"]
+    action = model_upgrade.read_history(project)["actions"][-1]
+    assert action["models"][0]["rolled_back"] is True
+    assert action["prompts"][0]["rolled_back"] is True
+    fail = False
+    retry = _invoke(["rollback", "--yes", "--source", str(project)], _Ctx(client, "json"))
+    assert retry.exit_code == 0, retry.output
+    assert restored == ["main.my_agent.system", "main.my_agent.writer"]
+    assert model_upgrade.read_history(project)["actions"][-1]["rolled_back"] is True
+
+
+def test_rollback_accepts_restored_models_when_progress_was_not_saved(
+    tmp_path, stub_job, stub_promote, stub_restore, monkeypatch
+):
+    project, client = _applied(tmp_path, monkeypatch, _report("system.ai.claude-haiku-4-5"))
+    client.models[SERVICE] = "system.ai.claude-sonnet-4-5"
+    calls = list(client.calls)
+    result = _invoke(["rollback", "--yes", "--source", str(project)], _Ctx(client, "json"))
+    assert result.exit_code == 0, result.output
+    assert not any(call[0] == "set" for call in client.calls[len(calls) :])
+    assert model_upgrade.last_undoable_action(project) is None
+
+
+def test_rollback_refuses_changed_prompt_before_restoring_models(
+    tmp_path, stub_job, stub_promote, stub_restore, monkeypatch
+):
+    report = _report("system.ai.claude-haiku-4-5")
+    report.prompt_changes = ["main.my_agent.system"]
+    project, client = _applied(tmp_path, monkeypatch, report)
+    monkeypatch.setattr(
+        "databricks_agentbricks.cli.prompts.prompt_alias_version", lambda obj, prompt: 7
+    )
+    calls = list(client.calls)
+    result = _invoke(["rollback", "--yes", "--source", str(project)], _Ctx(client, "json"))
+    assert result.exit_code != 0
+    assert "moved after the last apply" in result.output
+    assert not any(call[0] == "set" for call in client.calls[len(calls) :])
+    assert stub_restore == []
+
+
+def test_role_rollback_consumes_history_instead_of_toggling(tmp_path):
+    project = _project(tmp_path)
+    client = _FakeClient()
+    for model in ("claude-haiku-4-5", "gpt-5-4-mini"):
+        result = _invoke(["set", model, "--yes", "--source", str(project)], _Ctx(client, "json"))
+        assert result.exit_code == 0, result.output
+    for expected in ("system.ai.claude-haiku-4-5", "system.ai.claude-sonnet-4-5"):
+        result = _invoke(
+            ["rollback", "--role", "agent", "--yes", "--source", str(project)], _Ctx(client, "json")
+        )
+        assert result.exit_code == 0, result.output
+        assert client.model == expected
+    again = _invoke(
+        ["rollback", "--role", "agent", "--yes", "--source", str(project)], _Ctx(client, "json")
+    )
+    assert again.exit_code != 0
+    assert client.model == "system.ai.claude-sonnet-4-5"
 
 
 def test_rollback_refuses_when_a_model_moved_since_the_action(

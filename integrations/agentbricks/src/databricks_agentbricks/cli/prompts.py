@@ -43,6 +43,16 @@ def registry_mlflow(obj):
     return mlflow
 
 
+def prompt_alias_version(obj, prompt: dict) -> int:
+    """Read the live alias, bypassing MLflow's local cache."""
+    mlflow = registry_mlflow(obj)
+    return int(
+        mlflow.genai.load_prompt(
+            f"prompts:/{prompt['name']}@{prompt['alias']}", cache_ttl_seconds=0
+        ).version
+    )
+
+
 def restore_prompt_aliases(obj, prompts: list[dict]) -> None:
     """Move each prompt's alias back to the version it pointed at before an apply."""
     mlflow = registry_mlflow(obj)

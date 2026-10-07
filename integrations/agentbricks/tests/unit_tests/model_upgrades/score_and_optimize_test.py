@@ -283,7 +283,7 @@ def test_patched_endpoints_rewrites_known_models_and_restores():
             Completions.create(None, model="wb-supervisor", messages=[])
             Completions.create(None, model="wb-rewriter", messages=[])
             Completions.create(None, model="some-other-endpoint", messages=[])
-        assert seen == ["wb-supervisor_exp", "wb-rewriter_exp", "some-other-endpoint"]
+        assert seen == [targets[0].exp_name, targets[1].exp_name, "some-other-endpoint"]
         # After exit, the patch is removed and our fake is back at the top.
         assert Completions.create is fake_create
     finally:
@@ -309,7 +309,7 @@ def test_patched_endpoints_covers_responses_api():
         with _patched_endpoints(targets):
             Responses.create(None, model="wb-supervisor", input=[])
             Responses.create(None, model="some-other", input=[])
-        assert seen == ["wb-supervisor_exp", "some-other"]
+        assert seen == [targets[0].exp_name, "some-other"]
         assert Responses.create is fake_create
     finally:
         Responses.create = original
@@ -448,4 +448,4 @@ def test_optimize_prompts_and_models_cleans_up_exp_endpoints_on_failure(
             scorers=fake_scorers,
             max_metric_calls=5,
         )
-    assert delete.call_args.args[1] == "ep1_exp"
+    assert delete.call_args.args[1].startswith("ep1_exp_")

@@ -5,6 +5,9 @@ from __future__ import annotations
 import pathlib
 
 import pytest
+import yaml
+from click.testing import CliRunner
+from deploy_test import _FakeCtx
 
 from databricks_agentbricks.agent_project import AgentProject
 from databricks_agentbricks.cli import deploy as deploy_mod
@@ -17,6 +20,9 @@ class _FakeClient:
     def __init__(self, exists: bool):
         self.exists = exists
         self.created: list[tuple[str, str]] = []
+        self.host = "https://ws"
+        self.current_user = "tester@example.com"
+        self.workspace_client = self
 
     def get_model_service(self, name):
         if not self.exists:
@@ -91,3 +97,59 @@ def test_loaded_bindings_are_plain_strings_deploy_can_write_to_app_yaml(tmp_path
     assert type(binding.name) is str and type(binding.default) is str
     services = deploy_mod._reconcile_model_services(project, _FakeClient(exists=True))
     yaml.safe_dump({"env": [{"name": "AGENT_MODEL_SERVICE_AGENT", "value": services["agent"]}]})
+
+
+def test_deploy_prunes_unbound_model_roles_and_preserves_bound_roles(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    project = AgentProject.create(tmp_path, framework="langgraph", server="custom")
+    project.bind_model_service("main.my_agent.writer", "system.ai.claude-sonnet-4-5", role="writer")
+    project.bind_model_service("main.my_agent.router", "system.ai.claude-sonnet-4-5", role="router")
+    project.write()
+    (tmp_path / "app.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "command": ["x"],
+                "env": [
+                    {"name": "AGENT_MODEL_SERVICE_ROUTER", "value": "main.my_agent.router"},
+                    {"name": "AGENT_MODEL_SERVICE_WRITER", "value": "main.my_agent.writer"},
+                    {"name": "KEEP", "value": "unchanged"},
+                ],
+            }
+        )
+    )
+    project.unbind_model_service("router")
+    project.write()
+    client = _FakeClient(exists=True)
+    monkeypatch.setattr(_FakeCtx, "client", lambda self: client)
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda *a: True)
+    monkeypatch.setattr(deploy_mod, "_app_compute_state", lambda *a: "ACTIVE")
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *a: None)
+    monkeypatch.setattr(deploy_mod, "get_or_create_trace_experiment", lambda *a: None)
+    monkeypatch.setattr(
+        deploy_mod, "reconcile_tool_access", lambda client, app, principal, plan, profile: plan
+    )
+    monkeypatch.setattr(deploy_mod, "finalize_tool_access", lambda *a: None)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda *a, **kw: SimpleNamespace(returncode=0, stdout="{}", stderr=""),
+    )
+    result = CliRunner().invoke(
+        deploy_mod.deploy, ["myapp", "--source", str(tmp_path)], obj=_FakeCtx()
+    )
+    assert result.exit_code == 0, result.output
+    env = {
+        e["name"]: e["value"] for e in yaml.safe_load((tmp_path / "app.yaml").read_text())["env"]
+    }
+    assert "AGENT_MODEL_SERVICE_ROUTER" not in env
+    assert env["AGENT_MODEL_SERVICE_WRITER"] == "main.my_agent.writer"
+    assert env["KEEP"] == "unchanged"
+    project.unbind_model_service("writer")
+    project.write()
+    result = CliRunner().invoke(
+        deploy_mod.deploy, ["myapp", "--source", str(tmp_path)], obj=_FakeCtx()
+    )
+    assert result.exit_code == 0, result.output
+    env = yaml.safe_load((tmp_path / "app.yaml").read_text())["env"]
+    assert not any(e["name"].startswith("AGENT_MODEL_SERVICE_") for e in env)

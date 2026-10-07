@@ -19,6 +19,7 @@ import json
 import math
 import re
 import time
+import uuid
 import warnings
 from collections import Counter, defaultdict
 from contextlib import contextmanager
@@ -129,10 +130,11 @@ class _EndpointTarget:
     name: str
     candidate_models: list
     initial_model: str
+    experiment_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
 
     @property
     def exp_name(self):
-        return model_services.exp_name(self.name)
+        return model_services.exp_name(self.name, self.experiment_id)
 
 
 @dataclass
@@ -150,6 +152,7 @@ class _State:
     token_costs: dict
     model_selection: str = "bandit"
     last_gateway_synced: dict = field(default_factory=dict)
+    created_exp_endpoints: list = field(default_factory=list)
     scorer_attempted: int = 0
     scorer_succeeded: int = 0
 
@@ -355,30 +358,25 @@ def _preflight(state, seed, train_data, val_data):
 
 def _ensure_exp_endpoints(state):
     for et in state.endpoint_targets:
-        try:
-            model_services.get_model(_client(), et.exp_name)
-            print(f"  {et.exp_name}: already exists")
-            continue
-        except Exception:
-            pass
         model_services.create(
             _client(),
             et.exp_name,
             _resolve_system_ai_name(et.initial_model),
             comment=f"{_MANAGED_BY}; role=experimental",
         )
+        state.created_exp_endpoints.append(et.exp_name)
         print(f"  {et.exp_name}: created with {et.initial_model}")
 
 
 def _cleanup_exp_endpoints(state):
-    for et in state.endpoint_targets:
+    for name in state.created_exp_endpoints:
         try:
-            model_services.delete(_client(), et.exp_name)
-            print(f"  {et.exp_name}: deleted")
+            model_services.delete(_client(), name)
+            print(f"  {name}: deleted")
         except Exception as e:
             print(
-                f"  {et.exp_name}: delete failed ({type(e).__name__}: {e}) -- "
-                f"clean up manually with `{model_services.delete_command(et.exp_name)}`"
+                f"  {name}: delete failed ({type(e).__name__}: {e}) -- "
+                f"clean up manually with `{model_services.delete_command(name)}`"
             )
 
 
@@ -516,7 +514,7 @@ def _patched_prompts(candidate, prompt_targets):
 
 
 def _patch_create(import_path, cls_name, is_async, rewrites):
-    """Monkeypatch `<cls>.create` to rewrite `model=<endpoint>` to `<endpoint>-exp`.
+    """Monkeypatch `<cls>.create` to rewrite `model=<endpoint>` to `<endpoint>_exp_<id>`.
 
     Returns `(cls, "create", original)` for the caller to restore on exit, or
     `None` if the import isn't available (e.g. an older `openai` SDK without the
@@ -552,7 +550,7 @@ def _patch_create(import_path, cls_name, is_async, rewrites):
 
 @contextmanager
 def _patched_endpoints(endpoint_targets):
-    """Rewrite `model=<prod_endpoint>` to `<prod_endpoint>-exp` on outbound LLM calls.
+    """Rewrite `model=<prod_endpoint>` to `<prod_endpoint>_exp_<id>` on outbound LLM calls.
 
     Patches the OpenAI Python client's chat.completions and responses APIs (sync
     + async) so any agent routing through OpenAI / databricks_openai /
@@ -593,7 +591,7 @@ def _patched_endpoints(endpoint_targets):
 
 _TOKEN_USAGE_KEY = "mlflow.chat.tokenUsage"
 # Set by autolog from the *request* -- for our agents this is the gateway endpoint
-# name (e.g. "wanderbricks-supervisor-exp"), not a catalog model. The real model
+# name (e.g. "main.agent.supervisor_exp_<id>"), not a catalog model. The real model
 # served is echoed in the response body (`span.outputs["model"]`), which is what
 # MLflow's pricing catalog can actually price -- see `_read_span_model`.
 _LLM_MODEL_ATTR_KEY = "mlflow.llm.model"
@@ -877,7 +875,7 @@ def _estimate_cost_usd(candidate, endpoint_targets, total_tokens, token_costs, l
         return 0.0
 
     if llm_calls:
-        # A call to a model service (or its `_exp` clone) records the service's name, which no
+        # A call to a model service (or its `_exp_<id>` clone) records the service's name, which no
         # catalog can price; price it as the model the candidate routes that service to.
         routed = {}
         for et in endpoint_targets:
@@ -1430,7 +1428,7 @@ def optimize_prompts_and_models(
       1. Loads each prompt URI's current `@production` template and extracts
          its required template variables.
       2. Reads each gateway endpoint's current destination as the seed model.
-      3. Creates `<endpoint>-exp` clones of every gateway endpoint and runs
+      3. Creates `<endpoint>_exp_<id>` clones of every gateway endpoint and runs
          optimization against them. The exp endpoints are deleted on exit
          (success or failure).
       4. Pre-flight: runs `predict_fn` once on the first record with the seed
@@ -1448,7 +1446,7 @@ def optimize_prompts_and_models(
       Works whether the agent loads prompts fresh per call or caches the
       `PromptVersion` instance at module import (see `_patched_prompts`).
     - **Endpoints**: the OpenAI client's `model=<endpoint>` arg is rewritten
-      to `<endpoint>-exp` so calls land on the experimental clones rather than
+      to `<endpoint>_exp_<id>` so calls land on the experimental clones rather than
       prod. Covers `chat.completions.create` and `responses.create`, sync +
       async (see `_patched_endpoints`).
 
@@ -1514,8 +1512,8 @@ def optimize_prompts_and_models(
     )
 
     print("Creating experimental gateway endpoints...")
-    _ensure_exp_endpoints(state)
     try:
+        _ensure_exp_endpoints(state)
         seed = _seed_candidate(state)
         adapter = _AgentAdapter(state)
         templates = _build_reflection_templates(state)
@@ -1661,6 +1659,19 @@ def promote_to_prod(result: Result, *, rollback_alias="production_previous", dry
         for pt, _ in prompt_changes:
             out[pt.name] = "would-register"
         return out
+
+    # Model choices were evaluated with every prompt's seed version, including unchanged prompts.
+    for pt in result.prompt_targets:
+        if pt.alias:
+            current = mlflow.genai.load_prompt(
+                f"prompts:/{pt.name}@{pt.alias}", cache_ttl_seconds=0
+            )
+            if int(current.version) != pt.prior_version:
+                raise RuntimeError(
+                    f"Prompt {pt.name}@{pt.alias} moved from v{pt.prior_version} to "
+                    f"v{current.version} after optimization started. Run the search again. "
+                    "No production updates applied."
+                )
 
     applied_endpoints = []
     repointed_prompts = []

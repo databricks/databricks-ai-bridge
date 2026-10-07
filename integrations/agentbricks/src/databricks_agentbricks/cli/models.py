@@ -135,7 +135,7 @@ def _promote(obj, report) -> list[dict]:
     It repoints every model service whose model changed, registers each rewritten prompt as a new
     version and moves its alias there (the prior version keeps ``@production_previous``), and rolls
     all of it back if any step fails. Returns the prompt-alias moves it made, as
-    {name, alias, prior_version}, so `models rollback` can move them back.
+    {name, alias, prior_version, applied_version}, so `models rollback` can move them back.
     """
     import contextlib  # noqa: PLC0415
     import sys  # noqa: PLC0415
@@ -154,9 +154,14 @@ def _promote(obj, report) -> list[dict]:
     # promote_to_prod prints its plan; keep stdout clean for -o json.
     with render.status("Applying the recommendation…"):
         with contextlib.redirect_stdout(sys.stderr):
-            promote_to_prod(result)
+            promoted = promote_to_prod(result)
     return [
-        {"name": target.name, "alias": target.alias, "prior_version": target.prior_version}
+        {
+            "name": target.name,
+            "alias": target.alias,
+            "prior_version": target.prior_version,
+            "applied_version": int(promoted[target.name].version),
+        }
         for target in result.prompt_targets
         if target.alias
         and result.best_candidate.get(f"prompt:{target.short_name}") not in (None, target.template)
@@ -402,10 +407,15 @@ def models_rollback(obj, role: Optional[str], yes: bool, source: pathlib.Path) -
         raise AgentCliError("No recorded switch or upgrade to roll back.")
     index, action = found
     client = obj.client()
+    pending_models = [m for m in action["models"] if not m.get("rolled_back")]
+    pending_prompts = [p for p in action["prompts"] if not p.get("rolled_back")]
+    current_models = {
+        m["model_service"]: _current_model(client, m["model_service"]) for m in pending_models
+    }
     moved = [
         m["model_service"]
-        for m in action["models"]
-        if _current_model(client, m["model_service"]) != m["model"]
+        for m in pending_models
+        if current_models[m["model_service"]] not in (m["model"], m["previous_model"])
     ]
     if moved:
         raise AgentCliError(
@@ -413,28 +423,41 @@ def models_rollback(obj, role: Optional[str], yes: bool, source: pathlib.Path) -
             hint="Roll those back one at a time with `agentbricks experimental models rollback --role <role>`, "
             "or switch them with `agentbricks experimental models set`.",
         )
+    current_prompts = {}
+    for prompt in pending_prompts:
+        current = prompt_registry.prompt_alias_version(obj, prompt)
+        current_prompts[(prompt["name"], prompt["alias"])] = current
+        applied = prompt.get("applied_version")
+        if applied is not None and current not in (int(applied), int(prompt["prior_version"])):
+            raise AgentCliError(
+                f"Prompt {prompt['name']}@{prompt['alias']} moved after the last {action['kind']}.",
+                hint="Review the current prompt version before restoring an older version.",
+            )
     undo = [
-        f"{m['model_service']}: {m['model']} → {m['previous_model']}" for m in action["models"]
-    ] + [f"{p['name']}@{p['alias']} → version {p['prior_version']}" for p in action["prompts"]]
+        f"{m['model_service']}: {m['model']} → {m['previous_model']}" for m in pending_models
+    ] + [f"{p['name']}@{p['alias']} → version {p['prior_version']}" for p in pending_prompts]
     if not _confirm(obj, yes, f"Undo the last {action['kind']}: " + "; ".join(undo) + "?"):
         if obj.output == "json":
             render.emit_json({"changed": False})
             return
         raise click.Abort()
-    for m in action["models"]:
-        _switch(
-            obj, project, m["model_service"], m["model"], m["previous_model"], reason="rollback"
-        )
-    if action["prompts"]:
-        prompt_registry.restore_prompt_aliases(obj, action["prompts"])
-    model_upgrade.mark_rolled_back(project.root, index)
+    for m in pending_models:
+        if current_models[m["model_service"]] != m["previous_model"]:
+            _switch(
+                obj, project, m["model_service"], m["model"], m["previous_model"], reason="rollback"
+            )
+        model_upgrade.mark_action_item_rolled_back(project.root, index, "models", m)
+    for prompt in pending_prompts:
+        if current_prompts[(prompt["name"], prompt["alias"])] != int(prompt["prior_version"]):
+            prompt_registry.restore_prompt_aliases(obj, [prompt])
+        model_upgrade.mark_action_item_rolled_back(project.root, index, "prompts", prompt)
     if obj.output == "json":
         render.emit_json(
             {
                 "changed": True,
                 "undid": action["kind"],
-                "models": action["models"],
-                "prompts": action["prompts"],
+                "models": pending_models,
+                "prompts": pending_prompts,
             }
         )
         return
@@ -445,28 +468,29 @@ def _rollback_role(obj, project, service: str, yes: bool) -> None:
     """Switch one model service back to the model it used before its last switch."""
     from databricks_agentbricks import model_upgrade  # noqa: PLC0415
 
-    history = [
-        h
-        for h in model_upgrade.read_history(project.root)["changes"]
-        if h.get("model_service") == service
-    ]
-    previous = history[-1].get("previous_model") if history else None
-    if not previous:
+    found = model_upgrade.last_undoable_model_action(project.root, service)
+    if found is None:
         raise AgentCliError(f"No recorded switch of '{service}' to roll back.")
+    index, action, model = found
+    previous = model["previous_model"]
     current = _current_model(obj.client(), service)
+    if current not in (model["model"], previous):
+        raise AgentCliError(f"'{service}' switched models after the last {action['kind']}.")
     if not _confirm(obj, yes, f"Switch '{service}' from {current} to {previous}?"):
         if obj.output == "json":
             render.emit_json({"model_service": service, "model": current, "changed": False})
             return
         raise click.Abort()
-    _switch(obj, project, service, current, previous, reason="rollback")
+    if current != previous:
+        _switch(obj, project, service, current, previous, reason="rollback")
+    model_upgrade.mark_action_item_rolled_back(project.root, index, "models", model)
     if obj.output == "json":
         render.emit_json(
             {
                 "model_service": service,
                 "previous_model": current,
                 "model": previous,
-                "changed": True,
+                "changed": current != previous,
             }
         )
         return

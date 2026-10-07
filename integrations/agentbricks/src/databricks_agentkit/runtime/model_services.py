@@ -120,9 +120,10 @@ def system_ai_name(model: str) -> str:
     return model if model.startswith(_SYSTEM_AI_PREFIX) else f"{_SYSTEM_AI_PREFIX}{model}"
 
 
-def exp_name(name: str) -> str:
+def exp_name(name: str, run_id: str | None = None) -> str:
     """The temporary clone of model service ``name`` that candidates are evaluated against."""
-    return f"{name}{EXPERIMENT_SUFFIX}"
+    suffix = f"_{run_id}" if run_id else ""
+    return f"{name}{EXPERIMENT_SUFFIX}{suffix}"
 
 
 def service_path(name: str) -> str:

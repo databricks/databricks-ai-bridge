@@ -1,11 +1,21 @@
 """Tests for promote_to_prod."""
 
+import pytest
+
 from databricks_agentkit.model_upgrades import promote_to_prod
 from databricks_agentkit.model_upgrades.optimization import (
     Result,
     _EndpointTarget,
     _PromptTarget,
 )
+
+
+@pytest.fixture(autouse=True)
+def live_prompt_version(mocker):
+    return mocker.patch(
+        "databricks_agentkit.model_upgrades.optimization.mlflow.genai.load_prompt",
+        return_value=mocker.Mock(version=2),
+    )
 
 
 def _result(candidate, *, prompt_targets=(), endpoint_targets=()):
@@ -75,6 +85,31 @@ def test_changed_prompt_registers_new_version_with_rollback(mocker):
         "alias": "production",
         "version": 3,
     }
+
+
+@pytest.mark.parametrize("rewrite", [False, True])
+def test_promotion_rejects_changed_alias_before_mutating_models_or_prompts(
+    mocker, live_prompt_version, rewrite
+):
+    live_prompt_version.return_value.version = 7
+    update = mocker.patch(
+        "databricks_agentkit.model_upgrades.optimization.model_services.set_model"
+    )
+    register = mocker.patch(
+        "databricks_agentkit.model_upgrades.optimization.mlflow.genai.register_prompt"
+    )
+    alias = mocker.patch(
+        "databricks_agentkit.model_upgrades.optimization.mlflow.genai.set_prompt_alias"
+    )
+    pt = _pt()
+    et = _EndpointTarget("a.b.llm", ["m2"], "m1")
+    candidate = {"model:a.b.llm": "m2", "prompt:foo": "rewritten" if rewrite else pt.template}
+    with pytest.raises(RuntimeError, match="moved from v2 to v7"):
+        promote_to_prod(_result(candidate, prompt_targets=[pt], endpoint_targets=[et]))
+    update.assert_not_called()
+    register.assert_not_called()
+    alias.assert_not_called()
+    live_prompt_version.assert_called_once_with(pt.uri, cache_ttl_seconds=0)
 
 
 def test_endpoint_unchanged_skipped(mocker):

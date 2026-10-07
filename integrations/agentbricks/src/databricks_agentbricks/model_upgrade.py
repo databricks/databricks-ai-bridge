@@ -7,7 +7,7 @@ Python project in workspace files) plus ``databricks-agentbricks[upgrade]``. Ins
 ``job_main`` imports the project's own ``predict_fn``, eval data, and scorers (``module:attr``
 references, the same inputs ``optimize_prompts_and_models`` takes) and runs the search:
 ``databricks_agentkit.model_upgrades.optimize_prompts_and_models`` (GEPA), which routes the agent's
-calls to a temporary ``<service>_exp`` clone of the bound model service, so production traffic is
+calls to a temporary ``<service>_exp_<id>`` clone of the bound model service, so production traffic is
 never touched while candidates run. The job records its ``UpgradeReport`` on an MLflow run; the CLI
 reads it back (``fetch_report``) and only `models apply` switches the service.
 
@@ -341,7 +341,7 @@ def run_and_record(root: pathlib.Path, config: JobConfig) -> UpgradeReport:
     from databricks_agentkit.runtime.workspace import workspace_client  # noqa: PLC0415
 
     # Each call site must call its bound service (the agent reads AGENT_MODEL_SERVICE_<ROLE> at
-    # import), or the optimizer's redirect to the <service>_exp clone never matches.
+    # import), or the optimizer's redirect to the <service>_exp_<id> clone never matches.
     for role, service in config.services.items():
         os.environ[model_service_env(role)] = service
     mlflow.set_tracking_uri("databricks")
@@ -528,7 +528,7 @@ def record_action(
     prompts: Sequence[dict[str, Any]] = (),
 ) -> None:
     """Append one undoable action: ``models`` as {model_service, previous_model, model}, ``prompts``
-    as {name, alias, prior_version} (the version the alias pointed at before the action)."""
+    as {name, alias, prior_version, applied_version} (the alias versions before and after the action)."""
     history = read_history(root)
     history["actions"].append(
         {
@@ -548,6 +548,35 @@ def last_undoable_action(root: pathlib.Path) -> Optional[tuple[int, dict[str, An
         if not action.get("rolled_back"):
             return index, action
     return None
+
+
+def last_undoable_model_action(
+    root: pathlib.Path, service: str
+) -> Optional[tuple[int, dict[str, Any], dict[str, Any]]]:
+    """The latest action with an outstanding model switch for ``service``."""
+    for index, action in reversed(list(enumerate(read_history(root)["actions"]))):
+        if action.get("rolled_back"):
+            continue
+        for model in action["models"]:
+            if model["model_service"] == service and not model.get("rolled_back"):
+                return index, action, model
+    return None
+
+
+def mark_action_item_rolled_back(
+    root: pathlib.Path, index: int, kind: str, item: dict[str, Any]
+) -> None:
+    """Save each completed undo so a failed or role-scoped rollback can resume."""
+    history = read_history(root)
+    action = history["actions"][index]
+    keys = ("model_service",) if kind == "models" else ("name", "alias")
+    for recorded in action[kind]:
+        if all(recorded[key] == item[key] for key in keys):
+            recorded["rolled_back"] = True
+    action["rolled_back"] = all(
+        entry.get("rolled_back") for entry in [*action["models"], *action["prompts"]]
+    )
+    _write_history(root, history)
 
 
 def mark_rolled_back(root: pathlib.Path, index: int) -> None:

@@ -1128,7 +1128,7 @@ _Options_
 
 #### `agentbricks experimental models unbind`
 
-Remove a model-service binding from agent.toml. After the next deploy that LLM call uses its own default model directly again.
+Remove a model-service binding from agent.toml. The next deploy removes that role's `AGENT_MODEL_SERVICE_<ROLE>` entry from app.yaml, so the LLM call uses its own default model directly again. The service itself is left in place.
 
 ```
 agentbricks experimental models unbind [options]
@@ -1187,7 +1187,7 @@ _Options_
 
 #### `agentbricks experimental models rollback`
 
-Undo the last `models apply` or `models set`. Every model service the action switched goes back to its previous model, and every prompt alias it moved (for example `@production`) goes back to the version it pointed at before, the one `@production_previous` marks. Run it again to undo the action before that. Refuses if a model was switched again after the action. Moving prompt aliases needs the `upgrade` extra installed locally.
+Undo the last `models apply` or `models set`. Every model service the action switched goes back to its previous model, and every prompt alias it moved (for example `@production`) goes back to the version it pointed at before, the one `@production_previous` marks. If a step fails, run it again to finish the remaining changes; completed steps are skipped. Once the action is fully undone, another rollback undoes the action before that. Refuses if a model or prompt alias moved to an unrelated value after the action. A rollback with `--role` records that model as restored and leaves the action's other models and prompts available for a later rollback. Moving prompt aliases needs the `upgrade` extra installed locally.
 
 ```
 agentbricks experimental models rollback [options]
@@ -1205,7 +1205,7 @@ _Options_
 
 Search candidate models for every bound role together, and with `--prompt` rewritten versions of the agent's MLflow Prompt Registry prompts, as a serverless Databricks job. Every combination is scored on the whole agent, so a cheaper router that hurts the writer's answers loses. The search never runs on your machine (it can take hours), so this command uploads the project to `/Workspace/Users/<you>/agentbricks_model_upgrades/<name>` (its own folder, separate from the deployed app's source), submits a one-time run, and returns. The job's environment installs the uploaded project from its `pyproject.toml` plus `databricks-agentbricks[upgrade]`.
 
-The job imports the `predict_fn`, eval data, and scorers you name from the project (`module:attr` references, the same inputs `optimize_prompts_and_models` takes) and runs the whole agent on each eval record per candidate combination, against temporary `<service>_exp` copies of the model services (production traffic is untouched). It sets each `AGENT_MODEL_SERVICE_<ROLE>` before importing your code, so every LLM call that uses `resolve_model_service("<role>")` hits its copy. The winner balances quality, latency, and cost (`--weights`); at equal quality the cheaper models win. The run logs to the MLflow experiment `<trace experiment>-model-upgrades`, never to the agent's own trace experiment.
+The job imports the `predict_fn`, eval data, and scorers you name from the project (`module:attr` references, the same inputs `optimize_prompts_and_models` takes) and runs the whole agent on each eval record per candidate combination, against temporary `<service>_exp_<id>` copies of the model services (production traffic is untouched). Each search uses its own copies and deletes only those copies when it exits, so overlapping jobs can evaluate independently. It sets each `AGENT_MODEL_SERVICE_<ROLE>` before importing your code, so every LLM call that uses `resolve_model_service("<role>")` hits its copy. The winner balances quality, latency, and cost (`--weights`); at equal quality the cheaper models win. The run logs to the MLflow experiment `<trace experiment>-model-upgrades`, never to the agent's own trace experiment.
 
 Nothing changes until the recommendation is applied. By default the command returns once the job is submitted: check on it with `agentbricks experimental models status`, then run `agentbricks experimental models apply`. `--apply ask` waits for the result and asks before changing anything, and `--apply auto` applies it without asking. `--run-on local` runs the search in this process instead of a job, which needs the `upgrade` extra and the project's dependencies installed locally.
 
@@ -1236,7 +1236,7 @@ _Options_
 
 #### `agentbricks experimental models apply`
 
-Apply the latest finished upgrade run's recommendation with the optimizer's `promote_to_prod`: it repoints every model service whose model changed and registers each rewritten prompt as a new version (its alias moves there; the prior version keeps `@production_previous`), rolling all of it back if any step fails. Needs the `upgrade` extra installed locally. Errors if the run hasn't finished, or if a service was switched after the run started. Prompts for confirmation; `-o json` switches only with `--yes`.
+Apply the latest finished upgrade run's recommendation with the optimizer's `promote_to_prod`: it repoints every model service whose model changed and registers each rewritten prompt as a new version (its alias moves there; the prior version keeps `@production_previous`), rolling all of it back if any step fails. Needs the `upgrade` extra installed locally. Errors if the run hasn't finished, or if a service or prompt alias changed after the run started. All prompt aliases are checked before any production update, including prompts whose templates are unchanged. Prompts for confirmation; `-o json` switches only with `--yes`.
 
 ```
 agentbricks experimental models apply [options]

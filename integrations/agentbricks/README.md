@@ -465,13 +465,17 @@ agentbricks experimental models apply         # switch to it
 `models upgrade` uploads the project to your workspace and runs the search as a serverless
 Databricks job (it can take hours, so it never runs locally). The job imports the `predict_fn`,
 eval data, and scorers you name from the project (the same inputs `optimize_prompts_and_models`
-takes, below) and runs each eval record once per candidate, against a temporary `<service>_exp`
+takes, below) and runs each eval record once per candidate, against a temporary `<service>_exp_<id>`
 clone. Each LLM call must use its role's service, `resolve_model_service("<role>")`, which reads the
 `AGENT_MODEL_SERVICE_<ROLE>` env var that deploy (and the job, before importing your code) sets.
 With `--prompt`, GEPA rewrites those prompts for each candidate model too. `models apply` switches
 to the best quality / latency / cost trade-off and registers any rewritten prompts (prior versions
 keep `@production_previous`). `models rollback` undoes the whole last apply: it switches every
-model back and moves each prompt's alias back to its prior version.
+model back and moves each prompt's alias back to its prior version. Apply refuses recommendations
+whose prompt aliases changed during the search; rollback checks those aliases against the versions
+recorded when the recommendation was applied. If rollback fails partway through, run it again
+to finish the remaining changes. Each search owns its temporary clones, so overlapping jobs can
+evaluate different models independently.
 
 The search is `databricks_agentkit.model_upgrades`, which you can also call directly (for example
 from a notebook) to tune several model services and MLflow Prompt Registry prompts together:

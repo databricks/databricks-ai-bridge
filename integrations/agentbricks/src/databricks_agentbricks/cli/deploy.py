@@ -71,6 +71,7 @@ from databricks_agentkit.runtime.store import (
 )
 from databricks_agentkit.runtime.tool_manifest import (
     MEMORY_STORE_ENV,
+    MODEL_SERVICE_ENV_PREFIX,
     SESSION_STORE_ENV,
     model_service_env,
 )
@@ -203,6 +204,8 @@ def _upsert_manifest_env(
     source: pathlib.Path,
     updates: dict[str, str],
     removals: Sequence[str] = (),
+    *,
+    prune_model_services: bool = False,
 ) -> bool:
     """Reconcile env entries in <source>/app.yaml: upsert ``updates``, drop any named in ``removals``.
 
@@ -223,6 +226,13 @@ def _upsert_manifest_env(
     raw_env = doc.get("env")
     candidates = raw_env if isinstance(raw_env, list) else []
     env: list[dict[str, Any]] = [entry for entry in candidates if isinstance(entry, dict)]
+    if prune_model_services:
+        env = [
+            entry
+            for entry in env
+            if not str(entry.get("name", "")).startswith(MODEL_SERVICE_ENV_PREFIX)
+            or entry.get("name") in updates
+        ]
     by_name = {e.get("name"): e for e in env if isinstance(e, dict)}
     for name, value in updates.items():
         if name in by_name:
@@ -710,8 +720,10 @@ def deploy(
     # 3. Patch app.yaml before creating the app. The managed Runtime Store fields are added after
     #    app creation because that API requires the app's service principal.
     scaffolded = False
-    if env_updates or trace_env_removals:
-        scaffolded = _upsert_manifest_env(source_dir, env_updates, trace_env_removals)
+    if env_updates or trace_env_removals or project is not None:
+        scaffolded = _upsert_manifest_env(
+            source_dir, env_updates, trace_env_removals, prune_model_services=project is not None
+        )
 
     # 4. Ensure the app exists and its compute is active. Create only when new; the compute wait
     #    runs every deploy.
