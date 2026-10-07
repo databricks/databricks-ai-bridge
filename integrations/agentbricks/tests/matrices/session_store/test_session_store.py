@@ -1,4 +1,4 @@
-"""STUB: a single-feature agent with a session store; the store the CLI declared was created.
+"""STUB: an `init` agent (default bindings); the session store the CLI declared was created.
 
 Real case still to write: conversation state persists across invocations of one session_id and is
 isolated between sessions.
@@ -14,7 +14,7 @@ from common import EXPECTED, Evidence, recorded_row
 
 
 def test_session_store_created(agentbricks_cli: AgentbricksCli, evidence: Evidence) -> None:
-    project = agentbricks_cli.new_project("cli", keep=("session_store",))
+    project = agentbricks_cli.new_project("cli")
     command = f"agentbricks sessions stores create --name {project.session_store_config}"
     with recorded_row(
         evidence,

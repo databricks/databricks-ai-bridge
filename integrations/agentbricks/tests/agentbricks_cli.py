@@ -41,12 +41,6 @@ from common import (
 )
 from workspace_client import Workspace, cleanup_app
 
-# `agentbricks init` binds a session store, memory store, and tracing experiment by default.
-_UNBIND_COMMANDS = {
-    "session_store": ("sessions", "unbind"),
-    "memory_store": ("memory", "unbind"),
-    "tracing": ("tracing", "unbind"),
-}
 _STORE_KINDS = {"memory": ("memory", "stores"), "sessions": ("sessions", "stores")}
 _DIRECT_HEADER = (
     'schema_version = 1\n\n[agent]\nframework = "{framework}"\nserver = "agentbricks"\n'
@@ -65,7 +59,6 @@ class Project:
     authoring: str
     path: pathlib.Path
     app_name: str
-    features: tuple[str, ...] = ()
     memory_store_config: str | None = None
     session_store_config: str | None = None
     memory_resource: dict[str, Any] | None = None
@@ -235,19 +228,15 @@ class AgentbricksCli:
 
     # Authoring
 
-    def new_project(self, authoring: str, keep: Sequence[str] = ()) -> Project:
-        """`agentbricks init` a uniquely named project, pin the runtime under test, and leave only
-        the ``keep`` features (session_store, memory_store, tracing) bound.
+    def new_project(self, authoring: str) -> Project:
+        """`agentbricks init` a uniquely named project and pin the runtime under test.
 
-        CLI authoring unbinds every other default feature. Direct authoring replaces the whole
-        manifest later in ``write_manifest``, which binds ``keep`` itself.
+        `init` binds a session store, a memory store and a tracing experiment by default, and CLI
+        authoring keeps them. Direct authoring replaces the whole manifest in ``write_manifest``.
         """
-        unknown = set(keep) - set(_UNBIND_COMMANDS)
-        if unknown:
-            raise MatrixError(f"Unknown features to keep: {sorted(unknown)}")
         path = self.inputs.output / "projects" / f"t-{uuid.uuid4().hex[:8]}"
         path.parent.mkdir(parents=True, exist_ok=True)
-        project = Project(authoring, path, f"agent-bricks-{path.name}", features=tuple(keep))
+        project = Project(authoring, path, f"agent-bricks-{path.name}")
         self._projects.append(project)
         self._run_long(
             f"init-{path.name}",
@@ -261,9 +250,6 @@ class AgentbricksCli:
         # Registered before any store exists so cleanup knows the app name if creation fails.
         self.evidence.register_project(project.app_name, authoring=authoring)
         if authoring == "cli":
-            for feature, command in _UNBIND_COMMANDS.items():
-                if feature not in keep:
-                    self.cli(*command, "--source", str(path))
             self._sync_manifest(project)
         return project
 
@@ -299,19 +285,14 @@ class AgentbricksCli:
         target.write_text(content, encoding="utf-8")
 
     def write_manifest(self, project: Project, tool_specs: Sequence[ToolSpec]) -> None:
-        """Direct authoring: write agent.toml with exactly these tools and the project's features."""
+        """Direct authoring: write agent.toml with exactly these tools plus a tracing binding."""
         sections = [_DIRECT_HEADER.format(framework=FRAMEWORKS[0])]
         sections.extend(spec.toml for spec in tool_specs if spec.toml)
-        if "session_store" in project.features:
-            sections.append(f'[session_store]\nname = "{project.path.name}-sessions"\n')
-        if "memory_store" in project.features:
-            sections.append(f'[memory_store]\nname = "{project.path.name}-memory"\n')
-        if "tracing" in project.features:
-            # Follows default_experiment_name's shape so direct authoring carries the same
-            # tracing binding `agentbricks init` gives CLI authoring.
-            slug = re.sub(r"[^a-z0-9-]+", "-", project.path.name.lower()).strip("-") or "agent"
-            experiment = f"/Shared/agentbricks_traces/{slug}-{self.inputs.run_suffix}"
-            sections.append(f'[tracing]\nexperiment_name = "{experiment}"\n')
+        # Follows default_experiment_name's shape so direct authoring carries the same tracing
+        # binding `agentbricks init` gives CLI authoring.
+        slug = re.sub(r"[^a-z0-9-]+", "-", project.path.name.lower()).strip("-") or "agent"
+        experiment = f"/Shared/agentbricks_traces/{slug}-{self.inputs.run_suffix}"
+        sections.append(f'[tracing]\nexperiment_name = "{experiment}"\n')
         target = project.path / "agent.toml"
         self.transcript.file_step(target, "direct authoring; no agentbricks tools command")
         target.write_text("\n".join(sections), encoding="utf-8")

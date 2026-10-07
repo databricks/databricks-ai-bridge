@@ -17,8 +17,8 @@ def test_grants(
     subtests,
 ) -> None:
     uc_function = next(tool for tool in tools_for(inputs) if tool.name == "uc_function")
-    # Tracing stays bound so the App carries a resource Agent Bricks does not own.
-    project = agentbricks_cli.new_project(authoring, keep=("tracing",))
+    # `init` and direct authoring both bind tracing, a resource Agent Bricks does not own.
+    project = agentbricks_cli.new_project(authoring)
     app = project.app_name
     if authoring == "cli":
         bind(agentbricks_cli, project, uc_function)

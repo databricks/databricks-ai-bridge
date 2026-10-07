@@ -1,4 +1,4 @@
-"""STUB: a single-feature agent with tracing; the experiment is bound and attached to the App.
+"""STUB: an `init` agent (default bindings); the tracing experiment is bound and attached to the App.
 
 Real case still to write: an invocation exports a trace to the experiment.
 """
@@ -16,7 +16,7 @@ from workspace_client import Workspace
 def test_tracing_experiment_bound(
     agentbricks_cli: AgentbricksCli, workspace_client: Workspace, evidence: Evidence
 ) -> None:
-    project = agentbricks_cli.new_project("cli", keep=("tracing",))
+    project = agentbricks_cli.new_project("cli")
     with recorded_row(
         evidence,
         "cli",

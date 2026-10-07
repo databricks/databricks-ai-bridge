@@ -1,4 +1,4 @@
-"""STUB: a single-feature agent with a memory store; the store the CLI declared was created.
+"""STUB: an `init` agent (default bindings); the memory store the CLI declared was created.
 
 Real case still to write: the agent writes a memory in one invocation and recalls it in another.
 """
@@ -13,7 +13,7 @@ from common import EXPECTED, Evidence, recorded_row
 
 
 def test_memory_store_created(agentbricks_cli: AgentbricksCli, evidence: Evidence) -> None:
-    project = agentbricks_cli.new_project("cli", keep=("memory_store",))
+    project = agentbricks_cli.new_project("cli")
     command = f"agentbricks memory stores create --name {project.memory_store_config}"
     with recorded_row(
         evidence,
