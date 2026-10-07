@@ -10,6 +10,7 @@ import click
 from databricks_agentbricks import render
 from databricks_agentbricks.render import field
 from databricks_agentkit import timefmt
+from databricks_agentkit._api_client import MEMORY_PIPELINE_TRIGGERS
 
 
 def _resolve_instructions(ctx, param, value):
@@ -38,7 +39,7 @@ def _render_detail(pipeline: dict) -> None:
             "Session store": field(pipeline, "session_store"),
             "Memory store": field(pipeline, "memory_store"),
             "Model": field(pipeline, "model"),
-            "Instructions": field(pipeline, "instructions"),
+            "Instructions": field(policy, "instructions"),
             "Enabled": field(policy, "enabled"),
             "Trigger": field(policy, "trigger"),
             "ETag": field(pipeline, "etag"),
@@ -80,8 +81,16 @@ def pipeline() -> None:
     callback=_resolve_instructions,
     help="Instructions steering distillation: inline text or @path to a UTF-8 file.",
 )
+@click.option(
+    "--trigger",
+    type=click.Choice(list(MEMORY_PIPELINE_TRIGGERS)),
+    default="manual",
+    show_default=True,
+    help="How runs start: only when you start one, or also automatically about every 24 hours. "
+    "Fixed after creation.",
+)
 @click.pass_obj
-def create(obj, memory_store, session_store, model, display_name, instructions) -> None:
+def create(obj, memory_store, session_store, model, display_name, instructions, trigger) -> None:
     """Create a Dreamer memory pipeline."""
     data = obj.client().create_memory_pipeline(
         memory_store=memory_store,
@@ -89,6 +98,7 @@ def create(obj, memory_store, session_store, model, display_name, instructions) 
         model=model,
         display_name=display_name,
         instructions=instructions,
+        trigger=trigger,
     )
     if obj.output == "json":
         render.emit_json(data)

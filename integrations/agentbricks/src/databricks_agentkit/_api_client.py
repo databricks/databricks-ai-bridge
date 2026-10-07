@@ -91,6 +91,10 @@ def memory_pipeline_path(name: str) -> str:
     return f"memory-pipelines/{raw}"
 
 
+# CLI trigger names → API `DreamerPolicy.Trigger` values.
+MEMORY_PIPELINE_TRIGGERS = {"manual": "MANUAL_ONLY", "scheduled": "SCHEDULED"}
+
+
 def memory_entry_path(store: str, entry: str) -> str:
     entry = (entry or "").strip().strip("/")
     if entry.startswith("memory-stores/"):
@@ -510,7 +514,16 @@ class _AgentBricksApiClient:
         model: Optional[str] = None,
         display_name: Optional[str] = None,
         instructions: Optional[str] = None,
+        trigger: Optional[str] = None,
     ) -> dict:
+        policy = _body(instructions=instructions)
+        if trigger is not None:
+            if trigger not in MEMORY_PIPELINE_TRIGGERS:
+                raise AgentCliError(
+                    f"Unsupported memory pipeline trigger: {trigger!r}. "
+                    f"Use one of: {', '.join(MEMORY_PIPELINE_TRIGGERS)}."
+                )
+            policy["trigger"] = MEMORY_PIPELINE_TRIGGERS[trigger]
         return self._do(
             "POST",
             f"{_BASE}/memory-pipelines",
@@ -518,7 +531,7 @@ class _AgentBricksApiClient:
                 display_name=display_name,
                 session_store=session_store_path(session_store),
                 memory_store=memory_store_path(memory_store),
-                instructions=instructions,
+                dreamer_policy=policy or None,
                 model=model,
             ),
         )
@@ -542,16 +555,21 @@ class _AgentBricksApiClient:
         display_name: Optional[str] = None,
         instructions: Optional[str] = None,
     ) -> dict:
-        body = _body(display_name=display_name, instructions=instructions)
+        body = _body(display_name=display_name)
+        mask = list(body)
+        if instructions is not None:
+            # Instructions live in dreamer_policy, and the API accepts only this leaf as a mask
+            # path; it rejects a bare `dreamer_policy` because the policy's other fields are
+            # immutable.
+            body["dreamer_policy"] = {"instructions": instructions}
+            mask.append("dreamer_policy.instructions")
         if not body:
             raise AgentCliError("No fields to update. Provide --display-name or --instructions.")
-        body = {"name": memory_pipeline_path(name), **body}
-        update_mask = ",".join(key for key in body if key != "name")
         return self._do(
             "PATCH",
             f"{_BASE}/{memory_pipeline_path(name)}",
-            query={"update_mask": update_mask},
-            body=body,
+            query={"update_mask": ",".join(mask)},
+            body={"name": memory_pipeline_path(name), **body},
         )
 
     def delete_memory_pipeline(self, name: str) -> dict:

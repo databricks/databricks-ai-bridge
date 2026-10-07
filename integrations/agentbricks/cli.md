@@ -506,10 +506,18 @@ agentbricks memory pipeline create --memory-store TEXT --session-store TEXT [opt
 | `--model` | string | - | no | Model service used for Dreamer distillation. |
 | `--display-name` | string | - | no | Optional human-readable pipeline name. |
 | `--instructions` | string | - | no | Instructions steering distillation: inline text or @path to a UTF-8 file. |
+| `--trigger <manual\|scheduled>` | `manual` \| `scheduled` | `manual` | no | How runs start: only when you start one, or also automatically about every 24 hours. Fixed after creation. |
 
 ```bash
 agentbricks memory pipeline create --memory-store agent-memory --session-store agent-sessions \
   --model system.ai.gpt-5-6-sol
+```
+
+Create a pipeline that also runs automatically about every 24 hours:
+
+```bash
+agentbricks memory pipeline create --memory-store agent-memory --session-store agent-sessions \
+  --trigger scheduled
 ```
 
 ##### `agentbricks memory pipeline list`
