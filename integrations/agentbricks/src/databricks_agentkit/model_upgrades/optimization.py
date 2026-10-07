@@ -1396,7 +1396,7 @@ def optimize_prompts_and_models(
     latency_hard_gate: float = 60.0,
     cost_soft_gate: float = 0.02,
     token_costs: Optional[dict] = None,
-    reflection_model: str = "databricks-claude-sonnet-4-6",
+    reflection_model: str = "databricks-claude-opus-5-5",
     model_selection: str = "bandit",
     reflection_minibatch_size: int = 5,
     frontier_type: str = "hybrid",

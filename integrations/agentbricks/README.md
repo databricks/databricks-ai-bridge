@@ -499,7 +499,7 @@ promote_to_prod(result)  # repoints the services, registers and aliases the winn
 ```
 
 Model choices use a UCB1 bandit by default (`model_selection="reflection"` asks the reflection LLM
-instead); prompts are rewritten by GEPA's reflection loop. Both need the `upgrade` extra:
+instead); prompts are rewritten by GEPA's reflection loop, which uses Claude Opus 5.5. Both need the `upgrade` extra:
 `pip install 'databricks-agentbricks[upgrade]'`.
 
 Prompts the agent loads from the MLflow Prompt Registry go under `[prompts]`
@@ -550,7 +550,7 @@ agentbricks [-p <profile>] [-o text|json]
     unbind | list | status
     set        MODEL [--role ROLE] [--yes]
     rollback   [--role ROLE] [--yes]
-    upgrade    --candidates [ROLE=]MODEL[,...] [...] [--prompt URI ... | --models-only] --predict REF --train-data REF --val-data REF
+    upgrade    [--candidates [ROLE=]MODEL[,...] [...]] [--prompt URI ... | --models-only] --predict REF --train-data REF --val-data REF
                --scorer REF [...] [--budget N] [--weights Q,L,C] [--timeout-hours H]
                [--run-on job|local] [--apply never|ask|auto] [--wait]
     apply      [--yes]

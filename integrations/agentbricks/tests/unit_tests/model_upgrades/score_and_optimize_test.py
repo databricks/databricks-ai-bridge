@@ -194,7 +194,7 @@ def test_optimize_prompts_and_models_threads_inputs_to_gepa_optimize(
         "model:ep1": "databricks-claude-sonnet-4",
     }
     assert kwargs["max_metric_calls"] == 10
-    assert kwargs["reflection_lm"] == "databricks/databricks-claude-sonnet-4-6"
+    assert kwargs["reflection_lm"] == "databricks/databricks-claude-opus-5-5"
     assert "prompt:foo" in kwargs["reflection_prompt_template"]
     assert "model:ep1" in kwargs["reflection_prompt_template"]
     # Default model_selection="bandit" wires a custom proposer for model choices.
