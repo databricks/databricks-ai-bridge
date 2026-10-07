@@ -110,11 +110,15 @@ class AppManifest:
         one module. Returns True if it scaffolded a new file.
 
         ``removals`` lets an unbind clear stale agentbricks-managed env (e.g. the ``MLFLOW_*`` keys when
-        tracing is unbound) so the manifest stops pointing the deployed runtime at a resource whose grant
-        has just been pruned; without it, the upsert-only merge would leave the stale entry behind.
+        tracing is unbound) so the manifest stops pointing the deployed runtime at a resource that is no
+        longer configured; without it, the upsert-only merge would leave the stale entry behind. A
+        removal-only patch does not scaffold a missing app.yaml: without a manifest, there is no runtime
+        configuration to detach.
         ``updates`` and ``removals`` are expected to be disjoint.
         """
         app_yaml = source / "app.yaml"
+        if not app_yaml.exists() and not updates:
+            return False
         if app_yaml.exists():
             manifest = cls.parse_lenient(app_yaml.read_text())
             scaffolded = False

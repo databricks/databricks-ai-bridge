@@ -153,7 +153,10 @@ class MemoryStoreProvisioner:
     """The memory store declared in agent.toml, reconciled and granted on its own.
 
     Delegates API work to its own ``MemoryStoreClient``.  ``reconcile`` returns the bound store name
-    and manifest patch; ``grant`` consumes that state and returns a :class:`GrantOutcome`.
+    and manifest patch; ``grant`` consumes that state and returns a :class:`GrantOutcome`. Unbinding
+    detaches the runtime configuration only: the managed-store API exposes a grant operation but no
+    safe list/revoke operation or prior-binding tracking, so deploy does not attempt to revoke the
+    app's managed-store access grant.
     """
 
     def __init__(self, memory_store_client: MemoryStoreClient, reporter: Reporter) -> None:
@@ -165,18 +168,25 @@ class MemoryStoreProvisioner:
 
         `agentbricks deploy` is the only reconcile-to-cloud verb; agent.toml is the source of truth and
         is never rewritten. ``AGENT_MEMORY_STORE`` carries the store's bare id (not its display name),
-        because the entries API is keyed by id.
+        because the entries API is keyed by id. A clean unbind in an agent.toml project returns an
+        env-removal patch; a standalone source without agent.toml has no declarative unbind and keeps
+        any manually configured env.
         """
         store_name = ctx.memory_store
         if not store_name:
-            return MemoryStoreState(store_name=None, manifest=ManifestPatch(env={}))
+            removals = (MEMORY_STORE_ENV,) if ctx.project.agent_project is not None else ()
+            return MemoryStoreState(
+                store_name=None, manifest=ManifestPatch(env={}, env_removals=removals)
+            )
         with self._reporter.status(f"Reconciling memory store '{store_name}'…"):
             result = self._memory_store_client.reconcile(store_name)
         if result.created:
             self._reporter.note(f"Created memory store {store_name!r}")
-        env: dict[str, str] = {}
-        if result.store_id:
-            env[MEMORY_STORE_ENV] = result.store_id
+        if not result.store_id:
+            raise AgentCliError(
+                f"Memory store {store_name!r} did not return the required store identifier."
+            )
+        env = {MEMORY_STORE_ENV: result.store_id}
         return MemoryStoreState(
             store_name=store_name,
             manifest=ManifestPatch(env=env),
@@ -210,7 +220,10 @@ class SessionStoreProvisioner:
     """The session store declared in agent.toml, reconciled and granted on its own.
 
     Delegates API work to its own ``SessionStoreClient``. Session stores resolve by name, so
-    ``AGENT_SESSION_STORE`` carries the name rather than a resolved id.
+    ``AGENT_SESSION_STORE`` carries the name rather than a resolved id. Unbinding detaches the
+    runtime configuration only: the managed-store API exposes a grant operation but no safe
+    list/revoke operation or prior-binding tracking, so deploy does not attempt to revoke the app's
+    managed-store access grant.
     """
 
     def __init__(self, session_store_client: SessionStoreClient, reporter: Reporter) -> None:
@@ -218,10 +231,17 @@ class SessionStoreProvisioner:
         self._reporter = reporter
 
     def reconcile(self, ctx: ResourceContext) -> SessionStoreState:
-        """Create the declared session store if absent and wire ``AGENT_SESSION_STORE``."""
+        """Create the declared session store if absent and wire ``AGENT_SESSION_STORE``.
+
+        A clean unbind in an agent.toml project returns an env-removal patch; a standalone source
+        without agent.toml has no declarative unbind and keeps any manually configured env.
+        """
         store_name = ctx.session_store
         if not store_name:
-            return SessionStoreState(store_name=None, manifest=ManifestPatch(env={}))
+            removals = (SESSION_STORE_ENV,) if ctx.project.agent_project is not None else ()
+            return SessionStoreState(
+                store_name=None, manifest=ManifestPatch(env={}, env_removals=removals)
+            )
         with self._reporter.status(f"Reconciling session store '{store_name}'…"):
             result = self._session_store_client.reconcile(store_name)
         if result.created:
@@ -269,12 +289,12 @@ class TracingProvisioner:
 
         Resolved by experiment NAME (never a stored id), and nothing is written back to agent.toml.
         (`agentbricks dev` traces to a local MLflow server instead and never touches this experiment.)
-        The env is set when tracing resolves; on a CLEAN unbind - resolved to None with no setup error
-        - the stale ``MLFLOW_*`` keys are pruned instead, so the manifest stops pointing the runtime at
-        an experiment whose grant is about to be pruned too. On a resolve ERROR neither the env nor the
-        trace resources are touched: a transient failure must not look like an unbind.
-
-        (Store env is still upsert-only, a separate follow-up - unbinding a store leaves its env behind.)
+        The env is set when tracing resolves; on a CLEAN unbind of an agent.toml project - resolved to
+        None with no setup error - the stale ``MLFLOW_*`` keys are pruned instead, so the manifest stops
+        pointing the runtime at an experiment whose grant is about to be pruned too. A standalone source
+        without agent.toml has no declarative unbind, so its manually configured env is retained. On a
+        resolve ERROR neither the env nor the trace resources are touched: a transient failure must not
+        look like an unbind.
         """
         trace_provision = None
         setup_error: Optional[str] = None
@@ -295,11 +315,11 @@ class TracingProvisioner:
         otel_tables = tuple(trace_provision.tables.otel_tables()) if trace_provision else ()
         if experiment_id:
             manifest = ManifestPatch(env=mlflow_tracing_config(experiment_id).env())
-        elif setup_error is None:
+        elif setup_error is None and ctx.project.agent_project is not None:
             manifest = ManifestPatch(
                 env={},
                 env_removals=tuple(mlflow_tracing_config("").env()),
-            )  # the MLFLOW_* keys to prune
+            )  # the MLFLOW_* keys to prune on a declarative unbind
         else:
             manifest = ManifestPatch(env={})
         return TracingState(
@@ -313,15 +333,18 @@ class TracingProvisioner:
         """Reconcile the agentbricks-owned trace resources whenever tracing resolved cleanly.
 
         A resolved experiment grants that set (the ``experiment`` resource, CAN_EDIT, plus MODIFY on
-        any UC OTEL tables via ``uc_securable`` resources); a cleanly-unbound project prunes the
-        agentbricks-trace-* resources an earlier bound deploy left behind. When resolving the BOUND
-        experiment errored instead we don't know the intended state, so the reconcile is skipped
-        rather than run - a flaky deploy must not silently revoke trace access the way an unbind does.
+        any UC OTEL tables via ``uc_securable`` resources); a cleanly-unbound agent.toml project prunes
+        the agentbricks-trace-* resources an earlier bound deploy left behind. A standalone source has
+        no declarative unbind, so its existing trace resources are retained. When resolving the BOUND
+        experiment errored instead we don't know the intended state, so the reconcile is skipped rather
+        than run - a flaky deploy must not silently revoke trace access the way an unbind does.
 
         (Whether removing a ``uc_securable`` resource also revokes the underlying UC MODIFY grant is
         platform behavior - documented but not yet verified live.)
         """
-        if state.setup_error is not None:
+        if state.setup_error is not None or (
+            state.experiment_id is None and ctx.project.agent_project is None
+        ):
             return GrantOutcome.skipped()
         with self._reporter.status("Granting the agent runtime access to its trace experiment…"):
             error = self._tracing_client.reconcile_app_resources(
