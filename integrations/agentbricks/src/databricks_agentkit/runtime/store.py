@@ -80,6 +80,18 @@ class RuntimeStore(Protocol):
         """Claim a newly queued invocation for its first attempt."""
         ...
 
+    async def load_session_state(self, session_id: str) -> JsonValue:
+        """Return the latest saved session state, or None when absent or cleared."""
+        ...
+
+    async def save_session_state(self, invocation_id: str, attempt: int, state: JsonValue) -> bool:
+        """Save private session state while this attempt owns its active invocation.
+
+        A None value clears the session state. An invocation that never saves state leaves the
+        preceding state intact. Sessionless or no-longer-owned invocations cannot save state.
+        """
+        ...
+
     async def complete(
         self,
         invocation_id: str,
@@ -118,6 +130,7 @@ class InMemoryRuntimeStore(RuntimeStore):
     def __init__(self) -> None:
         self.states: dict[str, Invocation] = {}
         self.persisted_events: list[InvocationEvent] = []
+        self._session_states: dict[str, JsonValue] = {}
         self._lock = asyncio.Lock()
 
     async def initialize(self) -> None:
@@ -227,6 +240,24 @@ class InMemoryRuntimeStore(RuntimeStore):
             self.states[invocation_id] = claimed
             self._append_event(invocation_id, claimed.attempt, {"type": "run.started"})
             return copy.deepcopy(claimed)
+
+    async def load_session_state(self, session_id: str) -> JsonValue:
+        _validate_session_id(session_id)
+        async with self._lock:
+            return copy.deepcopy(self._session_states.get(session_id))
+
+    async def save_session_state(self, invocation_id: str, attempt: int, state: JsonValue) -> bool:
+        _validate_invocation_id(invocation_id)
+        async with self._lock:
+            invocation = self.states.get(invocation_id)
+            if (
+                invocation is None
+                or invocation.session_id is None
+                or not self._owns_attempt(invocation, attempt)
+            ):
+                return False
+            self._session_states[invocation.session_id] = copy.deepcopy(state)
+            return True
 
     async def complete(self, invocation_id: str, attempt: int, response: JsonValue) -> bool:
         async with self._lock:

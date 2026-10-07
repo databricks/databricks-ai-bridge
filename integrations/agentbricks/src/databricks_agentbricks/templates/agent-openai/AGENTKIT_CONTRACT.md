@@ -96,14 +96,14 @@ outputs, and interruptions require explicit mappings and must not be discarded t
 
 Runtime Store persistence covers invocations and emitted events. Session Store persistence covers
 the conversation transcript, not in-flight run state. The Agents SDK has no node-level checkpoint
-continuation: OpenAI HITL `RunState` is process-local and does not survive worker loss even with a
-Session Store bound. `dev` uses process-local invocation storage; deployment attaches a
-Lakebase-backed Runtime Store.
+continuation. The template persists paused OpenAI HITL `RunState` through the invocation context's
+private session state before emitting interrupts; writes require active attempt ownership. This
+state survives worker loss with a Lakebase Runtime Store. `dev` uses process-local storage.
 
 Register recovery when intended. The recover hook replays the persisted application input against
-the same session and prepends a developer instruction warning that the prior attempt may have
-partially completed. Recovery is at least once, so side effects must be idempotent and tools must
-tolerate replay.
+the same session (or restores the saved approval continuation) and prepends a developer instruction
+warning that the prior attempt may have partially completed. Recovery is at least once, so side
+effects must be idempotent and tools must tolerate replay.
 
 ## Optional chat app
 

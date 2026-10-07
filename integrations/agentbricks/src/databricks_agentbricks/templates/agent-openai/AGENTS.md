@@ -64,7 +64,8 @@ Agents SDK does not expose checkpoint continuation.
   Store.
 - Conversation transcript: in-process in `agentbricks dev`; managed Session Store when bound, on `agentbricks deploy`.
 - Long-term memory: off in `agentbricks dev`; managed Memory Store when bound, on `agentbricks deploy`.
-- OpenAI HITL `RunState`: process-local even with Session Store; it does not survive worker loss.
+- OpenAI HITL `RunState`: saved in the Runtime Store, independently of Session Store transcripts;
+  survives worker loss when the runtime uses Lakebase, and stays process-local in `agentbricks dev`.
 - Recovery: replay the persisted application input against the same session.
 
 The adapter sends every translated framework event through `context.emit()` before delivery. OpenAI

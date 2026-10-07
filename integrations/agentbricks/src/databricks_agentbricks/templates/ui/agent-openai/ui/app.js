@@ -1152,14 +1152,17 @@ async function sendText(text, mode = state.mode) {
 
 async function resume(decision) {
   if (state.busy) return;
-  if (!state.pendingInterrupt && !state.config?.session.durable) {
+  if (!state.pendingInterrupt) {
     appendError(new Error("No paused run is loaded for the current routing session."));
     return;
   }
-  const payload =
-    decision === "approve"
-      ? { resume: { decisions: [{ type: "approve" }] } }
-      : { resume: { decisions: [{ type: "reject", message: "Rejected from the Agent Bricks demo UI." }] } };
+  const pendingInterrupt = state.pendingInterrupt;
+  const decisions = pendingInterrupt.value.action_requests.map((request) => ({
+    type: decision,
+    call_id: request.call_id,
+    ...(decision === "reject" ? { message: "Rejected from the Agent Bricks demo UI." } : {}),
+  }));
+  const payload = { resume: { decisions } };
   appendMessage("system", decision === "approve" ? "Approved pending tool call." : "Rejected pending tool call.", "Human decision");
   setBusy(true, "Resuming");
   try {
@@ -1167,6 +1170,7 @@ async function resume(decision) {
     // The agent persists the resumed turn to its own Session; refresh the panel (no client write).
     await refreshSessionView();
   } catch (error) {
+    if (!state.pendingInterrupt) handleInterrupt(pendingInterrupt);
     appendError(error);
   } finally {
     setBusy(false);

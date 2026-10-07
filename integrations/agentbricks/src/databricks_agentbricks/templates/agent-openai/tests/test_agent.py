@@ -5,16 +5,17 @@ Databricks auth needed, so they run anywhere. The live test builds the full agen
 model; it is skipped unless a workspace profile is configured.
 """
 
+import json
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 from agent.agent import resume_agent
 from agent.tools import all_tools
 from agents import FunctionTool
-from runtime.adapter import _normalize_item, _serialize_events
+from runtime.adapter import _approval_value, _normalize_item
 
 
 def test_tools_autoregister():
@@ -84,6 +85,7 @@ class _FakeStreamResult:
     def __init__(self, events, interruptions, state):
         self._events, self.interruptions, self._state = events, interruptions, state
         self.final_output = None
+        self.is_complete = True
 
     async def stream_events(self):
         for event in self._events:
@@ -175,51 +177,357 @@ async def test_agent_events_propagate_request_user_mcp_failure(monkeypatch):
             pass
 
 
-@pytest.mark.asyncio
-async def test_serialize_events_relays_interrupt_as_native_event():
+def test_approval_value_preserves_tool_arguments():
     approval = _FakeToolApproval("send_message", '{"recipient": "x", "body": "y"}', "call-1")
-    sentinel_state = object()
-    result = _FakeStreamResult([], [approval], sentinel_state)
+    second = _FakeToolApproval("send_message", "{}", "call-2")
+    assert _approval_value([approval, second]) == {
+        "action_requests": [
+            {"name": "send_message", "args": {"recipient": "x", "body": "y"}, "call_id": "call-1"},
+            {"name": "send_message", "args": {}, "call_id": "call-2"},
+        ]
+    }
 
-    events = [e async for e in _serialize_events(result)]
 
-    assert events == [
-        {
-            "type": "interrupt",
-            "id": "call-1",
-            "value": {
-                "action_requests": [
-                    {"name": "send_message", "args": {"recipient": "x", "body": "y"}}
+@pytest.mark.parametrize(
+    "decisions",
+    [
+        None,
+        [],
+        {},
+        [None],
+        [{"type": "approve"}],
+        [{"type": "invalid", "call_id": "call-1"}],
+        [{"type": "reject", "call_id": "call-1", "message": 5}],
+        [{"type": "approve", "call_id": "stale"}],
+        [{"type": "approve"}, {"type": "approve"}],
+    ],
+)
+def test_resume_agent_invalid_then_valid_does_not_consume_state(decisions):
+    state = MagicMock()
+    item = _FakeToolApproval("send_message", "{}", "call-1")
+    state.get_interruptions.return_value = [item]
+    with pytest.raises(ValueError):
+        resume_agent(state, {"decisions": decisions})
+    state.approve.assert_not_called()
+    state.reject.assert_not_called()
+    assert resume_agent(state, {"decisions": [{"type": "approve", "call_id": "call-1"}]}) is state
+    state.approve.assert_called_once_with(item)
+
+
+def test_resume_agent_validates_all_decisions_before_mutating():
+    state = MagicMock()
+    state.get_interruptions.return_value = [
+        _FakeToolApproval("send_message", "{}", "call-1"),
+        _FakeToolApproval("send_message", "{}", "call-2"),
+    ]
+    with pytest.raises(ValueError):
+        resume_agent(
+            state,
+            {
+                "decisions": [
+                    {"type": "approve", "call_id": "call-1"},
+                    {"type": "invalid", "call_id": "call-2"},
                 ]
             },
-        }
-    ]
+        )
+    state.approve.assert_not_called()
+    state.reject.assert_not_called()
+    resume_agent(
+        state,
+        {
+            "decisions": [
+                {"type": "approve", "call_id": "call-1"},
+                {"type": "reject", "call_id": "call-2", "message": "No"},
+            ]
+        },
+    )
+    state.reject.assert_called_once_with(state.get_interruptions()[1], rejection_message="No")
 
 
-def test_resume_agent_approves_pending_run(monkeypatch):
-    from agent.agent import _pending_runs
+@pytest.fixture
+def approval_run(monkeypatch):
+    import agent.agent as agent_module
+    from agents import Agent, RunConfig, SQLiteSession, function_tool
+    from agents.models.interface import Model
+    from openai.types.responses import (
+        Response,
+        ResponseCompletedEvent,
+        ResponseFunctionToolCall,
+        ResponseOutputMessage,
+        ResponseOutputText,
+    )
 
-    approved = []
+    executed, models = [], []
+    control = SimpleNamespace(model_calls=0, fail_after_tool=False, second_approval=False)
+    store = {"state": None}
+    session = SQLiteSession("approval-test")
 
-    class _State:
-        def get_interruptions(self):
-            return ["item-a"]
+    @function_tool(needs_approval=True)
+    def send_message() -> str:
+        """Send the approved message."""
+        executed.append("sent")
+        return "sent"
 
-        def approve(self, item):
-            approved.append(item)
+    class ApprovalModel(Model):
+        async def get_response(self, *args, **kwargs):
+            raise AssertionError("expected streaming")
 
-        def reject(self, item, rejection_message=None):
-            raise AssertionError("should not reject on approve")
+        async def stream_response(self, instructions, input, *args, **kwargs):
+            control.model_calls += 1
+            outputs = [item for item in input if item.get("type") == "function_call_output"]
+            if not outputs or (control.second_approval and len(outputs) == 1):
+                output = ResponseFunctionToolCall(
+                    id=f"tool-{len(outputs) + 1}",
+                    type="function_call",
+                    call_id=f"call-{len(outputs) + 1}",
+                    name="send_message",
+                    arguments="{}",
+                )
+            else:
+                if control.fail_after_tool:
+                    control.fail_after_tool = False
+                    raise RuntimeError("model failed after tool execution")
+                output = ResponseOutputMessage(
+                    id="message-1",
+                    type="message",
+                    role="assistant",
+                    status="completed",
+                    content=[ResponseOutputText(type="output_text", text="Done", annotations=[])],
+                )
+            response = Response(
+                id="response-1",
+                created_at=0,
+                model="test",
+                object="response",
+                output=[output],
+                parallel_tool_calls=False,
+                tool_choice="auto",
+                tools=[],
+            )
+            yield ResponseCompletedEvent(
+                type="response.completed", response=response, sequence_number=0
+            )
 
-    _pending_runs["sess-2"] = _State()
-    resume_agent("sess-2", {"decisions": [{"type": "approve"}]})
-    assert approved == ["item-a"]
-    assert "sess-2" not in _pending_runs  # popped so it can't be resumed twice
+    def create_agent(actor, mcp, model=None, **kwargs):
+        models.append(model)
+        return Agent(name="Agent", model=ApprovalModel(), tools=[send_message])
+
+    async def save(value):
+        store["state"] = json.loads(json.dumps(value))
+
+    save_state = AsyncMock(side_effect=save)
+    monkeypatch.setattr(agent_module, "create_agent", create_agent)
+    monkeypatch.setattr(agent_module, "build_mcp_servers", lambda: [])
+    monkeypatch.setattr(agent_module, "mcp_servers", AsyncMock(return_value=[]))
+    monkeypatch.setattr(agent_module, "session_store", lambda *_args: session)
+    monkeypatch.setattr(agent_module, "start_trace", lambda **_kwargs: nullcontext(None))
+    run_streamed = agent_module.Runner.run_streamed
+    monkeypatch.setattr(
+        agent_module.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: run_streamed(
+            *args, **kwargs, run_config=RunConfig(tracing_disabled=True)
+        ),
+    )
+
+    async def run(**kwargs):
+        async with agent_module.run_agent(
+            [{"role": "user", "content": "Send a message"}],
+            session_id="approval-test",
+            actor="actor",
+            load_state=AsyncMock(side_effect=lambda: store["state"]),
+            save_state=save_state,
+            **kwargs,
+        ) as result:
+            async for _ in result.stream_events():
+                pass
+        return result
+
+    return SimpleNamespace(
+        run=run,
+        control=control,
+        store=store,
+        executed=executed,
+        models=models,
+        session=session,
+        save_state=save_state,
+    )
 
 
-def test_resume_agent_without_pending_run_raises():
-    with pytest.raises(RuntimeError, match="No paused run"):
-        resume_agent("never-started", {"decisions": [{"type": "approve"}]})
+@pytest.mark.asyncio
+async def test_approval_restores_sdk_state_original_model_and_session(approval_run):
+    run = approval_run
+    await run.run(model="original-model", invocation_id="start")
+    assert run.executed == []
+    replayed = await run.run(invocation_id="start")
+    assert [item.call_id for item in replayed.interruptions] == ["call-1"]
+    assert run.control.model_calls == 1
+    snapshot = json.loads(json.dumps(run.store["state"]))
+    with pytest.raises(ValueError):
+        await run.run(
+            resume={"decisions": [{"type": "invalid", "call_id": "call-1"}]},
+            invocation_id="invalid",
+        )
+    assert run.store["state"] == snapshot
+    result = await run.run(
+        model="changed-model",
+        invocation_id="resume",
+        resume={"decisions": [{"type": "approve", "call_id": "call-1"}]},
+    )
+    assert run.models[-1] == "original-model"
+    assert run.executed == ["sent"]
+    assert result.final_output == "Done"
+    assert run.store["state"]["status"] == "completed"
+    history = await run.session.get_items()
+    assert any(item.get("type") == "function_call_output" for item in history)
+    assert history[-1]["content"][0]["text"] == "Done"
+
+
+@pytest.mark.asyncio
+async def test_approval_storage_failure_happens_before_tool_execution(approval_run):
+    run = approval_run
+    await run.run(model="original-model", invocation_id="start")
+    snapshot = json.loads(json.dumps(run.store["state"]))
+    run.save_state.side_effect = OSError("store unavailable")
+    with pytest.raises(OSError, match="store unavailable"):
+        await run.run(
+            resume={"decisions": [{"type": "approve", "call_id": "call-1"}]}, invocation_id="resume"
+        )
+    assert run.store["state"] == snapshot
+    assert run.executed == []
+
+
+@pytest.mark.asyncio
+async def test_approval_model_failure_continues_without_repeating_tool(approval_run):
+    run = approval_run
+    decisions = {"decisions": [{"type": "approve", "call_id": "call-1"}]}
+    await run.run(model="original-model", invocation_id="start")
+    run.control.fail_after_tool = True
+    with pytest.raises(RuntimeError, match="model failed"):
+        await run.run(resume=decisions, invocation_id="failed-resume")
+    assert run.store["state"]["status"] == "failed"
+    snapshot = json.loads(json.dumps(run.store["state"]))
+    with pytest.raises(ValueError):
+        await run.run(
+            invocation_id="changed-decision",
+            resume={"decisions": [{"type": "reject", "call_id": "call-1"}]},
+        )
+    assert run.store["state"] == snapshot
+    assert run.executed == ["sent"]
+    result = await run.run(resume=decisions, invocation_id="retry")
+    assert result.final_output == "Done"
+    assert run.executed == ["sent"]
+    assert run.store["state"]["status"] == "completed"
+
+
+def _approval_context(run):
+    return SimpleNamespace(
+        session_id="approval-test",
+        invocation_id="start",
+        emit=AsyncMock(),
+        load_session_state=AsyncMock(side_effect=lambda: run.store["state"]),
+        save_session_state=run.save_state,
+    )
+
+
+@pytest.mark.asyncio
+async def test_adapter_recovery_replays_completed_response_without_model_call(approval_run):
+    import runtime.adapter as adapter
+
+    run = approval_run
+    context = _approval_context(run)
+    await adapter.invoke(
+        {
+            "messages": [{"role": "user", "content": "Send a message"}],
+            "actor": "actor",
+            "model": "original-model",
+        },
+        context,
+    )
+    writes = run.save_state.await_count
+    context.invocation_id = "invalid"
+    with pytest.raises(ValueError):
+        await adapter.invoke({"actor": "actor", "resume": {"decisions": []}}, context)
+    assert run.save_state.await_count == writes
+    context.invocation_id = "resume"
+    payload = {
+        "actor": "actor",
+        "resume": {"decisions": [{"type": "approve", "call_id": "call-1"}]},
+    }
+    completed = await adapter.invoke(payload, context)
+    calls, history = run.control.model_calls, await run.session.get_items()
+    recovered = await adapter.recover(payload, context)
+    assert completed["status"] == "completed"
+    assert recovered == completed
+    assert run.control.model_calls == calls
+    assert run.executed == ["sent"]
+    assert await run.session.get_items() == history
+    context.invocation_id = "duplicate"
+    with pytest.raises(RuntimeError):
+        await adapter.invoke(payload, context)
+    assert run.control.model_calls == calls
+
+
+@pytest.mark.asyncio
+async def test_initial_pause_storage_failure_does_not_emit_interrupt(approval_run):
+    import runtime.adapter as adapter
+
+    run, context = approval_run, _approval_context(approval_run)
+    run.save_state.side_effect = OSError("store unavailable")
+    with pytest.raises(OSError, match="store unavailable"):
+        await adapter.invoke(
+            {"messages": [{"role": "user", "content": "Send"}], "actor": "actor"}, context
+        )
+    assert not any(call.args[0]["type"] == "interrupt" for call in context.emit.await_args_list)
+    assert run.executed == []
+
+
+@pytest.mark.asyncio
+async def test_recovered_resume_reemits_next_pause_without_reapplying_old_decision(approval_run):
+    run = approval_run
+    run.control.second_approval = True
+    await run.run(model="original-model", invocation_id="start")
+    decisions = {"decisions": [{"type": "approve", "call_id": "call-1"}]}
+    await run.run(resume=decisions, invocation_id="resume")
+    recovered = await run.run(resume=decisions, invocation_id="resume")
+    assert [item.call_id for item in recovered.interruptions] == ["call-2"]
+    assert run.executed == ["sent"]
+    assert run.control.model_calls == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("completed", [False, True])
+async def test_transport_failure_keeps_uncommitted_continuation_claimed(
+    approval_run, monkeypatch, completed
+):
+    import agent.agent as agent_module
+
+    run = approval_run
+    await run.run(model="original-model", invocation_id="start")
+    active = _FakeStreamResult([], [], None)
+    active.is_complete = completed
+    active.final_output = "Done" if completed else None
+    active.cancel = MagicMock(side_effect=lambda: setattr(active, "is_complete", True))
+    monkeypatch.setattr(agent_module.Runner, "run_streamed", lambda *_args, **_kwargs: active)
+    with pytest.raises(OSError, match="transport lost"):
+        async with agent_module.run_agent(
+            [],
+            session_id="approval-test",
+            actor="actor",
+            load_state=AsyncMock(side_effect=lambda: run.store["state"]),
+            save_state=run.save_state,
+            invocation_id="resume",
+            resume={"decisions": [{"type": "approve", "call_id": "call-1"}]},
+        ):
+            raise OSError("transport lost")
+    assert active.cancel.call_count == (0 if completed else 1)
+    assert run.store["state"]["status"] == "running"
+    assert run.store["state"]["invocation_id"] == "resume"
+    with pytest.raises(RuntimeError):
+        await run.run(
+            invocation_id="duplicate",
+            resume={"decisions": [{"type": "approve", "call_id": "call-1"}]},
+        )
 
 
 def test_configure_raises_clear_error_without_auth(monkeypatch):
@@ -301,22 +609,31 @@ async def test_adapter_recovery_marks_replayed_agent_input(monkeypatch):
 
     monkeypatch.setattr(adapter, "run_agent", fake_run_agent)
     payload = {"session_id": "ignored", "messages": [{"role": "user", "content": "hi"}]}
-    context = SimpleNamespace(session_id="runtime-session", emit=AsyncMock())
+    context = SimpleNamespace(
+        session_id="runtime-session",
+        emit=AsyncMock(),
+        load_session_state=AsyncMock(),
+        save_session_state=AsyncMock(),
+        invocation_id="invocation",
+    )
 
     response = await adapter.invoke(payload, context)
     recovered = await adapter.recover(payload, context)
 
+    kwargs = {
+        "session_id": "runtime-session",
+        "actor": "runtime-session",
+        "model": None,
+        "resume": None,
+        "load_state": context.load_session_state,
+        "save_state": ANY,
+        "invocation_id": context.invocation_id,
+    }
     assert calls == [
+        (payload["messages"], kwargs),
         (
-            payload["messages"],
-            {"session_id": "runtime-session", "actor": "runtime-session", "model": None},
-        ),
-        (
-            [
-                {"role": "developer", "content": adapter._RECOVERY_INSTRUCTION},
-                *payload["messages"],
-            ],
-            {"session_id": "runtime-session", "actor": "runtime-session", "model": None},
+            [{"role": "developer", "content": adapter._RECOVERY_INSTRUCTION}, *payload["messages"]],
+            kwargs,
         ),
     ]
     assert "session_id" not in response

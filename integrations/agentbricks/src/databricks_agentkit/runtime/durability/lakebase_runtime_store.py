@@ -282,6 +282,7 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                         heartbeat_at TIMESTAMPTZ,
                         request JSONB NOT NULL,
                         response JSONB,
+                        session_state JSONB,
                         CHECK (status IN ('QUEUED', 'ACTIVE', 'COMPLETED', 'FAILED'))
                     )
                     """
@@ -292,7 +293,8 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                     f"""
                     ALTER TABLE {self._table}
                     ADD COLUMN IF NOT EXISTS session_id TEXT,
-                    ADD COLUMN IF NOT EXISTS session_sequence_number BIGINT
+                    ADD COLUMN IF NOT EXISTS session_sequence_number BIGINT,
+                    ADD COLUMN IF NOT EXISTS session_state JSONB
                     """
                 )
             )
@@ -527,6 +529,44 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
     async def claim(self, invocation_id: str) -> Invocation | None:
         """Claim a newly queued invocation for its first attempt."""
         return await self._claim(invocation_id, stale_seconds=None)
+
+    async def load_session_state(self, session_id: str) -> JsonValue:
+        _validate_session_id(session_id)
+        async with self._engine.connect() as connection:
+            serialized = (
+                await connection.execute(
+                    text(
+                        f"""
+                        SELECT session_state::TEXT
+                        FROM {self._table}
+                        WHERE session_id=:session_id AND session_state IS NOT NULL
+                        ORDER BY session_sequence_number DESC
+                        LIMIT 1
+                        """
+                    ),
+                    {"session_id": session_id},
+                )
+            ).scalar_one_or_none()
+        return json.loads(serialized) if serialized is not None else None
+
+    async def save_session_state(self, invocation_id: str, attempt: int, state: JsonValue) -> bool:
+        _validate_invocation_id(invocation_id)
+        serialized = _serialize_json_value(state)
+        async with self._engine.begin() as connection:
+            result = await connection.execute(
+                text(
+                    f"""
+                    UPDATE {self._table}
+                    SET session_state=CAST(:state AS JSONB)
+                    WHERE invocation_id=:invocation_id
+                      AND attempt=:attempt
+                      AND status='ACTIVE'
+                      AND session_id IS NOT NULL
+                    """
+                ),
+                {"invocation_id": invocation_id, "attempt": attempt, "state": serialized},
+            )
+        return result.rowcount == 1
 
     async def claim_recoverable(
         self,

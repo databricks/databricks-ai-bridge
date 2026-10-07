@@ -77,20 +77,30 @@ new invocation with the same application session:
   "id": "<new-uuid>",
   "session_id": "<same-session-id>",
   "input": {
-    "resume": {"decisions": [{"type": "approve"}]}
+    "resume": {"decisions": [{"type": "approve", "call_id": "<action-request-call-id>"}]}
   }
 }
 ```
 
-The paused Agents SDK `RunState` is process-local. A managed Session Store preserves transcript
-history, but not a pending approval across restarts or replicas.
+Supply one decision per `action_requests` entry, in order, using its `call_id`. A decision's `type`
+must be `approve` or `reject`; rejections may include a string `message`.
+
+The runtime saves paused `RunState` separately from transcript history, before emitting the approval
+prompt. With a Lakebase Runtime Store, it survives restarts and replica changes. Invalid decisions
+leave the pause intact; a valid continuation claims it for its invocation ID. Reuse that ID to check
+or recover an accepted continuation. If the continuation fails, retry with the same decisions in a
+new invocation; completed tool outputs in the saved state are retained.
+If storage fails after approval was accepted, check the invocation and tool side effects before
+retrying; the runtime cannot safely reopen a continuation without its latest state.
+`agentbricks dev` and direct `run_agent` calls without storage callbacks keep pauses process-local.
 
 ## Crash recovery
 
 `runtime/main.py` always registers the adapter's `invoke` and `recover` hooks. Both call the same
 `agent.agent.run_agent` function. OpenAI Agents SDK does not currently expose LangGraph-style node
-checkpoints, so `recover` replays the original application input against the same session. The
-adapter prepends a developer instruction telling the agent that this is a recovery attempt and that
+checkpoints. Approval continuations restore the saved state; for other invocations, `recover`
+replays the original application input against the same session. The adapter prepends a developer
+instruction telling the agent that this is a recovery attempt and that
 some tool calls or external side effects may already have completed or may still be in progress.
 When deployment attaches a Runtime Store, invocation state and emitted events survive process loss
 and the runtime can call `recover` on a replacement worker. Without a Runtime Store, invocation state
