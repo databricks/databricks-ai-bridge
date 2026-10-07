@@ -4,32 +4,40 @@ These tests exercise the actual scoring formula, scorer dispatch, latency
 gate, cost estimation, warn-once paths, and the scorer-success ratchet --
 behaviors that the optimize_prompts_and_models tests mock out.
 """
-import warnings
 
 import pytest
 
 from databricks_agentkit.model_upgrades.optimization import (
-    _AgentAdapter,
     _DBU_TO_USD,
-    _EndpointTarget,
-    _PromptTarget,
     _SCORER_WARNINGS_SEEN,
-    _State,
+    _AgentAdapter,
     _convert_to_numeric,
+    _EndpointTarget,
     _estimate_cost_usd,
     _make_bandit_proposer,
     _mlflow_model_cost,
     _read_span_model,
     _run_scorers,
+    _State,
     _ucb1_select,
     _warn_once,
     optimize_prompts_and_models,
 )
 
 
-def _state(*, predict_fn=None, scorers=(), endpoint_targets=(), prompt_targets=(),
-           weight_quality=0.7, weight_latency=0.2, weight_cost=0.1,
-           latency_hard_gate=60.0, cost_soft_gate=0.02, token_costs=None):
+def _state(
+    *,
+    predict_fn=None,
+    scorers=(),
+    endpoint_targets=(),
+    prompt_targets=(),
+    weight_quality=0.7,
+    weight_latency=0.2,
+    weight_cost=0.1,
+    latency_hard_gate=60.0,
+    cost_soft_gate=0.02,
+    token_costs=None,
+):
     return _State(
         predict_fn=predict_fn or (lambda x: "ok"),
         prompt_targets=list(prompt_targets),
@@ -55,6 +63,7 @@ def _clear_warning_dedup():
 # _run_scorers matrix
 # ---------------------------------------------------------------------------
 
+
 def test_run_scorers_numeric_callable_averages():
     s1 = lambda inputs, expected, answer: 0.6
     s2 = lambda inputs, expected, answer: 0.8
@@ -67,6 +76,7 @@ def test_run_scorers_numeric_callable_averages():
 def test_run_scorers_raising_callable_warns_and_skips(recwarn):
     def bad(inputs, expected, answer):
         raise TypeError("boom")
+
     s_ok = lambda inputs, expected, answer: 1.0
     state = _state(scorers=[bad, s_ok])
 
@@ -80,6 +90,7 @@ def test_run_scorers_raising_callable_warns_and_skips(recwarn):
 def test_run_scorers_all_fail_returns_zero_and_does_not_increment_succeeded(recwarn):
     def bad(inputs, expected, answer):
         raise RuntimeError("nope")
+
     state = _state(scorers=[bad])
     assert _run_scorers([bad], {}, "x", "y", state=state) == 0.0
     assert state.scorer_attempted == 1
@@ -88,6 +99,7 @@ def test_run_scorers_all_fail_returns_zero_and_does_not_increment_succeeded(recw
 
 def test_run_scorers_categorical_rating_yes_no_coerced():
     from mlflow.genai.judges import CategoricalRating
+
     yes = lambda inputs, expected, answer: CategoricalRating.YES
     no = lambda inputs, expected, answer: CategoricalRating.NO
     state = _state(scorers=[yes, no])
@@ -96,6 +108,7 @@ def test_run_scorers_categorical_rating_yes_no_coerced():
 
 def test_run_scorers_feedback_value_unwrapped():
     from mlflow.entities import Feedback
+
     fb = lambda inputs, expected, answer: Feedback(name="s", value=0.42)
     state = _state(scorers=[fb])
     assert _run_scorers([fb], {}, "x", "y", state=state) == pytest.approx(0.42)
@@ -132,7 +145,9 @@ def test_run_scorers_passes_trace_to_mlflow_scorer(mocker):
     sentinel_trace = object()
     score = _run_scorers(
         [FakeScorer()],
-        inputs={"q": "?"}, expectations={"expected_response": "a"}, answer="answer",
+        inputs={"q": "?"},
+        expectations={"expected_response": "a"},
+        answer="answer",
         trace=sentinel_trace,
     )
     assert score == pytest.approx(0.9)
@@ -161,7 +176,9 @@ def test_run_scorers_trace_defaults_to_none_for_mlflow_scorer():
 
     _run_scorers(
         [FakeScorer()],
-        inputs={}, expectations={}, answer="a",
+        inputs={},
+        expectations={},
+        answer="a",
     )
     assert "trace" in captured
     assert captured["trace"] is None
@@ -178,6 +195,7 @@ def test_warn_once_dedupes_within_process(recwarn):
 def test_convert_to_numeric_handles_all_types():
     from mlflow.entities import Feedback
     from mlflow.genai.judges import CategoricalRating
+
     assert _convert_to_numeric(0.5) == 0.5
     assert _convert_to_numeric(1) == 1.0
     assert _convert_to_numeric(True) == 1.0
@@ -192,6 +210,7 @@ def test_convert_to_numeric_handles_all_types():
 # _estimate_cost_usd
 # ---------------------------------------------------------------------------
 
+
 def test_estimate_cost_no_endpoints_is_zero():
     assert _estimate_cost_usd({}, [], {"input": 100, "output": 50}, {}) == 0.0
 
@@ -200,7 +219,8 @@ def test_estimate_cost_real_tokens_uses_per_model_rates():
     et = _EndpointTarget(name="ep1", candidate_models=["m1"], initial_model="m1")
     token_costs = {"m1": {"input": 1000.0, "output": 2000.0}}
     cost = _estimate_cost_usd(
-        {"model:ep1": "m1"}, [et],
+        {"model:ep1": "m1"},
+        [et],
         {"input": 1_000_000, "output": 1_000_000},
         token_costs,
     )
@@ -224,7 +244,10 @@ def test_estimate_cost_zero_input_only_still_uses_real_tokens():
     token_costs = {"m1": {"input": 1.0, "output": 1.0}}
     # input=0, output=200
     cost_real = _estimate_cost_usd(
-        {"model:ep1": "m1"}, [et], {"input": 0, "output": 200}, token_costs,
+        {"model:ep1": "m1"},
+        [et],
+        {"input": 0, "output": 200},
+        token_costs,
     )
     cost_fallback = _estimate_cost_usd({"model:ep1": "m1"}, [et], {}, token_costs)
     assert cost_real != cost_fallback
@@ -234,11 +257,14 @@ def test_estimate_cost_zero_input_only_still_uses_real_tokens():
 
 def test_estimate_cost_uses_mlflow_pricing_when_no_override():
     """No token_costs override -> price via MLflow (stubbed 1e-6 in / 3e-6 out)."""
-    et = _EndpointTarget(name="ep1", candidate_models=["databricks-x"],
-                         initial_model="databricks-x")
+    et = _EndpointTarget(
+        name="ep1", candidate_models=["databricks-x"], initial_model="databricks-x"
+    )
     cost = _estimate_cost_usd(
-        {"model:ep1": "databricks-x"}, [et],
-        {"input": 1000, "output": 500}, {},
+        {"model:ep1": "databricks-x"},
+        [et],
+        {"input": 1000, "output": 500},
+        {},
     )
     # stub: 1000 * 1e-6 + 500 * 3e-6 = 0.001 + 0.0015 = 0.0025
     assert cost == pytest.approx(0.0025)
@@ -246,12 +272,15 @@ def test_estimate_cost_uses_mlflow_pricing_when_no_override():
 
 def test_estimate_cost_override_beats_mlflow():
     """An explicit token_costs entry takes priority over MLflow pricing."""
-    et = _EndpointTarget(name="ep1", candidate_models=["databricks-x"],
-                         initial_model="databricks-x")
+    et = _EndpointTarget(
+        name="ep1", candidate_models=["databricks-x"], initial_model="databricks-x"
+    )
     token_costs = {"databricks-x": {"input": 0.0, "output": 0.0}}  # forced free
     cost = _estimate_cost_usd(
-        {"model:ep1": "databricks-x"}, [et],
-        {"input": 1000, "output": 500}, token_costs,
+        {"model:ep1": "databricks-x"},
+        [et],
+        {"input": 1000, "output": 500},
+        token_costs,
     )
     assert cost == 0.0
 
@@ -261,7 +290,10 @@ def test_estimate_cost_falls_back_when_mlflow_cannot_price():
     override -> fallback rate, not a crash."""
     et = _EndpointTarget(name="ep1", candidate_models=["mystery"], initial_model="mystery")
     cost = _estimate_cost_usd(
-        {"model:ep1": "mystery"}, [et], {"input": 1_000_000, "output": 0}, {},
+        {"model:ep1": "mystery"},
+        [et],
+        {"input": 1_000_000, "output": 0},
+        {},
     )
     # fallback input rate 10 DBU/1M: 1M * 10/1M * 0.07 = 0.7
     assert cost == pytest.approx(1_000_000 * 10.0 / 1_000_000 * _DBU_TO_USD)
@@ -297,29 +329,46 @@ def test_mlflow_model_cost_strips_date_snapshot_suffix():
 # _estimate_cost_usd -- per-call (resolved-model) path
 # ---------------------------------------------------------------------------
 
+
 def test_estimate_cost_prices_per_llm_call_by_resolved_model():
     """With per-call trace data, price each call by its resolved model via MLflow
     (stub: 1e-6 in / 3e-6 out for priceable names), independent of endpoint count."""
-    et = _EndpointTarget(name="ep1", candidate_models=["databricks-gpt-5-4-mini"],
-                         initial_model="databricks-gpt-5-4-mini")
+    et = _EndpointTarget(
+        name="ep1",
+        candidate_models=["databricks-gpt-5-4-mini"],
+        initial_model="databricks-gpt-5-4-mini",
+    )
     llm_calls = [
         {"model": "gpt-5.4-mini-2026-03-17", "input": 1000, "output": 500},
         {"model": "gpt-5.4-nano-2026-03-17", "input": 200, "output": 100},
     ]
-    cost = _estimate_cost_usd({"model:ep1": "databricks-gpt-5-4-mini"}, [et],
-                              {"input": 1300, "output": 600}, {}, llm_calls=llm_calls)
+    cost = _estimate_cost_usd(
+        {"model:ep1": "databricks-gpt-5-4-mini"},
+        [et],
+        {"input": 1300, "output": 600},
+        {},
+        llm_calls=llm_calls,
+    )
     # call1: 1000*1e-6 + 500*3e-6 = 0.0025 ; call2: 200*1e-6 + 100*3e-6 = 0.0005
     assert cost == pytest.approx(0.0030)
 
 
 def test_estimate_cost_per_call_override_by_resolved_name():
     """A token_costs override keyed by the resolved model name wins over MLflow."""
-    et = _EndpointTarget(name="ep1", candidate_models=["databricks-gpt-5-4-mini"],
-                         initial_model="databricks-gpt-5-4-mini")
+    et = _EndpointTarget(
+        name="ep1",
+        candidate_models=["databricks-gpt-5-4-mini"],
+        initial_model="databricks-gpt-5-4-mini",
+    )
     llm_calls = [{"model": "gpt-5.4-mini-2026-03-17", "input": 1000, "output": 500}]
     token_costs = {"gpt-5.4-mini-2026-03-17": {"input": 0.0, "output": 0.0}}
-    cost = _estimate_cost_usd({"model:ep1": "databricks-gpt-5-4-mini"}, [et],
-                              {"input": 1000, "output": 500}, token_costs, llm_calls=llm_calls)
+    cost = _estimate_cost_usd(
+        {"model:ep1": "databricks-gpt-5-4-mini"},
+        [et],
+        {"input": 1000, "output": 500},
+        token_costs,
+        llm_calls=llm_calls,
+    )
     assert cost == 0.0
 
 
@@ -328,8 +377,9 @@ def test_estimate_cost_per_call_falls_back_and_warns(recwarn):
     and warns once, rather than raising."""
     et = _EndpointTarget(name="ep1", candidate_models=["mystery"], initial_model="mystery")
     llm_calls = [{"model": "mystery-model", "input": 1_000_000, "output": 0}]
-    cost = _estimate_cost_usd({"model:ep1": "mystery"}, [et],
-                              {"input": 1_000_000, "output": 0}, {}, llm_calls=llm_calls)
+    cost = _estimate_cost_usd(
+        {"model:ep1": "mystery"}, [et], {"input": 1_000_000, "output": 0}, {}, llm_calls=llm_calls
+    )
     assert cost == pytest.approx(1_000_000 * 10.0 / 1_000_000 * _DBU_TO_USD)
     assert any("unpriced_model" in str(w.message) for w in recwarn.list)
 
@@ -337,8 +387,12 @@ def test_estimate_cost_per_call_falls_back_and_warns(recwarn):
 def test_estimate_cost_per_call_ignores_endpoint_count():
     """Per-call pricing must NOT divide by number of endpoints (that's the fallback
     path's behavior). Two endpoints, one real call -> priced once, in full."""
-    e1 = _EndpointTarget(name="ep1", candidate_models=["databricks-x"], initial_model="databricks-x")
-    e2 = _EndpointTarget(name="ep2", candidate_models=["databricks-y"], initial_model="databricks-y")
+    e1 = _EndpointTarget(
+        name="ep1", candidate_models=["databricks-x"], initial_model="databricks-x"
+    )
+    e2 = _EndpointTarget(
+        name="ep2", candidate_models=["databricks-y"], initial_model="databricks-y"
+    )
     llm_calls = [{"model": "gpt-5.4-mini", "input": 1000, "output": 0}]
     cost = _estimate_cost_usd({}, [e1, e2], {"input": 1000, "output": 0}, {}, llm_calls=llm_calls)
     # single call priced in full: 1000 * 1e-6 = 0.001 (no /2 split)
@@ -349,10 +403,12 @@ def test_estimate_cost_per_call_ignores_endpoint_count():
 # _read_span_model
 # ---------------------------------------------------------------------------
 
+
 class _FakeSpan:
     def __init__(self, outputs=None, attrs=None):
         self.outputs = outputs
         self._attrs = attrs or {}
+
     def get_attribute(self, key):
         return self._attrs.get(key)
 
@@ -384,12 +440,13 @@ def test_read_span_model_none_when_absent():
 # _AgentAdapter._run_one composite-score formula
 # ---------------------------------------------------------------------------
 
+
 def test_run_one_composite_score(mocker):
     """Verify quality * 0.7 + latency * 0.2 + cost * 0.1 with mocked trace + scorers."""
     et = _EndpointTarget(name="ep1", candidate_models=["m1"], initial_model="m1")
     state = _state(
         predict_fn=lambda x: "answer",
-        scorers=[lambda inputs, expected, answer: 1.0],   # quality = 1.0
+        scorers=[lambda inputs, expected, answer: 1.0],  # quality = 1.0
         endpoint_targets=[et],
         token_costs={"m1": {"input": 0.0, "output": 0.0}},  # cost = 0 USD
         latency_hard_gate=10.0,
@@ -401,7 +458,9 @@ def test_run_one_composite_score(mocker):
 
     adapter = _AgentAdapter(state)
     score, obj, answer, _, _ = adapter._run_one(
-        {"model:ep1": "m1"}, inputs={}, expectations={"expected_response": "answer"},
+        {"model:ep1": "m1"},
+        inputs={},
+        expectations={"expected_response": "answer"},
     )
     # quality=1.0 (perfect scorer)
     # latency very small -> lat_score ~= 1.0
@@ -437,7 +496,9 @@ def test_run_one_latency_hard_gate(mocker):
 
     adapter = _AgentAdapter(state)
     score, obj, _, feedback, _ = adapter._run_one(
-        {"model:ep1": "m1"}, inputs={}, expectations={"expected_response": "ok"},
+        {"model:ep1": "m1"},
+        inputs={},
+        expectations={"expected_response": "ok"},
     )
     assert score == 0.0
     assert obj == {"quality": 0.0, "latency": 0.0, "cost": 0.0}
@@ -452,6 +513,7 @@ def test_run_one_predict_failure_yields_error_string(mocker):
         raise ValueError("agent broke")
 
     seen = []
+
     def scorer(inputs, expected, answer):
         seen.append(answer)
         return 0.0
@@ -468,7 +530,9 @@ def test_run_one_predict_failure_yields_error_string(mocker):
     )
 
     adapter = _AgentAdapter(state)
-    _, _, answer, _, _ = adapter._run_one({"model:ep1": "m1"}, inputs={}, expectations={"expected_response": "x"})
+    _, _, answer, _, _ = adapter._run_one(
+        {"model:ep1": "m1"}, inputs={}, expectations={"expected_response": "x"}
+    )
     assert answer.startswith("ERROR:")
     assert "agent broke" in answer
     assert seen == [answer]
@@ -502,7 +566,9 @@ def test_run_one_no_warn_when_weight_cost_zero(mocker, recwarn):
         predict_fn=lambda x: "ok",
         scorers=[lambda inputs, expected, answer: 1.0],
         endpoint_targets=[et],
-        weight_quality=0.8, weight_latency=0.2, weight_cost=0.0,
+        weight_quality=0.8,
+        weight_latency=0.2,
+        weight_cost=0.0,
         token_costs={"m1": {"input": 0.0, "output": 0.0}},
     )
     mocker.patch(
@@ -521,11 +587,14 @@ def test_run_one_no_warn_when_weight_cost_zero(mocker, recwarn):
 # Scorer-success ratchet (raises if <10% of evals produced a numeric score)
 # ---------------------------------------------------------------------------
 
+
 def test_optimize_raises_when_scorer_success_under_10pct(mocker, recwarn):
     """If almost every scorer call fails, the optimize call should surface
     the issue at the end rather than silently reporting delta=0."""
     pv = mocker.Mock(template="answer the {{question}}", version=3)
-    mocker.patch("databricks_agentkit.model_upgrades.optimization.mlflow.genai.load_prompt", return_value=pv)
+    mocker.patch(
+        "databricks_agentkit.model_upgrades.optimization.mlflow.genai.load_prompt", return_value=pv
+    )
     mocker.patch(
         "databricks_agentkit.model_upgrades.optimization.model_services.get_model",
         return_value="system.ai.m1",
@@ -548,7 +617,9 @@ def test_optimize_raises_when_scorer_success_under_10pct(mocker, recwarn):
             best_idx=1,
         )
 
-    mocker.patch("databricks_agentkit.model_upgrades.optimization.gepa.optimize", side_effect=fake_optimize)
+    mocker.patch(
+        "databricks_agentkit.model_upgrades.optimization.gepa.optimize", side_effect=fake_optimize
+    )
 
     def always_fails(inputs, expected, answer):
         raise RuntimeError("scorer broken")
@@ -568,6 +639,7 @@ def test_optimize_raises_when_scorer_success_under_10pct(mocker, recwarn):
 # ---------------------------------------------------------------------------
 # UCB1 bandit model selection
 # ---------------------------------------------------------------------------
+
 
 def test_ucb1_cold_start_pulls_untried_arm_first():
     """Any candidate with no observations is pulled before exploiting."""
@@ -604,9 +676,13 @@ def _bandit_state(endpoint_targets):
         prompt_targets=[],
         endpoint_targets=list(endpoint_targets),
         scorers=[],
-        weight_quality=0.7, weight_latency=0.2, weight_cost=0.1,
-        latency_hard_gate=60.0, cost_soft_gate=0.02,
-        reflection_model="reflection", token_costs={},
+        weight_quality=0.7,
+        weight_latency=0.2,
+        weight_cost=0.1,
+        latency_hard_gate=60.0,
+        cost_soft_gate=0.02,
+        reflection_model="reflection",
+        token_costs={},
         model_selection="bandit",
     )
 
@@ -636,7 +712,9 @@ def test_bandit_proposer_delegates_prompt_to_reflection_lm(mocker):
         return_value=lambda p: "unused",
     )
     adapter = _AgentAdapter(_bandit_state([]))
-    proposer = _make_bandit_proposer(adapter, templates={"prompt:foo": "T <curr_param> <side_info>"})
+    proposer = _make_bandit_proposer(
+        adapter, templates={"prompt:foo": "T <curr_param> <side_info>"}
+    )
 
     reflective = {"prompt:foo": [{"Score": "0.5"}]}
     out = proposer({"prompt:foo": "old prompt"}, reflective, ["prompt:foo"])
@@ -672,7 +750,9 @@ def test_bandit_proposer_coupled_dispatch_model_and_prompt_together(mocker):
     et = _EndpointTarget(name="ep1", candidate_models=["m_a", "m_b"], initial_model="m_a")
     adapter = _AgentAdapter(_bandit_state([et]))
     adapter._model_history["ep1"]["m_a"].extend([0.9, 0.9])  # m_b untried -> picked
-    proposer = _make_bandit_proposer(adapter, templates={"prompt:foo": "T <curr_param> <side_info>"})
+    proposer = _make_bandit_proposer(
+        adapter, templates={"prompt:foo": "T <curr_param> <side_info>"}
+    )
 
     out = proposer(
         {"prompt:foo": "old", "model:ep1": "m_a"},
@@ -696,6 +776,8 @@ def test_bandit_proposer_independent_per_endpoint(mocker):
     proposer = _make_bandit_proposer(adapter, templates={})
 
     out = proposer(
-        {"model:ep1": "a1", "model:ep2": "a2"}, {}, ["model:ep1", "model:ep2"],
+        {"model:ep1": "a1", "model:ep2": "a2"},
+        {},
+        ["model:ep1", "model:ep2"],
     )
     assert out == {"model:ep1": "a1", "model:ep2": "b2"}

@@ -17,14 +17,13 @@ Migrated from the Smart Model Upgrades prototype (databricks-field-eng/smart-mod
 
 import json
 import math
-import os
 import re
 import time
 import warnings
 from collections import Counter, defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, List, Optional
 
 import gepa
 import mlflow
@@ -53,6 +52,7 @@ def _client():
 def _set_endpoint_model(name, model):
     """Repoint model service `name` to `system.ai.<model>`."""
     model_services.set_model(_client(), name, _resolve_system_ai_name(model))
+
 
 warnings.filterwarnings("ignore", message="Pydantic serializer warnings")
 
@@ -83,7 +83,7 @@ def _parse_prompt_uri(uri):
     """
     if not uri.startswith("prompts:/"):
         raise ValueError(f"Invalid prompt URI {uri!r} (must start with 'prompts:/')")
-    rest = uri[len("prompts:/"):]
+    rest = uri[len("prompts:/") :]
     if "@" in rest:
         name, alias = rest.rsplit("@", 1)
         version = None
@@ -110,6 +110,7 @@ def _extract_required_vars(template):
 # ---------------------------------------------------------------------------
 # Internal state
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class _PromptTarget:
@@ -153,13 +154,18 @@ class _State:
     scorer_succeeded: int = 0
 
 
-def _prompt_key(pt): return f"prompt:{pt.short_name}"
-def _model_key(et):  return f"model:{et.name}"
+def _prompt_key(pt):
+    return f"prompt:{pt.short_name}"
+
+
+def _model_key(et):
+    return f"model:{et.name}"
 
 
 # ---------------------------------------------------------------------------
 # Public Result
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class Result:
@@ -180,6 +186,7 @@ class Result:
         endpoint_targets: resolved endpoint metadata used by `promote_to_prod`.
         gepa_result: raw `gepa.GEPAResult` (advanced/debug use, non-picklable).
     """
+
     best_candidate: dict
     best_score: float
     baseline_score: float
@@ -193,6 +200,7 @@ class Result:
 # ---------------------------------------------------------------------------
 # State construction
 # ---------------------------------------------------------------------------
+
 
 def _build_prompt_target(uri):
     name, alias, version, short = _parse_prompt_uri(uri)
@@ -223,10 +231,20 @@ def _build_endpoint_target(name, candidate_models):
     )
 
 
-def _build_state(predict_fn, prompt_uris, gateway_endpoints, scorers,
-                 weight_quality, weight_latency, weight_cost,
-                 latency_hard_gate, cost_soft_gate, reflection_model,
-                 token_costs, model_selection="bandit"):
+def _build_state(
+    predict_fn,
+    prompt_uris,
+    gateway_endpoints,
+    scorers,
+    weight_quality,
+    weight_latency,
+    weight_cost,
+    latency_hard_gate,
+    cost_soft_gate,
+    reflection_model,
+    token_costs,
+    model_selection="bandit",
+):
     if not prompt_uris and not gateway_endpoints:
         raise ValueError("Pass at least one of prompt_uris or gateway_endpoints")
 
@@ -241,9 +259,11 @@ def _build_state(predict_fn, prompt_uris, gateway_endpoints, scorers,
             f"weights must sum to 1.0 (got quality={weight_quality} + "
             f"latency={weight_latency} + cost={weight_cost} = {weight_sum})"
         )
-    for name, w in (("weight_quality", weight_quality),
-                    ("weight_latency", weight_latency),
-                    ("weight_cost", weight_cost)):
+    for name, w in (
+        ("weight_quality", weight_quality),
+        ("weight_latency", weight_latency),
+        ("weight_cost", weight_cost),
+    ):
         if w < 0:
             raise ValueError(f"{name} must be >= 0 (got {w})")
 
@@ -256,8 +276,7 @@ def _build_state(predict_fn, prompt_uris, gateway_endpoints, scorers,
 
     prompt_targets = [_build_prompt_target(u) for u in prompt_uris]
     endpoint_targets = [
-        _build_endpoint_target(name, candidates)
-        for name, candidates in gateway_endpoints.items()
+        _build_endpoint_target(name, candidates) for name, candidates in gateway_endpoints.items()
     ]
 
     # No pre-flight cost-data check: cost is priced at runtime by the *resolved*
@@ -333,6 +352,7 @@ def _preflight(state, seed, train_data, val_data):
 # Exp endpoint lifecycle (internal)
 # ---------------------------------------------------------------------------
 
+
 def _ensure_exp_endpoints(state):
     for et in state.endpoint_targets:
         try:
@@ -356,11 +376,14 @@ def _cleanup_exp_endpoints(state):
             model_services.delete(_client(), et.exp_name)
             print(f"  {et.exp_name}: deleted")
         except Exception as e:
-            print(f"  {et.exp_name}: delete failed ({type(e).__name__}: {e}) -- "
-                  f"clean up manually with `{model_services.delete_command(et.exp_name)}`")
+            print(
+                f"  {et.exp_name}: delete failed ({type(e).__name__}: {e}) -- "
+                f"clean up manually with `{model_services.delete_command(et.exp_name)}`"
+            )
 
 
 _model_info_cache = {}
+
 
 def _resolve_model_info(fmapi_endpoint):
     """Return {name, display_name, description} for an FMAPI endpoint. Cached.
@@ -428,6 +451,7 @@ def _sync_destinations(candidate, state, *, use_exp):
 # Patched prompts (internal)
 # ---------------------------------------------------------------------------
 
+
 @contextmanager
 def _patched_prompts(candidate, prompt_targets):
     """Inject GEPA candidate prompts by patching `PromptVersion.template`.
@@ -466,12 +490,11 @@ def _patched_prompts(candidate, prompt_targets):
     two optimizations in the same kernel don't cross-contaminate.
     """
     from mlflow.entities.model_registry.prompt_version import PromptVersion
+
     original = PromptVersion.template
     original_getter = original.fget
     overrides = {
-        pt.name: candidate[_prompt_key(pt)]
-        for pt in prompt_targets
-        if _prompt_key(pt) in candidate
+        pt.name: candidate[_prompt_key(pt)] for pt in prompt_targets if _prompt_key(pt) in candidate
     }
 
     @property
@@ -491,6 +514,7 @@ def _patched_prompts(candidate, prompt_targets):
 # Transparent endpoint routing (internal)
 # ---------------------------------------------------------------------------
 
+
 def _patch_create(import_path, cls_name, is_async, rewrites):
     """Monkeypatch `<cls>.create` to rewrite `model=<endpoint>` to `<endpoint>-exp`.
 
@@ -499,6 +523,7 @@ def _patch_create(import_path, cls_name, is_async, rewrites):
     Responses API).
     """
     import importlib
+
     try:
         module = importlib.import_module(import_path)
         cls = getattr(module, cls_name)
@@ -507,12 +532,14 @@ def _patch_create(import_path, cls_name, is_async, rewrites):
     original = cls.create
 
     if is_async:
+
         async def patched(self, *args, **kwargs):
             model = kwargs.get("model")
             if model in rewrites:
                 kwargs["model"] = rewrites[model]
             return await original(self, *args, **kwargs)
     else:
+
         def patched(self, *args, **kwargs):
             model = kwargs.get("model")
             if model in rewrites:
@@ -548,7 +575,8 @@ def _patched_endpoints(endpoint_targets):
         ("openai.resources.responses", "AsyncResponses", True),
     ]
     patches = [
-        p for (path, cls_name, is_async) in targets
+        p
+        for (path, cls_name, is_async) in targets
         if (p := _patch_create(path, cls_name, is_async, rewrites)) is not None
     ]
 
@@ -661,22 +689,26 @@ def _extract_trace_summary():
             if in_t or out_t:
                 # An LLM call: record its resolved model + tokens so cost can be
                 # priced per-call rather than from the trace total.
-                llm_calls.append({
-                    "model": _read_span_model(span),
-                    "input": in_t,
-                    "output": out_t,
-                })
+                llm_calls.append(
+                    {
+                        "model": _read_span_model(span),
+                        "input": in_t,
+                        "output": out_t,
+                    }
+                )
             dur = 0.0
             if hasattr(span, "end_time_ns") and hasattr(span, "start_time_ns"):
                 if span.end_time_ns and span.start_time_ns:
                     dur = (span.end_time_ns - span.start_time_ns) / 1e9
-            spans.append({
-                "name": span.name or "",
-                "type": span.span_type,
-                "duration_s": round(dur, 2),
-                "input": str(span.inputs or "")[:300],
-                "output": str(span.outputs or "")[:500],
-            })
+            spans.append(
+                {
+                    "name": span.name or "",
+                    "type": span.span_type,
+                    "duration_s": round(dur, 2),
+                    "input": str(span.inputs or "")[:300],
+                    "output": str(span.outputs or "")[:500],
+                }
+            )
         return {
             "total_tokens": {"input": total_in, "output": total_out},
             "llm_calls": llm_calls,
@@ -689,6 +721,7 @@ def _extract_trace_summary():
 # ---------------------------------------------------------------------------
 # Scoring (internal)
 # ---------------------------------------------------------------------------
+
 
 def _convert_to_numeric(score):
     if isinstance(score, Feedback):
@@ -739,6 +772,7 @@ def _run_scorers(scorers, inputs, expectations, answer, *, trace=None, state=Non
     so optimize_prompts_and_models can ratchet on a low success rate.
     """
     from mlflow.genai.scorers.base import Scorer as MlflowScorer
+
     numeric = []
     if scorers and state is not None:
         state.scorer_attempted += 1
@@ -824,8 +858,7 @@ def _rate_cost_usd(in_tokens, out_tokens, rate):
     return dbu * _DBU_TO_USD
 
 
-def _estimate_cost_usd(candidate, endpoint_targets, total_tokens, token_costs,
-                       llm_calls=None):
+def _estimate_cost_usd(candidate, endpoint_targets, total_tokens, token_costs, llm_calls=None):
     """Rough $-per-call estimate in USD.
 
     Preferred path (`llm_calls` from the trace): price each LLM call by its
@@ -865,7 +898,8 @@ def _estimate_cost_usd(candidate, endpoint_targets, total_tokens, token_costs,
                 total += mlflow_cost
                 continue
             _warn_once(
-                "cost", "unpriced_model",
+                "cost",
+                "unpriced_model",
                 f"could not price model {model!r} via token_costs or MLflow's "
                 f"catalog; using the fallback rate. Pass "
                 f"token_costs={{{model!r}: {{'input': <DBU/1M>, 'output': <DBU/1M>}}}} "
@@ -900,6 +934,7 @@ def _estimate_cost_usd(candidate, endpoint_targets, total_tokens, token_costs,
 # ---------------------------------------------------------------------------
 # Adapter (internal)
 # ---------------------------------------------------------------------------
+
 
 def _format_full_trace(spans):
     if not spans:
@@ -943,34 +978,49 @@ class _AgentAdapter(gepa.GEPAAdapter):
         trace = _extract_trace_summary()
 
         if latency > state.latency_hard_gate:
-            return 0.0, {"quality": 0.0, "latency": 0.0, "cost": 0.0}, answer, \
-                   f"REJECTED: latency {latency:.1f}s", trace
+            return (
+                0.0,
+                {"quality": 0.0, "latency": 0.0, "cost": 0.0},
+                answer,
+                f"REJECTED: latency {latency:.1f}s",
+                trace,
+            )
 
         quality = _run_scorers(
-            state.scorers, inputs, expectations, answer,
-            trace=mlflow_trace, state=state,
+            state.scorers,
+            inputs,
+            expectations,
+            answer,
+            trace=mlflow_trace,
+            state=state,
         )
         lat_score = max(0.0, 1.0 - latency / state.latency_hard_gate)
 
         total_in = trace.get("total_tokens", {}).get("input") or 0
         if state.weight_cost > 0 and not total_in:
             _warn_once(
-                "tracing", "no_token_usage",
+                "tracing",
+                "no_token_usage",
                 "no token usage in active trace; cost component is using a "
                 "500/200-token fallback x per-model rates, which means cost "
                 "score depends only on model choice. Enable "
                 "`mlflow.<framework>.autolog()` at agent import, or pass "
                 "`weight_cost=0` to disable the cost component.",
             )
-        cost_usd = _estimate_cost_usd(candidate, state.endpoint_targets,
-                                      trace.get("total_tokens", {}),
-                                      state.token_costs,
-                                      llm_calls=trace.get("llm_calls"))
+        cost_usd = _estimate_cost_usd(
+            candidate,
+            state.endpoint_targets,
+            trace.get("total_tokens", {}),
+            state.token_costs,
+            llm_calls=trace.get("llm_calls"),
+        )
         cost_score = max(0.0, 1.0 - cost_usd / state.cost_soft_gate)
 
-        score = (state.weight_quality * quality
-                 + state.weight_latency * lat_score
-                 + state.weight_cost * cost_score)
+        score = (
+            state.weight_quality * quality
+            + state.weight_latency * lat_score
+            + state.weight_cost * cost_score
+        )
         objectives = {"quality": quality, "latency": lat_score, "cost": cost_score}
         feedback = (
             f"quality={quality:.2f} latency={latency:.1f}s "
@@ -1000,20 +1050,24 @@ class _AgentAdapter(gepa.GEPAAdapter):
             _sync_destinations(candidate, self.state, use_exp=True)
             for record in batch:
                 score, obj, answer, feedback, trace = self._run_one(
-                    candidate, record["inputs"], record["expectations"],
+                    candidate,
+                    record["inputs"],
+                    record["expectations"],
                 )
                 scores.append(score)
                 outputs.append(answer)
                 all_obj.append(obj)
                 if capture_traces:
-                    trajectories.append({
-                        "inputs": record["inputs"],
-                        "outputs": answer,
-                        "expectations": record["expectations"],
-                        "score": score,
-                        "feedback": feedback,
-                        "trace": trace,
-                    })
+                    trajectories.append(
+                        {
+                            "inputs": record["inputs"],
+                            "outputs": answer,
+                            "expectations": record["expectations"],
+                            "score": score,
+                            "feedback": feedback,
+                            "trace": trace,
+                        }
+                    )
         return gepa.EvaluationBatch(
             outputs=outputs,
             scores=scores,
@@ -1026,7 +1080,8 @@ class _AgentAdapter(gepa.GEPAAdapter):
         for key in components_to_update:
             history_str = self._history_str(key)
             comp_data = []
-            for traj, score in zip(eval_batch.trajectories or [], eval_batch.scores):
+            # Trajectories are empty unless GEPA captured traces for this batch.
+            for traj, score in zip(eval_batch.trajectories or [], eval_batch.scores, strict=False):
                 trace = traj.get("trace", {})
                 record = {
                     "component_name": key,
@@ -1047,7 +1102,7 @@ class _AgentAdapter(gepa.GEPAAdapter):
     def _history_str(self, key):
         if not key.startswith("model:"):
             return ""
-        ep_name = key[len("model:"):]
+        ep_name = key[len("model:") :]
         history = self._model_history.get(ep_name, {})
         et = next((e for e in self.state.endpoint_targets if e.name == ep_name), None)
         if et is None:
@@ -1237,6 +1292,7 @@ def _make_bandit_proposer(adapter, templates):
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def setup_endpoints(endpoints, *, agent_tag=None, extra_tags=None):
     """Create or sync production gateway endpoints.
 
@@ -1317,7 +1373,10 @@ def score(predict_fn, val_data, *, scorers):
         mlflow_trace = _get_active_trace()
         scores.append(
             _run_scorers(
-                scorers, record["inputs"], record["expectations"], answer,
+                scorers,
+                record["inputs"],
+                record["expectations"],
+                answer,
                 trace=mlflow_trace,
             )
         )
@@ -1444,9 +1503,14 @@ def optimize_prompts_and_models(
         list(prompt_uris or []),
         dict(gateway_endpoints or {}),
         scorers,
-        weight_quality, weight_latency, weight_cost,
-        latency_hard_gate, cost_soft_gate, reflection_model,
-        token_costs, model_selection,
+        weight_quality,
+        weight_latency,
+        weight_cost,
+        latency_hard_gate,
+        cost_soft_gate,
+        reflection_model,
+        token_costs,
+        model_selection,
     )
 
     print("Creating experimental gateway endpoints...")
@@ -1474,7 +1538,8 @@ def optimize_prompts_and_models(
             # owns the prompt-reflection call too, reusing the same per-component
             # templates GEPA would have used.
             defaults["custom_candidate_proposer"] = _make_bandit_proposer(
-                adapter, templates,
+                adapter,
+                templates,
             )
         defaults.update(gepa_kwargs)
         with _patched_endpoints(state.endpoint_targets):
@@ -1577,7 +1642,9 @@ def promote_to_prod(result: Result, *, rollback_alias="production_previous", dry
     for et, new_model, _ in endpoint_changes:
         print(f"  endpoint {et.name}: {et.initial_model} -> {new_model}")
     for pt, _ in prompt_changes:
-        print(f"  prompt {pt.name}@{pt.alias}: new version (rollback to v{pt.prior_version} via @{rollback_alias})")
+        print(
+            f"  prompt {pt.name}@{pt.alias}: new version (rollback to v{pt.prior_version} via @{rollback_alias})"
+        )
     for et in result.endpoint_targets:
         if not any(c[0] is et for c in endpoint_changes):
             print(f"  endpoint {et.name}: unchanged ({et.initial_model})")
@@ -1612,11 +1679,15 @@ def promote_to_prod(result: Result, *, rollback_alias="production_previous", dry
             for pt in repointed_prompts:
                 try:
                     mlflow.genai.set_prompt_alias(
-                        name=pt.name, alias=pt.alias, version=pt.prior_version,
+                        name=pt.name,
+                        alias=pt.alias,
+                        version=pt.prior_version,
                     )
                     print(f"  {pt.name}@{pt.alias}: rolled back to v{pt.prior_version}")
                 except Exception as rb:
-                    print(f"  {pt.name}@{pt.alias}: ROLLBACK FAILED ({rb}) -- manual intervention required")
+                    print(
+                        f"  {pt.name}@{pt.alias}: ROLLBACK FAILED ({rb}) -- manual intervention required"
+                    )
 
     print("Updating production gateway endpoints...")
     try:
@@ -1635,7 +1706,9 @@ def promote_to_prod(result: Result, *, rollback_alias="production_previous", dry
         for pt, new_template in prompt_changes:
             if pt.alias:
                 mlflow.genai.set_prompt_alias(
-                    name=pt.name, alias=rollback_alias, version=pt.prior_version,
+                    name=pt.name,
+                    alias=rollback_alias,
+                    version=pt.prior_version,
                 )
             new_pv = mlflow.genai.register_prompt(
                 name=pt.name,
@@ -1644,7 +1717,9 @@ def promote_to_prod(result: Result, *, rollback_alias="production_previous", dry
             )
             if pt.alias:
                 mlflow.genai.set_prompt_alias(
-                    name=pt.name, alias=pt.alias, version=new_pv.version,
+                    name=pt.name,
+                    alias=pt.alias,
+                    version=new_pv.version,
                 )
                 repointed_prompts.append(pt)
             out[pt.name] = new_pv

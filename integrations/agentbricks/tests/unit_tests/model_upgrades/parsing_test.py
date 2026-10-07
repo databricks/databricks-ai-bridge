@@ -1,24 +1,37 @@
 """Tests for prompt-URI parsing and required-var extraction."""
+
 import pytest
 
-from databricks_agentkit.model_upgrades.optimization import _extract_required_vars, _parse_prompt_uri
+from databricks_agentkit.model_upgrades.optimization import (
+    _extract_required_vars,
+    _parse_prompt_uri,
+)
 
 
 def test_parse_alias_uri():
     assert _parse_prompt_uri("prompts:/cat.schema.supervisor@production") == (
-        "cat.schema.supervisor", "production", None, "supervisor",
+        "cat.schema.supervisor",
+        "production",
+        None,
+        "supervisor",
     )
 
 
 def test_parse_version_uri():
     assert _parse_prompt_uri("prompts:/cat.schema.foo/3") == (
-        "cat.schema.foo", None, "3", "foo",
+        "cat.schema.foo",
+        None,
+        "3",
+        "foo",
     )
 
 
 def test_parse_no_alias_defaults_to_production():
     assert _parse_prompt_uri("prompts:/cat.schema.foo") == (
-        "cat.schema.foo", "production", None, "foo",
+        "cat.schema.foo",
+        "production",
+        None,
+        "foo",
     )
 
 

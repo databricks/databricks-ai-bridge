@@ -1,10 +1,8 @@
 """Tests for score and optimize_prompts_and_models wrappers."""
-import sys
-import types
 
 import pytest
 
-from databricks_agentkit.model_upgrades import score, optimize_prompts_and_models
+from databricks_agentkit.model_upgrades import optimize_prompts_and_models, score
 
 
 @pytest.fixture
@@ -37,8 +35,11 @@ def test_score_requires_scorers(fake_predict):
 def test_optimize_prompts_and_models_requires_at_least_one_target(fake_predict, fake_scorers):
     with pytest.raises(ValueError, match="prompt_uris or gateway_endpoints"):
         optimize_prompts_and_models(
-            fake_predict, [], [],
-            scorers=fake_scorers, max_metric_calls=10,
+            fake_predict,
+            [],
+            [],
+            scorers=fake_scorers,
+            max_metric_calls=10,
         )
 
 
@@ -50,20 +51,30 @@ def test_optimize_prompts_and_models_requires_scorers(fake_predict):
 def test_optimize_prompts_and_models_rejects_unbalanced_weights(fake_predict, fake_scorers):
     with pytest.raises(ValueError, match="weights must sum to 1.0"):
         optimize_prompts_and_models(
-            fake_predict, [], [],
+            fake_predict,
+            [],
+            [],
             prompt_uris=["prompts:/cat.schema.foo@production"],
-            scorers=fake_scorers, max_metric_calls=10,
-            weight_quality=1.0, weight_latency=0.5, weight_cost=0.5,
+            scorers=fake_scorers,
+            max_metric_calls=10,
+            weight_quality=1.0,
+            weight_latency=0.5,
+            weight_cost=0.5,
         )
 
 
 def test_optimize_prompts_and_models_rejects_negative_weights(fake_predict, fake_scorers):
     with pytest.raises(ValueError, match="weight_latency must be >= 0"):
         optimize_prompts_and_models(
-            fake_predict, [], [],
+            fake_predict,
+            [],
+            [],
             prompt_uris=["prompts:/cat.schema.foo@production"],
-            scorers=fake_scorers, max_metric_calls=10,
-            weight_quality=1.2, weight_latency=-0.1, weight_cost=-0.1,
+            scorers=fake_scorers,
+            max_metric_calls=10,
+            weight_quality=1.2,
+            weight_latency=-0.1,
+            weight_cost=-0.1,
         )
 
 
@@ -84,19 +95,25 @@ def test_optimize_prompts_and_models_no_preflight_cost_raise(mocker, fake_predic
     fake_gepa = mocker.patch("databricks_agentkit.model_upgrades.optimization.gepa")
     fake_gepa.optimize.return_value = mocker.Mock(
         best_candidate={"model:ep1": "unknown-model-x"},
-        val_aggregate_scores=[0.5, 0.6], best_idx=1,
+        val_aggregate_scores=[0.5, 0.6],
+        best_idx=1,
     )
     mocker.patch("databricks_agentkit.model_upgrades.optimization._AgentAdapter")
 
     # Should NOT raise, even with weight_cost > 0 and no token_costs for the model.
     optimize_prompts_and_models(
-        fake_predict, [], [{"inputs": {}, "expectations": {"expected_response": "x"}}],
+        fake_predict,
+        [],
+        [{"inputs": {}, "expectations": {"expected_response": "x"}}],
         gateway_endpoints={"ep1": ["unknown-model-x", "another-unknown"]},
-        scorers=fake_scorers, max_metric_calls=10,
+        scorers=fake_scorers,
+        max_metric_calls=10,
     )
 
 
-def test_optimize_prompts_and_models_accepts_token_costs_for_unknown_model(mocker, fake_predict, fake_scorers):
+def test_optimize_prompts_and_models_accepts_token_costs_for_unknown_model(
+    mocker, fake_predict, fake_scorers
+):
     mocker.patch(
         "databricks_agentkit.model_upgrades.optimization.model_services.get_model",
         return_value="system.ai.custom-model",
@@ -111,23 +128,31 @@ def test_optimize_prompts_and_models_accepts_token_costs_for_unknown_model(mocke
     fake_gepa = mocker.patch("databricks_agentkit.model_upgrades.optimization.gepa")
     fake_gepa.optimize.return_value = mocker.Mock(
         best_candidate={"model:ep1": "custom-model"},
-        val_aggregate_scores=[0.5, 0.6], best_idx=1,
+        val_aggregate_scores=[0.5, 0.6],
+        best_idx=1,
     )
     mocker.patch("databricks_agentkit.model_upgrades.optimization._AgentAdapter")
 
     # Should not raise.
     optimize_prompts_and_models(
-        fake_predict, [], [{"inputs": {}, "expectations": {"expected_response": "x"}}],
+        fake_predict,
+        [],
+        [{"inputs": {}, "expectations": {"expected_response": "x"}}],
         gateway_endpoints={"ep1": ["custom-model"]},
-        scorers=fake_scorers, max_metric_calls=10,
+        scorers=fake_scorers,
+        max_metric_calls=10,
         token_costs={"custom-model": {"input": 1.0, "output": 5.0}},
     )
 
 
-def test_optimize_prompts_and_models_threads_inputs_to_gepa_optimize(mocker, fake_predict, fake_scorers):
+def test_optimize_prompts_and_models_threads_inputs_to_gepa_optimize(
+    mocker, fake_predict, fake_scorers
+):
     """End-to-end mock: prompt loading, endpoint reads, exp lifecycle, gepa.optimize."""
     pv = mocker.Mock(template="Answer the {{question}} succinctly.", version=3)
-    mocker.patch("databricks_agentkit.model_upgrades.optimization.mlflow.genai.load_prompt", return_value=pv)
+    mocker.patch(
+        "databricks_agentkit.model_upgrades.optimization.mlflow.genai.load_prompt", return_value=pv
+    )
 
     mocker.patch(
         "databricks_agentkit.model_upgrades.optimization.model_services.get_model",
@@ -143,14 +168,19 @@ def test_optimize_prompts_and_models_threads_inputs_to_gepa_optimize(mocker, fak
 
     fake_gepa = mocker.patch("databricks_agentkit.model_upgrades.optimization.gepa")
     fake_gepa.optimize.return_value = mocker.Mock(
-        best_candidate={"prompt:foo": "Answer the {{question}}.", "model:ep1": "databricks-gpt-5-4-mini"},
+        best_candidate={
+            "prompt:foo": "Answer the {{question}}.",
+            "model:ep1": "databricks-gpt-5-4-mini",
+        },
         val_aggregate_scores=[0.50, 0.85],
         best_idx=1,
     )
     mocker.patch("databricks_agentkit.model_upgrades.optimization._AgentAdapter")
 
     result = optimize_prompts_and_models(
-        fake_predict, [], [{"inputs": {"question": "q"}, "expectations": {"expected_response": "a"}}],
+        fake_predict,
+        [],
+        [{"inputs": {"question": "q"}, "expectations": {"expected_response": "a"}}],
         prompt_uris=["prompts:/cat.schema.foo@production"],
         gateway_endpoints={"ep1": ["databricks-gpt-5-4-mini", "databricks-claude-sonnet-4"]},
         scorers=fake_scorers,
@@ -170,7 +200,9 @@ def test_optimize_prompts_and_models_threads_inputs_to_gepa_optimize(mocker, fak
     # Default model_selection="bandit" wires a custom proposer for model choices.
     assert callable(kwargs["custom_candidate_proposer"])
     assert result.prompt_uris == ["prompts:/cat.schema.foo@production"]
-    assert result.gateway_endpoints == {"ep1": ["databricks-gpt-5-4-mini", "databricks-claude-sonnet-4"]}
+    assert result.gateway_endpoints == {
+        "ep1": ["databricks-gpt-5-4-mini", "databricks-claude-sonnet-4"]
+    }
     assert result.baseline_score == 0.50
     assert result.best_score == 0.85
 
@@ -191,7 +223,8 @@ def _mock_optimize_env(mocker):
     fake_gepa = mocker.patch("databricks_agentkit.model_upgrades.optimization.gepa")
     fake_gepa.optimize.return_value = mocker.Mock(
         best_candidate={"model:ep1": "databricks-gpt-5-4-mini"},
-        val_aggregate_scores=[0.5, 0.6], best_idx=1,
+        val_aggregate_scores=[0.5, 0.6],
+        best_idx=1,
     )
     mocker.patch("databricks_agentkit.model_upgrades.optimization._AgentAdapter")
     return fake_gepa
@@ -201,9 +234,12 @@ def test_reflection_mode_omits_custom_proposer(mocker, fake_predict, fake_scorer
     """model_selection='reflection' keeps the original LLM-driven model path."""
     fake_gepa = _mock_optimize_env(mocker)
     optimize_prompts_and_models(
-        fake_predict, [], [{"inputs": {}, "expectations": {"expected_response": "x"}}],
+        fake_predict,
+        [],
+        [{"inputs": {}, "expectations": {"expected_response": "x"}}],
         gateway_endpoints={"ep1": ["databricks-gpt-5-4-mini", "databricks-claude-sonnet-4"]},
-        scorers=fake_scorers, max_metric_calls=10,
+        scorers=fake_scorers,
+        max_metric_calls=10,
         model_selection="reflection",
     )
     kwargs = fake_gepa.optimize.call_args.kwargs
@@ -214,9 +250,12 @@ def test_reflection_mode_omits_custom_proposer(mocker, fake_predict, fake_scorer
 def test_invalid_model_selection_rejected(mocker, fake_predict, fake_scorers):
     with pytest.raises(ValueError, match="model_selection"):
         optimize_prompts_and_models(
-            fake_predict, [], [{"inputs": {}, "expectations": {"expected_response": "x"}}],
+            fake_predict,
+            [],
+            [{"inputs": {}, "expectations": {"expected_response": "x"}}],
             gateway_endpoints={"ep1": ["databricks-gpt-5-4-mini"]},
-            scorers=fake_scorers, max_metric_calls=10,
+            scorers=fake_scorers,
+            max_metric_calls=10,
             model_selection="ucb2",
         )
 
@@ -224,7 +263,8 @@ def test_invalid_model_selection_rejected(mocker, fake_predict, fake_scorers):
 def test_patched_endpoints_rewrites_known_models_and_restores():
     """The context manager should rewrite `model=<ep>` to `<ep>_exp` and restore on exit."""
     from openai.resources.chat.completions import Completions
-    from databricks_agentkit.model_upgrades.optimization import _patched_endpoints, _EndpointTarget
+
+    from databricks_agentkit.model_upgrades.optimization import _EndpointTarget, _patched_endpoints
 
     seen = []
     original_create = Completions.create
@@ -253,7 +293,8 @@ def test_patched_endpoints_rewrites_known_models_and_restores():
 def test_patched_endpoints_covers_responses_api():
     """Responses.create should be patched alongside Completions.create."""
     from openai.resources.responses import Responses
-    from databricks_agentkit.model_upgrades.optimization import _patched_endpoints, _EndpointTarget
+
+    from databricks_agentkit.model_upgrades.optimization import _EndpointTarget, _patched_endpoints
 
     seen = []
     original = Responses.create
@@ -277,7 +318,9 @@ def test_patched_endpoints_covers_responses_api():
 def test_preflight_runs_predict_once_before_gepa(mocker, fake_scorers):
     """Pre-flight should call predict_fn on the first record before launching gepa."""
     pv = mocker.Mock(template="answer the {{question}}", version=3)
-    mocker.patch("databricks_agentkit.model_upgrades.optimization.mlflow.genai.load_prompt", return_value=pv)
+    mocker.patch(
+        "databricks_agentkit.model_upgrades.optimization.mlflow.genai.load_prompt", return_value=pv
+    )
     mocker.patch(
         "databricks_agentkit.model_upgrades.optimization.model_services.get_model",
         return_value="system.ai.databricks-gpt-5-4-mini",
@@ -292,21 +335,29 @@ def test_preflight_runs_predict_once_before_gepa(mocker, fake_scorers):
 
     fake_gepa = mocker.patch("databricks_agentkit.model_upgrades.optimization.gepa")
     fake_gepa.optimize.return_value = mocker.Mock(
-        best_candidate={"prompt:foo": "answer the {{question}}", "model:ep1": "databricks-gpt-5-4-mini"},
-        val_aggregate_scores=[0.5, 0.5], best_idx=1,
+        best_candidate={
+            "prompt:foo": "answer the {{question}}",
+            "model:ep1": "databricks-gpt-5-4-mini",
+        },
+        val_aggregate_scores=[0.5, 0.5],
+        best_idx=1,
     )
     mocker.patch("databricks_agentkit.model_upgrades.optimization._AgentAdapter")
 
     calls = []
+
     def predict(inputs):
         calls.append(inputs)
         return "ok"
 
     optimize_prompts_and_models(
-        predict, [{"inputs": {"question": "first"}, "expectations": {"expected_response": "a"}}], [],
+        predict,
+        [{"inputs": {"question": "first"}, "expectations": {"expected_response": "a"}}],
+        [],
         prompt_uris=["prompts:/cat.schema.foo@production"],
         gateway_endpoints={"ep1": ["databricks-gpt-5-4-mini"]},
-        scorers=fake_scorers, max_metric_calls=10,
+        scorers=fake_scorers,
+        max_metric_calls=10,
     )
     assert calls == [{"question": "first"}]
 
@@ -315,7 +366,9 @@ def test_preflight_warns_but_does_not_abort_on_predict_failure(mocker, fake_scor
     """A predict failure on warmup is logged but doesn't kill the run -- GEPA's
     per-eval ERROR path + the scorer-success ratchet handle the rest."""
     pv = mocker.Mock(template="answer the {{question}}", version=3)
-    mocker.patch("databricks_agentkit.model_upgrades.optimization.mlflow.genai.load_prompt", return_value=pv)
+    mocker.patch(
+        "databricks_agentkit.model_upgrades.optimization.mlflow.genai.load_prompt", return_value=pv
+    )
     mocker.patch(
         "databricks_agentkit.model_upgrades.optimization.model_services.get_model",
         return_value="system.ai.databricks-gpt-5-4-mini",
@@ -329,8 +382,12 @@ def test_preflight_warns_but_does_not_abort_on_predict_failure(mocker, fake_scor
     )
     fake_gepa = mocker.patch("databricks_agentkit.model_upgrades.optimization.gepa")
     fake_gepa.optimize.return_value = mocker.Mock(
-        best_candidate={"prompt:foo": "answer the {{question}}", "model:ep1": "databricks-gpt-5-4-mini"},
-        val_aggregate_scores=[0.0, 0.0], best_idx=1,
+        best_candidate={
+            "prompt:foo": "answer the {{question}}",
+            "model:ep1": "databricks-gpt-5-4-mini",
+        },
+        val_aggregate_scores=[0.0, 0.0],
+        best_idx=1,
     )
     mocker.patch("databricks_agentkit.model_upgrades.optimization._AgentAdapter")
 
@@ -338,10 +395,13 @@ def test_preflight_warns_but_does_not_abort_on_predict_failure(mocker, fake_scor
         raise ValueError("agent broken")
 
     optimize_prompts_and_models(
-        broken, [{"inputs": {"question": "q"}, "expectations": {"expected_response": "a"}}], [],
+        broken,
+        [{"inputs": {"question": "q"}, "expectations": {"expected_response": "a"}}],
+        [],
         prompt_uris=["prompts:/cat.schema.foo@production"],
         gateway_endpoints={"ep1": ["databricks-gpt-5-4-mini"]},
-        scorers=fake_scorers, max_metric_calls=10,
+        scorers=fake_scorers,
+        max_metric_calls=10,
     )
     fake_gepa.optimize.assert_called_once()
     out = capsys.readouterr().out
@@ -351,6 +411,7 @@ def test_preflight_warns_but_does_not_abort_on_predict_failure(mocker, fake_scor
 def test_patched_endpoints_no_targets_is_noop():
     """Passing an empty target list should not touch the OpenAI client."""
     from openai.resources.chat.completions import Completions
+
     from databricks_agentkit.model_upgrades.optimization import _patched_endpoints
 
     before = Completions.create
@@ -359,9 +420,13 @@ def test_patched_endpoints_no_targets_is_noop():
     assert Completions.create is before
 
 
-def test_optimize_prompts_and_models_cleans_up_exp_endpoints_on_failure(mocker, fake_predict, fake_scorers):
+def test_optimize_prompts_and_models_cleans_up_exp_endpoints_on_failure(
+    mocker, fake_predict, fake_scorers
+):
     pv = mocker.Mock(template="x {{var}}", version=1)
-    mocker.patch("databricks_agentkit.model_upgrades.optimization.mlflow.genai.load_prompt", return_value=pv)
+    mocker.patch(
+        "databricks_agentkit.model_upgrades.optimization.mlflow.genai.load_prompt", return_value=pv
+    )
     mocker.patch(
         "databricks_agentkit.model_upgrades.optimization.model_services.get_model",
         return_value="system.ai.databricks-gpt-5-4-mini",
@@ -375,7 +440,9 @@ def test_optimize_prompts_and_models_cleans_up_exp_endpoints_on_failure(mocker, 
 
     with pytest.raises(RuntimeError, match="boom"):
         optimize_prompts_and_models(
-            fake_predict, [], [],
+            fake_predict,
+            [],
+            [],
             prompt_uris=["prompts:/cat.schema.foo@production"],
             gateway_endpoints={"ep1": ["databricks-gpt-5-4-mini"]},
             scorers=fake_scorers,

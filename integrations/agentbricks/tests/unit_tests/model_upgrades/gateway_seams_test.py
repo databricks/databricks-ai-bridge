@@ -8,7 +8,9 @@ _MS = "databricks_agentkit.model_upgrades.optimization.model_services"
 
 
 def _target(name="main.agent.llm", initial="claude-sonnet-4-5"):
-    return opt._EndpointTarget(name=name, candidate_models=["claude-haiku-4-5"], initial_model=initial)
+    return opt._EndpointTarget(
+        name=name, candidate_models=["claude-haiku-4-5"], initial_model=initial
+    )
 
 
 class _State:
@@ -73,7 +75,9 @@ def test_cost_prices_calls_to_the_service_as_the_routed_candidate(mocker):
         priced.append(model)
         return 0.001
 
-    mocker.patch("databricks_agentkit.model_upgrades.optimization._mlflow_model_cost", side_effect=_cost)
+    mocker.patch(
+        "databricks_agentkit.model_upgrades.optimization._mlflow_model_cost", side_effect=_cost
+    )
     et = _target()
     calls = [{"model": "main.agent.llm_exp", "input": 100, "output": 50}]
     cost = opt._estimate_cost_usd(

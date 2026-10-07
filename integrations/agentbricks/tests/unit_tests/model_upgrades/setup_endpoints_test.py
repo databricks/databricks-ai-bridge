@@ -1,4 +1,5 @@
 """Tests for setup_endpoints."""
+
 import pytest
 
 from databricks_agentkit.model_upgrades import setup_endpoints
@@ -24,7 +25,9 @@ def test_skips_when_destination_matches(mocker):
         return_value="system.ai.databricks-claude-sonnet-4",
     )
     create = mocker.patch("databricks_agentkit.model_upgrades.optimization.model_services.create")
-    update = mocker.patch("databricks_agentkit.model_upgrades.optimization.model_services.set_model")
+    update = mocker.patch(
+        "databricks_agentkit.model_upgrades.optimization.model_services.set_model"
+    )
     statuses = setup_endpoints({"ep1": "databricks-claude-sonnet-4"})
     assert statuses == {"ep1": "exists:system.ai.databricks-claude-sonnet-4"}
     create.assert_not_called()
@@ -36,7 +39,9 @@ def test_updates_when_destination_drifts(mocker):
         "databricks_agentkit.model_upgrades.optimization.model_services.get_model",
         return_value="system.ai.databricks-old",
     )
-    update = mocker.patch("databricks_agentkit.model_upgrades.optimization.model_services.set_model")
+    update = mocker.patch(
+        "databricks_agentkit.model_upgrades.optimization.model_services.set_model"
+    )
     statuses = setup_endpoints({"ep1": "databricks-new"})
     assert statuses == {"ep1": "updated:system.ai.databricks-old->system.ai.databricks-new"}
     update.assert_called_once()
@@ -80,6 +85,7 @@ def test_tags_propagated_to_create(mocker):
 
 def test_multiple_endpoints_processed_independently(mocker):
     """One call should process several endpoints, mixing created/exists/updated."""
+
     def fake_get(client, name):
         if name == "ep_match":
             return "system.ai.databricks-match"
@@ -87,15 +93,22 @@ def test_multiple_endpoints_processed_independently(mocker):
             return "system.ai.databricks-stale"
         raise Exception("404")
 
-    mocker.patch("databricks_agentkit.model_upgrades.optimization.model_services.get_model", side_effect=fake_get)
+    mocker.patch(
+        "databricks_agentkit.model_upgrades.optimization.model_services.get_model",
+        side_effect=fake_get,
+    )
     create = mocker.patch("databricks_agentkit.model_upgrades.optimization.model_services.create")
-    update = mocker.patch("databricks_agentkit.model_upgrades.optimization.model_services.set_model")
+    update = mocker.patch(
+        "databricks_agentkit.model_upgrades.optimization.model_services.set_model"
+    )
 
-    statuses = setup_endpoints({
-        "ep_match": "databricks-match",
-        "ep_drift": "databricks-fresh",
-        "ep_new": "databricks-claude-sonnet-4",
-    })
+    statuses = setup_endpoints(
+        {
+            "ep_match": "databricks-match",
+            "ep_drift": "databricks-fresh",
+            "ep_new": "databricks-claude-sonnet-4",
+        }
+    )
     assert statuses["ep_match"] == "exists:system.ai.databricks-match"
     assert statuses["ep_drift"] == "updated:system.ai.databricks-stale->system.ai.databricks-fresh"
     assert statuses["ep_new"] == "created"

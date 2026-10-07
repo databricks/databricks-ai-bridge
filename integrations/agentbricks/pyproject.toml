@@ -103,6 +103,12 @@ include = ["pyproject.toml", "src/**/*.py", "tests/**/*.py"]
 extend-exclude = ["src/databricks_agentbricks/templates"]
 extend = "../../pyproject.toml"
 
+[tool.ruff.lint.per-file-ignores]
+# The model-upgrade optimizer reports its progress (candidates tried, scores, the promotion plan) on
+# stdout, as the Smart Model Upgrades library it was migrated from does. `agentbricks experimental
+# models apply` redirects it off the CLI's stdout so JSON output stays clean.
+"src/databricks_agentkit/model_upgrades/optimization.py" = ["T201"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests/unit_tests"]
 
