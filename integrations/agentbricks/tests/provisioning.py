@@ -1,8 +1,8 @@
 """pytest plugin: the workspace resources tests ask for, as lazy session fixtures, and their teardown.
 
-A fixture exists per requirement (``catalog``, ``scratch_schema``, ``uc_function``,
-``genie_space``) and is only created when a selected test needs it, so a run that never asks for
-``uc_function`` never deploys a bundle or creates a function. Each fixture skips when the backend
+A fixture exists per requirement (``catalog``, ``scratch_schema``, ``uc_function``) and is only
+created when a selected test needs it, so a run that never asks for ``uc_function`` never deploys a
+bundle or creates a function. Each fixture skips when the target workspace
 cannot provide it or the operator did not configure it.
 
 Creation happens once per run across xdist workers (``shared_state``). Teardown happens once, in
@@ -14,14 +14,12 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import re
 import uuid
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 
 import pytest
-from backends import Backend, BackendUnavailable
 from common import (
     APP_PREFIX,
     MatrixError,
@@ -31,8 +29,9 @@ from common import (
     project_prefix,
     run_command,
 )
-from run_context import base_run_config, build_backend, started_run_config
+from run_context import base_run_config, build_target_workspace, started_run_config
 from shared_state import SharedResources, Track
+from target_workspace import TargetWorkspace, TargetWorkspaceUnavailable
 from workspace_client import Workspace, cleanup_app
 
 BUNDLE_TARGET = "nightly"
@@ -51,36 +50,25 @@ class UcFunction:
     volume_marker: str
 
 
-def _require_workspace(backend: Backend, what: str) -> Workspace:
-    workspace = backend.workspace
+def require_workspace(target_workspace: TargetWorkspace, what: str) -> Workspace:
+    workspace = target_workspace.client
     if workspace is None:
-        pytest.skip(f"{what} needs a Databricks workspace; the {backend.name} backend has none")
+        pytest.skip(f"{what} needs a live workspace; got --workspace {target_workspace.name}")
     return workspace
 
 
 @pytest.fixture(scope="session")
-def catalog(request: pytest.FixtureRequest, backend: Backend) -> str:
-    workspace = _require_workspace(backend, "a UC catalog")
+def catalog(request: pytest.FixtureRequest, target_workspace: TargetWorkspace) -> str:
+    workspace = require_workspace(target_workspace, "a UC catalog")
     name = request.config.getoption("catalog")
     workspace.require_catalog(name)
     return name
 
 
 @pytest.fixture(scope="session")
-def genie_space(request: pytest.FixtureRequest, backend: Backend) -> str:
-    space_id = request.config.getoption("genie_space_id")
-    if not space_id:
-        pytest.skip("no Genie space; pass --genie-space-id or set AGENTBRICKS_E2E_GENIE_SPACE_ID")
-    if re.fullmatch(r"[0-9a-f]{32}", space_id) is None:
-        raise MatrixError(f"Genie space id {space_id!r} is not 32 lowercase hex characters.")
-    _require_workspace(backend, "a Genie space").require_genie_space(space_id)
-    return space_id
-
-
-@pytest.fixture(scope="session")
 def deploy_scratch_schema(
     catalog: str,
-    backend: Backend,
+    target_workspace: TargetWorkspace,
     shared_resources: SharedResources,
     request: pytest.FixtureRequest,
 ) -> Callable[[Path], str]:
@@ -93,7 +81,7 @@ def deploy_scratch_schema(
     def deploy(bundle_dir: Path) -> str:
         value = shared_resources.get_or_create(
             "scratch_schema",
-            lambda track: _deploy_bundle(backend, run, catalog, bundle_dir, track),
+            lambda track: _deploy_bundle(target_workspace, run, catalog, bundle_dir, track),
         )
         if value["bundle_dir"] != str(bundle_dir.resolve()):
             raise MatrixError(
@@ -107,10 +95,10 @@ def deploy_scratch_schema(
 
 @pytest.fixture(scope="session")
 def uc_function(
-    scratch_schema: str, backend: Backend, shared_resources: SharedResources
+    scratch_schema: str, target_workspace: TargetWorkspace, shared_resources: SharedResources
 ) -> UcFunction:
     """Marker functions and a marker volume in ``scratch_schema`` (a fixture each matrix defines)."""
-    workspace = _require_workspace(backend, "a UC function")
+    workspace = require_workspace(target_workspace, "a UC function")
     value = shared_resources.get_or_create(
         "uc_function", lambda track: _create_uc_function(workspace, scratch_schema, track)
     )
@@ -120,29 +108,33 @@ def uc_function(
 # Creation
 
 
-def _bundle_env(backend: Backend, catalog: str, run_id: str) -> dict[str, str]:
+def _bundle_env(target_workspace: TargetWorkspace, catalog: str, run_id: str) -> dict[str, str]:
     return child_env(
-        {**backend.env, "BUNDLE_VAR_catalog_name": catalog, "BUNDLE_VAR_run_id": run_id}
+        {**target_workspace.env, "BUNDLE_VAR_catalog_name": catalog, "BUNDLE_VAR_run_id": run_id}
     )
 
 
 def _bundle(
-    backend: Backend, bundle_dir: Path, env: dict[str, str], *args: str, timeout: float
+    target_workspace: TargetWorkspace,
+    bundle_dir: Path,
+    env: dict[str, str],
+    *args: str,
+    timeout: float,
 ) -> str:
-    argv = ["databricks", "bundle", *args, "-t", BUNDLE_TARGET, *backend.cli_args]
+    argv = ["databricks", "bundle", *args, "-t", BUNDLE_TARGET, *target_workspace.cli_args]
     return run_command(argv, cwd=bundle_dir, env=env, timeout=timeout)
 
 
 def _deploy_bundle(
-    backend: Backend, run: RunConfig, catalog: str, bundle_dir: Path, track: Track
+    target_workspace: TargetWorkspace, run: RunConfig, catalog: str, bundle_dir: Path, track: Track
 ) -> dict[str, str]:
     bundle_dir = bundle_dir.resolve()
-    env = _bundle_env(backend, catalog, run.run_id)
+    env = _bundle_env(target_workspace, catalog, run.run_id)
     # Tracked first: a deploy that fails midway still leaves a schema to destroy.
     track(bundle_dir=str(bundle_dir), catalog=catalog, run_id=run.run_id)
-    _bundle(backend, bundle_dir, env, "deploy", timeout=900)
+    _bundle(target_workspace, bundle_dir, env, "deploy", timeout=900)
     summary = json.loads(
-        _bundle(backend, bundle_dir, env, "summary", "--output", "json", timeout=120)
+        _bundle(target_workspace, bundle_dir, env, "summary", "--output", "json", timeout=120)
     )
     resource = summary.get("resources", {}).get("schemas", {}).get(SCHEMA_RESOURCE)
     if not isinstance(resource, dict):
@@ -221,16 +213,21 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
         log("Resources retained (--keep-resources); skipping teardown.")
         return
     try:
-        backend = build_backend(config)
-    except BackendUnavailable:
+        target_workspace = build_target_workspace(config)
+    except TargetWorkspaceUnavailable:
         return
-    if backend.workspace is not None and _teardown(backend, backend.workspace, run, tracked):
+    if target_workspace.client is not None and _teardown(
+        target_workspace, target_workspace.client, run, tracked
+    ):
         if session.exitstatus == 0:
             session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 def _teardown(
-    backend: Backend, workspace: Workspace, run: RunConfig, tracked: dict[str, dict[str, str]]
+    target_workspace: TargetWorkspace,
+    workspace: Workspace,
+    run: RunConfig,
+    tracked: dict[str, dict[str, str]],
 ) -> list[str]:
     """Remove what the run created and return a description of each failure."""
     failures: list[str] = []
@@ -252,11 +249,13 @@ def _teardown(
     if volume := functions.get("volume"):
         attempt(f"volume {volume}", partial(workspace.drop, "VOLUME", volume))
     if bundle := tracked.get("scratch_schema"):
-        env = _bundle_env(backend, bundle["catalog"], bundle["run_id"])
+        env = _bundle_env(target_workspace, bundle["catalog"], bundle["run_id"])
         bundle_dir = Path(bundle["bundle_dir"])
         attempt(
             "bundle destroy",
-            lambda: _bundle(backend, bundle_dir, env, "destroy", "--auto-approve", timeout=900),
+            lambda: _bundle(
+                target_workspace, bundle_dir, env, "destroy", "--auto-approve", timeout=900
+            ),
         )
     return failures
 

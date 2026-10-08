@@ -1,4 +1,4 @@
-"""pytest plugin: command-line options, the run's identity, and the backend the suite runs against.
+"""pytest plugin: command-line options, the run's identity, and the workspace the suite runs against.
 
 Under xdist the controller picks the run id and output directory and hands them to each worker in
 ``workerinput``, so every process names, finds and later tears down the same resources.
@@ -15,9 +15,14 @@ import uuid
 from typing import Any
 
 import pytest
-from backends import BACKENDS, Backend, BackendUnavailable, make_backend
 from common import MatrixError, RunConfig, log, run_command
 from shared_state import SharedResources
+from target_workspace import (
+    WORKSPACE_KINDS,
+    TargetWorkspace,
+    TargetWorkspaceUnavailable,
+    make_target_workspace,
+)
 
 PACKAGE_DIR = pathlib.Path(__file__).resolve().parent.parent
 _RUN_KEY = pytest.StashKey[RunConfig]()
@@ -27,8 +32,8 @@ _HANDOFF = "agentbricks_run"
 def pytest_addoption(parser: pytest.Parser) -> None:
     group = parser.getgroup("agentbricks", "Agent Bricks E2E matrices")
     group.addoption(
-        "--backend",
-        choices=BACKENDS,
+        "--workspace",
+        choices=WORKSPACE_KINDS,
         default="live",
         help="live runs against a Databricks workspace; fake skips whatever needs one.",
     )
@@ -44,11 +49,6 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--catalog",
         default=os.environ.get("AGENTBRICKS_E2E_CATALOG", "main"),
         help="Existing catalog for scratch schemas (AGENTBRICKS_E2E_CATALOG, default main).",
-    )
-    group.addoption(
-        "--genie-space-id",
-        default=os.environ.get("AGENTBRICKS_E2E_GENIE_SPACE_ID"),
-        help="Genie space for the genie_space fixture (AGENTBRICKS_E2E_GENIE_SPACE_ID).",
     )
     group.addoption("--bridge-sha", help="Immutable bridge commit for generated App dependencies.")
     group.addoption(
@@ -109,19 +109,19 @@ def started_run_config(config: pytest.Config) -> RunConfig | None:
     return config.stash.get(_RUN_KEY, None)
 
 
-def build_backend(config: pytest.Config) -> Backend:
-    return make_backend(
-        config.getoption("backend"),
+def build_target_workspace(config: pytest.Config) -> TargetWorkspace:
+    return make_target_workspace(
+        config.getoption("workspace"),
         config.getoption("databricks_profile"),
         base_run_config(config),
     )
 
 
 @pytest.fixture(scope="session")
-def backend(request: pytest.FixtureRequest) -> Backend:
+def target_workspace(request: pytest.FixtureRequest) -> TargetWorkspace:
     try:
-        return build_backend(request.config)
-    except BackendUnavailable as exc:
+        return build_target_workspace(request.config)
+    except TargetWorkspaceUnavailable as exc:
         pytest.skip(str(exc))
 
 

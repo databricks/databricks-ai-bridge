@@ -1,7 +1,7 @@
-"""Where the system under test runs: what the CLI subprocess needs, and the workspace tests may touch.
+"""The Databricks workspace the system under test talks to (``--workspace live|fake``).
 
-``live`` is a real Databricks workspace. ``fake`` is an in-process stand-in that has no workspace, so
-every requirement that needs one is skipped rather than failed.
+``live`` is a real workspace. ``fake`` is a local stand-in with no SDK access, so every requirement
+that needs a real workspace is skipped rather than failed.
 """
 
 from __future__ import annotations
@@ -12,14 +12,14 @@ from typing import Protocol
 from common import RunConfig
 from workspace_client import Workspace
 
-BACKENDS = ("live", "fake")
+WORKSPACE_KINDS = ("live", "fake")
 
 
-class BackendUnavailable(Exception):
-    """The selected backend cannot run in this environment; the suite skips instead of failing."""
+class TargetWorkspaceUnavailable(Exception):
+    """The selected workspace cannot run in this environment; the suite skips instead of failing."""
 
 
-class Backend(Protocol):
+class TargetWorkspace(Protocol):
     name: str
 
     @property
@@ -33,18 +33,18 @@ class Backend(Protocol):
         ...
 
     @property
-    def workspace(self) -> Workspace | None:
-        """SDK access for grants, cleanup and UC setup; None when the backend has no workspace."""
+    def client(self) -> Workspace | None:
+        """SDK access for grants, cleanup and UC setup; None for the fake workspace."""
         ...
 
 
-class LiveBackend:
+class LiveWorkspace:
     name = "live"
 
     def __init__(self, profile: str | None, run_config: RunConfig):
         self.profile = profile
         self._run_config = run_config
-        self._workspace: Workspace | None = None
+        self._client: Workspace | None = None
 
     @property
     def env(self) -> Mapping[str, str]:
@@ -56,30 +56,30 @@ class LiveBackend:
         return ["--profile", self.profile] if self.profile else []
 
     @property
-    def workspace(self) -> Workspace:
-        if self._workspace is None:
-            self._workspace = Workspace(
+    def client(self) -> Workspace:
+        if self._client is None:
+            self._client = Workspace(
                 self.profile,
                 app_auth_profile=self._run_config.app_auth_profile,
                 warehouse_id=self._run_config.warehouse_id,
                 preprovisioned_app_catalog_access=self._run_config.preprovisioned_app_catalog_access,
             )
-        return self._workspace
+        return self._client
 
 
-class FakeBackend:
+class FakeWorkspace:
     """Seam for the in-process fake: DATABRICKS_HOST/DATABRICKS_TOKEN env, no CLI args, no Workspace."""
 
     name = "fake"
     env: Mapping[str, str] = {}
     cli_args: Sequence[str] = ()
-    workspace: Workspace | None = None
+    client: Workspace | None = None
 
     def __init__(self, run_config: RunConfig):
-        raise BackendUnavailable("fake backend not implemented yet")
+        raise TargetWorkspaceUnavailable("fake workspace not implemented yet")
 
 
-def make_backend(name: str, profile: str | None, run_config: RunConfig) -> Backend:
+def make_target_workspace(name: str, profile: str | None, run_config: RunConfig) -> TargetWorkspace:
     if name == "fake":
-        return FakeBackend(run_config)
-    return LiveBackend(profile, run_config)
+        return FakeWorkspace(run_config)
+    return LiveWorkspace(profile, run_config)

@@ -1,12 +1,12 @@
 """Fixtures shared by every matrix under ``matrices/``.
 
-``run_context`` (options, backend, run identity) and ``provisioning`` (lazy workspace resources and
+``run_context`` (options, target workspace, run identity) and ``provisioning`` (lazy workspace resources and
 their teardown) are plugins. One command runs a matrix, from ``integrations/agentbricks``:
 
     uv run pytest tests/matrices/tools -n 6 --dist loadgroup \
-        --databricks-profile <profile> --genie-space-id <id>
+        --databricks-profile <profile>
 
-``--backend fake`` runs against no workspace; whatever needs one is skipped.
+``--workspace fake`` runs against no workspace; whatever needs one is skipped.
 
 The CLI wrapper is function-scoped: each test authors, runs and deploys its own projects, and the
 fixture deletes every App and store they created when the test ends.
@@ -18,8 +18,8 @@ from collections.abc import Iterator
 
 import pytest
 from agentbricks_cli import AgentbricksCli
-from backends import Backend
 from common import RunConfig, log
+from target_workspace import TargetWorkspace
 from workspace_client import Workspace, cleanup_app
 
 pytest_plugins = ["run_context", "provisioning"]
@@ -34,21 +34,21 @@ def pytest_runtest_logreport(report: pytest.TestReport) -> None:
 
 
 @pytest.fixture(scope="session")
-def workspace_client(backend: Backend) -> Workspace:
-    workspace = backend.workspace
+def workspace_client(target_workspace: TargetWorkspace) -> Workspace:
+    workspace = target_workspace.client
     if workspace is None:
-        pytest.skip(f"the {backend.name} backend has no Databricks workspace")
+        pytest.skip(f"--workspace {target_workspace.name} has no Databricks SDK access")
     return workspace
 
 
 @pytest.fixture
 def agentbricks_cli(
-    request: pytest.FixtureRequest, backend: Backend, run_config: RunConfig
+    request: pytest.FixtureRequest, target_workspace: TargetWorkspace, run_config: RunConfig
 ) -> Iterator[AgentbricksCli]:
-    cli = AgentbricksCli(backend, run_config)
+    cli = AgentbricksCli(target_workspace, run_config)
     yield cli
-    if cli.projects and backend.workspace is not None:
-        _delete_projects(cli, backend.workspace, failed=request.node.nodeid in _failed_tests)
+    if cli.projects and target_workspace.client is not None:
+        _delete_projects(cli, target_workspace.client, failed=request.node.nodeid in _failed_tests)
 
 
 def _delete_projects(cli: AgentbricksCli, workspace: Workspace, *, failed: bool) -> None:

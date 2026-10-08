@@ -30,7 +30,6 @@ from typing import Any, Protocol
 
 import tomli
 import tomlkit
-from backends import Backend
 from common import (
     APP_PREFIX,
     E2E_MODEL,
@@ -45,6 +44,7 @@ from common import (
     now,
     project_prefix,
 )
+from target_workspace import TargetWorkspace
 
 _STORE_KINDS = {"memory": ("memory", "stores"), "sessions": ("sessions", "stores")}
 _DIRECT_HEADER = (
@@ -138,20 +138,20 @@ class Agent:
 
 
 class AgentbricksCli:
-    """Authors, runs and deploys projects with the CLI against a backend."""
+    """Authors, runs and deploys projects with the CLI against a target workspace."""
 
-    def __init__(self, backend: Backend, run_config: RunConfig):
-        self.backend = backend
+    def __init__(self, target_workspace: TargetWorkspace, run_config: RunConfig):
+        self.target_workspace = target_workspace
         self.run_config = run_config
         self.logs_dir = run_config.output / "logs"
         self.projects: list[Project] = []
-        self._env = child_env(backend.env)
+        self._env = child_env(target_workspace.env)
         self._sequence = 0
 
     # Process plumbing
 
     def argv(self, *args: str) -> list[str]:
-        return [_agentbricks_bin(), *self.backend.cli_args, *args]
+        return [_agentbricks_bin(), *self.target_workspace.cli_args, *args]
 
     def cli(
         self,
@@ -420,9 +420,11 @@ class AgentbricksCli:
 
     def deploy(self, project: Project, app: str | None = None) -> Agent:
         """`agentbricks deploy` the project; deploying again updates the same App."""
-        workspace = self.backend.workspace
+        workspace = self.target_workspace.client
         if workspace is None:
-            raise MatrixError(f"deploy needs a workspace; the {self.backend.name} backend has none")
+            raise MatrixError(
+                f"deploy needs a live workspace; got --workspace {self.target_workspace.name}"
+            )
         workspace.check_app_auth()
         name = app or project.app_name
         creating = not project.app_registered
