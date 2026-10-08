@@ -213,7 +213,10 @@ def test_sandbox_metadata_protects_token_env_policy_for_both_identities(adapter,
                 server.call_tool(
                     "run_code",
                     {"code": "print('ok')"},
-                    meta={"databricks_access_token_included": False},
+                    meta={
+                        "downscope": {"volumes": [{"name": "other.data.volume"}]},
+                        "databricks_access_token_included": False,
+                    },
                 )
             )
             is result
@@ -238,6 +241,45 @@ def test_sandbox_metadata_protects_token_env_policy_for_both_identities(adapter,
             )
         )
         assert result == "sandbox-result"
+        assert session.call_tool.call_args.kwargs["meta"] == expected_meta
+
+
+@pytest.mark.parametrize("token_included", [True, False])
+def test_unscoped_sandbox_omits_downscope_even_with_caller_meta(
+    adapter, monkeypatch, token_included
+):
+    sandbox = tool("user", "sandbox", "sandbox", databricks_access_token_included=token_included)
+    server = adapter._server_from_tool(sandbox, workspace_client_for=Mock())
+    expected_meta = {"databricks_access_token_included": token_included}
+
+    if adapter.__name__.endswith("openai.mcp"):
+        call_tool = AsyncMock(return_value=SimpleNamespace(isError=False))
+        monkeypatch.setattr(FakeServer, "call_tool", call_tool)
+        asyncio.run(
+            server.call_tool(
+                "run_code",
+                {},
+                meta={
+                    "downscope": {"volumes": []},
+                    "databricks_access_token_included": not token_included,
+                },
+            )
+        )
+        assert call_tool.call_args.kwargs["meta"] == expected_meta
+    else:
+        session = SimpleNamespace(initialize=AsyncMock(), call_tool=AsyncMock())
+
+        @asynccontextmanager
+        async def create_session(connection):
+            yield session
+
+        monkeypatch.setattr(adapter, "create_session", create_session)
+        request = SimpleNamespace(server_name="sandbox", name="run_code", args={})
+        asyncio.run(
+            adapter._sandbox_interceptor((sandbox,), workspace_client_for=Mock())(
+                request, AsyncMock()
+            )
+        )
         assert session.call_tool.call_args.kwargs["meta"] == expected_meta
 
 

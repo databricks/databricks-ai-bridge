@@ -198,7 +198,14 @@ def _scope(value: object) -> ScopeRecord:
         raise ToolManifestError(
             "Workspace sandbox scopes are not supported yet. Use volume:<name> instead."
         )
-    if not separator or kind not in {"table", "volume"} or not resource_value:
+    parts = resource_value.split(".")
+    if (
+        not separator
+        or kind not in {"table", "volume"}
+        or len(parts) != 3
+        or any(not part for part in parts)
+        or any(character.isspace() for character in resource_value)
+    ):
         raise RuntimeError(f"Invalid agent.toml downscope resource: {resource!r}.")
     permission = _required_string(value.get("permission", "read_only"), "a permission")
     if permission not in {"read_only", "read_write"}:
@@ -222,6 +229,8 @@ def _tool(value: object) -> ToolRecord:
     if not isinstance(raw_downscope, list):
         raise RuntimeError("agent.toml policy.downscope must be an array.")
     kind = _required_string(source.get("kind"), "a tool source kind")
+    if kind == "sandbox" and "downscope" in policy and not raw_downscope:
+        raise RuntimeError("Sandbox policy.downscope cannot be empty; omit it for caller grants.")
     databricks_access_token_included = policy.get("databricks_access_token_included", False)
     if not isinstance(databricks_access_token_included, bool):
         raise RuntimeError("agent.toml policy.databricks_access_token_included must be a boolean.")
@@ -249,8 +258,8 @@ def _tool(value: object) -> ToolRecord:
         databricks_access_token_included=databricks_access_token_included,
         auth=auth,
     )
-    if record.kind == "sandbox" and (record.service != "system.ai.sandbox" or not record.downscope):
-        raise RuntimeError("Sandbox bindings require system.ai.sandbox and a downscope.")
+    if record.kind == "sandbox" and record.service != "system.ai.sandbox":
+        raise RuntimeError("Sandbox bindings require system.ai.sandbox.")
     if record.kind == "mcp" and not record.service:
         raise RuntimeError("MCP bindings require source.service.")
     if record.kind == "uc_function" and not record.function:
@@ -326,7 +335,9 @@ def downscope_wire(tool: ToolRecord) -> dict[str, list[dict[str, str]]]:
 
 def sandbox_meta(tool: ToolRecord) -> dict[str, Any]:
     """Build the protected MCP metadata for a configured sandbox binding."""
-    return {
-        "downscope": downscope_wire(tool),
-        "databricks_access_token_included": tool.databricks_access_token_included,
+    meta: dict[str, Any] = {
+        "databricks_access_token_included": tool.databricks_access_token_included
     }
+    if tool.downscope:
+        meta["downscope"] = downscope_wire(tool)
+    return meta

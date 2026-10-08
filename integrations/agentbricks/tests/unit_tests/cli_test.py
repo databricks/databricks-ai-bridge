@@ -105,7 +105,9 @@ def test_nested_command_help_shows_usage_options_and_examples():
     assert result.exit_code == 0, result.output
     assert "Usage: agentbricks tools add sandbox [OPTIONS]" in result.output
     assert "--scope TEXT" in result.output
+    assert "caller grants by default" in result.output
     assert "EXAMPLES" in result.output
+    assert "agentbricks tools add sandbox" in result.output
     assert "agentbricks tools add sandbox --scope volume:main.data.files" in result.output
 
 
@@ -142,6 +144,7 @@ def test_tools_add_help_explains_types_and_project_targeting():
     assert "Subcommands target the current directory by default" in result.output
     assert "Pass --source PATH to target another project." in result.output
     for example in (
+        "agentbricks tools add sandbox",
         "agentbricks tools add sandbox --scope volume:main.data.files",
         "agentbricks tools add mcp system.ai.web_search",
         "agentbricks tools add uc-function catalog.schema.lookup_ticket",

@@ -343,18 +343,20 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("tools",): (
         ("agentbricks tools add --help", "see all tool types you can add"),
+        ("agentbricks tools add sandbox", "add a sandbox with caller grants"),
         (
             "agentbricks tools add sandbox --scope volume:main.data.files",
-            "add a data sandbox tool",
+            "restrict the sandbox to a volume",
         ),
         ("agentbricks tools add mcp system.ai.web_search", "add a managed MCP tool"),
         ("agentbricks tools remove mcp system.ai.web_search", "remove a tool binding"),
         ("agentbricks tools list", "browse available integrations to add"),
     ),
     ("tools", "add"): (
+        ("agentbricks tools add sandbox", "add a sandbox with caller grants"),
         (
             "agentbricks tools add sandbox --scope volume:main.data.files",
-            "add a data sandbox tool",
+            "restrict the sandbox to a volume",
         ),
         ("agentbricks tools add mcp system.ai.web_search", "add a managed MCP tool"),
         (
@@ -365,9 +367,10 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("agentbricks tools add genie-agent SPACE_ID", "add tools for one Genie Space"),
     ),
     ("tools", "add", "sandbox"): (
+        ("agentbricks tools add sandbox", "add a sandbox with caller grants"),
         (
             "agentbricks tools add sandbox --scope volume:main.data.files",
-            "add a data sandbox tool",
+            "restrict the sandbox to a volume",
         ),
     ),
     ("tools", "add", "mcp"): (

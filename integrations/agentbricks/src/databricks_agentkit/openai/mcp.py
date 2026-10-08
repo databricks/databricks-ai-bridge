@@ -98,7 +98,9 @@ class _DownscopedMcpServer(_ConfiguredMcpServer):
         self._protected_meta = protected_meta
 
     async def call_tool(self, tool_name, arguments, **kwargs):
-        meta = {**(kwargs.pop("meta", None) or {}), **self._protected_meta}
+        caller_meta = kwargs.pop("meta", None) or {}
+        meta = {key: value for key, value in caller_meta.items() if key != "downscope"}
+        meta.update(self._protected_meta)
         return await super().call_tool(tool_name, arguments, meta=meta, **kwargs)
 
 

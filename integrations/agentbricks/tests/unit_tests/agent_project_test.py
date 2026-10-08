@@ -141,6 +141,40 @@ def test_scope_rejects_unsupported_table_resource():
 
 
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
+def test_unscoped_sandbox_round_trips_without_downscope_meta(tmp_path, monkeypatch, framework):
+    project = AgentProject.create(tmp_path, framework=framework, server="agentbricks")
+    project.add_tool(ToolSpec.sandbox("sandbox", scopes=[], auth="user"))
+    project.write()
+    monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
+
+    assert AgentProject.load(tmp_path).tools[0].policy.downscope == ()
+    record = load_tools(expected_framework=framework)[0]
+    assert record.downscope == ()
+    assert tool_manifest.sandbox_meta(record) == {"databricks_access_token_included": True}
+
+
+@pytest.mark.parametrize("reader", ["project", "runtime"])
+@pytest.mark.parametrize("downscope", ["[]", '[{ resource = "volume:main.data" }]'])
+def test_supplied_invalid_sandbox_downscope_fails_closed(tmp_path, monkeypatch, reader, downscope):
+    path = _write_manifest(
+        tmp_path,
+        'schema_version = 1\n[agent]\nframework = "langgraph"\nserver = "agentbricks"\n'
+        '\n[[tools]]\nid = "sandbox"\n'
+        'source = { kind = "sandbox", service = "system.ai.sandbox" }\n'
+        f"policy = {{ downscope = {downscope} }}\n",
+    )
+    before = path.read_bytes()
+    monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
+
+    with pytest.raises((AgentCliError, RuntimeError)):
+        if reader == "project":
+            AgentProject.load(tmp_path)
+        else:
+            load_tools(expected_framework="langgraph")
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
 @pytest.mark.parametrize("permission", ["read_only", "read_write"])
 def test_table_scopes_round_trip_when_gate_is_enabled(tmp_path, monkeypatch, framework, permission):
     monkeypatch.setattr(tool_manifest, "SANDBOX_TABLE_SCOPES_ENABLED", True)
@@ -525,7 +559,6 @@ def test_add_conflicting_tool_id_fails_without_writing(tmp_path: pathlib.Path):
     [
         (lambda: ToolSpec.mcp("web", service="not-three-parts"), "MCP service"),
         (lambda: ToolSpec.uc_function("lookup", function="catalog.schema"), "UC function"),
-        (lambda: ToolSpec.sandbox("sandbox", scopes=[]), "scope"),
         (
             lambda: ToolSpec.sandbox("sandbox", scopes=[Scope(kind="unknown", value="c.s.t")]),
             "scope kind",
