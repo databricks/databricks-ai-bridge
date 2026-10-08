@@ -38,7 +38,7 @@ EXPERIMENTAL_TABLE = "experimental"
 # `[experimental.model_services.<role>]` table per
 # LLM call site: `name` is the user-owned UC model service that call goes through
 # (catalog.schema.name); `default` is the system.ai.* model deploy routes it to when it first
-# creates the service. `agentbricks experimental models set` repoints them afterwards. A single-model
+# creates the service. `agentbricks experimental models upgrade` / `set` repoint them afterwards. A single-model
 # agent uses one role, DEFAULT_MODEL_ROLE.
 MODEL_SERVICES_TABLE = "model_services"
 MODEL_SERVICE_DEFAULT_KEY = "default"
@@ -46,7 +46,7 @@ DEFAULT_MODEL_ROLE = tool_manifest.DEFAULT_MODEL_ROLE
 _ROLE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 # The prompt bindings (`agentbricks experimental prompts bind`): MLflow Prompt Registry prompts
 # the agent loads, as `<key> = "catalog.schema.name"` under [experimental.prompts]. `agentbricks deploy` grants
-# the app access to their schemas.
+# the app access to their schemas, and `models upgrade` optimizes them by default.
 PROMPTS_TABLE = "prompts"
 MODEL_SERVICES_PATH = f"{EXPERIMENTAL_TABLE}.{MODEL_SERVICES_TABLE}"
 PROMPTS_PATH = f"{EXPERIMENTAL_TABLE}.{PROMPTS_TABLE}"

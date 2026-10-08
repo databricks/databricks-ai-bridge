@@ -333,6 +333,74 @@ class _AgentBricksApiClient:
         """The chat-capable ``system.ai.*`` model services in this workspace, sorted."""
         return model_services.list_ai_gateway_model_services(self._w)
 
+    # --- workspace files + one-time job runs (used by `agentbricks experimental models upgrade`) --------
+
+    def upload_workspace_file(self, path: str, content: str) -> None:
+        """Write a workspace file at ``path`` (overwriting), creating its parent folder."""
+        import io  # noqa: PLC0415
+
+        from databricks.sdk.service.workspace import ImportFormat  # noqa: PLC0415
+
+        try:
+            self._w.workspace.mkdirs(path.rsplit("/", 1)[0])
+            self._w.workspace.upload(
+                path, io.BytesIO(content.encode("utf-8")), format=ImportFormat.AUTO, overwrite=True
+            )
+        except Exception as exc:  # noqa: BLE001 - normalized to AgentCliError
+            raise wrap_api_error(exc) from exc
+
+    def submit_serverless_python_run(
+        self,
+        *,
+        run_name: str,
+        python_file: str,
+        parameters: list[str],
+        dependencies: list[str],
+        environment_version: str,
+        timeout_seconds: int,
+    ) -> int:
+        """Submit a one-time serverless run of a workspace Python file; returns the run id.
+
+        ``dependencies`` take any requirements.txt form, including workspace paths to Python
+        projects (a directory with a pyproject.toml).
+        """
+        from databricks.sdk.service import compute, jobs  # noqa: PLC0415
+
+        try:
+            waiter = self._w.jobs.submit(
+                run_name=run_name,
+                tasks=[
+                    jobs.SubmitTask(
+                        task_key="model_upgrade",
+                        spark_python_task=jobs.SparkPythonTask(
+                            python_file=python_file,
+                            parameters=parameters,
+                            source=jobs.Source.WORKSPACE,
+                        ),
+                        environment_key="default",
+                    )
+                ],
+                environments=[
+                    jobs.JobEnvironment(
+                        environment_key="default",
+                        spec=compute.Environment(
+                            environment_version=environment_version, dependencies=dependencies
+                        ),
+                    )
+                ],
+                timeout_seconds=timeout_seconds,
+            )
+        except Exception as exc:  # noqa: BLE001 - normalized to AgentCliError
+            raise wrap_api_error(exc) from exc
+        return int(waiter.run_id)
+
+    def get_run(self, run_id: int) -> Any:
+        """A job run (state, run_page_url, tasks)."""
+        try:
+            return self._w.jobs.get_run(run_id)
+        except Exception as exc:  # noqa: BLE001 - normalized to AgentCliError
+            raise wrap_api_error(exc) from exc
+
     # --- memory stores -------------------------------------------------------
 
     def create_memory_store(
