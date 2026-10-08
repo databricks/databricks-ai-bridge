@@ -16,6 +16,7 @@ from databricks_agentbricks.cli.deploy import deploy, deployments
 from databricks_agentbricks.cli.dev import dev
 from databricks_agentbricks.cli.doctor import doctor
 from databricks_agentbricks.cli.endpoint import endpoint
+from databricks_agentbricks.cli.experimental import experimental
 from databricks_agentbricks.cli.help import configure_help
 from databricks_agentbricks.cli.init import init
 from databricks_agentbricks.cli.memory import memory
@@ -71,7 +72,9 @@ def agentbricks(ctx: click.Context, profile: Optional[str], output: str) -> None
 
     \b
       Models       Call Databricks model serving out of the box, routed through
-                   the AI Gateway for capacity on your existing Databricks auth.
+                   the AI Gateway for capacity on your existing Databricks auth;
+                   bind each LLM call to a model service, then search models and
+                   prompts for every call on your own eval set.
       Tools        Data sandboxes, managed MCP services, Unity Catalog
                    functions, and local Python tools the agent can call.
       Memory       Long-term memory the agent recalls across conversations.
@@ -98,6 +101,7 @@ agentbricks.add_command(deploy)
 agentbricks.add_command(deployments)
 agentbricks.add_command(endpoint)
 agentbricks.add_command(tools)
+agentbricks.add_command(experimental)
 configure_help(agentbricks)
 
 

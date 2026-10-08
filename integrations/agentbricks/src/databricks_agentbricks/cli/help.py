@@ -19,6 +19,7 @@ _COMMAND_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("SETUP", ("login", "logout", "init", "doctor")),
     ("DEVELOP", ("dev", "tools", "memory", "sessions", "tracing")),
     ("SHIP", ("deploy", "deployments")),
+    ("EXPERIMENTAL", ("experimental",)),
 )
 
 # Each example is either a bare command, or a (command, comment) pair. The comment is a short gloss
@@ -287,6 +288,78 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("agentbricks tracing bind --experiment-id 12345", "or by experiment id"),
     ),
     ("tracing", "unbind"): (("agentbricks tracing unbind", "turn tracing off"),),
+    ("experimental",): (
+        (
+            "agentbricks experimental models status",
+            "the model behind each of the agent's LLM calls",
+        ),
+        ("agentbricks experimental prompts list", "the prompts the agent loads"),
+    ),
+    ("experimental", "models"): (
+        (
+            "agentbricks experimental models bind main.my_agent.llm --default system.ai.claude-sonnet-4-5",
+            "call a model service you own (deploy creates it)",
+        ),
+        ("agentbricks experimental models status", "the model behind each bound service"),
+        (
+            "agentbricks experimental models set claude-haiku-4-5 --role router",
+            "switch one role's model, with no code change or redeploy",
+        ),
+    ),
+    ("experimental", "models", "bind"): (
+        (
+            "agentbricks experimental models bind main.my_agent.llm --default system.ai.claude-sonnet-4-5",
+            "declare the agent's model service in agent.toml",
+        ),
+        (
+            "agentbricks experimental models bind main.my_agent.router_llm --role router "
+            "--default system.ai.claude-haiku-4-5",
+            "one service per LLM call in a compound agent",
+        ),
+    ),
+    ("experimental", "models", "unbind"): (
+        ("agentbricks experimental models unbind", "remove the agent's only binding"),
+        ("agentbricks experimental models unbind --role router", "remove one role's binding"),
+    ),
+    ("experimental", "prompts"): (
+        (
+            "agentbricks experimental prompts bind main.my_agent.writer",
+            "declare a Prompt Registry prompt the agent loads",
+        ),
+        ("agentbricks experimental prompts list", "bound prompts and their @production versions"),
+    ),
+    ("experimental", "prompts", "bind"): (
+        (
+            "agentbricks experimental prompts bind main.my_agent.writer",
+            "declare a Prompt Registry prompt the agent loads",
+        ),
+        (
+            "agentbricks experimental prompts bind main.my_agent.v2_writer --key writer",
+            "bind it under a different key",
+        ),
+    ),
+    ("experimental", "prompts", "unbind"): (
+        ("agentbricks experimental prompts unbind writer", "remove a prompt binding"),
+    ),
+    ("experimental", "prompts", "list"): (
+        ("agentbricks experimental prompts list", "bound prompts and their @production versions"),
+    ),
+    ("experimental", "models", "list"): (
+        ("agentbricks experimental models list", "models you can route a service to"),
+    ),
+    ("experimental", "models", "status"): (
+        ("agentbricks experimental models status", "each role's model and the bound prompts"),
+    ),
+    ("experimental", "models", "set"): (
+        (
+            "agentbricks experimental models set system.ai.claude-haiku-4-5",
+            "switch the model by name",
+        ),
+        (
+            "agentbricks experimental models set claude-haiku-4-5 --role router",
+            "switch one role's model",
+        ),
+    ),
     ("tracing", "list"): (
         (
             "agentbricks tracing list --experiment-name /Shared/agentbricks_traces/my-agent",

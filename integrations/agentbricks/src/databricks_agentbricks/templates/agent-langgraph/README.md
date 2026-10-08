@@ -109,6 +109,10 @@ Use `agentbricks init --framework langgraph --disable-chat-app` for API-only out
 - Add local tools under `agent/tools/`; modules are auto-discovered.
 - Add MCP servers in `agent/mcps.py` or with `agentbricks tools add mcp`.
 - Bind long-term memory with `agentbricks memory bind <store>`.
+- Route the agent's model through a Unity Gateway model service you own with
+  `agentbricks experimental models bind`, then switch it without a redeploy with
+  `agentbricks experimental models set`. These commands are experimental, so their flags may
+  change between releases.
 
 ```bash
 agentbricks --profile <profile> deploy agent-langgraph --source .
