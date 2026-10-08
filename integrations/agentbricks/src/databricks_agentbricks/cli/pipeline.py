@@ -29,6 +29,12 @@ def _truncate(value: Any, length: int = 48) -> str:
     return text if len(text) <= length else text[: length - 1] + "…"
 
 
+def _store_id(name: Any) -> str | None:
+    # The list table is too narrow for full resource names; the collection prefix is
+    # implied by the column header.
+    return str(name).split("/")[-1] if name else None
+
+
 def _render_detail(pipeline: dict) -> None:
     policy = field(pipeline, "dreamer_policy") or {}
     render.detail(
@@ -133,8 +139,8 @@ def list_(obj, page_size, page_token) -> None:
         [
             [
                 field(item, "name"),
-                field(item, "session_store"),
-                field(item, "memory_store"),
+                _store_id(field(item, "session_store")),
+                _store_id(field(item, "memory_store")),
                 _truncate(field(item, "model")),
             ]
             for item in pipelines
