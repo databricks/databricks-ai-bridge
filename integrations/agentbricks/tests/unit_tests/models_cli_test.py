@@ -391,6 +391,7 @@ def test_upgrade_uploads_project_and_submits_job_without_switching(tmp_path, stu
     assert config.candidates == {"agent": ["system.ai.claude-haiku-4-5", "system.ai.gpt-5-4-mini"]}
     assert config.trace_experiment == "/Shared/agentbricks_traces/my-agent"
     assert config.weights == (0.7, 0.2, 0.1)
+    assert config.latency_gate == 60.0
     assert timeout_hours == 6.0
     # Submitting never switches the model.
     assert client.model == "system.ai.claude-sonnet-4-5"
@@ -1139,3 +1140,28 @@ def test_check_ref_follows_imports_and_star_imports(tmp_path):
     model_upgrade.check_ref(tmp_path, "agent.star:ANYTHING")  # a star import can define any name
     with pytest.raises(AgentCliError, match="doesn't define 'TRAIN'"):
         model_upgrade.check_ref(tmp_path, "agent.small:TRAIN")
+
+
+def test_upgrade_passes_latency_gate_to_the_job(tmp_path, stub_job):
+    project = _project(tmp_path)
+    result = _invoke(
+        ["upgrade", *_EVAL_FLAGS, "-c", "claude-haiku-4-5", "--latency-gate", "300",
+         "--source", str(project)],
+        _Ctx(_JobClient(), "json"),
+    )  # fmt: skip
+    assert result.exit_code == 0, result.output
+    _, config, _ = stub_job["submit"]
+    assert config.latency_gate == 300.0
+    assert model_upgrade.JobConfig.from_param(config.to_param()).latency_gate == 300.0
+
+
+def test_report_where_every_record_scored_zero_says_so(capsys):
+    from databricks_agentbricks.cli.models import _render_report
+
+    report = _report("system.ai.claude-sonnet-4-5")
+    report.baseline_score = report.best_score = 0.0
+    _render_report(report)
+    out = capsys.readouterr().out
+    assert "Every record scored 0" in out
+    assert "--latency-gate" in out
+    assert "Already on the best" not in out

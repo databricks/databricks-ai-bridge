@@ -46,6 +46,8 @@ DEFAULT_TIMEOUT_HOURS = 6
 # Default search budget, in agent runs per eval record. GEPA proposes one prompt or model at a time,
 # so a compound agent needs room for every prompt and every role's candidates to get a turn.
 BUDGET_PER_RECORD = 10
+# A record slower than this many seconds scores 0 on every objective (the optimizer's default).
+DEFAULT_LATENCY_GATE = 60.0
 # MLflow tags on the job's run: the id the CLI looks the run up by, and the report itself.
 UPGRADE_ID_TAG = "agentbricks.upgrade_id"
 REPORT_TAG = "agentbricks.upgrade_report"
@@ -276,6 +278,7 @@ def run_upgrade(
     scorers: list,
     budget: Optional[int],
     weights: tuple[float, float, float],
+    latency_gate: float = DEFAULT_LATENCY_GATE,
 ) -> tuple[UpgradeReport, Any]:
     """Search every bound role's candidates (plus its current model) and ``prompt_uris`` jointly.
 
@@ -299,6 +302,7 @@ def run_upgrade(
         weight_quality=weight_quality,
         weight_latency=weight_latency,
         weight_cost=weight_cost,
+        latency_hard_gate=latency_gate,
         model_selection="bandit",
         display_progress_bar=False,
     )
@@ -368,6 +372,7 @@ class JobConfig:
     trace_experiment: str
     budget: Optional[int]
     weights: tuple[float, float, float]
+    latency_gate: float = DEFAULT_LATENCY_GATE
 
     def to_param(self) -> str:
         return json.dumps({**self.__dict__, "weights": list(self.weights)})
@@ -426,6 +431,7 @@ def run_and_record(root: pathlib.Path, config: JobConfig) -> UpgradeReport:
                 "scorers": ",".join(config.scorers),
                 "budget": config.budget or "auto",
                 "weights": ",".join(str(w) for w in config.weights),
+                "latency_gate": config.latency_gate,
             }
         )
         client = workspace_client()
@@ -443,6 +449,7 @@ def run_and_record(root: pathlib.Path, config: JobConfig) -> UpgradeReport:
             scorers=_load_scorers(root, config.scorers),
             budget=config.budget,
             weights=config.weights,
+            latency_gate=config.latency_gate,
         )
         report.mlflow_run_id = run.info.run_id
         mlflow.log_dict(promotion_payload(result), PROMOTION_ARTIFACT)

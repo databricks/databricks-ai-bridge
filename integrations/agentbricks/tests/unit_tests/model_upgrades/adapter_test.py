@@ -506,6 +506,29 @@ def test_run_one_latency_hard_gate(mocker):
     assert feedback.startswith("REJECTED: latency")
 
 
+def test_run_one_warns_when_a_record_goes_over_the_latency_gate(mocker, monkeypatch):
+    """A rejection used to be silent, so a slow agent read as "already on the best models"."""
+    import time as _time
+
+    monkeypatch.setattr(opt, "_SCORER_WARNINGS_SEEN", set())
+    et = _EndpointTarget(name="ep1", candidate_models=["m1"], initial_model="m1")
+    state = _state(
+        predict_fn=lambda x: _time.sleep(0.05) or "ok",
+        scorers=[lambda inputs, expected, answer: 1.0],
+        endpoint_targets=[et],
+        token_costs={"m1": {"input": 0.0, "output": 0.0}},
+        latency_hard_gate=0.01,
+    )
+    mocker.patch(
+        "databricks_agentkit.model_upgrades.optimization._extract_trace_summary",
+        return_value={"total_tokens": {}, "spans": []},
+    )
+    with pytest.warns(UserWarning, match="over latency_hard_gate"):
+        _AgentAdapter(state)._run_one(
+            {"model:ep1": "m1"}, inputs={}, expectations={"expected_response": "ok"}
+        )
+
+
 def test_run_one_predict_failure_yields_error_string(mocker):
     """Predict raising should produce 'ERROR: ...' answer for the scorer to see."""
     et = _EndpointTarget(name="ep1", candidate_models=["m1"], initial_model="m1")

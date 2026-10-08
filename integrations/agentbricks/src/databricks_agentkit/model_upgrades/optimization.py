@@ -980,6 +980,13 @@ class _AgentAdapter(gepa.GEPAAdapter):
         trace = _extract_trace_summary()
 
         if latency > state.latency_hard_gate:
+            _warn_once(
+                "latency",
+                "over_latency_hard_gate",
+                f"a record took {latency:.0f}s, over latency_hard_gate={state.latency_hard_gate:.0f}s, "
+                "so it scores 0 on every objective. Raise latency_hard_gate if the agent is "
+                "legitimately this slow.",
+            )
             return (
                 0.0,
                 {"quality": 0.0, "latency": 0.0, "cost": 0.0},

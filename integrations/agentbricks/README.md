@@ -471,7 +471,9 @@ agentbricks experimental models apply         # switch to it
 
 By default `models upgrade` uploads the project to your workspace and runs the search as a
 serverless Databricks job, because a search can take hours. `--run-on local` runs it in your
-terminal instead, which needs the `upgrade` extra and the agent's dependencies installed. The job imports the `predict_fn`,
+terminal instead, which needs the `upgrade` extra and the agent's dependencies installed. Each call
+takes longer from a laptop than on a serverless job, and a record slower than `--latency-gate` (60
+seconds by default) scores 0, so raise it if a local run warns that records went over the gate. The job imports the `predict_fn`,
 eval data, and scorers you name from the project (the same inputs `optimize_prompts_and_models`
 takes, below) and runs each eval record once per candidate, against a temporary `<service>_exp_<id>`
 clone. Each LLM call must use its role's service, `resolve_model_service("<role>")`, which reads the

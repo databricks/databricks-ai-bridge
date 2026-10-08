@@ -622,6 +622,14 @@ def _render_report(report) -> None:
     }
     if report.mlflow_run_id:
         fields["MLflow run"] = report.mlflow_run_id
+    if not report.changed and report.best_score == 0:
+        # Every record failed, timed out, or went over --latency-gate: nothing was compared.
+        run = f" (MLflow run {report.mlflow_run_id})" if report.mlflow_run_id else ""
+        render.warning(
+            f"Every record scored 0{run}, so no candidate could be compared. Check the warnings "
+            "above: the agent may be erroring, or slower than --latency-gate."
+        )
+        return
     render.success(
         "Upgrade recommendation" if report.changed else "Already on the best models and prompts",
         fields=fields,
@@ -787,6 +795,15 @@ def _render_applied(result: dict) -> None:
     help="Quality, latency, cost weights for picking the winner.",
 )
 @click.option(
+    "--latency-gate",
+    type=click.FloatRange(min=1),
+    default=60.0,
+    show_default=True,
+    help="Seconds. A record slower than this scores 0 on every objective. Raise it for agents "
+    "that legitimately take longer, or for --run-on local, where each call takes longer than on "
+    "a serverless job.",
+)
+@click.option(
     "--timeout-hours",
     type=click.FloatRange(min=0.1),
     default=6.0,
@@ -828,6 +845,7 @@ def models_upgrade(
     scorers: tuple[str, ...],
     budget: Optional[int],
     weights: str,
+    latency_gate: float,
     timeout_hours: float,
     run_on: str,
     apply_mode: str,
@@ -916,6 +934,7 @@ def models_upgrade(
         trace_experiment=str(project.trace_experiment_name),
         budget=budget,
         weights=parsed_weights,
+        latency_gate=latency_gate,
     )
     if run_on == "local":
         run = _run_locally(obj, project, config, services, current, by_role)
