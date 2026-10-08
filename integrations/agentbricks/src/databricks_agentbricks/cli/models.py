@@ -937,6 +937,16 @@ def models_upgrade(
         latency_gate=latency_gate,
     )
     if run_on == "local":
+        import importlib.util  # noqa: PLC0415
+
+        # GEPA writes prompt rewrites through litellm. Without it, every reflection fails and the
+        # search runs for hours without proposing a single prompt; the job installs it for you.
+        missing = [m for m in ("gepa", "litellm") if importlib.util.find_spec(m) is None]
+        if missing and (config.prompt_uris or "gepa" in missing):
+            raise AgentCliError(
+                f"--run-on local needs {', '.join(missing)} installed here.",
+                hint=model_upgrade.UPGRADE_EXTRA_HINT,
+            )
         run = _run_locally(obj, project, config, services, current, by_role)
     else:
         run = _run_as_job(

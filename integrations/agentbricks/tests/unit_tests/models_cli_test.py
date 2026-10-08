@@ -1165,3 +1165,23 @@ def test_report_where_every_record_scored_zero_says_so(capsys):
     assert "Every record scored 0" in out
     assert "--latency-gate" in out
     assert "Already on the best" not in out
+
+
+def test_local_run_with_prompts_needs_litellm(tmp_path, stub_job, monkeypatch):
+    """Without litellm, GEPA can't write a single prompt rewrite, so fail before the search."""
+    import importlib.util
+
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name, *a, **k: None if name == "litellm" else real_find_spec(name, *a, **k),
+    )
+    project = _project(tmp_path)
+    result = _invoke(
+        ["upgrade", *_EVAL_FLAGS, "-c", "claude-haiku-4-5", "--run-on", "local",
+         "--prompt", "prompts:/main.my_agent.writer@production", "--source", str(project)],
+        _Ctx(_JobClient()),
+    )  # fmt: skip
+    assert result.exit_code != 0
+    assert "--run-on local needs litellm installed here" in result.output
