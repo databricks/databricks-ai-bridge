@@ -97,7 +97,7 @@ def deploy_scratch_schema(
 def uc_function(
     scratch_schema: str, target_workspace: TargetWorkspace, shared_resources: SharedResources
 ) -> UcFunction:
-    """Marker functions and a marker volume in ``scratch_schema`` (a fixture each matrix defines)."""
+    """Marker functions and a marker volume in ``scratch_schema`` (defined by the matrix that needs one)."""
     workspace = require_workspace(target_workspace, "a UC function")
     value = shared_resources.get_or_create(
         "uc_function", lambda track: _create_uc_function(workspace, scratch_schema, track)
