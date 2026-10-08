@@ -33,6 +33,9 @@ from databricks_agentbricks.projects.agent_project import AgentProject, Scope, T
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.reporting import Reporter
 from databricks_agentbricks.services.deploy_service import DeployRequest, DeployService
+from databricks_agentbricks.services.deployment.model_binding_provisioner import (
+    ModelBindingProvisioner,
+)
 from databricks_agentbricks.services.deployment.provisioners import (
     AppProvisioner,
     GrantOutcome,
@@ -148,6 +151,7 @@ def _real_auth_deploy_harness(tmp_path, sdk_apps):
         tracing_provisioner=tracing,
         runtime_store_provisioner=runtime,
         tool_access_provisioner=tool_access,
+        model_binding_provisioner=ModelBindingProvisioner(provider, Mock(spec=Reporter)),
         reporter=reporter,
     )
     return SimpleNamespace(

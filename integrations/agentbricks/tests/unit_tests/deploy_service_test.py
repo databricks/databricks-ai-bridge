@@ -22,6 +22,9 @@ from databricks_agentbricks.projects.app_manifest import AppManifest
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.reporting import Reporter
 from databricks_agentbricks.services.deploy_service import DeployRequest, DeployService
+from databricks_agentbricks.services.deployment.model_binding_provisioner import (
+    ModelBindingProvisioner,
+)
 from databricks_agentbricks.services.deployment.names import DeploymentName
 from databricks_agentbricks.services.deployment.provisioners import (
     AppProvisioner,
@@ -129,6 +132,7 @@ def deployment_fixture(tmp_path: pathlib.Path) -> SimpleNamespace:
         tracing_provisioner=tracing,
         runtime_store_provisioner=runtime,
         tool_access_provisioner=tool_access,
+        model_binding_provisioner=ModelBindingProvisioner(provider, reporter),
         reporter=reporter,
     )
     return SimpleNamespace(
@@ -255,6 +259,7 @@ def test_deploy_passes_returned_state_between_phases(tmp_path: pathlib.Path) -> 
         tracing_provisioner=tracing,
         runtime_store_provisioner=runtime,
         tool_access_provisioner=tool_access,
+        model_binding_provisioner=ModelBindingProvisioner(provider, Mock(spec=Reporter)),
         reporter=Mock(spec=Reporter),
     )
     result = service.deploy(
@@ -591,6 +596,9 @@ def test_declarative_unbind_prunes_stale_store_env_from_existing_manifest(
         tracing_provisioner=deployment_fixture.tracing,
         runtime_store_provisioner=deployment_fixture.runtime,
         tool_access_provisioner=deployment_fixture.tool_access,
+        model_binding_provisioner=ModelBindingProvisioner(
+            deployment_fixture.provider, deployment_fixture.reporter
+        ),
         reporter=deployment_fixture.reporter,
     )
 

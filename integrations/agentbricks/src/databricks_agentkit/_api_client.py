@@ -17,12 +17,14 @@ from urllib.parse import quote
 
 from databricks_agentbricks.errors import TRANSIENT_ERROR_CODES, AgentCliError, wrap_api_error
 from databricks_agentkit import models
+from databricks_agentkit.runtime import model_services, prompt_registry
 
 if TYPE_CHECKING:
     from databricks.sdk import WorkspaceClient
 
 _BASE = "/api/2.0/agents"
 _MCP_SERVICES_PATH = "/api/2.1/unity-catalog/mcp-services"
+_MODEL_SERVICES_PATH = "/api/2.1/unity-catalog/model-services"
 
 # Transient backend failures (e.g. a CANCELLED RPC) usually clear on a retry, so retry safe
 # requests once before surfacing them. Mutating requests must opt in explicitly: their first
@@ -271,6 +273,65 @@ class _AgentBricksApiClient:
             _MCP_SERVICES_PATH,
             query=_query(parent=f"schemas/{schema}", page_token=page_token),
         )
+
+    # --- Unity Catalog AI Gateway model services -----------------------------
+
+    def get_model_service(self, name: str) -> dict:
+        """Look up a model service by its three-part name (``catalog.schema.name``)."""
+        return self._do("GET", model_services.service_path(name))
+
+    def create_model_service(self, name: str, model: str, *, comment: str | None = None) -> dict:
+        """Create a model service routed 100% to ``model``, creating its parent schema if missing."""
+        try:
+            model_services.ensure_schema(self._w, name)
+        except Exception as exc:  # noqa: BLE001 - normalized to AgentCliError
+            raise wrap_api_error(exc) from exc
+        query, body = model_services.create_request(
+            name, model_services.foundation_model(self._w, model), comment
+        )
+        return self._do("POST", _MODEL_SERVICES_PATH, query=query, body=body)
+
+    def set_model_service_model(self, name: str, model: str) -> dict:
+        """Repoint a model service's (single) destination to ``model`` (a ``system.ai.*`` name)."""
+        query, body = model_services.set_model_request(
+            model_services.foundation_model(self._w, model)
+        )
+        return self._do(
+            "PATCH", model_services.service_path(name), query=query, body=body, safe_to_retry=True
+        )
+
+    def grant_model_service_execute(self, name: str, principal: str) -> None:
+        """Grant ``principal`` EXECUTE on a model service, plus best-effort USE CATALOG / SCHEMA.
+
+        The parent grants are best-effort (see ``model_services.grant_requests``); EXECUTE raises.
+        """
+        for path, body, required in model_services.grant_requests(name, principal):
+            try:
+                self._do("PATCH", path, body=body, safe_to_retry=True)
+            except AgentCliError:
+                if required:
+                    raise
+
+    def grant_prompt_access(self, schema: str, principal: str) -> None:
+        """Let ``principal`` load Prompt Registry prompts in ``catalog.schema``.
+
+        Grants the schema privileges the Prompt Registry requires (see ``prompt_registry``), plus
+        best-effort USE CATALOG.
+        """
+        for path, body, required in prompt_registry.grant_requests(schema, principal):
+            try:
+                self._do("PATCH", path, body=body, safe_to_retry=True)
+            except AgentCliError:
+                if required:
+                    raise
+
+    def can_execute_model(self, model: str) -> Optional[bool]:
+        """Whether the caller can execute ``model``'s registered model (None if unknown)."""
+        return model_services.can_execute(self._w, model, self.current_user)
+
+    def list_chat_model_services(self) -> list[str]:
+        """The chat-capable ``system.ai.*`` model services in this workspace, sorted."""
+        return model_services.list_ai_gateway_model_services(self._w)
 
     # --- memory stores -------------------------------------------------------
 

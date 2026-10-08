@@ -70,12 +70,25 @@ class AppManifest:
         raw = self._doc.get("env")
         return raw if isinstance(raw, list) else []
 
-    def upsert_env(self, updates: Mapping[str, str], removals: Sequence[str] = ()) -> None:
+    def upsert_env(
+        self,
+        updates: Mapping[str, str],
+        removals: Sequence[str] = (),
+        *,
+        prune_prefixes: Sequence[str] = (),
+    ) -> None:
         """deploy's write path: normalize ``env`` to dict entries (dropping non-dicts), upsert each
         name in ``updates`` (setting ``value`` and dropping ``valueFrom`` on an existing entry,
         appending a new one otherwise), then drop any entry named in ``removals``.
         """
         env: list[dict[str, Any]] = [e for e in self.raw_env() if isinstance(e, dict)]
+        if prune_prefixes:
+            env = [
+                entry
+                for entry in env
+                if not str(entry.get("name", "")).startswith(tuple(prune_prefixes))
+                or entry.get("name") in updates
+            ]
         by_name = {e.get("name"): e for e in env}
         for name, value in updates.items():
             if name in by_name:
@@ -102,6 +115,8 @@ class AppManifest:
         source: pathlib.Path,
         updates: Mapping[str, str],
         removals: Sequence[str] = (),
+        *,
+        prune_prefixes: Sequence[str] = (),
     ) -> bool:
         """Reconcile env entries in <source>/app.yaml: upsert ``updates``, drop any named in ``removals``.
 
@@ -126,6 +141,6 @@ class AppManifest:
             manifest = cls.scaffold()
             scaffolded = True
 
-        manifest.upsert_env(updates, removals)
+        manifest.upsert_env(updates, removals, prune_prefixes=prune_prefixes)
         app_yaml.write_text(manifest.to_yaml())
         return scaffolded
