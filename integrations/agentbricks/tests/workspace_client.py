@@ -1,7 +1,6 @@
-"""Databricks SDK helpers for the matrix tests and runner: the workspace, which is not under test.
+"""Databricks SDK helpers for the matrix tests and fixtures: the workspace, which is not under test.
 
-Everything here goes through the SDK except ``app_logs``, since the SDK has no Apps log API, and
-bundles, which the runner drives with the Databricks CLI.
+Everything here goes through the SDK except ``app_logs``, since the SDK has no Apps log API.
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ import time
 from collections.abc import Callable, Sequence
 from typing import Any, cast
 
-from common import TOOL_RESOURCE_PREFIX, MatrixError, Transcript, now
+from common import TOOL_RESOURCE_PREFIX, MatrixError, log, now
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import DatabricksError, NotFound
 from databricks.sdk.service.catalog import SecurableType
@@ -28,7 +27,6 @@ class Workspace:
     def __init__(
         self,
         profile: str | None,
-        transcript: Transcript,
         *,
         app_auth_profile: str | None = None,
         warehouse_id: str | None = None,
@@ -36,11 +34,12 @@ class Workspace:
     ):
         self.profile = profile
         self.app_auth_profile = app_auth_profile or profile
-        self.transcript = transcript
         self.warehouse_id = warehouse_id
         self.preprovisioned_app_catalog_access = preprovisioned_app_catalog_access
         self.client = WorkspaceClient(profile=profile)
         self._app_auth_client: WorkspaceClient | None = None
+        self._app_auth_checked = False
+        self._warehouse_started = False
 
     # App auth: Databricks Apps /api routes need OAuth, so a PAT is rejected.
 
@@ -57,12 +56,15 @@ class Workspace:
         return self._app_auth_client
 
     def check_app_auth(self) -> None:
+        if self._app_auth_checked:
+            return
         if self._app_client().config.auth_type == "pat":
             raise MatrixError(
                 f"{self._app_auth_label()} uses a PAT. "
                 "Databricks Apps /api routes require OAuth; run `databricks auth login` "
                 "for a profile on the same workspace."
             )
+        self._app_auth_checked = True
 
     @property
     def app_headers(self) -> dict[str, str]:
@@ -71,6 +73,20 @@ class Workspace:
         if not authorization:
             raise MatrixError(f"Could not resolve credentials from {self._app_auth_label()}.")
         return {"Authorization": authorization}
+
+    # Existing resources the suite depends on
+
+    def require_catalog(self, name: str) -> None:
+        try:
+            self.client.catalogs.get(name)
+        except DatabricksError as exc:
+            raise MatrixError(f"Catalog {name!r} is not accessible: {exc}") from exc
+
+    def require_genie_space(self, space_id: str) -> None:
+        try:
+            self.client.genie.get_space(space_id)
+        except DatabricksError as exc:
+            raise MatrixError(f"Genie space {space_id!r} is not accessible: {exc}") from exc
 
     # SQL, warehouse, files
 
@@ -85,17 +101,24 @@ class Workspace:
                 (item for item in warehouses if item.state == State.RUNNING), warehouses[0]
             )
             self.warehouse_id = str(running.id)
-        self.transcript.write(f"# start warehouse {self.warehouse_id}")
+        log(f"# start warehouse {self.warehouse_id}")
         self.client.warehouses.start_and_wait(self.warehouse_id, timeout=dt.timedelta(minutes=20))
         return self.warehouse_id
 
+    def _ensure_warehouse(self) -> str:
+        # Each xdist worker has its own Workspace, so the warehouse is started on first use.
+        if not self._warehouse_started:
+            self.start_warehouse(self.warehouse_id)
+            self._warehouse_started = True
+        assert self.warehouse_id is not None
+        return self.warehouse_id
+
     def sql(self, statement: str, *, timeout: float = 600) -> None:
-        if self.warehouse_id is None:
-            raise MatrixError("SQL warehouse was not selected.")
-        self.transcript.write(f"$ sql: {statement}")
+        warehouse_id = self._ensure_warehouse()
+        log(f"$ sql: {statement}")
         response = self.client.statement_execution.execute_statement(
             statement=statement,
-            warehouse_id=self.warehouse_id,
+            warehouse_id=warehouse_id,
             wait_timeout="30s",
             on_wait_timeout=ExecuteStatementRequestOnWaitTimeout.CONTINUE,
         )
@@ -114,9 +137,13 @@ class Workspace:
         if not response.status or response.status.state != StatementState.SUCCEEDED:
             raise MatrixError(f"SQL failed: {response.as_dict()}")
 
+    def drop(self, kind: str, full_name: str) -> None:
+        catalog, schema, name = full_name.split(".")
+        self.sql(f"DROP {kind} IF EXISTS `{catalog}`.`{schema}`.`{name}`")
+
     def upload(self, path: str, data: bytes) -> None:
         self.client.files.upload(path, io.BytesIO(data), overwrite=True)
-        self.transcript.write(f"# uploaded {path}")
+        log(f"# uploaded {path}")
 
     def delete_file(self, path: str) -> None:
         try:
@@ -150,7 +177,7 @@ class Workspace:
                 return app
             elapsed = time.monotonic() - started
             if elapsed >= next_tick:
-                self.transcript.write(f"tick {now():%H:%M} | app-{name} | {state or 'UNKNOWN'}")
+                log(f"tick {now():%H:%M} | app-{name} | {state or 'UNKNOWN'}")
                 next_tick += 60
             time.sleep(15)
         raise MatrixError(f"App {name} did not become ACTIVE.")
@@ -169,9 +196,9 @@ class Workspace:
             log_path.parent.mkdir(parents=True, exist_ok=True)
             log_path.write_text(content, encoding="utf-8")
         except OSError as exc:
-            self.transcript.write(f"App runtime log capture warning for {name}: {exc}")
+            log(f"App runtime log capture warning for {name}: {exc}")
             return None
-        self.transcript.write(f"App runtime logs captured: {log_path}")
+        log(f"App runtime logs captured: {log_path}")
         return log_path
 
     # Grants
@@ -275,7 +302,7 @@ class Workspace:
             try:
                 self.client.apps.get(name)
             except NotFound:
-                self.transcript.write(f"tick {now():%H:%M} | delete-{name} | absent")
+                log(f"tick {now():%H:%M} | delete-{name} | absent")
                 return
             except DatabricksError as exc:
                 raise MatrixError(f"Could not verify deletion of App {name!r}: {exc}") from exc
@@ -285,7 +312,7 @@ class Workspace:
                     f"App {name!r} still existed {timeout:.0f}s after delete returned."
                 )
             if elapsed >= next_tick:
-                self.transcript.write(f"tick {now():%H:%M} | delete-{name} | deleting")
+                log(f"tick {now():%H:%M} | delete-{name} | deleting")
                 next_tick += 60
             time.sleep(15)
 
@@ -317,9 +344,7 @@ class Workspace:
                 or not isinstance(branch, str)
                 or not re.fullmatch(r"projects/[^/]+/branches/[^/]+", branch)
             ):
-                self.transcript.write(
-                    f"cleanup warning | Lakebase role for {app_name} | ownership not verified"
-                )
+                log(f"cleanup warning | Lakebase role for {app_name} | ownership not verified")
                 return None
             for role in self.client.postgres.list_roles(parent=branch):
                 data = role.as_dict()
@@ -333,7 +358,7 @@ class Workspace:
                 ):
                     return name
         except Exception as exc:
-            self.transcript.write(f"cleanup warning | Lakebase role lookup for {app_name} | {exc}")
+            log(f"cleanup warning | Lakebase role lookup for {app_name} | {exc}")
         return None
 
     def delete_role(self, role_name: str) -> None:
@@ -345,82 +370,54 @@ class Workspace:
 
 def cleanup_app(
     workspace: Workspace,
-    delete_store: Callable[[str, str], subprocess.CompletedProcess[str]],
     name: str,
-    info: dict[str, Any],
     *,
-    has_app: bool,
-) -> list[dict[str, Any]]:
-    """Delete one project's stores, and its App, runtime store and Lakebase role if it has an App.
+    delete_store: Callable[[str, str], subprocess.CompletedProcess[str]] | None = None,
+    memory_store: str | None = None,
+    session_store: str | None = None,
+    has_app: bool = True,
+    runtime_store: bool = False,
+) -> list[str]:
+    """Delete one project's stores and, if it has an App, its runtime store, App and Lakebase role.
 
     ``delete_store(kind, store)`` is the agentbricks CLI's store delete, which has no SDK surface.
+    Returns a description of each failure; an empty list means everything was deleted.
     """
-    transcript = workspace.transcript
-    results: list[dict[str, Any]] = []
-    has_stores = bool(info.get("memory_store_name") or info.get("session_store_name"))
+    failures: list[str] = []
     # Looked up before anything is deleted, since it needs the App and its runtime store.
-    role_target = workspace.app_role_target(name) if has_app and has_stores else None
-    stores_ok = True
-    for label, kind, store in (
-        ("memory store", "memory", info.get("memory_store_name")),
-        ("session store", "sessions", info.get("session_store_name")),
-    ):
-        if not store:
+    role_target = workspace.app_role_target(name) if has_app and runtime_store else None
+    for kind, store in (("memory", memory_store), ("sessions", session_store)):
+        if not (store and delete_store):
             continue
         try:
             result = delete_store(kind, store)
             if result.returncode != 0:
-                stores_ok = False
-                results.append(
-                    {
-                        "resource": f"{label}:{store}",
-                        "status": "failed",
-                        "detail": (result.stderr or result.stdout).strip(),
-                    }
-                )
-            else:
-                results.append({"resource": f"{label}:{store}", "status": "deleted"})
+                failures.append(f"{kind} store {store}: {(result.stderr or result.stdout).strip()}")
         except Exception as exc:
-            stores_ok = False
-            transcript.write(f"cleanup warning | {label} {store} | {exc}")
-            results.append({"resource": f"{label}:{store}", "status": "failed", "detail": str(exc)})
+            failures.append(f"{kind} store {store}: {exc}")
     if not has_app:
-        return results
+        return failures
 
     runtime_store_deleted = False
-    if has_stores:
+    if runtime_store:
         # The Runtime Store owns a dedicated Lakebase database; it must be deleted before the
         # role, or the role delete fails on database ownership.
         try:
             workspace.delete_runtime_store(name)
             runtime_store_deleted = True
-            results.append({"resource": f"runtime-store:{name}", "status": "deleted"})
         except Exception as exc:
-            results.append(
-                {"resource": f"runtime-store:{name}", "status": "failed", "detail": str(exc)}
-            )
+            failures.append(f"runtime store {name}: {exc}")
     try:
         workspace.delete_app(name)
     except Exception as exc:
-        results.append({"resource": f"app:{name}", "status": "failed", "detail": str(exc)})
-        return results
-    results.append(
-        {"resource": f"app:{name}", "status": "deleted", "confirmed_absent_at": now().isoformat()}
-    )
-    if role_target and stores_ok and runtime_store_deleted:
+        failures.append(f"app {name}: {exc}")
+        return failures
+    if role_target and not failures and runtime_store_deleted:
         try:
             workspace.delete_role(role_target)
-            results.append({"resource": f"lakebase-role:{role_target}", "status": "deleted"})
         except Exception as exc:
-            transcript.write(f"cleanup warning | Lakebase role {role_target} | {exc}")
-            results.append(
-                {
-                    "resource": f"lakebase-role:{role_target}",
-                    "status": "failed",
-                    "detail": str(exc),
-                }
-            )
-    return results
+            failures.append(f"Lakebase role {role_target}: {exc}")
+    return failures
 
 
 # Grant helpers

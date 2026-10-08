@@ -7,8 +7,8 @@ the tool surface, route to the wrong one, so this is the one test that binds the
 from __future__ import annotations
 
 from agentbricks_cli import AgentbricksCli
-from common import EXPECTED, Evidence, Inputs, recorded_row
-from tools import PYTHON_MARKER, UC_MARKER, bind, tools_for
+from provisioning import UcFunction
+from tools import PYTHON_MARKER, UC_MARKER, Tool, bind
 from workspace_client import Workspace
 
 # Names the Unity Catalog function without its tool id, and the Python helper only to exclude it.
@@ -21,39 +21,23 @@ PROMPT = (
 def test_selects_uc_function_not_python_marker(
     agentbricks_cli: AgentbricksCli,
     workspace_client: Workspace,
-    inputs: Inputs,
-    evidence: Evidence,
+    tools: tuple[Tool, ...],
+    uc_function: UcFunction,
     authoring: str,
 ) -> None:
-    tools = tools_for(inputs)
     project = agentbricks_cli.new_project(authoring)
     app = project.app_name
-    with recorded_row(
-        evidence,
-        authoring,
-        "deploy",
-        "selection",
-        command="agentbricks deploy",
-        expected=EXPECTED["selection"],
-        marker=UC_MARKER,
-    ) as row:
-        row.app_name = app
-        if authoring == "cli":
-            for tool in tools:
-                bind(agentbricks_cli, project, tool)
-        else:
-            agentbricks_cli.write_manifest(project, tools)
-        agent = agentbricks_cli.deploy(project, app)
-        # The nested function is deliberately outside Agent Bricks' grants.
-        workspace_client.grant_transitive(app, inputs.transitive_uc_function)
-        row.command = agent.curl(PROMPT)
-        row.log_path = agent.log_path
-        row.app_url = agent.base_url
-        row.serialized = agent.invoke(PROMPT, "deploy-selection")
+    if authoring == "cli":
+        for tool in tools:
+            bind(agentbricks_cli, project, tool)
+    else:
+        agentbricks_cli.write_manifest(project, tools)
+    agent = agentbricks_cli.deploy(project, app)
+    # The nested function is deliberately outside Agent Bricks' grants.
+    workspace_client.grant_transitive(app, uc_function.nested_function)
+    serialized = agent.invoke(PROMPT, "deploy-selection")
 
-        assert UC_MARKER in row.serialized, (
-            f"The UC function tool was not called: {row.serialized[:2000]}"
-        )
-        assert PYTHON_MARKER not in row.serialized, (
-            f"The Python marker tool was called too: {row.serialized[:2000]}"
-        )
+    assert UC_MARKER in serialized, f"The UC function tool was not called: {serialized[:2000]}"
+    assert PYTHON_MARKER not in serialized, (
+        f"The Python marker tool was called too: {serialized[:2000]}"
+    )

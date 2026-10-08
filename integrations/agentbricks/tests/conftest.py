@@ -1,7 +1,15 @@
 """Fixtures shared by every matrix under ``matrices/``.
 
+``run_context`` (options, backend, run identity) and ``provisioning`` (lazy workspace resources and
+their teardown) are plugins. One command runs a matrix, from ``integrations/agentbricks``:
+
+    uv run pytest tests/matrices/tools -n 6 --dist loadgroup \
+        --databricks-profile <profile> --genie-space-id <id>
+
+``--backend fake`` runs against no workspace; whatever needs one is skipped.
+
 The CLI wrapper is function-scoped: each test authors, runs and deploys its own projects, and the
-wrapper deletes every App and store it created when the test ends.
+fixture deletes every App and store they created when the test ends.
 """
 
 from __future__ import annotations
@@ -10,44 +18,58 @@ from collections.abc import Iterator
 
 import pytest
 from agentbricks_cli import AgentbricksCli
-from common import Evidence, Inputs, Transcript
-from workspace_client import Workspace
+from backends import Backend
+from common import RunConfig, log
+from workspace_client import Workspace, cleanup_app
+
+pytest_plugins = ["run_context", "provisioning"]
+
+_failed_tests: set[str] = set()
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    # Includes subtest reports, so the App's logs are captured when any subtest fails.
+    if report.failed:
+        _failed_tests.add(report.nodeid)
 
 
 @pytest.fixture(scope="session")
-def inputs() -> Inputs:
-    return Inputs.from_env()
-
-
-@pytest.fixture(scope="session")
-def transcript(inputs: Inputs) -> Transcript:
-    return Transcript(inputs.output / "commands.log")
-
-
-@pytest.fixture(scope="session")
-def evidence(inputs: Inputs) -> Evidence:
-    return Evidence(inputs.output)
-
-
-@pytest.fixture(scope="session")
-def workspace_client(inputs: Inputs, transcript: Transcript) -> Workspace:
-    workspace = Workspace(
-        inputs.databricks_profile,
-        transcript,
-        app_auth_profile=inputs.app_auth_profile,
-        warehouse_id=inputs.warehouse_id,
-        preprovisioned_app_catalog_access=inputs.preprovisioned_app_catalog_access,
-    )
-    workspace.check_app_auth()
+def workspace_client(backend: Backend) -> Workspace:
+    workspace = backend.workspace
+    if workspace is None:
+        pytest.skip(f"the {backend.name} backend has no Databricks workspace")
     return workspace
 
 
 @pytest.fixture
 def agentbricks_cli(
-    inputs: Inputs, workspace_client: Workspace, transcript: Transcript, evidence: Evidence
+    request: pytest.FixtureRequest, backend: Backend, run_config: RunConfig
 ) -> Iterator[AgentbricksCli]:
-    cli = AgentbricksCli(inputs, workspace_client, transcript, evidence)
-    try:
-        yield cli
-    finally:
-        cli.close()
+    cli = AgentbricksCli(backend, run_config)
+    yield cli
+    if cli.projects and backend.workspace is not None:
+        _delete_projects(cli, backend.workspace, failed=request.node.nodeid in _failed_tests)
+
+
+def _delete_projects(cli: AgentbricksCli, workspace: Workspace, *, failed: bool) -> None:
+    """Delete every App, store and role the test's projects created; the sweep gets the rest."""
+    for project in cli.projects:
+        if failed and project.app_registered:
+            # The App is deleted next, so a failing test must capture its logs while it exists.
+            workspace.app_logs(
+                project.app_name, cli.logs_dir / f"deploy-runtime-{project.app_name}.log"
+            )
+        try:
+            failures = cleanup_app(
+                workspace,
+                project.app_name,
+                delete_store=cli.delete_store,
+                memory_store=project.memory_store_name,
+                session_store=project.session_store_name,
+                has_app=project.app_registered,
+                runtime_store=bool(project.memory_store_name or project.session_store_name),
+            )
+        except Exception as exc:
+            failures = [str(exc)]
+        for failure in failures:
+            log(f"cleanup warning | {project.app_name} | {failure}")
