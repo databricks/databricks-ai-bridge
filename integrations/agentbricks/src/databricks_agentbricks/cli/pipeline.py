@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -220,3 +222,30 @@ def run(obj, name) -> None:
         render.emit_json(data)
         return
     _render_run(data)
+
+
+@pipeline.group("runs")
+def runs() -> None:
+    """Inspect memory pipeline runs."""
+
+
+@runs.command("get")
+@click.argument("name")
+@click.pass_context
+def get_run(ctx, name) -> None:
+    """Get run details through the Databricks CLI."""
+    match = re.fullmatch(r"memory-pipelines/[^/]+/runs/([0-9]+)", name)
+    if match is None:
+        raise click.BadParameter(
+            "Expected memory-pipelines/<pipeline-id>/runs/<numeric-run-id>.", param_hint="NAME"
+        )
+    command = ["databricks", "jobs", "get-run", match.group(1)]
+    if ctx.obj.profile:
+        command.extend(["--profile", ctx.obj.profile])
+    try:
+        result = subprocess.run(command, check=False)
+    except FileNotFoundError as exc:
+        raise click.ClickException(
+            "Databricks CLI not found. Install it and add it to PATH."
+        ) from exc
+    ctx.exit(result.returncode)
