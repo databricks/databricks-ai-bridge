@@ -1,0 +1,23 @@
+{
+  "name": "agent",
+  "displayName": "Agent Plugin",
+  "description": "LangChain/LangGraph AI agent with streaming Responses API and MCP tool support",
+  "resources": {
+    "required": [
+      {
+        "type": "serving_endpoint",
+        "alias": "Model Endpoint",
+        "resourceKey": "agent-model-endpoint",
+        "description": "Databricks model serving endpoint for the agent LLM",
+        "permission": "CAN_QUERY",
+        "fields": {
+          "name": {
+            "env": "DATABRICKS_MODEL",
+            "description": "Model serving endpoint name"
+          }
+        }
+      }
+    ],
+    "optional": []
+  }
+}
