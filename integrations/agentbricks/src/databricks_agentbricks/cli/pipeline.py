@@ -238,11 +238,9 @@ def get_run(ctx, name) -> None:
     if ctx.obj.profile:
         command.extend(["--profile", ctx.obj.profile])
     try:
-        result = subprocess.run(command, capture_output=True, check=False)
+        result = subprocess.run(command, check=False)
     except FileNotFoundError as exc:
         raise click.ClickException(
             "Databricks CLI not found. Install it and add it to PATH."
         ) from exc
-    click.echo(result.stdout, nl=False)
-    click.echo(result.stderr, err=True, nl=False)
     ctx.exit(result.returncode)

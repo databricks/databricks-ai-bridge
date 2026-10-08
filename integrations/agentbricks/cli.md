@@ -585,7 +585,8 @@ agentbricks --profile dogfood memory pipeline get-run \
 `NAME` must be `memory-pipelines/<pipeline-id>/runs/<numeric-run-id>`. This command
 extracts the run ID and calls `databricks jobs get-run <run-id>`, forwarding the selected
 profile. The Databricks CLI must be installed and available on `PATH`. Its stdout, stderr,
-and exit code are passed through unchanged; Agent Bricks `--output` does not reformat the result.
+and exit code are passed through unchanged, with terminal streams inherited to preserve native
+coloring; Agent Bricks `--output` does not reformat the result.
 The pipeline ID is not sent to Jobs or checked against the run.
 
 ##### `agentbricks memory pipeline run`
