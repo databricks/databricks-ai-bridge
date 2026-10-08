@@ -1074,12 +1074,12 @@ Commands whose interface is still being designed. They work and are tested, but 
 
 | Subcommand | Description |
 | --- | --- |
-| [`experimental models`](#agentbricks-experimental-models) | Choose the models behind your agent |
+| [`experimental models`](#agentbricks-experimental-models) | Choose, evaluate, and upgrade the models behind your agent |
 | [`experimental prompts`](#agentbricks-experimental-prompts) | Declare the Prompt Registry prompts your agent loads |
 
 ### `agentbricks experimental models`
 
-Choose the models behind your agent. Each LLM call site in the agent (a *role*: for example `router` and `writer` in a compound agent, or the single `agent` role in a one-model agent) calls a Unity Catalog AI Gateway model service you own (`catalog.schema.name`, declared under `[experimental.model_services.<role>]` in agent.toml) instead of a hardcoded `system.ai.*` model:
+Choose, evaluate, and upgrade the models behind your agent. Each LLM call site in the agent (a *role*: for example `router` and `writer` in a compound agent, or the single `agent` role in a one-model agent) calls a Unity Catalog AI Gateway model service you own (`catalog.schema.name`, declared under `[experimental.model_services.<role>]` in agent.toml) instead of a hardcoded `system.ai.*` model:
 
 ```toml
 [experimental.model_services.router]
@@ -1091,15 +1091,18 @@ name = "main.my_agent.writer_llm"
 default = "system.ai.claude-sonnet-4-5"
 ```
 
-`agentbricks deploy` creates each service if it's missing (routed to its binding's default model), grants the app's service principal EXECUTE on it, and wires it in as `AGENT_MODEL_SERVICE_<ROLE>`; the agent reads it with `resolve_model_service("<role>")`. After that, switching the model behind a service with `models set` takes effect without a code change or redeploy.
+`agentbricks deploy` creates each service if it's missing (routed to its binding's default model), grants the app's service principal EXECUTE on it, and wires it in as `AGENT_MODEL_SERVICE_<ROLE>`; the agent reads it with `resolve_model_service("<role>")`. After that, switching the model behind a service takes effect without a code change or redeploy, and `models upgrade` searches every role's model, plus the prompts bound with [`experimental prompts`](#agentbricks-experimental-prompts), together. Upgrade runs and switches are recorded in `.agentbricks/model_upgrades.json`; switches can be rolled back.
 
 | Subcommand | Description |
 | --- | --- |
 | [`models bind`](#agentbricks-experimental-models-bind) | Declare the model service for one of the agent's LLM calls in agent.toml (creates nothing; deploy provisions it). |
 | [`models unbind`](#agentbricks-experimental-models-unbind) | Remove a model-service binding from agent.toml (the service is left in place). |
 | [`models list`](#agentbricks-experimental-models-list) | List the `system.ai.*` chat models you can route the agent to. |
-| [`models status`](#agentbricks-experimental-models-status) | Show each bound model service, the model behind it now, and the bound prompts. |
+| [`models status`](#agentbricks-experimental-models-status) | Show each bound model service, the model behind it now, and the latest upgrade run with its recommendation. |
 | [`models set`](#agentbricks-experimental-models-set) | Switch one model service to a named model. |
+| [`models rollback`](#agentbricks-experimental-models-rollback) | Undo the last apply or set: every model it switched and every prompt alias it moved. |
+| [`models upgrade`](#agentbricks-experimental-models-upgrade) | Search models for every role, and optionally rewritten prompts, together, as a Databricks job. |
+| [`models apply`](#agentbricks-experimental-models-apply) | Apply the latest finished upgrade run's recommendation: every model and prompt it changed. |
 
 #### `agentbricks experimental models bind`
 
@@ -1148,7 +1151,7 @@ agentbricks experimental models list
 
 #### `agentbricks experimental models status`
 
-Show each bound model service, the model it routes to now, and the bound prompts.
+Show each bound model service and the model it routes to now, the last recorded switch, and the latest upgrade run: the job's state and, once it has finished, each role's per-model scores and recommendation.
 
 ```
 agentbricks experimental models status [options]
@@ -1182,6 +1185,73 @@ _Options_
 | `--yes` (`-y`) | flag | - | no | Switch without asking for confirmation. |
 | `--source <SOURCE>` | path | `.` | no | Agent Bricks project containing agent.toml. |
 
+#### `agentbricks experimental models rollback`
+
+Undo the last `models apply` or `models set`. Every model service the action switched goes back to its previous model, and every prompt alias it moved (for example `@production`) goes back to the version it pointed at before, the one `@production_previous` marks. If a step fails, run it again to finish the remaining changes; completed steps are skipped. Once the action is fully undone, another rollback undoes the action before that. Refuses if a model or prompt alias moved to an unrelated value after the action. A rollback with `--role` records that model as restored and leaves the action's other models and prompts available for a later rollback. Moving prompt aliases needs the `upgrade` extra installed locally.
+
+```
+agentbricks experimental models rollback [options]
+```
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--role <ROLE>` | string | - | no | Roll back only this role's last model switch; prompts are left alone. |
+| `--yes` (`-y`) | flag | - | no | Switch without asking for confirmation. |
+| `--source <SOURCE>` | path | `.` | no | Agent Bricks project containing agent.toml. |
+
+#### `agentbricks experimental models upgrade`
+
+Search candidate models for every bound role together, and with `--prompt` rewritten versions of the agent's MLflow Prompt Registry prompts, as a serverless Databricks job. Every combination is scored on the whole agent, so a cheaper router that hurts the writer's answers loses. The search never runs on your machine (it can take hours), so this command uploads the project to `/Workspace/Users/<you>/agentbricks_model_upgrades/<name>` (its own folder, separate from the deployed app's source), submits a one-time run, and returns. The job's environment installs the uploaded project from its `pyproject.toml` plus `databricks-agentbricks[upgrade]`.
+
+The job imports the `predict_fn`, eval data, and scorers you name from the project (`module:attr` references, the same inputs `optimize_prompts_and_models` takes) and runs the whole agent on each eval record per candidate combination, against temporary `<service>_exp_<id>` copies of the model services (production traffic is untouched). Each search uses its own copies and deletes only those copies when it exits, so overlapping jobs can evaluate independently. It sets each `AGENT_MODEL_SERVICE_<ROLE>` before importing your code, so every LLM call that uses `resolve_model_service("<role>")` hits its copy. The winner balances quality, latency, and cost (`--quality-weight`, `--latency-weight`, `--cost-weight`); at equal quality the cheaper models win. The run logs to the MLflow experiment `<trace experiment>-model-upgrades`, never to the agent's own trace experiment.
+
+Nothing changes until the recommendation is applied. By default the command returns once the job is submitted: check on it with `agentbricks experimental models status`, then run `agentbricks experimental models apply`. `--apply ask` waits for the result and asks before changing anything, and `--apply auto` applies it without asking. `--run-on local` runs the search in this process instead of a job, which needs the `upgrade` extra and the project's dependencies installed locally.
+
+When the run finishes, the command prints a summary: a table of each role's current and recommended model, each role's candidate scores, the change in the combined quality, latency, and cost score, the prompts that were rewritten, and the MLflow run that recorded it.
+
+```
+agentbricks experimental models upgrade --candidates MODEL --predict REF --train-data REF --val-data REF --scorer REF [options]
+```
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--candidates <ROLE=MODEL,...>` (`-c`) | string | - | for a model search | `system.ai.*` models to evaluate for one role, e.g. `router=claude-haiku-4-5,gpt-5-4-nano`. Repeat per role; the `ROLE=` prefix is optional when only one role is bound. Roles you don't list keep their current model. Each role's current model is always its baseline. Omit to optimize the agent's prompts only. |
+| `--prompt <URI>` | `prompts:/` URI | prompts bound in agent.toml | no | Prompt Registry prompt to optimize alongside the models (e.g. `prompts:/main.my_agent.system@production`). Repeat for more. Defaults to the prompts bound with `prompts bind`, at `@production`. The agent must load it with `load_prompt` and call `.format()` on every call. |
+| `--models-only` | flag | - | no | Search models only, leaving the agent's prompts as they are. |
+| `--predict <REF>` | `module:attr` | - | yes | Your agent's `predict_fn`: a sync callable taking one eval record's `inputs` dict. |
+| `--train-data <REF>` | `module:attr` | - | yes | Training records: a list of `{"inputs": ..., "expectations": ...}`. |
+| `--val-data <REF>` | `module:attr` | - | yes | Validation records, same shape as `--train-data`. |
+| `--scorer <REF>` | `module:attr` | - | yes | A scorer or list of scorers (MLflow scorers, or `(inputs, expectations, answer) -> float`). Repeat for more. |
+| `--budget <N>` | integer >= 1 | 10 x eval records | no | Evaluation budget, in agent runs. |
+| `--quality-weight <NUMBER>` | number >= 0 | `0.7` | no | How much the scorers' quality counts toward picking the winner. The three weights are relative: they're scaled to sum to 1. |
+| `--latency-weight <NUMBER>` | number >= 0 | `0.2` | no | How much latency counts toward picking the winner. |
+| `--cost-weight <NUMBER>` | number >= 0 | `0.1` | no | How much token cost counts toward picking the winner. |
+| `--latency-gate <SECONDS>` | number >= 1 | `60` | no | A record slower than this scores 0 on every objective. Raise it for agents that legitimately take longer, or for `--run-on local`, where each call takes longer than on a serverless job. |
+| `--timeout-hours <H>` | number >= 0.1 | `6` | no | Cancel the job if it runs longer than this. |
+| `--run-on <WHERE>` | `job`, `local` | `job` | no | Where the search runs: a serverless Databricks job, or this process. |
+| `--apply <MODE>` | `never`, `ask`, `auto` | `never` | no | What to do with the recommendation: leave it for `models apply`, wait and ask, or wait and apply without asking. Under `-o json`, `ask` applies nothing. |
+| `--wait` | flag | - | no | Wait for the job to finish and show its recommendation (Ctrl-C detaches; the job keeps running). Implied by `--apply ask` / `auto`. |
+| `--source <SOURCE>` | path | `.` | no | Agent Bricks project containing agent.toml. |
+
+#### `agentbricks experimental models apply`
+
+Apply the latest finished upgrade run's recommendation with the optimizer's `promote_to_prod`: it repoints every model service whose model changed and registers each rewritten prompt as a new version (its alias moves there; the prior version keeps `@production_previous`), rolling all of it back if any step fails. Needs the `upgrade` extra installed locally. Errors if the run hasn't finished, or if a service or prompt alias changed after the run started. All prompt aliases are checked before any production update, including prompts whose templates are unchanged. Prompts for confirmation; `-o json` switches only with `--yes`.
+
+```
+agentbricks experimental models apply [options]
+```
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--yes` (`-y`) | flag | - | no | Switch without asking for confirmation. |
+| `--source <SOURCE>` | path | `.` | no | Agent Bricks project containing agent.toml. |
+
 ### `agentbricks experimental prompts`
 
 Declare the MLflow Prompt Registry prompts your agent loads. Each one is a binding under `[experimental.prompts]` in agent.toml, keyed by a short name:
@@ -1192,6 +1262,8 @@ writer = "main.my_agent.writer"
 ```
 
 `agentbricks deploy` grants the app's service principal what the Prompt Registry requires to load them: USE SCHEMA, EXECUTE, CREATE FUNCTION, and MANAGE on each prompt's schema, plus USE CATALOG.
+
+Bound prompts are what [`models upgrade`](#agentbricks-experimental-models-upgrade) rewrites by default, and what [`models apply`](#agentbricks-experimental-models-apply) and [`models rollback`](#agentbricks-experimental-models-rollback) move the `@production` alias of.
 
 | Subcommand | Description |
 | --- | --- |

@@ -2,7 +2,8 @@
 
 Each prompt is a binding in agent.toml's ``[experimental.prompts]`` table (``key = "catalog.schema.name"``).
 `agentbricks deploy` grants the app's service principal what the Prompt Registry requires to load
-them.
+them, and `agentbricks experimental models upgrade` rewrites them alongside the models. This module
+also holds the Prompt Registry helpers `models apply` and `models rollback` use to move aliases.
 """
 
 from __future__ import annotations
@@ -52,6 +53,16 @@ def prompt_alias_version(obj, prompt: dict) -> int:
     )
 
 
+def restore_prompt_aliases(obj, prompts: list[dict]) -> None:
+    """Move each prompt's alias back to the version it pointed at before an apply."""
+    mlflow = registry_mlflow(obj)
+    with render.status("Moving prompt aliases back…"):
+        for prompt in prompts:
+            mlflow.genai.set_prompt_alias(
+                name=prompt["name"], alias=prompt["alias"], version=prompt["prior_version"]
+            )
+
+
 def _production_version(mlflow, name: str) -> Optional[str]:
     try:
         return str(mlflow.genai.load_prompt(f"prompts:/{name}@{PRODUCTION_ALIAS}").version)
@@ -63,7 +74,8 @@ def _production_version(mlflow, name: str) -> Optional[str]:
 def prompts() -> None:
     """Declare the Prompt Registry prompts your agent loads.
 
-    Bound prompts get the access they need at deploy.
+    Bound prompts get the access they need at deploy, and `models upgrade` rewrites them alongside
+    the models behind each LLM call.
     """
 
 
@@ -81,7 +93,7 @@ def prompts_bind(obj, prompt: str, key: Optional[str], source: pathlib.Path) -> 
 
     This only edits agent.toml. `agentbricks deploy` grants the app's service principal what the
     Prompt Registry requires to load prompts (USE SCHEMA, EXECUTE, CREATE FUNCTION, and MANAGE on
-    the prompt's schema).
+    the prompt's schema), and `agentbricks experimental models upgrade` optimizes bound prompts.
     """
     from databricks_agentbricks.agent_project import AgentProject  # noqa: PLC0415
 

@@ -48,8 +48,9 @@ openai = [
     "opentelemetry-exporter-otlp-proto-grpc>=1.25.0",
     "databricks-agents>=1.9.3",
 ]
-# `databricks_agentkit.model_upgrades`: the GEPA optimizer, litellm for its reflection LM, and full
-# mlflow (prompt registry, genai scorers, pricing catalog).
+# `databricks_agentkit.model_upgrades` / `agentbricks models upgrade`: the GEPA optimizer and full mlflow
+# (prompt registry, genai scorers, pricing catalog). The upgrade job installs it next to the agent
+# project, whose predict_fn it runs; `models apply` / `rollback` need it locally too.
 upgrade = [
     "gepa>=0.0.26",
     "litellm>=1.64.0",
@@ -107,7 +108,8 @@ extend = "../../pyproject.toml"
 
 [tool.ruff.lint.per-file-ignores]
 # The model-upgrade optimizer reports its progress (candidates tried, scores, the promotion plan) on
-# stdout, as the Smart Model Upgrades library it was migrated from does.
+# stdout, as the Smart Model Upgrades library it was migrated from does. `agentbricks experimental
+# models apply` redirects it off the CLI's stdout so JSON output stays clean.
 "src/databricks_agentkit/model_upgrades/optimization.py" = ["T201"]
 
 [tool.pytest.ini_options]

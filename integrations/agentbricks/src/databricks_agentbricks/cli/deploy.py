@@ -415,8 +415,8 @@ def _reconcile_model_services(project, client) -> dict[str, str]:
     """Create each model service DECLARED in agent.toml that doesn't exist yet; return {role: name}.
 
     A new service routes to its binding's ``default`` model. An existing one is left alone: its
-    destination belongs to `agentbricks experimental models set` after the first deploy, so a redeploy must
-    never undo a switch. Returns {} when no model service is bound.
+    destination belongs to `agentbricks experimental models upgrade` / `set` after the first deploy, so a redeploy must
+    never reset an upgrade. Returns {} when no model service is bound.
     """
     if project is None or not project.model_services:
         return {}
