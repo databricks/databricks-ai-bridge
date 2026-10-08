@@ -33,6 +33,7 @@ def test_deploy_invocation_failure_captures_app_logs(tmp_path: pathlib.Path, mon
     monkeypatch.setattr(runner, "run_long", lambda *args, **kwargs: "")
     monkeypatch.setattr(runner, "_assert_app_absent", lambda name: None)
     monkeypatch.setattr(runner, "_wait_for_app", lambda name: {"url": "https://test-app"})
+    monkeypatch.setattr(runner, "_attach_genie_warehouse", lambda app: app)
     monkeypatch.setattr(runner, "_grant_transitive_function", lambda app: {})
     _stub_grant_snapshot(monkeypatch, runner)
 
@@ -104,6 +105,7 @@ def test_successful_deploy_does_not_fetch_app_logs(tmp_path: pathlib.Path, monke
     monkeypatch.setattr(runner, "run_long", lambda *args, **kwargs: "")
     monkeypatch.setattr(runner, "_assert_app_absent", lambda name: None)
     monkeypatch.setattr(runner, "_wait_for_app", lambda name: {"url": "https://test-app"})
+    monkeypatch.setattr(runner, "_attach_genie_warehouse", lambda app: app)
     monkeypatch.setattr(runner, "_grant_transitive_function", lambda app: {})
     _stub_grant_snapshot(monkeypatch, runner)
     monkeypatch.setattr(runner, "_exercise", lambda *args, **kwargs: None)

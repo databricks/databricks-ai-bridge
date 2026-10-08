@@ -74,7 +74,10 @@ deployed tool matrix exercises valid managed tools.
 
 The deployed cases do not pre-grant the temporary UC function. They require `agentbricks deploy` to
 create the function/volume/Genie Apps resources, then inspect those permissions before
-invoking the App. Built-in `system.ai` MCP services use platform-managed access defaults and are
+invoking the App. The runner attaches a separate user-managed `sql_warehouse` App resource with
+`CAN_USE` for the Genie Space's backing warehouse before invoking Genie, and verifies the resource
+survives the CLI-authored repeat deploy; Agent Bricks does not grant this transitive dependency.
+Built-in `system.ai` MCP services use platform-managed access defaults and are
 validated through live Sandbox and web-search calls rather than direct grant inspection. External
 MCP services still receive direct service/catalog/schema grants. The temporary declared function
 calls a second, undeclared function: the harness proves Agent Bricks did not

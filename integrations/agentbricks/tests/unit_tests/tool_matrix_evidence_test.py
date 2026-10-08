@@ -8,6 +8,8 @@ import pathlib
 import subprocess
 import sys
 import zipfile
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from databricks.sdk.errors import NotFound
@@ -695,3 +697,113 @@ def test_cleanup_deletes_volume_marker_file_before_dropping_volume(monkeypatch, 
         {"resource": f"volume:{runner.uc_volume}", "status": "deleted"},
     ]
     assert runner.cleanup_complete is True
+
+
+def test_attach_genie_warehouse_preserves_existing_app_resources(monkeypatch, tmp_path):
+    runner = tool_matrix.Runner("profile", tmp_path / "out", tmp_path / "wheel.whl")
+    runner.genie_space_id = "0" * 32
+    workspace = SimpleNamespace(genie=Mock())
+    workspace.genie.get_space.return_value = SimpleNamespace(warehouse_id="warehouse-1")
+    monkeypatch.setattr(tool_matrix, "WorkspaceClient", lambda profile: workspace)
+    resources = [
+        {"name": "user-owned", "sql_warehouse": {"id": "other-warehouse", "permission": "CAN_USE"}},
+        {"name": "agentbricks-tool-genie", "genie_space": {"space_id": runner.genie_space_id}},
+    ]
+    app = {"name": "agent-bricks-test", "resources": resources}
+    updates: list[dict] = []
+
+    def fake_databricks(args):
+        if args[:2] == ["apps", "create-update"]:
+            updates.append(json.loads(args[args.index("--json") + 1]))
+            return {}
+        assert args == ["apps", "get", "agent-bricks-test"]
+        return {"name": app["name"], "resources": updates[0]["app"]["resources"]}
+
+    monkeypatch.setattr(runner, "databricks", fake_databricks)
+
+    result = runner._attach_genie_warehouse(app)
+
+    assert updates == [
+        {
+            "app": {
+                "resources": [
+                    *resources,
+                    {
+                        "name": tool_matrix._GENIE_WAREHOUSE_RESOURCE_NAME,
+                        "sql_warehouse": {"id": "warehouse-1", "permission": "CAN_USE"},
+                    },
+                ]
+            },
+            "update_mask": "resources",
+        }
+    ]
+    assert result["resources"] == updates[0]["app"]["resources"]
+    assert not tool_matrix._GENIE_WAREHOUSE_RESOURCE_NAME.startswith("agentbricks-tool-")
+    assert 2 <= len(tool_matrix._GENIE_WAREHOUSE_RESOURCE_NAME) <= 30
+    workspace.genie.get_space.assert_called_once_with(runner.genie_space_id)
+
+
+def test_attach_genie_warehouse_rejects_space_without_warehouse(monkeypatch, tmp_path):
+    runner = tool_matrix.Runner("profile", tmp_path / "out", tmp_path / "wheel.whl")
+    runner.genie_space_id = "0" * 32
+    workspace = SimpleNamespace(genie=Mock())
+    workspace.genie.get_space.return_value = SimpleNamespace(warehouse_id=None)
+    monkeypatch.setattr(tool_matrix, "WorkspaceClient", lambda profile: workspace)
+    databricks = Mock()
+    monkeypatch.setattr(runner, "databricks", databricks)
+
+    with pytest.raises(tool_matrix.MatrixError, match="no backing SQL warehouse"):
+        runner._attach_genie_warehouse({"name": "agent-bricks-test", "resources": []})
+
+    databricks.assert_not_called()
+
+
+def test_grant_snapshot_requires_user_managed_genie_warehouse(monkeypatch, tmp_path):
+    runner = tool_matrix.Runner("profile", tmp_path / "out", tmp_path / "wheel.whl")
+    runner.uc_function = "main.tools.marker"
+    runner.transitive_uc_function = "main.tools.nested"
+    runner.uc_volume = "main.tools.volume"
+    runner.genie_space_id = "0" * 32
+    resources = [
+        {"name": "user-owned"},
+        {
+            "name": "agentbricks-tool-function",
+            "uc_securable": {
+                "securable_full_name": runner.uc_function,
+                "securable_type": "FUNCTION",
+                "permission": "EXECUTE",
+            },
+        },
+        {
+            "name": "agentbricks-tool-volume",
+            "uc_securable": {
+                "securable_full_name": runner.uc_volume,
+                "securable_type": "VOLUME",
+                "permission": "READ_VOLUME",
+            },
+        },
+        {
+            "name": "agentbricks-tool-genie",
+            "genie_space": {"space_id": runner.genie_space_id, "permission": "CAN_RUN"},
+        },
+    ]
+    app = {"service_principal_client_id": "app-sp", "resources": resources}
+
+    with pytest.raises(tool_matrix.MatrixError, match="user-managed Genie SQL warehouse"):
+        runner._grant_snapshot(app)
+
+    resources.append(
+        {
+            "name": tool_matrix._GENIE_WAREHOUSE_RESOURCE_NAME,
+            "sql_warehouse": {"id": "warehouse-1", "permission": "CAN_USE"},
+        }
+    )
+    monkeypatch.setattr(tool_matrix, "WorkspaceClient", lambda profile: Mock())
+
+    def stop_at_direct_grants(*args):
+        raise RuntimeError("manual warehouse resource verified")
+
+    monkeypatch.setattr(tool_matrix, "_direct_privileges", stop_at_direct_grants)
+
+    with pytest.raises(RuntimeError, match="manual warehouse resource verified"):
+        runner._grant_snapshot(app)

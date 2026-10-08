@@ -149,19 +149,19 @@ def test_app_name_is_prefixed_and_uses_oauth_and_generated_routing_key(uuid4: Mo
 
 
 @pytest.mark.parametrize(
-    ("target", "auth", "should_auth"),
+    ("url", "app", "auth", "should_auth"),
     [
-        ({"url": "http://localhost:8000"}, True, True),
-        ({"app": "demo"}, False, False),
+        ("http://localhost:8000", None, True, True),
+        (None, "demo", False, False),
     ],
 )
 def test_explicit_auth_mode_overrides_target_default(
-    target: dict[str, str], auth: bool, should_auth: bool
+    url: str | None, app: str | None, auth: bool, should_auth: bool
 ) -> None:
     service, apps, authenticator, transport = _service()
     apps.get_app_url.return_value = "https://agent.example"
 
-    service.invoke(InvokeRequest(path="/invoke", auth=auth, routing_key="fixed", **target))
+    service.invoke(InvokeRequest(url=url, app=app, path="/invoke", auth=auth, routing_key="fixed"))
 
     request = transport.send.call_args.args[0]
     assert ("Authorization" in request.headers) is should_auth
