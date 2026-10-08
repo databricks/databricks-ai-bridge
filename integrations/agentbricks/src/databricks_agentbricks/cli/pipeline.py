@@ -86,8 +86,7 @@ def pipeline() -> None:
     type=click.Choice(list(MEMORY_PIPELINE_TRIGGERS)),
     default="manual",
     show_default=True,
-    help="How runs start: only when you start one, or also automatically about every 24 hours. "
-    "Fixed after creation.",
+    help="How runs start: only when you start one, or also automatically about every 24 hours.",
 )
 @click.pass_obj
 def create(obj, memory_store, session_store, model, display_name, instructions, trigger) -> None:
@@ -175,14 +174,21 @@ def get(obj, name) -> None:
     callback=_resolve_instructions,
     help="Instructions steering distillation: inline text or @path to a UTF-8 file.",
 )
+@click.option(
+    "--trigger",
+    type=click.Choice(list(MEMORY_PIPELINE_TRIGGERS)),
+    default=None,
+    help="How runs start: only when you start one, or also automatically about every 24 hours.",
+)
 @click.pass_obj
-def update(obj, name, display_name, instructions, model) -> None:
-    """Update a pipeline's display name, instructions, or model."""
+def update(obj, name, display_name, instructions, model, trigger) -> None:
+    """Update a pipeline's display name, instructions, model, or trigger."""
     data = obj.client().update_memory_pipeline(
         name,
         display_name=display_name,
         instructions=instructions,
         model=model,
+        trigger=trigger,
     )
     if obj.output == "json":
         render.emit_json(data)

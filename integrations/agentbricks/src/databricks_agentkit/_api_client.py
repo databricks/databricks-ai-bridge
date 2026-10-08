@@ -555,18 +555,26 @@ class _AgentBricksApiClient:
         display_name: Optional[str] = None,
         instructions: Optional[str] = None,
         model: Optional[str] = None,
+        trigger: Optional[str] = None,
     ) -> dict:
         body = _body(display_name=display_name, model=model)
         mask = list(body)
+        policy = _body(instructions=instructions)
         if instructions is not None:
-            # Instructions live in dreamer_policy, and the API accepts only this leaf as a mask
-            # path; it rejects a bare `dreamer_policy` because the policy's other fields are
-            # immutable.
-            body["dreamer_policy"] = {"instructions": instructions}
             mask.append("dreamer_policy.instructions")
+        if trigger is not None:
+            if trigger not in MEMORY_PIPELINE_TRIGGERS:
+                raise AgentCliError(
+                    f"Unsupported memory pipeline trigger: {trigger!r}. "
+                    f"Use one of: {', '.join(MEMORY_PIPELINE_TRIGGERS)}."
+                )
+            policy["trigger"] = MEMORY_PIPELINE_TRIGGERS[trigger]
+            mask.append("dreamer_policy.trigger")
+        if policy:
+            body["dreamer_policy"] = policy
         if not body:
             raise AgentCliError(
-                "No fields to update. Provide --display-name, --instructions, or --model."
+                "No fields to update. Provide --display-name, --instructions, --model, or --trigger."
             )
         return self._do(
             "PATCH",

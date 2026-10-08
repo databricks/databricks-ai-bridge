@@ -155,7 +155,12 @@ def test_list_get_update_and_delete_expose_crud_workflow():
         (
             "update",
             "p-123",
-            {"display_name": None, "instructions": "Only durable facts.", "model": None},
+            {
+                "display_name": None,
+                "instructions": "Only durable facts.",
+                "model": None,
+                "trigger": None,
+            },
         ),
         ("delete", "p-123"),
     ]
@@ -176,8 +181,31 @@ def test_update_accepts_model_and_instructions_file(model, tmp_path):
 
     assert result.exit_code == 0, result.output
     assert client.calls == [
-        ("update", "p-123", {"display_name": None, "instructions": instructions, "model": model})
+        (
+            "update",
+            "p-123",
+            {"display_name": None, "instructions": instructions, "model": model, "trigger": None},
+        )
     ]
+
+
+@pytest.mark.parametrize("trigger", ["manual", "scheduled"])
+def test_update_accepts_trigger(trigger):
+    client = _Client()
+    result = CliRunner().invoke(
+        _pipeline(), ["update", "p-123", "--trigger", trigger], obj=_Ctx(client)
+    )
+    assert result.exit_code == 0, result.output
+    assert client.calls[0][-1]["trigger"] == trigger
+
+
+def test_update_rejects_unknown_trigger():
+    client = _Client()
+    result = CliRunner().invoke(
+        _pipeline(), ["update", "p-123", "--trigger", "hourly"], obj=_Ctx(client)
+    )
+    assert result.exit_code == 2
+    assert client.calls == []
 
 
 def test_run_triggers_pipeline_and_renders_returned_run():

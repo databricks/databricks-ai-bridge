@@ -325,6 +325,37 @@ def test_update_memory_pipeline_model_and_instructions(workspace_client, model, 
     )
 
 
+@pytest.mark.parametrize(
+    "trigger,expected", [("manual", "MANUAL_ONLY"), ("scheduled", "SCHEDULED")]
+)
+@pytest.mark.parametrize("combined", [False, True])
+@mock.patch("databricks.sdk.WorkspaceClient")
+def test_update_memory_pipeline_trigger(workspace_client, trigger, expected, combined):
+    c, do = _client(workspace_client)
+    kwargs = {"model": "system.ai.gpt-5.6-luna", "instructions": "test"} if combined else {}
+    c.update_memory_pipeline("p-123", trigger=trigger, **kwargs)
+    body = {"name": "memory-pipelines/p-123", "dreamer_policy": {"trigger": expected}}
+    mask = "dreamer_policy.trigger"
+    if combined:
+        body["model"] = kwargs["model"]
+        body["dreamer_policy"]["instructions"] = "test"
+        mask = "model,dreamer_policy.instructions,dreamer_policy.trigger"
+    do.assert_called_once_with(
+        "PATCH",
+        "/api/2.0/agents/memory-pipelines/p-123",
+        query={"update_mask": mask},
+        body=body,
+    )
+
+
+@mock.patch("databricks.sdk.WorkspaceClient")
+def test_update_memory_pipeline_rejects_invalid_trigger(workspace_client):
+    c, do = _client(workspace_client)
+    with pytest.raises(AgentCliError, match="Unsupported memory pipeline trigger"):
+        c.update_memory_pipeline("p-123", trigger="hourly")
+    do.assert_not_called()
+
+
 @mock.patch("databricks.sdk.WorkspaceClient")
 def test_memory_pipeline_trigger_maps_to_api_enum(workspace_client):
     c, do = _client(workspace_client)
