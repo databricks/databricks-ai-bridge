@@ -166,6 +166,17 @@ def test_list_get_update_and_delete_expose_crud_workflow():
     ]
 
 
+def test_list_shows_store_ids_without_collection_prefix():
+    result = CliRunner().invoke(_pipeline(), ["list"], obj=_Ctx(_Client()))
+
+    assert result.exit_code == 0, result.output
+    # Full resource names get cut off in the table, hiding the part that identifies the store.
+    assert "support-sessions" in result.output
+    assert "support-memory" in result.output
+    assert "session-stores/" not in result.output
+    assert "memory-stores/" not in result.output
+
+
 @pytest.mark.parametrize("model", ["system.ai.gpt-5-6-sol", ""])
 def test_update_accepts_model_and_instructions_file(model, tmp_path):
     path = tmp_path / "instructions.md"
