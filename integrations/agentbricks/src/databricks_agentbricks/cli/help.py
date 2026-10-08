@@ -150,7 +150,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("memory", "pipeline", "update"): (
         (
             "agentbricks memory pipeline update <pipeline> "
-            '--instructions "Keep durable preferences"',
+            "--instructions @/path/to/instructions.md --model system.ai.gpt-5-6-sol",
             "edit a memory pipeline",
         ),
     ),
