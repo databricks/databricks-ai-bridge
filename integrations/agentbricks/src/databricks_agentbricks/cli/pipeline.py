@@ -30,8 +30,7 @@ def _truncate(value: Any, length: int = 48) -> str:
 
 
 def _store_id(name: Any) -> str | None:
-    # The list table is too narrow for full resource names; the collection prefix is
-    # implied by the column header.
+    # Strip out prefix from memory/session store resource name
     return str(name).split("/")[-1] if name else None
 
 
