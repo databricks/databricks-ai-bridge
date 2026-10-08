@@ -23,4 +23,4 @@ resources:
   schemas:
     scratch_schema:
       catalog_name: ${var.catalog_name}
-      name: agentbricks_agent_tools_e2e_${var.run_id}
+      name: ab_e2e_${var.run_id}

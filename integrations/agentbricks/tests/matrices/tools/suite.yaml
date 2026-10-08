@@ -4,7 +4,9 @@ name: tools
 tests: [matrices/tools/]
 runs:
   nightly:
-    timeout_minutes: 240
+    timeout_minutes: 60
+    # Deploy tests run in parallel; the dev tests share one worker (xdist_group "dev").
+    workers: 6
 requires:
   - name: catalog
     kind: existing

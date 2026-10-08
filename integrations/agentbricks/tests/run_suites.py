@@ -40,6 +40,7 @@ from common import (
     AUTHORING_PATHS,
     FRAMEWORKS,
     INPUTS_ENV,
+    MATRIX_CELLS,
     MatrixError,
     Transcript,
     last_nonempty_line,
@@ -89,6 +90,7 @@ class Options:
     app_auth_profile: str | None
     preprovisioned_app_catalog_access: bool
     keep_resources: bool
+    pytest_args: list[str] = dataclasses.field(default_factory=list)
 
 
 class Shell:
@@ -307,9 +309,10 @@ class SuiteRunner(Shell):
         self.bundle_env: dict[str, str] = {}
         self.bundle_target = "nightly" if options.run_profile == "nightly" else "dev"
         self.inputs_path = self.output / "inputs.json"
-        self.rows_path = self.output / "rows.jsonl"
-        self.registry_path = self.output / "registry.jsonl"
-        self.cleanup_path = self.output / "cleanup.jsonl"
+        # Per-worker files written by common.Evidence; glob patterns merge them.
+        self.rows_glob = "rows.*.jsonl"
+        self.registry_glob = "registry.*.jsonl"
+        self.cleanup_glob = "cleanup.*.jsonl"
         self.grant_dir = self.output / "grant-checks"
         self._workspace: Workspace | None = None
 
@@ -464,6 +467,11 @@ class SuiteRunner(Shell):
 
     # Test execution
 
+    def _parallel_args(self) -> list[str]:
+        # loadgroup keeps tests sharing an xdist_group (the local dev runs) on one worker.
+        workers = int(self.suite.runs[self.options.run_profile].get("workers", 1))
+        return ["-n", str(workers), "--dist", "loadgroup"] if workers > 1 else []
+
     def run_pytest(self, budget_seconds: float) -> int:
         tests = [str(TESTS_DIR / relative) for relative in self.suite.tests]
         argv = [
@@ -478,8 +486,13 @@ class SuiteRunner(Shell):
             "no:cacheprovider",
             "--junitxml",
             str(self.output / "junit.xml"),
+            *self._parallel_args(),
+            *self.options.pytest_args,
         ]
         env = {**os.environ, INPUTS_ENV: str(self.inputs_path)}
+        if self.options.databricks_profile:
+            # The CLI auth token lookup is by host; pin the profile when several share one host.
+            env["DATABRICKS_CONFIG_PROFILE"] = self.options.databricks_profile
         self.transcript.command(argv)
         process = subprocess.Popen(argv, cwd=TESTS_DIR, env=env, start_new_session=True)
         try:
@@ -501,25 +514,21 @@ class SuiteRunner(Shell):
         apps: list[str] = []
         projects: dict[str, dict[str, Any]] = {}
         cleaned: set[str] = set()
-        if self.registry_path.exists():
-            for line in self.registry_path.read_text(encoding="utf-8").splitlines():
-                if not line.strip():
-                    continue
-                event = json.loads(line)
-                name = event["app_name"]
-                if event["kind"] == "app" and name not in apps:
-                    apps.append(name)
-                elif event["kind"] == "project":
-                    projects.setdefault(name, {}).update(event)
-                elif event["kind"] == "cleaned":
-                    cleaned.add(name)
+        for event in self._read_jsonl(self.registry_glob):
+            name = event["app_name"]
+            if event["kind"] == "app" and name not in apps:
+                apps.append(name)
+            elif event["kind"] == "project":
+                projects.setdefault(name, {}).update(event)
+            elif event["kind"] == "cleaned":
+                cleaned.add(name)
         return apps, projects, cleaned
 
     def teardown(self) -> None:
         # Each test deletes its own App and stores; this sweeps whatever a test could not, such as
         # after a crash, and folds the tests' own cleanup results into the evidence.
         apps, projects, cleaned = self._registry()
-        self.cleanup_results.extend(self._read_jsonl(self.cleanup_path))
+        self.cleanup_results.extend(self._read_jsonl(self.cleanup_glob))
         for name in dict.fromkeys([*apps, *projects]):
             if name not in cleaned:
                 self.cleanup_results.extend(
@@ -616,11 +625,10 @@ class SuiteRunner(Shell):
 
     # Evidence
 
-    def _read_jsonl(self, path: pathlib.Path) -> list[dict[str, Any]]:
-        if not path.exists():
-            return []
+    def _read_jsonl(self, pattern: str) -> list[dict[str, Any]]:
         return [
             json.loads(line)
+            for path in sorted(self.output.glob(pattern))
             for line in path.read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
@@ -680,7 +688,7 @@ class SuiteRunner(Shell):
             "cleanup_required": self.cleanup_required,
             "cleanup_complete": self.cleanup_complete,
             "cleanup": self.cleanup_results,
-            "rows": self._read_jsonl(self.rows_path),
+            "rows": self._read_jsonl(self.rows_glob),
         }
         target = self.output / "evidence.json"
         temporary = target.with_suffix(".json.tmp")
@@ -710,7 +718,8 @@ class SuiteRunner(Shell):
                 self.transcript.write("Resources retained (--keep-resources); skipping teardown.")
             self.ended_at = now().isoformat()
             evidence = self.write_evidence()
-        verified = verify_evidence(evidence)
+        # A filtered run covers only some cells, so the full-matrix check would always fail.
+        verified = 0 if self.options.pytest_args else verify_evidence(evidence)
         return 0 if pytest_returncode == 0 and verified == 0 else 1
 
 
@@ -804,6 +813,8 @@ def _verify_tools_evidence(document: dict[str, Any], rows: list[dict[str, Any]])
         sys.stdout.write("sandbox evidence: hidden marker provenance is missing or invalid\n")
         return 1
     for tool_kind, marker in sandbox_markers.items():
+        if not isinstance(marker, str):
+            continue  # unreachable: validated above
         matching_rows = [row for row in rows if row.get("tool_kind") == tool_kind]
         if any(
             row.get("expected") != marker or marker not in str(row.get("actual", ""))
@@ -867,10 +878,10 @@ def verify_evidence(path: pathlib.Path, *, require_cleanup: bool = True) -> int:
         sys.stdout.write(f"evidence provenance missing: {sorted(missing_provenance)}\n")
         return 1
     suite = document.get("suite")
-    kinds = MATRIX_KINDS.get(suite)
-    if kinds is None:
+    cells = MATRIX_CELLS.get(suite) if isinstance(suite, str) else None
+    if cells is None:
         sys.stdout.write(
-            f"evidence suite {suite!r} is not a known matrix: {sorted(MATRIX_KINDS)}\n"
+            f"evidence suite {suite!r} is not a known matrix: {sorted(MATRIX_CELLS)}\n"
         )
         return 1
     rows = document.get("rows", [])
@@ -1007,6 +1018,12 @@ def parse_args() -> argparse.Namespace:
         help="Skip per-App USE CATALOG grants because catalog access is pre-provisioned.",
     )
     parser.add_argument("--keep-resources", action="store_true")
+    parser.add_argument(
+        "--pytest-arg",
+        action="append",
+        default=[],
+        help="Extra pytest argument, e.g. -k test_dev (repeatable). Skips the full-matrix evidence check.",
+    )
     parser.add_argument("--verify-evidence", type=pathlib.Path)
     args = parser.parse_args()
     if args.verify_evidence is None and args.profile is None:
@@ -1040,6 +1057,7 @@ def main() -> int:
         app_auth_profile=args.app_auth_profile,
         preprovisioned_app_catalog_access=args.preprovisioned_app_catalog_access,
         keep_resources=args.keep_resources,
+        pytest_args=args.pytest_arg,
     )
     toolchain = Toolchain(options)
     try:

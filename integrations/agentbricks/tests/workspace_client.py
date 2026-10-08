@@ -13,7 +13,7 @@ import re
 import subprocess
 import time
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, cast
 
 from common import TOOL_RESOURCE_PREFIX, MatrixError, Transcript, now
 from databricks.sdk import WorkspaceClient
@@ -290,7 +290,10 @@ class Workspace:
             time.sleep(15)
 
     def runtime_store(self, app_name: str) -> dict[str, Any]:
-        return self.client.api_client.do("GET", f"/api/2.0/agents/runtime-stores/{app_name}")
+        return cast(
+            dict[str, Any],
+            self.client.api_client.do("GET", f"/api/2.0/agents/runtime-stores/{app_name}"),
+        )
 
     def delete_runtime_store(self, app_name: str) -> None:
         """Delete the deploy-created Runtime Store; a missing store counts as deleted."""

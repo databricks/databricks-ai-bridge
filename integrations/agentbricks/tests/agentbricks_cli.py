@@ -68,6 +68,7 @@ class Project:
     experiment_name: str | None = None
     # Set only once this project registered the App, so cleanup never deletes one it did not create.
     app_registered: bool = False
+    environment_prepared: bool = False
 
 
 class Agent:
@@ -123,6 +124,17 @@ class Agent:
                 if attempt < 3:
                     time.sleep(15)
         raise MatrixError(f"{label} failed after 3 attempts: {last}")
+
+    def warm_up(self, deadline_seconds: float = 180.0) -> None:
+        """Invoke until the App answers once. A new App's session store can drop the first calls."""
+        started = time.monotonic()
+        while True:
+            try:
+                self.invoke("Reply with the single word OK.", label="warm-up")
+                return
+            except MatrixError:
+                if time.monotonic() - started > deadline_seconds:
+                    raise
 
     def curl(self, prompt: str) -> str:
         """A redacted curl equivalent of ``invoke``, recorded as the evidence row's command."""
@@ -286,7 +298,7 @@ class AgentbricksCli:
 
     def write_manifest(self, project: Project, tool_specs: Sequence[ToolSpec]) -> None:
         """Direct authoring: write agent.toml with exactly these tools plus a tracing binding."""
-        sections = [_DIRECT_HEADER.format(framework=FRAMEWORKS[0])]
+        sections: list[str] = [_DIRECT_HEADER.format(framework=FRAMEWORKS[0])]
         sections.extend(spec.toml for spec in tool_specs if spec.toml)
         # Follows default_experiment_name's shape so direct authoring carries the same tracing
         # binding `agentbricks init` gives CLI authoring.
@@ -397,9 +409,9 @@ class AgentbricksCli:
         label = f"dev-{project.path.name}-{self._next()}"
         log_path = self.logs_dir / f"{label}.log"
         port = _free_port()
-        argv = self.argv(
-            "dev", "--source", str(project.path), "--app-port", str(port), "--prepare-environment"
-        )
+        # Only the first start prepares the venv; run-local refuses to recreate an existing one.
+        prepare = [] if project.environment_prepared else ["--prepare-environment"]
+        argv = self.argv("dev", "--source", str(project.path), "--app-port", str(port), *prepare)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         self.transcript.command(argv)
         with log_path.open("w", encoding="utf-8") as log_file:
@@ -409,9 +421,12 @@ class AgentbricksCli:
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
+                # The template server binds $PORT, so an inherited PORT would override --app-port.
+                env={**os.environ, "PORT": str(port)},
             )
         try:
             self._wait_for_local(process, port, label, log_path)
+            project.environment_prepared = True
             yield Agent(f"http://127.0.0.1:{port}", lambda: {}, log_path, self.transcript)
         finally:
             if process.poll() is None:
@@ -421,7 +436,8 @@ class AgentbricksCli:
     def deploy(self, project: Project, app: str | None = None) -> Agent:
         """`agentbricks deploy` the project; deploying again updates the same App."""
         name = app or project.app_name
-        if not project.app_registered:
+        creating = not project.app_registered
+        if creating:
             self.workspace.assert_app_absent(name)
             # Deploy can create the App and then fail while waiting for it, so register first.
             self.evidence.register_app(name)
@@ -436,7 +452,7 @@ class AgentbricksCli:
         url = str(deployed.get("url") or "").rstrip("/")
         if not url:
             raise MatrixError(f"App {name} has no URL: {deployed}")
-        return Agent(
+        agent = Agent(
             url,
             lambda: self.workspace.app_headers,
             self.logs_dir / f"{label}.log",
@@ -444,6 +460,9 @@ class AgentbricksCli:
             app_name=name,
             app=deployed,
         )
+        if creating:
+            agent.warm_up()
+        return agent
 
     def _wait_for_local(
         self, process: subprocess.Popen[str], port: int, label: str, log_path: pathlib.Path

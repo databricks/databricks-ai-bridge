@@ -173,9 +173,12 @@ class Evidence:
     """Appends the files under the output directory that the runner turns into ``evidence.json``."""
 
     def __init__(self, output: pathlib.Path):
-        self.rows_path = output / "rows.jsonl"
-        self.registry_path = output / "registry.jsonl"
-        self.cleanup_path = output / "cleanup.jsonl"
+        # One set of files per pytest-xdist worker; the runner merges them, so no file is shared
+        # between processes (attach_artifact_to_failed_rows rewrites its rows file in place).
+        worker = os.environ.get("PYTEST_XDIST_WORKER", "main")
+        self.rows_path = output / f"rows.{worker}.jsonl"
+        self.registry_path = output / f"registry.{worker}.jsonl"
+        self.cleanup_path = output / f"cleanup.{worker}.jsonl"
         self.grant_dir = output / "grant-checks"
         self._lock = threading.Lock()
 

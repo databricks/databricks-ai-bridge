@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 
+import pytest
 from agentbricks_cli import AgentbricksCli
 from common import Evidence, Inputs
 from tools import (
@@ -19,6 +20,9 @@ from tools import (
     tool_row,
     tools_for,
 )
+
+# Local dev servers share run-local's proxy port, so all dev runs stay on one worker, in order.
+pytestmark = pytest.mark.xdist_group("dev")
 
 
 def test_dev(
