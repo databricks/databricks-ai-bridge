@@ -1185,3 +1185,17 @@ def test_local_run_with_prompts_needs_litellm(tmp_path, stub_job, monkeypatch):
     )  # fmt: skip
     assert result.exit_code != 0
     assert "--run-on local needs litellm installed here" in result.output
+
+
+def test_binding_a_new_role_keeps_a_blank_line_before_the_next_table(tmp_path):
+    project = _project(tmp_path)
+    _invoke_prompts(["bind", "main.my_agent.writer", "--source", str(project)], _Ctx())
+    result = _invoke(
+        ["bind", ROUTER, "--role", "router", "--default", "claude-haiku-4-5",
+         "--source", str(project)],
+        _Ctx(),
+    )  # fmt: skip
+    assert result.exit_code == 0, result.output
+    text = (project / "agent.toml").read_text()
+    assert "\n\n[prompts]\n" in text
+    assert '"system.ai.claude-haiku-4-5"\n[' not in text

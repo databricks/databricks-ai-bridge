@@ -707,7 +707,8 @@ class AgentProject:
             tables = tomlkit.table()
             self._document.append(MODEL_SERVICES_TABLE, tables)
         table = tables.get(role)
-        if not isinstance(table, Mapping):
+        created = not isinstance(table, Mapping)
+        if created:
             table = tomlkit.table()
             tables.append(role, table)
         table["name"] = name
@@ -715,6 +716,9 @@ class AgentProject:
             table[MODEL_SERVICE_DEFAULT_KEY] = default
         elif MODEL_SERVICE_DEFAULT_KEY in table:
             del table[MODEL_SERVICE_DEFAULT_KEY]
+        if created:
+            # Keep a blank line before whatever table follows, e.g. [prompts].
+            table.add(tomlkit.nl())
         self.model_services[role] = binding
         return True
 
