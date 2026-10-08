@@ -34,7 +34,7 @@ uv build --wheel --out-dir /tmp/agentbricks-tooling-dist
 uv run python tests/e2e/tool_matrix.py \
   --profile df1 \
   --app-auth-profile df1-oauth-mcp \
-  --wheel /tmp/agentbricks-tooling-dist/databricks_agentbricks-0.3.0-py3-none-any.whl \
+  --wheel /tmp/agentbricks-tooling-dist/databricks_agentbricks-0.5.0.dev0-py3-none-any.whl \
   --output /tmp/agentbricks-tool-matrix-df1 \
   --uc-schema supervisor_agent.mason_agent_tools_e2e \
   --genie-space-id "$AGENTBRICKS_E2E_GENIE_SPACE_ID" \
@@ -114,7 +114,7 @@ uv build --wheel --out-dir /tmp/agentbricks-auth-scope-dist
 uv run python tests/e2e/auth_scope_matrix.py \
   --profile df1 \
   --app-auth-profile df1-oauth-mcp \
-  --wheel /tmp/agentbricks-auth-scope-dist/databricks_agentbricks-0.3.0-py3-none-any.whl \
+  --wheel /tmp/agentbricks-auth-scope-dist/databricks_agentbricks-0.5.0.dev0-py3-none-any.whl \
   --output /tmp/agentbricks-auth-scope-matrix \
   --uc-schema aifx_benchmarks.agentbricks_auth_scope_e2e \
   --source-repo https://github.com/databricks/databricks-ai-bridge.git \

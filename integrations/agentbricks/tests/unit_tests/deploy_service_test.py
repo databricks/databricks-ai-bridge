@@ -40,6 +40,7 @@ from databricks_agentbricks.services.deployment.provisioners import (
 )
 from databricks_agentbricks.services.deployment.tool_access import ToolAccessPlan
 from databricks_agentbricks.services.deployment.tool_access_provisioner import ToolAccessProvisioner
+from databricks_agentkit.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
 
 
 def _auth_plan(
@@ -561,6 +562,49 @@ def test_deploy_with_no_manifest_changes_does_not_scaffold_app_yaml(
     assert result.created_app_yaml is False
     assert not (tmp_path / "app.yaml").exists()
     deployment_fixture.provider.get.assert_called_once_with()
+
+
+def test_declarative_unbind_prunes_stale_store_env_from_existing_manifest(
+    deployment_fixture, tmp_path: pathlib.Path
+) -> None:
+    (tmp_path / "app.yaml").write_text(
+        "command: ['python', 'app.py']\n"
+        "env:\n"
+        f"  - name: {MEMORY_STORE_ENV}\n"
+        "    value: stale-memory-id\n"
+        f"  - name: {SESSION_STORE_ENV}\n"
+        "    value: stale-session-name\n"
+        "  - name: KEEP\n"
+        "    value: preserve-me\n"
+    )
+    memory_client = Mock()
+    session_client = Mock()
+    service = DeployService(
+        project_resolver=deployment_fixture.resolver,
+        apps_client=deployment_fixture.apps,
+        api_client_provider=deployment_fixture.provider,
+        app_provisioner=deployment_fixture.app,
+        memory_store_provisioner=MemoryStoreProvisioner(memory_client, deployment_fixture.reporter),
+        session_store_provisioner=SessionStoreProvisioner(
+            session_client, deployment_fixture.reporter
+        ),
+        tracing_provisioner=deployment_fixture.tracing,
+        runtime_store_provisioner=deployment_fixture.runtime,
+        tool_access_provisioner=deployment_fixture.tool_access,
+        reporter=deployment_fixture.reporter,
+    )
+
+    result = service.deploy(_request(tmp_path))
+
+    env = {
+        entry["name"]: entry["value"]
+        for entry in AppManifest.parse_lenient((tmp_path / "app.yaml").read_text()).raw_env()
+    }
+    assert env == {"KEEP": "preserve-me"}
+    assert result.memory_grant_attempted is False
+    assert result.session_grant_attempted is False
+    memory_client.assert_not_called()
+    session_client.assert_not_called()
 
 
 def test_deploy_does_not_resolve_service_principal_without_bound_stores(

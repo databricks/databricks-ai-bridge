@@ -140,6 +140,24 @@ def test_prepare_honors_explicit_environment_flag_and_default_port(
     )
 
 
+def test_prepare_refuses_stale_manifest_without_clobbering_user_file(
+    service_fixture: SimpleNamespace, tmp_path: pathlib.Path
+) -> None:
+    dev_yaml = tmp_path / "app.agentbricksdev.yaml"
+    original_dev_yaml = "user-owned local manifest\n"
+    dev_yaml.write_text(original_dev_yaml)
+
+    with pytest.raises(AgentCliError, match="already exists"):
+        with service_fixture.service.prepare(
+            DevRequest(source=str(tmp_path), prepare_environment=None, app_port=None)
+        ):
+            pytest.fail("prepare should reject an existing local manifest")
+
+    assert dev_yaml.read_text() == original_dev_yaml
+    service_fixture.apps.run_local.assert_not_called()
+    service_fixture.tracing.stop.assert_called_once_with(service_fixture.tracing_server)
+
+
 def test_missing_app_yaml_fails_before_loading_project_or_starting_tracing(
     service_fixture: SimpleNamespace, tmp_path: pathlib.Path
 ) -> None:
@@ -207,3 +225,69 @@ def test_manifest_setup_failure_still_stops_started_tracing(
     assert not (tmp_path / "app.agentbricksdev.yaml").exists()
     service_fixture.apps.run_local.assert_not_called()
     service_fixture.tracing.stop.assert_called_once_with(service_fixture.tracing_server)
+
+
+def test_manifest_write_failure_removes_partial_manifest_and_stops_tracing(
+    service_fixture: SimpleNamespace,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_open = pathlib.Path.open
+
+    def failing_open(path: pathlib.Path, mode: str = "r", *args, **kwargs):
+        output = real_open(path, mode, *args, **kwargs)
+        if path.name != "app.agentbricksdev.yaml" or mode != "x":
+            return output
+
+        class FailingOutput:
+            def __enter__(self):
+                output.__enter__()
+                return self
+
+            def __exit__(self, *exit_args):
+                return output.__exit__(*exit_args)
+
+            def write(self, value: str) -> int:
+                output.write("partial")
+                output.flush()
+                raise OSError("disk full")
+
+        return FailingOutput()
+
+    monkeypatch.setattr(pathlib.Path, "open", failing_open)
+    app_yaml = tmp_path / "app.yaml"
+    original_app_yaml = app_yaml.read_text()
+
+    with pytest.raises(AgentCliError, match="Could not write .*disk full"):
+        with service_fixture.service.prepare(
+            DevRequest(source=str(tmp_path), prepare_environment=None, app_port=None)
+        ):
+            pytest.fail("prepare should fail when the local manifest cannot be written")
+
+    assert not (tmp_path / "app.agentbricksdev.yaml").exists()
+    assert app_yaml.read_text() == original_app_yaml
+    service_fixture.apps.run_local.assert_not_called()
+    service_fixture.tracing.stop.assert_called_once_with(service_fixture.tracing_server)
+
+
+def test_prepare_and_run_remain_safe_when_tracing_does_not_start(
+    service_fixture: SimpleNamespace, tmp_path: pathlib.Path
+) -> None:
+    service_fixture.tracing.start.return_value = (None, {})
+
+    with service_fixture.service.prepare(
+        DevRequest(source=str(tmp_path), prepare_environment=False, app_port=8123)
+    ) as plan:
+        assert plan.preview.tracing_uri is None
+        assert plan.preview.local_experiment_name is None
+        assert plan.entry_point.exists()
+        service_fixture.service.run(plan)
+
+    assert not (tmp_path / "app.agentbricksdev.yaml").exists()
+    service_fixture.tracing.stop.assert_not_called()
+    service_fixture.apps.run_local.assert_called_once_with(
+        tmp_path,
+        "app.agentbricksdev.yaml",
+        prepare_environment=False,
+        app_port=8123,
+    )

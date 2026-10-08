@@ -19,6 +19,31 @@ tool_matrix = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = tool_matrix
 _SPEC.loader.exec_module(tool_matrix)
 
+_EXPECTED_WHEEL_SOURCE_FILES = frozenset(
+    {
+        "databricks_agentkit/_api_client.py",
+        "databricks_agentbricks/cli/deploy.py",
+        "databricks_agentbricks/clients/api_client_provider.py",
+        "databricks_agentbricks/clients/apps_client.py",
+        "databricks_agentbricks/clients/apps_user_auth_client.py",
+        "databricks_agentbricks/clients/conversation_store_client.py",
+        "databricks_agentbricks/clients/databricks_cli.py",
+        "databricks_agentbricks/clients/legacy_runtime_store.py",
+        "databricks_agentbricks/clients/managed_runtime_store.py",
+        "databricks_agentbricks/clients/tracing_client.py",
+        "databricks_agentbricks/projects/agent_project.py",
+        "databricks_agentbricks/projects/app_manifest.py",
+        "databricks_agentbricks/projects/config.py",
+        "databricks_agentbricks/projects/resolver.py",
+        "databricks_agentbricks/services/deploy_service.py",
+        "databricks_agentbricks/services/deployment/config.py",
+        "databricks_agentbricks/services/deployment/names.py",
+        "databricks_agentbricks/services/deployment/provisioners.py",
+        "databricks_agentbricks/services/deployment/tool_access.py",
+        "databricks_agentbricks/services/deployment/tool_access_provisioner.py",
+    }
+)
+
 
 def _evidence(*, cleanup_required: bool, cleanup_status: str = "deleted") -> dict:
     volume_marker = "AGENTBRICKS_VOLUME_fedcba9876543210"
@@ -67,7 +92,7 @@ def _evidence(*, cleanup_required: bool, cleanup_status: str = "deleted") -> dic
             "source_head_sha": "a" * 40,
             "source_dirty": False,
             "wheel_source_matches": True,
-            "wheel_source_sha256": {"databricks_agentbricks/tool_access.py": "b" * 64},
+            "wheel_source_sha256": {member: "b" * 64 for member in _EXPECTED_WHEEL_SOURCE_FILES},
         },
         "template_repo": "/tmp/databricks-ai-bridge",
         "template_ref": "feature",
@@ -240,10 +265,8 @@ def _source_checkout_and_wheel(tmp_path: pathlib.Path) -> tuple[pathlib.Path, st
     repo = tmp_path / "repo"
     source_root = repo / "integrations" / "agentbricks" / "src"
     sources = {
-        "databricks_agentkit/_api_client.py": b"WORKSPACE_CLIENT = True\n",
-        "databricks_agentbricks/tool_access.py": b"TOOL_ACCESS = True\n",
-        "databricks_agentbricks/app_resources.py": b"APP_RESOURCES = True\n",
-        "databricks_agentbricks/cli/deploy.py": b"DEPLOY = True\n",
+        member: f"SOURCE = {index}\n".encode()
+        for index, member in enumerate(sorted(_EXPECTED_WHEEL_SOURCE_FILES))
     }
     for member, content in sources.items():
         path = source_root / member
@@ -262,6 +285,16 @@ def _source_checkout_and_wheel(tmp_path: pathlib.Path) -> tuple[pathlib.Path, st
     return repo, commit_sha, wheel
 
 
+def test_wheel_source_files_exist_in_agentbricks_checkout():
+    source_root = pathlib.Path(__file__).parents[2] / "src"
+    assert set(tool_matrix._WHEEL_SOURCE_FILES) == _EXPECTED_WHEEL_SOURCE_FILES
+    missing = [
+        member for member in _EXPECTED_WHEEL_SOURCE_FILES if not (source_root / member).is_file()
+    ]
+
+    assert not missing, f"_WHEEL_SOURCE_FILES contains stale paths: {missing}"
+
+
 def test_source_provenance_ties_wheel_modules_to_claimed_checkout(tmp_path):
     repo, commit_sha, wheel = _source_checkout_and_wheel(tmp_path)
 
@@ -270,19 +303,14 @@ def test_source_provenance_ties_wheel_modules_to_claimed_checkout(tmp_path):
     assert provenance["source_head_sha"] == commit_sha
     assert provenance["source_dirty"] is False
     assert provenance["wheel_source_matches"] is True
-    assert set(provenance["wheel_source_sha256"]) == {
-        "databricks_agentkit/_api_client.py",
-        "databricks_agentbricks/tool_access.py",
-        "databricks_agentbricks/app_resources.py",
-        "databricks_agentbricks/cli/deploy.py",
-    }
+    assert set(provenance["wheel_source_sha256"]) == _EXPECTED_WHEEL_SOURCE_FILES
 
 
 def test_source_provenance_rejects_unrelated_wheel(tmp_path):
     repo, commit_sha, wheel = _source_checkout_and_wheel(tmp_path)
     with zipfile.ZipFile(wheel) as archive:
         contents = {member: archive.read(member) for member in tool_matrix._WHEEL_SOURCE_FILES}
-    contents["databricks_agentbricks/tool_access.py"] = b"WRONG = True\n"
+    contents["databricks_agentbricks/services/deployment/tool_access.py"] = b"WRONG = True\n"
     with zipfile.ZipFile(wheel, "w") as archive:
         for member, content in contents.items():
             archive.writestr(member, content)

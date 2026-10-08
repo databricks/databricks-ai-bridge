@@ -66,9 +66,25 @@ EXPECTED = {
 
 _WHEEL_SOURCE_FILES = (
     "databricks_agentkit/_api_client.py",
-    "databricks_agentbricks/tool_access.py",
-    "databricks_agentbricks/app_resources.py",
     "databricks_agentbricks/cli/deploy.py",
+    "databricks_agentbricks/clients/api_client_provider.py",
+    "databricks_agentbricks/clients/apps_client.py",
+    "databricks_agentbricks/clients/apps_user_auth_client.py",
+    "databricks_agentbricks/clients/conversation_store_client.py",
+    "databricks_agentbricks/clients/databricks_cli.py",
+    "databricks_agentbricks/clients/legacy_runtime_store.py",
+    "databricks_agentbricks/clients/managed_runtime_store.py",
+    "databricks_agentbricks/clients/tracing_client.py",
+    "databricks_agentbricks/projects/agent_project.py",
+    "databricks_agentbricks/projects/app_manifest.py",
+    "databricks_agentbricks/projects/config.py",
+    "databricks_agentbricks/projects/resolver.py",
+    "databricks_agentbricks/services/deploy_service.py",
+    "databricks_agentbricks/services/deployment/config.py",
+    "databricks_agentbricks/services/deployment/names.py",
+    "databricks_agentbricks/services/deployment/provisioners.py",
+    "databricks_agentbricks/services/deployment/tool_access.py",
+    "databricks_agentbricks/services/deployment/tool_access_provisioner.py",
 )
 
 
