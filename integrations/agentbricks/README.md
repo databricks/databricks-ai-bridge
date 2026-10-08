@@ -2,7 +2,8 @@
 
 Agent Bricks CLI is an experimental command-line interface for building and deploying custom
 agents on Databricks. It manages memory, sessions, tracing, and deployments from one authenticated
-command.
+command. Under `agentbricks experimental`, it also binds each of the agent's LLM calls to a model
+service you own, so the model behind it can change without a code change or redeploy.
 
 > The underlying APIs are in preview and may need workspace enablement.
 
@@ -29,8 +30,9 @@ invocation protocol to design yourself. Bring your own agent, or start from a te
   (LangGraph or OpenAI Agents) with the runtime, tests, and an optional chat UI wired up; you edit
   the application code (model, tools, prompts).
 - **`agent.toml`** - the declarative source of truth for the Databricks-managed infrastructure your
-  agent depends on: tool bindings (data sandbox, managed MCP services, Unity Catalog functions) and
-  memory, session, and durability resources. `agentbricks deploy` reads it to provision and wire everything
+  agent depends on: tool bindings (data sandbox, managed MCP services, Unity Catalog functions),
+  memory, session, and durability resources, and the model services and Prompt Registry prompts
+  each LLM call uses. `agentbricks deploy` reads it to provision and wire everything
   up (detailed under [Agent tools](#agent-tools)).
 - **`agentbricks deploy`** - provisions the bound stores, grants the app's service principal access to
   them, provisions the durable-runtime database when durability is on, configures tracing, and rolls
@@ -444,6 +446,32 @@ agentbricks deploy my-agent
 
 Memory and session stores are independent resources: deleting one never affects the other.
 
+## Model services and prompts (experimental)
+
+`agentbricks experimental models` and `agentbricks experimental prompts` bind each LLM call in
+your agent to a Unity Gateway model service you own (Unity Gateway was formerly AI Gateway), and
+declare the Prompt Registry prompts it loads. They live under `experimental` because their flags
+and output may still change between releases without a deprecation period. The agent.toml tables
+they write live under `[experimental]` too.
+
+A one-model agent binds one service. A compound agent binds one per call site, each under a role:
+
+```sh
+agentbricks experimental models bind main.my_agent.router_llm --role router --default system.ai.claude-haiku-4-5
+agentbricks experimental models bind main.my_agent.writer_llm --role writer --default system.ai.claude-sonnet-4-5
+agentbricks experimental prompts bind main.my_agent.writer
+agentbricks deploy my-agent      # creates the services and grants the app access to them and the prompt
+agentbricks experimental models status                              # the model behind each service
+agentbricks experimental models set claude-haiku-4-5 --role writer  # switch one, no redeploy
+```
+
+Each LLM call must use its role's service, `resolve_model_service("<role>")`, which reads the
+`AGENT_MODEL_SERVICE_<ROLE>` env var that deploy sets. Deploy creates a service that doesn't exist
+yet, routed to its `--default` model, and never repoints one that does, so a redeploy can't undo a
+switch. For bound prompts, deploy grants the app the schema privileges the Prompt Registry requires
+to load them (USE SCHEMA, EXECUTE, CREATE FUNCTION, and MANAGE). `agentbricks experimental prompts
+list` shows each bound prompt and the version its `@production` alias points at.
+
 ## Commands
 
 For the full command reference - every command, subcommand, argument, and option, in table form -
@@ -483,6 +511,14 @@ agentbricks [-p <profile>] [-o text|json]
     list             [--kind sandbox|mcp|uc-function|genie-one|genie-agent]
                      [--schema CATALOG.SCHEMA]
     remove           TOOL_ID [MCP_SERVICE] [--source PATH]
+  models
+    bind       SERVICE [--role ROLE] [--default MODEL] [--source PATH]
+    unbind | list | status
+    set        MODEL [--role ROLE] [--yes]
+  prompts
+    bind       PROMPT [--key KEY] [--source PATH]
+    unbind     KEY [--source PATH]
+    list       [--source PATH]
   deploy       [<name>] [--source PATH] [--instances N]
   deployments  list | get | logs | start | stop | delete
   endpoint
