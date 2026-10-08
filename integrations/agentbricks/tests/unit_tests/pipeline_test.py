@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
+from unittest import mock
+
 import pytest
 from click.testing import CliRunner
 
@@ -59,6 +62,7 @@ class _Client:
 
 class _Ctx:
     output = "text"
+    profile = None
 
     def __init__(self, client):
         self._client = client
@@ -71,6 +75,54 @@ def _pipeline():
     assert "pipeline" in cli.memory.commands, "memory must register the pipeline command group"
     assert "dreamer" not in cli.memory.commands
     return cli.memory.commands["pipeline"]
+
+
+@pytest.mark.parametrize("profile", [None, "dogfood"])
+@pytest.mark.parametrize("output", ["text", "json"])
+@mock.patch("databricks_agentbricks.cli.pipeline.subprocess.run")
+def test_get_run_passes_through_databricks_output(run, profile, output):
+    run.return_value = subprocess.CompletedProcess([], 0, b'{"run_id": 418898433707211}\n', b"")
+    ctx = _Ctx(_Client())
+    ctx.profile = profile
+    ctx.output = output
+    result = CliRunner().invoke(
+        _pipeline(), ["get-run", "memory-pipelines/p-123/runs/418898433707211"], obj=ctx
+    )
+    assert result.exit_code == 0, result.output
+    assert result.stdout == '{"run_id": 418898433707211}\n'
+    command = ["databricks", "jobs", "get-run", "418898433707211"]
+    if profile:
+        command.extend(["--profile", profile])
+    run.assert_called_once_with(command, capture_output=True, check=False)
+
+
+@mock.patch("databricks_agentbricks.cli.pipeline.subprocess.run")
+def test_get_run_preserves_failure_output_and_exit_code(run):
+    run.return_value = subprocess.CompletedProcess([], 7, b"", b"Error: run not found\n")
+    result = CliRunner().invoke(
+        _pipeline(), ["get-run", "memory-pipelines/p-123/runs/123"], obj=_Ctx(_Client())
+    )
+    assert result.exit_code == 7
+    assert result.stderr == "Error: run not found\n"
+
+
+@pytest.mark.parametrize(
+    "name", ["123", "memory-pipelines/p/runs/abc", "memory-pipelines/p/runs/123/extra"]
+)
+@mock.patch("databricks_agentbricks.cli.pipeline.subprocess.run")
+def test_get_run_rejects_invalid_resource_name(run, name):
+    result = CliRunner().invoke(_pipeline(), ["get-run", name], obj=_Ctx(_Client()))
+    assert result.exit_code == 2
+    run.assert_not_called()
+
+
+@mock.patch("databricks_agentbricks.cli.pipeline.subprocess.run", side_effect=FileNotFoundError)
+def test_get_run_reports_missing_databricks_cli(run):
+    result = CliRunner().invoke(
+        _pipeline(), ["get-run", "memory-pipelines/p-123/runs/123"], obj=_Ctx(_Client())
+    )
+    assert result.exit_code == 1
+    assert "Databricks CLI not found" in result.output
 
 
 def test_create_accepts_store_names_and_model():

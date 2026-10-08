@@ -492,6 +492,7 @@ Manage pipelines that distill session history into long-term memory.
 | [`memory pipeline update`](#agentbricks-memory-pipeline-update) | Update a pipeline's display name, instructions, model, or trigger. |
 | [`memory pipeline delete`](#agentbricks-memory-pipeline-delete) | Delete a Dreamer memory pipeline and its backing job. |
 | [`memory pipeline run`](#agentbricks-memory-pipeline-run) | Manually run a Dreamer memory pipeline. |
+| [`memory pipeline get-run`](#agentbricks-memory-pipeline-get-run) | Get run details through the Databricks CLI. |
 
 ##### `agentbricks memory pipeline create`
 
@@ -573,6 +574,19 @@ agentbricks memory pipeline delete NAME [options]
 | Option | Type | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--yes`, `-y` | flag | false | no | Skip the confirmation prompt. |
+
+##### `agentbricks memory pipeline get-run`
+
+```sh
+agentbricks --profile dogfood memory pipeline get-run \
+  memory-pipelines/2043d0c0-7d15-496e-83af-b6893165038f/runs/418898433707211
+```
+
+`NAME` must be `memory-pipelines/<pipeline-id>/runs/<numeric-run-id>`. This command
+extracts the run ID and calls `databricks jobs get-run <run-id>`, forwarding the selected
+profile. The Databricks CLI must be installed and available on `PATH`. Its stdout, stderr,
+and exit code are passed through unchanged; Agent Bricks `--output` does not reformat the result.
+The pipeline ID is not sent to Jobs or checked against the run.
 
 ##### `agentbricks memory pipeline run`
 
