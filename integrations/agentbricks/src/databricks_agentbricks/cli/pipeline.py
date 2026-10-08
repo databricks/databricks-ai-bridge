@@ -224,7 +224,12 @@ def run(obj, name) -> None:
     _render_run(data)
 
 
-@pipeline.command("get-run")
+@pipeline.group("runs")
+def runs() -> None:
+    """Inspect memory pipeline runs."""
+
+
+@runs.command("get")
 @click.argument("name")
 @click.pass_context
 def get_run(ctx, name) -> None:

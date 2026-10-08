@@ -86,7 +86,7 @@ def test_get_run_inherits_terminal_streams(run, profile, output):
     ctx.profile = profile
     ctx.output = output
     result = CliRunner().invoke(
-        _pipeline(), ["get-run", "memory-pipelines/p-123/runs/418898433707211"], obj=ctx
+        _pipeline(), ["runs", "get", "memory-pipelines/p-123/runs/418898433707211"], obj=ctx
     )
     assert result.exit_code == 0, result.output
     command = ["databricks", "jobs", "get-run", "418898433707211"]
@@ -99,7 +99,7 @@ def test_get_run_inherits_terminal_streams(run, profile, output):
 def test_get_run_preserves_failure_exit_code(run):
     run.return_value = subprocess.CompletedProcess([], 7)
     result = CliRunner().invoke(
-        _pipeline(), ["get-run", "memory-pipelines/p-123/runs/123"], obj=_Ctx(_Client())
+        _pipeline(), ["runs", "get", "memory-pipelines/p-123/runs/123"], obj=_Ctx(_Client())
     )
     assert result.exit_code == 7
 
@@ -109,7 +109,7 @@ def test_get_run_preserves_failure_exit_code(run):
 )
 @mock.patch("databricks_agentbricks.cli.pipeline.subprocess.run")
 def test_get_run_rejects_invalid_resource_name(run, name):
-    result = CliRunner().invoke(_pipeline(), ["get-run", name], obj=_Ctx(_Client()))
+    result = CliRunner().invoke(_pipeline(), ["runs", "get", name], obj=_Ctx(_Client()))
     assert result.exit_code == 2
     run.assert_not_called()
 
@@ -117,7 +117,7 @@ def test_get_run_rejects_invalid_resource_name(run, name):
 @mock.patch("databricks_agentbricks.cli.pipeline.subprocess.run", side_effect=FileNotFoundError)
 def test_get_run_reports_missing_databricks_cli(run):
     result = CliRunner().invoke(
-        _pipeline(), ["get-run", "memory-pipelines/p-123/runs/123"], obj=_Ctx(_Client())
+        _pipeline(), ["runs", "get", "memory-pipelines/p-123/runs/123"], obj=_Ctx(_Client())
     )
     assert result.exit_code == 1
     assert "Databricks CLI not found" in result.output
