@@ -1,5 +1,35 @@
 # Agent Bricks CLI agent-tool matrix
 
+## OBO Chat History Regression
+
+`chat_history.py` tests a deployed LangGraph or OpenAI Agents app with UI enabled and a
+user-authenticated Genie/MCP binding. It submits a prompt in the browser, requires a tool call and
+the expected answer, then reloads the page without another invocation. Fixed apps must return
+the persisted prompt and response messages and display the saved answer. LangGraph history is
+compared with invocation output; OpenAI native session items are compared before and after reload.
+
+```bash
+python tests/e2e/chat_history.py \
+  --url https://<app>.aws.databricksapps.com \
+  --app-auth-profile <workspace-oauth-profile> \
+  --framework langgraph \
+  --model <gateway-model> --tool genie_get_query_result \
+  --prompt '<read-only query against your synthetic fixture>' \
+  --answer-marker '<expected fixture value>' \
+  --expect restored --output /tmp/history-fixed
+```
+
+Deploy the same configuration from the baseline and PR revisions, using immutable SDK pins
+as described in [CONTRIBUTING.md](../../CONTRIBUTING.md). For the negative control, run the
+identical command against the baseline URL with `--expect auth-error` for LangGraph: the
+invocation must still succeed, but reopening must return exactly HTTP 401
+`MCP_USER_AUTHORIZATION_MISSING`. For OpenAI Agents, use `--framework openai` and
+`--expect empty-history`: the invocation must succeed, but reopening returns HTTP 200 with an
+empty transcript because baseline history reads the public rather than user-scoped session ID.
+The runner never supplies forwarded-user headers or uses a PAT fallback. Install Playwright
+and Chrome in the test environment; screenshots and credential-free JSON evidence are saved
+under `--output`.
+
 ## MCP registration validation
 
 For a focused check of `agentbricks tools add mcp`, install the current `databricks-agentbricks` wheel and pytest

@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from databricks_agentkit.langgraph.genie import genie_tools
+    from databricks_agentkit.langgraph.history import read_history
     from databricks_agentkit.langgraph.mcp import mcp_tools
     from databricks_agentkit.langgraph.memory import memory_tools
     from databricks_agentkit.langgraph.session_store import checkpointer, thread_config
@@ -66,6 +67,8 @@ __all__ = [
     # thread_config(session_id) as the per-request run config.
     "checkpointer",
     "thread_config",
+    # Saved transcript and approval reads without constructing the live agent.
+    "read_history",
     # MLflow tracing (LangChain autolog bound in) — call configure_tracing() once at startup.
     "configure_tracing",
     # Wrap each invocation in start_trace() so a trace is recorded (pass session_id= to tag it).
@@ -83,6 +86,7 @@ _MODULE_BY_NAME = {
     "memory_tools": "databricks_agentkit.langgraph.memory",
     "checkpointer": "databricks_agentkit.langgraph.session_store",
     "thread_config": "databricks_agentkit.langgraph.session_store",
+    "read_history": "databricks_agentkit.langgraph.history",
     "start_trace": "databricks_agentkit.runtime",
     "workspace_client": "databricks_agentkit.runtime",
     "workspace_headers": "databricks_agentkit.runtime",
