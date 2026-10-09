@@ -3,7 +3,7 @@
 This project is an OpenAI Agents SDK workload hosted by `databricks_agentkit.DurableAgentServer`.
 
 For CLI workflows, read [.agents/skills/agent-bricks-workflow/SKILL.md](.agents/skills/agent-bricks-workflow/SKILL.md).
-If it is absent, use `agentbricks skills show` to read guidance from the installed CLI.
+If it is absent, read the bundled skill at the path printed by the CLI's coding-agent hint.
 
 Read [AGENTKIT_CONTRACT.md](AGENTKIT_CONTRACT.md) before changing integration points. It owns command
 requirements, tool/state/tracing wiring, and recovery. [README.md](README.md) owns setup and client

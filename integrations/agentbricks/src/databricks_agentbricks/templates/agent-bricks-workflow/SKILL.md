@@ -37,11 +37,11 @@ In scaffolded projects, `AGENTKIT_CONTRACT.md` owns runtime wiring and transport
 `AGENTS.md` and `README.md` explain the project's code and setup. Read only references needed for the
 task. Do not invent SDK APIs or replace integration points with a bespoke server.
 
-`agentbricks skills show` reads the skill bundled with the installed CLI.
-`agentbricks skills install <directory>` adopts that version in an existing project without
-overwriting a different skill. A project-local copy can be older than the installed CLI; inspect
-command help before relying on an old option. Some coding agents require a new session to discover
-newly installed skills. Any agent can instead read this file directly.
+New projects install this workflow skill automatically during `agentbricks init`. In existing
+projects, read the bundled skill at the path printed by the CLI's coding-agent hint; no separate
+setup command or project configuration change is needed. A project-local copy can be older than the
+installed CLI; inspect command help before relying on an old option. Some coding agents require a
+new session to discover newly installed skills. Any agent can instead read this file directly.
 
 Report what changed, what was validated locally versus in the workspace, and any unresolved
 permissions or state decisions. A configured binding or successful deployment alone does not prove

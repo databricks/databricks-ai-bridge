@@ -112,8 +112,9 @@ New projects include the `agent-bricks-workflow` skill in `.agents/skills/`, wit
 JSON results include `workflow_skill` and `skill_pointers`.
 
 With `--existing`, prepare the separate `agent-bricks-migrate` bundle and pointers in all three
-discovery roots without changing existing application source or configuration. Use
-`agentbricks skills install DIRECTORY` to adopt general workflow guidance in an existing project.
+discovery roots without changing existing application source or configuration. Coding agents in
+existing projects can read the bundled workflow skill at the path printed by the CLI's automatic
+stderr hint; set `AGENTBRICKS_DISABLE_AGENT_HINT=1` to disable hints.
 
 `--server agentbricks` selects the managed server, which supports foreground, streaming, and background invocations through one HTTP contract and Runtime Store. This existing server value is recorded in `agent.toml`. Pass `--server custom` for a minimal foreground-only FastAPI server.
 
@@ -166,49 +167,6 @@ _Arguments_
 | Argument | Required | Description |
 | --- | --- | --- |
 | `DIRECTORY` | no | Existing agent repository to inspect (default: `.`). |
-
-### `agentbricks skills`
-
-Read or install coding-agent guidance for Agent Bricks CLI workflows.
-
-Skills ship with this CLI version. No authentication or network access is required. Installation is
-project-local and never changes global coding-agent configuration.
-
-```
-agentbricks skills <command>
-```
-
-#### `agentbricks skills show`
-
-Print the bundled workflow skill and its location. Any coding agent can read this guidance, even
-without native skill discovery. Resolve references relative to the printed skill path.
-
-```
-agentbricks skills show
-```
-
-With global `-o json`, returns `name`, `path`, and `content`.
-
-#### `agentbricks skills install`
-
-Install the workflow skill in DIRECTORY (default: current directory).
-
-Write the shared bundle under `.agents/skills` and pointers under `.claude/skills` and `.agent/skills`.
-Identical installations are left unchanged; different existing skills are never overwritten.
-Restart your coding-agent session if it caches skill discovery.
-
-```
-agentbricks skills install [DIRECTORY]
-```
-
-_Arguments_
-
-| Argument | Required | Description |
-| --- | --- | --- |
-| `DIRECTORY` | no | Existing project directory (default: `.`). |
-
-With global `-o json`, returns the skill `name` and the three installed manifest paths in `skills`.
-Automatic coding-agent hints go to stderr; set `AGENTBRICKS_DISABLE_AGENT_HINT=1` to disable them.
 
 ### `agentbricks dev`
 

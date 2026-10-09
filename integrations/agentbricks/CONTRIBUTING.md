@@ -145,8 +145,8 @@ present too; editable-install tests alone do not verify distribution contents.
 For native discovery, open a fresh scaffold in the coding agent, confirm `agent-bricks-workflow`
 appears in its skill list, and ask it to plan an Agent Bricks deployment without executing live
 commands. Repeat with Claude Code and Codex at minimum; installed agent versions and settings can
-affect discovery. A direct file read or `agentbricks skills show` is the fallback, not evidence of
-native automatic discovery.
+affect discovery. Reading the bundled skill at the path printed by the CLI's coding-agent hint
+is the fallback, not evidence of native automatic discovery.
 
 A later end-to-end comparison should use the same prompt, model/effort, framework, workspace, and
 success criteria in fresh directories and sessions. Compare baseline against the new CLI while

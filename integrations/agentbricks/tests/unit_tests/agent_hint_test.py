@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 import click
 import pytest
@@ -87,7 +88,7 @@ def test_hint_output_failure_does_not_affect_command(monkeypatch):
 
 @pytest.mark.parametrize(
     "arguments",
-    [["--help"], ["--version"], ["skills", "--help"], ["skills", "show"]],
+    [["--help"], ["--version"], ["init", "--help"], ["memory", "stores", "--help"]],
 )
 def test_help_and_nested_commands_emit_exactly_one_stderr_hint(monkeypatch, arguments):
     runner = CliRunner()
@@ -100,12 +101,26 @@ def test_help_and_nested_commands_emit_exactly_one_stderr_hint(monkeypatch, argu
     assert len(result.stderr.splitlines()) == 1
 
 
-def test_hint_preserves_json_stdout(monkeypatch):
+def test_hint_preserves_json_stdout(monkeypatch, tmp_path):
     monkeypatch.setenv("GEMINI_CLI", "1")
-    result = CliRunner().invoke(agentbricks, ["-o", "json", "skills", "show"])
+    result = CliRunner().invoke(agentbricks, ["-o", "json", "init", str(tmp_path / "agent")])
     assert result.exit_code == 0, result.output
-    assert json.loads(result.stdout)["name"] == "agent-bricks-workflow"
+    assert Path(json.loads(result.stdout)["workflow_skill"]).is_file()
     assert str(bundled_workflow_skill()) in result.stderr
+
+
+def test_existing_project_reads_bundled_guidance_without_installation(monkeypatch, tmp_path):
+    project_file = tmp_path / "README.md"
+    project_file.write_text("existing project")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CODEX_THREAD_ID", "test")
+    result = CliRunner().invoke(agentbricks, ["deploy", "--help"])
+    assert result.exit_code == 0, result.output
+    manifest = bundled_workflow_skill()
+    assert str(manifest) in result.stderr
+    assert manifest.is_file()
+    assert list(tmp_path.iterdir()) == [project_file]
+    assert project_file.read_text() == "existing project"
 
 
 def test_hint_preserves_error_exit_status(monkeypatch):

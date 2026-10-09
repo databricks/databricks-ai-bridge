@@ -19,7 +19,6 @@ from databricks_agentbricks.cli.endpoint import endpoint
 from databricks_agentbricks.cli.init import init
 from databricks_agentbricks.cli.memory import memory
 from databricks_agentbricks.cli.sessions import sessions
-from databricks_agentbricks.cli.skills import skills
 from databricks_agentbricks.cli.tools import tools
 from databricks_agentbricks.cli.tracing import tracing
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
@@ -91,7 +90,6 @@ agentbricks.add_command(login)
 agentbricks.add_command(logout)
 agentbricks.add_command(init)
 agentbricks.add_command(doctor)
-agentbricks.add_command(skills)
 agentbricks.add_command(dev)
 agentbricks.add_command(memory)
 agentbricks.add_command(sessions)

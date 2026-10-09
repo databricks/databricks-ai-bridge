@@ -111,26 +111,6 @@ def test_install_rolls_back_only_created_directories(tmp_path, monkeypatch):
     assert not (tmp_path / ".agents").exists()
 
 
-def test_show_json_exposes_installed_guidance_without_authentication():
-    result = CliRunner().invoke(agentbricks, ["-o", "json", "skills", "show"])
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert payload["name"] == "agent-bricks-workflow"
-    assert Path(payload["path"]).read_text() == payload["content"]
-
-
-def test_install_command_is_project_local_and_idempotent(tmp_path):
-    arguments = ["-o", "json", "skills", "install", str(tmp_path)]
-    runner = CliRunner()
-    first = runner.invoke(agentbricks, arguments)
-    second = runner.invoke(agentbricks, arguments)
-    assert first.exit_code == second.exit_code == 0
-    assert json.loads(first.stdout) == json.loads(second.stdout)
-    for manifest in json.loads(first.stdout)["skills"]:
-        assert Path(manifest).is_relative_to(tmp_path)
-        assert Path(manifest).is_file()
-
-
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
 @pytest.mark.parametrize("server", ["agentbricks", "custom"])
 def test_real_scaffolds_install_workflow_skills(tmp_path, framework, server):
