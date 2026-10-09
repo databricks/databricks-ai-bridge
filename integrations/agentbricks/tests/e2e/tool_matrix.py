@@ -1364,6 +1364,7 @@ class Runner:
                     "confirmed_absent_at": dt.datetime.now(dt.timezone.utc).isoformat(),
                 }
             )
+            self._delete_deployment_source(app)
             role_target = role_targets.get(app)
             if role_target and app in cleaned_stores and app in apps_with_deleted_runtime_stores:
                 try:
@@ -1468,6 +1469,28 @@ class Runner:
             result.get("status") == "failed" for result in self.cleanup_results
         )
         self._write_evidence()
+
+    def _delete_deployment_source(self, app: str) -> None:
+        # `agentbricks deploy` syncs source to this default path; `apps delete` leaves it behind.
+        path: str | None = None
+        try:
+            client = WorkspaceClient(profile=self.profile)
+            user = client.current_user.me().user_name
+            path = f"/Workspace/Users/{user}/agentbricks_deployments/{app}"
+            try:
+                client.workspace.delete(path, recursive=True)
+            except NotFound:
+                pass
+            self.cleanup_results.append({"resource": f"workspace:{path}", "status": "deleted"})
+        except Exception as exc:
+            self.transcript.write(f"cleanup warning | deployment source for {app} | {exc}")
+            self.cleanup_results.append(
+                {
+                    "resource": f"workspace:{path or app}",
+                    "status": "failed",
+                    "detail": str(exc),
+                }
+            )
 
     def _wait_for_app_deleted(self, name: str, timeout: float = 1200) -> None:
         client = WorkspaceClient(profile=self.profile)
@@ -1978,14 +2001,21 @@ def main() -> int:
         return verify_evidence(runner.output / "evidence.json")
     finally:
         if not precheck_passed:
+            # Nothing reruns cleanup after CI, so retained resources accumulate until workspace
+            # quotas (e.g. the 500-role Lakebase limit) break later runs. Logs and evidence keep
+            # the diagnosis; pass --keep-resources to retain live resources instead.
+            if runner.cleanup_required:
+                try:
+                    runner.cleanup()
+                except Exception as exc:
+                    runner.transcript.write(f"cleanup warning | {exc}")
             runner.ended_at = dt.datetime.now(dt.timezone.utc).isoformat()
             try:
                 runner._write_evidence()
             except Exception as exc:
                 runner.transcript.write(f"evidence warning | {exc}")
-            runner.transcript.write(
-                "Resources retained after failure for diagnosis; rerun cleanup after fixing."
-            )
+            if not runner.cleanup_required:
+                runner.transcript.write("Resources retained after failure (--keep-resources).")
 
 
 if __name__ == "__main__":
