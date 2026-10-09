@@ -21,6 +21,79 @@ from databricks_agentkit._api_client import (
 )
 
 
+@pytest.mark.parametrize("code", ["INVALID_PARAMETER_VALUE", "BAD_REQUEST"])
+@pytest.mark.parametrize("model", ["system.ai.gpt-5.6-luna", ""])
+@pytest.mark.parametrize("operation", ["create", "update"])
+@mock.patch("databricks.sdk.WorkspaceClient")
+def test_pipeline_model_schema_fallback(workspace_client, operation, model, code):
+    c, do = _client(workspace_client)
+    message = (
+        'Unknown field "model"'
+        if operation == "create"
+        else "unsupported update path: dreamer_policy.model"
+    )
+    do.side_effect = [AgentCliError(message, error_code=code), {"ok": True}]
+    if operation == "create":
+        result = c.create_memory_pipeline(
+            memory_store="m",
+            session_store="s",
+            model=model,
+            instructions="keep",
+            trigger="scheduled",
+        )
+    else:
+        result = c.update_memory_pipeline(
+            "p", model=model, instructions="keep", trigger="scheduled"
+        )
+    assert result == {"ok": True}
+    assert do.call_count == 2
+    original, retried = do.call_args_list
+    assert retried.kwargs["body"]["model"] == model
+    assert "model" not in original.kwargs["body"]
+    assert original.kwargs["body"]["dreamer_policy"] == {
+        "model": model,
+        "instructions": "keep",
+        "trigger": "SCHEDULED",
+    }
+    assert original.args == retried.args
+    if operation == "update":
+        assert retried.kwargs["query"] == {
+            "update_mask": "model,dreamer_policy.instructions,dreamer_policy.trigger"
+        }
+    else:
+        assert retried.kwargs["body"]["session_store"] == "session-stores/s"
+        assert retried.kwargs["body"]["memory_store"] == "memory-stores/m"
+
+
+@pytest.mark.parametrize(
+    "code,message",
+    [
+        ("BAD_REQUEST", "Model not found: model"),
+        ("PERMISSION_DENIED", 'Unknown field "model"'),
+        ("INTERNAL_ERROR", 'Unknown field "model"'),
+        ("INVALID_PARAMETER_VALUE", "unsupported update path: dreamer_policy.trigger"),
+    ],
+)
+@mock.patch("databricks.sdk.WorkspaceClient")
+def test_pipeline_model_does_not_retry_unrelated_failures(workspace_client, code, message):
+    c, do = _client(workspace_client)
+    do.side_effect = AgentCliError(message, error_code=code)
+    with pytest.raises(AgentCliError):
+        c.update_memory_pipeline("p", model="model")
+    assert do.call_count == 1
+
+
+@mock.patch("databricks.sdk.WorkspaceClient")
+def test_pipeline_model_fallback_only_once(workspace_client):
+    c, do = _client(workspace_client)
+    do.side_effect = AgentCliError(
+        "unsupported update path: dreamer_policy.model", error_code="INVALID_PARAMETER_VALUE"
+    )
+    with pytest.raises(AgentCliError):
+        c.update_memory_pipeline("p", model="")
+    assert do.call_count == 2
+
+
 def _client(workspace_client):
     inst = workspace_client.return_value
     inst.config.host = "https://ws.example.com"
@@ -231,7 +304,7 @@ def test_memory_pipeline_crud_uses_v2_resource_contract(workspace_client):
             body={
                 "memory_store": "memory-stores/support-memory",
                 "session_store": "session-stores/support-sessions",
-                "model": "system.ai.gpt-5-6-sol",
+                "dreamer_policy": {"model": "system.ai.gpt-5-6-sol"},
             },
         ),
         mock.call("GET", "/api/2.0/agents/memory-pipelines/p-123", query=None, body=None),
@@ -312,10 +385,10 @@ def test_update_memory_pipeline_model_and_instructions(workspace_client, model, 
 
     c.update_memory_pipeline("p-123", model=model, instructions=instructions)
 
-    body = {"name": "memory-pipelines/p-123", "model": model}
-    mask = "model"
+    body = {"name": "memory-pipelines/p-123", "dreamer_policy": {"model": model}}
+    mask = "dreamer_policy.model"
     if instructions is not None:
-        body["dreamer_policy"] = {"instructions": instructions}
+        body["dreamer_policy"]["instructions"] = instructions
         mask += ",dreamer_policy.instructions"
     do.assert_called_once_with(
         "PATCH",
@@ -337,9 +410,9 @@ def test_update_memory_pipeline_trigger(workspace_client, trigger, expected, com
     body = {"name": "memory-pipelines/p-123", "dreamer_policy": {"trigger": expected}}
     mask = "dreamer_policy.trigger"
     if combined:
-        body["model"] = kwargs["model"]
+        body["dreamer_policy"]["model"] = kwargs["model"]
         body["dreamer_policy"]["instructions"] = "test"
-        mask = "model,dreamer_policy.instructions,dreamer_policy.trigger"
+        mask = "dreamer_policy.model,dreamer_policy.instructions,dreamer_policy.trigger"
     do.assert_called_once_with(
         "PATCH",
         "/api/2.0/agents/memory-pipelines/p-123",
