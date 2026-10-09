@@ -21,8 +21,9 @@ def test_langchain_provider_strips_tool_text_id_from_next_model_request(status):
     from langchain_core.messages.content import create_text_block
 
     text = "sandbox output" if status == "success" else "ValueError: controlled sandbox error"
-    content = [create_text_block(text=text)]
-    assert content[0]["id"]
+    block = create_text_block(text=text)
+    assert block["id"]
+    content: list[str | dict] = [dict(block)]
     message = ToolMessage(
         content=content,
         name="run_code",
