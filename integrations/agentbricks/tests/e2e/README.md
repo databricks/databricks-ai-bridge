@@ -93,10 +93,10 @@ uv run python tests/e2e/tool_matrix.py \
 ```
 
 Success is exactly `20 passed, 0 failed, 0 skipped`, two deploy grant snapshots, and one idempotent
-repeat deploy. Temporary Apps and UC resources are deleted after a successful run, with cleanup results
+repeat deploy. Temporary Apps, their synced `agentbricks_deployments/<app>` source folders, stores,
+Lakebase roles, and UC resources are deleted after every run, passing or failing, with cleanup results
 saved in `evidence.json`; App deletion is not considered complete until a follow-up read confirms
-absence. A failed run retains resources for diagnosis. Pass `--keep-resources` to retain resources after
-a successful run while debugging. The gated nightly test reports bounded dev/deploy log tails and
+absence. Pass `--keep-resources` to retain resources while debugging. The gated nightly test reports bounded dev/deploy log tails and
 captures App runtime logs for failed deployed cases.
 
 ## Declarative user-auth scope matrix
