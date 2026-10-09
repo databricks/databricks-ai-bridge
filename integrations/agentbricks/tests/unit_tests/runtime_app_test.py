@@ -8,7 +8,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from databricks_agentbricks.agent_project import AgentProject, ToolSpec
+from databricks_agentbricks.projects.agent_project import AgentProject, ToolSpec
 from databricks_agentkit import DurableAgentServer
 from databricks_agentkit.runtime.store import (
     RUNTIME_STORE_DATABASE_ENV,

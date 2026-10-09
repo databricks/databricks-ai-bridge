@@ -12,8 +12,8 @@ import uuid
 import pytest
 from rich.console import Console
 
-from databricks_agentbricks import render
-from databricks_agentbricks.cli.endpoint_examples import (
+from databricks_agentbricks.presentation import render
+from databricks_agentbricks.presentation.endpoint import (
     agent_invoke_command,
     print_agent_invoke_command,
 )

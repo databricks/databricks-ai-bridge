@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import types
 
-from databricks_agentbricks import databricks_cli as dc
+from databricks_agentbricks.clients import databricks_cli as dc
 
 
 def test_databricks_failure_hides_the_apps_subcommand(monkeypatch):

@@ -9,9 +9,9 @@ from typing import Any, Optional
 
 import click
 
-from databricks_agentbricks import render
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.render import field
+from databricks_agentbricks.presentation import render
+from databricks_agentbricks.presentation.render import field
 from databricks_agentkit import timefmt
 
 _BREADCRUMB = "Agent Session"
@@ -72,7 +72,7 @@ def sessions_bind(obj, store: str, source: pathlib.Path) -> None:
     This only edits agent.toml — it does not create the store. `agentbricks deploy` creates any declared
     store that doesn't exist yet and grants the deployed app's service principal access to it.
     """
-    from databricks_agentbricks.agent_project import AgentProject
+    from databricks_agentbricks.projects.agent_project import AgentProject
 
     project = AgentProject.load(source)
     project.bind_session_store(store)
@@ -100,15 +100,24 @@ def sessions_bind(obj, store: str, source: pathlib.Path) -> None:
 def sessions_unbind(obj, source: pathlib.Path) -> None:
     """Remove the session store binding from the agent's agent.toml.
 
-    Only edits agent.toml; the managed store itself is untouched (delete it with
-    `agentbricks sessions stores delete`).
+    This only edits agent.toml. The next `agentbricks deploy` removes the managed environment
+    reference from app.yaml; previously granted managed-store access is not revoked.
     """
-    from databricks_agentbricks.agent_project import AgentProject
+    from databricks_agentbricks.projects.agent_project import AgentProject
 
     project = AgentProject.load(source)
     if project.unbind_session_store():
         project.write()
-        render.success("Removed session store binding", fields={"agent.toml": str(project.path)})
+        render.success(
+            "Removed session store binding",
+            fields={"agent.toml": str(project.path)},
+            next_steps=[
+                (
+                    "agentbricks deploy <name>",
+                    "Redeploy to remove the managed env reference from app.yaml; previously granted managed-store access remains",
+                )
+            ],
+        )
     else:
         click.echo(f"No session store binding in {project.path}.")
 

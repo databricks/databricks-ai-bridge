@@ -155,10 +155,68 @@ def test_list_get_update_and_delete_expose_crud_workflow():
         (
             "update",
             "p-123",
-            {"display_name": None, "instructions": "Only durable facts."},
+            {
+                "display_name": None,
+                "instructions": "Only durable facts.",
+                "model": None,
+                "trigger": None,
+            },
         ),
         ("delete", "p-123"),
     ]
+
+
+def test_list_shows_store_ids_without_collection_prefix():
+    result = CliRunner().invoke(_pipeline(), ["list"], obj=_Ctx(_Client()))
+
+    assert result.exit_code == 0, result.output
+    # Full resource names get cut off in the table, hiding the part that identifies the store.
+    assert "support-sessions" in result.output
+    assert "support-memory" in result.output
+    assert "session-stores/" not in result.output
+    assert "memory-stores/" not in result.output
+
+
+@pytest.mark.parametrize("model", ["system.ai.gpt-5-6-sol", ""])
+def test_update_accepts_model_and_instructions_file(model, tmp_path):
+    path = tmp_path / "instructions.md"
+    instructions = "# Distillation\nKeep durable facts.\n"
+    path.write_text(instructions, encoding="utf-8")
+    client = _Client()
+
+    result = CliRunner().invoke(
+        _pipeline(),
+        ["update", "p-123", "--model", model, "--instructions", f"@{path}"],
+        obj=_Ctx(client),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert client.calls == [
+        (
+            "update",
+            "p-123",
+            {"display_name": None, "instructions": instructions, "model": model, "trigger": None},
+        )
+    ]
+
+
+@pytest.mark.parametrize("trigger", ["manual", "scheduled"])
+def test_update_accepts_trigger(trigger):
+    client = _Client()
+    result = CliRunner().invoke(
+        _pipeline(), ["update", "p-123", "--trigger", trigger], obj=_Ctx(client)
+    )
+    assert result.exit_code == 0, result.output
+    assert client.calls[0][-1]["trigger"] == trigger
+
+
+def test_update_rejects_unknown_trigger():
+    client = _Client()
+    result = CliRunner().invoke(
+        _pipeline(), ["update", "p-123", "--trigger", "hourly"], obj=_Ctx(client)
+    )
+    assert result.exit_code == 2
+    assert client.calls == []
 
 
 def test_run_triggers_pipeline_and_renders_returned_run():
