@@ -152,21 +152,18 @@ async def run_agent(
     snapshot = await load_state() if load_state else _pending_runs.get(session_id)
     if snapshot is not None and snapshot["actor"] != actor:
         raise ValueError("The pending approval belongs to a different actor.")
-    if snapshot is not None and snapshot.get("status") == "completed":
+    if snapshot is not None and snapshot["status"] != "pending":
         if resume is not None or snapshot["invocation_id"] == invocation_id:
-            raise RuntimeError("This invocation already completed; use its saved response.")
+            raise RuntimeError(
+                "This approval was already accepted and cannot be replayed. "
+                "Check its invocation status and tool side effects before starting a new turn."
+            )
         snapshot = None
     if resume is not None:
         if not isinstance(resume, dict):
             raise ValueError("resume must be an object")
         if snapshot is None:
             raise RuntimeError("No paused run for this session.")
-        if snapshot["status"] == "running" and snapshot["invocation_id"] != invocation_id:
-            raise RuntimeError("This approval was already accepted; check its invocation status.")
-        if snapshot.get("status") in ("running", "failed") and resume.get(
-            "decisions"
-        ) != snapshot.get("decisions"):
-            raise ValueError("Retry the continuation with its previously accepted decisions.")
     elif snapshot is not None and snapshot.get("invocation_id") != invocation_id:
         raise ValueError("Resolve the pending approval before starting another turn.")
     if snapshot is not None:
@@ -216,22 +213,15 @@ async def run_agent(
             workspace_client_for=workspace_client_for,
         )
         if snapshot is not None:
-            state = await RunState.from_json(agent, snapshot["run_state"])
-            agent_input = (
-                resume_agent(state, resume)
-                if resume is not None
-                and snapshot["status"] == "pending"
-                and snapshot["invocation_id"] != invocation_id
-                else state
-            )
-            if resume is not None:
+            agent_input = await RunState.from_json(agent, snapshot["run_state"])
+            if resume is not None and snapshot["invocation_id"] != invocation_id:
+                agent_input = resume_agent(agent_input, resume)
+                # Consume before executing. Interrupted continuations must not replay tools.
                 await persist(
                     {
-                        **snapshot,
-                        "run_state": agent_input.to_json(),
-                        "status": "running",
+                        "status": "consumed",
+                        "actor": actor,
                         "invocation_id": invocation_id,
-                        "decisions": resume["decisions"],
                     }
                 )
         with start_trace(name="invoke", inputs=agent_input, session_id=session_id) as span:
@@ -241,25 +231,8 @@ async def run_agent(
                 session=session_store(session_id, actor),
             )
 
-            async def persist_result(status: str) -> None:
-                await persist(
-                    {
-                        "run_state": result.to_state().to_json(),
-                        "model": model or MODEL,
-                        "actor": actor,
-                        "invocation_id": invocation_id,
-                        "status": status,
-                        "decisions": resume["decisions"] if resume is not None else None,
-                    }
-                )
-
             try:
                 yield result
-            except Exception:
-                if resume is not None and result.is_complete and result.final_output is None:
-                    # Keep completed tool outputs, so retrying a model failure does not rerun tools.
-                    await persist_result("failed")
-                raise
             finally:
                 if not result.is_complete:
                     result.cancel()
@@ -274,8 +247,14 @@ async def run_agent(
                         "Request-user invocations do not support paused approvals.",
                         400,
                     )
-                await persist_result("pending")
-            elif resume is not None and result.is_complete:
-                await persist_result("completed")
+                await persist(
+                    {
+                        "run_state": result.to_state().to_json(),
+                        "model": model or MODEL,
+                        "actor": actor,
+                        "invocation_id": invocation_id,
+                        "status": "pending",
+                    }
+                )
             if span is not None:
                 span.set_outputs({"output": result.final_output})

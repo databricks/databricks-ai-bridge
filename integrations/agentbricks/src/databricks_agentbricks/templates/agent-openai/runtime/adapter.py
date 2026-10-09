@@ -98,20 +98,6 @@ async def _invoke_agent(
     checkpoints = Checkpoints(
         session_id, actor, context.invocation_id, context.attempt, context.emit
     )
-    saved = await checkpoints.load()
-    if (
-        isinstance(saved, dict)
-        and saved.get("status") == "completed"
-        and saved.get("invocation_id") == context.invocation_id
-        and saved.get("actor") == actor
-    ):
-        return saved["response"]
-
-    async def save_state(snapshot):
-        if snapshot is not None and snapshot.get("status") == "completed":
-            snapshot = {**snapshot, "response": {"output": outputs, "status": "completed"}}
-        await checkpoints.save(snapshot)
-
     async with run_agent(
         _agent_input(payload, recovery=recovery),
         session_id=session_id,
@@ -119,7 +105,7 @@ async def _invoke_agent(
         model=model if isinstance(model, str) else None,
         resume=payload.get("resume"),
         load_state=checkpoints.load,
-        save_state=save_state,
+        save_state=checkpoints.save,
         invocation_id=context.invocation_id,
         **auth_kwargs,
     ) as result:

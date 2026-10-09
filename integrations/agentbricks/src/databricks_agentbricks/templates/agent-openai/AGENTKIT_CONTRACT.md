@@ -94,20 +94,21 @@ outputs, and interruptions require explicit mappings and must not be discarded t
 
 ### Recovery and durability
 
-Runtime Store persistence covers invocations and emitted events. The harness defines checkpoint
-contents: the OpenAI example saves its paused `RunState` in a namespaced Session Store session,
-separate from the transcript, before emitting interrupts. Its `agent/checkpoints.py` helper uses
-append-only records ordered by invocation generation, attempt, and write index. It reserves the
-generation before checking attempt ownership through `context.emit`, so delayed old writes cannot
-replace newer checkpoints. The runtime does not interpret or store framework checkpoints.
-With a Session Store binding, pauses survive worker loss; without one they stay process-local.
-Concurrent workers still require shared Runtime Store scheduling. The Agents SDK has no node-level
-checkpoint continuation.
+Runtime Store persistence covers invocations and emitted events. The harness saves paused SDK
+`RunState` in a separate Session Store session before emitting interrupts. These checkpoints never
+enter the conversation transcript. With a binding, pending approvals survive worker loss; without
+one they stay process-local. Concurrent workers require shared Runtime Store scheduling.
+
+Validate every decision before changing saved state. Persist a consumed marker before continuing
+an accepted approval; subsequent resume requests must not rerun it, even after failure or recovery.
+If execution was interrupted after acceptance, its outcome may be uncertain; check the invocation
+and tool side effects before starting a new ordinary turn with a new invocation ID. A later pause
+saves new approval state. Completed responses remain the runtime's responsibility.
 
 Register recovery when intended. The recover hook replays the persisted application input against
-the same session (or restores the saved approval continuation) and prepends a developer instruction
-warning that the prior attempt may have partially completed. Recovery is at least once, so side
-effects must be idempotent and tools must tolerate replay.
+the same session, except for already accepted approvals, and prepends a developer instruction
+warning that the prior attempt may have partially completed. The Agents SDK has no node-level
+checkpoint continuation; replayed side effects must be idempotent.
 
 ## Optional chat app
 

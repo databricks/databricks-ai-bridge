@@ -67,6 +67,8 @@ class Checkpoints:
         # The runtime owns scheduling/fencing; the harness owns checkpoint contents and storage.
         await self._emit({"type": "checkpoint"})
         await asyncio.to_thread(self._append, item)
+        # Recheck after the write: callers may execute an approved tool once save returns.
+        await self._emit({"type": "checkpoint"})
         self._snapshot = item["state"]
 
     def _read(self):

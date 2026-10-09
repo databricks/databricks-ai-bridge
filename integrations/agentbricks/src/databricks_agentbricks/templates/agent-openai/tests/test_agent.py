@@ -265,6 +265,7 @@ def approval_run(monkeypatch):
     @function_tool(needs_approval=True)
     def send_message() -> str:
         """Send the approved message."""
+        assert store["state"]["status"] == "consumed"
         executed.append("sent")
         return "sent"
 
@@ -361,7 +362,8 @@ def approval_run(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_approval_restores_sdk_state_original_model_and_session(approval_run):
+@pytest.mark.parametrize("decision", ["approve", "reject"])
+async def test_approval_restores_sdk_state_original_model_and_session(approval_run, decision):
     run = approval_run
     await run.run(model="original-model", invocation_id="start")
     assert run.executed == []
@@ -378,12 +380,12 @@ async def test_approval_restores_sdk_state_original_model_and_session(approval_r
     result = await run.run(
         model="changed-model",
         invocation_id="resume",
-        resume={"decisions": [{"type": "approve", "call_id": "call-1"}]},
+        resume={"decisions": [{"type": decision, "call_id": "call-1"}]},
     )
     assert run.models[-1] == "original-model"
-    assert run.executed == ["sent"]
+    assert run.executed == (["sent"] if decision == "approve" else [])
     assert result.final_output == "Done"
-    assert run.store["state"]["status"] == "completed"
+    assert run.store["state"] == {"status": "consumed", "actor": "actor", "invocation_id": "resume"}
     history = await run.session.get_items()
     assert any(item.get("type") == "function_call_output" for item in history)
     assert history[-1]["content"][0]["text"] == "Done"
@@ -404,26 +406,22 @@ async def test_approval_storage_failure_happens_before_tool_execution(approval_r
 
 
 @pytest.mark.asyncio
-async def test_approval_model_failure_continues_without_repeating_tool(approval_run):
+async def test_approval_model_failure_refuses_replay_without_repeating_tool(approval_run):
     run = approval_run
     decisions = {"decisions": [{"type": "approve", "call_id": "call-1"}]}
     await run.run(model="original-model", invocation_id="start")
     run.control.fail_after_tool = True
     with pytest.raises(RuntimeError, match="model failed"):
         await run.run(resume=decisions, invocation_id="failed-resume")
-    assert run.store["state"]["status"] == "failed"
+    assert run.store["state"]["status"] == "consumed"
     snapshot = json.loads(json.dumps(run.store["state"]))
-    with pytest.raises(ValueError):
-        await run.run(
-            invocation_id="changed-decision",
-            resume={"decisions": [{"type": "reject", "call_id": "call-1"}]},
-        )
-    assert run.store["state"] == snapshot
+    calls = run.control.model_calls
+    for invocation_id in ("failed-resume", "retry"):
+        with pytest.raises(RuntimeError, match="already accepted"):
+            await run.run(resume=decisions, invocation_id=invocation_id)
+        assert run.store["state"] == snapshot
+    assert run.control.model_calls == calls
     assert run.executed == ["sent"]
-    result = await run.run(resume=decisions, invocation_id="retry")
-    assert result.final_output == "Done"
-    assert run.executed == ["sent"]
-    assert run.store["state"]["status"] == "completed"
 
 
 def _approval_context():
@@ -433,7 +431,7 @@ def _approval_context():
 
 
 @pytest.mark.asyncio
-async def test_adapter_recovery_replays_completed_response_without_model_call(approval_run):
+async def test_adapter_refuses_consumed_approval_but_allows_new_turn(approval_run):
     import runtime.adapter as adapter
 
     run = approval_run
@@ -458,9 +456,9 @@ async def test_adapter_recovery_replays_completed_response_without_model_call(ap
     }
     completed = await adapter.invoke(payload, context)
     calls, history = run.control.model_calls, await run.session.get_items()
-    recovered = await adapter.recover(payload, context)
     assert completed["status"] == "completed"
-    assert recovered == completed
+    with pytest.raises(RuntimeError, match="already accepted"):
+        await adapter.recover(payload, context)
     assert run.control.model_calls == calls
     assert run.executed == ["sent"]
     assert await run.session.get_items() == history
@@ -468,6 +466,12 @@ async def test_adapter_recovery_replays_completed_response_without_model_call(ap
     with pytest.raises(RuntimeError):
         await adapter.invoke(payload, context)
     assert run.control.model_calls == calls
+    context.invocation_id = "new-turn"
+    result = await adapter.invoke(
+        {"actor": "actor", "messages": [{"role": "user", "content": "Hi"}]}, context
+    )
+    assert result["status"] == "completed"
+    assert run.executed == ["sent"]
 
 
 @pytest.mark.asyncio
@@ -495,6 +499,14 @@ async def test_recovered_resume_reemits_next_pause_without_reapplying_old_decisi
     assert [item.call_id for item in recovered.interruptions] == ["call-2"]
     assert run.executed == ["sent"]
     assert run.control.model_calls == 2
+    with pytest.raises(ValueError, match="mismatched"):
+        await run.run(resume=decisions, invocation_id="stale-decision")
+    await run.run(
+        resume={"decisions": [{"type": "approve", "call_id": "call-2"}]},
+        invocation_id="second-resume",
+    )
+    assert run.executed == ["sent", "sent"]
+    assert run.store["state"]["status"] == "consumed"
 
 
 @pytest.mark.asyncio
@@ -523,13 +535,14 @@ async def test_transport_failure_keeps_uncommitted_continuation_claimed(
         ):
             raise OSError("transport lost")
     assert active.cancel.call_count == (0 if completed else 1)
-    assert run.store["state"]["status"] == "running"
+    assert run.store["state"]["status"] == "consumed"
     assert run.store["state"]["invocation_id"] == "resume"
-    with pytest.raises(RuntimeError):
-        await run.run(
-            invocation_id="duplicate",
-            resume={"decisions": [{"type": "approve", "call_id": "call-1"}]},
-        )
+    for invocation_id in ("resume", "duplicate"):
+        with pytest.raises(RuntimeError, match="already accepted"):
+            await run.run(
+                invocation_id=invocation_id,
+                resume={"decisions": [{"type": "approve", "call_id": "call-1"}]},
+            )
 
 
 def test_configure_raises_clear_error_without_auth(monkeypatch):

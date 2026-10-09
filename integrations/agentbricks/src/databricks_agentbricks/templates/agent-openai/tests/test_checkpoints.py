@@ -174,3 +174,34 @@ async def test_delayed_state_never_overwrites_newer_checkpoint(
     records = next(iter(checkpoints.store.items.values()))
     assert records[-1]["state"] == {"value": "stale"}  # Physically last, logically older.
     assert await checkpoints.create("reader").load() == {"value": "newer"}
+
+
+@pytest.mark.asyncio
+async def test_replaced_attempt_cannot_execute_after_delayed_consumed_write(
+    checkpoints, monkeypatch
+):
+    pending = {"status": "pending"}
+    consumed = {"status": "consumed"}
+    await checkpoints.create("pause").save(pending)
+    current_attempt, executions = 1, []
+
+    async def emit(event):
+        if current_attempt != 1:
+            raise RuntimeError("lost lease")
+
+    async def continue_after_save(task):
+        await task
+        executions.append(1)
+
+    old = checkpoints.create("continuation", emit=emit)
+    async with _delay_append(monkeypatch, old, state=consumed) as task:
+        continuation = asyncio.create_task(continue_after_save(task))
+        current_attempt = 2
+        replacement = checkpoints.create("continuation", attempt=2)
+        assert await replacement.load() == pending
+        await replacement.save(consumed)
+        executions.append(2)
+    with pytest.raises(RuntimeError, match="lost lease"):
+        await continuation
+    assert executions == [2]
+    assert await checkpoints.create("reader").load() == consumed
