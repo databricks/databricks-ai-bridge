@@ -9,10 +9,12 @@ from pathlib import Path
 import pytest
 import yaml
 from click.testing import CliRunner
+from pydantic import ValidationError
 
 from databricks_agentbricks import skills as skill_mod
 from databricks_agentbricks.cli.app import agentbricks
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentkit.runtime.app import _InvocationRequest
 
 
 def _snapshot(directory: Path) -> dict[str, bytes]:
@@ -35,6 +37,24 @@ def test_bundled_skill_has_portable_metadata_and_valid_references():
     assert references
     for relative in references:
         assert (manifest.parent / relative).is_file()
+
+
+@pytest.mark.parametrize("actor_location", ["input", "top_level"])
+def test_documented_memory_payload_obeys_runtime_actor_placement(actor_location):
+    reference = skill_mod.bundled_workflow_skill().parent / "references/deployment.md"
+    example = re.search(r"```json\n(.*?)\n```", reference.read_text(), re.DOTALL)
+    assert example is not None
+    payload = json.loads(example.group(1))
+    if actor_location == "top_level":
+        payload["actor"] = payload["input"].pop("actor")
+        with pytest.raises(ValidationError) as raised:
+            _InvocationRequest.model_validate(payload)
+        assert raised.value.errors()[0]["type"] == "extra_forbidden"
+        assert raised.value.errors()[0]["loc"] == ("actor",)
+    else:
+        request = _InvocationRequest.model_validate(payload)
+        assert request.input == payload["input"]
+        assert request.session_id == payload["session_id"]
 
 
 def test_install_has_one_bundle_and_resolvable_compatibility_pointers(tmp_path):

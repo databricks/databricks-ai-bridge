@@ -22,6 +22,14 @@ Session Store persists conversation history. Runtime Store tracks invocation sta
 Memory Store holds durable facts for recall across conversations. Do not confuse their identifiers
 or assume that changing a binding migrates existing history.
 
+For generated LangGraph and OpenAI Agents SDK server templates, the request's actor selector is
+`input.actor`. Omitting it, including with message-list input, defaults the actor to `session_id`.
+For cross-conversation memory checks, keep the actor and authenticated identity stable while
+changing the session and invocation UUID; see the
+[payload example](deployment.md#cross-conversation-memory-payload).
+With request-user authentication, the adapter namespaces the actor by the authenticated principal;
+the input field does not replace that identity.
+
 LangGraph can resume checkpoints; OpenAI Agents SDK recovery replays persisted application input
 against the session. Preserve approval flows and account for at-least-once tool side effects.
 OpenAI HITL `RunState` is process-local even when a Session Store is bound.
