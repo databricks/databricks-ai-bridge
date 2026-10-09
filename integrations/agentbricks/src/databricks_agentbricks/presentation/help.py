@@ -16,7 +16,7 @@ CommandPath = tuple[str, ...]
 # getting-started path. Any command missing here still lists under "Other commands" (see
 # `_group.AgentBricksGroup`).
 _COMMAND_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("SETUP", ("login", "logout", "init", "doctor")),
+    ("SETUP", ("login", "logout", "init", "doctor", "skills")),
     ("DEVELOP", ("dev", "tools", "memory", "sessions", "tracing")),
     ("SHIP", ("deploy", "deployments")),
 )
@@ -45,6 +45,14 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("doctor",): (
         ("agentbricks doctor .", "check an existing repository's Agent Bricks onboarding"),
+    ),
+    ("skills",): (
+        ("agentbricks skills show", "read the bundled workflow guidance"),
+        ("agentbricks skills install .", "adopt the skill in this project"),
+    ),
+    ("skills", "show"): (("agentbricks skills show", "read the bundled workflow guidance"),),
+    ("skills", "install"): (
+        ("agentbricks skills install .", "install project-local coding-agent guidance"),
     ),
     ("dev",): (("agentbricks dev", "run the agent locally with a chat UI"),),
     ("memory",): (
