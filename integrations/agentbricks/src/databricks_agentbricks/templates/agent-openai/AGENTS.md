@@ -44,6 +44,7 @@ application session state.
 | Change | File |
 | --- | --- |
 | Framework-native agent and `run_agent` | `agent/agent.py` |
+| Harness checkpoint persistence through the Session Store | `agent/checkpoints.py` |
 | Local tools | `agent/tools/` |
 | MCP servers | `agent/mcps.py` |
 | Managed runtime `invoke`/`recover` hooks and input/output translation | `runtime/adapter.py` |
@@ -54,9 +55,9 @@ application session state.
 Keep `agent/agent.py` runnable without runtime request or context types. If you bring an existing agent,
 put its framework-native execution in `run_agent`. The small `runtime/adapter.py` is the agent-author
 integration point: it translates the application payload, calls `run_agent`, emits runtime events, and
-shapes the response. Its `recover` hook calls the same `run_agent` with the original application input
-plus a developer instruction warning that the prior attempt may have partially completed because the
-Agents SDK does not expose checkpoint continuation.
+shapes the response. Its `recover` hook calls the same `run_agent` with the original input and a
+developer instruction warning that the prior attempt may have partially completed. An already
+accepted approval is never rerun; the Agents SDK has no node-level checkpoints.
 
 ## State and recovery
 
@@ -64,12 +65,14 @@ Agents SDK does not expose checkpoint continuation.
   Store.
 - Conversation transcript: in-process in `agentbricks dev`; managed Session Store when bound, on `agentbricks deploy`.
 - Long-term memory: off in `agentbricks dev`; managed Memory Store when bound, on `agentbricks deploy`.
-- OpenAI HITL `RunState`: process-local even with Session Store; it does not survive worker loss.
-- Recovery: replay the persisted application input against the same session.
+- OpenAI HITL `RunState`: the example harness saves it in a separate Session Store session;
+  survives worker loss when a Session Store is bound, and stays process-local otherwise.
+- Recovery: replay the persisted application input against the same session, except an already
+  accepted approval. See [AGENTKIT_CONTRACT.md](AGENTKIT_CONTRACT.md) for approval semantics.
 
 The adapter sends every translated framework event through `context.emit()` before delivery. OpenAI
-Agents SDK does not expose node-level checkpoint continuation, so side effects remain at-least-once
-and tools must be idempotent.
+Agents SDK does not expose node-level checkpoint continuation, so replayed turns may repeat side
+effects and tools must be idempotent.
 
 ## Tools
 
