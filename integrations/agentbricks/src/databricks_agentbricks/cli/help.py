@@ -19,6 +19,7 @@ _COMMAND_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("SETUP", ("login", "logout", "init", "doctor")),
     ("DEVELOP", ("dev", "tools", "memory", "sessions", "tracing")),
     ("SHIP", ("deploy", "deployments")),
+    ("EXPERIMENTAL", ("experimental",)),
 )
 
 # Each example is either a bare command, or a (command, comment) pair. The comment is a short gloss
@@ -287,6 +288,112 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("agentbricks tracing bind --experiment-id 12345", "or by experiment id"),
     ),
     ("tracing", "unbind"): (("agentbricks tracing unbind", "turn tracing off"),),
+    ("experimental",): (
+        (
+            "agentbricks experimental models status",
+            "the model behind each of the agent's LLM calls",
+        ),
+        ("agentbricks experimental prompts list", "the prompts the agent loads"),
+    ),
+    ("experimental", "models"): (
+        (
+            "agentbricks experimental models bind main.my_agent.llm --default system.ai.claude-sonnet-4-5",
+            "call a model service you own (deploy creates it)",
+        ),
+        (
+            "agentbricks experimental models upgrade -c claude-haiku-4-5 --predict agent.eval:predict "
+            "--train-data agent.eval:TRAIN --val-data agent.eval:VAL --scorer agent.eval:SCORERS",
+            "search models (and prompts) on your eval set, as a Databricks job",
+        ),
+        ("agentbricks experimental models status", "check on the job and see its recommendation"),
+        ("agentbricks experimental models apply", "apply the recommendation"),
+        ("agentbricks experimental models rollback", "undo the last apply or set"),
+    ),
+    ("experimental", "models", "bind"): (
+        (
+            "agentbricks experimental models bind main.my_agent.llm --default system.ai.claude-sonnet-4-5",
+            "declare the agent's model service in agent.toml",
+        ),
+        (
+            "agentbricks experimental models bind main.my_agent.router_llm --role router "
+            "--default system.ai.claude-haiku-4-5",
+            "one service per LLM call in a compound agent",
+        ),
+    ),
+    ("experimental", "models", "unbind"): (
+        ("agentbricks experimental models unbind", "remove the agent's only binding"),
+        ("agentbricks experimental models unbind --role router", "remove one role's binding"),
+    ),
+    ("experimental", "prompts"): (
+        (
+            "agentbricks experimental prompts bind main.my_agent.writer",
+            "declare a Prompt Registry prompt the agent loads",
+        ),
+        ("agentbricks experimental prompts list", "bound prompts and their @production versions"),
+    ),
+    ("experimental", "prompts", "bind"): (
+        (
+            "agentbricks experimental prompts bind main.my_agent.writer",
+            "declare a Prompt Registry prompt the agent loads",
+        ),
+        (
+            "agentbricks experimental prompts bind main.my_agent.v2_writer --key writer",
+            "bind it under a different key",
+        ),
+    ),
+    ("experimental", "prompts", "unbind"): (
+        ("agentbricks experimental prompts unbind writer", "remove a prompt binding"),
+    ),
+    ("experimental", "prompts", "list"): (
+        ("agentbricks experimental prompts list", "bound prompts and their @production versions"),
+    ),
+    ("experimental", "models", "list"): (
+        ("agentbricks experimental models list", "models you can route a service to"),
+    ),
+    ("experimental", "models", "status"): (
+        ("agentbricks experimental models status", "each role's model and the latest run"),
+    ),
+    ("experimental", "models", "upgrade"): (
+        (
+            "agentbricks experimental models upgrade -c router=claude-haiku-4-5,gpt-5-4-nano "
+            "-c writer=claude-haiku-4-5 --prompt prompts:/main.my_agent.writer@production "
+            "--predict agent.eval:predict --train-data agent.eval:TRAIN "
+            "--val-data agent.eval:VAL --scorer agent.eval:SCORERS",
+            "search every role's model and a prompt together",
+        ),
+        (
+            "agentbricks experimental models upgrade -c claude-haiku-4-5 --predict agent.eval:predict "
+            "--train-data agent.eval:TRAIN --val-data agent.eval:VAL --scorer agent.eval:SCORERS "
+            "--apply ask",
+            "wait for the result and confirm before applying it",
+        ),
+        (
+            "agentbricks experimental models upgrade -c claude-haiku-4-5 --predict agent.eval:predict "
+            "--train-data agent.eval:TRAIN --val-data agent.eval:VAL --scorer agent.eval:SCORERS "
+            "--run-on local",
+            "run the search in this process instead of a job",
+        ),
+    ),
+    ("experimental", "models", "apply"): (
+        ("agentbricks experimental models apply", "promote every model and prompt that won"),
+    ),
+    ("experimental", "models", "set"): (
+        (
+            "agentbricks experimental models set system.ai.claude-haiku-4-5",
+            "switch the model by name",
+        ),
+        (
+            "agentbricks experimental models set claude-haiku-4-5 --role router",
+            "switch one role's model",
+        ),
+    ),
+    ("experimental", "models", "rollback"): (
+        ("agentbricks experimental models rollback", "undo the last apply: its models and prompts"),
+        (
+            "agentbricks experimental models rollback --role router",
+            "undo one role's last model switch",
+        ),
+    ),
     ("tracing", "list"): (
         (
             "agentbricks tracing list --experiment-name /Shared/agentbricks_traces/my-agent",

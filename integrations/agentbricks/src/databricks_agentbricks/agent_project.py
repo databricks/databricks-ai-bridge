@@ -31,6 +31,25 @@ SESSION_STORE_TABLE = "session_store"
 # init` bootstraps a default name.
 TRACING_TABLE = "tracing"
 EXPERIMENT_NAME_KEY = "experiment_name"
+# The `agentbricks experimental` bindings live under [experimental] until their interface settles, so
+# they can graduate to top-level tables later without colliding with anything already there.
+EXPERIMENTAL_TABLE = "experimental"
+# The model-service bindings (`agentbricks experimental models bind`), one
+# `[experimental.model_services.<role>]` table per
+# LLM call site: `name` is the user-owned UC model service that call goes through
+# (catalog.schema.name); `default` is the system.ai.* model deploy routes it to when it first
+# creates the service. `agentbricks experimental models upgrade` / `set` repoint them afterwards. A single-model
+# agent uses one role, DEFAULT_MODEL_ROLE.
+MODEL_SERVICES_TABLE = "model_services"
+MODEL_SERVICE_DEFAULT_KEY = "default"
+DEFAULT_MODEL_ROLE = tool_manifest.DEFAULT_MODEL_ROLE
+_ROLE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+# The prompt bindings (`agentbricks experimental prompts bind`): MLflow Prompt Registry prompts
+# the agent loads, as `<key> = "catalog.schema.name"` under [experimental.prompts]. `agentbricks deploy` grants
+# the app access to their schemas, and `models upgrade` optimizes them by default.
+PROMPTS_TABLE = "prompts"
+MODEL_SERVICES_PATH = f"{EXPERIMENTAL_TABLE}.{MODEL_SERVICES_TABLE}"
+PROMPTS_PATH = f"{EXPERIMENTAL_TABLE}.{PROMPTS_TABLE}"
 
 _SCHEMA_VERSION = 1
 _SUPPORTED_SCOPE_KINDS = {"volume"}
@@ -50,6 +69,25 @@ def _three_part_name(value: str, description: str) -> str:
             hint=f"Use a three-part name: catalog.schema.{description.replace(' ', '_')}.",
         )
     return value
+
+
+def model_role(value: str) -> str:
+    """Validate a model-service role name (lowercase identifier, e.g. ``router``)."""
+    if not isinstance(value, str) or not _ROLE_PATTERN.match(value):
+        raise AgentCliError(
+            f"Invalid model role {value!r}.",
+            hint="Use a lowercase identifier such as `router` or `writer`.",
+        )
+    return value
+
+
+@dataclass(frozen=True)
+class ModelServiceBinding:
+    """One `[experimental.model_services.<role>]` table: a call site's service and its first-deploy
+    model."""
+
+    name: str
+    default: str | None = None
 
 
 @dataclass(frozen=True)
@@ -271,6 +309,48 @@ def _store_name_from_manifest(value: object, table: str) -> str | None:
     return _required_string(cast(Mapping[str, Any], value).get("name"), f"[{table}] name")
 
 
+def _prompts_from_manifest(value: object) -> dict[str, str]:
+    """Read ``[experimental.prompts]`` (``key = "catalog.schema.name"``), or {} if there is none."""
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise AgentCliError(f"agent.toml [{PROMPTS_PATH}] must be a table of key = prompt name.")
+    prompts: dict[str, str] = {}
+    for key, name in cast(Mapping[str, Any], value).items():
+        model_role(key)
+        # Plain str, not tomlkit's String (see _model_services_from_manifest).
+        prompts[str(key)] = str(
+            _three_part_name(_required_string(name, f"[{PROMPTS_PATH}] {key}"), "prompt")
+        )
+    return prompts
+
+
+def _model_services_from_manifest(value: object) -> dict[str, ModelServiceBinding]:
+    """Read the ``[experimental.model_services.<role>]`` tables, or {} if there are none."""
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise AgentCliError(f"agent.toml [{MODEL_SERVICES_PATH}] must be a table of roles.")
+    bindings: dict[str, ModelServiceBinding] = {}
+    for role, table in cast(Mapping[str, Any], value).items():
+        model_role(role)
+        where = f"[{MODEL_SERVICES_PATH}.{role}]"
+        if not isinstance(table, Mapping):
+            raise AgentCliError(f"agent.toml {where} must be a table.")
+        name = _three_part_name(
+            _required_string(table.get("name"), f"{where} name"), "model service"
+        )
+        default = table.get(MODEL_SERVICE_DEFAULT_KEY)
+        if default is not None and not (isinstance(default, str) and default):
+            raise AgentCliError(
+                f"agent.toml {where} {MODEL_SERVICE_DEFAULT_KEY} must be a non-empty string."
+            )
+        # Plain str, not tomlkit's String: deploy writes these into app.yaml, and yaml.safe_dump
+        # can't represent tomlkit types.
+        bindings[role] = ModelServiceBinding(str(name), str(default) if default else None)
+    return bindings
+
+
 def _store_id_from_manifest(value: object) -> str | None:
     """Read the optional bare store ``id`` from a ``[memory_store]`` table, or None if absent."""
     if not isinstance(value, Mapping):
@@ -387,6 +467,8 @@ class AgentProject:
         deployment_name: str | None = None,
         trace_experiment_name: str | None = None,
         user_auth: tool_manifest.UserAuthConfig | None = None,
+        model_services: dict[str, ModelServiceBinding] | None = None,
+        prompts: dict[str, str] | None = None,
     ) -> None:
         self.root = root
         self.path = root / "agent.toml"
@@ -409,6 +491,12 @@ class AgentProject:
         # profiles, since an id is workspace-local. `agentbricks init` bootstraps a default name.
         self.trace_experiment_name = trace_experiment_name
         self.user_auth = user_auth or tool_manifest.UserAuthConfig()
+        # Model-service bindings by role: the UC model service each LLM call site goes through, and
+        # the model deploy routes it to on first create. Empty = unbound (the agent calls its own
+        # default models directly).
+        self.model_services: dict[str, ModelServiceBinding] = dict(model_services or {})
+        # Prompt bindings by key: the three-part Prompt Registry name of each prompt the agent loads.
+        self.prompts: dict[str, str] = dict(prompts or {})
 
     @classmethod
     def load(cls, root: pathlib.Path | str | None = None) -> "AgentProject":
@@ -471,6 +559,19 @@ class AgentProject:
             trace_experiment_name = (
                 str(raw_experiment) if isinstance(raw_experiment, str) and raw_experiment else None
             )
+        moved = [t for t in (MODEL_SERVICES_TABLE, PROMPTS_TABLE) if t in document]
+        if moved:
+            raise AgentCliError(
+                f"agent.toml declares {', '.join(f'[{t}]' for t in moved)} at the top level.",
+                hint=f"Move {'them' if len(moved) > 1 else 'it'} under [{EXPERIMENTAL_TABLE}], e.g. "
+                f"[{MODEL_SERVICES_PATH}.<role>] and [{PROMPTS_PATH}].",
+            )
+        experimental = document.get(EXPERIMENTAL_TABLE)
+        if experimental is not None and not isinstance(experimental, Mapping):
+            raise AgentCliError(f"agent.toml [{EXPERIMENTAL_TABLE}] must be a table.")
+        experimental = cast(Mapping[str, Any], experimental or {})
+        model_services = _model_services_from_manifest(experimental.get(MODEL_SERVICES_TABLE))
+        prompts = _prompts_from_manifest(experimental.get(PROMPTS_TABLE))
         return cls(
             project_root,
             document,
@@ -483,6 +584,8 @@ class AgentProject:
             str(deployment_name) if deployment_name is not None else None,
             trace_experiment_name,
             user_auth,
+            model_services,
+            prompts,
         )
 
     @classmethod
@@ -591,6 +694,115 @@ class AgentProject:
     def unbind_session_store(self) -> bool:
         """Remove the session store binding from agent.toml. Returns True if it was present."""
         return self._clear_store(SESSION_STORE_TABLE)
+
+    def bind_model_service(
+        self, name: str, default: str | None = None, role: str = DEFAULT_MODEL_ROLE
+    ) -> bool:
+        """Declare the model service for ``role`` in agent.toml. Returns True if it changed.
+
+        ``name`` is a three-part UC name (catalog.schema.name). ``default`` is the ``system.ai.*``
+        model `agentbricks deploy` routes the service to when it creates it; an existing service is never
+        repointed by deploy. Passing no ``default`` keeps any recorded one.
+        """
+        role = model_role(role)
+        name = _three_part_name(
+            _required_string(name, f"[{MODEL_SERVICES_TABLE}.{role}] name"), "model service"
+        )
+        for other_role, binding in self.model_services.items():
+            if other_role != role and binding.name == name:
+                raise AgentCliError(
+                    f"Model service '{name}' is already bound to role '{other_role}'.",
+                    hint="Give each LLM call site its own model service so each can be upgraded "
+                    "on its own.",
+                )
+        current = self.model_services.get(role)
+        default = default or (current.default if current else None)
+        binding = ModelServiceBinding(name, default)
+        if current == binding:
+            return False
+        experimental = self._experimental_table()
+        tables = experimental.get(MODEL_SERVICES_TABLE)
+        if not isinstance(tables, Mapping):
+            tables = tomlkit.table(is_super_table=True)
+            experimental.append(MODEL_SERVICES_TABLE, tables)
+        existing = tables.get(role)
+        created = not isinstance(existing, Mapping)
+        table = cast(Any, tomlkit.table() if created else existing)
+        if created:
+            tables.append(role, table)
+        table["name"] = name
+        if default:
+            table[MODEL_SERVICE_DEFAULT_KEY] = default
+        elif MODEL_SERVICE_DEFAULT_KEY in table:
+            del table[MODEL_SERVICE_DEFAULT_KEY]
+        if created:
+            # Keep a blank line before whatever table follows, e.g. [experimental.prompts].
+            table.add(tomlkit.nl())
+        self.model_services[role] = binding
+        return True
+
+    def bind_prompt(self, name: str, key: str | None = None) -> str:
+        """Declare Prompt Registry prompt ``name`` (catalog.schema.name) in agent.toml; returns its key.
+
+        ``key`` defaults to the prompt's own name (its last part).
+        """
+        name = _three_part_name(_required_string(name, f"[{PROMPTS_PATH}] prompt"), "prompt")
+        key = model_role(key or name.rsplit(".", 1)[1])
+        for other_key, other_name in self.prompts.items():
+            if other_name == name and other_key != key:
+                raise AgentCliError(f"Prompt '{name}' is already bound as '{other_key}'.")
+        experimental = self._experimental_table()
+        table = experimental.get(PROMPTS_TABLE)
+        if not isinstance(table, Mapping):
+            table = tomlkit.table()
+            experimental.append(PROMPTS_TABLE, table)
+        table[key] = name
+        self.prompts[key] = name
+        return key
+
+    def unbind_prompt(self, key: str) -> bool:
+        """Remove prompt binding ``key`` from agent.toml. True if it was present."""
+        if key not in self.prompts:
+            return False
+        experimental = cast(Any, self._document.get(EXPERIMENTAL_TABLE))
+        table = experimental.get(PROMPTS_TABLE) if isinstance(experimental, Mapping) else None
+        if isinstance(table, Mapping) and key in table:
+            del table[key]
+            if not table:
+                del experimental[PROMPTS_TABLE]
+                self._drop_empty_experimental_table()
+        del self.prompts[key]
+        return True
+
+    def unbind_model_service(self, role: str = DEFAULT_MODEL_ROLE) -> bool:
+        """Remove ``role``'s model-service binding from agent.toml. True if it was present."""
+        if role not in self.model_services:
+            return False
+        experimental = cast(Any, self._document.get(EXPERIMENTAL_TABLE))
+        tables = (
+            experimental.get(MODEL_SERVICES_TABLE) if isinstance(experimental, Mapping) else None
+        )
+        if isinstance(tables, Mapping) and role in tables:
+            del tables[role]
+            if not tables:
+                del experimental[MODEL_SERVICES_TABLE]
+                self._drop_empty_experimental_table()
+        del self.model_services[role]
+        return True
+
+    def _experimental_table(self) -> Any:
+        """The [experimental] table, created (as a super table, so it never renders as an empty
+        `[experimental]` header) when missing."""
+        experimental = cast(Any, self._document.get(EXPERIMENTAL_TABLE))
+        if not isinstance(experimental, Mapping):
+            experimental = tomlkit.table(is_super_table=True)
+            self._document.append(EXPERIMENTAL_TABLE, experimental)
+        return experimental
+
+    def _drop_empty_experimental_table(self) -> None:
+        experimental = self._document.get(EXPERIMENTAL_TABLE)
+        if isinstance(experimental, Mapping) and not experimental:
+            del self._document[EXPERIMENTAL_TABLE]
 
     def bind_tracing(self, experiment_name: str) -> bool:
         """Bind tracing to an MLflow experiment NAME (an experiment path). Returns True if changed.

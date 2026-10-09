@@ -48,6 +48,14 @@ openai = [
     "opentelemetry-exporter-otlp-proto-grpc>=1.25.0",
     "databricks-agents>=1.9.3",
 ]
+# `databricks_agentkit.model_upgrades` / `agentbricks models upgrade`: the GEPA optimizer and full mlflow
+# (prompt registry, genai scorers, pricing catalog). The upgrade job installs it next to the agent
+# project, whose predict_fn it runs; `models apply` / `rollback` need it locally too.
+upgrade = [
+    "gepa>=0.0.26",
+    "litellm>=1.64.0",
+    "mlflow>=3.11.0",
+]
 
 [project.scripts]
 agentbricks = "databricks_agentbricks.cli:main"
@@ -61,6 +69,11 @@ dev = [
 tests = [
     "databricks-ai-bridge[memory]>=0.22.0",
     "fastapi>=0.129.0",
+    # The model-upgrade optimizer's tests (tests/unit_tests/model_upgrades) need the `upgrade` extra.
+    "gepa>=0.0.26",
+    "litellm>=1.64.0",
+    "mlflow>=3.11.0",
+    "openai>=1.66.0",
     "httpx>=0.28.1",
     "pytest==9.0.2",
     "pytest-asyncio==1.3.0",
@@ -92,6 +105,12 @@ include = ["pyproject.toml", "src/**/*.py", "tests/**/*.py"]
 # modules) — they import scaffold-relative paths that never resolve here, so don't lint them.
 extend-exclude = ["src/databricks_agentbricks/templates"]
 extend = "../../pyproject.toml"
+
+[tool.ruff.lint.per-file-ignores]
+# The model-upgrade optimizer reports its progress (candidates tried, scores, the promotion plan) on
+# stdout, as the Smart Model Upgrades library it was migrated from does. `agentbricks experimental
+# models apply` redirects it off the CLI's stdout so JSON output stays clean.
+"src/databricks_agentkit/model_upgrades/optimization.py" = ["T201"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit_tests"]

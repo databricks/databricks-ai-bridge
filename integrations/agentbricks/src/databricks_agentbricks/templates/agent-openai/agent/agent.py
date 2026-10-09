@@ -24,13 +24,17 @@ from databricks_agentkit.openai import (
     start_trace,
 )
 from databricks_agentkit.runtime.auth import AuthError
+from databricks_agentkit.runtime.tool_manifest import resolve_model_service
 
 logger = logging.getLogger(__name__)
 
 # A Unity Catalog AI Gateway model service, served from the `system.ai` schema and queried through
 # the gateway (see `use_ai_gateway=True` in configure()). Swap for any `system.ai.*` model service
 # your workspace exposes — the demo chat app's picker lists what's available.
-MODEL = "system.ai.claude-sonnet-4-5"
+# `agentbricks experimental models bind` swaps this for a model service you own (wired in by `agentbricks deploy`
+# as AGENT_MODEL_SERVICE_AGENT), so `agentbricks experimental models upgrade` can change the model without a code
+# change.
+MODEL = resolve_model_service() or "system.ai.claude-sonnet-4-5"
 
 # Tools that require human approval before they run. Add a tool's name here and the agent pauses when
 # the model calls it, emitting an `interrupt` event; the client resumes by sending `resume` with the
