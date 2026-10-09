@@ -7,7 +7,7 @@ from collections.abc import Iterator
 
 import click
 
-from databricks_agentbricks._group import apply_group_class, dim
+from databricks_agentbricks.presentation.group import apply_group_class, dim
 
 CommandPath = tuple[str, ...]
 
@@ -135,6 +135,11 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
             "--model system.ai.gpt-5-6-sol",
             "create a memory pipeline",
         ),
+        (
+            "agentbricks memory pipeline create --memory-store agent-memory "
+            "--session-store agent-sessions --trigger scheduled",
+            "run it automatically about every 24 hours",
+        ),
     ),
     ("memory", "pipeline", "list"): (
         ("agentbricks memory pipeline list", "list memory pipelines"),
@@ -145,7 +150,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("memory", "pipeline", "update"): (
         (
             "agentbricks memory pipeline update <pipeline> "
-            '--instructions "Keep durable preferences"',
+            "--instructions @/path/to/instructions.md --model system.ai.gpt-5-6-sol",
             "edit a memory pipeline",
         ),
     ),

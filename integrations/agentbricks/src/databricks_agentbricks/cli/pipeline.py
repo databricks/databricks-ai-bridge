@@ -7,9 +7,10 @@ from typing import Any
 
 import click
 
-from databricks_agentbricks import render
-from databricks_agentbricks.render import field
+from databricks_agentbricks.presentation import render
+from databricks_agentbricks.presentation.render import field
 from databricks_agentkit import timefmt
+from databricks_agentkit._api_client import MEMORY_PIPELINE_TRIGGERS
 
 
 def _resolve_instructions(ctx, param, value):
@@ -28,6 +29,11 @@ def _truncate(value: Any, length: int = 48) -> str:
     return text if len(text) <= length else text[: length - 1] + "…"
 
 
+def _store_id(name: Any) -> str | None:
+    # Strip out prefix from memory/session store resource name
+    return str(name).split("/")[-1] if name else None
+
+
 def _render_detail(pipeline: dict) -> None:
     policy = field(pipeline, "dreamer_policy") or {}
     render.detail(
@@ -38,7 +44,7 @@ def _render_detail(pipeline: dict) -> None:
             "Session store": field(pipeline, "session_store"),
             "Memory store": field(pipeline, "memory_store"),
             "Model": field(pipeline, "model"),
-            "Instructions": field(pipeline, "instructions"),
+            "Instructions": field(policy, "instructions"),
             "Enabled": field(policy, "enabled"),
             "Trigger": field(policy, "trigger"),
             "ETag": field(pipeline, "etag"),
@@ -80,8 +86,15 @@ def pipeline() -> None:
     callback=_resolve_instructions,
     help="Instructions steering distillation: inline text or @path to a UTF-8 file.",
 )
+@click.option(
+    "--trigger",
+    type=click.Choice(list(MEMORY_PIPELINE_TRIGGERS)),
+    default="manual",
+    show_default=True,
+    help="How runs start: only when you start one, or also automatically about every 24 hours.",
+)
 @click.pass_obj
-def create(obj, memory_store, session_store, model, display_name, instructions) -> None:
+def create(obj, memory_store, session_store, model, display_name, instructions, trigger) -> None:
     """Create a Dreamer memory pipeline."""
     data = obj.client().create_memory_pipeline(
         memory_store=memory_store,
@@ -89,6 +102,7 @@ def create(obj, memory_store, session_store, model, display_name, instructions) 
         model=model,
         display_name=display_name,
         instructions=instructions,
+        trigger=trigger,
     )
     if obj.output == "json":
         render.emit_json(data)
@@ -124,8 +138,8 @@ def list_(obj, page_size, page_token) -> None:
         [
             [
                 field(item, "name"),
-                field(item, "session_store"),
-                field(item, "memory_store"),
+                _store_id(field(item, "session_store")),
+                _store_id(field(item, "memory_store")),
                 _truncate(field(item, "model")),
             ]
             for item in pipelines
@@ -155,18 +169,31 @@ def get(obj, name) -> None:
 @click.argument("name")
 @click.option("--display-name", default=None)
 @click.option(
+    "--model",
+    default=None,
+    help="Model service for distillation; empty string clears the override.",
+)
+@click.option(
     "--instructions",
     default=None,
     callback=_resolve_instructions,
     help="Instructions steering distillation: inline text or @path to a UTF-8 file.",
 )
+@click.option(
+    "--trigger",
+    type=click.Choice(list(MEMORY_PIPELINE_TRIGGERS)),
+    default=None,
+    help="How runs start: only when you start one, or also automatically about every 24 hours.",
+)
 @click.pass_obj
-def update(obj, name, display_name, instructions) -> None:
-    """Update a pipeline's display name or instructions."""
+def update(obj, name, display_name, instructions, model, trigger) -> None:
+    """Update a pipeline's display name, instructions, model, or trigger."""
     data = obj.client().update_memory_pipeline(
         name,
         display_name=display_name,
         instructions=instructions,
+        model=model,
+        trigger=trigger,
     )
     if obj.output == "json":
         render.emit_json(data)

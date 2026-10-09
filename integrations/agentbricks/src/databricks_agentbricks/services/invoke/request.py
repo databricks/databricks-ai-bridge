@@ -1,4 +1,4 @@
-"""Generic HTTP request construction for Agent Bricks endpoint commands."""
+"""Input validation and HTTP request construction for endpoint invocation."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ import json
 import urllib.parse
 from typing import Any, Mapping
 
-from databricks_agentbricks.cli.endpoint_transport import EndpointRequest
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.services.invoke.transport import EndpointRequest
 
 
 def parse_pairs(values: tuple[str, ...], *, separator: str, description: str) -> dict[str, str]:

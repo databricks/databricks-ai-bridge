@@ -17,9 +17,10 @@ from unittest import mock
 import pytest
 from click.testing import CliRunner
 
-from databricks_agentbricks.agent_project import AgentProject
 from databricks_agentbricks.cli import tracing as tracing_mod
+from databricks_agentbricks.clients import tracing_client
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.projects.agent_project import AgentProject
 
 _AGENT_TOML = 'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "agentbricks"\n'
 
@@ -87,7 +88,7 @@ def test_create_experiment_idempotent_creates_parent_dir_for_nested_path():
     mlflow.get_experiment_by_name.return_value = None  # doesn't exist yet
     mlflow.create_experiment.return_value = "eid-1"
     client = mock.Mock()
-    with mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow):
+    with mock.patch.object(tracing_client, "_mlflow", return_value=mlflow):
         result = tracing_mod.create_experiment_idempotent(
             None, client, "/Shared/agentbricks_traces/demo"
         )
@@ -104,7 +105,7 @@ def test_create_experiment_idempotent_reuses_existing_without_mkdir():
     # A managed (non-UC) experiment carries no UC destination tag.
     mlflow.get_experiment_by_name.return_value = mock.Mock(experiment_id="eid-2", tags={})
     client = mock.Mock()
-    with mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow):
+    with mock.patch.object(tracing_client, "_mlflow", return_value=mlflow):
         assert tracing_mod.create_experiment_idempotent(None, client, "/Shared/x") == (
             tracing_mod.ResolvedTraceExperiment(
                 experiment_id="eid-2", tables=tracing_mod.MLflowTraceTables()
@@ -138,7 +139,7 @@ def test_create_experiment_idempotent_returns_uc_tables():
         },
     )
     client = mock.Mock()
-    with mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow):
+    with mock.patch.object(tracing_client, "_mlflow", return_value=mlflow):
         result = tracing_mod.create_experiment_idempotent(None, client, "/Shared/uc")
     # The per-kind base tables; the "unified" VIEW tag is excluded.
     assert result == tracing_mod.ResolvedTraceExperiment(

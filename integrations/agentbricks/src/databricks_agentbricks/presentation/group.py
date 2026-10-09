@@ -240,7 +240,8 @@ def _usage_error_show(self: click.exceptions.UsageError, file=None) -> None:
     # Local imports avoid a module-load cycle (render/errors import from click, not from here).
     from rich.console import Console
 
-    from databricks_agentbricks import errors, render
+    from databricks_agentbricks import errors
+    from databricks_agentbricks.presentation import render
 
     invocation = self.ctx.command_path if self.ctx is not None else "agentbricks"
     message = self.format_message()
