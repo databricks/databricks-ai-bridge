@@ -33,7 +33,7 @@ dependencies = [
 [project.optional-dependencies]
 # Framework adapters are optional; the CLI, store SDK, and HTTP runtime install by default.
 langgraph = [
-    "databricks-langchain>=0.17.0",
+    "databricks-langchain==0.21.0",
     "langgraph>=1.1.0",
     "langchain>=1.0.0",
     "langchain-mcp-adapters>=0.3.0",
