@@ -872,6 +872,7 @@ def test_start_local_tracing_server_degrades_when_launch_fails(tmp_path: pathlib
     monkeypatch.setattr(local_tracing_client.subprocess, "Popen", _boom)
     result = local_tracing_client.LocalTracingClient().start_dev(tmp_path)
     assert result.server is None and result.environment == {}
+    assert result.warning is not None
     assert "uvx not found" in result.warning
 
 
@@ -904,6 +905,7 @@ def test_start_read_server_degrades_when_launch_fails(tmp_path: pathlib.Path, mo
     monkeypatch.setattr(local_tracing_client.subprocess, "Popen", _boom)
     result = local_tracing_client.LocalTracingClient().start_read(tmp_path / "mlflow.db")
     assert result.server is None and result.base_url is None
+    assert result.warning is not None
     assert "uvx not found" in result.warning
 
 
