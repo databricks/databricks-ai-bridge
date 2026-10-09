@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import click
+import pytest
 from click.testing import CliRunner
 
 import databricks_agentbricks.cli.app as cli
@@ -47,6 +48,13 @@ def test_root_registers_supported_commands():
     assert "durability" not in names
     assert "help" not in names
     assert "add-sandbox" not in names
+
+
+@pytest.mark.parametrize("arguments", [["skills"], ["skills", "show"], ["skills", "install", "."]])
+def test_skills_are_not_a_public_cli_command(arguments):
+    result = CliRunner().invoke(cli.agentbricks, arguments)
+    assert result.exit_code != 0
+    assert "error: unknown command `skills`" in result.output
 
 
 def test_pipeline_is_nested_under_memory():

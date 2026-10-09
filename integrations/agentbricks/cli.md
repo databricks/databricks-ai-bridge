@@ -61,6 +61,7 @@ These options apply to every command. Pass them before the command name, for exa
 | [`logout`](#agentbricks-logout) | Forget the saved default profile |
 | [`init`](#agentbricks-init) | Scaffold a new agent project |
 | [`doctor`](#agentbricks-doctor) | Check an existing agent's Agent Bricks onboarding |
+| [`skills`](#agentbricks-skills) | Read or adopt bundled coding-agent workflow guidance |
 | [`dev`](#agentbricks-dev) | Run the agent locally with a chat UI |
 | [`memory`](#agentbricks-memory) | Manage an agent's long-term memory |
 | [`mcp`](#agentbricks-mcp) | Discover managed MCP services |
@@ -105,6 +106,15 @@ DIRECTORY is the target path to create (defaults to the template's own name). Th
 Pass --profile (or set a default via `agentbricks login` / -p) to seed a local `.env` so the scaffolded project runs with `agentbricks dev` right away.
 
 The scaffold is preconfigured to call Databricks model serving through the AI Gateway using that profile, so it can talk to a model with no separate endpoint or API key to set up.
+
+New projects include the `agent-bricks-workflow` skill in `.agents/skills/`, with discovery pointers in
+`.claude/skills/` and `.agent/skills/`. Local `dev` is optional when the goal is deployment.
+JSON results include `workflow_skill` and `skill_pointers`.
+
+With `--existing`, prepare the separate `agent-bricks-migrate` bundle and pointers in all three
+discovery roots without changing existing application source or configuration. Coding agents in
+existing projects can read the bundled workflow skill at the path printed by the CLI's automatic
+stderr hint; set `AGENTBRICKS_DISABLE_AGENT_HINT=1` to disable hints.
 
 `--server agentbricks` selects the managed server, which supports foreground, streaming, and background invocations through one HTTP contract and Runtime Store. This existing server value is recorded in `agent.toml`. Pass `--server custom` for a minimal foreground-only FastAPI server.
 

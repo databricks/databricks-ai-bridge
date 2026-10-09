@@ -126,6 +126,34 @@ the same change, in `src/databricks_agentbricks/cli/doctor.py`:
 Also refresh the framework references and examples in `cli.md` and `README.md`, and add doctor test
 coverage for the new framework in `tests/unit_tests/doctor_test.py`.
 
+## Testing coding-agent skills
+
+The workflow skill is bundled under `src/databricks_agentbricks/templates/agent-bricks-workflow/`.
+Keep migration instructions separate and share maintained references rather than copying the
+entire CLI manual into a skill. Verify changes offline before running a live agent journey:
+
+```sh
+python -m pytest tests/unit_tests/skills_test.py tests/unit_tests/agent_hint_test.py \
+  tests/unit_tests/init_test.py tests/unit_tests/cli_test.py
+```
+
+These tests exercise real scaffold generation, portable skill metadata and references, shared-bundle
+discovery pointers, idempotency, conflict preservation, rollback, agent detection, help output,
+opt-out behavior, and JSON stdout. Build a wheel and confirm the skill and reference files are
+present too; editable-install tests alone do not verify distribution contents.
+
+For native discovery, open a fresh scaffold in the coding agent, confirm `agent-bricks-workflow`
+appears in its skill list, and ask it to plan an Agent Bricks deployment without executing live
+commands. Repeat with Claude Code and Codex at minimum; installed agent versions and settings can
+affect discovery. Reading the bundled skill at the path printed by the CLI's coding-agent hint
+is the fallback, not evidence of native automatic discovery.
+
+A later end-to-end comparison should use the same prompt, model/effort, framework, workspace, and
+success criteria in fresh directories and sessions. Compare baseline against the new CLI while
+recording skill adoption, documentation reads, unnecessary dev runs, validation calls, and elapsed
+time. Separate provisioning time from agent planning and validation time. Do not claim improved
+completion time from unit tests or skip requested validation to make a benchmark faster.
+
 ## Cutting a release
 
 Run **Cut Agent Bricks release** from the Actions tab with a version such as `0.4.0` or

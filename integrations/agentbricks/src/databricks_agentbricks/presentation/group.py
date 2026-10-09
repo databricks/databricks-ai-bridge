@@ -23,6 +23,7 @@ from typing import Iterable, Optional
 
 import click
 
+from databricks_agentbricks.agent_hint import workflow_hint
 from databricks_agentbricks.errors import AgentCliError
 
 # Ordered intent sections for the root command list. Each command name must be a real subcommand;
@@ -70,6 +71,15 @@ class AgentBricksGroup(_FlushEpilog, click.Group):
     # Set only on the root group. When present, `format_commands` renders these sections instead of
     # Click's flat "Commands:" list.
     command_sections: Optional[CommandSections] = None
+
+    def make_context(self, info_name, args, parent=None, **extra):
+        if parent is None and not extra.get("resilient_parsing"):
+            if message := workflow_hint():
+                try:
+                    click.echo(message, err=True)
+                except Exception:
+                    pass
+        return super().make_context(info_name, args, parent=parent, **extra)
 
     def resolve_command(self, ctx: click.Context, args: list[str]):
         try:
