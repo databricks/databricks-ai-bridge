@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## databricks-langchain 0.21.0 (2026-10-09)
+
+### Bug Fixes
+- Strip unsupported metadata from rich `ToolMessage` text blocks before sending them to the model, allowing agents to continue after MCP tool calls (#664).
+- Fix Responses API streaming text aggregation and duplicate output in `ChatDatabricks`, and handle usage metadata with missing token details (#681).
+
 ## databricks-openai 0.17.1 (2026-08-20)
 
 ### Bug Fixes
