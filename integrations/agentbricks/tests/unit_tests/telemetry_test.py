@@ -11,9 +11,9 @@ import click
 from click.testing import CliRunner
 
 import databricks_agentbricks.cli.app as cli
-from databricks_agentbricks._group import AgentBricksCommand
 from databricks_agentbricks.cli import telemetry
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.presentation.group import AgentBricksCommand
 
 
 class _ApiClient:
@@ -32,14 +32,14 @@ class _Context:
     command_path = "agentbricks init"
 
     def __init__(self, api_client: _ApiClient | None = None):
-        workspace_client = None
-        if api_client is not None:
-            workspace_client = SimpleNamespace(api_client=api_client)
+        private_client = (
+            SimpleNamespace(workspace_client=SimpleNamespace(api_client=api_client))
+            if api_client is not None
+            else None
+        )
         self.obj = SimpleNamespace(
             profile=None,
-            _client=SimpleNamespace(workspace_client=workspace_client)
-            if workspace_client is not None
-            else None,
+            api_client_provider=SimpleNamespace(_client=private_client),
         )
         self.command = SimpleNamespace(name="init", params=())
         self.parent = SimpleNamespace(
@@ -72,13 +72,11 @@ def test_build_payload_matches_frontend_log_schema():
     assert uuid.UUID(encoded["frontend_log_event_id"])
     assert _inner(payload) == {
         "agentbricks_cli_log": {
-            "execution_context": {
-                "command_path": "agentbricks init",
-                "execution_time_ms": 17,
-                "exit_code": 0,
-                "operating_system": telemetry.platform.system().lower(),
-                "package_version": telemetry._package_version(),
-            }
+            "command_path": "agentbricks init",
+            "execution_time_ms": 17,
+            "exit_code": 0,
+            "operating_system": telemetry.platform.system().lower(),
+            "package_version": telemetry._package_version(),
         }
     }
     assert "/tmp" not in json.dumps(payload)
@@ -95,7 +93,7 @@ def test_build_log_uses_static_click_path_instead_of_raw_context_path():
         exit_code=0,
     )
 
-    assert log["execution_context"]["command_path"] == "agentbricks init"
+    assert log["command_path"] == "agentbricks init"
     assert "private-profile" not in json.dumps(log)
 
     context.command = SimpleNamespace(name="init --private-profile", params=())
@@ -104,7 +102,7 @@ def test_build_log_uses_static_click_path_instead_of_raw_context_path():
         execution_time_ms=1,
         exit_code=0,
     )
-    assert fallback_log["execution_context"]["command_path"] == "agentbricks"
+    assert fallback_log["command_path"] == "agentbricks"
 
 
 def test_real_init_telemetry_captures_safe_options_without_values(monkeypatch, tmp_path):
@@ -136,30 +134,29 @@ def test_real_init_telemetry_captures_safe_options_without_values(monkeypatch, t
     assert result.exit_code == 0, result.output
     assert len(records) == 1
     log = records[0]
-    assert set(log) == {"execution_context", "parameters"}
-    context = log["execution_context"]
-    assert set(context) == {
+    assert set(log) == {
         "command_path",
         "package_version",
         "operating_system",
         "execution_time_ms",
         "exit_code",
+        "parameters",
     }
-    assert context["command_path"] == "agentbricks init"
-    assert context["exit_code"] == 0
-    assert context["execution_time_ms"] >= 0
+    assert log["command_path"] == "agentbricks init"
+    assert log["exit_code"] == 0
+    assert log["execution_time_ms"] >= 0
     parameters = {parameter["name"]: parameter for parameter in log["parameters"]}
     assert parameters["agentbricks.output"] == {
         "name": "agentbricks.output",
-        "choice_value": "json",
+        "choice_value": "AGENTBRICKS_CLI_JSON",
     }
     assert parameters["agentbricks init.framework"] == {
         "name": "agentbricks init.framework",
-        "choice_value": "openai",
+        "choice_value": "AGENTBRICKS_CLI_OPENAI",
     }
     assert parameters["agentbricks init.server"] == {
         "name": "agentbricks init.server",
-        "choice_value": "custom",
+        "choice_value": "AGENTBRICKS_CLI_CUSTOM",
     }
     assert parameters["agentbricks init.disable_chat_app"] == {
         "name": "agentbricks init.disable_chat_app",
@@ -168,8 +165,13 @@ def test_real_init_telemetry_captures_safe_options_without_values(monkeypatch, t
     assert parameters["agentbricks init.profile"] == {
         "name": "agentbricks init.profile",
     }
-    # DIRECTORY is a positional argument and remains absent even though it was supplied.
-    assert "agentbricks init.directory" not in parameters
+    assert set(parameters) == {
+        "agentbricks.output",
+        "agentbricks init.framework",
+        "agentbricks init.server",
+        "agentbricks init.disable_chat_app",
+        "agentbricks init.profile",
+    }
     encoded = json.dumps(log)
     assert "private-project-name" not in encoded
     assert "private-profile-name" not in encoded
@@ -186,7 +188,7 @@ def test_failed_payload_uses_bounded_category_and_no_message():
         ),
     )
 
-    assert log["execution_context"]["error_category"] == "ERROR_CATEGORY_AUTHORIZATION"
+    assert log["error_category"] == "ERROR_CATEGORY_AUTHORIZATION"
     encoded = json.dumps(log)
     assert "secret message" not in encoded
     assert "/tmp/private" not in encoded
@@ -211,18 +213,22 @@ def test_existing_workspace_client_receives_exact_transport_request(monkeypatch)
     method, path, body = api_client.calls[0]
     assert (method, path) == ("POST", "/telemetry-ext")
     assert body["uploadTime"] == 12300
-    assert _inner(body)["agentbricks_cli_log"]["execution_context"]["exit_code"] == 0
+    assert _inner(body)["agentbricks_cli_log"]["exit_code"] == 0
 
 
-def test_transport_payload_contains_bounded_parameters(monkeypatch):
+def test_transport_payload_contains_static_parameter_names(monkeypatch):
     api_client = _ApiClient()
 
-    @click.command(name="inventory", cls=AgentBricksCommand)
-    @click.option("--label", multiple=True)
-    @click.option("--enabled", is_flag=True)
+    @click.group(name="agentbricks")
+    def root():
+        pass
+
+    @root.command(name="deploy", cls=AgentBricksCommand)
+    @click.option("--workspace-path", multiple=True)
+    @click.option("--allow-user-scope-update", is_flag=True)
     @click.pass_context
-    def inventory(ctx, label, enabled):
-        del ctx, label, enabled
+    def deploy(ctx, workspace_path, allow_user_scope_update):
+        del ctx, workspace_path, allow_user_scope_update
 
     monkeypatch.delenv("AGENTBRICKS_DISABLE_TELEMETRY", raising=False)
     monkeypatch.setattr(telemetry, "_MAX_FOREGROUND_WAIT_S", 1)
@@ -232,8 +238,15 @@ def test_transport_payload_contains_bounded_parameters(monkeypatch):
         lambda ctx: SimpleNamespace(api_client=api_client),
     )
     result = CliRunner().invoke(
-        inventory,
-        ["--label", "private-label", "--label", "private-label-two", "--enabled"],
+        root,
+        [
+            "deploy",
+            "--workspace-path",
+            "private-label",
+            "--workspace-path",
+            "private-label-two",
+            "--allow-user-scope-update",
+        ],
     )
 
     assert result.exit_code == 0, result.output
@@ -241,13 +254,53 @@ def test_transport_payload_contains_bounded_parameters(monkeypatch):
     log = _inner(api_client.calls[0][2])["agentbricks_cli_log"]
     parameters = {parameter["name"]: parameter for parameter in log["parameters"]}
     assert parameters == {
-        "inventory.label": {"name": "inventory.label"},
-        "inventory.enabled": {"name": "inventory.enabled"},
+        "agentbricks deploy.workspace_path": {"name": "agentbricks deploy.workspace_path"},
+        "agentbricks deploy.allow_user_scope_update": {
+            "name": "agentbricks deploy.allow_user_scope_update"
+        },
     }
-    assert log["execution_context"]["command_path"] == "inventory"
+    assert log["command_path"] == "agentbricks deploy"
     encoded = json.dumps(log)
     assert "private-label" not in encoded
     assert "private-label-two" not in encoded
+
+
+def test_custom_click_names_are_static_and_values_are_not_sent(monkeypatch):
+    captured = []
+
+    @click.command(name="inventory", cls=AgentBricksCommand)
+    @click.option("--label")
+    @click.pass_context
+    def inventory(ctx, label):
+        del ctx, label
+
+    @click.group(name="agentbricks")
+    def root():
+        pass
+
+    @root.command(name="init", cls=AgentBricksCommand)
+    @click.option("--private-option")
+    @click.pass_context
+    def init(ctx, private_option):
+        del ctx, private_option
+
+    monkeypatch.setattr(
+        telemetry,
+        "emit_command",
+        lambda ctx, **kwargs: captured.append(telemetry.build_log(ctx, **kwargs)),
+    )
+    result = CliRunner().invoke(inventory, ["--label", "private-label"])
+    known_command_result = CliRunner().invoke(root, ["init", "--private-option", "private-value"])
+
+    assert result.exit_code == 0, result.output
+    assert known_command_result.exit_code == 0, known_command_result.output
+    assert captured[0]["command_path"] == "inventory"
+    assert captured[0]["parameters"] == [{"name": "inventory.label"}]
+    assert captured[1]["command_path"] == "agentbricks init"
+    assert captured[1]["parameters"] == [{"name": "agentbricks init.private_option"}]
+    assert "private-label" not in json.dumps(captured[0])
+    assert "private-option" not in json.dumps(captured[1])
+    assert "private-value" not in json.dumps(captured[1])
 
 
 def test_opt_out_does_not_construct_or_send(monkeypatch):
@@ -335,16 +388,36 @@ def test_build_log_captures_only_explicit_options_and_allowlisted_values(monkeyp
 
     @root.command(name="deploy", cls=AgentBricksCommand)
     @click.option("--instances", type=click.IntRange(min=1, max=5), default=2)
-    @click.option("--default-secret", default="secret-default")
-    @click.option("--enabled", is_flag=True)
+    @click.option("--workspace-path", default="secret-default")
+    @click.option("--allow-user-scope-update", is_flag=True)
     @click.option("--hidden", is_flag=True, hidden=True)
     @click.option("--deprecated", is_flag=True, deprecated=True)
-    @click.option("--kind", type=click.Choice(["private-choice"]))
-    @click.option("--label", multiple=True)
+    @click.option("--source", type=click.Choice(["private-choice"]))
+    @click.option("--pip-index-url", multiple=True)
     @click.argument("directory", required=False)
     @click.pass_context
-    def deploy(ctx, instances, default_secret, enabled, hidden, deprecated, kind, label, directory):
-        del ctx, instances, default_secret, enabled, hidden, deprecated, kind, label, directory
+    def deploy(
+        ctx,
+        instances,
+        workspace_path,
+        allow_user_scope_update,
+        hidden,
+        deprecated,
+        source,
+        pip_index_url,
+        directory,
+    ):
+        del (
+            ctx,
+            instances,
+            workspace_path,
+            allow_user_scope_update,
+            hidden,
+            deprecated,
+            source,
+            pip_index_url,
+            directory,
+        )
 
     monkeypatch.setattr(
         telemetry,
@@ -358,16 +431,16 @@ def test_build_log_captures_only_explicit_options_and_allowlisted_values(monkeyp
             "private-directory",
             "--instances",
             "3",
-            "--default-secret",
+            "--workspace-path",
             "private-secret",
-            "--enabled",
+            "--allow-user-scope-update",
             "--hidden",
             "--deprecated",
-            "--kind",
+            "--source",
             "private-choice",
-            "--label",
+            "--pip-index-url",
             "private-label-one",
-            "--label",
+            "--pip-index-url",
             "private-label-two",
         ],
     )
@@ -376,23 +449,21 @@ def test_build_log_captures_only_explicit_options_and_allowlisted_values(monkeyp
     parameters = {parameter["name"]: parameter for parameter in captured[0]["parameters"]}
     assert parameters["agentbricks deploy.instances"] == {
         "name": "agentbricks deploy.instances",
-        "bounded_int_value": 3,
+        "int_value": 3,
     }
-    assert parameters["agentbricks deploy.default_secret"] == {
-        "name": "agentbricks deploy.default_secret",
+    assert parameters["agentbricks deploy.workspace_path"] == {
+        "name": "agentbricks deploy.workspace_path",
     }
-    assert parameters["agentbricks deploy.enabled"] == {
-        "name": "agentbricks deploy.enabled",
+    assert parameters["agentbricks deploy.allow_user_scope_update"] == {
+        "name": "agentbricks deploy.allow_user_scope_update",
     }
-    assert parameters["agentbricks deploy.label"] == {
-        "name": "agentbricks deploy.label",
+    assert parameters["agentbricks deploy.source"] == {
+        "name": "agentbricks deploy.source",
     }
-    assert parameters["agentbricks deploy.kind"] == {
-        "name": "agentbricks deploy.kind",
+    assert parameters["agentbricks deploy.pip_index_url"] == {
+        "name": "agentbricks deploy.pip_index_url",
     }
-    assert "agentbricks deploy.hidden" not in parameters
-    assert "agentbricks deploy.deprecated" not in parameters
-    assert "agentbricks deploy.directory" not in parameters
+    assert len(parameters) == 5
     encoded = json.dumps(captured[0])
     assert "private-secret" not in encoded
     assert "private-choice" not in encoded
@@ -429,21 +500,25 @@ def test_build_log_omits_default_options(monkeypatch):
 def test_unallowlisted_choice_is_presence_only(monkeypatch):
     captured = []
 
-    @click.command(name="inventory", cls=AgentBricksCommand)
-    @click.option("--source", type=click.Choice(["private-choice"]))
+    @click.group(name="agentbricks")
+    def root():
+        pass
+
+    @root.command(name="init", cls=AgentBricksCommand)
+    @click.option("--framework", type=click.Choice(["private-choice"]))
     @click.pass_context
-    def inventory(ctx, source):
-        del ctx, source
+    def init(ctx, framework):
+        del ctx, framework
 
     monkeypatch.setattr(
         telemetry,
         "emit_command",
         lambda ctx, **kwargs: captured.append(telemetry.build_log(ctx, **kwargs)),
     )
-    result = CliRunner().invoke(inventory, ["--source", "private-choice"])
+    result = CliRunner().invoke(root, ["init", "--framework", "private-choice"])
 
     assert result.exit_code == 0, result.output
-    assert captured[0]["parameters"] == [{"name": "inventory.source"}]
+    assert captured[0]["parameters"] == [{"name": "agentbricks init.framework"}]
     assert "private-choice" not in json.dumps(captured[0])
 
 
@@ -463,6 +538,16 @@ def test_safe_choice_allowlist_is_a_subset_of_current_click_choices():
     for name, values in telemetry._SAFE_CHOICE_VALUES.items():
         assert name in declared_choices
         assert values <= declared_choices[name]
+
+
+def test_safe_choice_values_use_registered_data_shape_prefix():
+    option = click.Option(["--choice"], type=click.Choice(["placeholder"]))
+
+    for name, values in telemetry._SAFE_CHOICE_VALUES.items():
+        for value in values:
+            entry = telemetry._parameter_entry(name=name, parameter=option, value=value)
+            assert entry is not None
+            assert entry["choice_value"] == f"AGENTBRICKS_CLI_{value.upper().replace('-', '_')}"
 
 
 def test_safe_boolean_allowlist_contains_only_current_boolean_options():

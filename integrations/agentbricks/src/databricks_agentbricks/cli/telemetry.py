@@ -28,6 +28,7 @@ _TELEMETRY_PATH = "/telemetry-ext"
 # Keep the foreground wait short.  The worker is daemonized so an unavailable endpoint cannot hold
 # the CLI process open after this bound expires.
 _MAX_FOREGROUND_WAIT_S = 0.25
+_CHOICE_VALUE_PREFIX = "AGENTBRICKS_CLI_"
 
 # Parameter values are opt-in. A Click ``Choice`` is not automatically safe to report because a
 # command can construct one from a workspace value. Keep this map literal and keyed by the static
@@ -266,7 +267,8 @@ def _parameter_entry(*, name: str, parameter: Any, value: object) -> dict[str, A
     if isinstance(parameter_type, click.Choice):
         allowed = _SAFE_CHOICE_VALUES.get(name)
         if allowed is not None and not multiple and isinstance(value, str) and value in allowed:
-            return {"name": name, "choice_value": value}
+            choice_label = value.upper().replace("-", "_")
+            return {"name": name, "choice_value": f"{_CHOICE_VALUE_PREFIX}{choice_label}"}
         # An unallowlisted Choice is handled like free text: its static presence may be useful,
         # while its value is never sent.
         return {"name": name}
@@ -278,7 +280,7 @@ def _parameter_entry(*, name: str, parameter: Any, value: object) -> dict[str, A
             and type(value) is int
             and bounds[0] <= value <= bounds[1]
         ):
-            return {"name": name, "bounded_int_value": value}
+            return {"name": name, "int_value": value}
         return {"name": name}
 
     # Arbitrary strings, paths, IDs, secrets, JSON, and unallowlisted numeric values are presence
@@ -351,7 +353,7 @@ def build_log(
         command_exit_code = int(exit_code)
     except (TypeError, ValueError, OverflowError):
         command_exit_code = 1
-    execution_context: dict[str, Any] = {
+    log: dict[str, Any] = {
         "command_path": command_path,
         "package_version": _package_version(),
         "operating_system": platform.system().lower(),
@@ -359,8 +361,7 @@ def build_log(
         "exit_code": command_exit_code,
     }
     if command_exit_code != 0:
-        execution_context["error_category"] = _bounded_error_category(error_category)
-    log: dict[str, Any] = {"execution_context": execution_context}
+        log["error_category"] = _bounded_error_category(error_category)
     parameters = _collect_parameters(ctx)
     if parameters:
         log["parameters"] = parameters
@@ -397,7 +398,8 @@ def _root_obj(ctx: Any) -> Any:
 def _existing_workspace_client(obj: Any) -> Any | None:
     """Return a client already constructed for the command, without constructing a new one."""
 
-    private_client = getattr(obj, "_client", None)
+    provider = getattr(obj, "api_client_provider", None)
+    private_client = getattr(provider, "_client", None)
     if private_client is None:
         return None
     workspace_client = getattr(private_client, "workspace_client", None)

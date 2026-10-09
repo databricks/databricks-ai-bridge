@@ -108,15 +108,20 @@ If Databricks SDK default authentication is already configured, you can skip `ag
 You can also pass the global `--profile/-p` option before an individual command, for example
 `agentbricks --profile <profile> tools list`. Use `--output json` for scripting.
 
-The CLI sends best effort command usage telemetry after leaf commands. Its execution context records
-the static command path, package version, operating system, duration, and process outcome. The
-outcome contains the exit code and, for nonzero exits, a bounded error category. Parameter entries
-are limited to options explicitly supplied on the command line: free-form options contribute their
-static name, while a small reviewed set of choices, boolean flags, and bounded integers may
+The CLI sends best effort command usage telemetry after leaf commands. Its log records the static
+command path, package version, operating system, duration, and process outcome (exit code and, for
+nonzero exits, a bounded error category). Parameter entries are limited to options explicitly
+supplied on the command line: free-form options contribute their static name, while a small reviewed
+set of choices, boolean flags, and bounded integers may
 contribute a value. Unreviewed boolean flags contribute only their static name. Positional
 arguments, raw command arguments, paths, IDs, secrets, arbitrary option values, and exception
 messages are omitted. Hidden and deprecated options are excluded. Set
 `AGENTBRICKS_DISABLE_TELEMETRY=1` to disable these uploads.
+
+Telemetry runs only when a leaf command is invoked, whether its callback succeeds or fails. Help
+and errors rejected during Click parsing, before a leaf starts, do not produce an event. Uploads
+use existing or non-interactive workspace credentials; missing credentials or a failed upload
+never change the command result.
 
 ## Quickstart
 
