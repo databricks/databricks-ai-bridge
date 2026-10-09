@@ -1,7 +1,7 @@
 """Fixtures shared by every matrix under ``matrices/``.
 
-``run_context`` (options, target workspace, run identity) and ``provisioning`` (lazy workspace resources and
-their teardown) are plugins. One command runs a matrix, from ``integrations/agentbricks``:
+``run_context`` (options, target workspace, run identity) and ``provisioning`` (the catalog
+requirement and the end-of-run cleanup) are plugins. One command runs a matrix, from ``integrations/agentbricks``:
 
     uv run pytest tests/matrices/tools -n 6 --dist loadgroup \
         --databricks-profile <profile>
@@ -52,7 +52,7 @@ def agentbricks_cli(
 
 
 def _delete_projects(cli: AgentbricksCli, workspace: Workspace, *, failed: bool) -> None:
-    """Delete every App, store and role the test's projects created; the sweep gets the rest."""
+    """Delete every App, store, source folder and Lakebase leftover the test's projects created."""
     for project in cli.projects:
         if failed and project.app_registered:
             # The App is deleted next, so a failing test must capture its logs while it exists.
@@ -67,7 +67,9 @@ def _delete_projects(cli: AgentbricksCli, workspace: Workspace, *, failed: bool)
                 memory_store=project.memory_store_name,
                 session_store=project.session_store_name,
                 has_app=project.app_registered,
-                runtime_store=bool(project.memory_store_name or project.session_store_name),
+                # Every managed deploy creates a Runtime Store, with or without memory/session stores.
+                runtime_store=project.app_registered,
+                identity=project.identity,
             )
         except Exception as exc:
             failures = [str(exc)]

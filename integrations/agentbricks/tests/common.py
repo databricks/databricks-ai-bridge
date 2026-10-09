@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
-import os
 import pathlib
 import shlex
 import subprocess
@@ -33,6 +32,11 @@ def now() -> dt.datetime:
 def project_prefix(run_id: str) -> str:
     """Names every project of a run, so teardown can sweep the Apps a crashed test leaked."""
     return f"t-{run_id}-"
+
+
+def scratch_schema_prefix(run_id: str) -> str:
+    """Names every temporary schema of a run, so the controller can sweep ones a test left behind."""
+    return f"ab_e2e_{run_id}_"
 
 
 def log(text: str) -> None:
@@ -99,8 +103,3 @@ class RunConfig:
     preprovisioned_app_catalog_access: bool
     bridge_sha: str | None
     wheel: pathlib.Path | None
-
-
-def child_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
-    """The environment for a subprocess: ours plus ``extra``."""
-    return {**os.environ, **(extra or {})}

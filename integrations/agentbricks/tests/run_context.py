@@ -16,7 +16,6 @@ from typing import Any
 
 import pytest
 from common import MatrixError, RunConfig, log, run_command
-from shared_state import SharedResources
 from target_workspace import (
     WORKSPACE_KINDS,
     TargetWorkspace,
@@ -48,7 +47,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     group.addoption(
         "--catalog",
         default=os.environ.get("AGENTBRICKS_E2E_CATALOG", "main"),
-        help="Existing catalog for scratch schemas (AGENTBRICKS_E2E_CATALOG, default main).",
+        help="Existing catalog for temporary test schemas (AGENTBRICKS_E2E_CATALOG, default main).",
     )
     group.addoption("--bridge-sha", help="Immutable bridge commit for generated App dependencies.")
     group.addoption(
@@ -63,7 +62,9 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="Skip per-App USE CATALOG grants because catalog access is pre-provisioned.",
     )
     group.addoption(
-        "--keep-resources", action="store_true", help="Skip teardown of provisioned resources."
+        "--keep-resources",
+        action="store_true",
+        help="Skip the end-of-run sweep of leaked Apps and temporary schemas.",
     )
 
 
@@ -126,27 +127,16 @@ def target_workspace(request: pytest.FixtureRequest) -> TargetWorkspace:
 
 
 @pytest.fixture(scope="session")
-def shared_resources(request: pytest.FixtureRequest) -> SharedResources:
-    return SharedResources(base_run_config(request.config).output / "state")
-
-
-@pytest.fixture(scope="session")
-def run_config(request: pytest.FixtureRequest, shared_resources: SharedResources) -> RunConfig:
+def run_config(request: pytest.FixtureRequest) -> RunConfig:
     run = base_run_config(request.config)
     run.output.mkdir(parents=True, exist_ok=True)
     log(f"Agent Bricks E2E output: {run.output} (run {run.run_id})")
     if run.wheel or run.bridge_sha:
         return run
-
-    def build(_track: object) -> dict[str, Any]:
-        dist = run.output / "dist"
-        run_command(
-            ["uv", "build", "--wheel", "--out-dir", str(dist)], cwd=PACKAGE_DIR, timeout=600
-        )
-        wheels = sorted(dist.glob("*.whl"))
-        if not wheels:
-            raise MatrixError("uv build produced no wheel")
-        return {"path": str(wheels[-1])}
-
-    built = shared_resources.get_or_create("wheel", build)
-    return dataclasses.replace(run, wheel=pathlib.Path(built["path"]))
+    # A directory per process: xdist workers build at the same time and must not share an output.
+    dist = run.output / "dist" / os.environ.get("PYTEST_XDIST_WORKER", "main")
+    run_command(["uv", "build", "--wheel", "--out-dir", str(dist)], cwd=PACKAGE_DIR, timeout=600)
+    wheels = sorted(dist.glob("*.whl"))
+    if not wheels:
+        raise MatrixError("uv build produced no wheel")
+    return dataclasses.replace(run, wheel=wheels[-1])

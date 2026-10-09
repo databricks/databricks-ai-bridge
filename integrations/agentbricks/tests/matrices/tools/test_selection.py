@@ -7,8 +7,8 @@ the tool surface, route to the wrong one, so this is the one test that binds the
 from __future__ import annotations
 
 from agentbricks_cli import AgentbricksCli
-from provisioning import UcFunction
 from tools import PYTHON_MARKER, UC_MARKER, Tool, bind
+from uc_objects import UcFunction
 from workspace_client import Workspace
 
 # Names the Unity Catalog function without its tool id, and the Python helper only to exclude it.

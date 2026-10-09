@@ -36,7 +36,6 @@ from common import (
     FRAMEWORKS,
     MatrixError,
     RunConfig,
-    child_env,
     last_lines,
     last_nonempty_line,
     log,
@@ -45,6 +44,7 @@ from common import (
     project_prefix,
 )
 from target_workspace import TargetWorkspace
+from workspace_client import AppIdentity, Workspace, record_app_identity
 
 _STORE_KINDS = {"memory": ("memory", "stores"), "sessions": ("sessions", "stores")}
 _DIRECT_HEADER = (
@@ -74,6 +74,8 @@ class Project:
     # Set only once this project registered the App, so cleanup never deletes one it did not create.
     app_registered: bool = False
     environment_prepared: bool = False
+    # Recorded at deploy time: cleanup cannot look this up once the App or its store is gone.
+    identity: AppIdentity = dataclasses.field(default_factory=AppIdentity)
 
 
 class Agent:
@@ -145,7 +147,7 @@ class AgentbricksCli:
         self.run_config = run_config
         self.logs_dir = run_config.output / "logs"
         self.projects: list[Project] = []
-        self._env = child_env(target_workspace.env)
+        self._env = {**os.environ, **target_workspace.env}
         self._sequence = 0
 
     # Process plumbing
@@ -433,12 +435,16 @@ class AgentbricksCli:
             # Deploy can create the App and then fail while waiting for it, so mark it first.
             project.app_registered = True
         label = f"deploy-{name}-{self._next()}"
-        self._run_long(
-            label,
-            self.argv("deploy", name, "--source", str(project.path)),
-            timeout=2400,
-        )
-        deployed = workspace.wait_for_app(name)
+        try:
+            self._run_long(
+                label,
+                self.argv("deploy", name, "--source", str(project.path)),
+                timeout=2400,
+            )
+            deployed = workspace.wait_for_app(name)
+        finally:
+            # Also after a failed deploy, which can leave an App, store and role behind.
+            self._record_identity(project, name, workspace)
         url = str(deployed.get("url") or "").rstrip("/")
         if not url:
             raise MatrixError(f"App {name} has no URL: {deployed}")
@@ -452,6 +458,13 @@ class AgentbricksCli:
         if creating:
             agent.warm_up()
         return agent
+
+    def _record_identity(self, project: Project, app: str, workspace: Workspace) -> None:
+        """Keep the App's principal and Lakebase branch for cleanup, and for the controller's sweep."""
+        identity = project.identity.merged(workspace.app_identity(app))
+        if identity != project.identity:
+            project.identity = identity
+            record_app_identity(self.run_config.output, app, identity)
 
     def _wait_for_local(
         self, process: subprocess.Popen[str], port: int, label: str, log_path: pathlib.Path

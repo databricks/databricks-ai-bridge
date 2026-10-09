@@ -5,22 +5,71 @@ Everything here goes through the SDK except ``app_logs``, since the SDK has no A
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import io
+import json
 import pathlib
 import re
 import subprocess
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from typing import Any, cast
 
 from common import TOOL_RESOURCE_PREFIX, MatrixError, log, now
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import DatabricksError, NotFound
-from databricks.sdk.service.catalog import SecurableType
+from databricks.sdk.service.catalog import SecurableType, VolumeType
 from databricks.sdk.service.sql import ExecuteStatementRequestOnWaitTimeout, State, StatementState
 
 GrantTuple = tuple[str, str, str, str]
+
+_BRANCH = re.compile(r"projects/[^/]+/branches/[^/]+")
+_RUNTIME_DATABASE_PREFIX = "runtime-"
+_APPS_RECORD = "apps.jsonl"
+
+
+@dataclasses.dataclass(frozen=True)
+class AppIdentity:
+    """What cleanup needs to find an App's Lakebase leftovers once the App and its Runtime Store are gone."""
+
+    service_principal: str | None = None
+    branch: str | None = None
+    database_id: str | None = None
+
+    def merged(self, other: AppIdentity) -> AppIdentity:
+        """This identity with any missing field taken from ``other``."""
+        return AppIdentity(
+            self.service_principal or other.service_principal,
+            self.branch or other.branch,
+            self.database_id or other.database_id,
+        )
+
+
+def record_app_identity(output: pathlib.Path, app: str, identity: AppIdentity) -> None:
+    """Append one line for the controller's end-of-run sweep, which cannot see worker memory."""
+    line = json.dumps({"app": app, **dataclasses.asdict(identity)}) + "\n"
+    # One write per line: appends this small do not interleave across processes on POSIX.
+    with (output / _APPS_RECORD).open("a", encoding="utf-8") as record:
+        record.write(line)
+
+
+def recorded_app_identities(output: pathlib.Path) -> dict[str, AppIdentity]:
+    """Every App identity the run's workers recorded, by App name."""
+    path = output / _APPS_RECORD
+    identities: dict[str, AppIdentity] = {}
+    if not path.exists():
+        return identities
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            data = json.loads(line)
+            identity = AppIdentity(
+                data.get("service_principal"), data.get("branch"), data.get("database_id")
+            )
+            identities[data["app"]] = identities.get(data["app"], AppIdentity()).merged(identity)
+        except (ValueError, KeyError, TypeError, AttributeError):
+            continue
+    return identities
 
 
 class Workspace:
@@ -40,6 +89,7 @@ class Workspace:
         self._app_auth_client: WorkspaceClient | None = None
         self._app_auth_checked = False
         self._warehouse_started = False
+        self._user_name: str | None = None
 
     # App auth: Databricks Apps /api routes need OAuth, so a PAT is rejected.
 
@@ -137,19 +187,41 @@ class Workspace:
         if not response.status or response.status.state != StatementState.SUCCEEDED:
             raise MatrixError(f"SQL failed: {response.as_dict()}")
 
-    def drop(self, kind: str, full_name: str) -> None:
-        catalog, schema, name = full_name.split(".")
-        self.sql(f"DROP {kind} IF EXISTS `{catalog}`.`{schema}`.`{name}`")
-
     def upload(self, path: str, data: bytes) -> None:
         self.client.files.upload(path, io.BytesIO(data), overwrite=True)
         log(f"# uploaded {path}")
 
-    def delete_file(self, path: str) -> None:
+    # Temporary UC objects
+
+    def create_schema(self, catalog: str, name: str, *, remove_after: dt.datetime) -> str:
+        """Create a schema and return its full name; ``RemoveAfter`` lets a sweeper delete it later."""
+        info = self.client.schemas.create(
+            name,
+            catalog,
+            comment="Temporary Agent Bricks E2E schema; safe to delete",
+            properties={"RemoveAfter": remove_after.strftime("%Y%m%d%H")},
+        )
+        log(f"# created schema {info.full_name}")
+        return f"{catalog}.{name}"
+
+    def delete_schema(self, full_name: str) -> None:
+        """Delete a schema with everything in it, grants included; a missing schema is fine."""
         try:
-            self.client.files.delete(path)
+            self.client.schemas.delete(full_name, force=True)
         except NotFound:
-            pass
+            return
+        log(f"# deleted schema {full_name}")
+
+    def schemas_with_prefix(self, catalog: str, prefix: str) -> list[str]:
+        return [
+            info.full_name
+            for info in self.client.schemas.list(catalog)
+            if info.full_name and info.name and info.name.startswith(prefix)
+        ]
+
+    def create_volume(self, catalog: str, schema: str, name: str) -> None:
+        self.client.volumes.create(catalog, schema, name, VolumeType.MANAGED)
+        log(f"# created volume {catalog}.{schema}.{name}")
 
     # Apps
 
@@ -329,43 +401,162 @@ class Workspace:
         except NotFound:
             pass
 
-    def app_role_target(self, app_name: str) -> str | None:
-        """The Lakebase role of the App's principal, only if ownership is verified end to end."""
+    def app_identity(self, app_name: str) -> AppIdentity:
+        """The App's principal and Lakebase location as far as they still exist; never raises."""
+        principal: str | None = None
+        branch: str | None = None
+        database_id: str | None = None
         try:
             principal = self.app(app_name).get("service_principal_client_id")
-            store = self.runtime_store(app_name)
-            owner = store.get("owner", {}).get("app", {})
-            branch = store.get("storage_backend", {}).get("lakebase", {}).get("branch")
-            if (
-                not principal
-                or store.get("name") != f"runtime-stores/{app_name}"
-                or owner.get("name") != app_name
-                or owner.get("service_principal_id") != principal
-                or not isinstance(branch, str)
-                or not re.fullmatch(r"projects/[^/]+/branches/[^/]+", branch)
-            ):
-                log(f"cleanup warning | Lakebase role for {app_name} | ownership not verified")
-                return None
-            for role in self.client.postgres.list_roles(parent=branch):
-                data = role.as_dict()
-                status = data.get("status", {})
-                name = data.get("name")
-                if (
-                    status.get("postgres_role") == principal
-                    and status.get("identity_type") == "SERVICE_PRINCIPAL"
-                    and isinstance(name, str)
-                    and name.startswith(f"{branch}/roles/")
-                ):
-                    return name
+        except NotFound:
+            pass
         except Exception as exc:
-            log(f"cleanup warning | Lakebase role lookup for {app_name} | {exc}")
-        return None
+            log(f"cleanup warning | principal lookup for {app_name} | {exc}")
+        try:
+            lakebase = self.runtime_store(app_name).get("storage_backend", {}).get("lakebase", {})
+            candidate = lakebase.get("branch")
+            if isinstance(candidate, str) and _BRANCH.fullmatch(candidate):
+                branch = candidate
+                database_id = lakebase.get("database_id")
+        except NotFound:
+            pass
+        except Exception as exc:
+            log(f"cleanup warning | Runtime Store lookup for {app_name} | {exc}")
+        return AppIdentity(principal, branch, database_id)
 
-    def delete_role(self, role_name: str) -> None:
-        operation = self.client.postgres.delete_role(name=role_name)
-        wait = getattr(operation, "wait", None)
-        if callable(wait):
-            wait()
+    def runtime_databases(
+        self, branch: str, principals: Collection[str], database_ids: Collection[str]
+    ) -> list[str]:
+        """Resource names of the branch's ``runtime-`` databases owned by these principals.
+
+        Database ids embed a truncated App name plus a UUID, so ownership is read from the owner
+        role instead, which is named after the principal. ``database_ids`` are matched as given.
+        """
+        wanted = [principal for principal in principals if principal]
+        names = []
+        for database in self.client.postgres.list_databases(parent=branch):
+            database_id = (database.name or "").rsplit("/", 1)[-1]
+            owner = (
+                (database.status.role if database.status else None)
+                or (database.spec.role if database.spec else None)
+                or ""
+            )
+            if (
+                database.name
+                and database_id.startswith(_RUNTIME_DATABASE_PREFIX)
+                and (
+                    database_id in database_ids
+                    or any(owner.rsplit("/", 1)[-1].endswith(item) for item in wanted)
+                )
+            ):
+                names.append(database.name)
+        return names
+
+    def roles_of(self, branch: str, principals: Collection[str]) -> list[str]:
+        """Resource names of the branch's roles for these principals.
+
+        Role ids are the principal's UUID, sometimes behind a prefix such as ``agents-``.
+        """
+        wanted = [principal for principal in principals if principal]
+        return [
+            role.name
+            for role in self.client.postgres.list_roles(parent=branch)
+            if role.name and any(role.name.rsplit("/", 1)[-1].endswith(item) for item in wanted)
+        ]
+
+    def delete_database(self, name: str) -> None:
+        try:
+            _wait(self.client.postgres.delete_database(name=name))
+        except NotFound:
+            pass
+
+    def delete_role(self, name: str) -> None:
+        try:
+            _wait(self.client.postgres.delete_role(name=name))
+        except NotFound:
+            pass
+
+    # Deployment sources: `agentbricks deploy` syncs them into the user's workspace home and
+    # `apps delete` leaves them behind.
+
+    @property
+    def user_name(self) -> str:
+        if self._user_name is None:
+            name = self.client.current_user.me().user_name
+            if not name:
+                raise MatrixError("The current user has no user_name.")
+            self._user_name = name
+        return self._user_name
+
+    def _deployments_dir(self) -> str:
+        return f"/Workspace/Users/{self.user_name}/agentbricks_deployments"
+
+    def delete_deployment_source(self, app_name: str) -> None:
+        """Delete the App's synced source folder; a missing folder counts as deleted."""
+        self.delete_workspace_path(f"{self._deployments_dir()}/{app_name}")
+
+    def deployment_sources_with_prefix(self, prefix: str) -> list[str]:
+        try:
+            entries = list(self.client.workspace.list(self._deployments_dir()))
+        except NotFound:
+            return []
+        return [
+            entry.path
+            for entry in entries
+            if entry.path and entry.path.rsplit("/", 1)[-1].startswith(prefix)
+        ]
+
+    def delete_workspace_path(self, path: str) -> None:
+        try:
+            self.client.workspace.delete(path, recursive=True)
+        except NotFound:
+            pass
+
+
+def _wait(operation: Any) -> None:
+    wait = getattr(operation, "wait", None)
+    if callable(wait):
+        wait()
+
+
+def _delete_each(
+    kind: str, find: Callable[[], list[str]], delete: Callable[[str], None]
+) -> list[str]:
+    """Delete everything ``find`` returns, continuing past failures; returns one line per failure."""
+    try:
+        names = find()
+    except Exception as exc:
+        return [f"{kind} lookup: {exc}"]
+    failures = []
+    for name in names:
+        try:
+            delete(name)
+        except Exception as exc:
+            failures.append(f"{kind} {name}: {exc}")
+    return failures
+
+
+def delete_lakebase_leftovers(
+    workspace: Workspace,
+    branch: str,
+    *,
+    principals: Collection[str],
+    database_ids: Collection[str] = (),
+) -> list[str]:
+    """Delete runtime databases and then the principals' roles on one branch.
+
+    A role that owns a database cannot be deleted, so databases go first. Only ``runtime-``
+    databases are touched, and both kinds are matched by principal UUID, never by name pattern.
+    """
+    return _delete_each(
+        "runtime database",
+        lambda: workspace.runtime_databases(branch, principals, database_ids),
+        workspace.delete_database,
+    ) + _delete_each(
+        "Lakebase role",
+        lambda: workspace.roles_of(branch, principals),
+        workspace.delete_role,
+    )
 
 
 def cleanup_app(
@@ -377,46 +568,53 @@ def cleanup_app(
     session_store: str | None = None,
     has_app: bool = True,
     runtime_store: bool = False,
+    identity: AppIdentity | None = None,
 ) -> list[str]:
-    """Delete one project's stores and, if it has an App, its runtime store, App and Lakebase role.
+    """Delete one project's stores and, if it has an App, everything the App's deploy created.
 
     ``delete_store(kind, store)`` is the agentbricks CLI's store delete, which has no SDK surface.
-    Returns a description of each failure; an empty list means everything was deleted.
+    ``identity`` is what was recorded at deploy time; it fills in whatever the live lookup misses.
+    Every step runs regardless of earlier failures except those that need the App gone. Returns a
+    description of each failure; an empty list means everything was deleted.
     """
     failures: list[str] = []
-    # Looked up before anything is deleted, since it needs the App and its runtime store.
-    role_target = workspace.app_role_target(name) if has_app and runtime_store else None
-    for kind, store in (("memory", memory_store), ("sessions", session_store)):
-        if not (store and delete_store):
-            continue
+
+    def attempt(label: str, action: Callable[..., object], *args: Any) -> bool:
         try:
-            result = delete_store(kind, store)
-            if result.returncode != 0:
-                failures.append(f"{kind} store {store}: {(result.stderr or result.stdout).strip()}")
+            action(*args)
         except Exception as exc:
-            failures.append(f"{kind} store {store}: {exc}")
+            failures.append(f"{label}: {exc}")
+            return False
+        return True
+
+    def delete_cli_store(kind: str, store: str) -> None:
+        assert delete_store is not None
+        result = delete_store(kind, store)
+        if result.returncode != 0:
+            raise MatrixError((result.stderr or result.stdout).strip())
+
+    # Read before any delete: the principal and branch come from the App and its Runtime Store.
+    known = (identity or AppIdentity()).merged(
+        workspace.app_identity(name) if has_app else AppIdentity()
+    )
+    for kind, store in (("memory", memory_store), ("sessions", session_store)):
+        if store and delete_store:
+            attempt(f"{kind} store {store}", delete_cli_store, kind, store)
     if not has_app:
         return failures
 
-    runtime_store_deleted = False
     if runtime_store:
-        # The Runtime Store owns a dedicated Lakebase database; it must be deleted before the
-        # role, or the role delete fails on database ownership.
-        try:
-            workspace.delete_runtime_store(name)
-            runtime_store_deleted = True
-        except Exception as exc:
-            failures.append(f"runtime store {name}: {exc}")
-    try:
-        workspace.delete_app(name)
-    except Exception as exc:
-        failures.append(f"app {name}: {exc}")
-        return failures
-    if role_target and not failures and runtime_store_deleted:
-        try:
-            workspace.delete_role(role_target)
-        except Exception as exc:
-            failures.append(f"Lakebase role {role_target}: {exc}")
+        attempt(f"runtime store {name}", workspace.delete_runtime_store, name)
+    app_deleted = attempt(f"app {name}", workspace.delete_app, name)
+    if app_deleted:
+        attempt(f"deployment source {name}", workspace.delete_deployment_source, name)
+    if known.branch:
+        failures += delete_lakebase_leftovers(
+            workspace,
+            known.branch,
+            principals=[known.service_principal or ""],
+            database_ids=[known.database_id or ""],
+        )
     return failures
 
 

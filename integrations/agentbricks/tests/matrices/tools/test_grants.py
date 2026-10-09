@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from agentbricks_cli import AgentbricksCli
 from common import TOOL_RESOURCE_PREFIX
-from provisioning import UcFunction
 from tools import bind, uc_function_tool
+from uc_objects import UcFunction
 from workspace_client import Workspace
 
 
