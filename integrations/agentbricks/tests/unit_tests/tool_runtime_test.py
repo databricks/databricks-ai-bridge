@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import importlib
 import logging
 import pathlib
@@ -516,6 +517,166 @@ def test_mcp_tools_caller_cancellation_drains_discovery_tasks(mcp_discovery, mon
             await asyncio.gather(discovery, *tasks.values(), return_exceptions=True)
 
     asyncio.run(asyncio.wait_for(exercise(), timeout=5))
+
+
+@pytest.mark.parametrize("optional", [False, True])
+@pytest.mark.parametrize("failed", [False, True])
+def test_mcp_tools_normalizes_text_results_without_changing_tool_contract(
+    mcp_discovery, monkeypatch, optional, failed
+):
+    tools_module = pytest.importorskip("langchain_core.tools")
+    content_module = pytest.importorskip("langchain_core.messages.content")
+    _project, mcp, server_type, client_type = mcp_discovery
+    text = content_module.create_text_block(
+        text="ValueError: controlled failure" if failed else "sandbox result"
+    )
+    text.update({"index": 0, "extras": {"provider": "metadata"}})
+    image = {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}}
+    content = [text, image, "plain text"]
+    original_content = copy.deepcopy(content)
+    artifact = {"structured_content": {"outcome": "succeeded", "sandbox_id": "test-only"}}
+    arguments = []
+
+    async def run_code(code: str):
+        arguments.append(code)
+        if failed:
+            raise tools_module.ToolException("controlled failure")
+        return content, artifact
+
+    def handle_error(error):
+        assert str(error) == "controlled failure"
+        return content
+
+    original = tools_module.StructuredTool(
+        name="run_code",
+        description="Run sandbox code.",
+        args_schema={"type": "object", "properties": {"code": {"type": "string"}}},
+        coroutine=run_code,
+        response_format="content_and_artifact",
+        handle_tool_error=handle_error,
+        metadata={"readOnlyHint": True, "_meta": {"source": "sandbox"}},
+        tags=["sandbox"],
+    )
+    monkeypatch.setattr(mcp, "load_tools", lambda **kwargs: [])
+
+    async def get_tools(self, server_name=None):
+        return [original]
+
+    monkeypatch.setattr(client_type, "get_tools", get_tools)
+    server = server_type("sandbox", "https://workspace")
+    if not optional:
+        monkeypatch.setattr(
+            mcp,
+            "load_tools",
+            lambda **kwargs: [
+                SimpleNamespace(
+                    id="sandbox", kind="sandbox", auth="app", service="system.ai.sandbox"
+                )
+            ],
+        )
+        monkeypatch.setattr(mcp, "_server_from_tool", lambda *args, **kwargs: server)
+    returned = asyncio.run(mcp.mcp_tools([server] if optional else None))
+    assert len(returned) == 1
+    normalized = returned[0]
+    assert normalized is not original
+    assert normalized.args_schema is original.args_schema
+    assert normalized.description == original.description
+    assert normalized.metadata == original.metadata
+    assert normalized.tags == original.tags
+    assert normalized.response_format == original.response_format
+    assert normalized.coroutine.__wrapped__ is original.coroutine
+    assert original.handle_tool_error is handle_error
+
+    message = asyncio.run(
+        normalized.ainvoke(
+            {
+                "type": "tool_call",
+                "name": "run_code",
+                "id": "call_sandbox",
+                "args": {"code": "test"},
+            }
+        )
+    )
+    assert message.content == [{"type": "text", "text": text["text"]}, image, "plain text"]
+    assert message.tool_call_id == "call_sandbox"
+    assert message.name == "run_code"
+    assert message.status == ("error" if failed else "success")
+    assert message.artifact is (None if failed else artifact)
+    assert arguments == ["test"]
+    assert content == original_content
+
+
+@pytest.mark.parametrize("status", ["success", "error"])
+def test_mcp_tool_normalization_preserves_existing_tool_message(mcp_discovery, status):
+    messages = pytest.importorskip("langchain_core.messages")
+    content_module = pytest.importorskip("langchain_core.messages.content")
+    tools_module = pytest.importorskip("langchain_core.tools")
+    _project, mcp, _server_type, _client_type = mcp_discovery
+    artifact = {"structured_content": {"outcome": "execution_error"}}
+    original = messages.ToolMessage(
+        content=[content_module.create_text_block(text="sandbox output")],
+        name="run_code",
+        id="message_sandbox",
+        tool_call_id="call_sandbox",
+        artifact=artifact,
+        status=status,
+        additional_kwargs={"retained": True},
+    )
+    before = original.model_dump()
+
+    async def run_code():
+        return original, None
+
+    tool = tools_module.StructuredTool(
+        name="run_code",
+        description="Run sandbox code.",
+        args_schema={"type": "object", "properties": {}},
+        coroutine=run_code,
+        response_format="content_and_artifact",
+    )
+    message = asyncio.run(
+        mcp._normalize_mcp_tool(tool).ainvoke(
+            {"type": "tool_call", "name": "run_code", "id": "call_sandbox", "args": {}}
+        )
+    )
+    assert message.content == [{"type": "text", "text": "sandbox output"}]
+    assert message.model_dump() == {**before, "content": message.content}
+    assert message.artifact is artifact
+    assert original.model_dump() == before
+
+
+@pytest.mark.parametrize("error_policy", [True, False, "tool failed"])
+def test_mcp_tool_normalization_preserves_noncallable_error_policy(mcp_discovery, error_policy):
+    tools_module = pytest.importorskip("langchain_core.tools")
+    _project, mcp, _server_type, _client_type = mcp_discovery
+
+    async def run_code():
+        return "plain sandbox output", None
+
+    tool = tools_module.StructuredTool(
+        name="run_code",
+        description="Run sandbox code.",
+        args_schema={"type": "object", "properties": {}},
+        coroutine=run_code,
+        response_format="content_and_artifact",
+        handle_tool_error=error_policy,
+    )
+    normalized = mcp._normalize_mcp_tool(tool)
+    assert normalized.handle_tool_error == error_policy
+    assert asyncio.run(normalized.ainvoke({})) == "plain sandbox output"
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        "unchanged discovery test double",
+        SimpleNamespace(response_format="content"),
+        SimpleNamespace(response_format="content_and_artifact", coroutine=None),
+    ],
+)
+def test_mcp_tool_normalization_leaves_other_tool_shapes_unchanged(mcp_discovery, tool):
+    _project, mcp, _server_type, _client_type = mcp_discovery
+    assert mcp._normalize_mcp_tool(tool) is tool
 
 
 def test_manifest_reader_rejects_wrong_framework(tmp_path: pathlib.Path, monkeypatch):
