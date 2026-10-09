@@ -12,14 +12,28 @@ callers store whatever shape they like (the saver stores checkpoint fragments).
 
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, Iterator, Optional, Sequence
 
 from databricks.sdk import WorkspaceClient
+from requests.exceptions import ChunkedEncodingError
+from requests.exceptions import ConnectionError as RequestsConnectionError
 
 from databricks_agentkit.runtime.workspace import workspace_client as default_workspace_client
 
 _API_ROOT = "/api/2.0/agents"
+
+# The Session Store API intermittently truncates its HTTP response — the server hits its own request
+# timeout while waiting on its backing DB connection and sends a 0-byte body, which surfaces here as
+# a transport error rather than a status code. The request does no durable work before that timeout,
+# so retrying is safe for writes (append/create) as well as reads.
+_TRANSIENT_TRANSPORT_ERRORS = (ChunkedEncodingError, RequestsConnectionError)
+_DO_ATTEMPTS = 3
+_RETRY_DELAY_S = 0.5
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -55,7 +69,7 @@ class SessionStoreClient:
         return self
 
     def get_session(self, *, session_id: str) -> Session:
-        resp: dict[str, Any] = self._api.do("GET", f"{self._sessions_path()}/{session_id}")  # type: ignore[assignment]
+        resp: dict[str, Any] = self._do("GET", f"{self._sessions_path()}/{session_id}")  # type: ignore[assignment]
         return self._session(resp)
 
     def create_session(
@@ -69,13 +83,13 @@ class SessionStoreClient:
         if metadata:
             body["metadata"] = metadata
         query = {"session_id": session_id} if session_id else None
-        resp: dict[str, Any] = self._api.do("POST", self._sessions_path(), query=query, body=body)  # type: ignore[assignment]
+        resp: dict[str, Any] = self._do("POST", self._sessions_path(), query=query, body=body)  # type: ignore[assignment]
         return self._session(resp)
 
     def append_items(self, session: Session, *, items: Sequence[Any]) -> None:
         if not items:
             raise ValueError("at least one item is required")
-        self._api.do(
+        self._do(
             "POST",
             f"{self._items_path(session)}:append",
             body={"items": [{"data": item} for item in items]},
@@ -88,9 +102,7 @@ class SessionStoreClient:
         page_token: Optional[str] = None
         while True:
             query = {k: v for k, v in {"order_by": order_by, "page_token": page_token}.items() if v}
-            resp: dict[str, Any] = self._api.do(
-                "GET", self._items_path(session), query=query or None
-            )  # type: ignore[assignment]
+            resp: dict[str, Any] = self._do("GET", self._items_path(session), query=query or None)  # type: ignore[assignment]
             for item in resp.get("session_items", []):
                 if "data" in item:
                     yield SessionItem(item_id=item.get("item_id", ""), data=item["data"])
@@ -99,9 +111,33 @@ class SessionStoreClient:
                 return
 
     def clear_items(self, session: Session) -> None:
-        self._api.do("POST", f"{self._items_path(session)}:clear", body={})
+        self._do("POST", f"{self._items_path(session)}:clear", body={})
 
     # ----- internals ----------------------------------------------------------
+
+    def _do(self, method: str, path: str, **kwargs: Any) -> Any:
+        """``api_client.do`` with a short retry on transient transport failures.
+
+        Non-transport errors (e.g. a ``NOT_FOUND`` for a session that does not exist yet) are not
+        caught, so callers still see them on the first attempt.
+        """
+        last_error: Exception | None = None
+        for attempt in range(_DO_ATTEMPTS):
+            try:
+                return self._api.do(method, path, **kwargs)
+            except _TRANSIENT_TRANSPORT_ERRORS as exc:
+                last_error = exc
+                if attempt < _DO_ATTEMPTS - 1:
+                    _logger.warning(
+                        "Session Store %s %s truncated (%s); retry %d/%d",
+                        method,
+                        path,
+                        type(exc).__name__,
+                        attempt + 1,
+                        _DO_ATTEMPTS - 1,
+                    )
+                    time.sleep(_RETRY_DELAY_S)
+        raise last_error  # type: ignore[misc]
 
     def _sessions_path(self) -> str:
         if not self._store_name:
