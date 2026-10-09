@@ -15,9 +15,10 @@ from typing import Optional
 
 import click
 
-from databricks_agentbricks.cli.tracing import start_local_tracing_server, stop_local_tracing_server
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.databricks_cli import _databricks
+from databricks_agentbricks.clients.local_tracing_client import LocalTracingClient
+from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.dev import (
     announce_bound_resources,
     local_trace_label,
@@ -41,6 +42,19 @@ class _CliLocalTracing:
 
     def stop(self, server: subprocess.Popen) -> None:
         stop_local_tracing_server(server)
+
+
+def start_local_tracing_server(
+    source_dir: pathlib.Path,
+) -> tuple[subprocess.Popen | None, dict[str, str]]:
+    result = LocalTracingClient().start_dev(source_dir)
+    if result.warning is not None:
+        render.diagnostic("warning", result.warning, help=result.help)
+    return result.server, result.environment
+
+
+def stop_local_tracing_server(server: subprocess.Popen) -> None:
+    LocalTracingClient().stop(server)
 
 
 def build_dev_service(obj) -> DevService:
