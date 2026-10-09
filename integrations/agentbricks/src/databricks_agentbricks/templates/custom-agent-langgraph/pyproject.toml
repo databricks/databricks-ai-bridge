@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "databricks-agentbricks>=0.3.0",
-    "databricks-langchain>=0.17.0",
+    "databricks-langchain==0.21.0",
     "databricks-sdk>=0.124.0",
     "fastapi>=0.129.0",
     "langchain>=1.0.0",
