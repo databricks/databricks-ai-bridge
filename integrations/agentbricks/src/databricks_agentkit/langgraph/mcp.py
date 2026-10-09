@@ -13,13 +13,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any
+from collections.abc import Callable
+from functools import wraps
+from typing import TYPE_CHECKING, Any, cast
 
 from databricks_langchain import DatabricksMCPServer, DatabricksMultiServerMCPClient
 from langchain_mcp_adapters.sessions import create_session
 
 if TYPE_CHECKING:
     from databricks_langchain import MCPServer
+    from langchain_core.tools import BaseTool
 
 from databricks_agentkit.runtime import mcp_auth
 from databricks_agentkit.runtime.auth import AuthError
@@ -29,6 +32,51 @@ from databricks_agentkit.runtime.workspace import workspace_client, workspace_he
 logger = logging.getLogger(__name__)
 _auth_error = mcp_auth.mcp_auth_error
 _tool_error = mcp_auth.mcp_tool_error
+
+
+def _normalize_tool_content(content: Any) -> Any:
+    """Keep text blocks compatible with model providers, without changing artifacts."""
+    if isinstance(content, list):
+        return [
+            {"type": "text", "text": block["text"]}
+            if isinstance(block, dict)
+            and block.get("type") == "text"
+            and isinstance(block.get("text"), str)
+            else block
+            for block in content
+        ]
+    if isinstance(content, str):
+        return content
+
+    from langchain_core.messages import ToolMessage
+
+    if isinstance(content, ToolMessage):
+        return content.model_copy(update={"content": _normalize_tool_content(content.content)})
+    return content
+
+
+def _normalize_mcp_tool(tool: BaseTool) -> BaseTool:
+    # MCP adapters add block IDs that older model adapters forward to strict provider schemas.
+    coroutine = getattr(tool, "coroutine", None)
+    if getattr(tool, "response_format", None) != "content_and_artifact" or not callable(coroutine):
+        return tool
+
+    @wraps(coroutine)
+    async def call_tool(*args: Any, **kwargs: Any) -> tuple[Any, Any]:
+        content, artifact = await coroutine(*args, **kwargs)
+        return _normalize_tool_content(content), artifact
+
+    updates: dict[str, Any] = {"coroutine": call_tool}
+    error_handler = tool.handle_tool_error
+    if callable(error_handler):
+        handle_error = cast(Callable[[Any], Any], error_handler)
+
+        @wraps(handle_error)
+        def handle_tool_error(error: Any) -> Any:
+            return _normalize_tool_content(handle_error(error))
+
+        updates["handle_tool_error"] = handle_tool_error
+    return tool.model_copy(update=updates)
 
 
 def _server_from_tool(
@@ -157,7 +205,7 @@ async def mcp_tools(
     *,
     workspace_client_for: mcp_auth.WorkspaceClientResolver | None = None,
 ) -> list:
-    """Fetch declared tools with request identity and protected sandbox downscoping.
+    """Fetch model-compatible tools with request identity and protected sandbox downscoping.
 
     Includes the MCP servers declared in ``agent.toml``; pass ``extra_servers`` to add servers the
     agent builds itself. Request-user failures propagate; App, legacy, and optional customer
@@ -213,4 +261,4 @@ async def mcp_tools(
 
         for group in await asyncio.gather(*(fetch_optional(server) for server in extra_servers)):
             result.extend(group)
-    return result
+    return [_normalize_mcp_tool(tool) for tool in result]

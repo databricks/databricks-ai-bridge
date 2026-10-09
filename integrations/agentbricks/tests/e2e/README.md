@@ -1,5 +1,27 @@
 # Agent Bricks CLI agent-tool matrix
 
+## Sandbox result roundtrip
+
+Run a LangGraph agent with a declared `system.ai.sandbox` binding and the SDK under test, keeping
+its chat UI enabled. Then exercise successful code and a deliberate Python execution error over
+both JSON and foreground SSE:
+
+```bash
+RUN_AGENTBRICKS_SANDBOX_E2E=1 \
+AGENTBRICKS_E2E_AGENT_URL=http://127.0.0.1:8000 \
+AGENTBRICKS_E2E_OUTPUT=/tmp/agentbricks-sandbox-roundtrip \
+  python -m pytest tests/e2e/sandbox_roundtrip_test.py -v -s
+```
+
+Each case requires one correlated `run_code` call, provider-compatible text blocks, and a final
+model answer consuming the sandbox result. Execution errors must remain visible in that answer;
+a `run.failed` event is never accepted as a passing negative case. For deployed Apps, provide
+`AGENTBRICKS_E2E_APP_TOKEN` through the environment. Override the gateway model with
+`AGENTBRICKS_E2E_MODEL`. Neither credentials nor authorization headers are written to evidence.
+
+Use the released `databricks-langchain==0.20.0` when checking this regression, so the newer
+companion-package sanitizer cannot mask a missing SDK fix.
+
 ## MCP registration validation
 
 For a focused check of `agentbricks tools add mcp`, install the current `databricks-agentbricks` wheel and pytest
