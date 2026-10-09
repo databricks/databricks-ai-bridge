@@ -520,7 +520,8 @@ class _AgentBricksApiClient:
                 for field in nested_query["update_mask"].split(",")
             )
         try:
-            return self._do(method, path, body=nested, query=nested_query)
+            request_body = {**nested, "model": body["model"]} if method == "POST" else nested
+            return self._do(method, path, body=request_body, query=nested_query)
         except AgentCliError as exc:
             # Retry only an explicit rejection of the nested model schema. In particular,
             # never retry model validation, authorization, or ambiguous write failures.
@@ -540,6 +541,14 @@ class _AgentBricksApiClient:
             if exc.error_code not in {"INVALID_PARAMETER_VALUE", "BAD_REQUEST"} or not (
                 unsupported_model or unknown_model
             ):
+                raise
+            if method == "POST":
+                # Both locations were sent. A bare "unknown field model" is ambiguous:
+                # require the parser to identify the containing message before retrying.
+                if unknown_model and "dreamerpolicy" in message:
+                    return self._do(method, path, body=body, query=query)
+                if unknown_model and "memorypipeline" in message and "dreamerpolicy" not in message:
+                    return self._do(method, path, body=nested, query=query)
                 raise
             return self._do(method, path, body=body, query=query)
 
