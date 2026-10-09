@@ -23,10 +23,10 @@ from databricks.sdk.service.workspace import (
     WorkspaceObjectPermissions,
 )
 
-from databricks_agentbricks import tool_access as ta
-from databricks_agentbricks.agent_project import Scope, ToolSpec
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.tool_access import (
+from databricks_agentbricks.projects.agent_project import Scope, ToolSpec
+from databricks_agentbricks.services.deployment import tool_access as ta
+from databricks_agentbricks.services.deployment.tool_access import (
     UcGrant,
     WorkspaceGrant,
     _ensure_uc_grant,

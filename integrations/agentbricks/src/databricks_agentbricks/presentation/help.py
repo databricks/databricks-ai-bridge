@@ -7,7 +7,7 @@ from collections.abc import Iterator
 
 import click
 
-from databricks_agentbricks._group import apply_group_class, dim
+from databricks_agentbricks.presentation.group import apply_group_class, dim
 
 CommandPath = tuple[str, ...]
 

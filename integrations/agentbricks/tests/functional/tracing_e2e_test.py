@@ -75,15 +75,34 @@ def _agentbricks_json(*args: str, project: pathlib.Path, home: pathlib.Path):
     agentbricks = pathlib.Path(sys.executable).with_name("agentbricks")
     if not agentbricks.is_file():
         pytest.skip("requires the agentbricks CLI on PATH")
+    # Keep the already-provisioned uvx environment and package index visible while isolating
+    # HOME from real Databricks credentials. Otherwise uvx may retry against public PyPI.
+    uv = shutil.which("uv")
+    assert uv is not None
+    uv_cache_dir = subprocess.run(
+        [uv, "cache", "dir"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    environment = {
+        **os.environ,
+        "HOME": str(home),
+        "UV_CACHE_DIR": uv_cache_dir,
+        "MLFLOW_DISABLE_AGENT_HINT": "1",
+    }
+    uv_config = pathlib.Path.home() / ".config" / "uv" / "uv.toml"
+    if "UV_CONFIG_FILE" not in environment and uv_config.is_file():
+        environment["UV_CONFIG_FILE"] = str(uv_config)
     result = subprocess.run(
         [str(agentbricks), "--output", "json", *args, "--source", str(project)],
         capture_output=True,
         text=True,
         timeout=180,
-        env={**os.environ, "HOME": str(home), "MLFLOW_DISABLE_AGENT_HINT": "1"},
+        env=environment,
     )
     assert result.returncode == 0, (
         f"exit {result.returncode}\nSTDOUT:{result.stdout}\nSTDERR:{result.stderr}"
+    )
+    assert result.stdout.lstrip().startswith(("[", "{")), (
+        f"tracing command produced no JSON\nSTDOUT:{result.stdout}\nSTDERR:{result.stderr}"
     )
     return json.loads(result.stdout)
 

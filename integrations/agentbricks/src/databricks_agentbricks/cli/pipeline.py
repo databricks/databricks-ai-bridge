@@ -7,8 +7,8 @@ from typing import Any
 
 import click
 
-from databricks_agentbricks import render
-from databricks_agentbricks.render import field
+from databricks_agentbricks.presentation import render
+from databricks_agentbricks.presentation.render import field
 from databricks_agentkit import timefmt
 from databricks_agentkit._api_client import MEMORY_PIPELINE_TRIGGERS
 

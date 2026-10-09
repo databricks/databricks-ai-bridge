@@ -467,7 +467,7 @@ _Options_
 
 Remove the memory store binding from the agent's agent.toml.
 
-Only edits agent.toml; the managed store itself is untouched (delete it with `agentbricks memory stores delete`).
+This only edits agent.toml. The next `agentbricks deploy` removes the managed environment reference from app.yaml; previously granted managed-store access is not revoked.
 
 ```
 agentbricks memory unbind [options]
@@ -838,7 +838,7 @@ _Options_
 
 Remove the session store binding from the agent's agent.toml.
 
-Only edits agent.toml; the managed store itself is untouched (delete it with `agentbricks sessions stores delete`).
+This only edits agent.toml. The next `agentbricks deploy` removes the managed environment reference from app.yaml; previously granted managed-store access is not revoked.
 
 ```
 agentbricks sessions unbind [options]
