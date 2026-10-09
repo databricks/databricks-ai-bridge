@@ -1472,6 +1472,7 @@ class Runner:
 
     def _delete_deployment_source(self, app: str) -> None:
         # `agentbricks deploy` syncs source to this default path; `apps delete` leaves it behind.
+        # TODO: switch to `agentbricks deployments delete` once it also removes the synced source.
         path: str | None = None
         try:
             client = WorkspaceClient(profile=self.profile)
