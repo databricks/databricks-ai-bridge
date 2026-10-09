@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     # Agent Bricks includes the HTTP runtime; this extra adds the langgraph framework adapter.
     "databricks-agentbricks[langgraph]>=0.5.0",
+    "databricks-langchain==0.21.0",
     "uvicorn>=0.41.0",
     "python-dotenv>=1.2.1",
     "databricks-sdk>=0.124.0",
