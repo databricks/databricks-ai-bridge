@@ -61,6 +61,7 @@ from databricks_agentbricks.tool_access import (
     reconcile_tool_access,
 )
 from databricks_agentkit import timefmt
+from databricks_agentkit.runtime import prompt_registry
 from databricks_agentkit.runtime.store import (
     RUNTIME_STORE_DATABASE_ENV,
     RUNTIME_STORE_LAKEBASE_BRANCH_ENV,
@@ -68,7 +69,12 @@ from databricks_agentkit.runtime.store import (
     RUNTIME_STORE_SCHEMA_ENV,
     RUNTIME_STORE_USERNAME_ENV,
 )
-from databricks_agentkit.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
+from databricks_agentkit.runtime.tool_manifest import (
+    MEMORY_STORE_ENV,
+    MODEL_SERVICE_ENV_PREFIX,
+    SESSION_STORE_ENV,
+    model_service_env,
+)
 
 # TEMPORARY: the Apps build environment currently can't reach the internal pypi proxy, so builds
 # time out installing dependencies. Point the build at public PyPI (sanctioned interim workaround)
@@ -198,6 +204,8 @@ def _upsert_manifest_env(
     source: pathlib.Path,
     updates: dict[str, str],
     removals: Sequence[str] = (),
+    *,
+    prune_model_services: bool = False,
 ) -> bool:
     """Reconcile env entries in <source>/app.yaml: upsert ``updates``, drop any named in ``removals``.
 
@@ -218,6 +226,13 @@ def _upsert_manifest_env(
     raw_env = doc.get("env")
     candidates = raw_env if isinstance(raw_env, list) else []
     env: list[dict[str, Any]] = [entry for entry in candidates if isinstance(entry, dict)]
+    if prune_model_services:
+        env = [
+            entry
+            for entry in env
+            if not str(entry.get("name", "")).startswith(MODEL_SERVICE_ENV_PREFIX)
+            or entry.get("name") in updates
+        ]
     by_name = {e.get("name"): e for e in env if isinstance(e, dict)}
     for name, value in updates.items():
         if name in by_name:
@@ -390,6 +405,47 @@ def _reconcile_declared_stores(
         if created:
             render.console().print(f"[green]✓[/] Created session store {session_store!r}")
     return memory_store_id
+
+
+# Error codes UC returns for a model service that doesn't exist yet.
+_NOT_FOUND_CODES = {"NOT_FOUND", "RESOURCE_DOES_NOT_EXIST"}
+
+
+def _reconcile_model_services(project, client) -> dict[str, str]:
+    """Create each model service DECLARED in agent.toml that doesn't exist yet; return {role: name}.
+
+    A new service routes to its binding's ``default`` model. An existing one is left alone: its
+    destination belongs to `agentbricks experimental models set` after the first deploy, so a redeploy must
+    never undo a switch. Returns {} when no model service is bound.
+    """
+    if project is None or not project.model_services:
+        return {}
+    services: dict[str, str] = {}
+    for role, binding in project.model_services.items():
+        name = binding.name
+        with render.status(f"Reconciling model service '{name}' ({role})…"):
+            try:
+                client.get_model_service(name)
+                services[role] = name
+                continue
+            except AgentCliError as exc:
+                if exc.error_code not in _NOT_FOUND_CODES:
+                    raise
+            if not binding.default:
+                raise AgentCliError(
+                    f"Model service '{name}' doesn't exist and agent.toml declares no default "
+                    f"model for role '{role}'.",
+                    hint=f"Run `agentbricks experimental models bind {name} --role {role} --default "
+                    "system.ai.<model>` so deploy can create it.",
+                )
+            client.create_model_service(
+                name,
+                binding.default,
+                comment="Managed by agentbricks; repoint with `agentbricks experimental models`.",
+            )
+        render.console().print(f"[green]✓[/] Created model service {name!r} → {binding.default}")
+        services[role] = name
+    return services
 
 
 def get_or_create_trace_experiment(
@@ -597,6 +653,7 @@ def deploy(
     #    is the only reconcile-to-cloud verb; agent.toml is the source of truth and is never rewritten.
     memory_store, session_store, _ = resource_bindings(source_dir)
     memory_store_id = _reconcile_declared_stores(memory_store, session_store, client)
+    model_services = _reconcile_model_services(project, client)
 
     # 2. Provision tracing when bound (`agentbricks init` binds a default experiment): get-or-create the
     #    experiment NAME from agent.toml and wire the two env vars the runtime reads. Resolved by name,
@@ -636,6 +693,12 @@ def deploy(
         env_updates[MEMORY_STORE_ENV] = memory_store_id
     if session_store:
         env_updates[SESSION_STORE_ENV] = session_store
+    for role, service in model_services.items():
+        env_updates[model_service_env(role)] = service
+    if model_services:
+        provisioned["Model services"] = ", ".join(
+            f"{role}: {service}" for role, service in model_services.items()
+        )
 
     legacy_runtime_backend = None
     if (
@@ -657,8 +720,10 @@ def deploy(
     # 3. Patch app.yaml before creating the app. The managed Runtime Store fields are added after
     #    app creation because that API requires the app's service principal.
     scaffolded = False
-    if env_updates or trace_env_removals:
-        scaffolded = _upsert_manifest_env(source_dir, env_updates, trace_env_removals)
+    if env_updates or trace_env_removals or project is not None:
+        scaffolded = _upsert_manifest_env(
+            source_dir, env_updates, trace_env_removals, prune_model_services=project is not None
+        )
 
     # 4. Ensure the app exists and its compute is active. Create only when new; the compute wait
     #    runs every deploy.
@@ -798,6 +863,40 @@ def deploy(
     # flaky deploy must not silently revoke the SP's trace access the way an unbind does. (Whether
     # removing a `uc_securable` resource also revokes the underlying UC MODIFY grant is platform
     # behavior - documented but not yet verified live.)
+    # Each bound model service is a UC securable the app's SP must hold EXECUTE on to call it
+    # (system.ai.* models are granted broadly; a user-owned service is not).
+    model_grant_error: Optional[str] = None
+    if model_services:
+        with render.status("Granting the app access to its model services…"):
+            sp = _app_service_principal(name, obj.profile)
+            if sp is None:
+                model_grant_error = "could not resolve the app's service principal."
+            else:
+                failed = []
+                for service in model_services.values():
+                    try:
+                        client.grant_model_service_execute(service, sp)
+                    except AgentCliError as exc:
+                        failed.append(f"{service}: {exc.hint or exc}")
+                model_grant_error = "; ".join(failed) or None
+    # Each bound prompt's schema: the Prompt Registry needs CREATE FUNCTION, EXECUTE, and MANAGE on
+    # it even to load a prompt, so without this the agent fails at its first LLM call.
+    prompts = dict(project.prompts) if project is not None else {}
+    prompt_schemas = sorted({prompt_registry.schema_of(p) for p in prompts.values()})
+    prompt_grant_error: Optional[str] = None
+    if prompt_schemas:
+        with render.status("Granting the app access to its prompts…"):
+            sp = _app_service_principal(name, obj.profile)
+            if sp is None:
+                prompt_grant_error = "could not resolve the app's service principal."
+            else:
+                failed = []
+                for schema in prompt_schemas:
+                    try:
+                        client.grant_prompt_access(schema, sp)
+                    except AgentCliError as exc:
+                        failed.append(f"{schema}: {exc.hint or exc}")
+                prompt_grant_error = "; ".join(failed) or None
     trace_grant_error: Optional[str] = None
     if trace_setup_error is None:
         with render.status("Granting the agent runtime access to its trace experiment…"):
@@ -836,6 +935,16 @@ def deploy(
                         tool_access_plan.uc_grants or tool_access_plan.workspace_grants
                     ),
                 },
+                "model_services": model_services,
+                "model_service_grant": None
+                if not model_services
+                else ("granted" if model_grant_error is None else "failed"),
+                "model_service_grant_error": model_grant_error,
+                "prompts": prompts,
+                "prompt_grant": None
+                if not prompt_schemas
+                else ("granted" if prompt_grant_error is None else "failed"),
+                "prompt_grant_error": prompt_grant_error,
             }
         )
         return
@@ -873,6 +982,26 @@ def deploy(
             0,
             "The app's service principal needs write access to its trace experiment; that grant "
             f"couldn't be applied automatically. Cause: {trace_grant_error}",
+        )
+    if model_services and model_grant_error is not None:
+        steps.insert(
+            0,
+            "The app's service principal needs EXECUTE on its model services "
+            f"({', '.join(model_services.values())}) plus USE CATALOG / USE SCHEMA; that grant "
+            f"couldn't be applied automatically. Cause: {model_grant_error}",
+        )
+    if model_services and model_grant_error is None:
+        provisioned["Model access"] = "granted to app service principal"
+    if prompt_schemas and prompt_grant_error is not None:
+        steps.insert(
+            0,
+            "The app's service principal needs USE SCHEMA, EXECUTE, CREATE FUNCTION, and MANAGE on "
+            f"its prompt schemas ({', '.join(prompt_schemas)}) to load its prompts; that grant "
+            f"couldn't be applied automatically. Cause: {prompt_grant_error}",
+        )
+    if prompt_schemas and prompt_grant_error is None:
+        provisioned["Prompt access"] = (
+            f"granted to app service principal on {', '.join(prompt_schemas)}"
         )
     if grants_stores and grant_error is None:
         provisioned["Store access"] = "granted to app service principal"
