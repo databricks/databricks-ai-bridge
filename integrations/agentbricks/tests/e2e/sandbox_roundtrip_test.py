@@ -74,6 +74,10 @@ async def test_sandbox_result_reaches_next_model_turn(stream, execution_error):
     assert result["name"] == "run_code", result
     assert result["tool_call_id"], result
     assert marker in json.dumps(result["content"]), result
+    assert any(
+        isinstance(block, dict) and block.get("type") == "text" and block.get("id")
+        for block in result["content"]
+    ), result
     execution = result["artifact"]["structured_content"]
     assert execution["outcome"] == ("execution_error" if execution_error else "succeeded"), result
     assert execution["language"] == "python", result

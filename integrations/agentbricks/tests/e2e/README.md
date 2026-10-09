@@ -14,10 +14,10 @@ RUN_AGENTBRICKS_SANDBOX_E2E=1 AGENTBRICKS_E2E_AGENT_URL=<agent-url> \
 
 For a deployed App, supply an OAuth bearer token through `AGENTBRICKS_E2E_APP_TOKEN`; never
 record it in test artifacts. Set `AGENTBRICKS_E2E_MODEL` to use a different entitled model.
-The test requires one sandbox call, a matching tool-call ID, the expected structured execution
-outcome, and a final assistant response containing the unique marker. The original tool message
-may still contain LangChain metadata: the provider strips it from the outbound model request,
-not from the stored transcript.
+The test requires one sandbox call, a matching tool-call ID, a metadata-rich text block with a
+generated `id`, the expected structured execution outcome, and a final assistant response
+containing the unique marker. The original tool message retains the LangChain metadata: the
+provider strips it from the outbound model request, not from the stored transcript.
 
 ## MCP registration validation
 
