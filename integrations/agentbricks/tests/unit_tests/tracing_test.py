@@ -18,7 +18,8 @@ import pytest
 from click.testing import CliRunner
 
 from databricks_agentbricks.cli import tracing as tracing_mod
-from databricks_agentbricks.clients import tracing_client
+from databricks_agentbricks.clients import local_tracing_client, tracing_client
+from databricks_agentbricks.clients.local_tracing_client import LocalTracingStart
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.agent_project import AgentProject
 
@@ -750,7 +751,9 @@ def test_list_reads_local_dev_store_when_not_provisioned(tmp_path: pathlib.Path)
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
         mock.patch.object(tracing_mod, "_set_tracking_uri"),
         mock.patch.object(
-            tracing_mod, "_start_read_server", return_value=(fake_server, "http://127.0.0.1:5599")
+            local_tracing_client.LocalTracingClient,
+            "start_read",
+            return_value=LocalTracingStart(fake_server, "http://127.0.0.1:5599"),
         ),
     ):
         result = CliRunner().invoke(
@@ -780,7 +783,9 @@ def test_get_reads_local_dev_store_when_not_provisioned(tmp_path: pathlib.Path):
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
         mock.patch.object(tracing_mod, "_set_tracking_uri"),
         mock.patch.object(
-            tracing_mod, "_start_read_server", return_value=(fake_server, "http://127.0.0.1:5599")
+            local_tracing_client.LocalTracingClient,
+            "start_read",
+            return_value=LocalTracingStart(fake_server, "http://127.0.0.1:5599"),
         ),
     ):
         result = CliRunner().invoke(
@@ -806,7 +811,11 @@ def test_list_degrades_when_local_read_server_unavailable(tmp_path: pathlib.Path
     mlflow = mock.Mock()
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
-        mock.patch.object(tracing_mod, "_start_read_server", return_value=(None, None)),
+        mock.patch.object(
+            local_tracing_client.LocalTracingClient,
+            "start_read",
+            return_value=LocalTracingStart(None, None),
+        ),
     ):
         result = CliRunner().invoke(
             tracing_mod.tracing_list, ["--source", str(tmp_path)], obj=_Ctx(output="json")
@@ -830,18 +839,18 @@ def test_status_str_handles_enum_like_and_none():
 def test_start_local_tracing_server_launches_sqlite_server(tmp_path: pathlib.Path, monkeypatch):
     # Launch `uvx mlflow server` backed by sqlite under .agentbricks/, returning the MLFLOW_* env pointing
     # at it (bare experiment name = project dir, no workspace path / username needed).
-    monkeypatch.setattr(tracing_mod, "_free_port", lambda: 5599)
+    monkeypatch.setattr(local_tracing_client, "_free_port", lambda: 5599)
     captured: dict = {}
 
     def _fake_popen(cmd, **kwargs):
         captured["cmd"] = cmd
         return mock.Mock()
 
-    monkeypatch.setattr(tracing_mod.subprocess, "Popen", _fake_popen)
-    server, env = tracing_mod.start_local_tracing_server(tmp_path)
-    assert server is not None
-    assert env["MLFLOW_TRACKING_URI"] == "http://127.0.0.1:5599"
-    assert env["MLFLOW_EXPERIMENT_NAME"] == tmp_path.resolve().name
+    monkeypatch.setattr(local_tracing_client.subprocess, "Popen", _fake_popen)
+    result = local_tracing_client.LocalTracingClient().start_dev(tmp_path)
+    assert result.server is not None
+    assert result.environment["MLFLOW_TRACKING_URI"] == "http://127.0.0.1:5599"
+    assert result.environment["MLFLOW_EXPERIMENT_NAME"] == tmp_path.resolve().name
     assert (tmp_path / ".agentbricks").is_dir()
     joined = " ".join(captured["cmd"])
     assert captured["cmd"][0] == "uvx" and "server" in captured["cmd"]
@@ -855,14 +864,15 @@ def test_start_local_tracing_server_launches_sqlite_server(tmp_path: pathlib.Pat
 def test_start_local_tracing_server_degrades_when_launch_fails(tmp_path: pathlib.Path, monkeypatch):
     # If the server process can't be spawned (e.g. uv missing), degrade to (None, {}) so `agentbricks dev`
     # runs without traces rather than aborting.
-    monkeypatch.setattr(tracing_mod, "_free_port", lambda: 5599)
+    monkeypatch.setattr(local_tracing_client, "_free_port", lambda: 5599)
 
     def _boom(cmd, **kwargs):
         raise OSError("uvx not found")
 
-    monkeypatch.setattr(tracing_mod.subprocess, "Popen", _boom)
-    server, env = tracing_mod.start_local_tracing_server(tmp_path)
-    assert server is None and env == {}
+    monkeypatch.setattr(local_tracing_client.subprocess, "Popen", _boom)
+    result = local_tracing_client.LocalTracingClient().start_dev(tmp_path)
+    assert result.server is None and result.environment == {}
+    assert "uvx not found" in result.warning
 
 
 def test_wait_for_server_false_when_process_exits():
@@ -870,7 +880,7 @@ def test_wait_for_server_false_when_process_exits():
     # bail immediately rather than blocking for the whole timeout.
     server = mock.Mock()
     server.poll.return_value = 1  # already exited
-    assert tracing_mod._wait_for_server("http://127.0.0.1:1", server, timeout=1) is False
+    assert local_tracing_client._wait_for_server("http://127.0.0.1:1", server, timeout=1) is False
 
 
 def test_wait_for_server_true_when_health_responds(monkeypatch):
@@ -880,17 +890,31 @@ def test_wait_for_server_true_when_health_responds(monkeypatch):
     resp_cm = mock.MagicMock()
     resp_cm.__enter__.return_value = mock.Mock(status=200)
     monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: resp_cm)
-    assert tracing_mod._wait_for_server("http://127.0.0.1:5599", server) is True
+    assert local_tracing_client._wait_for_server("http://127.0.0.1:5599", server) is True
 
 
 def test_start_read_server_degrades_when_launch_fails(tmp_path: pathlib.Path, monkeypatch):
     # A short-lived read server that can't spawn (uv missing) degrades to (None, None) so `list`/`get`
     # show nothing rather than aborting.
-    monkeypatch.setattr(tracing_mod, "_free_port", lambda: 5599)
+    monkeypatch.setattr(local_tracing_client, "_free_port", lambda: 5599)
 
     def _boom(cmd, **kwargs):
         raise OSError("uvx not found")
 
-    monkeypatch.setattr(tracing_mod.subprocess, "Popen", _boom)
-    server, base_url = tracing_mod._start_read_server(tmp_path / "mlflow.db")
-    assert server is None and base_url is None
+    monkeypatch.setattr(local_tracing_client.subprocess, "Popen", _boom)
+    result = local_tracing_client.LocalTracingClient().start_read(tmp_path / "mlflow.db")
+    assert result.server is None and result.base_url is None
+    assert "uvx not found" in result.warning
+
+
+def test_start_read_server_stops_process_when_health_never_passes(tmp_path, monkeypatch):
+    server = mock.Mock()
+    monkeypatch.setattr(local_tracing_client, "_free_port", lambda: 5599)
+    monkeypatch.setattr(local_tracing_client, "_wait_for_server", lambda *args: False)
+    monkeypatch.setattr(local_tracing_client.subprocess, "Popen", lambda *args, **kwargs: server)
+
+    result = local_tracing_client.LocalTracingClient().start_read(tmp_path / "mlflow.db")
+
+    assert result.server is None and result.base_url is None
+    assert result.warning == "local trace store did not come up"
+    server.terminate.assert_called_once()

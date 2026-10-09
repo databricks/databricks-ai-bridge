@@ -15,6 +15,8 @@ from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.agent_project import AgentProject, ToolSpec
 from databricks_agentbricks.projects.config import write_project_metadata
 
+_REAL_START_LOCAL_TRACING = dev_mod.start_local_tracing_server
+
 
 def _write_agent_manifest(
     source: pathlib.Path,
@@ -50,7 +52,7 @@ class _Ctx:
 
 @pytest.fixture(autouse=True)
 def _stub_local_tracing(monkeypatch):
-    """`agentbricks dev` starts a local MLflow tracking server (via cli.tracing) for Agent Bricks projects;
+    """`agentbricks dev` starts a local MLflow tracking server for Agent Bricks projects;
     stub the name dev.py imported so ordinary dev tests neither spawn one nor need uv. Tracing tests
     override this. The server helper's own behavior is tested in tracing_test.py."""
     monkeypatch.setattr(dev_mod, "start_local_tracing_server", lambda source_dir: (None, {}))
@@ -614,3 +616,17 @@ def test_dev_notes_bound_tracing_experiment(tmp_path: pathlib.Path):
     out = " ".join(result.output.split())  # collapse rich line-wrapping
     assert "Tracing experiment '/Shared/agentbricks_traces/mine' is bound" in out
     assert "Run `agentbricks deploy` to trace to the bound experiment" in out
+
+
+def test_dev_local_tracing_adapter_reports_start_warning(tmp_path: pathlib.Path):
+    from databricks_agentbricks.clients.local_tracing_client import LocalTracingStart
+
+    failure = LocalTracingStart(None, None, warning="uvx not found", help="install uv")
+    with (
+        mock.patch.object(dev_mod.LocalTracingClient, "start_dev", return_value=failure),
+        mock.patch.object(dev_mod.render, "diagnostic") as diagnostic,
+    ):
+        server, environment = _REAL_START_LOCAL_TRACING(tmp_path)
+
+    assert server is None and environment == {}
+    diagnostic.assert_called_once_with("warning", "uvx not found", help="install uv")
