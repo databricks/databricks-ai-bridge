@@ -43,7 +43,7 @@ def _render_detail(pipeline: dict) -> None:
             "Resource name": field(pipeline, "name"),
             "Session store": field(pipeline, "session_store"),
             "Memory store": field(pipeline, "memory_store"),
-            "Model": field(pipeline, "model"),
+            "Model": field(policy, "model") if "model" in policy else field(pipeline, "model"),
             "Instructions": field(policy, "instructions"),
             "Enabled": field(policy, "enabled"),
             "Trigger": field(policy, "trigger"),
@@ -140,7 +140,7 @@ def list_(obj, page_size, page_token) -> None:
                 field(item, "name"),
                 _store_id(field(item, "session_store")),
                 _store_id(field(item, "memory_store")),
-                _truncate(field(item, "model")),
+                _truncate((field(item, "dreamer_policy") or {}).get("model", field(item, "model"))),
             ]
             for item in pipelines
         ],

@@ -506,6 +506,43 @@ class _AgentBricksApiClient:
 
     # --- memory pipelines ---------------------------------------------------
 
+    def _write_memory_pipeline(
+        self, method: str, path: str, *, body: dict, query: Optional[dict] = None
+    ) -> dict:
+        if "model" not in body:
+            return self._do(method, path, body=body, query=query)
+        nested = {key: value for key, value in body.items() if key != "model"}
+        nested["dreamer_policy"] = {**(body.get("dreamer_policy") or {}), "model": body["model"]}
+        nested_query = dict(query) if query is not None else None
+        if nested_query is not None and "update_mask" in nested_query:
+            nested_query["update_mask"] = ",".join(
+                "dreamer_policy.model" if field == "model" else field
+                for field in nested_query["update_mask"].split(",")
+            )
+        try:
+            return self._do(method, path, body=nested, query=nested_query)
+        except AgentCliError as exc:
+            # Retry only an explicit rejection of the nested model schema. In particular,
+            # never retry model validation, authorization, or ambiguous write failures.
+            message = str(exc).lower()
+            unsupported_model = (
+                message.strip().rstrip(".") == "unsupported update path: dreamer_policy.model"
+            )
+            unknown_model = any(
+                marker in message
+                for marker in (
+                    'unknown field "model"',
+                    "unknown field 'model'",
+                    'unrecognized field "model"',
+                    "cannot find field: model in message",
+                )
+            )
+            if exc.error_code not in {"INVALID_PARAMETER_VALUE", "BAD_REQUEST"} or not (
+                unsupported_model or unknown_model
+            ):
+                raise
+            return self._do(method, path, body=body, query=query)
+
     def create_memory_pipeline(
         self,
         *,
@@ -524,7 +561,7 @@ class _AgentBricksApiClient:
                     f"Use one of: {', '.join(MEMORY_PIPELINE_TRIGGERS)}."
                 )
             policy["trigger"] = MEMORY_PIPELINE_TRIGGERS[trigger]
-        return self._do(
+        return self._write_memory_pipeline(
             "POST",
             f"{_BASE}/memory-pipelines",
             body=_body(
@@ -576,7 +613,7 @@ class _AgentBricksApiClient:
             raise AgentCliError(
                 "No fields to update. Provide --display-name, --instructions, --model, or --trigger."
             )
-        return self._do(
+        return self._write_memory_pipeline(
             "PATCH",
             f"{_BASE}/{memory_pipeline_path(name)}",
             query={"update_mask": ",".join(mask)},
