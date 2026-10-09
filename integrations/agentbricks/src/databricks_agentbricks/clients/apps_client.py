@@ -367,7 +367,7 @@ class AppsClient:
             self._profile,
             cwd=str(source_dir),
             action="Could not start the agent locally.",
-            env=_run_local_env(),
+            env=_get_run_local_env(),
         )
 
     def get_service_principal(self, app_name: str) -> Optional[str]:
@@ -647,7 +647,7 @@ def add_tool_resources_for_rollout(
     return _add_tool_resources_for_rollout(app, resources, profile, runner=_databricks)
 
 
-def _run_local_env() -> dict[str, str]:
+def _get_run_local_env() -> dict[str, str]:
     """Our environment without ``VIRTUAL_ENV``.
 
     ``run-local --prepare-environment`` creates the project's ``.venv`` but installs the app's
