@@ -560,7 +560,12 @@ agentbricks memory pipeline update p-123 --instructions @/path/to/instructions.m
 ```
 
 Instructions are sent as `dreamer_policy.instructions` with that leaf field in the update mask.
-`--model` updates the top-level `model` field; `--model ""` clears the override.
+`--model ""` clears the override. Create sends the same value in both top-level `model` and
+`dreamer_policy.model`, retrying once without an explicitly rejected field when the error
+identifies its containing message. Ambiguous errors do not trigger another create.
+Update sends `dreamer_policy.model` first and retries once with legacy top-level `model`
+and its update mask on explicit schema rejection. Other errors are not retried.
+List and detail views accept either model location, preferring the nested value when present.
 `--trigger` updates `dreamer_policy.trigger`: `manual` maps to `MANUAL_ONLY`, and
 `scheduled` maps to `SCHEDULED`. Omit the flag to preserve the current trigger.
 

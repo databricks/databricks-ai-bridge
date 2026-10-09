@@ -73,6 +73,17 @@ def _pipeline():
     return cli.memory.commands["pipeline"]
 
 
+@pytest.mark.parametrize("command", [["get", "p-123"], ["list"]])
+def test_pipeline_renders_nested_model(command, monkeypatch):
+    policy = PIPELINE["dreamer_policy"]
+    assert isinstance(policy, dict)
+    monkeypatch.setitem(PIPELINE, "dreamer_policy", {**policy, "model": "nested-model"})
+    result = CliRunner().invoke(_pipeline(), command, obj=_Ctx(_Client()))
+    assert result.exit_code == 0, result.output
+    assert "nested-model" in result.output
+    assert "system.ai.gpt-5-6-sol" not in result.output
+
+
 def test_create_accepts_store_names_and_model():
     client = _Client()
     result = CliRunner().invoke(
