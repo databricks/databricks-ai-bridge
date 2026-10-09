@@ -4,6 +4,29 @@ This guide covers the Agent Bricks CLI (`agentbricks`), AgentKit, the runtime, a
 including how to run and test changes locally and on Databricks Apps. The current Python
 distribution is `databricks-agentbricks`; installing it provides the `agentbricks` command and AgentKit.
 
+## Architecture and placement
+
+Use the deploy, dev, and invoke decomposition as the reference for new work. A simple command can
+call an existing client or project helper; multi-step operations belong in an injectable service.
+Place code by its primary responsibility:
+
+- **Single responsibility:** CLI commands handle interaction, services coordinate workflows,
+  provisioners manage individual resources, and clients encapsulate external APIs.
+- **Law of Demeter / information hiding:** Services call direct collaborators rather than reaching
+  through them into SDK clients or resource internals; collaborators return typed facts.
+- **Dependency injection:** Supply collaborators explicitly so workflows can be tested without
+  globals or live workspace APIs.
+- **Explicit data flow:** Provisioners return state and manifest patches; services own the sequence
+  and intermediate state instead of relying on mutable provisioner state or call-order dependencies.
+
+Keep shared utilities at the top of `src/databricks_agentbricks/`: external adapters in `clients/`,
+local configuration in `projects/`, output rendering in `presentation/`, and the framework-neutral
+`Reporter` protocol in `reporting.py`. Keep Click command entry points in `cli/`. Workflow entry
+points belong directly in `services/` as `deploy_service.py`, `dev_service.py`, and
+`invoke_service.py`; put helpers used only by one workflow in `services/deployment/` or
+`services/invoke/`, not in new top-level feature packages. Services should not import Click or
+CLI presentation code.
+
 ## Three kinds of change, and how each is sourced
 
 There are three layers a contributor edits. Knowing which one you're changing tells you what to

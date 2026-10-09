@@ -8,6 +8,8 @@ import pathlib
 import subprocess
 import sys
 import zipfile
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from databricks.sdk.errors import NotFound
@@ -18,6 +20,31 @@ assert _SPEC is not None and _SPEC.loader is not None
 tool_matrix = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = tool_matrix
 _SPEC.loader.exec_module(tool_matrix)
+
+_EXPECTED_WHEEL_SOURCE_FILES = frozenset(
+    {
+        "databricks_agentkit/_api_client.py",
+        "databricks_agentbricks/cli/deploy.py",
+        "databricks_agentbricks/clients/api_client_provider.py",
+        "databricks_agentbricks/clients/apps_client.py",
+        "databricks_agentbricks/clients/apps_user_auth_client.py",
+        "databricks_agentbricks/clients/conversation_store_client.py",
+        "databricks_agentbricks/clients/databricks_cli.py",
+        "databricks_agentbricks/clients/legacy_runtime_store.py",
+        "databricks_agentbricks/clients/managed_runtime_store.py",
+        "databricks_agentbricks/clients/tracing_client.py",
+        "databricks_agentbricks/projects/agent_project.py",
+        "databricks_agentbricks/projects/app_manifest.py",
+        "databricks_agentbricks/projects/config.py",
+        "databricks_agentbricks/projects/resolver.py",
+        "databricks_agentbricks/services/deploy_service.py",
+        "databricks_agentbricks/services/deployment/config.py",
+        "databricks_agentbricks/services/deployment/names.py",
+        "databricks_agentbricks/services/deployment/provisioners.py",
+        "databricks_agentbricks/services/deployment/tool_access.py",
+        "databricks_agentbricks/services/deployment/tool_access_provisioner.py",
+    }
+)
 
 
 def _evidence(*, cleanup_required: bool, cleanup_status: str = "deleted") -> dict:
@@ -67,7 +94,7 @@ def _evidence(*, cleanup_required: bool, cleanup_status: str = "deleted") -> dic
             "source_head_sha": "a" * 40,
             "source_dirty": False,
             "wheel_source_matches": True,
-            "wheel_source_sha256": {"databricks_agentbricks/tool_access.py": "b" * 64},
+            "wheel_source_sha256": {member: "b" * 64 for member in _EXPECTED_WHEEL_SOURCE_FILES},
         },
         "template_repo": "/tmp/databricks-ai-bridge",
         "template_ref": "feature",
@@ -240,10 +267,8 @@ def _source_checkout_and_wheel(tmp_path: pathlib.Path) -> tuple[pathlib.Path, st
     repo = tmp_path / "repo"
     source_root = repo / "integrations" / "agentbricks" / "src"
     sources = {
-        "databricks_agentkit/_api_client.py": b"WORKSPACE_CLIENT = True\n",
-        "databricks_agentbricks/tool_access.py": b"TOOL_ACCESS = True\n",
-        "databricks_agentbricks/app_resources.py": b"APP_RESOURCES = True\n",
-        "databricks_agentbricks/cli/deploy.py": b"DEPLOY = True\n",
+        member: f"SOURCE = {index}\n".encode()
+        for index, member in enumerate(sorted(_EXPECTED_WHEEL_SOURCE_FILES))
     }
     for member, content in sources.items():
         path = source_root / member
@@ -262,6 +287,16 @@ def _source_checkout_and_wheel(tmp_path: pathlib.Path) -> tuple[pathlib.Path, st
     return repo, commit_sha, wheel
 
 
+def test_wheel_source_files_exist_in_agentbricks_checkout():
+    source_root = pathlib.Path(__file__).parents[2] / "src"
+    assert set(tool_matrix._WHEEL_SOURCE_FILES) == _EXPECTED_WHEEL_SOURCE_FILES
+    missing = [
+        member for member in _EXPECTED_WHEEL_SOURCE_FILES if not (source_root / member).is_file()
+    ]
+
+    assert not missing, f"_WHEEL_SOURCE_FILES contains stale paths: {missing}"
+
+
 def test_source_provenance_ties_wheel_modules_to_claimed_checkout(tmp_path):
     repo, commit_sha, wheel = _source_checkout_and_wheel(tmp_path)
 
@@ -270,19 +305,14 @@ def test_source_provenance_ties_wheel_modules_to_claimed_checkout(tmp_path):
     assert provenance["source_head_sha"] == commit_sha
     assert provenance["source_dirty"] is False
     assert provenance["wheel_source_matches"] is True
-    assert set(provenance["wheel_source_sha256"]) == {
-        "databricks_agentkit/_api_client.py",
-        "databricks_agentbricks/tool_access.py",
-        "databricks_agentbricks/app_resources.py",
-        "databricks_agentbricks/cli/deploy.py",
-    }
+    assert set(provenance["wheel_source_sha256"]) == _EXPECTED_WHEEL_SOURCE_FILES
 
 
 def test_source_provenance_rejects_unrelated_wheel(tmp_path):
     repo, commit_sha, wheel = _source_checkout_and_wheel(tmp_path)
     with zipfile.ZipFile(wheel) as archive:
         contents = {member: archive.read(member) for member in tool_matrix._WHEEL_SOURCE_FILES}
-    contents["databricks_agentbricks/tool_access.py"] = b"WRONG = True\n"
+    contents["databricks_agentbricks/services/deployment/tool_access.py"] = b"WRONG = True\n"
     with zipfile.ZipFile(wheel, "w") as archive:
         for member, content in contents.items():
             archive.writestr(member, content)
@@ -667,3 +697,113 @@ def test_cleanup_deletes_volume_marker_file_before_dropping_volume(monkeypatch, 
         {"resource": f"volume:{runner.uc_volume}", "status": "deleted"},
     ]
     assert runner.cleanup_complete is True
+
+
+def test_attach_genie_warehouse_preserves_existing_app_resources(monkeypatch, tmp_path):
+    runner = tool_matrix.Runner("profile", tmp_path / "out", tmp_path / "wheel.whl")
+    runner.genie_space_id = "0" * 32
+    workspace = SimpleNamespace(genie=Mock())
+    workspace.genie.get_space.return_value = SimpleNamespace(warehouse_id="warehouse-1")
+    monkeypatch.setattr(tool_matrix, "WorkspaceClient", lambda profile: workspace)
+    resources = [
+        {"name": "user-owned", "sql_warehouse": {"id": "other-warehouse", "permission": "CAN_USE"}},
+        {"name": "agentbricks-tool-genie", "genie_space": {"space_id": runner.genie_space_id}},
+    ]
+    app = {"name": "agent-bricks-test", "resources": resources}
+    updates: list[dict] = []
+
+    def fake_databricks(args):
+        if args[:2] == ["apps", "create-update"]:
+            updates.append(json.loads(args[args.index("--json") + 1]))
+            return {}
+        assert args == ["apps", "get", "agent-bricks-test"]
+        return {"name": app["name"], "resources": updates[0]["app"]["resources"]}
+
+    monkeypatch.setattr(runner, "databricks", fake_databricks)
+
+    result = runner._attach_genie_warehouse(app)
+
+    assert updates == [
+        {
+            "app": {
+                "resources": [
+                    *resources,
+                    {
+                        "name": tool_matrix._GENIE_WAREHOUSE_RESOURCE_NAME,
+                        "sql_warehouse": {"id": "warehouse-1", "permission": "CAN_USE"},
+                    },
+                ]
+            },
+            "update_mask": "resources",
+        }
+    ]
+    assert result["resources"] == updates[0]["app"]["resources"]
+    assert not tool_matrix._GENIE_WAREHOUSE_RESOURCE_NAME.startswith("agentbricks-tool-")
+    assert 2 <= len(tool_matrix._GENIE_WAREHOUSE_RESOURCE_NAME) <= 30
+    workspace.genie.get_space.assert_called_once_with(runner.genie_space_id)
+
+
+def test_attach_genie_warehouse_rejects_space_without_warehouse(monkeypatch, tmp_path):
+    runner = tool_matrix.Runner("profile", tmp_path / "out", tmp_path / "wheel.whl")
+    runner.genie_space_id = "0" * 32
+    workspace = SimpleNamespace(genie=Mock())
+    workspace.genie.get_space.return_value = SimpleNamespace(warehouse_id=None)
+    monkeypatch.setattr(tool_matrix, "WorkspaceClient", lambda profile: workspace)
+    databricks = Mock()
+    monkeypatch.setattr(runner, "databricks", databricks)
+
+    with pytest.raises(tool_matrix.MatrixError, match="no backing SQL warehouse"):
+        runner._attach_genie_warehouse({"name": "agent-bricks-test", "resources": []})
+
+    databricks.assert_not_called()
+
+
+def test_grant_snapshot_requires_user_managed_genie_warehouse(monkeypatch, tmp_path):
+    runner = tool_matrix.Runner("profile", tmp_path / "out", tmp_path / "wheel.whl")
+    runner.uc_function = "main.tools.marker"
+    runner.transitive_uc_function = "main.tools.nested"
+    runner.uc_volume = "main.tools.volume"
+    runner.genie_space_id = "0" * 32
+    resources = [
+        {"name": "user-owned"},
+        {
+            "name": "agentbricks-tool-function",
+            "uc_securable": {
+                "securable_full_name": runner.uc_function,
+                "securable_type": "FUNCTION",
+                "permission": "EXECUTE",
+            },
+        },
+        {
+            "name": "agentbricks-tool-volume",
+            "uc_securable": {
+                "securable_full_name": runner.uc_volume,
+                "securable_type": "VOLUME",
+                "permission": "READ_VOLUME",
+            },
+        },
+        {
+            "name": "agentbricks-tool-genie",
+            "genie_space": {"space_id": runner.genie_space_id, "permission": "CAN_RUN"},
+        },
+    ]
+    app = {"service_principal_client_id": "app-sp", "resources": resources}
+
+    with pytest.raises(tool_matrix.MatrixError, match="user-managed Genie SQL warehouse"):
+        runner._grant_snapshot(app)
+
+    resources.append(
+        {
+            "name": tool_matrix._GENIE_WAREHOUSE_RESOURCE_NAME,
+            "sql_warehouse": {"id": "warehouse-1", "permission": "CAN_USE"},
+        }
+    )
+    monkeypatch.setattr(tool_matrix, "WorkspaceClient", lambda profile: Mock())
+
+    def stop_at_direct_grants(*args):
+        raise RuntimeError("manual warehouse resource verified")
+
+    monkeypatch.setattr(tool_matrix, "_direct_privileges", stop_at_direct_grants)
+
+    with pytest.raises(RuntimeError, match="manual warehouse resource verified"):
+        runner._grant_snapshot(app)

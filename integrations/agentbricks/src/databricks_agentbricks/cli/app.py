@@ -16,12 +16,13 @@ from databricks_agentbricks.cli.deploy import deploy, deployments
 from databricks_agentbricks.cli.dev import dev
 from databricks_agentbricks.cli.doctor import doctor
 from databricks_agentbricks.cli.endpoint import endpoint
-from databricks_agentbricks.cli.help import configure_help
 from databricks_agentbricks.cli.init import init
 from databricks_agentbricks.cli.memory import memory
 from databricks_agentbricks.cli.sessions import sessions
 from databricks_agentbricks.cli.tools import tools
 from databricks_agentbricks.cli.tracing import tracing
+from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
+from databricks_agentbricks.presentation.help import configure_help
 from databricks_agentkit._api_client import _AgentBricksApiClient
 
 
@@ -31,12 +32,11 @@ class CliContext:
     def __init__(self, profile: Optional[str], output: str):
         self.profile = profile
         self.output = output
-        self._client: Optional[_AgentBricksApiClient] = None
+        self.api_client_provider = ApiClientProvider(profile)
 
     def client(self) -> _AgentBricksApiClient:
-        if self._client is None:
-            self._client = _AgentBricksApiClient(self.profile)
-        return self._client
+        """Compatibility accessor for commands not yet migrated to ``api_client_provider``."""
+        return self.api_client_provider.get()
 
 
 @click.group(name="agentbricks", context_settings={"help_option_names": ["-h", "--help"]})

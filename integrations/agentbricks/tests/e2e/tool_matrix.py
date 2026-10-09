@@ -66,10 +66,28 @@ EXPECTED = {
 
 _WHEEL_SOURCE_FILES = (
     "databricks_agentkit/_api_client.py",
-    "databricks_agentbricks/tool_access.py",
-    "databricks_agentbricks/app_resources.py",
     "databricks_agentbricks/cli/deploy.py",
+    "databricks_agentbricks/clients/api_client_provider.py",
+    "databricks_agentbricks/clients/apps_client.py",
+    "databricks_agentbricks/clients/apps_user_auth_client.py",
+    "databricks_agentbricks/clients/conversation_store_client.py",
+    "databricks_agentbricks/clients/databricks_cli.py",
+    "databricks_agentbricks/clients/legacy_runtime_store.py",
+    "databricks_agentbricks/clients/managed_runtime_store.py",
+    "databricks_agentbricks/clients/tracing_client.py",
+    "databricks_agentbricks/projects/agent_project.py",
+    "databricks_agentbricks/projects/app_manifest.py",
+    "databricks_agentbricks/projects/config.py",
+    "databricks_agentbricks/projects/resolver.py",
+    "databricks_agentbricks/services/deploy_service.py",
+    "databricks_agentbricks/services/deployment/config.py",
+    "databricks_agentbricks/services/deployment/names.py",
+    "databricks_agentbricks/services/deployment/provisioners.py",
+    "databricks_agentbricks/services/deployment/tool_access.py",
+    "databricks_agentbricks/services/deployment/tool_access_provisioner.py",
 )
+
+_GENIE_WAREHOUSE_RESOURCE_NAME = "ab-e2e-genie-warehouse"
 
 
 class MatrixError(RuntimeError):
@@ -781,6 +799,7 @@ class Runner:
                 timeout=2400,
             )
             app = self._wait_for_app(case.app_name)
+            app = self._attach_genie_warehouse(app)
             initial_grants = self._grant_snapshot(app)
             repeat_grants = None
             idempotent = None
@@ -912,6 +931,60 @@ class Runner:
             time.sleep(15)
         raise MatrixError(f"App {name} did not become ACTIVE.")
 
+    def _attach_genie_warehouse(self, app: dict[str, Any]) -> dict[str, Any]:
+        space_id = self.genie_space_id
+        if not space_id:
+            raise MatrixError("A Genie space is required to provision its backing warehouse.")
+        warehouse_id = WorkspaceClient(profile=self.profile).genie.get_space(space_id).warehouse_id
+        if not warehouse_id:
+            raise MatrixError(f"Genie space {space_id!r} has no backing SQL warehouse.")
+        app_name = app.get("name")
+        resources = app.get("resources") or []
+        if not isinstance(app_name, str) or not app_name:
+            raise MatrixError(f"App response has no name: {app}")
+        if not isinstance(resources, list) or not all(
+            isinstance(resource, dict) for resource in resources
+        ):
+            raise MatrixError(f"App resources are not a list of objects: {resources}")
+        desired = {
+            "name": _GENIE_WAREHOUSE_RESOURCE_NAME,
+            "sql_warehouse": {"id": warehouse_id, "permission": "CAN_USE"},
+        }
+        matching = [resource for resource in resources if resource.get("name") == desired["name"]]
+        if matching and matching != [desired]:
+            raise MatrixError("Existing matrix Genie warehouse resource does not match the space.")
+        if not matching:
+            self.databricks(
+                [
+                    "apps",
+                    "create-update",
+                    app_name,
+                    "--json",
+                    json.dumps(
+                        {
+                            "app": {"resources": [*resources, desired]},
+                            "update_mask": "resources",
+                        }
+                    ),
+                ]
+            )
+        for _ in range(24):
+            updated = self.databricks(["apps", "get", app_name])
+            current_resources = updated.get("resources")
+            if isinstance(current_resources, list) and any(
+                isinstance(resource, dict)
+                and resource.get("name") == desired["name"]
+                and isinstance(resource.get("sql_warehouse"), dict)
+                and all(
+                    resource["sql_warehouse"].get(key) == value
+                    for key, value in desired["sql_warehouse"].items()
+                )
+                for resource in current_resources
+            ):
+                return updated
+            time.sleep(5)
+        raise MatrixError(f"App {app_name!r} did not attach the Genie SQL warehouse.")
+
     def _grant_snapshot(self, app: dict[str, Any]) -> dict[str, Any]:
         principal = app.get("service_principal_client_id")
         if not principal or self.uc_function is None or self.transitive_uc_function is None:
@@ -937,6 +1010,13 @@ class Runner:
         )
         if not unrelated_resources:
             raise MatrixError("Expected a non-tool App resource to prove preservation on redeploy.")
+        if not any(
+            resource.get("name") == _GENIE_WAREHOUSE_RESOURCE_NAME
+            and isinstance(resource.get("sql_warehouse"), dict)
+            and resource["sql_warehouse"].get("permission") == "CAN_USE"
+            for resource in unrelated_resources
+        ):
+            raise MatrixError("The App is missing its user-managed Genie SQL warehouse resource.")
         expected_app_resources = {
             ("uc_securable", self.uc_function, "FUNCTION", "EXECUTE"),
             ("uc_securable", self.uc_volume, "VOLUME", "READ_VOLUME"),
