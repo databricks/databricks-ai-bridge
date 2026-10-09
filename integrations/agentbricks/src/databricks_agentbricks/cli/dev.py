@@ -9,6 +9,7 @@ rather than re-implementing it.
 
 from __future__ import annotations
 
+import os
 import pathlib
 from typing import Optional
 
@@ -190,6 +191,7 @@ def dev(
             obj.profile,
             cwd=str(source_dir),
             action="Could not start the agent locally.",
+            env=_run_local_env(),
         )
     finally:
         # Remove the local-only manifest so a later `agentbricks deploy` cannot sync it to the workspace, and
@@ -198,6 +200,16 @@ def dev(
             entry_point.unlink(missing_ok=True)
         if tracing_server is not None:
             stop_local_tracing_server(tracing_server)
+
+
+def _run_local_env() -> dict[str, str]:
+    """Our environment without ``VIRTUAL_ENV``.
+
+    ``run-local --prepare-environment`` creates the project's ``.venv`` but installs the app's
+    requirements with ``uv pip``, which targets ``$VIRTUAL_ENV`` first: an activated venv would get
+    the app's packages (and downgrades) instead of the project's own.
+    """
+    return {key: value for key, value in os.environ.items() if key != "VIRTUAL_ENV"}
 
 
 def _announce_local_url(
