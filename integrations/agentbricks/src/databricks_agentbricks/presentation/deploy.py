@@ -98,8 +98,18 @@ def present_deleted(name: str, *, output: Optional[str]) -> None:
     render.success(f"Deleted deployment '{name}'")
 
 
-def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> None:
-    """Report a finished deploy: the machine payload for `--output json`, else the success panel."""
+def present_deploy_result(
+    result: DeployResult,
+    *,
+    output: Optional[str],
+    profile: Optional[str] = None,
+    profile_source: Optional[str] = None,
+    host: Optional[str] = None,
+) -> None:
+    """Report a finished deploy: the machine payload for `--output json`, else the success panel.
+
+    ``profile``/``host`` surface which workspace the deploy went to in the success panel.
+    """
     if output == "json":
         store_grant_attempted = result.memory_grant_attempted or result.session_grant_attempted
         store_grant_error = result.session_grant_error or result.memory_grant_error
@@ -230,6 +240,10 @@ def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> Non
         provisioned["Trace access"] = "granted to agent runtime service principal"
     fields = {"URL": result.url} if result.url else {}
     fields.update({"Workspace path": result.workspace_path, **provisioned})
+    if profile:
+        fields["Profile"] = f"{profile} (from {profile_source})"
+        if host:
+            fields["Host"] = host
     render.success(
         f"Deployed agent '{result.deployment}'",
         fields=fields,

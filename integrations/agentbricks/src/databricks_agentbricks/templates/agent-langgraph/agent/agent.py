@@ -1,4 +1,7 @@
+import configparser
 import os
+import sys
+import threading
 from collections.abc import AsyncGenerator, Callable
 from typing import Any
 
@@ -55,28 +58,72 @@ def configure() -> None:
     configure_tracing()
 
 
+# Resolving auth can block forever on an external-browser OAuth flow (a browser plus a local
+# callback server), so the startup check is bounded by this timeout instead.
+_AUTH_CHECK_TIMEOUT_S = 20.0
+
+
 def _check_databricks_auth() -> None:
     """Fail fast at startup with a clear message if Databricks auth isn't configured.
 
     Without this, a missing/invalid profile only surfaces on the first model call — as a generic SDK
     error buried in a request traceback. Resolving a WorkspaceClient here validates the same config
-    the model client uses, so the failure is immediate and actionable.
+    the model client uses, so the failure is immediate and actionable. The resolution is bounded:
+    an external-browser profile with no cached token would otherwise block forever on a browser
+    flow that a server process can never complete.
     """
+    problem: BaseException | None = None
+    if _external_browser_without_cached_token():
+        problem = RuntimeError("external-browser auth with no cached token; it needs an interactive login")
+    else:
+        outcome: list[BaseException | None] = []
+
+        def _resolve() -> None:
+            try:
+                workspace_client()
+                outcome.append(None)
+            except BaseException as e:
+                outcome.append(e)
+
+        worker = threading.Thread(target=_resolve, daemon=True, name="databricks-auth-check")
+        worker.start()
+        worker.join(_AUTH_CHECK_TIMEOUT_S)
+        problem = outcome[0] if outcome else TimeoutError("auth check timed out")
+        if problem is None:
+            return
+    profile = os.getenv("DATABRICKS_CONFIG_PROFILE")
+    target = f"profile {profile!r}" if profile else "the DEFAULT profile / DATABRICKS_HOST+TOKEN"
+    message = (
+        f"Databricks auth is not configured — the agent can't call the model. Tried {target}.\n"
+        "Fix one of:\n"
+        "  • set DATABRICKS_CONFIG_PROFILE in .env to a profile from `databricks auth profiles`, or\n"
+        "  • run `databricks auth login --profile <name>` to create one, or\n"
+        "  • set DATABRICKS_HOST and DATABRICKS_TOKEN in .env.\n"
+        f"(underlying error: {problem})"
+    )
+    # stderr too: depending on the server, a raised exception can surface as a bare traceback.
+    print(message, file=sys.stderr)
+    raise RuntimeError(message) from problem
+
+
+def _external_browser_without_cached_token() -> bool:
+    """Whether the active profile needs an interactive browser login this process can't complete.
+
+    Best-effort: the profile's auth_type says external-browser, and the Python SDK's OAuth token
+    cache (what lets that flow skip the browser) holds no tokens at all.
+    """
+    profile = os.getenv("DATABRICKS_CONFIG_PROFILE")
+    if not profile:
+        return False
+    config = configparser.ConfigParser(interpolation=None)
+    config.read(os.path.expanduser(os.getenv("DATABRICKS_CONFIG_FILE", "~/.databrickscfg")))
+    if config.get(profile, "auth_type", fallback="") != "external-browser":
+        return False
     try:
-        workspace_client()
-    except Exception as e:
-        profile = os.getenv("DATABRICKS_CONFIG_PROFILE")
-        target = (
-            f"profile {profile!r}" if profile else "the DEFAULT profile / DATABRICKS_HOST+TOKEN"
-        )
-        raise RuntimeError(
-            f"Databricks auth is not configured — the agent can't call the model. Tried {target}.\n"
-            "Fix one of:\n"
-            "  • set DATABRICKS_CONFIG_PROFILE in .env to a profile from `databricks auth profiles`, or\n"
-            "  • run `databricks auth login --profile <name>` to create one, or\n"
-            "  • set DATABRICKS_HOST and DATABRICKS_TOKEN in .env.\n"
-            f"(underlying error: {e})"
-        ) from e
+        with os.scandir(os.path.expanduser("~/.config/databricks-sdk-py/oauth")) as entries:
+            return not any(entry.is_file() and entry.stat().st_size > 0 for entry in entries)
+    except OSError:
+        return True  # no cache directory at all -> no cached token
 
 
 async def create_agent_graph(

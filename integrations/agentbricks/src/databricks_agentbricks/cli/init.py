@@ -25,11 +25,17 @@ from typing import Optional
 
 import click
 
+from databricks_agentbricks.cli.auth import can_prompt_login, profile_host
+from databricks_agentbricks.cli.profile import sign_in_if_interactive, warn_unknown_profile
 from databricks_agentbricks.cli.tracing import default_experiment_name
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.projects.agent_project import AgentProject, default_store_name
-from databricks_agentbricks.projects.config import write_project_metadata
+from databricks_agentbricks.projects.config import (
+    _load_persisted_metadata,
+    write_project_metadata,
+)
+from databricks_agentbricks.projects.env_file import write_env
 from databricks_agentbricks.projects.types import (
     AgentFramework,
     AgentServer,
@@ -117,29 +123,41 @@ def _bundled_template_ref() -> str:
         return "bundled"
 
 
-def _write_env(dest: pathlib.Path, profile: str) -> bool:
-    """Seed a local `.env` from `.env.example` with DATABRICKS_CONFIG_PROFILE=<profile>.
-
-    Returns True if a `.env` was written. Skips if `.env` already exists (never clobbers). The
-    template reads DATABRICKS_CONFIG_PROFILE for local model auth, so this makes the scaffolded
-    project runnable with `agentbricks dev` without a manual `cp .env.example .env` step.
-    """
-    env_path = dest / ".env"
-    if env_path.exists():
+def _is_generated_project(dest: pathlib.Path) -> bool:
+    """Whether `init` (this CLI family) scaffolded `dest`, by its persisted metadata marker."""
+    try:
+        return _load_persisted_metadata(dest) is not None
+    except AgentCliError:
         return False
-    example = dest / ".env.example"
-    base = example.read_text() if example.exists() else ""
-    lines, replaced = [], False
-    for line in base.splitlines():
-        if line.startswith("DATABRICKS_CONFIG_PROFILE="):
-            lines.append(f"DATABRICKS_CONFIG_PROFILE={profile}")
-            replaced = True
-        else:
-            lines.append(line)
-    if not replaced:
-        lines.insert(0, f"DATABRICKS_CONFIG_PROFILE={profile}")
-    env_path.write_text("\n".join(lines) + "\n")
-    return True
+
+
+def _report_already_initialized(obj, dest: pathlib.Path) -> None:
+    """Re-run of `init` on a project this CLI scaffolded: nothing is written.
+
+    Re-scaffolding would clobber user code, so the project's identity and `.env` stay as they
+    are; `--existing` migration is for projects Agent Bricks did NOT generate.
+    """
+    if obj.output == "json":
+        render.emit_json({"already_initialized": True, "directory": str(dest)})
+        return
+    render.console().print(
+        f"{dest} is already an Agent Bricks project; nothing was changed. Run `agentbricks dev` / "
+        f"`agentbricks deploy`, or `agentbricks profile set <profile> --source {dest}` to change "
+        "its workspace."
+    )
+
+
+def _project_profile(obj, flag_profile: Optional[str]) -> tuple[str, str]:
+    """(profile, source) to pin in a new project's `.env`: `--profile`, the resolved `-p` /
+    DATABRICKS_CONFIG_PROFILE, else `DEFAULT` (what `.env.example` ships with).
+
+    Every project gets a profile so it keeps its workspace however the shell is set up later.
+    """
+    if flag_profile:
+        return flag_profile, "--profile"
+    if obj.profile:
+        return obj.profile, obj.profile_info.source
+    return "DEFAULT", "default"
 
 
 def _migration_paths(dest: pathlib.Path, target: pathlib.Path) -> tuple[pathlib.Path, ...]:
@@ -318,9 +336,10 @@ def _prepare_migration(
 )
 @click.option(
     "--profile",
+    "-p",
     default=None,
     help="Seed a local .env with this DATABRICKS_CONFIG_PROFILE so `agentbricks dev` works "
-    "immediately (defaults to the profile from -p / `agentbricks login`).",
+    "immediately (defaults to the global -p, then DATABRICKS_CONFIG_PROFILE).",
 )
 @click.option(
     "--disable-chat-app",
@@ -363,11 +382,16 @@ def init(
     """Scaffold a local agent project from an Agent Bricks template.
 
     DIRECTORY is the target path to create (defaults to the template's own name). The
-    directory must not already exist unless --existing is supplied. Once scaffolded, deploy it with
+    directory must not already exist — except a project `init` itself scaffolded, where a rerun
+    changes nothing (use `agentbricks profile set <profile>` to change its workspace). Use --existing to migrate a project Agent Bricks did not
+    generate. Once scaffolded, deploy it with
     `agentbricks deploy <name> --source <directory>`.
 
-    Pass --profile (or set a default via `agentbricks login` / -p) to seed a local `.env` so the
-    scaffolded project runs with `agentbricks dev` right away.
+    The project's `.env` always pins a Databricks profile: --profile (or -p, or
+    DATABRICKS_CONFIG_PROFILE), else `DEFAULT`. In an interactive terminal, init then signs in to
+    it, opening `databricks auth login` only if it isn't authenticated yet (which also creates a
+    missing profile); non-interactive and CI runs skip sign-in. Change it later with
+    `agentbricks profile set <profile>`.
 
     The scaffold is preconfigured to call Databricks model serving through the AI Gateway using
     that profile, so it can talk to a model with no separate endpoint or API key to set up.
@@ -406,11 +430,14 @@ def init(
     dest = pathlib.Path(directory) if directory else pathlib.Path(template_name)
 
     if dest.exists():
-        raise AgentCliError(
-            f"Destination '{dest}' already exists.",
-            hint=f"Use --existing to prepare a migration from an existing "
-            f"{_FRAMEWORK_LABEL_PHRASE} project, or choose a new directory to scaffold.",
-        )
+        if not _is_generated_project(dest):
+            raise AgentCliError(
+                f"Destination '{dest}' already exists.",
+                hint=f"Use --existing to prepare a migration from an existing "
+                f"{_FRAMEWORK_LABEL_PHRASE} project, or choose a new directory to scaffold.",
+            )
+        _report_already_initialized(obj, dest)
+        return
 
     overlay_names = (template.chat_app,) if chat_app_enabled else ()
     try:
@@ -441,11 +468,18 @@ def init(
             experiment_name=experiment_name,
         )
         project.write()
-        env_profile = profile or obj.profile
-        wrote_env = _write_env(dest, env_profile) if env_profile else False
+        env_profile, env_profile_source = _project_profile(obj, profile)
+        write_env(dest, env_profile)
+        if not can_prompt_login():
+            # Interactive runs sign in right after scaffolding, which creates a missing profile.
+            warn_unknown_profile(env_profile, obj)
     except Exception:
         shutil.rmtree(dest, ignore_errors=True)
         raise
+
+    # A failed sign-in doesn't undo the scaffold; the summary says how to retry.
+    signed_in_user = sign_in_if_interactive(obj, env_profile, env_profile_source)
+    workspace_host = profile_host(env_profile)
 
     if obj.output == "json":
         render.emit_json(
@@ -456,7 +490,9 @@ def init(
                 "directory": str(dest),
                 "server": selected_server.value,
                 "chat_app_enabled": chat_app_enabled,
-                "env_profile": env_profile if wrote_env else None,
+                "env_profile": env_profile,
+                "workspace_host": workspace_host,
+                "signed_in_user": signed_in_user,
                 "memory_store": memory_store,
                 "session_store": session_store,
                 "experiment_name": experiment_name,
@@ -480,15 +516,15 @@ def init(
     if experiment_name:
         fields["Traces experiment"] = experiment_name
     steps: list[str | tuple[str, str]] = [(f"cd {dest}", "Enter the project directory")]
-    if wrote_env:
-        fields["Profile (.env)"] = env_profile
+    fields["Profile (.env)"] = env_profile
+    fields["Workspace"] = workspace_host or "not configured yet"
+    if signed_in_user:
+        fields["Signed in as"] = signed_in_user
     else:
-        # No profile resolved, so no .env was seeded — call out the auth step explicitly rather
-        # than burying it, since running locally fails without a Databricks profile.
-        steps += [
-            ("cp .env.example .env", "Create your local env file"),
-            "Set DATABRICKS_CONFIG_PROFILE in .env (or re-run `agentbricks init --profile <profile>`)",
-        ]
+        steps.append(
+            (f"agentbricks profile login {env_profile}", "Sign in before running the agent")
+        )
+    steps.append(("agentbricks profile set <profile>", "Use a different profile (optional)"))
     steps.append(("agentbricks dev", "Run the agent locally"))
     if chat_app_enabled:
         steps.append("Open http://localhost:8000 to chat with it")
