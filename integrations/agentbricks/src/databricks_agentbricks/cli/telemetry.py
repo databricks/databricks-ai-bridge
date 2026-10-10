@@ -15,6 +15,7 @@ import platform
 import threading
 import time
 import uuid
+from dataclasses import asdict, dataclass
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _installed_version
 from pathlib import Path
@@ -22,7 +23,7 @@ from typing import Any
 
 import click
 
-_DISABLE_ENV = "AGENTBRICKS_DISABLE_TELEMETRY"
+_DISABLE_TELEMETRY_ENV = "AGENTBRICKS_DISABLE_TELEMETRY"
 _TELEMETRY_PATH = "/telemetry-ext"
 
 # Keep the foreground wait short.  The worker is daemonized so an unavailable endpoint cannot hold
@@ -50,7 +51,7 @@ _SAFE_CHOICE_VALUES: dict[str, frozenset[str]] = {
 # Keep integer telemetry explicitly bounded even when the Click range later changes. This is a
 # privacy review boundary, rather than an inferred copy of the command's type declaration.
 _SAFE_BOUNDED_INT_RANGES: dict[str, tuple[int, int]] = {
-    "agentbricks deploy.instances": (1, 5),
+    "agentbricks deploy.instance_count": (1, 5),
 }
 
 # Boolean values are also opt-in. Keep this literal allowlist limited to the reviewed, low-risk
@@ -81,6 +82,17 @@ _ERROR_CATEGORIES = frozenset(
 )
 
 
+@dataclass(frozen=True)
+class _ParameterEntry:
+    name: str
+    choice_value: str | None = None
+    bool_value: bool | None = None
+    int_value: int | None = None
+
+    def as_log(self) -> dict[str, str | bool | int]:
+        return {key: value for key, value in asdict(self).items() if value is not None}
+
+
 def telemetry_disabled() -> bool:
     """Whether the user opted out of CLI telemetry.
 
@@ -88,7 +100,7 @@ def telemetry_disabled() -> bool:
     true so shell conventions such as ``AGENTBRICKS_DISABLE_TELEMETRY=1`` and ``=yes`` both work.
     """
 
-    value = os.environ.get(_DISABLE_ENV, "").strip().lower()
+    value = os.environ.get(_DISABLE_TELEMETRY_ENV, "").strip().lower()
     return value not in {"", "0", "false", "no", "off"}
 
 
@@ -243,8 +255,12 @@ def _parameter_value(context: Any, name: str) -> tuple[bool, object]:
         return False, None
 
 
-def _parameter_entry(*, name: str, parameter: Any, value: object) -> dict[str, Any] | None:
-    """Create one bounded parameter entry, dropping every unsafe value."""
+def _parameter_entry(*, name: str, parameter: Any, value: object) -> _ParameterEntry | None:
+    """Create one bounded parameter entry, dropping every unsafe value.
+
+    Plain string options have Click's STRING type, not Choice. Even an explicitly declared Choice
+    sends its value only when the option and value have been reviewed in the allowlist.
+    """
 
     try:
         if bool(getattr(parameter, "hidden", False)) or bool(
@@ -261,17 +277,23 @@ def _parameter_entry(*, name: str, parameter: Any, value: object) -> dict[str, A
 
     if is_bool_flag:
         if name in _SAFE_BOOL_PARAMETER_NAMES and type(value) is bool:
-            return {"name": name, "bool_value": value}
-        return {"name": name}
+            return _ParameterEntry(name=name, bool_value=value)
+        return _ParameterEntry(name=name)
 
     if isinstance(parameter_type, click.Choice):
         allowed = _SAFE_CHOICE_VALUES.get(name)
-        if allowed is not None and not multiple and isinstance(value, str) and value in allowed:
+        if (
+            allowed is not None
+            and not multiple
+            and isinstance(value, str)
+            and value in allowed
+            and value in parameter_type.choices
+        ):
             choice_label = value.upper().replace("-", "_")
-            return {"name": name, "choice_value": f"{_CHOICE_VALUE_PREFIX}{choice_label}"}
+            return _ParameterEntry(name=name, choice_value=f"{_CHOICE_VALUE_PREFIX}{choice_label}")
         # An unallowlisted Choice is handled like free text: its static presence may be useful,
         # while its value is never sent.
-        return {"name": name}
+        return _ParameterEntry(name=name)
 
     bounds = _SAFE_BOUNDED_INT_RANGES.get(name)
     if bounds is not None:
@@ -280,15 +302,15 @@ def _parameter_entry(*, name: str, parameter: Any, value: object) -> dict[str, A
             and type(value) is int
             and bounds[0] <= value <= bounds[1]
         ):
-            return {"name": name, "int_value": value}
-        return {"name": name}
+            return _ParameterEntry(name=name, int_value=value)
+        return _ParameterEntry(name=name)
 
     # Arbitrary strings, paths, IDs, secrets, JSON, and unallowlisted numeric values are presence
     # signals only. The caller has already excluded defaults and environment values.
-    return {"name": name}
+    return _ParameterEntry(name=name)
 
 
-def _collect_parameters(ctx: Any) -> list[dict[str, Any]]:
+def _collect_parameters(ctx: Any) -> list[_ParameterEntry]:
     """Collect bounded Click option metadata without reading raw invocation text."""
 
     try:
@@ -296,7 +318,7 @@ def _collect_parameters(ctx: Any) -> list[dict[str, Any]]:
         command_path = _static_command_path(contexts)
         if not contexts or command_path is None:
             return []
-        entries: list[dict[str, Any]] = []
+        entries: list[_ParameterEntry] = []
         seen_names: set[str] = set()
         for context_index, context in enumerate(contexts):
             command = getattr(context, "command", None)
@@ -364,7 +386,7 @@ def build_log(
         log["error_category"] = _bounded_error_category(error_category)
     parameters = _collect_parameters(ctx)
     if parameters:
-        log["parameters"] = parameters
+        log["parameters"] = [parameter.as_log() for parameter in parameters]
     return log
 
 

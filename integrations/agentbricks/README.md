@@ -112,8 +112,11 @@ The CLI sends best effort command usage telemetry after leaf commands. Its log r
 command path, package version, operating system, duration, and process outcome (exit code and, for
 nonzero exits, a bounded error category). Parameter entries are limited to options explicitly
 supplied on the command line: free-form options contribute their static name, while a small reviewed
-set of choices, boolean flags, and bounded integers may
-contribute a value. Unreviewed boolean flags contribute only their static name. Positional
+set of choices, boolean flags, and bounded integers may contribute a value. Plain string options
+are never treated as choices automatically. Even declared Click choices require an explicit,
+reviewed allowlist entry. Adding a choice option or changing its values requires a telemetry
+policy review, enforced against the registered command tree by unit tests. Unreviewed boolean
+flags contribute only their static name. Positional
 arguments, raw command arguments, paths, IDs, secrets, arbitrary option values, and exception
 messages are omitted. Hidden and deprecated options are excluded. Set
 `AGENTBRICKS_DISABLE_TELEMETRY=1` to disable these uploads.

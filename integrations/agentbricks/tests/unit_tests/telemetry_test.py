@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import click
+from click.core import ParameterSource
 from click.testing import CliRunner
 
 import databricks_agentbricks.cli.app as cli
@@ -50,6 +51,48 @@ class _Context:
 
     def find_root(self):
         return self
+
+
+_PRESENCE_ONLY_CHOICE_OPTIONS = {
+    "agentbricks memory pipeline create.trigger",
+    "agentbricks memory pipeline update.trigger",
+}
+
+
+def _real_context(*path: str) -> click.Context:
+    command = cli.agentbricks
+    context = click.Context(command, info_name="agentbricks")
+    for child_name in path:
+        assert isinstance(command, click.Group)
+        command = command.commands[child_name]
+        context = click.Context(command, info_name=child_name, parent=context)
+    return context
+
+
+def _explicit_option(
+    context: click.Context,
+    name: str,
+    value: object,
+    source: ParameterSource = ParameterSource.COMMANDLINE,
+) -> None:
+    assert any(
+        isinstance(parameter, click.Option) and parameter.name == name
+        for parameter in context.command.params
+    )
+    context.params[name] = value
+    context.set_parameter_source(name, source)
+
+
+def _real_options():
+    def walk(command, path):
+        for parameter in command.params:
+            if isinstance(parameter, click.Option):
+                yield path, parameter
+        if isinstance(command, click.Group):
+            for child_name, child in command.commands.items():
+                yield from walk(child, (*path, child_name))
+
+    yield from walk(cli.agentbricks, ())
 
 
 def _inner(body: dict) -> dict:
@@ -218,17 +261,9 @@ def test_existing_workspace_client_receives_exact_transport_request(monkeypatch)
 
 def test_transport_payload_contains_static_parameter_names(monkeypatch):
     api_client = _ApiClient()
-
-    @click.group(name="agentbricks")
-    def root():
-        pass
-
-    @root.command(name="deploy", cls=AgentBricksCommand)
-    @click.option("--workspace-path", multiple=True)
-    @click.option("--allow-user-scope-update", is_flag=True)
-    @click.pass_context
-    def deploy(ctx, workspace_path, allow_user_scope_update):
-        del ctx, workspace_path, allow_user_scope_update
+    context = _real_context("deploy")
+    _explicit_option(context, "workspace_path", "private-label")
+    _explicit_option(context, "allow_user_scope_update", True)
 
     monkeypatch.delenv("AGENTBRICKS_DISABLE_TELEMETRY", raising=False)
     monkeypatch.setattr(telemetry, "_MAX_FOREGROUND_WAIT_S", 1)
@@ -237,19 +272,8 @@ def test_transport_payload_contains_static_parameter_names(monkeypatch):
         "_workspace_client",
         lambda ctx: SimpleNamespace(api_client=api_client),
     )
-    result = CliRunner().invoke(
-        root,
-        [
-            "deploy",
-            "--workspace-path",
-            "private-label",
-            "--workspace-path",
-            "private-label-two",
-            "--allow-user-scope-update",
-        ],
-    )
+    telemetry.emit_command(context, execution_time_ms=1, exit_code=0)
 
-    assert result.exit_code == 0, result.output
     assert len(api_client.calls) == 1
     log = _inner(api_client.calls[0][2])["agentbricks_cli_log"]
     parameters = {parameter["name"]: parameter for parameter in log["parameters"]}
@@ -262,7 +286,6 @@ def test_transport_payload_contains_static_parameter_names(monkeypatch):
     assert log["command_path"] == "agentbricks deploy"
     encoded = json.dumps(log)
     assert "private-label" not in encoded
-    assert "private-label-two" not in encoded
 
 
 def test_custom_click_names_are_static_and_values_are_not_sent(monkeypatch):
@@ -274,33 +297,17 @@ def test_custom_click_names_are_static_and_values_are_not_sent(monkeypatch):
     def inventory(ctx, label):
         del ctx, label
 
-    @click.group(name="agentbricks")
-    def root():
-        pass
-
-    @root.command(name="init", cls=AgentBricksCommand)
-    @click.option("--private-option")
-    @click.pass_context
-    def init(ctx, private_option):
-        del ctx, private_option
-
     monkeypatch.setattr(
         telemetry,
         "emit_command",
         lambda ctx, **kwargs: captured.append(telemetry.build_log(ctx, **kwargs)),
     )
     result = CliRunner().invoke(inventory, ["--label", "private-label"])
-    known_command_result = CliRunner().invoke(root, ["init", "--private-option", "private-value"])
 
     assert result.exit_code == 0, result.output
-    assert known_command_result.exit_code == 0, known_command_result.output
     assert captured[0]["command_path"] == "inventory"
     assert captured[0]["parameters"] == [{"name": "inventory.label"}]
-    assert captured[1]["command_path"] == "agentbricks init"
-    assert captured[1]["parameters"] == [{"name": "agentbricks init.private_option"}]
     assert "private-label" not in json.dumps(captured[0])
-    assert "private-option" not in json.dumps(captured[1])
-    assert "private-value" not in json.dumps(captured[1])
 
 
 def test_opt_out_does_not_construct_or_send(monkeypatch):
@@ -379,76 +386,16 @@ def test_agentbricks_command_rethrows_unexpected_exception(monkeypatch):
     assert result.exception is failure
 
 
-def test_build_log_captures_only_explicit_options_and_allowlisted_values(monkeypatch):
-    captured = []
+def test_build_log_captures_only_explicit_options_and_allowlisted_values():
+    context = _real_context("deploy")
+    _explicit_option(context, "instance_count", 3)
+    _explicit_option(context, "workspace_path", "private-secret")
+    _explicit_option(context, "allow_user_scope_update", True)
 
-    @click.group(name="agentbricks")
-    def root():
-        pass
-
-    @root.command(name="deploy", cls=AgentBricksCommand)
-    @click.option("--instances", type=click.IntRange(min=1, max=5), default=2)
-    @click.option("--workspace-path", default="secret-default")
-    @click.option("--allow-user-scope-update", is_flag=True)
-    @click.option("--hidden", is_flag=True, hidden=True)
-    @click.option("--deprecated", is_flag=True, deprecated=True)
-    @click.option("--source", type=click.Choice(["private-choice"]))
-    @click.option("--pip-index-url", multiple=True)
-    @click.argument("directory", required=False)
-    @click.pass_context
-    def deploy(
-        ctx,
-        instances,
-        workspace_path,
-        allow_user_scope_update,
-        hidden,
-        deprecated,
-        source,
-        pip_index_url,
-        directory,
-    ):
-        del (
-            ctx,
-            instances,
-            workspace_path,
-            allow_user_scope_update,
-            hidden,
-            deprecated,
-            source,
-            pip_index_url,
-            directory,
-        )
-
-    monkeypatch.setattr(
-        telemetry,
-        "emit_command",
-        lambda ctx, **kwargs: captured.append(telemetry.build_log(ctx, **kwargs)),
-    )
-    result = CliRunner().invoke(
-        root,
-        [
-            "deploy",
-            "private-directory",
-            "--instances",
-            "3",
-            "--workspace-path",
-            "private-secret",
-            "--allow-user-scope-update",
-            "--hidden",
-            "--deprecated",
-            "--source",
-            "private-choice",
-            "--pip-index-url",
-            "private-label-one",
-            "--pip-index-url",
-            "private-label-two",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    parameters = {parameter["name"]: parameter for parameter in captured[0]["parameters"]}
-    assert parameters["agentbricks deploy.instances"] == {
-        "name": "agentbricks deploy.instances",
+    log = telemetry.build_log(context, exit_code=0)
+    parameters = {parameter["name"]: parameter for parameter in log["parameters"]}
+    assert parameters["agentbricks deploy.instance_count"] == {
+        "name": "agentbricks deploy.instance_count",
         "int_value": 3,
     }
     assert parameters["agentbricks deploy.workspace_path"] == {
@@ -457,110 +404,117 @@ def test_build_log_captures_only_explicit_options_and_allowlisted_values(monkeyp
     assert parameters["agentbricks deploy.allow_user_scope_update"] == {
         "name": "agentbricks deploy.allow_user_scope_update",
     }
-    assert parameters["agentbricks deploy.source"] == {
-        "name": "agentbricks deploy.source",
-    }
-    assert parameters["agentbricks deploy.pip_index_url"] == {
-        "name": "agentbricks deploy.pip_index_url",
-    }
-    assert len(parameters) == 5
-    encoded = json.dumps(captured[0])
+    assert len(parameters) == 3
+    encoded = json.dumps(log)
     assert "private-secret" not in encoded
-    assert "private-choice" not in encoded
-    assert "private-label-one" not in encoded
-    assert "private-label-two" not in encoded
-    assert "private-directory" not in encoded
 
 
-def test_build_log_omits_default_options(monkeypatch):
-    captured = []
+def test_build_log_omits_default_options():
+    context = _real_context("deploy")
+    _explicit_option(context, "instance_count", 2, source=ParameterSource.DEFAULT)
+    assert "parameters" not in telemetry.build_log(context, exit_code=0)
 
-    @click.group(name="agentbricks")
-    def root():
-        pass
 
-    @root.command(name="deploy", cls=AgentBricksCommand)
-    @click.option("--instances", type=click.IntRange(min=1, max=5), default=2)
-    @click.option("--enabled", is_flag=True)
-    @click.pass_context
-    def deploy(ctx, instances, enabled):
-        del ctx, instances, enabled
+def test_unallowlisted_choice_is_presence_only():
+    context = _real_context("memory", "pipeline", "create")
+    _explicit_option(context, "trigger", "manual")
+    log = telemetry.build_log(context, exit_code=0)
+    assert log["parameters"] == [{"name": "agentbricks memory pipeline create.trigger"}]
+    assert "manual" not in json.dumps(log)
 
-    monkeypatch.setattr(
-        telemetry,
-        "emit_command",
-        lambda ctx, **kwargs: captured.append(telemetry.build_log(ctx, **kwargs)),
+
+def test_choice_policy_covers_every_registered_choice_and_value():
+    declared_choices = {
+        f"{' '.join(('agentbricks', *path))}.{option.name}": frozenset(option.type.choices)
+        for path, option in _real_options()
+        if isinstance(option.type, click.Choice)
+    }
+
+    assert not (set(telemetry._SAFE_CHOICE_VALUES) & _PRESENCE_ONLY_CHOICE_OPTIONS)
+    assert set(declared_choices) == (
+        set(telemetry._SAFE_CHOICE_VALUES) | _PRESENCE_ONLY_CHOICE_OPTIONS
     )
-    result = CliRunner().invoke(root, ["deploy"])
-
-    assert result.exit_code == 0, result.output
-    assert "parameters" not in captured[0]
-
-
-def test_unallowlisted_choice_is_presence_only(monkeypatch):
-    captured = []
-
-    @click.group(name="agentbricks")
-    def root():
-        pass
-
-    @root.command(name="init", cls=AgentBricksCommand)
-    @click.option("--framework", type=click.Choice(["private-choice"]))
-    @click.pass_context
-    def init(ctx, framework):
-        del ctx, framework
-
-    monkeypatch.setattr(
-        telemetry,
-        "emit_command",
-        lambda ctx, **kwargs: captured.append(telemetry.build_log(ctx, **kwargs)),
-    )
-    result = CliRunner().invoke(root, ["init", "--framework", "private-choice"])
-
-    assert result.exit_code == 0, result.output
-    assert captured[0]["parameters"] == [{"name": "agentbricks init.framework"}]
-    assert "private-choice" not in json.dumps(captured[0])
-
-
-def test_safe_choice_allowlist_is_a_subset_of_current_click_choices():
-    declared_choices = {}
-
-    def collect_parameters(command, path):
-        for parameter in command.params:
-            if isinstance(parameter, click.Option) and isinstance(parameter.type, click.Choice):
-                declared_choices[f"{' '.join(path)}.{parameter.name}"] = set(parameter.type.choices)
-        if isinstance(command, click.Group):
-            for child_name, child in command.commands.items():
-                collect_parameters(child, (*path, child_name))
-
-    collect_parameters(cli.agentbricks, ("agentbricks",))
-
     for name, values in telemetry._SAFE_CHOICE_VALUES.items():
-        assert name in declared_choices
-        assert values <= declared_choices[name]
+        assert values == declared_choices[name]
 
 
 def test_safe_choice_values_use_registered_data_shape_prefix():
-    option = click.Option(["--choice"], type=click.Choice(["placeholder"]))
-
-    for name, values in telemetry._SAFE_CHOICE_VALUES.items():
-        for value in values:
+    for path, option in _real_options():
+        name = f"{' '.join(('agentbricks', *path))}.{option.name}"
+        for value in telemetry._SAFE_CHOICE_VALUES.get(name, ()):
             entry = telemetry._parameter_entry(name=name, parameter=option, value=value)
             assert entry is not None
+            assert entry.as_log() == {
+                "name": name,
+                "choice_value": f"AGENTBRICKS_CLI_{value.upper().replace('-', '_')}",
+            }
+
+
+def test_real_registered_options_only_emit_reviewed_values():
+    for path, option in _real_options():
+        assert option.name is not None
+        name = f"{' '.join(('agentbricks', *path))}.{option.name}"
+        if isinstance(option.type, click.Choice):
+            value = option.type.choices[0]
+        elif option.is_bool_flag:
+            value = True
+        elif isinstance(option.type, click.IntRange):
+            value = option.type.min if option.type.min is not None else 1
+        else:
+            value = "private-value"
+        if option.multiple:
+            value = (value,)
+
+        context = _real_context(*path)
+        _explicit_option(context, option.name, value)
+        log = telemetry.build_log(context, exit_code=0)
+
+        if option.hidden or option.deprecated:
+            assert "parameters" not in log, name
+            continue
+        assert len(log["parameters"]) == 1, name
+        entry = log["parameters"][0]
+        assert entry["name"] == name
+        if name in telemetry._SAFE_CHOICE_VALUES:
+            assert isinstance(value, str)
             assert entry["choice_value"] == f"AGENTBRICKS_CLI_{value.upper().replace('-', '_')}"
+        elif name in telemetry._SAFE_BOOL_PARAMETER_NAMES:
+            assert entry["bool_value"] is True
+        elif name in telemetry._SAFE_BOUNDED_INT_RANGES:
+            assert entry["int_value"] == value
+        else:
+            assert entry == {"name": name}
+
+
+def test_bounded_integer_policy_references_registered_options():
+    declared_ranges = {
+        f"{' '.join(('agentbricks', *path))}.{option.name}": option.type
+        for path, option in _real_options()
+        if isinstance(option.type, click.IntRange)
+    }
+    for name, (minimum, maximum) in telemetry._SAFE_BOUNDED_INT_RANGES.items():
+        assert name in declared_ranges
+        assert declared_ranges[name].min <= minimum <= maximum <= declared_ranges[name].max
+
+
+def test_parameter_entry_preserves_false_boolean_value():
+    option = next(
+        option
+        for path, option in _real_options()
+        if path == ("init",) and option.name == "existing"
+    )
+    entry = telemetry._parameter_entry(
+        name="agentbricks init.existing", parameter=option, value=False
+    )
+    assert entry is not None
+    assert entry.as_log() == {"name": "agentbricks init.existing", "bool_value": False}
 
 
 def test_safe_boolean_allowlist_contains_only_current_boolean_options():
-    declared_flags = set()
-
-    def collect_flags(command, path):
-        for parameter in command.params:
-            if isinstance(parameter, click.Option) and parameter.is_bool_flag:
-                declared_flags.add(f"{' '.join(path)}.{parameter.name}")
-        if isinstance(command, click.Group):
-            for child_name, child in command.commands.items():
-                collect_flags(child, (*path, child_name))
-
-    collect_flags(cli.agentbricks, ("agentbricks",))
+    declared_flags = {
+        f"{' '.join(('agentbricks', *path))}.{option.name}"
+        for path, option in _real_options()
+        if option.is_bool_flag
+    }
 
     assert telemetry._SAFE_BOOL_PARAMETER_NAMES <= declared_flags
