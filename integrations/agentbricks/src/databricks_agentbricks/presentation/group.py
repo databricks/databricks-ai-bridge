@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import difflib
 import inspect
+import time
 from typing import Iterable, Optional
 
 import click
@@ -154,7 +155,72 @@ class AgentBricksHelpFormatter(click.HelpFormatter):
 
 
 class AgentBricksCommand(_FlushEpilog, click.Command):
-    """A leaf command whose `EXAMPLES` epilog renders flush-left, like the section headings."""
+    """A leaf command whose help and invocation telemetry use Agent Bricks conventions."""
+
+    def invoke(self, ctx: click.Context):
+        """Run one leaf and record its outcome without changing Click's exception behavior."""
+
+        started = time.monotonic()
+        try:
+            result = super().invoke(ctx)
+        except BaseException as exc:
+            exit_code = self._telemetry_exit_code(exc)
+            success = isinstance(exc, (click.exceptions.Exit, SystemExit)) and exit_code == 0
+            if not success and exit_code == 0:
+                # An exception with a zero-valued `code` still failed the command.
+                exit_code = 1
+            self._emit_telemetry(
+                ctx,
+                started,
+                exit_code=exit_code,
+                error_category=None if success else self._telemetry_error_category(exc),
+            )
+            raise
+        else:
+            self._emit_telemetry(ctx, started, exit_code=0)
+            return result
+
+    @staticmethod
+    def _telemetry_exit_code(exc: BaseException) -> int:
+        try:
+            from databricks_agentbricks.cli import telemetry
+
+            return telemetry._exit_code(exc)
+        except BaseException:
+            return 1
+
+    @staticmethod
+    def _telemetry_error_category(exc: BaseException) -> str:
+        try:
+            from databricks_agentbricks.cli import telemetry
+
+            return telemetry._error_category(exc)
+        except BaseException:
+            return "ERROR_CATEGORY_OTHER"
+
+    @staticmethod
+    def _emit_telemetry(
+        ctx: click.Context,
+        started: float,
+        *,
+        exit_code: int,
+        error_category: Optional[str] = None,
+    ) -> None:
+        # Lazy import and a final guard keep telemetry entirely outside command behavior.  In
+        # particular, an SDK import or a malformed test context must never replace the original
+        # command exception.
+        try:
+            from databricks_agentbricks.cli import telemetry
+
+            elapsed_ms = int(max(0.0, time.monotonic() - started) * 1000)
+            telemetry.emit_command(
+                ctx,
+                execution_time_ms=elapsed_ms,
+                exit_code=exit_code,
+                error_category=error_category,
+            )
+        except BaseException:
+            return
 
 
 class AgentBricksContext(click.Context):
