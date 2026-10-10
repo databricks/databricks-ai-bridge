@@ -16,9 +16,11 @@ import os
 import pathlib
 import subprocess
 import sys
+from importlib.metadata import requires
 
 import pytest
 import tomli
+from packaging.requirements import Requirement
 
 # Every top-level command; `<group> --help` proves each module imports and wires up as installed.
 _COMMANDS = (
@@ -105,6 +107,22 @@ def test_init_scaffolds(run_agentbricks, tmp_path: pathlib.Path, extra) -> None:
     assert (dest / "pyproject.toml").is_file()
     assert (dest / "app.yaml").is_file()
     assert (dest / "agent.toml").is_file()
+    with (dest / "pyproject.toml").open("rb") as project_file:
+        dependencies = tomli.load(project_file)["project"]["dependencies"]
+    if "langgraph" in extra:
+        assert "databricks-langchain==0.21.0" in dependencies
+    else:
+        assert not any(Requirement(dep).name == "databricks-langchain" for dep in dependencies)
+
+
+def test_installed_langgraph_extra_pins_fixed_provider() -> None:
+    requirements = [Requirement(dep) for dep in requires("databricks-agentbricks") or []]
+    provider = next(dep for dep in requirements if dep.name == "databricks-langchain")
+    assert str(provider.specifier) == "==0.21.0"
+    assert provider.marker is not None
+    assert provider.marker.evaluate({"extra": "langgraph"})
+    assert not provider.marker.evaluate({"extra": "openai"})
+    assert not provider.marker.evaluate({"extra": ""})
 
 
 def test_existing_init_includes_migration_skill_from_wheel(

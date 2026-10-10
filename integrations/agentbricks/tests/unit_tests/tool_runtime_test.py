@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import importlib
 import logging
 import pathlib
@@ -11,6 +12,38 @@ import types
 from types import SimpleNamespace
 
 import pytest
+
+
+@pytest.mark.parametrize("status", ["success", "error"])
+def test_langchain_provider_strips_tool_text_id_from_next_model_request(status):
+    chat_models = pytest.importorskip("databricks_langchain.chat_models")
+    from langchain_core.messages import ToolMessage
+    from langchain_core.messages.content import create_text_block
+
+    text = "sandbox output" if status == "success" else "ValueError: controlled sandbox error"
+    block = create_text_block(text=text)
+    assert block["id"]
+    content: list[str | dict] = [dict(block)]
+    message = ToolMessage(
+        content=content,
+        name="run_code",
+        tool_call_id="sandbox-call",
+        status=status,
+        artifact={"structured_content": {"output": text}},
+    )
+    original = copy.deepcopy(message)
+    model = chat_models.ChatDatabricks.model_construct(model="test-model")
+
+    request = model._prepare_inputs([message])
+
+    assert request["messages"] == [
+        {
+            "role": "tool",
+            "tool_call_id": "sandbox-call",
+            "content": [{"type": "text", "text": text}],
+        }
+    ]
+    assert message == original
 
 
 def _write_direct_manifest(project: pathlib.Path) -> None:
