@@ -9,9 +9,11 @@ from __future__ import annotations
 import dataclasses
 import datetime as dt
 import pathlib
+import re
 import shlex
 import subprocess
 import sys
+import tempfile
 from collections.abc import Mapping, Sequence
 
 FRAMEWORKS = ("langgraph",)
@@ -32,6 +34,15 @@ def now() -> dt.datetime:
 def project_prefix(run_id: str) -> str:
     """Names every project of a run, so teardown can sweep the Apps a crashed test leaked."""
     return f"t-{run_id}-"
+
+
+# App names are capped at 30 characters: "agent-bricks-t-" + run id + "-" + 6 random characters.
+RUN_ID_PATTERN = re.compile(r"[a-z0-9]{1,8}")
+
+
+def run_output_dir(run_id: str) -> pathlib.Path:
+    """Where a run writes its logs, projects and ``apps.jsonl``; the sweep finds it by the id alone."""
+    return pathlib.Path(tempfile.gettempdir()) / f"agentbricks-e2e-{run_id}"
 
 
 def scratch_schema_prefix(run_id: str) -> str:

@@ -10,12 +10,11 @@ import dataclasses
 import os
 import pathlib
 import re
-import tempfile
 import uuid
 from typing import Any
 
 import pytest
-from common import E2EError, RunConfig, log, run_command
+from common import RUN_ID_PATTERN, E2EError, RunConfig, log, run_command, run_output_dir
 from target_workspace import (
     WORKSPACE_KINDS,
     TargetWorkspace,
@@ -62,6 +61,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="Skip per-App USE CATALOG grants because catalog access is pre-provisioned.",
     )
     group.addoption(
+        "--run-id",
+        default=os.environ.get("AGENTBRICKS_E2E_RUN_ID"),
+        help="Names every resource of the run, so `tests/sweep.py --run-id` can clean up after a "
+        "killed run (AGENTBRICKS_E2E_RUN_ID; default: random). 1-8 lowercase letters or digits.",
+    )
+    group.addoption(
         "--keep-resources",
         action="store_true",
         help="Skip the end-of-run sweep of leaked Apps and temporary schemas.",
@@ -72,6 +77,9 @@ def pytest_configure(config: pytest.Config) -> None:
     sha = config.getoption("bridge_sha")
     if sha is not None and re.fullmatch(r"[0-9a-f]{40}", sha) is None:
         raise pytest.UsageError("--bridge-sha must be a 40-character lowercase Git commit SHA.")
+    run_id = config.getoption("run_id")
+    if run_id is not None and RUN_ID_PATTERN.fullmatch(run_id) is None:
+        raise pytest.UsageError("--run-id must be 1-8 lowercase letters or digits.")
 
 
 @pytest.hookimpl(optionalhook=True)
@@ -89,8 +97,8 @@ def base_run_config(config: pytest.Config) -> RunConfig:
     if handoff:
         run_id, output = handoff["run_id"], pathlib.Path(handoff["output"])
     else:
-        run_id = uuid.uuid4().hex[:6]
-        output = pathlib.Path(tempfile.gettempdir()) / f"agentbricks-e2e-{run_id}"
+        run_id = config.getoption("run_id") or uuid.uuid4().hex[:6]
+        output = run_output_dir(run_id)
     option = config.getoption
     run = RunConfig(
         run_id=run_id,

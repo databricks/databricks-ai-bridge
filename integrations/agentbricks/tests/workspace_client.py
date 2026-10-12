@@ -19,7 +19,7 @@ from typing import Any, cast
 from common import TOOL_RESOURCE_PREFIX, E2EError, log, now
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import DatabricksError, NotFound
-from databricks.sdk.service.catalog import SecurableType, VolumeType
+from databricks.sdk.service.catalog import PermissionsChange, Privilege, SecurableType, VolumeType
 from databricks.sdk.service.sql import ExecuteStatementRequestOnWaitTimeout, State, StatementState
 
 GrantTuple = tuple[str, str, str, str]
@@ -90,6 +90,8 @@ class Workspace:
         self._app_auth_checked = False
         self._warehouse_started = False
         self._user_name: str | None = None
+        # App name -> (catalog, principal) of each USE CATALOG this suite granted, for cleanup.
+        self._catalog_grants: dict[str, tuple[str, str]] = {}
 
     # App auth: Databricks Apps /api routes need OAuth, so a PAT is rejected.
 
@@ -317,6 +319,18 @@ class Workspace:
             "effective_privileges": effective,
         }
 
+    def revoke_catalog_grant(self, app_name: str) -> None:
+        """Revoke the USE CATALOG ``grant_transitive`` gave the App's principal, if it gave one."""
+        if app_name not in self._catalog_grants:
+            return
+        catalog, principal = self._catalog_grants[app_name]
+        self.client.grants.update(
+            SecurableType.CATALOG.value,
+            catalog,
+            changes=[PermissionsChange(principal=principal, remove=[Privilege.USE_CATALOG])],
+        )
+        del self._catalog_grants[app_name]
+
     def grant_transitive(self, app_name: str, function: str) -> dict[str, Any]:
         """Grant the App principal EXECUTE on a nested function and confirm it is direct and effective."""
         principal = self._principal(self.app(app_name))
@@ -324,6 +338,9 @@ class Workspace:
         quoted_principal = f"`{principal.replace('`', '``')}`"
         statements = []
         if not self.preprovisioned_app_catalog_access:
+            # Recorded first so a partial failure is still revoked. The schema-level grants go
+            # with the test's schema, but the catalog is shared and outlives the run.
+            self._catalog_grants[app_name] = (catalog, principal)
             statements.append(f"GRANT USE CATALOG ON CATALOG `{catalog}` TO {quoted_principal}")
         statements.extend(
             (
@@ -599,6 +616,7 @@ def cleanup_app(
     if not has_app:
         return failures
 
+    attempt(f"catalog grant {name}", workspace.revoke_catalog_grant, name)
     if runtime_store:
         attempt(f"runtime store {name}", workspace.delete_runtime_store, name)
     app_deleted = attempt(f"app {name}", workspace.delete_app, name)
