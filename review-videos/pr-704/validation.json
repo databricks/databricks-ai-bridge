@@ -1,0 +1,319 @@
+{
+  "pr": "https://github.com/databricks/databricks-ai-bridge/pull/704",
+  "tested_head": "002a85924f32104cecb92a9ba79b9c85228f0870",
+  "profile": "ml-inference-staging",
+  "model": "system.ai.gpt-5-mini",
+  "capture": "Actual Chromium browser recording at 1600x1120 and 25 fps, with a separate annotation bar; no fabricated UI states. The full reel concatenates the three uncut scenario recordings.",
+  "scope": "Local HTTP workers, real gateway model, managed Session Store, in-memory Runtime Store, harmless local marker tool, same browser page across worker restart.",
+  "limitations": [
+    "Not a deployed Databricks App test",
+    "Not browser-reload discovery",
+    "Not distributed-worker failover"
+  ],
+  "selected_assertions_passed": 26,
+  "selected_sessions_deleted": 5,
+  "total_sessions_deleted_including_superseded_capture": 6,
+  "store_metadata_unchanged": true,
+  "clips": [
+    {
+      "clip": "before-checkpoint-fix",
+      "source_verification": {
+        "agent/agent.py": {
+          "source_ref": "c2046018",
+          "sha256": "1250d4cd71a1b782f01ed02cad8b3427e7f1eddef624b9b3f9f7c93ab0e4e808",
+          "matches": true
+        },
+        "runtime/adapter.py": {
+          "source_ref": "c2046018",
+          "sha256": "05ac47bf5b1b44cbddc771bd5efb7ecec9563ddf4c2008f2e1982b3fe5a2f4df",
+          "matches": true
+        },
+        "runtime/ui.py": {
+          "source_ref": "c2046018",
+          "sha256": "e00fd77f57ec74aec16b859468b44d8442ab14d1e986fe97c5d307191eb77315",
+          "matches": true
+        },
+        "ui/app.js": {
+          "source_ref": "c2046018",
+          "sha256": "c92d47250ed8948772b762cd38b8c7fe476bb06cc12b4d452978629a1b9b7c06",
+          "matches": true
+        },
+        "ui/index.html": {
+          "source_ref": "c2046018",
+          "sha256": "38e3996df973930b1fea1bba5f873125ed781f5e7e4e393986a9b3a4d9b5e12c",
+          "matches": true
+        }
+      },
+      "assertions_passed": 5,
+      "exact_sessions_deleted": 1,
+      "store_metadata_unchanged": true,
+      "steps": [
+        {
+          "seconds_from_page_creation": 0.29,
+          "caption": "Live browser + real model + managed Session Store. The tool only writes a local test marker."
+        },
+        {
+          "seconds_from_page_creation": 4.38,
+          "caption": "1. Request a tool action that requires human approval."
+        },
+        {
+          "seconds_from_page_creation": 7.48,
+          "caption": "The live model is running; the tool will wait for approval."
+        },
+        {
+          "seconds_from_page_creation": 10.9,
+          "caption": "2. Approval is pending. The tool has executed 0 times."
+        },
+        {
+          "seconds_from_page_creation": 15.07,
+          "caption": "3. Restart the worker while keeping this browser page open."
+        },
+        {
+          "seconds_from_page_creation": 22.72,
+          "caption": "4. The worker restarted. Click Approve on the existing prompt."
+        },
+        {
+          "seconds_from_page_creation": 25.88,
+          "caption": "FAILED: approval cannot resume. Server log: 'No paused run for this session.' Tool count: 0."
+        }
+      ]
+    },
+    {
+      "clip": "before-ui-guard",
+      "source_verification": {
+        "agent/agent.py": {
+          "source_ref": "002a85924f32104cecb92a9ba79b9c85228f0870",
+          "sha256": "2a6acc5cbdc63255ffaf86ed5cad5a2153fedad01df5d489bc45815ed5c6d724",
+          "matches": true
+        },
+        "agent/checkpoints.py": {
+          "source_ref": "002a85924f32104cecb92a9ba79b9c85228f0870",
+          "sha256": "9ffd0ad22f6373edb01150833c6d15eab10bf76f2177dc2e52ba6b0a5e488a5d",
+          "matches": true
+        },
+        "runtime/adapter.py": {
+          "source_ref": "002a85924f32104cecb92a9ba79b9c85228f0870",
+          "sha256": "be7136e6c11c968bcaebbecb818d2788a5d2735f08e19c29e647ea73d85b021c",
+          "matches": true
+        },
+        "runtime/ui.py": {
+          "source_ref": "002a85924f32104cecb92a9ba79b9c85228f0870",
+          "sha256": "a1fa038e14b37b5fad9daadf0c205937f58bcfed01ae23d8b3b738d141401690",
+          "matches": true
+        },
+        "ui/app.js": {
+          "source_ref": "4f6e3c41",
+          "sha256": "0670ae6d2112b0beb0708fcfdac857f6e5f23e5574593ebbbc8397931b168afc",
+          "matches": true
+        },
+        "ui/index.html": {
+          "source_ref": "002a85924f32104cecb92a9ba79b9c85228f0870",
+          "sha256": "38e3996df973930b1fea1bba5f873125ed781f5e7e4e393986a9b3a4d9b5e12c",
+          "matches": true
+        }
+      },
+      "assertions_passed": 8,
+      "exact_sessions_deleted": 2,
+      "store_metadata_unchanged": true,
+      "steps": [
+        {
+          "seconds_from_page_creation": 0.14,
+          "caption": "Live browser + real model + managed Session Store. The tool only writes a local test marker."
+        },
+        {
+          "seconds_from_page_creation": 4.16,
+          "caption": "1. Request a tool action that requires human approval."
+        },
+        {
+          "seconds_from_page_creation": 7.22,
+          "caption": "The live model is running; the tool will wait for approval."
+        },
+        {
+          "seconds_from_page_creation": 14.12,
+          "caption": "2. Approval is pending. The tool has executed 0 times."
+        },
+        {
+          "seconds_from_page_creation": 18.44,
+          "caption": "3. Type an ordinary follow-up while approval is still pending; press Enter."
+        },
+        {
+          "seconds_from_page_creation": 25.48,
+          "caption": "BUG: the follow-up fails and Approve/Reject controls disappear. The backend is still waiting."
+        }
+      ]
+    },
+    {
+      "clip": "after-002a8592",
+      "source_verification": {
+        "agent/agent.py": {
+          "source_ref": "002a85924f32104cecb92a9ba79b9c85228f0870",
+          "sha256": "2a6acc5cbdc63255ffaf86ed5cad5a2153fedad01df5d489bc45815ed5c6d724",
+          "matches": true
+        },
+        "agent/checkpoints.py": {
+          "source_ref": "002a85924f32104cecb92a9ba79b9c85228f0870",
+          "sha256": "9ffd0ad22f6373edb01150833c6d15eab10bf76f2177dc2e52ba6b0a5e488a5d",
+          "matches": true
+        },
+        "runtime/adapter.py": {
+          "source_ref": "002a85924f32104cecb92a9ba79b9c85228f0870",
+          "sha256": "be7136e6c11c968bcaebbecb818d2788a5d2735f08e19c29e647ea73d85b021c",
+          "matches": true
+        },
+        "runtime/ui.py": {
+          "source_ref": "002a85924f32104cecb92a9ba79b9c85228f0870",
+          "sha256": "a1fa038e14b37b5fad9daadf0c205937f58bcfed01ae23d8b3b738d141401690",
+          "matches": true
+        },
+        "ui/app.js": {
+          "source_ref": "002a85924f32104cecb92a9ba79b9c85228f0870",
+          "sha256": "97b4d3bd40b9f0480523c5e4dcbc95dcfee573427b62cf64c48c146c0c4ec191",
+          "matches": true
+        },
+        "ui/index.html": {
+          "source_ref": "002a85924f32104cecb92a9ba79b9c85228f0870",
+          "sha256": "38e3996df973930b1fea1bba5f873125ed781f5e7e4e393986a9b3a4d9b5e12c",
+          "matches": true
+        }
+      },
+      "assertions_passed": 13,
+      "exact_sessions_deleted": 2,
+      "store_metadata_unchanged": true,
+      "steps": [
+        {
+          "seconds_from_page_creation": 0.13,
+          "caption": "Live browser + real model + managed Session Store. The tool only writes a local test marker."
+        },
+        {
+          "seconds_from_page_creation": 4.15,
+          "caption": "1. Request a tool action that requires human approval."
+        },
+        {
+          "seconds_from_page_creation": 7.2,
+          "caption": "The live model is running; the tool will wait for approval."
+        },
+        {
+          "seconds_from_page_creation": 11.75,
+          "caption": "2. Approval is pending. The tool has executed 0 times."
+        },
+        {
+          "seconds_from_page_creation": 15.85,
+          "caption": "3. Restart the worker. The same browser page remains open."
+        },
+        {
+          "seconds_from_page_creation": 23.35,
+          "caption": "4. Type an ordinary follow-up. Send is disabled; press Enter to test the guard."
+        },
+        {
+          "seconds_from_page_creation": 28.6,
+          "caption": "Draft and approval controls are retained. No extra invocation or checkpoint write occurred."
+        },
+        {
+          "seconds_from_page_creation": 34.68,
+          "caption": "5. Click Approve. Resume the saved approval after the worker restart."
+        },
+        {
+          "seconds_from_page_creation": 44.55,
+          "caption": "SUCCESS: tool executed once. The answer completed, the draft remains, and Send is enabled."
+        }
+      ]
+    }
+  ],
+  "media": {
+    "after-002a8592.mp4": {
+      "sha256": "6b37b1e6a2b694813c56fff15fae8fe7b4ff805385055cbe4f4af9f73d7744e5",
+      "media": {
+        "programs": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "width": 1600,
+            "height": 1120,
+            "pix_fmt": "yuv420p",
+            "r_frame_rate": "25/1"
+          }
+        ],
+        "format": {
+          "duration": "55.480000",
+          "size": "2316308"
+        }
+      }
+    },
+    "preview.gif": {
+      "sha256": "98a2979932c6c4efd049e390869fac69ea13f4e980ef2150388da3bb643158d4",
+      "media": {
+        "programs": [],
+        "streams": [
+          {
+            "codec_name": "gif",
+            "width": 1000,
+            "height": 700,
+            "pix_fmt": "bgra",
+            "r_frame_rate": "8/1"
+          }
+        ],
+        "format": {
+          "duration": "37.010000",
+          "size": "2062282"
+        }
+      }
+    },
+    "before-checkpoint-fix.mp4": {
+      "sha256": "d471b0f5403d52319700bdf4bca908c2ebe92345d09b2a0b4b2c2e765357e161",
+      "media": {
+        "programs": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "width": 1600,
+            "height": 1120,
+            "pix_fmt": "yuv420p",
+            "r_frame_rate": "25/1"
+          }
+        ],
+        "format": {
+          "duration": "37.640000",
+          "size": "1415522"
+        }
+      }
+    },
+    "before-after.mp4": {
+      "sha256": "aee07a68d32a00bebd672b4869f2bc012db1eb58a40a07597f1871b61c09ae47",
+      "media": {
+        "programs": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "width": 1600,
+            "height": 1120,
+            "pix_fmt": "yuv420p",
+            "r_frame_rate": "25/1"
+          }
+        ],
+        "format": {
+          "duration": "129.480000",
+          "size": "5292875"
+        }
+      }
+    },
+    "before-ui-guard.mp4": {
+      "sha256": "8a9f814db2ea174821bb50ac2c9f70cb435ffabcd167acec0cd664bdc076c3e2",
+      "media": {
+        "programs": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "width": 1600,
+            "height": 1120,
+            "pix_fmt": "yuv420p",
+            "r_frame_rate": "25/1"
+          }
+        ],
+        "format": {
+          "duration": "36.360000",
+          "size": "1562165"
+        }
+      }
+    }
+  }
+}
