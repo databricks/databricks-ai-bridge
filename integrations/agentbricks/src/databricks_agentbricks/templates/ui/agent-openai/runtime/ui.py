@@ -306,9 +306,8 @@ async def _local_history(session_id: str) -> dict[str, Any]:
     """Reconstruct the transcript from the in-process session (no managed Session Store).
 
     Reads the Responses items the agent stored in its ``SQLiteSession`` for this browser session and
-    shapes each into a ``{item_id, data}`` entry the UI renders. There are no durable interrupts here:
-    a paused human-in-the-loop run is held in-process by ``agent.py`` and is not part of the session
-    transcript, so ``interrupts`` is always empty for the unmanaged path.
+    shapes each into a ``{item_id, data}`` entry the UI renders. Pending approval state belongs to the
+    example's checkpoint session, not the transcript, so this route returns no ``interrupts``.
     """
     from databricks_agentkit.openai.sessions import session_store
 

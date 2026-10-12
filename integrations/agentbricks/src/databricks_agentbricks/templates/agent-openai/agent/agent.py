@@ -1,9 +1,10 @@
 import asyncio
 import logging
 import os
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from typing import Any
+from uuid import uuid4
 
 from agents import Agent, Runner, RunResultStreaming, RunState
 from agents.mcp import MCPServerManager
@@ -38,8 +39,8 @@ MODEL = "system.ai.claude-sonnet-4-5"
 # how the runtime knows which pending calls to surface. Empty it to disable approval gating.
 REQUIRE_APPROVAL = {"send_message"}
 
-# OpenAI Sessions persist transcript history, not a paused RunState. Keep pending approvals local.
-_pending_runs: dict[str, RunState] = {}
+# Native callers keep pauses local; the example adapter supplies Session Store checkpoints.
+_pending_runs: dict[str, dict[str, Any]] = {}
 
 
 def configure() -> None:
@@ -105,16 +106,22 @@ def create_agent(
     )
 
 
-def resume_agent(session_id: str, resume: dict[str, Any]) -> RunState:
+def resume_agent(state: RunState, resume: dict[str, Any]) -> RunState:
     """Apply human decisions to a paused run and return the native RunState."""
-    state = _pending_runs.pop(session_id, None)
-    if state is None:
-        raise RuntimeError(
-            "No paused run for this session. HITL pauses are in-process only, so a restart or a "
-            "different replica loses them; retry the turn."
-        )
-    decisions = resume.get("decisions") or []
-    for decision, item in zip(decisions, state.get_interruptions(), strict=False):
+    decisions = resume.get("decisions")
+    interruptions = state.get_interruptions()
+    if not isinstance(decisions, list) or not decisions or len(decisions) != len(interruptions):
+        raise ValueError("Provide exactly one decision for each pending tool call.")
+    # Validate the whole batch before applying even its first decision.
+    for decision, item in zip(decisions, interruptions, strict=True):
+        if (
+            not isinstance(decision, dict)
+            or decision.get("type") not in ("approve", "reject")
+            or ("message" in decision and not isinstance(decision["message"], str))
+            or decision.get("call_id") != item.call_id
+        ):
+            raise ValueError("Invalid approval decision or mismatched pending tool call.")
+    for decision, item in zip(decisions, interruptions, strict=True):
         if decision.get("type") == "approve":
             state.approve(item)
         else:
@@ -130,6 +137,10 @@ async def run_agent(
     actor: str | None = None,
     model: str | None = None,
     workspace_client_for: Callable[[str], WorkspaceClient] | None = None,
+    resume: dict[str, Any] | None = None,
+    load_state: Callable[[], Awaitable[Any]] | None = None,
+    save_state: Callable[[Any], Awaitable[None]] | None = None,
+    invocation_id: str | None = None,
 ) -> AsyncIterator[RunResultStreaming]:
     """Run the agent and expose its native streaming result.
 
@@ -137,6 +148,33 @@ async def run_agent(
     so it can be called from another server, a notebook, or a test harness.
     """
     actor = actor or session_id
+    invocation_id = invocation_id or str(uuid4())
+    snapshot = await load_state() if load_state else _pending_runs.get(session_id)
+    if snapshot is not None and snapshot["actor"] != actor:
+        raise ValueError("The pending approval belongs to a different actor.")
+    if snapshot is not None and snapshot["status"] != "pending":
+        if resume is not None or snapshot["invocation_id"] == invocation_id:
+            raise RuntimeError(
+                "This approval was already accepted and cannot be replayed. "
+                "Check its invocation status and tool side effects before starting a new turn."
+            )
+        snapshot = None
+    if resume is not None:
+        if not isinstance(resume, dict):
+            raise ValueError("resume must be an object")
+        if snapshot is None:
+            raise RuntimeError("No paused run for this session.")
+    elif snapshot is not None and snapshot.get("invocation_id") != invocation_id:
+        raise ValueError("Resolve the pending approval before starting another turn.")
+    if snapshot is not None:
+        model = snapshot["model"]
+
+    async def persist(value: dict[str, Any]) -> None:
+        if save_state:
+            await save_state(value)
+        else:
+            _pending_runs[session_id] = value
+
     auth_kwargs = {"workspace_client_for": workspace_client_for} if workspace_client_for else {}
     servers = await mcp_servers(build_mcp_servers(), **auth_kwargs)
     async with MCPServerManager(servers) as manager:
@@ -174,20 +212,29 @@ async def run_agent(
             model=model,
             workspace_client_for=workspace_client_for,
         )
-        with start_trace(name="invoke", inputs=agent_input, session_id=session_id) as span:
-            if isinstance(agent_input, RunState):
-                result = Runner.run_streamed(agent, agent_input)
-            else:
-                result = Runner.run_streamed(
-                    agent,
-                    agent_input,
-                    session=session_store(session_id, actor),
+        if snapshot is not None:
+            agent_input = await RunState.from_json(agent, snapshot["run_state"])
+            if resume is not None and snapshot["invocation_id"] != invocation_id:
+                agent_input = resume_agent(agent_input, resume)
+                # Consume before executing. Interrupted continuations must not replay tools.
+                await persist(
+                    {
+                        "status": "consumed",
+                        "actor": actor,
+                        "invocation_id": invocation_id,
+                    }
                 )
+        with start_trace(name="invoke", inputs=agent_input, session_id=session_id) as span:
+            result = Runner.run_streamed(
+                agent,
+                agent_input,
+                session=session_store(session_id, actor),
+            )
 
             try:
                 yield result
             finally:
-                if workspace_client_for is not None and not result.is_complete:
+                if not result.is_complete:
                     result.cancel()
                     with suppress(asyncio.CancelledError, Exception):
                         async for _ in result.stream_events():
@@ -200,6 +247,14 @@ async def run_agent(
                         "Request-user invocations do not support paused approvals.",
                         400,
                     )
-                _pending_runs[session_id] = result.to_state()
+                await persist(
+                    {
+                        "run_state": result.to_state().to_json(),
+                        "model": model or MODEL,
+                        "actor": actor,
+                        "invocation_id": invocation_id,
+                        "status": "pending",
+                    }
+                )
             if span is not None:
                 span.set_outputs({"output": result.final_output})
