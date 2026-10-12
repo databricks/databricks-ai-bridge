@@ -15,7 +15,7 @@ import uuid
 from typing import Any
 
 import pytest
-from common import MatrixError, RunConfig, log, run_command
+from common import E2EError, RunConfig, log, run_command
 from target_workspace import (
     WORKSPACE_KINDS,
     TargetWorkspace,
@@ -29,7 +29,7 @@ _HANDOFF = "agentbricks_run"
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    group = parser.getgroup("agentbricks", "Agent Bricks E2E matrices")
+    group = parser.getgroup("agentbricks", "Agent Bricks E2E suites")
     group.addoption(
         "--workspace",
         choices=WORKSPACE_KINDS,
@@ -138,5 +138,5 @@ def run_config(request: pytest.FixtureRequest) -> RunConfig:
     run_command(["uv", "build", "--wheel", "--out-dir", str(dist)], cwd=PACKAGE_DIR, timeout=600)
     wheels = sorted(dist.glob("*.whl"))
     if not wheels:
-        raise MatrixError("uv build produced no wheel")
+        raise E2EError("uv build produced no wheel")
     return dataclasses.replace(run, wheel=wheels[-1])

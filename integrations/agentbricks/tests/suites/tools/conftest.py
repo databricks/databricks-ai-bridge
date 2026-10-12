@@ -1,4 +1,4 @@
-"""Tools matrix: every test runs once per authoring path, over the tools the target workspace can support.
+"""Tools suite: every test runs once per authoring path, over the tools the target workspace can support.
 
 Each test gets its own temporary UC schema (``ab_e2e_<run_id>_<random>``) holding the function and
 volume its tools use, and deletes it, grants included, in its own teardown. The controller sweeps
@@ -16,7 +16,7 @@ from collections.abc import Iterator
 import pytest
 from common import (
     AUTHORING_PATHS,
-    MatrixError,
+    E2EError,
     RunConfig,
     log,
     now,
@@ -64,7 +64,7 @@ def genie_space(target_workspace: TargetWorkspace) -> str:
     if not space_id:
         pytest.skip("no Genie space; set AGENTBRICKS_E2E_GENIE_SPACE_ID")
     if re.fullmatch(r"[0-9a-f]{32}", space_id) is None:
-        raise MatrixError(f"Genie space id {space_id!r} is not 32 lowercase hex characters.")
+        raise E2EError(f"Genie space id {space_id!r} is not 32 lowercase hex characters.")
     require_workspace(target_workspace, "a Genie space").require_genie_space(space_id)
     return space_id
 

@@ -1,4 +1,4 @@
-"""Databricks SDK helpers for the matrix tests and fixtures: the workspace, which is not under test.
+"""Databricks SDK helpers for the E2E suites and fixtures: the workspace, which is not under test.
 
 Everything here goes through the SDK except ``app_logs``, since the SDK has no Apps log API.
 """
@@ -16,7 +16,7 @@ import time
 from collections.abc import Callable, Collection, Sequence
 from typing import Any, cast
 
-from common import TOOL_RESOURCE_PREFIX, MatrixError, log, now
+from common import TOOL_RESOURCE_PREFIX, E2EError, log, now
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import DatabricksError, NotFound
 from databricks.sdk.service.catalog import SecurableType, VolumeType
@@ -109,7 +109,7 @@ class Workspace:
         if self._app_auth_checked:
             return
         if self._app_client().config.auth_type == "pat":
-            raise MatrixError(
+            raise E2EError(
                 f"{self._app_auth_label()} uses a PAT. "
                 "Databricks Apps /api routes require OAuth; run `databricks auth login` "
                 "for a profile on the same workspace."
@@ -121,7 +121,7 @@ class Workspace:
         # Resolved per call so OAuth tokens refresh during a long run.
         authorization = self._app_client().config.authenticate().get("Authorization")
         if not authorization:
-            raise MatrixError(f"Could not resolve credentials from {self._app_auth_label()}.")
+            raise E2EError(f"Could not resolve credentials from {self._app_auth_label()}.")
         return {"Authorization": authorization}
 
     # Existing resources the suite depends on
@@ -130,13 +130,13 @@ class Workspace:
         try:
             self.client.catalogs.get(name)
         except DatabricksError as exc:
-            raise MatrixError(f"Catalog {name!r} is not accessible: {exc}") from exc
+            raise E2EError(f"Catalog {name!r} is not accessible: {exc}") from exc
 
     def require_genie_space(self, space_id: str) -> None:
         try:
             self.client.genie.get_space(space_id)
         except DatabricksError as exc:
-            raise MatrixError(f"Genie space {space_id!r} is not accessible: {exc}") from exc
+            raise E2EError(f"Genie space {space_id!r} is not accessible: {exc}") from exc
 
     # SQL, warehouse, files
 
@@ -146,7 +146,7 @@ class Workspace:
         else:
             warehouses = list(self.client.warehouses.list())
             if not warehouses:
-                raise MatrixError("The workspace has no SQL warehouse available for UC setup.")
+                raise E2EError("The workspace has no SQL warehouse available for UC setup.")
             running = next(
                 (item for item in warehouses if item.state == State.RUNNING), warehouses[0]
             )
@@ -178,14 +178,14 @@ class Workspace:
             StatementState.RUNNING,
         }:
             if not statement_id:
-                raise MatrixError(f"SQL response has no statement_id: {response}")
+                raise E2EError(f"SQL response has no statement_id: {response}")
             if timeout <= 0:
-                raise MatrixError(f"SQL statement timed out: {statement_id}")
+                raise E2EError(f"SQL statement timed out: {statement_id}")
             time.sleep(10)
             timeout -= 10
             response = self.client.statement_execution.get_statement(statement_id)
         if not response.status or response.status.state != StatementState.SUCCEEDED:
-            raise MatrixError(f"SQL failed: {response.as_dict()}")
+            raise E2EError(f"SQL failed: {response.as_dict()}")
 
     def upload(self, path: str, data: bytes) -> None:
         self.client.files.upload(path, io.BytesIO(data), overwrite=True)
@@ -234,8 +234,8 @@ class Workspace:
         except NotFound:
             return
         except DatabricksError as exc:
-            raise MatrixError(f"Could not verify App {name} is absent: {exc}") from exc
-        raise MatrixError(f"App {name} already exists; refusing to deploy over it.")
+            raise E2EError(f"Could not verify App {name} is absent: {exc}") from exc
+        raise E2EError(f"App {name} already exists; refusing to deploy over it.")
 
     def wait_for_app(self, name: str) -> dict[str, Any]:
         """The App once it is ACTIVE with a URL."""
@@ -252,7 +252,7 @@ class Workspace:
                 log(f"tick {now():%H:%M} | app-{name} | {state or 'UNKNOWN'}")
                 next_tick += 60
             time.sleep(15)
-        raise MatrixError(f"App {name} did not become ACTIVE.")
+        raise E2EError(f"App {name} did not become ACTIVE.")
 
     def app_logs(self, name: str, log_path: pathlib.Path) -> pathlib.Path | None:
         """Write the App's recent logs to ``log_path``; the SDK has no Apps log API."""
@@ -285,7 +285,7 @@ class Workspace:
     def experiment_id(self, name: str) -> str:
         experiment = self.client.experiments.get_by_name(name).experiment
         if experiment is None or not experiment.experiment_id:
-            raise MatrixError(f"Experiment {name!r} does not exist.")
+            raise E2EError(f"Experiment {name!r} does not exist.")
         return str(experiment.experiment_id)
 
     def non_tool_resources(self, app_name: str) -> list[dict[str, Any]]:
@@ -297,12 +297,12 @@ class Workspace:
         principal = self._principal(app)
         direct = direct_privileges(self.client, SecurableType.FUNCTION, function, principal)
         if "EXECUTE" in direct:
-            raise MatrixError(
+            raise E2EError(
                 f"Agent Bricks granted the transitive function directly: {function} -> {direct}"
             )
         effective = effective_privileges(self.client, SecurableType.FUNCTION, function, principal)
         if "EXECUTE" in effective:
-            raise MatrixError(
+            raise E2EError(
                 "The transitive function was already effective before the manual grant: "
                 f"{function} -> {effective}"
             )
@@ -310,9 +310,7 @@ class Workspace:
             resource.get("uc_securable", {}).get("securable_full_name") == function
             for resource in tool_resources(app)
         ):
-            raise MatrixError(
-                "The transitive function appeared in Agent Bricks-owned Apps resources."
-            )
+            raise E2EError("The transitive function appeared in Agent Bricks-owned Apps resources.")
         return {
             "service_principal_client_id": principal,
             "direct_privileges": direct,
@@ -339,12 +337,12 @@ class Workspace:
         direct = direct_privileges(self.client, SecurableType.FUNCTION, function, principal)
         effective = effective_privileges(self.client, SecurableType.FUNCTION, function, principal)
         if "EXECUTE" not in effective:
-            raise MatrixError(
+            raise E2EError(
                 "Manual EXECUTE grant did not become effective for the transitive function: "
                 f"{function} -> {effective}"
             )
         if "EXECUTE" not in direct:
-            raise MatrixError(
+            raise E2EError(
                 "Manual EXECUTE grant was not persisted directly for the transitive function: "
                 f"{function} -> {direct}"
             )
@@ -358,7 +356,7 @@ class Workspace:
     def _principal(app: dict[str, Any]) -> str:
         principal = app.get("service_principal_client_id")
         if not principal:
-            raise MatrixError(f"App response has no service_principal_client_id: {app}")
+            raise E2EError(f"App response has no service_principal_client_id: {app}")
         return str(principal)
 
     # Cleanup
@@ -377,12 +375,10 @@ class Workspace:
                 log(f"tick {now():%H:%M} | delete-{name} | absent")
                 return
             except DatabricksError as exc:
-                raise MatrixError(f"Could not verify deletion of App {name!r}: {exc}") from exc
+                raise E2EError(f"Could not verify deletion of App {name!r}: {exc}") from exc
             elapsed = time.monotonic() - started
             if elapsed >= timeout:
-                raise MatrixError(
-                    f"App {name!r} still existed {timeout:.0f}s after delete returned."
-                )
+                raise E2EError(f"App {name!r} still existed {timeout:.0f}s after delete returned.")
             if elapsed >= next_tick:
                 log(f"tick {now():%H:%M} | delete-{name} | deleting")
                 next_tick += 60
@@ -484,7 +480,7 @@ class Workspace:
         if self._user_name is None:
             name = self.client.current_user.me().user_name
             if not name:
-                raise MatrixError("The current user has no user_name.")
+                raise E2EError("The current user has no user_name.")
             self._user_name = name
         return self._user_name
 
@@ -591,7 +587,7 @@ def cleanup_app(
         assert delete_store is not None
         result = delete_store(kind, store)
         if result.returncode != 0:
-            raise MatrixError((result.stderr or result.stdout).strip())
+            raise E2EError((result.stderr or result.stdout).strip())
 
     # Read before any delete: the principal and branch come from the App and its Runtime Store.
     known = (identity or AppIdentity()).merged(
@@ -624,7 +620,7 @@ def cleanup_app(
 def _split_resources(app: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     resources = app.get("resources") or []
     if not isinstance(resources, list):
-        raise MatrixError(f"App resources are not a list: {resources}")
+        raise E2EError(f"App resources are not a list: {resources}")
 
     def name(resource: dict[str, Any]) -> str:
         return str(resource.get("name", ""))

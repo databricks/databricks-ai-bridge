@@ -1,6 +1,6 @@
-"""pytest plugin: the workspace requirements shared by every matrix, and the end-of-run cleanup.
+"""pytest plugin: the workspace requirements shared by every suite, and the end-of-run cleanup.
 
-``catalog`` is the one fixture here; a matrix that needs more (the tools matrix's UC schema) builds
+``catalog`` is the one fixture here; a suite that needs more (the tools suite's UC schema) builds
 it from ``require_workspace`` in its own conftest, and tears it down in the test's own teardown.
 
 Cleanup of leftovers happens once, in ``pytest_sessionfinish`` on the controller (the only process

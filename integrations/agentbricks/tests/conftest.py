@@ -1,9 +1,9 @@
-"""Fixtures shared by every matrix under ``matrices/``.
+"""Fixtures shared by every suite under ``suites/``.
 
 ``run_context`` (options, target workspace, run identity) and ``provisioning`` (the catalog
-requirement and the end-of-run cleanup) are plugins. One command runs a matrix, from ``integrations/agentbricks``:
+requirement and the end-of-run cleanup) are plugins. One command runs a suite, from ``integrations/agentbricks``:
 
-    uv run pytest tests/matrices/tools -n 6 --dist loadgroup \
+    uv run pytest tests/suites/tools -n 6 --dist loadgroup \
         --databricks-profile <profile>
 
 ``--workspace fake`` runs against no workspace; whatever needs one is skipped.

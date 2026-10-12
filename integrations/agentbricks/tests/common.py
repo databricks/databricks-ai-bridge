@@ -1,4 +1,4 @@
-"""Constants, ``RunConfig`` and logging/subprocess helpers shared by the matrix tests.
+"""Constants, ``RunConfig`` and logging/subprocess helpers shared by the E2E suites.
 
 ``run_context.py`` builds one ``RunConfig`` per pytest run; fixtures and tests read it through the
 ``run_config`` fixture.
@@ -21,7 +21,7 @@ TOOL_RESOURCE_PREFIX = "agentbricks-tool-"
 APP_PREFIX = "agent-bricks-"
 
 
-class MatrixError(RuntimeError):
+class E2EError(RuntimeError):
     """A reproducible setup or execution failure."""
 
 
@@ -69,7 +69,7 @@ def run_command(
     env: Mapping[str, str] | None = None,
     timeout: float = 300,
 ) -> str:
-    """Run a command, echo its output, and return stdout; a non-zero exit is a ``MatrixError``."""
+    """Run a command, echo its output, and return stdout; a non-zero exit is a ``E2EError``."""
     log_command(argv, cwd)
     result = subprocess.run(
         list(argv),
@@ -84,7 +84,7 @@ def run_command(
         if text.strip():
             log(text)
     if result.returncode != 0:
-        raise MatrixError(
+        raise E2EError(
             f"Command failed ({result.returncode}): {shlex.join(argv)}\n"
             f"{result.stderr or result.stdout}"
         )

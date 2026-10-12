@@ -2,7 +2,7 @@
 
 Every call here is a real ``agentbricks`` subprocess, so a regression in the CLI fails the test
 that makes it. The only non-subprocess part is ``Agent.invoke``, which POSTs to a running agent.
-Nothing in this module knows about any particular matrix; tests say what to bind. It records the
+Nothing in this module knows about any particular suite; tests say what to bind. It records the
 projects it creates in ``projects`` but deletes nothing: the ``agentbricks_cli`` fixture does.
 """
 
@@ -34,7 +34,7 @@ from common import (
     APP_PREFIX,
     E2E_MODEL,
     FRAMEWORKS,
-    MatrixError,
+    E2EError,
     RunConfig,
     last_lines,
     last_nonempty_line,
@@ -125,7 +125,7 @@ class Agent:
                 log(f"attempt {attempt}/3 | {label} | {exc}")
                 if attempt < 3:
                     time.sleep(15)
-        raise MatrixError(f"{label} failed after 3 attempts: {last}")
+        raise E2EError(f"{label} failed after 3 attempts: {last}")
 
     def warm_up(self, deadline_seconds: float = 180.0) -> None:
         """Invoke until the App answers once. A new App's session store can drop the first calls."""
@@ -134,7 +134,7 @@ class Agent:
             try:
                 self.invoke("Reply with the single word OK.", label="warm-up")
                 return
-            except MatrixError:
+            except E2EError:
                 if time.monotonic() - started > deadline_seconds:
                     raise
 
@@ -178,7 +178,7 @@ class AgentbricksCli:
         if result.stderr.strip():
             log(result.stderr)
         if check and result.returncode != 0:
-            raise MatrixError(
+            raise E2EError(
                 f"Command failed ({result.returncode}): {shlex.join(argv)}\n"
                 f"{result.stderr or result.stdout}"
             )
@@ -217,14 +217,14 @@ class AgentbricksCli:
                 elapsed = time.monotonic() - started
                 if elapsed >= timeout:
                     terminate_process_group(process, grace=0)
-                    raise MatrixError(f"{label} timed out after {timeout:.0f}s; log: {log_path}")
+                    raise E2EError(f"{label} timed out after {timeout:.0f}s; log: {log_path}")
                 if elapsed >= next_tick:
                     log(f"tick {now():%H:%M} | {label} | running | {last_nonempty_line(log_path)}")
                     next_tick += 60.0
                 time.sleep(2)
         log(log_path.read_text(encoding="utf-8", errors="replace"))
         if process.returncode != 0:
-            raise MatrixError(f"{label} failed ({process.returncode}); log: {log_path}")
+            raise E2EError(f"{label} failed ({process.returncode}); log: {log_path}")
         log(f"tick {now():%H:%M} | {label} | success")
 
     def _next(self) -> int:
@@ -424,7 +424,7 @@ class AgentbricksCli:
         """`agentbricks deploy` the project; deploying again updates the same App."""
         workspace = self.target_workspace.client
         if workspace is None:
-            raise MatrixError(
+            raise E2EError(
                 f"deploy needs a live workspace; got --workspace {self.target_workspace.name}"
             )
         workspace.check_app_auth()
@@ -447,7 +447,7 @@ class AgentbricksCli:
             self._record_identity(project, name, workspace)
         url = str(deployed.get("url") or "").rstrip("/")
         if not url:
-            raise MatrixError(f"App {name} has no URL: {deployed}")
+            raise E2EError(f"App {name} has no URL: {deployed}")
         agent = Agent(
             url,
             lambda: workspace.app_headers,
@@ -473,9 +473,7 @@ class AgentbricksCli:
         next_tick = 60.0
         while True:
             if process.poll() is not None:
-                raise MatrixError(
-                    f"{label} exited {process.returncode}: {last_lines(log_path, 30)}"
-                )
+                raise E2EError(f"{label} exited {process.returncode}: {last_lines(log_path, 30)}")
             try:
                 with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5):
                     return
@@ -486,7 +484,7 @@ class AgentbricksCli:
                 pass
             elapsed = time.monotonic() - started
             if elapsed > 1200:
-                raise MatrixError(f"{label} did not become reachable: {last_lines(log_path, 30)}")
+                raise E2EError(f"{label} did not become reachable: {last_lines(log_path, 30)}")
             if elapsed >= next_tick:
                 log(f"tick {now():%H:%M} | {label} | starting | {last_nonempty_line(log_path)}")
                 next_tick += 60
@@ -512,7 +510,7 @@ def _agentbricks_bin() -> str:
     sibling = pathlib.Path(sys.executable).parent / "agentbricks"
     found = str(sibling) if sibling.exists() else shutil.which("agentbricks")
     if found is None:
-        raise MatrixError("The agentbricks CLI is not installed in the test environment.")
+        raise E2EError("The agentbricks CLI is not installed in the test environment.")
     return found
 
 
@@ -553,7 +551,7 @@ def _monitored(
                 elapsed = time.monotonic() - started
                 log(f"tick {now():%H:%M} | {label} | running | {elapsed:.0f}s")
                 if elapsed >= timeout:
-                    raise MatrixError(f"{label} timed out after {timeout:.0f}s") from None
+                    raise E2EError(f"{label} timed out after {timeout:.0f}s") from None
 
 
 def _http_json(url: str, body: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
@@ -568,11 +566,11 @@ def _http_json(url: str, body: dict[str, Any], headers: dict[str, str]) -> dict[
             payload = response.read().decode()
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode(errors="replace")
-        raise MatrixError(f"HTTP {exc.code} from {url}: {detail}") from exc
+        raise E2EError(f"HTTP {exc.code} from {url}: {detail}") from exc
     try:
         value = json.loads(payload)
     except json.JSONDecodeError as exc:
-        raise MatrixError(f"Invalid JSON from {url}: {payload[:2000]}") from exc
+        raise E2EError(f"Invalid JSON from {url}: {payload[:2000]}") from exc
     if not isinstance(value, dict):
-        raise MatrixError(f"Expected object response from {url}, got {type(value).__name__}")
+        raise E2EError(f"Expected object response from {url}, got {type(value).__name__}")
     return value
