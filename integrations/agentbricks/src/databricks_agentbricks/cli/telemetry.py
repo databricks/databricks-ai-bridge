@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import configparser
 import json
+import math
 import os
 import platform
 import threading
@@ -31,22 +32,6 @@ _TELEMETRY_PATH = "/telemetry-ext"
 # the CLI process open after this bound expires.
 _MAX_FOREGROUND_WAIT_S = 0.25
 _CHOICE_VALUE_PREFIX = "AGENTBRICKS_CLI_"
-_MAX_CHOICE_VALUE_LENGTH = 64
-
-# Keep integer telemetry explicitly bounded even when the Click range later changes. This is a
-# privacy review boundary, rather than an inferred copy of the command's type declaration.
-_SAFE_BOUNDED_INT_RANGES: dict[str, tuple[int, int]] = {
-    "agentbricks deploy.instance_count": (1, 5),
-}
-
-# Boolean values are also opt-in. Keep this literal allowlist limited to the reviewed, low-risk
-# init flags; future flags contribute only their static name until explicitly reviewed.
-_SAFE_BOOL_PARAMETER_NAMES = frozenset(
-    {
-        "agentbricks init.existing",
-        "agentbricks init.disable_chat_app",
-    }
-)
 
 _MAX_PARAMETER_ENTRIES = 64
 _MAX_CONTEXT_DEPTH = 32
@@ -73,41 +58,35 @@ class _ParameterEntry:
     choice_value: str | None = None
     bool_value: bool | None = None
     int_value: int | None = None
+    double_value: float | None = None
 
     @classmethod
-    def from_option(cls, name: str, option: click.Option, value: object) -> _ParameterEntry | None:
-        if option.hidden or option.deprecated:
-            return None
-        if option.is_bool_flag:
-            if name in _SAFE_BOOL_PARAMETER_NAMES and type(value) is bool:
-                return cls(name=name, bool_value=value)
-            return cls(name=name)
+    def from_option(cls, name: str, option: click.Option, value: object) -> _ParameterEntry:
         if isinstance(option.type, click.Choice):
-            if (
-                not option.multiple
-                and type(value) is str
-                and value in option.type.choices
-                and 0 < len(value) <= _MAX_CHOICE_VALUE_LENGTH
-                and value.isascii()
-                and all(character.isalnum() or character in "-_" for character in value)
-            ):
-                label = value.upper().replace("-", "_")
+            if value in option.type.choices:
+                label = option.type.normalize_choice(value, None).upper().replace("-", "_")
                 return cls(name=name, choice_value=f"{_CHOICE_VALUE_PREFIX}{label}")
             return cls(name=name)
-        bounds = _SAFE_BOUNDED_INT_RANGES.get(name)
-        if bounds is not None and isinstance(option.type, click.IntRange):
-            if type(value) is int and bounds[0] <= value <= bounds[1]:
+        if isinstance(option.type, click.types.BoolParamType) and type(value) is bool:
+            return cls(name=name, bool_value=value)
+        if isinstance(option.type, click.types.IntParamType) and type(value) is int:
+            if -(1 << 63) <= value < (1 << 63):
                 return cls(name=name, int_value=value)
+        if isinstance(option.type, click.types.FloatParamType) and type(value) is float:
+            if math.isfinite(value):
+                return cls(name=name, double_value=value)
         return cls(name=name)
 
-    def to_dict(self) -> dict[str, str | bool | int]:
-        data: dict[str, str | bool | int] = {"name": self.name}
+    def to_dict(self) -> dict[str, str | bool | int | float]:
+        data: dict[str, str | bool | int | float] = {"name": self.name}
         if self.choice_value is not None:
             data["choice_value"] = self.choice_value
         if self.bool_value is not None:
             data["bool_value"] = self.bool_value
         if self.int_value is not None:
             data["int_value"] = self.int_value
+        if self.double_value is not None:
+            data["double_value"] = self.double_value
         return data
 
 
@@ -346,13 +325,15 @@ class _ClickInvocation:
                     continue
                 if parameter_name not in values:
                     continue
-                entry = _ParameterEntry.from_option(entry_name, parameter, values[parameter_name])
-                if entry is None:
-                    continue
-                entries.append(entry)
+                value = values[parameter_name]
+                option_values = (
+                    value if parameter.multiple and isinstance(value, tuple) else (value,)
+                )
+                for option_value in option_values:
+                    entries.append(_ParameterEntry.from_option(entry_name, parameter, option_value))
+                    if len(entries) >= _MAX_PARAMETER_ENTRIES:
+                        return tuple(entries)
                 seen_names.add(entry_name)
-                if len(entries) >= _MAX_PARAMETER_ENTRIES:
-                    return tuple(entries)
         return tuple(entries)
 
 

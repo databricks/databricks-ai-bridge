@@ -112,17 +112,19 @@ The CLI sends best effort command usage telemetry after leaf commands. Its log r
 command path, package version, operating system, duration, and process outcome (exit code and, for
 nonzero exits, a bounded error category). Parameter entries are limited to options explicitly
 supplied on the command line. Free-form options contribute only their static name. Declared Click
-choices contribute a bounded `AGENTBRICKS_CLI_`-prefixed value; a small reviewed set of boolean
-flags and bounded integers may also contribute a value. Ordinary string options and unreviewed
-boolean flags remain presence-only. Positional arguments, raw command arguments, paths, IDs,
-secrets, arbitrary option values, and exception messages are omitted. Hidden and deprecated
-options are excluded; repeated options contribute only their static names. Set
+choices contribute an `AGENTBRICKS_CLI_`-prefixed value. Click boolean and numeric options
+contribute their typed values; non-finite floats and integers outside the log schema's 64-bit
+range remain presence-only. Hidden and deprecated options follow the same policy, and repeated
+options contribute one parameter entry per supplied value, up to 64 entries. Positional arguments,
+raw command arguments, paths, IDs, secrets, arbitrary free-form option values, and exception
+messages are omitted. Set
 `AGENTBRICKS_DISABLE_TELEMETRY=1` to disable these uploads.
 
 Telemetry runs only when a leaf command is invoked, whether its callback succeeds or fails. Help
 and errors rejected during Click parsing, before a leaf starts, do not produce an event. Uploads
 use existing or non-interactive workspace credentials; missing credentials or a failed upload
-never change the command result.
+never change the command result. Local commands such as `init` and `logout` can run without a
+Databricks login, so telemetry does not start an interactive authentication flow for them.
 
 ## Quickstart
 

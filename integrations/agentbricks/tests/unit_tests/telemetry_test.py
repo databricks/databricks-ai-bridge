@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from enum import Enum
 from types import SimpleNamespace
 from unittest import mock
 
@@ -280,7 +281,8 @@ def test_transport_payload_contains_static_parameter_names(monkeypatch):
     assert parameters == {
         "agentbricks deploy.workspace_path": {"name": "agentbricks deploy.workspace_path"},
         "agentbricks deploy.allow_user_scope_update": {
-            "name": "agentbricks deploy.allow_user_scope_update"
+            "name": "agentbricks deploy.allow_user_scope_update",
+            "bool_value": True,
         },
     }
     assert log["command_path"] == "agentbricks deploy"
@@ -326,6 +328,21 @@ def test_no_auth_skips_client_creation(monkeypatch):
     with mock.patch.object(telemetry, "_workspace_client", return_value=None) as workspace_client:
         telemetry.emit_command(context, execution_time_ms=1, exit_code=0)
     workspace_client.assert_called_once_with(context)
+
+
+def test_telemetry_does_not_start_external_browser_login(monkeypatch, tmp_path):
+    config_file = tmp_path / ".databrickscfg"
+    config_file.write_text(
+        "[interactive]\nhost = https://example.com\nauth_type = external-browser\n"
+    )
+    monkeypatch.setenv("DATABRICKS_CONFIG_FILE", str(config_file))
+    monkeypatch.delenv("DATABRICKS_HOST", raising=False)
+    context = _Context()
+    context.obj.profile = "interactive"
+
+    with mock.patch("databricks_agentkit._api_client._workspace_client") as build:
+        assert telemetry._workspace_client(context) is None
+    build.assert_not_called()
 
 
 def test_transport_failure_is_silent_and_does_not_change_result(monkeypatch):
@@ -386,7 +403,7 @@ def test_agentbricks_command_rethrows_unexpected_exception(monkeypatch):
     assert result.exception is failure
 
 
-def test_build_log_captures_only_explicit_options_and_allowlisted_values():
+def test_build_log_captures_only_explicit_options_and_typed_values():
     context = _real_context("deploy")
     _explicit_option(context, "instance_count", 3)
     _explicit_option(context, "workspace_path", "private-secret")
@@ -403,6 +420,7 @@ def test_build_log_captures_only_explicit_options_and_allowlisted_values():
     }
     assert parameters["agentbricks deploy.allow_user_scope_update"] == {
         "name": "agentbricks deploy.allow_user_scope_update",
+        "bool_value": True,
     }
     assert len(parameters) == 3
     encoded = json.dumps(log)
@@ -449,47 +467,119 @@ def test_every_registered_choice_has_a_bounded_label():
     assert choice_count > 0
 
 
-def test_unbounded_or_repeated_choice_values_are_presence_only():
-    unbounded = click.Option(["--mode"], type=click.Choice(["private/value"]))
+def test_declared_choice_values_emit_without_extra_character_or_length_filters():
+    unusual = click.Option(["--mode"], type=click.Choice(["read/write"]))
     bounded = click.Option(["--mode"], type=click.Choice(["safe"]))
-    repeated = click.Option(["--mode"], type=click.Choice(["safe"]), multiple=True)
-    too_long = click.Option(["--mode"], type=click.Choice(["x" * 65]))
+    long = click.Option(["--mode"], type=click.Choice(["x" * 65]))
 
-    unbounded_entry = telemetry._ParameterEntry.from_option(
-        "agentbricks.mode", unbounded, "private/value"
-    )
-    repeated_entry = telemetry._ParameterEntry.from_option("agentbricks.mode", repeated, ("safe",))
-    too_long_entry = telemetry._ParameterEntry.from_option("agentbricks.mode", too_long, "x" * 65)
+    unusual_entry = telemetry._ParameterEntry.from_option("agentbricks.mode", unusual, "read/write")
+    long_entry = telemetry._ParameterEntry.from_option("agentbricks.mode", long, "x" * 65)
     undeclared_entry = telemetry._ParameterEntry.from_option("agentbricks.mode", bounded, "other")
 
-    assert unbounded_entry is not None
-    assert repeated_entry is not None
-    assert too_long_entry is not None
-    assert undeclared_entry is not None
-    assert unbounded_entry.to_dict() == {"name": "agentbricks.mode"}
-    assert repeated_entry.to_dict() == {"name": "agentbricks.mode"}
-    assert too_long_entry.to_dict() == {"name": "agentbricks.mode"}
+    assert unusual_entry.to_dict() == {
+        "name": "agentbricks.mode",
+        "choice_value": "AGENTBRICKS_CLI_READ/WRITE",
+    }
+    assert long_entry.to_dict() == {
+        "name": "agentbricks.mode",
+        "choice_value": f"AGENTBRICKS_CLI_{'X' * 65}",
+    }
     assert undeclared_entry.to_dict() == {"name": "agentbricks.mode"}
 
 
-def test_hidden_and_deprecated_choices_are_omitted():
+def test_enum_choice_uses_declared_click_label():
+    class Mode(Enum):
+        SAFE = 1
+
+    option = click.Option(["--mode"], type=click.Choice(Mode))
+    entry = telemetry._ParameterEntry.from_option("inventory.mode", option, Mode.SAFE)
+
+    assert entry.to_dict() == {
+        "name": "inventory.mode",
+        "choice_value": "AGENTBRICKS_CLI_SAFE",
+    }
+
+
+def test_repeated_choice_values_emit_separate_entries():
+    option = click.Option(["--mode"], type=click.Choice(["safe", "other"]), multiple=True)
+    command = click.Command("inventory", params=[option])
+    context = click.Context(command)
+    _explicit_option(context, "mode", ("safe", "other"))
+
+    assert _log(context, exit_code=0)["parameters"] == [
+        {"name": "inventory.mode", "choice_value": "AGENTBRICKS_CLI_SAFE"},
+        {"name": "inventory.mode", "choice_value": "AGENTBRICKS_CLI_OTHER"},
+    ]
+
+
+def test_repeated_options_respect_parameter_entry_limit():
+    option = click.Option(["--mode"], type=click.Choice(["safe"]), multiple=True)
+    command = click.Command("inventory", params=[option])
+    context = click.Context(command)
+    _explicit_option(context, "mode", ("safe",) * (telemetry._MAX_PARAMETER_ENTRIES + 1))
+
+    assert len(_log(context, exit_code=0)["parameters"]) == telemetry._MAX_PARAMETER_ENTRIES
+
+
+def test_repeated_free_form_values_remain_presence_only():
+    option = click.Option(["--label"], multiple=True)
+    command = click.Command("inventory", params=[option])
+    context = click.Context(command)
+    _explicit_option(context, "label", ("private-one", "private-two"))
+
+    log = _log(context, exit_code=0)
+    assert log["parameters"] == [{"name": "inventory.label"}] * 2
+    assert "private-one" not in json.dumps(log)
+    assert "private-two" not in json.dumps(log)
+
+
+def test_hidden_and_deprecated_choices_are_emitted():
     hidden = click.Option(["--mode"], type=click.Choice(["safe"]), hidden=True)
     deprecated = click.Option(["--mode"], type=click.Choice(["safe"]), deprecated=True)
 
-    assert telemetry._ParameterEntry.from_option("agentbricks.mode", hidden, "safe") is None
-    assert telemetry._ParameterEntry.from_option("agentbricks.mode", deprecated, "safe") is None
+    expected = {"name": "agentbricks.mode", "choice_value": "AGENTBRICKS_CLI_SAFE"}
+    assert (
+        telemetry._ParameterEntry.from_option("agentbricks.mode", hidden, "safe").to_dict()
+        == expected
+    )
+    assert (
+        telemetry._ParameterEntry.from_option("agentbricks.mode", deprecated, "safe").to_dict()
+        == expected
+    )
 
 
-def test_real_registered_options_only_emit_bounded_values():
+def test_numeric_values_follow_click_types_and_wire_limits():
+    count = click.Option(["--count"], type=click.INT)
+    timeout = click.Option(["--timeout"], type=click.FLOAT)
+
+    assert telemetry._ParameterEntry.from_option("inventory.count", count, 7).to_dict() == {
+        "name": "inventory.count",
+        "int_value": 7,
+    }
+    assert telemetry._ParameterEntry.from_option("inventory.timeout", timeout, 1.5).to_dict() == {
+        "name": "inventory.timeout",
+        "double_value": 1.5,
+    }
+    assert telemetry._ParameterEntry.from_option("inventory.count", count, 1 << 63).to_dict() == {
+        "name": "inventory.count"
+    }
+    assert telemetry._ParameterEntry.from_option(
+        "inventory.timeout", timeout, float("inf")
+    ).to_dict() == {"name": "inventory.timeout"}
+
+
+def test_real_registered_options_emit_declared_typed_values():
     for path, option in _real_options():
         assert option.name is not None
         name = f"{' '.join(('agentbricks', *path))}.{option.name}"
         if isinstance(option.type, click.Choice):
             value = option.type.choices[0]
-        elif option.is_bool_flag:
+        elif isinstance(option.type, click.types.BoolParamType):
             value = True
-        elif isinstance(option.type, click.IntRange):
-            value = option.type.min if option.type.min is not None else 1
+        elif isinstance(option.type, click.types.IntParamType):
+            value = option.type.min if isinstance(option.type, click.IntRange) else 1
+        elif isinstance(option.type, click.types.FloatParamType):
+            value = option.type.min if isinstance(option.type, click.FloatRange) else 1.0
         else:
             value = "private-value"
         if option.multiple:
@@ -499,32 +589,20 @@ def test_real_registered_options_only_emit_bounded_values():
         _explicit_option(context, option.name, value)
         log = _log(context, exit_code=0)
 
-        if option.hidden or option.deprecated:
-            assert "parameters" not in log, name
-            continue
         assert len(log["parameters"]) == 1, name
         entry = log["parameters"][0]
         assert entry["name"] == name
         if isinstance(option.type, click.Choice):
             assert isinstance(value, str)
             assert entry["choice_value"] == f"AGENTBRICKS_CLI_{value.upper().replace('-', '_')}"
-        elif name in telemetry._SAFE_BOOL_PARAMETER_NAMES:
+        elif isinstance(option.type, click.types.BoolParamType):
             assert entry["bool_value"] is True
-        elif name in telemetry._SAFE_BOUNDED_INT_RANGES:
+        elif isinstance(option.type, click.types.IntParamType):
             assert entry["int_value"] == value
+        elif isinstance(option.type, click.types.FloatParamType):
+            assert entry["double_value"] == value
         else:
             assert entry == {"name": name}
-
-
-def test_bounded_integer_policy_references_registered_options():
-    declared_ranges = {
-        f"{' '.join(('agentbricks', *path))}.{option.name}": option.type
-        for path, option in _real_options()
-        if isinstance(option.type, click.IntRange)
-    }
-    for name, (minimum, maximum) in telemetry._SAFE_BOUNDED_INT_RANGES.items():
-        assert name in declared_ranges
-        assert declared_ranges[name].min <= minimum <= maximum <= declared_ranges[name].max
 
 
 def test_parameter_entry_preserves_false_boolean_value():
@@ -534,15 +612,4 @@ def test_parameter_entry_preserves_false_boolean_value():
         if path == ("init",) and option.name == "existing"
     )
     entry = telemetry._ParameterEntry.from_option("agentbricks init.existing", option, False)
-    assert entry is not None
     assert entry.to_dict() == {"name": "agentbricks init.existing", "bool_value": False}
-
-
-def test_safe_boolean_allowlist_contains_only_current_boolean_options():
-    declared_flags = {
-        f"{' '.join(('agentbricks', *path))}.{option.name}"
-        for path, option in _real_options()
-        if option.is_bool_flag
-    }
-
-    assert telemetry._SAFE_BOOL_PARAMETER_NAMES <= declared_flags

@@ -106,14 +106,15 @@ The `agentbricks` console entry point runs `databricks_agentbricks.cli:main`. In
 fails. New leaves registered before `configure_help` use the same hook without adding telemetry
 calls. Click parsing failures and help exit before leaf invocation, so they are not logged.
 
-The emitter derives command paths and option names from static Click definitions. It emits bounded
-values for declared Click choices and explicitly allowlisted boolean and integer options; free-form
-values remain presence-only. Choice values use the `AGENTBRICKS_CLI_` prefix required by their data
-shape. New Click choices must use short, non-sensitive labels. The emitter wraps each event in a
-FrontendLog payload and sends it to `/telemetry-ext` on a daemon thread, waiting at most 250 ms in
-the foreground.
-Uploads are best effort: opt-out, unavailable non-interactive credentials, and transport failures
-must not change command behavior. When changing this path, update
+The emitter derives command paths and option names from static Click definitions. It emits values
+for declared Click choices and typed boolean and numeric options; free-form values remain
+presence-only. Choice values use the `AGENTBRICKS_CLI_` prefix required by their data shape. New
+Click choices must use non-sensitive labels. Repeated options produce one parameter entry per
+supplied value, up to 64 entries; hidden and deprecated options follow the same value policy. The
+emitter wraps each event in a FrontendLog payload and sends it to `/telemetry-ext` on a daemon
+thread, waiting at most 250 ms in the foreground. Local commands may run without login. Uploads
+are best effort: opt-out, unavailable non-interactive credentials, or transport failures must not
+change command behavior. When changing this path, update
 `tests/unit_tests/telemetry_test.py` and the telemetry description in `README.md`.
 
 ## Keeping docs in sync
