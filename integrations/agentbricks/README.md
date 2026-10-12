@@ -111,14 +111,12 @@ You can also pass the global `--profile/-p` option before an individual command,
 The CLI sends best effort command usage telemetry after leaf commands. Its log records the static
 command path, package version, operating system, duration, and process outcome (exit code and, for
 nonzero exits, a bounded error category). Parameter entries are limited to options explicitly
-supplied on the command line: free-form options contribute their static name, while a small reviewed
-set of choices, boolean flags, and bounded integers may contribute a value. Plain string options
-are never treated as choices automatically. Even declared Click choices require an explicit,
-reviewed allowlist entry. Adding a choice option or changing its values requires a telemetry
-policy review, enforced against the registered command tree by unit tests. Unreviewed boolean
-flags contribute only their static name. Positional
-arguments, raw command arguments, paths, IDs, secrets, arbitrary option values, and exception
-messages are omitted. Hidden and deprecated options are excluded. Set
+supplied on the command line. Free-form options contribute only their static name. Declared Click
+choices contribute a bounded `AGENTBRICKS_CLI_`-prefixed value; a small reviewed set of boolean
+flags and bounded integers may also contribute a value. Ordinary string options and unreviewed
+boolean flags remain presence-only. Positional arguments, raw command arguments, paths, IDs,
+secrets, arbitrary option values, and exception messages are omitted. Hidden and deprecated
+options are excluded; repeated options contribute only their static names. Set
 `AGENTBRICKS_DISABLE_TELEMETRY=1` to disable these uploads.
 
 Telemetry runs only when a leaf command is invoked, whether its callback succeeds or fails. Help
