@@ -27,6 +27,7 @@ from databricks_agentbricks.clients.tracing_client import (
     create_experiment_idempotent,
     uc_trace_tables,
 )
+from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.tracing import (
     TRACING_BIND_COMMAND,
@@ -34,7 +35,7 @@ from databricks_agentbricks.presentation.tracing import (
     show_trace_detail,
     show_trace_list,
 )
-from databricks_agentbricks.projects.experiment_naming import default_experiment_name
+from databricks_agentbricks.projects.agent_project import AgentProject, default_experiment_name
 from databricks_agentbricks.services.tracing.targets import TraceTargetResolver
 from databricks_agentbricks.services.tracing_service import (
     TraceReadRequest,
@@ -74,12 +75,31 @@ TRACES_EXPERIMENT_ID_ENV = "MLFLOW_EXPERIMENT_ID"
 
 
 def build_tracing_service(obj) -> TracingService:
-    mlflow = MLflowTraceClient(
+    mlflow = _build_mlflow_trace_client(obj)
+    return TracingService(mlflow, TraceTargetResolver(mlflow, LocalTracingClient()))
+
+
+def _build_mlflow_trace_client(obj) -> MLflowTraceClient:
+    return MLflowTraceClient(
         obj.profile,
         mlflow_loader=_mlflow,
         tracking_uri_setter=_set_tracking_uri,
     )
-    return TracingService(mlflow, TraceTargetResolver(mlflow, LocalTracingClient()))
+
+
+def _check_experiment_flags(
+    experiment_name: str | None, experiment_id: str | None, *, require_one: bool = False
+) -> None:
+    if experiment_name and experiment_id:
+        raise AgentCliError(
+            "Pass --experiment-name or --experiment-id, not both.",
+            hint="They select the same experiment; use whichever identifier you have.",
+        )
+    if require_one and not (experiment_name or experiment_id):
+        raise AgentCliError(
+            "Pass --experiment-name or --experiment-id to bind tracing to an experiment.",
+            hint="Absence of a bound experiment means tracing is off; `agentbricks tracing unbind` clears it.",
+        )
 
 
 @click.group()
@@ -146,7 +166,25 @@ def tracing_bind(obj, experiment_name, experiment_id, source) -> None:
     (e.g. from the experiment's URL) is a convenience: it's resolved to the experiment's name and
     stored as a name, never as an id.
     """
-    name = build_tracing_service(obj).bind(pathlib.Path(source), experiment_name, experiment_id)
+    _check_experiment_flags(experiment_name, experiment_id, require_one=True)
+    name = experiment_name
+    if experiment_id:
+        name = _build_mlflow_trace_client(obj).workspace_experiment_name_by_id(experiment_id)
+        if name is None:
+            raise AgentCliError(
+                f"No MLflow experiment found with id {experiment_id!r}.",
+                hint="Pass an existing experiment id, or use --experiment-name.",
+            )
+    elif name and not name.startswith("/"):
+        raise AgentCliError(
+            f"Experiment name must be an absolute workspace path, got {name!r}.",
+            hint="Use a path like /Shared/agentbricks_traces/<agent> or "
+            "/Users/<you>/agentbricks_traces/<agent>.",
+        )
+    assert name is not None
+    project = AgentProject.load(pathlib.Path(source))
+    project.bind_tracing(name)
+    project.write()
     if obj.output == "json":
         render.emit_json({"experiment_name": name})
         return
@@ -176,7 +214,9 @@ def tracing_unbind(obj, source) -> None:
     Deploy-only: `agentbricks dev` still traces locally to its own MLflow server, so you keep local traces
     while the deployed agent stays untraced.
     """
-    build_tracing_service(obj).unbind(pathlib.Path(source))
+    project = AgentProject.load(pathlib.Path(source))
+    project.unbind_tracing()
+    project.write()
     if obj.output == "json":
         render.emit_json({"experiment_name": None})
         return
@@ -206,6 +246,7 @@ def tracing_list(obj, experiment_name, experiment_id, warehouse_id, limit, sourc
     dev run's traces still show up here (tagged "(local dev)"). Nothing traced anywhere yet lists
     nothing. A UC-backed experiment is read through a SQL warehouse (``--warehouse``).
     """
+    _check_experiment_flags(experiment_name, experiment_id)
     result = build_tracing_service(obj).list(
         TraceReadRequest(pathlib.Path(source), experiment_name, experiment_id, warehouse_id),
         limit,
@@ -231,6 +272,7 @@ def tracing_get(obj, trace_id, experiment_name, experiment_id, warehouse_id, sou
     otherwise this project's workspace experiment if provisioned, else its local `agentbricks dev` store.
     A UC-backed experiment is read through a SQL warehouse (``--warehouse``).
     """
+    _check_experiment_flags(experiment_name, experiment_id)
     result = build_tracing_service(obj).get(
         TraceReadRequest(pathlib.Path(source), experiment_name, experiment_id, warehouse_id),
         trace_id,

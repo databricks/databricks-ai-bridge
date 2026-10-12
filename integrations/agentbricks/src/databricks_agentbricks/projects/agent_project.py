@@ -262,6 +262,15 @@ def default_store_name(project_name: str, suffix: str, token: str | None = None)
     return f"{slug or 'agent'}-{middle}{suffix}"
 
 
+def default_experiment_name(project: str | None, token: str | None = None) -> str:
+    """Return a project-specific experiment path under ``/Shared/agentbricks_traces``."""
+    if not project:
+        raise AgentCliError("Cannot derive the default tracing experiment without a project name.")
+    slug = re.sub(r"[^a-z0-9-]+", "-", project.lower()).strip("-") or "agent"
+    middle = f"-{token}" if token else ""
+    return f"/Shared/agentbricks_traces/{slug}{middle}"
+
+
 def _store_name_from_manifest(value: object, table: str) -> str | None:
     """Read the ``name`` from a ``[memory_store]`` / ``[session_store]`` table, or None if absent."""
     if value is None:

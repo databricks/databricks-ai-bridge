@@ -14,25 +14,8 @@ from databricks_agentbricks.clients.local_tracing_client import (
     LocalTracingStart,
 )
 from databricks_agentbricks.clients.mlflow_trace_client import MLflowTraceClient
-from databricks_agentbricks.projects.agent_project import AgentProject
 from databricks_agentbricks.services.tracing.targets import TraceReadTarget, TraceTargetResolver
 from databricks_agentbricks.services.tracing_service import TraceReadRequest, TracingService
-
-_AGENT_TOML = 'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "agentbricks"\n'
-
-
-def test_bind_by_name_does_not_construct_mlflow_client(tmp_path: pathlib.Path):
-    (tmp_path / "agent.toml").write_text(_AGENT_TOML)
-    mlflow = mock.create_autospec(MLflowTraceClient, instance=True)
-    service = TracingService(mlflow, mock.create_autospec(TraceTargetResolver, instance=True))
-
-    name = service.bind(tmp_path, "/Shared/agentbricks_traces/demo", None)
-
-    assert name == "/Shared/agentbricks_traces/demo"
-    assert AgentProject.load(tmp_path).trace_experiment_name == name
-    mlflow.select_workspace.assert_not_called()
-    mlflow.experiment_by_name.assert_not_called()
-    mlflow.experiment_by_id.assert_not_called()
 
 
 def test_list_returns_typed_trace_facts_from_injected_target(tmp_path: pathlib.Path):

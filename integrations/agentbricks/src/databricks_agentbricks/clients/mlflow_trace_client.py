@@ -58,6 +58,12 @@ class MLflowTraceClient:
     def experiment_by_id(self, experiment_id: str) -> Any | None:
         return _get_experiment_by_id(self.module, experiment_id)
 
+    def workspace_experiment_name_by_id(self, experiment_id: str) -> str | None:
+        """Resolve an id in the selected workspace to its portable experiment name."""
+        self.select_workspace()
+        experiment = self.experiment_by_id(experiment_id)
+        return experiment.name if experiment is not None else None
+
     def experiment_by_name(self, experiment_name: str) -> Any | None:
         return self.module.get_experiment_by_name(experiment_name)
 

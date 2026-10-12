@@ -285,8 +285,8 @@ def test_bind_sets_experiment_name(tmp_path: pathlib.Path):
         None  # not created yet — allowed (deploy creates it)
     )
     with (
-        mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
-        mock.patch.object(tracing_mod, "_set_tracking_uri"),
+        mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow) as load_mlflow,
+        mock.patch.object(tracing_mod, "_set_tracking_uri") as set_tracking_uri,
     ):
         result = CliRunner().invoke(
             tracing_mod.tracing_bind,
@@ -296,6 +296,8 @@ def test_bind_sets_experiment_name(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     assert json.loads(result.output) == {"experiment_name": "/Shared/agentbricks_traces/mine"}
     assert AgentProject.load(tmp_path).trace_experiment_name == "/Shared/agentbricks_traces/mine"
+    load_mlflow.assert_not_called()
+    set_tracking_uri.assert_not_called()
 
 
 def test_bind_rejects_non_absolute_name(tmp_path: pathlib.Path):

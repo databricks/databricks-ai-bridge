@@ -8,7 +8,6 @@ from typing import Any, Optional
 
 from databricks_agentbricks.clients.mlflow_trace_client import MLflowTraceClient
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.projects.agent_project import AgentProject
 from databricks_agentbricks.services.tracing.targets import TraceTargetResolver
 
 
@@ -80,64 +79,14 @@ def _summary(trace: Any) -> TraceSummary:
     )
 
 
-def _check_experiment_flags(
-    experiment_name: Optional[str], experiment_id: Optional[str], *, require_one: bool = False
-) -> None:
-    if experiment_name and experiment_id:
-        raise AgentCliError(
-            "Pass --experiment-name or --experiment-id, not both.",
-            hint="They select the same experiment; use whichever identifier you have.",
-        )
-    if require_one and not (experiment_name or experiment_id):
-        raise AgentCliError(
-            "Pass --experiment-name or --experiment-id to bind tracing to an experiment.",
-            hint="Absence of a bound experiment means tracing is off; `agentbricks tracing unbind` clears it.",
-        )
-
-
 class TracingService:
-    """Coordinate project bindings and trace reads without Click or presentation dependencies."""
+    """Coordinate trace reads without Click or presentation dependencies."""
 
     def __init__(self, mlflow: MLflowTraceClient, targets: TraceTargetResolver) -> None:
         self._mlflow = mlflow
         self._targets = targets
 
-    def bind(
-        self,
-        source: pathlib.Path,
-        experiment_name: str | None,
-        experiment_id: str | None,
-    ) -> str:
-        _check_experiment_flags(experiment_name, experiment_id, require_one=True)
-        name = experiment_name
-        if experiment_id:
-            self._mlflow.select_workspace()
-            experiment = self._mlflow.experiment_by_id(experiment_id)
-            if experiment is None:
-                raise AgentCliError(
-                    f"No MLflow experiment found with id {experiment_id!r}.",
-                    hint="Pass an existing experiment id, or use --experiment-name.",
-                )
-            name = experiment.name
-        elif name and not name.startswith("/"):
-            raise AgentCliError(
-                f"Experiment name must be an absolute workspace path, got {name!r}.",
-                hint="Use a path like /Shared/agentbricks_traces/<agent> or "
-                "/Users/<you>/agentbricks_traces/<agent>.",
-            )
-        assert name is not None
-        project = AgentProject.load(source)
-        project.bind_tracing(name)
-        project.write()
-        return name
-
-    def unbind(self, source: pathlib.Path) -> None:
-        project = AgentProject.load(source)
-        project.unbind_tracing()
-        project.write()
-
     def list(self, request: TraceReadRequest, limit: int) -> TraceListResult:
-        _check_experiment_flags(request.experiment_name, request.experiment_id)
         warehouse_id = self._mlflow.resolve_warehouse_id(request.warehouse_id)
         with self._targets.resolve(
             request.source, request.experiment_name, request.experiment_id, warehouse_id
@@ -156,7 +105,6 @@ class TracingService:
             )
 
     def get(self, request: TraceReadRequest, trace_id: str) -> TraceGetResult:
-        _check_experiment_flags(request.experiment_name, request.experiment_id)
         warehouse_id = self._mlflow.resolve_warehouse_id(request.warehouse_id)
         with self._targets.resolve(
             request.source, request.experiment_name, request.experiment_id, warehouse_id
