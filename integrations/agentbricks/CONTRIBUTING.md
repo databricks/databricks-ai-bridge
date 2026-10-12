@@ -112,10 +112,17 @@ presence-only. Choice values use the `AGENTBRICKS_CLI_` prefix required by their
 Click choices must use non-sensitive labels. Repeated options produce one parameter entry per
 supplied value, up to 64 entries; hidden and deprecated options follow the same value policy. The
 emitter wraps each event in a FrontendLog payload and sends it to `/telemetry-ext` on a daemon
-thread, waiting at most 250 ms in the foreground. Local commands may run without login. Uploads
-are best effort: opt-out, unavailable non-interactive credentials, or transport failures must not
-change command behavior. When changing this path, update
-`tests/unit_tests/telemetry_test.py` and the telemetry description in `README.md`.
+thread, waiting at most 250 ms in the foreground. It reuses the command's workspace client or lets
+the SDK resolve the selected or default profile. Local commands may run without login, so an SDK
+`external-browser` profile can prompt during telemetry. Uploads are best effort: opt-out, missing
+credentials, and transport failures must not change command behavior. When changing this path,
+update `tests/unit_tests/telemetry_test.py` and the telemetry description in `README.md`.
+
+Run `uv run pytest tests/functional/cli_smoke_test.py -k telemetry_to_local_receiver -q` from
+`integrations/agentbricks` to exercise the installed CLI, Click hook, SDK authentication, and HTTP
+upload against a temporary local receiver. It verifies the FrontendLog payload without workspace
+credentials; it does not verify Lumberjack ingestion, which requires a test workspace with the
+registered schema deployed.
 
 ## Keeping docs in sync
 

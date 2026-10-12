@@ -122,9 +122,10 @@ messages are omitted. Set
 
 Telemetry runs only when a leaf command is invoked, whether its callback succeeds or fails. Help
 and errors rejected during Click parsing, before a leaf starts, do not produce an event. Uploads
-use existing or non-interactive workspace credentials; missing credentials or a failed upload
-never change the command result. Local commands such as `init` and `logout` can run without a
-Databricks login, so telemetry does not start an interactive authentication flow for them.
+reuse the command's workspace client or let the Databricks SDK resolve the selected or default
+profile. Authenticate first with `agentbricks login --profile <profile>` or configure SDK auth;
+an SDK `external-browser` profile may prompt during telemetry even for local commands such as
+`init`. Missing credentials or a failed upload never change the command result.
 
 ## Quickstart
 

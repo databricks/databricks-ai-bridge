@@ -8,7 +8,6 @@ unavailable.
 
 from __future__ import annotations
 
-import configparser
 import json
 import math
 import os
@@ -19,7 +18,6 @@ import uuid
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _installed_version
-from pathlib import Path
 from typing import Any
 
 import click
@@ -388,79 +386,12 @@ def _existing_workspace_client(obj: Any) -> Any | None:
     return private_client if getattr(private_client, "api_client", None) is not None else None
 
 
-def _has_noninteractive_auth(profile: object | None) -> bool:
-    """Conservatively decide if constructing a client can use credentials without a login flow."""
-
-    if os.environ.get("DATABRICKS_HOST", "").strip():
-        if os.environ.get("DATABRICKS_TOKEN", "").strip():
-            return True
-        if (
-            os.environ.get("DATABRICKS_CLIENT_ID", "").strip()
-            and os.environ.get("DATABRICKS_CLIENT_SECRET", "").strip()
-        ):
-            return True
-        if (
-            os.environ.get("DATABRICKS_AZURE_CLIENT_ID", "").strip()
-            and os.environ.get("DATABRICKS_AZURE_CLIENT_SECRET", "").strip()
-        ):
-            return True
-
-    selected_profile = profile if isinstance(profile, str) and profile.strip() else None
-    selected_profile = selected_profile or os.environ.get("DATABRICKS_CONFIG_PROFILE", "").strip()
-    if not selected_profile:
-        return False
-
-    # A profile configured for external-browser auth can launch a browser while the SDK client is
-    # constructed.  Read the small INI file first and only let clearly non-interactive providers
-    # reach WorkspaceClient; an existing command client is still reused above.
-    config_path = Path(os.environ.get("DATABRICKS_CONFIG_FILE", Path.home() / ".databrickscfg"))
-    parser = configparser.ConfigParser()
-    try:
-        if not config_path.is_file():
-            return False
-        parser.read(config_path)
-        if not parser.has_section(selected_profile):
-            return False
-        section = parser[selected_profile]
-    except (OSError, configparser.Error):
-        return False
-
-    if section.get("token", "").strip():
-        return True
-    if section.get("client_id", "").strip() and section.get("client_secret", "").strip():
-        return True
-    if (
-        section.get("azure_client_id", "").strip()
-        and section.get("azure_client_secret", "").strip()
-    ):
-        return True
-    if section.get("username", "").strip() and section.get("password", "").strip():
-        return True
-    return section.get("auth_type", "").strip().lower() in {
-        "azure-cli",
-        "azure-devops-oidc",
-        "databricks-cli",
-        "env-oidc",
-        "file-oidc",
-        "github-oidc",
-        "google-credentials",
-        "metadata-service",
-        "model-serving",
-        "oauth-m2m",
-        "pat",
-        "runtime-native-auth",
-        "runtime-oauth",
-    }
-
-
 def _workspace_client(ctx: Any) -> Any | None:
     obj = _root_obj(ctx)
     existing = _existing_workspace_client(obj)
     if existing is not None:
         return existing
     profile = getattr(obj, "profile", None)
-    if not _has_noninteractive_auth(profile):
-        return None
     try:
         # The shared AgentKit transport preserves the workspace-id host override used by profiles
         # that resolve through a regional host.  It still constructs the regular SDK

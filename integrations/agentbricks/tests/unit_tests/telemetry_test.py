@@ -251,7 +251,9 @@ def test_existing_workspace_client_receives_exact_transport_request(monkeypatch)
     monkeypatch.setattr(telemetry, "_MAX_FOREGROUND_WAIT_S", 1)
     monkeypatch.setattr(telemetry.time, "time", lambda: 12.3)
 
-    telemetry.emit_command(context, execution_time_ms=5, exit_code=0)
+    with mock.patch("databricks_agentkit._api_client._workspace_client") as build:
+        telemetry.emit_command(context, execution_time_ms=5, exit_code=0)
+    build.assert_not_called()
 
     assert len(api_client.calls) == 1
     method, path, body = api_client.calls[0]
@@ -320,29 +322,35 @@ def test_opt_out_does_not_construct_or_send(monkeypatch):
     workspace_client.assert_not_called()
 
 
-def test_no_auth_skips_client_creation(monkeypatch):
+def test_sdk_resolves_default_profile_when_no_agentbricks_profile():
     context = _Context()
-    monkeypatch.delenv("AGENTBRICKS_DISABLE_TELEMETRY", raising=False)
-    monkeypatch.delenv("DATABRICKS_CONFIG_PROFILE", raising=False)
-    monkeypatch.delenv("DATABRICKS_HOST", raising=False)
-    with mock.patch.object(telemetry, "_workspace_client", return_value=None) as workspace_client:
-        telemetry.emit_command(context, execution_time_ms=1, exit_code=0)
-    workspace_client.assert_called_once_with(context)
+    client = SimpleNamespace(api_client=_ApiClient())
+    with mock.patch(
+        "databricks_agentkit._api_client._workspace_client", return_value=client
+    ) as build:
+        assert telemetry._workspace_client(context) is client
+    build.assert_called_once_with(None)
 
 
-def test_telemetry_does_not_start_external_browser_login(monkeypatch, tmp_path):
-    config_file = tmp_path / ".databrickscfg"
-    config_file.write_text(
-        "[interactive]\nhost = https://example.com\nauth_type = external-browser\n"
-    )
-    monkeypatch.setenv("DATABRICKS_CONFIG_FILE", str(config_file))
-    monkeypatch.delenv("DATABRICKS_HOST", raising=False)
+def test_sdk_receives_selected_agentbricks_profile():
     context = _Context()
-    context.obj.profile = "interactive"
+    context.obj.profile = "selected"
+    client = SimpleNamespace(api_client=_ApiClient())
+    with mock.patch(
+        "databricks_agentkit._api_client._workspace_client", return_value=client
+    ) as build:
+        assert telemetry._workspace_client(context) is client
+    build.assert_called_once_with("selected")
 
-    with mock.patch("databricks_agentkit._api_client._workspace_client") as build:
+
+def test_sdk_auth_failure_is_best_effort():
+    context = _Context()
+    with mock.patch(
+        "databricks_agentkit._api_client._workspace_client",
+        side_effect=RuntimeError("no credentials"),
+    ) as build:
         assert telemetry._workspace_client(context) is None
-    build.assert_not_called()
+    build.assert_called_once_with(None)
 
 
 def test_transport_failure_is_silent_and_does_not_change_result(monkeypatch):

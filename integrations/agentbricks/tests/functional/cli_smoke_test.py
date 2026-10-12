@@ -14,8 +14,12 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import queue
 import subprocess
 import sys
+import threading
+import uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 import tomli
@@ -58,11 +62,13 @@ def run_agentbricks(tmp_path: pathlib.Path):
         "DATABRICKS_CONFIG_FILE": str(empty_cfg),
     }
 
-    def run(*args: str, check: bool = True) -> subprocess.CompletedProcess:
+    def run(
+        *args: str, check: bool = True, env_override: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess:
         result = subprocess.run(
             [str(agentbricks), *args],
             cwd=tmp_path,
-            env=env,
+            env={**env, **(env_override or {})},
             capture_output=True,
             text=True,
             timeout=60,
@@ -75,6 +81,96 @@ def run_agentbricks(tmp_path: pathlib.Path):
         return result
 
     return run
+
+
+@pytest.mark.parametrize("profile_source", ["saved", "sdk"])
+def test_cli_posts_telemetry_to_local_receiver(run_agentbricks, tmp_path, profile_source) -> None:
+    uploads: queue.Queue[tuple[str, dict, str | None]] = queue.Queue()
+    reads: queue.Queue[str] = queue.Queue()
+
+    class _TelemetryReceiver(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+        def _respond_json(self, value: dict) -> None:
+            body = json.dumps(value).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self) -> None:
+            if self.path.startswith("/api/2.0/agents/memory-stores"):
+                reads.put(self.path)
+                self._respond_json({"managed_memory_stores": []})
+            else:
+                self._respond_json({})
+
+        def do_POST(self) -> None:
+            length = int(self.headers["Content-Length"])
+            body = json.loads(self.rfile.read(length))
+            self._respond_json({})
+            uploads.put((self.path, body, self.headers.get("Authorization")))
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), _TelemetryReceiver) as server:
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            profile_name = "telemetry-smoke"
+            config_file = tmp_path / ".databrickscfg"
+            config_file.write_text(
+                f"[{profile_name}]\nhost = http://127.0.0.1:{server.server_port}\n"
+                "token = local-test-token\n"
+            )
+            agentbricks_home = tmp_path / "agentbricks-home"
+            agentbricks_home.mkdir()
+            env_override = {
+                "DATABRICKS_CONFIG_FILE": str(config_file),
+                "AGENTBRICKS_CONFIG_HOME": str(agentbricks_home),
+            }
+            if profile_source == "saved":
+                (agentbricks_home / "config.json").write_text(json.dumps({"profile": profile_name}))
+            else:
+                env_override["DATABRICKS_CONFIG_PROFILE"] = profile_name
+
+            result = run_agentbricks(
+                "-o",
+                "json",
+                "memory",
+                "stores",
+                "list",
+                "--page-size",
+                "7",
+                env_override=env_override,
+            )
+            assert result.stdout
+            assert reads.get(timeout=5).startswith("/api/2.0/agents/memory-stores")
+            path, body, authorization = uploads.get(timeout=5)
+        finally:
+            server.shutdown()
+            worker.join(timeout=5)
+
+    assert path == "/telemetry-ext"
+    assert authorization == "Bearer local-test-token"
+    assert isinstance(body["uploadTime"], int)
+    assert body["items"] == []
+    assert len(body["protoLogs"]) == 1
+    frontend_log = json.loads(body["protoLogs"][0])
+    assert uuid.UUID(frontend_log["frontend_log_event_id"])
+    log = frontend_log["entry"]["agentbricks_cli_log"]
+    assert log["command_path"] == "agentbricks memory stores list"
+    assert log["exit_code"] == 0
+    assert {parameter["name"]: parameter for parameter in log["parameters"]} == {
+        "agentbricks.output": {
+            "name": "agentbricks.output",
+            "choice_value": "AGENTBRICKS_CLI_JSON",
+        },
+        "agentbricks memory stores list.page_size": {
+            "name": "agentbricks memory stores list.page_size",
+            "int_value": 7,
+        },
+    }
 
 
 def test_cli_and_every_command_help_load(run_agentbricks) -> None:
