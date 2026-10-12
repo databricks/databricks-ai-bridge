@@ -47,8 +47,8 @@ class RequestAuth:
 
 
 def test_documented_memory_payload_keeps_actor_stable_across_conversations(template):
-    _framework, adapter, _agent = template
-    reference = TEMPLATES / "agent-bricks-workflow/references/deployment.md"
+    framework, adapter, _agent = template
+    reference = TEMPLATES / f"agent-{framework}" / "AGENTKIT_CONTRACT.md"
     example = re.search(r"```json\n(.*?)\n```", reference.read_text(), re.DOTALL)
     assert example is not None
     invocation = json.loads(example.group(1))

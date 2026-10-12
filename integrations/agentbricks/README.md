@@ -171,13 +171,12 @@ convention. Support depends on the coding-agent version and its skill settings; 
 if discovery is cached. Generated `AGENTS.md` also links to the workflow skill. The skill is
 advisory and does not authorize deployment or live calls.
 
-When the CLI detects a coding-agent environment, it emits a single-line pointer to the bundled
-skill on stderr, including for `--help`. Coding agents in existing projects can read that bundled
-file directly without installing project-local skills or changing project configuration.
-Detection is best-effort and is not required for automatic installation during `init` or reading
-the skill directly. Ordinary human invocations stay silent; set
-`AGENTBRICKS_DISABLE_AGENT_HINT=1` to suppress automatic hints. Hints never alter JSON stdout and are
-not emitted by SDK imports or deployed agent runtime startup.
+The CLI emits a single-line pointer to the bundled skill on stderr by default, including for
+`--help`, without relying on coding-agent detection. Coding agents in existing projects can read
+that bundled file directly without installing project-local skills or changing project
+configuration. Set `AGENTBRICKS_DISABLE_AGENT_HINT=1` to suppress automatic hints; this does not
+disable skill installation during `init` or native discovery. Hints never alter JSON stdout and
+are not emitted during shell completion, SDK imports, or deployed agent runtime startup.
 
 For a deployment-only task, local `dev` is optional. The workflow skill describes focused
 verification of the deployed agent, rather than treating local execution as proof of managed

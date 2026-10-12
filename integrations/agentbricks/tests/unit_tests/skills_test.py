@@ -40,8 +40,13 @@ def test_bundled_skill_has_portable_metadata_and_valid_references():
 
 
 @pytest.mark.parametrize("actor_location", ["input", "top_level"])
-def test_documented_memory_payload_obeys_runtime_actor_placement(actor_location):
-    reference = skill_mod.bundled_workflow_skill().parent / "references/deployment.md"
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+def test_documented_memory_payload_obeys_runtime_actor_placement(actor_location, framework):
+    reference = (
+        skill_mod.bundled_workflow_skill().parent.parent
+        / f"agent-{framework}"
+        / "AGENTKIT_CONTRACT.md"
+    )
     example = re.search(r"```json\n(.*?)\n```", reference.read_text(), re.DOTALL)
     assert example is not None
     payload = json.loads(example.group(1))

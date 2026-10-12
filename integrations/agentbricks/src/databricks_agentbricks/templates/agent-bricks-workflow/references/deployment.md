@@ -35,49 +35,23 @@ Choose checks from the user's success criteria rather than exploring every API:
 3. If conversation persistence is required, use the same application `session_id` for two turns
    with distinct invocation UUIDs. Check that the second turn uses the first turn's context.
 4. If memory is required, write a distinct test fact and recall it in a separate conversation
-   for the same trusted actor. Use the [memory payload example](#cross-conversation-memory-payload)
-   for generated templates. Confirm the bound store contains the intended entry when needed.
+   for the same trusted actor and authenticated identity. Use the project's `AGENTKIT_CONTRACT.md`
+   for the request shape and actor mapping; generated managed-server projects include a memory
+   payload example there. Confirm the bound store contains the intended entry when needed.
    Remove only test data you created, and only when cleanup is authorized.
-5. If tracing or tools are part of the task, inspect one relevant trace or exercise the requested
-   tool. A bindings declaration is not evidence that the deployed principal can access it.
+5. When the requested behavior uses tools, exercise a representative configured tool through the
+   agent and check its result. Tools are part of the agent's logic; a bindings declaration is not
+   evidence that the deployed principal can access them. Preserve required approvals.
+6. Tracing is enabled by default. Inspect the representative invocation's trace in the configured
+   experiment to verify visibility and diagnose failures; do not add unrelated model calls just
+   to generate traces. If the project intentionally disables tracing, preserve that choice.
 
 Do not perform live model/tool calls or create/delete resources without authorization. Stop after
 the agreed checks pass, or report the concrete failure and remaining limitation.
 
-## Invocation identity
+## Runtime contract
 
-For `DurableAgentServer` templates, use `/api/invocations`. The transport's top-level `id` is an
-invocation UUID and idempotency key; `session_id` is the stable application conversation identifier.
-Framework-specific input belongs under `input`; consult `AGENTKIT_CONTRACT.md` and `runtime/adapter.py`
-for its shape. `X-Routing-Key` only controls sticky routing; it is neither identity nor session state.
-
-### Cross-conversation memory payload
-
-In the generated LangGraph and OpenAI Agents SDK `DurableAgentServer` templates, put `actor` inside
-the `input` object alongside `messages`, not at the top level of the invocation:
-
-```json
-{
-  "id": "11111111-1111-4111-8111-111111111111",
-  "session_id": "memory-write",
-  "input": {
-    "messages": [
-      {"role": "user", "content": "Remember this test fact: my test color is teal."}
-    ],
-    "actor": "memory-test-actor"
-  }
-}
-```
-
-Use fresh invocation UUIDs and a distinct test fact for your authorized check. Once the fact is
-stored, send a recall question with a different `session_id`, keeping `input.actor` and the
-authenticated identity unchanged. Two turns in the same session test conversation history,
-not cross-conversation memory.
-
-A top-level `actor` is rejected by the transport. Message-list shorthand (`"input": [...]`) has no
-actor field; the generated adapter defaults actor identity to `session_id`, so changing sessions
-also changes the memory partition. Use object-form input for this check. Custom or migrated
-adapters may use a different contract; inspect their adapter rather than imposing this example.
-
-The actor field is not authentication. Preserve the application's trusted identity mapping and
-[authorization boundaries](state-and-tools.md#actor-session-and-authorization).
+Read the project's `AGENTKIT_CONTRACT.md` for invocation paths, request fields, session and actor
+mapping, and routing requirements. Inspect `runtime/adapter.py` for application input translation.
+Custom or migrated servers may expose different contracts; use their documented API and adapter
+rather than imposing a generated template's payload.

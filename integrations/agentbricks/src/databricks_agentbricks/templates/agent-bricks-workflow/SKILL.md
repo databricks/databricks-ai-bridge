@@ -12,7 +12,7 @@ Skill discovery does not authorize provisioning, deployment, live calls, or dele
 ## Choose the task
 
 - **New agent:** `agentbricks init <directory>` scaffolds a project and installs this workflow skill.
-  LangGraph is the default; use `--framework openai` for an OpenAI Agents SDK project.
+  Use `agentbricks init --help` for supported frameworks and defaults; honor the user's selection.
   Inspect `agent.toml` and the generated project instructions before changing integration points.
 - **Existing agent adoption:** inspect its framework, then use
   `agentbricks init --existing --framework <framework> <directory>` when migration is requested.
