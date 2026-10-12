@@ -138,7 +138,7 @@ python -m pytest tests/unit_tests/skills_test.py tests/unit_tests/agent_hint_tes
 ```
 
 These tests exercise real scaffold generation, portable skill metadata and references, shared-bundle
-discovery pointers, idempotency, conflict preservation, rollback, default hints, help output,
+discovery pointers, idempotency, conflict preservation, rollback, agent detection, help output,
 opt-out behavior, and JSON stdout. Invocation examples belong in each template's
 `AGENTKIT_CONTRACT.md`, not the framework-neutral workflow skill; validate them against the runtime
 schema and template adapter. Build a wheel and confirm the skill and reference files are
