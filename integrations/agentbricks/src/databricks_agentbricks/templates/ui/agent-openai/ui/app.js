@@ -117,9 +117,9 @@ function setStatus(label, type = "ready") {
   elements.runStatus.className = `run-status ${type === "ready" ? "" : type}`.trim();
 }
 
-// The send button is enabled only when there is text to send and no run is in flight.
+// Resolve pending approvals before starting another turn.
 function updateSendState() {
-  elements.sendButton.disabled = state.busy || !elements.promptInput.value.trim();
+  elements.sendButton.disabled = state.busy || Boolean(state.pendingInterrupt) || !elements.promptInput.value.trim();
 }
 
 function setBusy(busy, label = "Working") {
@@ -1134,6 +1134,11 @@ async function dispatch(payload, mode = state.mode) {
 async function sendText(text, mode = state.mode) {
   const content = text.trim();
   if (!content || state.busy) return "";
+  if (state.pendingInterrupt) {
+    const error = new Error("Approve or reject the pending tool call before sending another message.");
+    appendError(error);
+    throw error;
+  }
   appendMessage("user", content, "You");
   setBusy(true, mode === "background" ? "Starting background run" : mode === "streaming" ? "Streaming" : "Running");
   try {
@@ -1179,6 +1184,7 @@ async function resume(decision) {
 
 function clearChat({ recordEvent = true } = {}) {
   state.pendingInterrupt = null;
+  updateSendState();
   state.draft = null;
   state.draftText = "";
   state.lastAssistantText = "";
