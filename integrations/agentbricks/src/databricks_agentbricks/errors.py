@@ -65,7 +65,7 @@ class AgentCliError(click.ClickException):
             return
         # Render in the cargo/uv diagnostic grammar: a red `error:` (or cargo's
         # `error[CODE]:`) keyword, the message, and an indented `help:` line carrying the fix.
-        from databricks_agentbricks import render
+        from databricks_agentbricks.presentation import render
 
         render.diagnostic(
             "error",

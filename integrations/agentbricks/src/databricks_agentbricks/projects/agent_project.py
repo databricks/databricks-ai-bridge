@@ -15,7 +15,7 @@ from tomlkit import TOMLDocument
 from tomlkit.exceptions import ParseError
 
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.project_types import (
+from databricks_agentbricks.projects.types import (
     AgentFramework,
     AgentServer,
     parse_framework,

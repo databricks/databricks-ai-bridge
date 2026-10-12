@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from databricks_agentbricks.agent_project import _three_part_name
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.projects.agent_project import _three_part_name
 
 _RESOURCE_PREFIX = "mcp-services/"
 

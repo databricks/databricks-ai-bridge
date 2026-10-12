@@ -25,12 +25,12 @@ from typing import Optional
 
 import click
 
-from databricks_agentbricks import render
-from databricks_agentbricks.agent_project import AgentProject, default_store_name
 from databricks_agentbricks.cli.tracing import default_experiment_name
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.project_config import write_project_metadata
-from databricks_agentbricks.project_types import (
+from databricks_agentbricks.presentation import render
+from databricks_agentbricks.projects.agent_project import AgentProject, default_store_name
+from databricks_agentbricks.projects.config import write_project_metadata
+from databricks_agentbricks.projects.types import (
     AgentFramework,
     AgentServer,
     parse_framework,

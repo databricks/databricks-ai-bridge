@@ -1,4 +1,4 @@
-"""HTTP transport and response decoding for Agent Bricks endpoint commands."""
+"""HTTP transport and response decoding for endpoint invocation."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ class EndpointRequest:
 
 @dataclass(frozen=True)
 class EndpointResponse:
-    """HTTP response data used by endpoint rendering."""
+    """HTTP response data returned by the invocation service."""
 
     url: str
     status_code: int
@@ -39,7 +39,7 @@ class EndpointResponse:
 
 
 class HttpSession:
-    """Small stdlib HTTP client retaining cookies across polling requests."""
+    """Small stdlib HTTP client retaining cookies across requests."""
 
     def __init__(self) -> None:
         self._opener = urllib.request.build_opener(
@@ -52,6 +52,7 @@ class HttpSession:
         *,
         on_event: Callable[[dict[str, Any]], None] | None = None,
     ) -> EndpointResponse:
+        """Send one request and decode either its body or its SSE events."""
         data = json.dumps(request.body).encode() if request.body_set else None
         http_request = urllib.request.Request(
             request.url,
@@ -63,6 +64,8 @@ class HttpSession:
         try:
             response = self._opener.open(http_request, timeout=request.timeout)
         except urllib.error.HTTPError as exc:
+            # HTTP errors still carry a response body and status, so decode them below and let
+            # InvokeService apply the command's non-2xx policy.
             response = exc
         except (OSError, TimeoutError, urllib.error.URLError) as exc:
             reason = getattr(exc, "reason", exc)

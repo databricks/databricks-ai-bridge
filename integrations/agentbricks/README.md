@@ -443,6 +443,10 @@ agentbricks deploy my-agent
 ```
 
 Memory and session stores are independent resources: deleting one never affects the other.
+For projects with `agent.toml`, unbinding either store removes its declaration; the next deploy
+removes the corresponding `AGENT_MEMORY_STORE` or `AGENT_SESSION_STORE` entry from `app.yaml`.
+Unbinding does not delete the store or revoke an existing grant to the App's service principal.
+If access must be revoked, coordinate that separately with the store owner or workspace admin.
 
 ## Commands
 

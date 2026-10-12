@@ -8,12 +8,12 @@ from typing import Any, Literal
 
 import click
 
-from databricks_agentbricks import render
-from databricks_agentbricks.agent_project import AgentProject, Scope, ToolSpec
-from databricks_agentbricks.cli.help import _example_epilog
 from databricks_agentbricks.cli.mcp import _add_command, _list_services, _validate_schema
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.project_config import require_managed_tool_support
+from databricks_agentbricks.presentation import render
+from databricks_agentbricks.presentation.help import _example_epilog
+from databricks_agentbricks.projects.agent_project import AgentProject, Scope, ToolSpec
+from databricks_agentbricks.projects.config import require_managed_tool_support
 
 
 def _identifier(value: str) -> str:

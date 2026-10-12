@@ -6,8 +6,8 @@ import pytest
 import tomli
 
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.project_config import load_project_metadata, write_project_metadata
-from databricks_agentbricks.project_types import AgentFramework
+from databricks_agentbricks.projects.config import load_project_metadata, write_project_metadata
+from databricks_agentbricks.projects.types import AgentFramework
 
 
 @pytest.mark.parametrize("framework", list(AgentFramework))

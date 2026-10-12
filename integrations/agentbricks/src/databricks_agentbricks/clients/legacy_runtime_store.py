@@ -5,10 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from dataclasses import dataclass
 from typing import Optional
 
-from databricks_agentbricks.app_resources import LakebaseBackend
-from databricks_agentbricks.databricks_cli import _databricks
+from databricks_agentbricks.clients.databricks_cli import _databricks
 from databricks_agentbricks.errors import AgentCliError
 
 _BRANCH = "production"
@@ -16,6 +16,42 @@ _DATABASE = "databricks-postgres"
 _ENDPOINT = "primary"
 _RESOURCE_NAME = "postgres-runtime-store"
 _SCHEMA_PREFIX = "databricks_agentkit_runtime_"
+
+
+@dataclass(frozen=True)
+class LakebaseBackend:
+    """A Lakebase database and endpoint used by the legacy Runtime Store."""
+
+    project: str
+    branch: str
+    endpoint_id: str
+    database: str
+    schema: str
+    tables: tuple[str, ...]
+    resource_name: str  # the app-resource name (must be unique across an app's resources)
+
+    @property
+    def branch_path(self) -> str:
+        return f"projects/{self.project}/branches/{self.branch}"
+
+    @property
+    def database_path(self) -> str:
+        return f"{self.branch_path}/databases/{self.database}"
+
+    @property
+    def endpoint_path(self) -> str:
+        return f"{self.branch_path}/endpoints/{self.endpoint_id}"
+
+    def postgres_resource(self) -> dict:
+        """Return this backend's ``postgres`` Apps resource entry."""
+        return {
+            "name": self.resource_name,
+            "postgres": {
+                "branch": self.branch_path,
+                "database": self.database_path,
+                "permission": "CAN_CONNECT_AND_CREATE",
+            },
+        }
 
 
 def backend(app: str) -> LakebaseBackend:

@@ -10,6 +10,7 @@ share it without importing each other.
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Mapping
 from typing import Optional
 
 from databricks_agentbricks.errors import AgentCliError
@@ -23,11 +24,12 @@ def _databricks(
     check: bool = True,
     cwd: Optional[str] = None,
     action: Optional[str] = None,
+    env: Optional[Mapping[str, str]] = None,
 ) -> subprocess.CompletedProcess:
     cmd = ["databricks", *args]
     if profile:
         cmd += ["--profile", profile]
-    result = subprocess.run(cmd, text=True, capture_output=capture, cwd=cwd)
+    result = subprocess.run(cmd, text=True, capture_output=capture, cwd=cwd, env=env)
     if check and result.returncode != 0:
         # Agent Bricks drives the `databricks apps` CLI as an implementation detail; surface a failure in
         # Agent Bricks' own terms (`action`) rather than echoing the raw subcommand and --profile, which

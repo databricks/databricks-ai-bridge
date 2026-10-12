@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
+from unittest import mock
+
 import pytest
 from click.testing import CliRunner
 
@@ -59,6 +62,7 @@ class _Client:
 
 class _Ctx:
     output = "text"
+    profile = None
 
     def __init__(self, client):
         self._client = client
@@ -71,6 +75,52 @@ def _pipeline():
     assert "pipeline" in cli.memory.commands, "memory must register the pipeline command group"
     assert "dreamer" not in cli.memory.commands
     return cli.memory.commands["pipeline"]
+
+
+@pytest.mark.parametrize("profile", [None, "dogfood"])
+@pytest.mark.parametrize("output", ["text", "json"])
+@mock.patch("databricks_agentbricks.cli.pipeline.subprocess.run")
+def test_get_run_inherits_terminal_streams(run, profile, output):
+    run.return_value = subprocess.CompletedProcess([], 0)
+    ctx = _Ctx(_Client())
+    ctx.profile = profile
+    ctx.output = output
+    result = CliRunner().invoke(
+        _pipeline(), ["runs", "get", "memory-pipelines/p-123/runs/418898433707211"], obj=ctx
+    )
+    assert result.exit_code == 0, result.output
+    command = ["databricks", "jobs", "get-run", "418898433707211"]
+    if profile:
+        command.extend(["--profile", profile])
+    run.assert_called_once_with(command, check=False)
+
+
+@mock.patch("databricks_agentbricks.cli.pipeline.subprocess.run")
+def test_get_run_preserves_failure_exit_code(run):
+    run.return_value = subprocess.CompletedProcess([], 7)
+    result = CliRunner().invoke(
+        _pipeline(), ["runs", "get", "memory-pipelines/p-123/runs/123"], obj=_Ctx(_Client())
+    )
+    assert result.exit_code == 7
+
+
+@pytest.mark.parametrize(
+    "name", ["123", "memory-pipelines/p/runs/abc", "memory-pipelines/p/runs/123/extra"]
+)
+@mock.patch("databricks_agentbricks.cli.pipeline.subprocess.run")
+def test_get_run_rejects_invalid_resource_name(run, name):
+    result = CliRunner().invoke(_pipeline(), ["runs", "get", name], obj=_Ctx(_Client()))
+    assert result.exit_code == 2
+    run.assert_not_called()
+
+
+@mock.patch("databricks_agentbricks.cli.pipeline.subprocess.run", side_effect=FileNotFoundError)
+def test_get_run_reports_missing_databricks_cli(run):
+    result = CliRunner().invoke(
+        _pipeline(), ["runs", "get", "memory-pipelines/p-123/runs/123"], obj=_Ctx(_Client())
+    )
+    assert result.exit_code == 1
+    assert "Databricks CLI not found" in result.output
 
 
 def test_create_accepts_store_names_and_model():
@@ -155,10 +205,68 @@ def test_list_get_update_and_delete_expose_crud_workflow():
         (
             "update",
             "p-123",
-            {"display_name": None, "instructions": "Only durable facts."},
+            {
+                "display_name": None,
+                "instructions": "Only durable facts.",
+                "model": None,
+                "trigger": None,
+            },
         ),
         ("delete", "p-123"),
     ]
+
+
+def test_list_shows_store_ids_without_collection_prefix():
+    result = CliRunner().invoke(_pipeline(), ["list"], obj=_Ctx(_Client()))
+
+    assert result.exit_code == 0, result.output
+    # Full resource names get cut off in the table, hiding the part that identifies the store.
+    assert "support-sessions" in result.output
+    assert "support-memory" in result.output
+    assert "session-stores/" not in result.output
+    assert "memory-stores/" not in result.output
+
+
+@pytest.mark.parametrize("model", ["system.ai.gpt-5-6-sol", ""])
+def test_update_accepts_model_and_instructions_file(model, tmp_path):
+    path = tmp_path / "instructions.md"
+    instructions = "# Distillation\nKeep durable facts.\n"
+    path.write_text(instructions, encoding="utf-8")
+    client = _Client()
+
+    result = CliRunner().invoke(
+        _pipeline(),
+        ["update", "p-123", "--model", model, "--instructions", f"@{path}"],
+        obj=_Ctx(client),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert client.calls == [
+        (
+            "update",
+            "p-123",
+            {"display_name": None, "instructions": instructions, "model": model, "trigger": None},
+        )
+    ]
+
+
+@pytest.mark.parametrize("trigger", ["manual", "scheduled"])
+def test_update_accepts_trigger(trigger):
+    client = _Client()
+    result = CliRunner().invoke(
+        _pipeline(), ["update", "p-123", "--trigger", trigger], obj=_Ctx(client)
+    )
+    assert result.exit_code == 0, result.output
+    assert client.calls[0][-1]["trigger"] == trigger
+
+
+def test_update_rejects_unknown_trigger():
+    client = _Client()
+    result = CliRunner().invoke(
+        _pipeline(), ["update", "p-123", "--trigger", "hourly"], obj=_Ctx(client)
+    )
+    assert result.exit_code == 2
+    assert client.calls == []
 
 
 def test_run_triggers_pipeline_and_renders_returned_run():

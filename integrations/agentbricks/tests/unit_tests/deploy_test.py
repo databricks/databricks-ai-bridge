@@ -1,65 +1,191 @@
-"""Unit tests for the deploy wrapper: trace env injection, store validation, deploy argv."""
+"""Unit tests for the deploy CLI adapter and its resource/client boundaries.
+
+The deployment workflow used to live in this command module. It is now owned by ``DeployService``
+and its clients/provisioners (covered by ``deploy_service_test.py`` and resource-specific tests),
+so this file focuses on the CLI adapter, manifest contract, and client behavior observable there.
+"""
 
 from __future__ import annotations
 
 import json
 import pathlib
 import types
+from dataclasses import replace
 from unittest import mock
 
 import pytest
 import yaml
 from click.testing import CliRunner
 
-from databricks_agentbricks.agent_project import AgentProject, ToolSpec
 from databricks_agentbricks.cli import deploy as deploy_mod
-from databricks_agentbricks.cli.tracing import MLflowTraceTables, ResolvedTraceExperiment
+from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
+from databricks_agentbricks.clients.apps_client import AppsClient
+from databricks_agentbricks.clients.conversation_store_client import (
+    MemoryStoreClient,
+    SessionStoreClient,
+)
+from databricks_agentbricks.clients.tracing_client import (
+    MLflowTraceTables,
+    ResolvedTraceExperiment,
+    TracingClient,
+)
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.project_config import write_project_metadata
-
-# The autouse fixture below stubs `get_or_create_trace_experiment` for deploy-command tests; capture the
-# real function here so its own unit tests can exercise the actual logic.
-_REAL_RESOLVE_TRACE = deploy_mod.get_or_create_trace_experiment
-
-
-@pytest.fixture(autouse=True)
-def _compute_active(monkeypatch):
-    # `agentbricks deploy` now waits for compute on every deploy; report ACTIVE so the wait returns
-    # immediately. Tests that exercise _wait_for_running directly override _app_compute_state.
-    monkeypatch.setattr(deploy_mod, "_app_compute_state", lambda name, profile: "ACTIVE")
-
-
-@pytest.fixture(autouse=True)
-def _no_tracing_by_default(monkeypatch):
-    # Tracing is on by default and would create an MLflow experiment (a live workspace op); stub the
-    # provisioning off so non-tracing deploy tests stay hermetic. Tracing tests override this.
-    # (The trace-resource reconcile is stubbed dir-wide by conftest.py's autouse fixture.)
-    monkeypatch.setattr(deploy_mod, "get_or_create_trace_experiment", lambda *a, **k: None)
+from databricks_agentbricks.projects.agent_project import AgentProject
+from databricks_agentbricks.projects.app_manifest import AppManifest
+from databricks_agentbricks.projects.resolver import ProjectResolver
+from databricks_agentbricks.services.deploy_service import (
+    DeployRequest,
+    DeployResult,
+    ToolAccessSummary,
+)
+from databricks_agentbricks.services.deployment.config import (
+    _DEFAULT_PIP_INDEX_URL,
+    _USE_MANAGED_RUNTIME_STORE,
+    TRACES_EXPERIMENT_ID_ENV,
+    TRACES_TRACKING_URI_ENV,
+    mlflow_tracing_config,
+)
+from databricks_agentbricks.services.deployment.names import DeploymentName
 
 
-@pytest.fixture(autouse=True)
-def _no_tool_access_reconciliation_by_default(monkeypatch):
-    # Tool access has dedicated planner/reconciler and deploy-order coverage. Keep unrelated deploy
-    # tests hermetic by replacing the cloud boundary, just as tracing is isolated above.
-    monkeypatch.setattr(
-        deploy_mod,
-        "reconcile_tool_access",
-        lambda client, app, principal, plan, profile: plan,
+class _FakeApiClient:
+    host = "https://workspace.example"
+    current_user = "me@example.com"
+
+
+class _Ctx:
+    profile = "prof"
+    output = "text"
+
+    def __init__(self, *, output: str = "text"):
+        self.output = output
+        self.api_client_provider = types.SimpleNamespace(get=lambda: _FakeApiClient())
+
+
+def _result(*, deployment: str = "agent-bricks-demo") -> DeployResult:
+    return DeployResult(
+        deployment=deployment,
+        source="/tmp/agent",
+        url="https://demo.example",
+        workspace_path="/Workspace/demo",
+        env={"KEEP": "value"},
+        client_host="https://workspace.example",
+        memory_store=None,
+        session_store=None,
+        trace_experiment_id=None,
+        uc_trace_tables=[],
+        trace_setup_error=None,
+        trace_grant_error=None,
+        memory_grant_error=None,
+        session_grant_error=None,
+        memory_grant_attempted=False,
+        session_grant_attempted=False,
+        tool_access=None,
+        created_app_yaml=False,
+        pip_index_url=None,
+        instance_count=None,
+        uses_runtime_api=True,
     )
-    monkeypatch.setattr(deploy_mod, "finalize_tool_access", lambda app, plan, profile: None)
 
 
-def test_upsert_manifest_env_scaffolds_when_missing(tmp_path: pathlib.Path):
-    scaffolded = deploy_mod._upsert_manifest_env(
-        tmp_path, {"AGENT_MEMORY_STORE": "memory-stores/x"}
+class _DeployApi:
+    """Small fake for the external Agent Bricks API used by concrete provisioners."""
+
+    host = "https://workspace.example"
+    current_user = "me@example.com"
+    workspace_client = object()
+
+    def __init__(self, events: list[tuple], *, fail_memory_grant: bool = False):
+        self.events = events
+        self.fail_memory_grant = fail_memory_grant
+
+    def create_memory_store(self, display_name, *, retry_transient=False):
+        self.events.append(("memory.create", display_name, retry_transient))
+        return {"name": "memory-stores/memory-id", "display_name": display_name}
+
+    def create_session_store(self, name, *, retry_transient=False):
+        self.events.append(("session.create", name, retry_transient))
+        return {"name": name}
+
+    def grant_memory_store_permission(self, resource_name, principal):
+        self.events.append(("memory.grant", resource_name, principal))
+        if self.fail_memory_grant:
+            raise AgentCliError("memory grant denied")
+
+    def grant_session_store_permission(self, resource_name, principal):
+        self.events.append(("session.grant", resource_name, principal))
+
+    def create_runtime_store(self, app, principal, *, app_name, retry_transient=False):
+        self.events.append(("runtime.create", app, principal, app_name, retry_transient))
+        return {
+            "name": f"runtime-stores/{app}",
+            "owner": {"app": {"name": app, "service_principal_id": principal}},
+            "storage_backend": {
+                "lakebase": {
+                    "branch": "projects/runtime/branches/production",
+                    "database_id": "runtime-db",
+                }
+            },
+        }
+
+
+class _DeployRunner:
+    """Fake `databricks` runner that records argv and serves an Apps JSON payload."""
+
+    def __init__(self, events: list[tuple], *, exists: bool = False):
+        self.events = events
+        self.exists = exists
+        self.resources: list[dict] = []
+
+    def __call__(self, args, profile, **kwargs):
+        args = list(args)
+        self.events.append(("apps", tuple(args)))
+        if args[:2] == ["apps", "get"]:
+            if len(args) == 3:
+                return types.SimpleNamespace(
+                    returncode=0 if self.exists else 1,
+                    stdout="" if self.exists else "",
+                    stderr="" if self.exists else "not found",
+                )
+            return types.SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "compute_status": {"state": "ACTIVE"},
+                        "service_principal_client_id": "sp-123",
+                        "url": "https://agent.example",
+                        "resources": self.resources,
+                    }
+                ),
+                stderr="",
+            )
+        if args[:2] == ["apps", "create-update"]:
+            payload = json.loads(args[args.index("--json") + 1])
+            if "resources" in payload.get("app", {}):
+                self.resources = payload["app"]["resources"]
+        if args[:2] == ["apps", "create"]:
+            return types.SimpleNamespace(returncode=0, stdout="App compute", stderr="")
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+
+def _real_deploy_context(api: _DeployApi, *, output: str = "text"):
+    return types.SimpleNamespace(
+        profile="prof",
+        output=output,
+        api_client_provider=types.SimpleNamespace(get=lambda: api),
     )
+
+
+def test_manifest_env_scaffolds_when_missing(tmp_path: pathlib.Path):
+    scaffolded = AppManifest.upsert_env_file(tmp_path, {"AGENT_MEMORY_STORE": "memory-stores/x"})
+
     assert scaffolded is True
     doc = yaml.safe_load((tmp_path / "app.yaml").read_text())
     assert {"name": "AGENT_MEMORY_STORE", "value": "memory-stores/x"} in doc["env"]
-    assert "command" in doc  # placeholder written
+    assert "command" in doc
 
 
-def test_upsert_manifest_env_updates_existing(tmp_path: pathlib.Path):
+def test_manifest_env_updates_existing_and_preserves_command(tmp_path: pathlib.Path):
     (tmp_path / "app.yaml").write_text(
         yaml.safe_dump(
             {
@@ -68,434 +194,131 @@ def test_upsert_manifest_env_updates_existing(tmp_path: pathlib.Path):
             }
         )
     )
-    scaffolded = deploy_mod._upsert_manifest_env(
+
+    scaffolded = AppManifest.upsert_env_file(
         tmp_path, {"AGENT_MEMORY_STORE": "new", "AGENT_SESSION_STORE": "s"}
     )
+
     assert scaffolded is False
     doc = yaml.safe_load((tmp_path / "app.yaml").read_text())
-    assert doc["command"] == ["uvicorn", "app:app"]  # preserved
-    by_name = {e["name"]: e["value"] for e in doc["env"]}
-    assert by_name == {"AGENT_MEMORY_STORE": "new", "AGENT_SESSION_STORE": "s"}
+    assert doc["command"] == ["uvicorn", "app:app"]
+    assert {entry["name"]: entry["value"] for entry in doc["env"]} == {
+        "AGENT_MEMORY_STORE": "new",
+        "AGENT_SESSION_STORE": "s",
+    }
 
 
-def test_upsert_manifest_env_preserves_unrelated_entries_and_replaces_value_from(
-    tmp_path: pathlib.Path,
-):
+def test_manifest_env_drops_value_from_invalid_entries_and_removals(tmp_path: pathlib.Path):
     unrelated = {"name": "USER_SECRET", "valueFrom": "user-secret-resource"}
-    (tmp_path / "app.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "command": ["uvicorn", "app:app"],
-                "env": [
-                    unrelated,
-                    {"name": "AGENT_MEMORY_STORE", "valueFrom": "old-resource"},
-                    "invalid-entry",
-                ],
-            }
-        )
-    )
-
-    assert deploy_mod._upsert_manifest_env(tmp_path, {"AGENT_MEMORY_STORE": "new"}) is False
-
-    doc = yaml.safe_load((tmp_path / "app.yaml").read_text())
-    assert doc["env"] == [unrelated, {"name": "AGENT_MEMORY_STORE", "value": "new"}]
-
-
-def test_upsert_manifest_env_removes_named_entries(tmp_path: pathlib.Path):
-    # `removals` drops named entries (e.g. the MLFLOW_* keys on unbind) while upsert still applies and
-    # unrelated entries are preserved.
     (tmp_path / "app.yaml").write_text(
         yaml.safe_dump(
             {
                 "command": ["x"],
                 "env": [
-                    {"name": "KEEP", "value": "1"},
-                    {"name": "MLFLOW_TRACKING_URI", "value": "databricks"},
-                    {"name": "MLFLOW_EXPERIMENT_ID", "value": "123"},
+                    unrelated,
+                    {"name": "AGENT_MEMORY_STORE", "valueFrom": "old-resource"},
+                    "invalid-entry",
+                    {"name": "MLFLOW_EXPERIMENT_ID", "value": "old"},
                 ],
             }
         )
     )
-    scaffolded = deploy_mod._upsert_manifest_env(
-        tmp_path, {"OTHER": "z"}, removals=["MLFLOW_TRACKING_URI", "MLFLOW_EXPERIMENT_ID"]
+
+    AppManifest.upsert_env_file(
+        tmp_path,
+        {"AGENT_MEMORY_STORE": "new"},
+        removals=["MLFLOW_EXPERIMENT_ID"],
     )
-    assert scaffolded is False
+
     doc = yaml.safe_load((tmp_path / "app.yaml").read_text())
-    assert doc["env"] == [{"name": "KEEP", "value": "1"}, {"name": "OTHER", "value": "z"}]
+    assert doc["env"] == [unrelated, {"name": "AGENT_MEMORY_STORE", "value": "new"}]
+
+
+def test_manifest_removal_only_does_not_scaffold_missing_file(tmp_path: pathlib.Path):
+    assert AppManifest.upsert_env_file(tmp_path, {}, removals=["MLFLOW_EXPERIMENT_ID"]) is False
+    assert not (tmp_path / "app.yaml").exists()
 
 
 def test_managed_runtime_store_is_the_internal_default():
-    assert deploy_mod._USE_MANAGED_RUNTIME_STORE is True
+    assert _USE_MANAGED_RUNTIME_STORE is True
 
 
-def test_ensure_session_store_reuses_on_already_exists():
-    client = mock.Mock()
-    client.create_session_store.side_effect = AgentCliError("exists", error_code="ALREADY_EXISTS")
-    client.get_session_store.return_value = {"session_store_name": "s"}
-    # Reused store -> created is False.
-    assert deploy_mod._ensure_session_store(client, "s") == ({"session_store_name": "s"}, False)
-    client.create_session_store.assert_called_once_with("s", retry_transient=True)
-
-
-def test_ensure_session_store_reports_created():
-    client = mock.Mock()
-    client.create_session_store.return_value = {"session_store_name": "s"}
-    assert deploy_mod._ensure_session_store(client, "s") == ({"session_store_name": "s"}, True)
-
-
-def test_ensure_memory_store_reuses_on_already_exists():
-    client = mock.Mock()
-    client.create_memory_store.side_effect = AgentCliError("exists", error_code="ALREADY_EXISTS")
-    client.list_memory_stores.return_value = {
-        "managed_memory_stores": [{"name": "memory-stores/mem-id-123", "display_name": "mem"}]
-    }
-
-    # Reused store -> created is False.
-    assert deploy_mod._ensure_memory_store(client, "mem") == (
-        {"name": "memory-stores/mem-id-123", "display_name": "mem"},
-        False,
-    )
-    client.create_memory_store.assert_called_once_with("mem", retry_transient=True)
-
-
-def test_ensure_memory_store_reports_created():
-    client = mock.Mock()
-    client.create_memory_store.return_value = {"name": "memory-stores/mem-id-123"}
-    assert deploy_mod._ensure_memory_store(client, "mem") == (
-        {"name": "memory-stores/mem-id-123"},
-        True,
-    )
-
-
-def test_ensure_memory_store_permission_denied_gives_admin_hint():
-    # ML-69282: admin-restricted Lakebase project creation -> actionable message, not a raw error.
-    client = mock.Mock()
-    client.create_memory_store.side_effect = AgentCliError("denied", error_code="PERMISSION_DENIED")
-    with pytest.raises(AgentCliError) as excinfo:
-        deploy_mod._ensure_memory_store(client, "mem")
-    err = excinfo.value
-    assert "permission to create memory store 'mem'" in err.message
-    assert err.hint is not None and "workspace admin" in err.hint
-    assert "--no-create-stores" in err.hint
-
-
-def test_ensure_memory_store_already_exists_but_inaccessible():
-    # ML-69292: name taken but not visible to the caller -> "you don't have access", not "could
-    # not be resolved".
-    client = mock.Mock()
-    client.create_memory_store.side_effect = AgentCliError("exists", error_code="ALREADY_EXISTS")
-    client.list_memory_stores.return_value = {"managed_memory_stores": []}
-    with pytest.raises(AgentCliError) as excinfo:
-        deploy_mod._ensure_memory_store(client, "mem")
-    err = excinfo.value
-    assert "already exists but you don't have access" in err.message
-    assert err.hint is not None and "grant you access" in err.hint
-
-
-def test_ensure_session_store_permission_denied_gives_admin_hint():
-    client = mock.Mock()
-    client.create_session_store.side_effect = AgentCliError(
-        "denied", error_code="PERMISSION_DENIED"
-    )
-    with pytest.raises(AgentCliError) as excinfo:
-        deploy_mod._ensure_session_store(client, "s")
-    err = excinfo.value
-    assert "permission to create session store 's'" in err.message
-    assert err.hint is not None and "workspace admin" in err.hint
-
-
-def test_ensure_session_store_already_exists_but_inaccessible():
-    client = mock.Mock()
-    client.create_session_store.side_effect = AgentCliError("exists", error_code="ALREADY_EXISTS")
-    client.get_session_store.side_effect = AgentCliError("denied", error_code="PERMISSION_DENIED")
-    with pytest.raises(AgentCliError) as excinfo:
-        deploy_mod._ensure_session_store(client, "s")
-    err = excinfo.value
-    assert "already exists but you don't have access" in err.message
-    assert err.hint is not None and "grant you access" in err.hint
-
-
-class _FakeClient:
-    host = "https://ws"
-    current_user = "me@example.com"
-
-    def __init__(self):
-        self.workspace_client = self
-        # Seeded with one pre-existing store ("mem", whose id differs from its display name as the
-        # real API returns); created stores are appended so deploy's auto-create can then resolve them.
-        self._memory_stores = [{"name": "memory-stores/mem-id-123", "display_name": "mem"}]
-
-    def get_memory_store(self, name):
-        return {"name": f"memory-stores/{name}"}
-
-    def list_memory_stores(self, page_size=None, page_token=None):
-        return {"managed_memory_stores": list(self._memory_stores), "next_page_token": ""}
-
-    def create_memory_store(self, display_name, *, retry_transient=False):
-        for existing in self._memory_stores:
-            if existing.get("display_name") == display_name:
-                raise AgentCliError(
-                    f"Memory store '{display_name}' already exists", error_code="ALREADY_EXISTS"
-                )
-        store = {"name": f"memory-stores/{display_name}", "display_name": display_name}
-        self._memory_stores.append(store)
-        return store
-
-    def get_session_store(self, name):
-        return {"session_store_name": name}
-
-    def create_session_store(self, name, *, retry_transient=False):
-        return {"session_store_name": name}
-
-    def create_runtime_store(self, store_id, sp, *, app_name, retry_transient=False):
-        return {
-            "name": f"runtime-stores/{store_id}",
-            "owner": {"app": {"name": app_name, "service_principal_id": sp}},
-            "storage_backend": {
-                "lakebase": {
-                    "project_id": "databricks-internal-custom-agents",
-                    "branch": "projects/databricks-internal-custom-agents/branches/production",
-                    "database_id": f"runtime-{app_name}-550e8400-e29b-41d4-a716-446655440000",
-                }
-            },
-        }
-
-    def get_runtime_store(self, name):
-        raise AgentCliError("absent", error_code="NOT_FOUND")
-
-    def grant_session_store_permission(self, store, principal):
-        return None
-
-    def grant_memory_store_permission(self, store, principal):
-        return None
-
-
-class _FakeCtx:
-    profile = "prof"
-    output = "text"
-
-    def client(self):
-        return _FakeClient()
-
-
-def _write_agent_manifest(
-    source: pathlib.Path,
-    *,
-    framework: str = "langgraph",
-    server: str = "agentbricks",
-    memory: str | None = None,
-    session: str | None = None,
-) -> None:
-    body = f'schema_version = 1\n\n[agent]\nframework = "{framework}"\nserver = "{server}"\n'
-    if memory:
-        body += f'\n[memory_store]\nname = "{memory}"\n'
-    if session:
-        body += f'\n[session_store]\nname = "{session}"\n'
-    (source / "agent.toml").write_text(body)
-
-
-@pytest.mark.parametrize(
-    ("framework", "template"),
-    [
-        ("langgraph", "custom-agent-langgraph"),
-        ("openai", "custom-agent-openai"),
-    ],
-)
-def test_deploy_rejects_custom_server_manifest_tools_before_mutation_or_network(
-    tmp_path: pathlib.Path,
-    framework: str,
-    template: str,
-):
-    source = tmp_path / template
-    source.mkdir()
-    (source / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    project = AgentProject.create(source, framework=framework, server="custom")
-    project.add_tool(ToolSpec.mcp("web", service="system.ai.web_search"))
-    project.write()
-    write_project_metadata(source, framework=framework, template=template)
-    manifest = source / "agent.toml"
-    before = manifest.read_text(encoding="utf-8")
-    ctx = _FakeCtx()
-
-    with (
-        mock.patch.object(deploy_mod, "_databricks") as db,
-        mock.patch.object(ctx, "client") as client,
-    ):
-        result = CliRunner().invoke(
-            deploy_mod.deploy,
-            ["custom", "--source", str(source)],
-            obj=ctx,
-        )
-
-    assert result.exit_code != 0
-    assert "require an Agent Bricks server template" in " ".join(result.output.split())
-    assert manifest.read_text(encoding="utf-8") == before
-    client.assert_not_called()
-    db.assert_not_called()
-
-
-@pytest.mark.parametrize("framework", ["langgraph", "openai"])
-def test_deploy_surfaces_invalid_custom_server_manifest_before_mutation_or_network(
-    tmp_path: pathlib.Path,
-    framework: str,
-):
-    source = tmp_path / f"custom-agent-{framework}"
-    source.mkdir()
-    (source / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    manifest = source / "agent.toml"
-    manifest.write_text(
-        f'schema_version = 1\n\n[agent]\nframework = "{framework}"\nserver = "custom"\n'
-        '\n[[tools]]\nid = "legacy"\nsource = { kind = "python", '
-        'entrypoint = "agent.tools:legacy" }\n',
-        encoding="utf-8",
-    )
-    before = manifest.read_text(encoding="utf-8")
-    ctx = _FakeCtx()
-
-    with (
-        mock.patch.object(deploy_mod, "_databricks") as db,
-        mock.patch.object(ctx, "client") as client,
-    ):
-        result = CliRunner().invoke(
-            deploy_mod.deploy,
-            ["custom", "--source", str(source)],
-            obj=ctx,
-        )
-
-    assert result.exit_code != 0
-    output = " ".join(result.output.split())
-    assert "Python tools are code-first" in output
-    assert "framework-native agent code" in output
-    assert "remain active" not in output
-    assert manifest.read_text(encoding="utf-8") == before
-    client.assert_not_called()
-    db.assert_not_called()
-
-
-def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch):
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _agent_toml(src, memory="mem")
-
-    calls: list[list[str]] = []
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: (
-            calls.append(args) or types.SimpleNamespace(returncode=0, stdout="", stderr="")
-        ),
-    )
-
-    result = CliRunner().invoke(
-        deploy_mod.deploy,
-        ["myapp", "--source", str(src)],
-        obj=_FakeCtx(),
-    )
-
-    assert result.exit_code == 0, result.output
-    # Agent Bricks prefixes new app names with `agent-bricks-` so `deployments list` can find its own apps.
-    ws = "/Workspace/Users/me@example.com/agentbricks_deployments/agent-bricks-myapp"
-    # uv.lock is excluded so the build resolves fresh against its own index (not the dev machine's).
-    assert ["sync", str(src), ws, "--exclude", "uv.lock"] in calls
-    assert ["apps", "deploy", "agent-bricks-myapp", "--source-code-path", ws] in calls
-    # deploy injects the resolved memory-store id so the entries API (keyed by id) can be addressed.
-    env_entries = yaml.safe_load((src / "app.yaml").read_text()).get("env") or []
-    env = {e["name"]: e["value"] for e in env_entries}
-    assert env.get("AGENT_MEMORY_STORE") == "mem-id-123"
-
-
-def test_deploy_creates_with_instance_count(tmp_path: pathlib.Path, monkeypatch):
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-
-    calls: list[tuple[list[str], dict]] = []
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: False)
-    monkeypatch.setattr(deploy_mod, "_wait_for_running", lambda name, profile: None)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kwargs: (
-            calls.append((args, kwargs))
-            or types.SimpleNamespace(returncode=0, stdout="", stderr="")
-        ),
-    )
-
-    result = CliRunner().invoke(
-        deploy_mod.deploy,
-        ["myapp", "--source", str(src), "--instances", "2"],
-        obj=_FakeCtx(),
-    )
-
-    assert result.exit_code == 0, result.output
-    assert (
-        [
-            "apps",
-            "create",
-            "agent-bricks-myapp",
-            "--compute-min-instances",
-            "2",
-            "--compute-max-instances",
-            "2",
-        ],
+def test_memory_store_client_reuses_existing_store_and_pages_by_display_name():
+    api = mock.Mock()
+    api.create_memory_store.side_effect = AgentCliError("exists", error_code="ALREADY_EXISTS")
+    api.list_memory_stores.side_effect = [
         {
-            "capture": True,
-            "action": "Could not create deployment 'agent-bricks-myapp'.",
+            "managed_memory_stores": [{"name": "memory-stores/other", "display_name": "other"}],
+            "next_page_token": "next",
         },
-    ) in calls
+        {
+            "managed_memory_stores": [
+                {"name": "memory-stores/mem-id-123", "display_name": "wanted"}
+            ],
+            "next_page_token": "",
+        },
+    ]
+    provider = mock.Mock(spec=ApiClientProvider)
+    provider.get.return_value = api
+
+    store, created = MemoryStoreClient(provider).ensure("wanted")
+
+    assert store["name"] == "memory-stores/mem-id-123"
+    assert created is False
+    assert [call.kwargs for call in api.list_memory_stores.call_args_list] == [
+        {"page_size": 100, "page_token": None},
+        {"page_size": 100, "page_token": "next"},
+    ]
 
 
-def test_deploy_updates_existing_instance_count(tmp_path: pathlib.Path, monkeypatch):
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+def test_memory_store_client_reports_permission_hint():
+    api = mock.Mock()
+    api.create_memory_store.side_effect = AgentCliError("denied", error_code="PERMISSION_DENIED")
+    provider = mock.Mock(spec=ApiClientProvider)
+    provider.get.return_value = api
 
-    calls: list[tuple[list[str], dict]] = []
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kwargs: (
-            calls.append((args, kwargs))
-            or types.SimpleNamespace(returncode=0, stdout="", stderr="")
-        ),
-    )
+    with pytest.raises(AgentCliError, match="permission to create memory store 'mem'") as exc:
+        MemoryStoreClient(provider).ensure("mem")
 
-    result = CliRunner().invoke(
-        deploy_mod.deploy,
-        ["myapp", "--source", str(src), "--instances", "2"],
-        obj=_FakeCtx(),
-    )
-
-    assert result.exit_code == 0, result.output
-    update_args, update_kwargs = next(
-        call for call in calls if call[0][:3] == ["apps", "create-update", "agent-bricks-myapp"]
-    )
-    assert update_kwargs == {
-        "capture": True,
-        "action": "Could not update deployment 'agent-bricks-myapp'.",
-    }
-    payload = json.loads(update_args[update_args.index("--json") + 1])
-    assert payload == {
-        "app": {"compute_min_instances": 2, "compute_max_instances": 2},
-        "update_mask": "compute_min_instances,compute_max_instances",
-    }
+    assert exc.value.hint is not None and "workspace admin" in exc.value.hint
 
 
-def test_deploy_rejects_instance_count_above_platform_limit():
-    result = CliRunner().invoke(
-        deploy_mod.deploy,
-        ["myapp", "--instances", "6"],
-        obj=_FakeCtx(),
-    )
+def test_memory_store_client_distinguishes_inaccessible_existing_store():
+    api = mock.Mock()
+    api.create_memory_store.side_effect = AgentCliError("exists", error_code="ALREADY_EXISTS")
+    api.list_memory_stores.return_value = {"managed_memory_stores": [], "next_page_token": ""}
+    provider = mock.Mock(spec=ApiClientProvider)
+    provider.get.return_value = api
 
-    assert result.exit_code != 0
-    assert "6 is not in the range 1<=x<=5" in result.output
+    with pytest.raises(AgentCliError, match="already exists but you don't have access"):
+        MemoryStoreClient(provider).ensure("mem")
 
 
-def test_deploy_help_exposes_instances_and_sticky_routing():
+def test_session_store_client_reuses_existing_store():
+    api = mock.Mock()
+    api.create_session_store.side_effect = AgentCliError("exists", error_code="ALREADY_EXISTS")
+    api.get_session_store.return_value = {"name": "sessions"}
+    provider = mock.Mock(spec=ApiClientProvider)
+    provider.get.return_value = api
+
+    store, created = SessionStoreClient(provider).ensure("sessions")
+
+    assert store == {"name": "sessions"}
+    assert created is False
+    api.create_session_store.assert_called_once_with("sessions", retry_transient=True)
+
+
+def test_session_store_client_reports_permission_hint():
+    api = mock.Mock()
+    api.create_session_store.side_effect = AgentCliError("denied", error_code="PERMISSION_DENIED")
+    provider = mock.Mock(spec=ApiClientProvider)
+    provider.get.return_value = api
+
+    with pytest.raises(AgentCliError, match="permission to create session store 'sessions'"):
+        SessionStoreClient(provider).ensure("sessions")
+
+
+def test_deploy_help_exposes_instance_count_and_routing_key():
     result = CliRunner().invoke(deploy_mod.deploy, ["--help"])
 
     assert result.exit_code == 0, result.output
@@ -504,1227 +327,544 @@ def test_deploy_help_exposes_instances_and_sticky_routing():
     assert "--max-instances" not in result.output
     assert "sticky routing" in result.output
     assert "X-Routing-Key" in result.output
-    assert "Databricks Apps instances" not in result.output
 
 
-@pytest.mark.parametrize("framework", ["langgraph", "openai"])
-def test_deploy_custom_server_skips_runtime_store_provisioning_and_binding(
-    tmp_path: pathlib.Path, monkeypatch, framework: str
-) -> None:
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "command": ["x"],
-                "env": [{"name": "USER_ENV", "value": "keep"}],
-            }
+def test_deploy_rejects_instance_count_above_platform_limit():
+    result = CliRunner().invoke(deploy_mod.deploy, ["demo", "--instances", "6"], obj=_Ctx())
+
+    assert result.exit_code != 0
+    assert "6 is not in the range 1<=x<=5" in result.output
+
+
+def test_deploy_cli_passes_request_to_service_and_presents_json(tmp_path: pathlib.Path):
+    service = mock.Mock()
+    service.deploy.return_value = _result()
+    ctx = _Ctx(output="json")
+
+    with mock.patch.object(deploy_mod, "build_deploy_service", return_value=service):
+        result = CliRunner().invoke(
+            deploy_mod.deploy,
+            [
+                "demo",
+                "--source",
+                str(tmp_path),
+                "--pip-index-url",
+                "https://pypi.org/simple/",
+                "--workspace-path",
+                "/Workspace/agents/demo",
+                "--instances",
+                "2",
+                "--allow-user-scope-update",
+            ],
+            obj=ctx,
         )
-    )
-    _write_agent_manifest(src, framework=framework, server="custom")
 
-    create = mock.Mock(side_effect=AssertionError("custom server must not provision a store"))
+    assert result.exit_code == 0, result.output
+    request = service.deploy.call_args.args[0]
+    assert request == DeployRequest(
+        name="demo",
+        source=str(tmp_path),
+        pip_index_url="https://pypi.org/simple/",
+        workspace_path="/Workspace/agents/demo",
+        instance_count=2,
+        allow_user_scope_update=True,
+    )
+    assert json.loads(result.output)["deployment"] == "agent-bricks-demo"
+
+
+def test_deploy_json_preserves_additive_tool_access_contract(tmp_path: pathlib.Path):
+    service = mock.Mock()
+    service.deploy.return_value = replace(
+        _result(),
+        tool_access=ToolAccessSummary(app_resources=1, uc_grants=2, workspace_grants=3),
+    )
+
+    with mock.patch.object(deploy_mod, "build_deploy_service", return_value=service):
+        result = CliRunner().invoke(
+            deploy_mod.deploy,
+            ["demo", "--source", str(tmp_path)],
+            obj=_Ctx(output="json"),
+        )
+
+    assert result.exit_code == 0, result.output
+    tool_access = json.loads(result.output)["tool_access"]
+    assert tool_access == {
+        "app_resources": 1,
+        "uc_grants": 2,
+        "workspace_grants": 3,
+        "direct_resources_only": True,
+        "uc_workspace_grants_additive": True,
+    }
+    assert "direct_grants_additive" not in tool_access
+
+
+def test_build_deploy_service_composes_current_clients_without_opening_api_client():
+    ctx = _Ctx()
+
+    service = deploy_mod.build_deploy_service(ctx)
+
+    assert service.__class__.__name__ == "DeployService"
+    assert service._apps_client.__class__ is AppsClient
+    assert service._api_client_provider is ctx.api_client_provider
+    assert service._memory_store_provisioner.__class__.__name__ == "MemoryStoreProvisioner"
+    assert service._session_store_provisioner.__class__.__name__ == "SessionStoreProvisioner"
+    assert service._tracing_provisioner.__class__.__name__ == "TracingProvisioner"
+
+
+def test_apps_client_formats_create_and_fixed_scale_update():
     calls = []
 
-    def fake_databricks(args, profile, **kwargs):
+    def runner(args, profile, **kwargs):
+        calls.append((args, profile, kwargs))
+        return types.SimpleNamespace(returncode=0, stdout="created", stderr="")
+
+    client = AppsClient("prof", runner=runner)
+    assert client.create("agent-bricks-demo", 2) == "created"
+    assert client.create_update_instances("agent-bricks-demo", 3) == "created"
+
+    assert calls[0][0] == [
+        "apps",
+        "create",
+        "agent-bricks-demo",
+        "--compute-min-instances",
+        "2",
+        "--compute-max-instances",
+        "2",
+    ]
+    update = json.loads(calls[1][0][-1])
+    assert update == {
+        "app": {"compute_min_instances": 3, "compute_max_instances": 3},
+        "update_mask": "compute_min_instances,compute_max_instances",
+    }
+
+
+def test_apps_client_wait_for_active_returns_when_compute_is_active():
+    calls = []
+
+    def runner(args, profile, **kwargs):
         calls.append(args)
-        assert profile == "prof"
-        return types.SimpleNamespace(returncode=0, stdout="{}", stderr="")
-
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda app, profile: False)
-    monkeypatch.setattr(_FakeClient, "create_runtime_store", create)
-    # the trace-resource reconcile issues its own create-update and is out of scope here
-    monkeypatch.setattr(deploy_mod, "apply_trace_resources", mock.Mock(return_value=None))
-    monkeypatch.setattr(deploy_mod, "_databricks", fake_databricks)
-
-    result = CliRunner().invoke(
-        deploy_mod.deploy,
-        ["myapp", "--source", str(src)],
-        obj=_FakeCtx(),
-    )
-
-    assert result.exit_code == 0, result.output
-    create.assert_not_called()
-    assert any(args[:3] == ["apps", "create", "agent-bricks-myapp"] for args in calls)
-    assert any(args[:3] == ["apps", "deploy", "agent-bricks-myapp"] for args in calls)
-    assert not any(args[:2] in (["apps", "update"], ["apps", "create-update"]) for args in calls)
-    env = {
-        entry["name"]: entry["value"]
-        for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
-    }
-    assert env["USER_ENV"] == "keep"
-    assert "DATABRICKS_AGENTBRICKS_RUNTIME_STORE_LAKEBASE_ENDPOINT" not in env
-    assert "DATABRICKS_AGENTBRICKS_RUNTIME_STORE_SCHEMA" not in env
-
-
-@pytest.mark.parametrize(
-    ("deploy_name", "database_prefix"),
-    [
-        ("myapp", "runtime-agent-bricks-myapp-"),
-        ("agent-bricks-myapp", "runtime-agent-bricks-myapp-"),
-    ],
-)
-def test_deploy_agentbricks_server_provisions_runtime_store(
-    tmp_path: pathlib.Path, monkeypatch, deploy_name: str, database_prefix: str
-) -> None:
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _write_agent_manifest(src)
-    monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", True)
-
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "sp-123")
-    deployed_env = None
-
-    def fake_databricks(args, profile, **kwargs):
-        nonlocal deployed_env
-        if args[:2] == ["apps", "deploy"]:
-            manifest = yaml.safe_load((src / "app.yaml").read_text())
-            deployed_env = {entry["name"]: entry["value"] for entry in manifest.get("env", [])}
-        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(deploy_mod, "_databricks", fake_databricks)
-
-    result = CliRunner().invoke(
-        deploy_mod.deploy,
-        [deploy_name, "--source", str(src)],
-        obj=_FakeCtx(),
-    )
-
-    assert result.exit_code == 0, result.output
-    env = {
-        entry["name"]: entry["value"]
-        for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
-    }
-    assert env[deploy_mod.RUNTIME_STORE_LAKEBASE_BRANCH_ENV] == (
-        "projects/databricks-internal-custom-agents/branches/production"
-    )
-    assert env[deploy_mod.RUNTIME_STORE_DATABASE_ENV].startswith(database_prefix)
-    assert env[deploy_mod.RUNTIME_STORE_USERNAME_ENV] == "sp-123"
-    assert deployed_env is not None
-    assert deployed_env[deploy_mod.RUNTIME_STORE_LAKEBASE_BRANCH_ENV] == (
-        "projects/databricks-internal-custom-agents/branches/production"
-    )
-    assert deploy_mod.RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV not in deployed_env
-    assert deploy_mod.RUNTIME_STORE_SCHEMA_ENV not in deployed_env
-
-
-def test_deploy_defaults_to_legacy_runtime_store(tmp_path: pathlib.Path, monkeypatch) -> None:
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "command": ["x"],
-                "env": [{"name": "USER_ENV", "value": "keep"}],
-            }
+        return types.SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"compute_status": {"state": "ACTIVE"}}),
+            stderr="",
         )
-    )
-    _write_agent_manifest(src)
-    monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", False)
 
-    backend = deploy_mod.legacy_runtime_store.backend("agent-bricks-myapp")
-    events = []
-    provision = mock.Mock(side_effect=lambda *args: (events.append("legacy-project"), backend)[1])
-    attach = mock.Mock(side_effect=lambda *args: events.append("legacy-resource"))
-    client = _FakeClient()
-    create_managed = mock.Mock(side_effect=AssertionError("managed API must remain opt-in"))
-    monkeypatch.setattr(client, "create_runtime_store", create_managed)
-    monkeypatch.setattr(deploy_mod.legacy_runtime_store, "get_or_create_backend", provision)
-    monkeypatch.setattr(deploy_mod, "apply_postgres_resources", attach)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_deployment_exists",
-        lambda *args: (events.append("app-exists"), True)[1],
-    )
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", mock.Mock(return_value="app-sp"))
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, *rest, **kwargs: (
-            events.append(args[0]) or types.SimpleNamespace(returncode=0, stdout="", stderr="")
+    AppsClient("prof", runner=runner).wait_for_active("agent-bricks-demo", timeout_s=1)
+
+    assert calls == [["apps", "get", "agent-bricks-demo", "-o", "json"]]
+
+
+def test_apps_client_wait_for_active_times_out(monkeypatch):
+    client = AppsClient(
+        "prof",
+        runner=lambda *args, **kwargs: types.SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"compute_status": {"state": "STARTING"}}),
+            stderr="",
         ),
     )
-    ctx = types.SimpleNamespace(profile="prof", output="text", client=lambda: client)
+    monkeypatch.setattr("databricks_agentbricks.clients.apps_client.time.monotonic", lambda: 1)
+    monkeypatch.setattr("databricks_agentbricks.clients.apps_client.time.sleep", lambda _: None)
 
-    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=ctx)
+    with pytest.raises(AgentCliError, match="did not reach a running state"):
+        client.wait_for_active("agent-bricks-demo", timeout_s=0)
 
-    assert result.exit_code == 0, result.output
-    provision.assert_called_once_with("agent-bricks-myapp", "prof")
-    attach.assert_called_once_with("agent-bricks-myapp", [backend], "prof")
-    create_managed.assert_not_called()
-    assert events[:4] == ["legacy-project", "app-exists", "legacy-resource", "sync"]
-    env = {
-        entry["name"]: entry["value"]
-        for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
+
+def test_tracing_config_renders_workspace_environment():
+    assert mlflow_tracing_config("exp-9").env() == {
+        TRACES_TRACKING_URI_ENV: "databricks",
+        TRACES_EXPERIMENT_ID_ENV: "exp-9",
     }
-    assert env[deploy_mod.RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV] == backend.endpoint_path
-    assert env[deploy_mod.RUNTIME_STORE_SCHEMA_ENV] == backend.schema
-    assert env["USER_ENV"] == "keep"
-    assert deploy_mod.RUNTIME_STORE_LAKEBASE_BRANCH_ENV not in env
-    assert deploy_mod.RUNTIME_STORE_DATABASE_ENV not in env
-    assert deploy_mod.RUNTIME_STORE_USERNAME_ENV not in env
 
 
-@pytest.mark.parametrize("store_kind", ["session", "memory"])
-def test_deploy_runtime_store_uses_dedicated_backend_with_managed_store(
-    tmp_path: pathlib.Path, monkeypatch, store_kind: str
-) -> None:
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _write_agent_manifest(src, **{store_kind: "other-store"})
-    events = []
-    monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", True)
-    client = _FakeClient()
-    create = client.create_runtime_store
+def test_tracing_client_reconciles_bound_experiment_resource():
+    updates = []
 
-    def create_store(*args, **kwargs):
-        events.append("runtime-store")
-        return create(*args, **kwargs)
-
-    monkeypatch.setattr(client, "create_runtime_store", create_store)
-    existence_checks: list[str] = []
-    monkeypatch.setattr(
-        deploy_mod,
-        "_deployment_exists",
-        lambda app, profile: (existence_checks.append(app) or False),
-    )
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "sp-123")
-    monkeypatch.setattr(deploy_mod, "_grant_store_access", lambda *args, **kwargs: None)
-
-    def fake_databricks(args, profile, **kwargs):
-        assert args[:1] != ["postgres"]
-        assert args[:2] != ["apps", "update"]
-        if args[:2] == ["apps", "create"]:
-            events.append("app-created")
-        if args[:2] == ["apps", "deploy"]:
-            env = {
-                entry["name"]: entry["value"]
-                for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
-            }
-            assert env[deploy_mod.RUNTIME_STORE_DATABASE_ENV].startswith(
-                "runtime-agent-bricks-myapp-"
+    def runner(args, profile, **kwargs):
+        if args[:2] == ["apps", "get"]:
+            return types.SimpleNamespace(
+                returncode=0, stdout=json.dumps({"resources": []}), stderr=""
             )
-            assert env[deploy_mod.RUNTIME_STORE_DATABASE_ENV] != "other-store"
-            assert env[deploy_mod.RUNTIME_STORE_USERNAME_ENV] == "sp-123"
-            assert (
-                env[deploy_mod.RUNTIME_STORE_LAKEBASE_BRANCH_ENV]
-                == "projects/databricks-internal-custom-agents/branches/production"
-            )
-            assert deploy_mod.RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV not in env
-            assert env[deploy_mod.RUNTIME_STORE_SCHEMA_ENV] == "databricks_agentkit_runtime"
-            events.append("app-deployed")
+        updates.append(json.loads(args[-1]))
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(deploy_mod, "_databricks", fake_databricks)
-    ctx = types.SimpleNamespace(profile="prof", output="text", client=lambda: client)
-    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=ctx)
+    apps = AppsClient("prof", runner=runner)
+    client = TracingClient(mock.Mock(spec=ApiClientProvider), apps, "prof")
+    assert client.reconcile_app_resources("agent-bricks-demo", "exp-1", []) is None
 
-    assert result.exit_code == 0, result.output
-    assert existence_checks == ["agent-bricks-myapp"]
-    assert events == ["app-created", "runtime-store", "app-deployed"]
-
-
-def test_deploy_renames_underlying_app_compute_output(tmp_path: pathlib.Path, monkeypatch):
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-
-    calls: list[tuple[list[str], dict]] = []
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: False)
-    monkeypatch.setattr(deploy_mod, "_wait_for_running", lambda name, profile: None)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kwargs: (
-            calls.append((args, kwargs))
-            or types.SimpleNamespace(
-                returncode=0,
-                stdout="App compute is starting\n" if args[:2] == ["apps", "create"] else "",
-                stderr="",
-            )
-        ),
-    )
-
-    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
-
-    assert result.exit_code == 0, result.output
-    apps_calls = [call for call in calls if call[0][1] in ("create", "deploy")]
-    assert [call[0][1] for call in apps_calls] == ["create", "deploy"]
-    # create is still captured (to relabel its output); both carry an `action` so a failure is
-    # reported in AgentBricks's terms instead of echoing the raw `databricks apps` command.
-    assert apps_calls[0][1] == {
-        "capture": True,
-        "action": "Could not create deployment 'agent-bricks-myapp'.",
-    }
-    assert apps_calls[1][1] == {"action": "Could not deploy 'agent-bricks-myapp'."}
-    assert "Agent compute is starting" in result.output
-    assert "App compute" not in result.output
-    get_call = next(call for call in calls if call[0][:2] == ["apps", "get"])
-    assert get_call[1] == {"capture": True, "check": False}
-
-
-def test_deploy_reports_app_url(tmp_path: pathlib.Path, monkeypatch):
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
-    monkeypatch.setattr(
-        deploy_mod, "_app_url", lambda name, p: "https://myapp-123.databricksapps.com"
-    )
-    captured: dict = {}
-    monkeypatch.setattr(deploy_mod.render, "emit_json", lambda data: captured.update(data))
-
-    class _JsonCtx(_FakeCtx):
-        output = "json"
-
-    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_JsonCtx())
-
-    assert result.exit_code == 0, result.output
-    assert captured["url"] == "https://myapp-123.databricksapps.com"
-
-
-@pytest.mark.parametrize("framework", ["langgraph", "openai"])
-@pytest.mark.parametrize(
-    "server,chat_ui", [("agentbricks", True), ("agentbricks", False), ("custom", False)]
-)
-def test_deploy_recommends_invoking_deployed_agent(
-    tmp_path: pathlib.Path,
-    monkeypatch,
-    framework: str,
-    server: str,
-    chat_ui: bool,
-):
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _write_agent_manifest(src, framework=framework, server=server)
-    if chat_ui:
-        (src / "runtime").mkdir()
-        (src / "runtime" / "ui.py").write_text("# chat UI\n")
-    monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", True)
-
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "sp-123")
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
-
-    result = CliRunner().invoke(
-        deploy_mod.deploy,
-        ["myapp", "--source", str(src)],
-        obj=_FakeCtx(),
-    )
-
-    assert result.exit_code == 0, result.output
-    commands = [
-        line for line in result.output.splitlines() if line.startswith("agentbricks endpoint")
+    assert updates == [
+        {
+            "app": {
+                "resources": [
+                    {
+                        "name": "agentbricks-trace-experiment",
+                        "experiment": {"experiment_id": "exp-1", "permission": "CAN_EDIT"},
+                    }
+                ]
+            },
+            "update_mask": "resources",
+        }
     ]
-    assert len(commands) == 1, result.output
-    command = commands[0]
-    path = "/api/invocations" if server == "agentbricks" else "/invocations"
-    assert f"agentbricks endpoint invoke agent-bricks-myapp --path {path} --json " in command
-    assert "│" not in command
-    assert ("$(uuidgen)" in command) is (server == "agentbricks")
-    panel, example = result.output.split("Invoke with Agent Bricks\n")
-    assert panel.splitlines()[-1].startswith("╰")
-    assert example.splitlines() == [command]
-    for existing_command in ("agentbricks deployments get", "agentbricks deployments logs"):
-        assert any(line.startswith("│") and existing_command in line for line in panel.splitlines())
-    assert "Runtime Store" not in result.output
-    assert "runtime-agent-bricks-myapp-550e8400-e29b-41d4-a716-446655440000" not in result.output
-    env = {
-        entry["name"]: entry["value"]
-        for entry in yaml.safe_load((src / "app.yaml").read_text()).get("env", [])
-    }
-    if server == "agentbricks":
-        # Hiding the display field must not disable the deployed runtime's backend.
-        assert env["DATABRICKS_AGENTBRICKS_RUNTIME_STORE_LAKEBASE_BRANCH"] == (
-            "projects/databricks-internal-custom-agents/branches/production"
-        )
 
 
-def test_deploy_sync_keeps_directly_edited_agent_manifest(tmp_path: pathlib.Path, monkeypatch):
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    (src / "agent.toml").write_text(
-        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "custom"\n'
+def test_project_resolver_reads_bindings_and_missing_project(tmp_path: pathlib.Path):
+    project = AgentProject.create(
+        tmp_path,
+        framework="langgraph",
+        server="agentbricks",
+        memory_store="memory",
+        session_store="sessions",
+        experiment_name="/Shared/traces",
     )
-    calls: list[list[str]] = []
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    project.write()
+    resolver = ProjectResolver()
+
+    assert resolver.resource_bindings(tmp_path) == ("memory", "sessions", "/Shared/traces")
+    missing = tmp_path / "missing"
+    missing.mkdir()
+    assert resolver.resource_bindings(missing) == (None, None, None)
+
+
+def test_project_resolver_requires_a_name_when_manifest_has_none(tmp_path: pathlib.Path):
+    project = AgentProject.create(tmp_path, framework="langgraph", server="agentbricks")
+    project.write()
+
+    with pytest.raises(AgentCliError, match="No deployment name given"):
+        ProjectResolver().resolve_deployment_name(project, None)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("demo", "demo"), ("agent-bricks-demo", "agent-bricks-demo")],
+)
+def test_deployment_name_validates_at_service_boundary(raw: str, expected: str):
+    assert DeploymentName(raw) == expected
+
+
+def test_real_cli_deploy_reconciles_resources_and_rolls_out_in_order(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    project = AgentProject.create(
+        tmp_path,
+        framework="langgraph",
+        server="agentbricks",
+        memory_store="memory",
+        session_store="sessions",
+        experiment_name="/Shared/traces",
+    )
+    project.write()
+    events: list[tuple] = []
+    api = _DeployApi(events, fail_memory_grant=True)
+    runner = _DeployRunner(events)
+    monkeypatch.setattr(deploy_mod, "_databricks", runner)
+
+    def resolve_trace(profile, client, name):
+        events.append(("trace.ensure", profile, name))
+        return ResolvedTraceExperiment("exp-42", MLflowTraceTables())
+
     monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: (
-            calls.append(args) or types.SimpleNamespace(returncode=0, stdout="", stderr="")
-        ),
+        "databricks_agentbricks.clients.tracing_client.create_experiment_idempotent",
+        resolve_trace,
     )
 
-    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        [
+            "demo",
+            "--source",
+            str(tmp_path),
+            "--instances",
+            "2",
+            "--pip-index-url",
+            "https://packages.example/simple",
+        ],
+        obj=_real_deploy_context(api),
+    )
 
     assert result.exit_code == 0, result.output
-    sync = next(args for args in calls if args[0] == "sync")
-    assert sync[:3] == [
+    assert "Deployed agent 'agent-bricks-demo'" in result.output
+    assert "memory grant denied" in result.output
+
+    env = {
+        entry["name"]: entry["value"]
+        for entry in AppManifest.parse_lenient((tmp_path / "app.yaml").read_text()).raw_env()
+    }
+    assert env == {
+        "MLFLOW_TRACKING_URI": "databricks",
+        "MLFLOW_EXPERIMENT_ID": "exp-42",
+        "AGENT_MEMORY_STORE": "memory-id",
+        "AGENT_SESSION_STORE": "sessions",
+        "PIP_INDEX_URL": "https://packages.example/simple",
+        "UV_INDEX_URL": "https://packages.example/simple",
+        "UV_DEFAULT_INDEX": "https://packages.example/simple",
+        "DATABRICKS_AGENTBRICKS_RUNTIME_STORE_LAKEBASE_BRANCH": "projects/runtime/branches/production",
+        "DATABRICKS_AGENTBRICKS_RUNTIME_STORE_DATABASE": "runtime-db",
+        "DATABRICKS_AGENTBRICKS_RUNTIME_STORE_USERNAME": "sp-123",
+        "DATABRICKS_AGENTBRICKS_RUNTIME_STORE_SCHEMA": "databricks_agentkit_runtime",
+    }
+
+    app_calls = [list(event[1]) for event in events if event[0] == "apps"]
+    assert next(call for call in app_calls if call[:2] == ["apps", "create"]) == [
+        "apps",
+        "create",
+        "agent-bricks-demo",
+        "--compute-min-instances",
+        "2",
+        "--compute-max-instances",
+        "2",
+    ]
+    assert next(call for call in app_calls if call[0] == "sync") == [
         "sync",
-        str(src),
-        "/Workspace/Users/me@example.com/agentbricks_deployments/agent-bricks-myapp",
+        str(tmp_path),
+        "/Workspace/Users/me@example.com/agentbricks_deployments/agent-bricks-demo",
+        "--exclude",
+        "uv.lock",
     ]
-    excluded = {sync[index + 1] for index, value in enumerate(sync[:-1]) if value == "--exclude"}
-    assert "agent.toml" not in excluded
+    assert next(call for call in app_calls if call[:2] == ["apps", "deploy"]) == [
+        "apps",
+        "deploy",
+        "agent-bricks-demo",
+        "--source-code-path",
+        "/Workspace/Users/me@example.com/agentbricks_deployments/agent-bricks-demo",
+    ]
 
+    def event_index(predicate):
+        return next(index for index, event in enumerate(events) if predicate(event))
 
-def test_first_deploy_waits_for_running_before_deploying(tmp_path: pathlib.Path, monkeypatch):
-    # A brand-new app isn't RUNNING right after `apps create`; deploy must wait, or it races and
-    # fails ("not in RUNNING state"). Verify create -> wait -> sync/deploy ordering.
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-
-    calls: list[list[str]] = []
-    monkeypatch.setattr(
-        deploy_mod, "_deployment_exists", lambda a, p: False
-    )  # app doesn't exist yet
-    waited = {"called": False}
-    monkeypatch.setattr(
-        deploy_mod, "_wait_for_running", lambda name, profile: waited.__setitem__("called", True)
+    create_index = event_index(
+        lambda event: event
+        == ("runtime.create", "agent-bricks-demo", "sp-123", "agent-bricks-demo", True)
     )
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: (
-            calls.append(args) or types.SimpleNamespace(returncode=0, stdout="", stderr="")
-        ),
+    sync_index = event_index(lambda event: event[0] == "apps" and event[1][0] == "sync")
+    deploy_index = event_index(
+        lambda event: event[0] == "apps" and event[1][:2] == ("apps", "deploy")
     )
-
-    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
-
-    assert result.exit_code == 0, result.output
-    assert ["apps", "create", "agent-bricks-myapp"] in calls
-    assert waited["called"], "must wait for the new app to be running before deploying"
-
-
-def test_redeploy_waits_for_running_and_skips_create(tmp_path: pathlib.Path, monkeypatch):
-    # An existing app is re-deployed: no `apps create` (it would error), but still wait for compute
-    # so there's feedback and the app is ACTIVE before `apps deploy`.
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-
-    calls: list[list[str]] = []
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)  # already exists
-    waited = {"called": False}
-    monkeypatch.setattr(
-        deploy_mod, "_wait_for_running", lambda name, profile: waited.__setitem__("called", True)
+    trace_update_index = event_index(
+        lambda event: event[0] == "apps" and event[1][:2] == ("apps", "create-update")
     )
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: (
-            calls.append(args) or types.SimpleNamespace(returncode=0, stdout="", stderr="")
-        ),
+    memory_grant_index = event_index(lambda event: event[0] == "memory.grant")
+    assert create_index < sync_index < deploy_index < trace_update_index
+    assert deploy_index < memory_grant_index
+    assert ("memory.create", "memory", True) in events
+    assert ("session.create", "sessions", True) in events
+    assert ("trace.ensure", "prof", "/Shared/traces") in events
+
+    trace_payload = json.loads(
+        next(call[-1] for call in app_calls if call[:2] == ["apps", "create-update"])
     )
-
-    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
-
-    assert result.exit_code == 0, result.output
-    assert ["apps", "create", "agent-bricks-myapp"] not in calls  # never re-create an existing app
-    assert waited["called"], "re-deploy must also wait for compute"
+    assert trace_payload["app"]["resources"][0]["experiment"] == {
+        "experiment_id": "exp-42",
+        "permission": "CAN_EDIT",
+    }
 
 
-def test_wait_for_running_returns_when_compute_active(monkeypatch):
-    monkeypatch.setattr(deploy_mod, "_app_compute_state", lambda name, p: "ACTIVE")
-    deploy_mod._wait_for_running("app", "prof", timeout_s=1)  # returns without raising
-
-
-def test_wait_for_running_times_out(monkeypatch):
-    monkeypatch.setattr(deploy_mod, "_app_compute_state", lambda name, p: "STARTING")
-    monkeypatch.setattr(deploy_mod.time, "sleep", lambda s: None)  # don't actually wait
-    try:
-        deploy_mod._wait_for_running("app", "prof", timeout_s=0)
-        raise AssertionError("expected AgentCliError on timeout")
-    except AgentCliError:
-        pass
-
-
-def test_deploy_injects_store_env(tmp_path: pathlib.Path, monkeypatch):
-    # The runtime reads stores from env, never agent.toml: deploy wires the resolved memory id
-    # (AGENT_MEMORY_STORE — the entries API is keyed by id) and the session name (AGENT_SESSION_STORE)
-    # into app.yaml.
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _write_agent_manifest(src, memory="mem", session="sessions")
-    monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", True)
-
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "sp-123")
-
-    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
-
-    assert result.exit_code == 0, result.output
-    env_entries = yaml.safe_load((src / "app.yaml").read_text()).get("env") or []
-    env = {entry["name"]: entry["value"] for entry in env_entries}
-    assert env["AGENT_MEMORY_STORE"] == "mem-id-123"  # _FakeClient resolves "mem" -> mem-id-123
-    assert env["AGENT_SESSION_STORE"] == "sessions"
-
-
-def test_deploy_wires_tracing_env_and_grants_experiment_resource(
-    tmp_path: pathlib.Path, monkeypatch
+@pytest.mark.parametrize(
+    ("pip_index", "expected_index"),
+    [(None, _DEFAULT_PIP_INDEX_URL), ("", None)],
+    ids=["default-pypi", "empty-disables-override"],
+)
+def test_real_cli_deploy_custom_server_persists_name_and_skips_runtime_store(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    pip_index: str | None,
+    expected_index: str | None,
 ):
-    # Tracing is on by default: deploy wires the two MLflow env vars (id + workspace) into app.yaml
-    # and grants the app's SP write access by declaring the experiment as an app resource.
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    project = AgentProject.create(tmp_path, framework="langgraph", server="custom")
+    project.write()
+    events: list[tuple] = []
+    api = _DeployApi(events)
+    runner = _DeployRunner(events)
+    monkeypatch.setattr(deploy_mod, "_databricks", runner)
+    args = ["demo", "--source", str(tmp_path)]
+    if pip_index is not None:
+        args.extend(["--pip-index-url", pip_index])
 
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(
-        deploy_mod,
-        "get_or_create_trace_experiment",
-        lambda *a, **k: deploy_mod.ResolvedTraceExperiment("exp-42", MLflowTraceTables()),
-    )
-    granted: dict = {}
-    monkeypatch.setattr(
-        deploy_mod,
-        "apply_trace_resources",
-        lambda app, experiment_id, tables, profile: granted.update(
-            app=app, experiment_id=experiment_id, tables=tables
-        ),
-    )
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
-
-    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+    result = CliRunner().invoke(deploy_mod.deploy, args, obj=_real_deploy_context(api))
 
     assert result.exit_code == 0, result.output
-    env = {e["name"]: e["value"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
-    assert env["MLFLOW_EXPERIMENT_ID"] == "exp-42"
-    assert env["MLFLOW_TRACKING_URI"] == "databricks"
-    # the experiment is granted to the app's SP as an app resource (no manual SQL grant); a managed
-    # experiment carries no UC tables
-    assert granted == {"app": "agent-bricks-myapp", "experiment_id": "exp-42", "tables": []}
-    assert "Deployed without tracing" not in result.output  # bound -> no unbound notice
-
-
-def test_deploy_grants_uc_trace_tables_for_uc_backed_experiment(tmp_path, monkeypatch):
-    # A bound experiment that resolves UC-backed: deploy grants the experiment (CAN_EDIT) AND MODIFY
-    # on its UC OTEL tables in ONE trace-resource write - the experiment grant alone does not
-    # propagate to the UC tables the app exports traces to.
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-
-    tables = MLflowTraceTables(spans="cat.schema.otel_spans", logs="cat.schema.otel_logs")
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(
-        deploy_mod,
-        "get_or_create_trace_experiment",
-        lambda *a, **k: deploy_mod.ResolvedTraceExperiment("exp-uc", tables),
+    assert AgentProject.load(tmp_path).deployment_name == "demo"
+    assert not any(
+        event[0] in {"memory.create", "session.create", "runtime.create", "trace.ensure"}
+        for event in events
     )
-    trace_grant = mock.Mock(return_value=None)
-    monkeypatch.setattr(deploy_mod, "apply_trace_resources", trace_grant)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    if expected_index is None:
+        assert not (tmp_path / "app.yaml").exists()
+    else:
+        env = {
+            entry["name"]: entry["value"]
+            for entry in AppManifest.parse_lenient((tmp_path / "app.yaml").read_text()).raw_env()
+        }
+        assert env["PIP_INDEX_URL"] == expected_index
+        assert env["UV_INDEX_URL"] == expected_index
+        assert env["UV_DEFAULT_INDEX"] == expected_index
+    assert all(
+        not key.startswith("DATABRICKS_AGENTBRICKS_RUNTIME_STORE_")
+        for key in (
+            {
+                entry["name"]: entry["value"]
+                for entry in AppManifest.parse_lenient(
+                    (tmp_path / "app.yaml").read_text()
+                ).raw_env()
+            }
+            if (tmp_path / "app.yaml").exists()
+            else {}
+        )
     )
 
-    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+
+def test_real_cli_deploy_without_agent_manifest_still_rolls_out_source(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    (tmp_path / "app.yaml").write_text("command: [python, app.py]\n")
+    events: list[tuple] = []
+    api = _DeployApi(events)
+    runner = _DeployRunner(events)
+    monkeypatch.setattr(deploy_mod, "_databricks", runner)
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["standalone", "--source", str(tmp_path), "--pip-index-url", ""],
+        obj=_real_deploy_context(api),
+    )
 
     assert result.exit_code == 0, result.output
-    # deploy hands the grant the (kind, table) pairs from the resolved tables
-    trace_grant.assert_called_once_with(
-        "agent-bricks-myapp", "exp-uc", tables.otel_tables(), "prof"
+    assert "Deployed agent 'agent-bricks-standalone'" in result.output
+    assert not (tmp_path / "agent.toml").exists()
+    assert not any(
+        event[0] in {"memory.create", "session.create", "runtime.create", "trace.ensure"}
+        for event in events
     )
-    env = {e["name"]: e["value"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
-    assert env["MLFLOW_EXPERIMENT_ID"] == "exp-uc"
-    # the success line is the same for UC and managed experiments (they converge)
-    out = " ".join(result.output.replace("│", " ").split())
-    assert "granted to agent runtime service principal" in out
+    app_calls = [list(event[1]) for event in events if event[0] == "apps"]
+    assert any(call[:2] == ["apps", "create"] for call in app_calls)
+    assert any(call[0] == "sync" for call in app_calls)
+    assert any(call[:2] == ["apps", "deploy"] for call in app_calls)
 
 
-def test_deploy_grants_managed_experiment_with_no_uc_tables(tmp_path, monkeypatch):
-    # A managed experiment has no UC tables: the single trace-resource grant gets an empty table
-    # tuple (which also converges away any stale table resources from a prior UC binding).
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+def test_deployments_get_uses_real_client_and_presents_json_and_text(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    events: list[tuple] = []
+    runner = _DeployRunner(events, exists=True)
+    monkeypatch.setattr(deploy_mod, "_databricks", runner)
+    api = _DeployApi(events)
 
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(
-        deploy_mod,
-        "get_or_create_trace_experiment",
-        lambda *a, **k: deploy_mod.ResolvedTraceExperiment("exp-42", MLflowTraceTables()),
+    json_result = CliRunner().invoke(
+        deploy_mod.deployments_get,
+        ["agent-bricks-demo"],
+        obj=_real_deploy_context(api, output="json"),
     )
-    trace_grant = mock.Mock(return_value=None)
-    monkeypatch.setattr(deploy_mod, "apply_trace_resources", trace_grant)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
-
-    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
-
-    assert result.exit_code == 0, result.output
-    trace_grant.assert_called_once_with("agent-bricks-myapp", "exp-42", [], "prof")
-
-
-def test_deploy_proceeds_when_trace_grant_fails(tmp_path, monkeypatch):
-    # The trace grant is best-effort: a failure surfaces as next-step guidance but never aborts
-    # the deploy.
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-
-    tables = MLflowTraceTables(spans="cat.schema.otel_spans")
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(
-        deploy_mod,
-        "get_or_create_trace_experiment",
-        lambda *a, **k: deploy_mod.ResolvedTraceExperiment("exp-uc", tables),
-    )
-    monkeypatch.setattr(
-        deploy_mod,
-        "apply_trace_resources",
-        mock.Mock(return_value="denied: needs MANAGE on the catalog"),
-    )
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    text_result = CliRunner().invoke(
+        deploy_mod.deployments_get,
+        ["agent-bricks-demo"],
+        obj=_real_deploy_context(api, output="text"),
     )
 
-    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
-
-    assert result.exit_code == 0, result.output  # deploy still succeeded
-    # the panel wraps long lines behind │ borders; strip them so wrapped phrases still match
-    out = " ".join(result.output.replace("│", " ").split())
-    assert "needs write access to its trace experiment" in out  # grant-failure guidance shown
-    assert "denied: needs MANAGE on the catalog" in out  # the cause is surfaced
-
-
-def test_deploy_reconciles_trace_resources_even_when_unbound(tmp_path, monkeypatch):
-    # Unbound (agentbricks tracing unbind): deploy still reconciles the agentbricks-owned trace set - passing
-    # experiment_id=None prunes stale agentbricks-trace-* resources left by a previously bound deploy.
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    # the autouse fixture already stubs get_or_create_trace_experiment -> None (unbound)
-    trace_grant = mock.Mock(return_value=None)
-    monkeypatch.setattr(deploy_mod, "apply_trace_resources", trace_grant)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
-
-    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
-
-    assert result.exit_code == 0, result.output
-    trace_grant.assert_called_once_with("agent-bricks-myapp", None, [], "prof")
+    assert json_result.exit_code == 0, json_result.output
+    assert json.loads(json_result.output)["url"] == "https://agent.example"
+    assert text_result.exit_code == 0, text_result.output
+    assert "Agent Deployment" in text_result.output
+    assert "https://agent.example" in text_result.output
+    assert sum(event[0] == "apps" and event[1][:2] == ("apps", "get") for event in events) >= 2
 
 
-def test_deploy_rebind_uc_to_uc_reconciles_to_the_new_table_set(tmp_path, monkeypatch):
-    # UC -> UC rebind: the redeploy resolves the NEW experiment's tables and reconciles to them, so
-    # the old experiment's agentbricks-trace-table-* resources are dropped in the same write (convergence
-    # itself is apply_trace_resources' job; here we guard that deploy passes the new set through).
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-
-    # the app currently carries the OLD experiment's 3 table resources (documentation only - the
-    # app state itself is apply_trace_resources' concern, stubbed here)
-    old_tables = MLflowTraceTables(
-        spans="old.schema.otel_spans",
-        logs="old.schema.otel_logs",
-        annotations="old.schema.otel_annotations",
-    )
-    new_tables = MLflowTraceTables(spans="new.schema.otel_spans", logs="new.schema.otel_logs")
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(
-        deploy_mod,
-        "get_or_create_trace_experiment",
-        lambda *a, **k: deploy_mod.ResolvedTraceExperiment("exp-new", new_tables),
-    )
-    trace_grant = mock.Mock(return_value=None)
-    monkeypatch.setattr(deploy_mod, "apply_trace_resources", trace_grant)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
-
-    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
-
-    assert result.exit_code == 0, result.output
-    assert len(old_tables.otel_tables()) != len(new_tables.otel_tables())  # the table count changed
-    trace_grant.assert_called_once_with(
-        "agent-bricks-myapp", "exp-new", new_tables.otel_tables(), "prof"
-    )
-
-
-def test_deploy_proceeds_when_tracing_provisioning_raises(tmp_path: pathlib.Path, monkeypatch):
-    # Tracing provisioning is best-effort: a non-AgentCliError (e.g. MLflow/network) must not abort
-    # the deploy — it proceeds without tracing. Crucially, a resolve FAILURE must NOT prune the
-    # agentbricks-owned trace resources: we don't know the intended state, so a flaky/offline deploy of a
-    # still-bound experiment must not silently revoke the SP's grants the way an unbind does.
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-
-    def _boom(*a, **k):
-        raise RuntimeError("mlflow create_experiment blew up")
-
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(deploy_mod, "get_or_create_trace_experiment", _boom)
-    trace_grant = mock.Mock(return_value=None)
-    monkeypatch.setattr(deploy_mod, "apply_trace_resources", trace_grant)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
-    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
-    assert result.exit_code == 0, result.output  # deploy still succeeded
-    env_entries = yaml.safe_load((src / "app.yaml").read_text()).get("env") or []
-    assert not any(e["name"].startswith("MLFLOW") for e in env_entries)  # tracing skipped
-    out = " ".join(result.output.replace("│", " ").split())
-    assert "Deployed without tracing" in out and "agentbricks tracing bind" in out  # guidance shown
-    assert "mlflow create_experiment blew up" in out  # the cause is surfaced
-    trace_grant.assert_not_called()  # resolve errored -> reconcile skipped, grants left intact
-
-
-def test_deploy_notifies_when_tracing_unbound(tmp_path: pathlib.Path, monkeypatch):
-    # Unbound tracing deploys silently otherwise; surface a next-step so the developer knows (in case
-    # it wasn't intended) and can enable it. The autouse fixture stubs resolve -> None (unbound).
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
-    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
-    assert result.exit_code == 0, result.output
-    out = " ".join(result.output.replace("│", " ").split())
-    assert "Deployed without tracing" in out
-    assert "agentbricks tracing bind" in out  # points at the (parameter-free) enable command
-    assert "Tracing setup failed" not in out  # unbound is not an error, so no cause suffix
-
-
-def test_deploy_prunes_stale_trace_env_from_manifest_on_unbind(tmp_path: pathlib.Path, monkeypatch):
-    # A previously-bound app.yaml carries the MLFLOW_* trace env. On a CLEAN unbind (autouse fixture
-    # stubs resolve -> None with no setup error), deploy prunes those keys so the manifest stops
-    # pointing the runtime at an experiment whose grant was just pruned; unrelated env is preserved.
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(
+def test_real_cli_unbind_prunes_trace_manifest_and_app_resources(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    project = AgentProject.create(tmp_path, framework="langgraph", server="custom")
+    project.write()
+    (tmp_path / "app.yaml").write_text(
         yaml.safe_dump(
             {
-                "command": ["x"],
+                "command": ["python", "app.py"],
                 "env": [
-                    {"name": "KEEP", "value": "1"},
-                    {"name": deploy_mod.TRACES_TRACKING_URI_ENV, "value": "databricks"},
-                    {"name": deploy_mod.TRACES_EXPERIMENT_ID_ENV, "value": "old-exp"},
+                    {"name": "KEEP", "value": "yes"},
+                    {"name": "MLFLOW_TRACKING_URI", "value": "databricks"},
+                    {"name": "MLFLOW_EXPERIMENT_ID", "value": "stale-exp"},
                 ],
             }
         )
     )
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
-    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
-    assert result.exit_code == 0, result.output
-    names = {e["name"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
-    assert deploy_mod.TRACES_TRACKING_URI_ENV not in names  # stale trace env pruned
-    assert deploy_mod.TRACES_EXPERIMENT_ID_ENV not in names
-    assert "KEEP" in names  # unrelated env preserved
-
-
-def test_resolve_memory_store_pages_at_100_and_matches_display_name():
-    # The list API caps page_size at 100, so resolution must page (not request 1000) and match the
-    # display name across pages.
-    class _PagingClient:
-        def __init__(self):
-            self.calls = []
-
-        def list_memory_stores(self, page_size=None, page_token=None):
-            self.calls.append((page_size, page_token))
-            if page_token is None:
-                return {
-                    "managed_memory_stores": [{"name": "memory-stores/a", "display_name": "other"}],
-                    "next_page_token": "p2",
-                }
-            return {
-                "managed_memory_stores": [{"name": "memory-stores/b", "display_name": "wanted"}],
-                "next_page_token": "",
-            }
-
-    client = _PagingClient()
-    store = deploy_mod._resolve_memory_store(client, "wanted")
-    assert store is not None
-    assert store["name"] == "memory-stores/b"  # found on page 2
-    assert all(ps == 100 for ps, _ in client.calls)  # never exceeds the API cap
-    assert [pt for _, pt in client.calls] == [None, "p2"]  # followed the page token
-
-
-def test_resolve_memory_store_returns_none_when_absent():
-    class _EmptyClient:
-        def list_memory_stores(self, page_size=None, page_token=None):
-            return {"managed_memory_stores": [], "next_page_token": ""}
-
-    assert deploy_mod._resolve_memory_store(_EmptyClient(), "nope") is None
-
-
-def test_grant_store_access_grants_both_stores_via_api(monkeypatch):
-    # Grants go through the managed store API (the store service does the Lakebase grant server-side),
-    # not a direct Lakebase resource attach — so a non-owner/non-admin deployer can still grant.
-    calls = []
-
-    class _Client:
-        def grant_session_store_permission(self, name, sp):
-            calls.append(("session", name, sp))
-
-        def grant_memory_store_permission(self, name, sp):
-            calls.append(("memory", name, sp))
-
-    # Memory is granted by resource id, so the display-name binding is resolved first.
-    monkeypatch.setattr(
-        deploy_mod, "_resolve_memory_store", lambda client, name: {"name": "memory-stores/uuid-x"}
-    )
-    err = deploy_mod._grant_store_access(_Client(), "sp-1", "sess-1", "mem-display")
-
-    assert err is None
-    assert calls == [
-        ("session", "sess-1", "sp-1"),
-        ("memory", "memory-stores/uuid-x", "sp-1"),
+    events: list[tuple] = []
+    api = _DeployApi(events)
+    runner = _DeployRunner(events, exists=True)
+    runner.resources = [
+        {"name": "user-owned", "secret": {}},
+        {"name": "agentbricks-trace-experiment", "experiment": {"experiment_id": "stale-exp"}},
+        {"name": "agentbricks-trace-spans", "uc_securable": {"permission": "MODIFY"}},
     ]
+    monkeypatch.setattr(deploy_mod, "_databricks", runner)
 
-
-def test_grant_store_access_surfaces_api_error(monkeypatch):
-    class _Client:
-        def grant_session_store_permission(self, name, sp):
-            raise AgentCliError("grant failed", hint="the store service refused the grant")
-
-    err = deploy_mod._grant_store_access(_Client(), "sp", "sess-1", None)
-    assert err == "the store service refused the grant"
-
-
-def test_deploy_resolves_existing_memory_store_by_display_name(tmp_path: pathlib.Path, monkeypatch):
-    # deploy reconciles the declared store; when it already exists it is resolved by display name
-    # (list+match, not get_memory_store which keys on resource id) and its id is injected into app.yaml.
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _agent_toml(src, memory="mem")
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
-    # _FakeClient resolves "mem" via list+match and returns id mem-id-123; deploy succeeds.
-    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
-    assert result.exit_code == 0, result.output
-    env_entries = yaml.safe_load((src / "app.yaml").read_text()).get("env") or []
-    env = {e["name"]: e["value"] for e in env_entries}
-    assert env.get("AGENT_MEMORY_STORE") == "mem-id-123"
-
-
-def test_deploy_creates_missing_declared_store(tmp_path: pathlib.Path, monkeypatch):
-    # A declared-but-missing store is created on deploy (not an error); agent.toml is never rewritten.
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _agent_toml(src, memory="ghost")
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["demo", "--source", str(tmp_path), "--pip-index-url", ""],
+        obj=_real_deploy_context(api),
     )
 
-    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
     assert result.exit_code == 0, result.output
-    assert "Created memory store 'ghost'" in result.output
-
-
-def test_mlflow_tracing_config_binds_experiment_by_id_and_workspace():
-    # The agent binding is exactly two env vars: the workspace (destination) and the experiment id.
-    assert deploy_mod.mlflow_tracing_config("exp-9").env() == {
-        "MLFLOW_TRACKING_URI": "databricks",
-        "MLFLOW_EXPERIMENT_ID": "exp-9",
+    env = {
+        entry["name"]: entry["value"]
+        for entry in AppManifest.parse_lenient((tmp_path / "app.yaml").read_text()).raw_env()
+    }
+    assert env == {"KEEP": "yes"}
+    assert runner.resources == [{"name": "user-owned", "secret": {}}]
+    trace_update = next(
+        list(event[1])
+        for event in events
+        if event[0] == "apps"
+        and event[1][:2] == ("apps", "create-update")
+        and "resources" in json.loads(event[1][-1]).get("app", {})
+    )
+    assert json.loads(trace_update[-1]) == {
+        "app": {"resources": [{"name": "user-owned", "secret": {}}]},
+        "update_mask": "resources",
     }
 
 
-def test_resolve_trace_experiment_none_when_unbound(tmp_path: pathlib.Path, monkeypatch):
-    # No experiment_name bound -> tracing is off; nothing is created and None is returned (no default
-    # fallback). A legacy [tracing] disabled key is simply ignored.
-    (tmp_path / "agent.toml").write_text(
-        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "agentbricks"\n'
-    )
-    called: list[str] = []
-    monkeypatch.setattr(
-        deploy_mod,
-        "create_experiment_idempotent",
-        lambda profile, client, name: called.append(name) or "should-not-happen",
-    )
-    assert _REAL_RESOLVE_TRACE(tmp_path, _FakeClient(), None) is None
-    assert called == []  # unbound -> no experiment provisioned
-
-
-def test_resolve_trace_experiment_get_or_creates_bound_name(tmp_path: pathlib.Path, monkeypatch):
-    # A bound experiment_name is get-or-created in the current workspace; the name (not an id) stays
-    # in agent.toml, so nothing is pinned back.
-    (tmp_path / "agent.toml").write_text(
-        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "agentbricks"\n'
-        '\n[tracing]\nexperiment_name = "/Shared/agentbricks_traces/bound"\n'
-    )
-    created: dict = {}
-    monkeypatch.setattr(
-        deploy_mod,
-        "create_experiment_idempotent",
-        lambda profile, client, name: created.update(name=name)
-        or ResolvedTraceExperiment("id-b", MLflowTraceTables()),
-    )
-    assert _REAL_RESOLVE_TRACE(tmp_path, _FakeClient(), None) == deploy_mod.ResolvedTraceExperiment(
-        "id-b", MLflowTraceTables()
-    )
-    assert created["name"] == "/Shared/agentbricks_traces/bound"
-    from databricks_agentbricks.agent_project import AgentProject
-
-    project = AgentProject.load(tmp_path)
-    assert project.trace_experiment_name == "/Shared/agentbricks_traces/bound"  # name kept
-
-
-def test_resolve_trace_experiment_get_or_creates_by_name_each_run(
-    tmp_path: pathlib.Path, monkeypatch
+def test_real_cli_redeploy_scales_existing_app_without_create(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ):
-    # Nothing is pinned back, so each run re-resolves the bound name and get-or-creates it (idempotent).
-    (tmp_path / "agent.toml").write_text(
-        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "agentbricks"\n'
-        '\n[tracing]\nexperiment_name = "/Shared/agentbricks_traces/bound"\n'
+    project = AgentProject.create(tmp_path, framework="langgraph", server="custom")
+    project.set_deployment_name("demo")
+    project.write()
+    events: list[tuple] = []
+    api = _DeployApi(events)
+    runner = _DeployRunner(events, exists=True)
+    monkeypatch.setattr(deploy_mod, "_databricks", runner)
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["--source", str(tmp_path), "--instances", "3", "--pip-index-url", ""],
+        obj=_real_deploy_context(api),
     )
-    calls: list[str] = []
-    monkeypatch.setattr(
-        deploy_mod,
-        "create_experiment_idempotent",
-        lambda profile, client, name: calls.append(name)
-        or ResolvedTraceExperiment("made-id", MLflowTraceTables()),
-    )
-    assert _REAL_RESOLVE_TRACE(tmp_path, _FakeClient(), None) == deploy_mod.ResolvedTraceExperiment(
-        "made-id", MLflowTraceTables()
-    )
-    assert _REAL_RESOLVE_TRACE(tmp_path, _FakeClient(), None) == deploy_mod.ResolvedTraceExperiment(
-        "made-id", MLflowTraceTables()
-    )
-    assert calls == ["/Shared/agentbricks_traces/bound", "/Shared/agentbricks_traces/bound"]
-
-
-def _run_deploy(src, monkeypatch, extra_args):
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
-    return CliRunner().invoke(
-        deploy_mod.deploy, ["myapp", "--source", str(src), *extra_args], obj=_FakeCtx()
-    )
-
-
-def test_deploy_injects_public_pypi_index_by_default(tmp_path: pathlib.Path, monkeypatch):
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    result = _run_deploy(src, monkeypatch, [])
-    assert result.exit_code == 0, result.output
-    env = {e["name"]: e["value"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
-    for name in ("PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDEX"):
-        assert env[name] == "https://pypi.org/simple/"
-
-
-def test_deploy_empty_pip_index_disables_override(tmp_path: pathlib.Path, monkeypatch):
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    result = _run_deploy(src, monkeypatch, ["--pip-index-url", ""])
-    assert result.exit_code == 0, result.output
-    doc = yaml.safe_load((src / "app.yaml").read_text())
-    env = {e["name"]: e["value"] for e in (doc.get("env") or [])}
-    assert "PIP_INDEX_URL" not in env  # empty -> no override, use the build's default index
-
-
-class _JsonCtx(_FakeCtx):
-    output = "json"
-
-
-def test_lifecycle_commands_honor_json_output(monkeypatch):
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "sp-123")
-    # start/stop/delete must emit JSON (not the Rich success panel) under --output json.
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
-    for command, key, args in (
-        (deploy_mod.deployments_start, "started", ["myapp"]),
-        (deploy_mod.deployments_stop, "stopped", ["myapp", "--yes"]),  # destructive: needs --yes
-        (deploy_mod.deployments_delete, "deleted", ["myapp", "--yes"]),
-    ):
-        result = CliRunner().invoke(command, args, obj=_JsonCtx())
-        assert result.exit_code == 0, result.output
-        assert json.loads(result.output) == {key: "myapp"}
-
-
-def _agent_toml(
-    source: pathlib.Path,
-    *,
-    server: str = "custom",
-    memory=None,
-    session=None,
-    experiment=None,
-    deployment_name=None,
-) -> None:
-    text = f'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "{server}"\n'
-    if deployment_name:
-        text += f'deployment_name = "{deployment_name}"\n'
-    if memory:
-        text += f'\n[memory_store]\nname = "{memory}"\n'
-    if session:
-        text += f'\n[session_store]\nname = "{session}"\n'
-    if experiment:
-        text += f'\n[tracing]\nexperiment_name = "{experiment}"\n'
-    (source / "agent.toml").write_text(text, encoding="utf-8")
-
-
-def test_resource_bindings_reads_agent_toml(tmp_path: pathlib.Path):
-    _agent_toml(
-        tmp_path,
-        memory="bound-mem",
-        session="bound-sess",
-        experiment="/Shared/agentbricks_traces/x",
-    )
-    assert deploy_mod.resource_bindings(tmp_path) == (
-        "bound-mem",
-        "bound-sess",
-        "/Shared/agentbricks_traces/x",
-    )
-
-
-def test_resource_bindings_none_when_unbound(tmp_path: pathlib.Path):
-    _agent_toml(tmp_path)  # scaffold with no resource tables
-    assert deploy_mod.resource_bindings(tmp_path) == (None, None, None)
-
-
-def test_resource_bindings_ignores_missing_manifest(tmp_path: pathlib.Path):
-    # No agent.toml -> nothing bound, never raises (so deploy/dev aren't blocked).
-    assert deploy_mod.resource_bindings(tmp_path) == (None, None, None)
-
-
-def test_deploy_writes_deployment_name_to_toml(tmp_path: pathlib.Path, monkeypatch):
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _agent_toml(src)  # a project with no deployment_name yet
-
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
-
-    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
 
     assert result.exit_code == 0, result.output
-    assert AgentProject.load(src).deployment_name == "myapp"  # persisted for later deploys
+    app_calls = [list(event[1]) for event in events if event[0] == "apps"]
+    assert not any(call[:2] == ["apps", "create"] for call in app_calls)
+    scale_call = next(call for call in app_calls if call[:2] == ["apps", "create-update"])
+    assert json.loads(scale_call[-1]) == {
+        "app": {"compute_min_instances": 3, "compute_max_instances": 3},
+        "update_mask": "compute_min_instances,compute_max_instances",
+    }
+    assert any(call[0] == "sync" for call in app_calls)
+    assert any(call[:2] == ["apps", "deploy"] for call in app_calls)
 
 
-@pytest.mark.parametrize(
-    ("existing_names", "expected_name"),
-    [
-        (set(), "agent-bricks-stored"),
-        ({"agent-bricks-stored"}, "agent-bricks-stored"),
-    ],
-)
-def test_deploy_reads_deployment_name_from_toml_when_omitted(
-    tmp_path: pathlib.Path, monkeypatch, existing_names: set[str], expected_name: str
+def test_real_cli_missing_name_fails_before_external_mutation(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ):
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _agent_toml(src, deployment_name="stored")
+    project = AgentProject.create(tmp_path, framework="langgraph", server="custom")
+    project.write()
+    events: list[tuple] = []
+    api = _DeployApi(events)
+    runner = _DeployRunner(events)
+    monkeypatch.setattr(deploy_mod, "_databricks", runner)
 
-    calls: list[list[str]] = []
-    monkeypatch.setattr(
-        deploy_mod,
-        "_deployment_exists",
-        lambda app, profile: app in existing_names,
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["--source", str(tmp_path)],
+        obj=_real_deploy_context(api),
     )
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: (
-            calls.append(args) or types.SimpleNamespace(returncode=0, stdout="", stderr="")
-        ),
-    )
-
-    result = CliRunner().invoke(deploy_mod.deploy, ["--source", str(src)], obj=_FakeCtx())
-
-    assert result.exit_code == 0, result.output
-    ws = f"/Workspace/Users/me@example.com/agentbricks_deployments/{expected_name}"
-    assert ["apps", "deploy", expected_name, "--source-code-path", ws] in calls
-
-
-def test_deploy_rejects_overlong_new_name_when_no_legacy_app_exists(
-    tmp_path: pathlib.Path, monkeypatch
-):
-    base_name = "a" * 18
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _agent_toml(src, server="custom", deployment_name=base_name)
-
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda app, profile: False)
-    databricks_calls: list[list[str]] = []
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: (
-            databricks_calls.append(args)
-            or types.SimpleNamespace(returncode=0, stdout="", stderr="")
-        ),
-    )
-
-    result = CliRunner().invoke(deploy_mod.deploy, ["--source", str(src)], obj=_FakeCtx())
 
     assert result.exit_code != 0
-    assert "31 > 30" in result.output
-    assert databricks_calls == []
-
-
-def test_deploy_without_name_or_toml_errors(tmp_path: pathlib.Path, monkeypatch):
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))  # no agent.toml
-
-    called: list = []
-    monkeypatch.setattr(deploy_mod, "_databricks", lambda *a, **k: called.append(a))
-
-    result = CliRunner().invoke(deploy_mod.deploy, ["--source", str(src)], obj=_FakeCtx())
-
-    assert result.exit_code != 0
-    assert "No deployment name" in result.output
-    assert called == []  # errored before shelling out to `databricks apps`
-
-
-def test_reconcile_declared_stores_returns_none_when_unbound():
-    assert deploy_mod._reconcile_declared_stores(None, None, _FakeClient()) is None
-
-
-def test_reconcile_declared_stores_creates_missing_and_returns_memory_id(capsys):
-    client = _FakeClient()  # seeded with only "mem" (id mem-id-123)
-    memory_id = deploy_mod._reconcile_declared_stores("new-mem", "new-sess", client)
-    # A freshly created memory store's bare id is returned for AGENT_MEMORY_STORE.
-    assert memory_id == "new-mem"  # _FakeClient names created stores memory-stores/<display_name>
-    out = capsys.readouterr().out
-    assert "Created memory store 'new-mem'" in out
-    assert "Created session store 'new-sess'" in out
-
-
-def test_reconcile_declared_stores_reuses_existing_memory_id(capsys):
-    client = _FakeClient()  # "mem" already exists with id mem-id-123
-    memory_id = deploy_mod._reconcile_declared_stores("mem", None, client)
-    assert memory_id == "mem-id-123"
-    assert "Created memory store" not in capsys.readouterr().out  # reused, not created
-
-
-def test_deploy_creates_declared_but_missing_store_without_writing_agent_toml(
-    tmp_path, monkeypatch
-):
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    # Include deployment_name so deploy's name-persist write doesn't change the file.
-    _agent_toml(src, memory="declared-mem", session="declared-sess", deployment_name="myapp")
-    before = (src / "agent.toml").read_text()
-
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
-
-    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
-
-    assert result.exit_code == 0, result.output
-    assert "Created memory store 'declared-mem'" in result.output
-    assert (src / "agent.toml").read_text() == before  # deploy never rewrites the manifest
-
-
-def test_deploy_grants_bound_store(tmp_path: pathlib.Path, monkeypatch):
-    # `agentbricks sessions bind` then plain `agentbricks deploy`: the binding must drive both the
-    # app.yaml env AND the SP access grant, or the deployed app can't reach its durable store.
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _agent_toml(src, session="bound-sess")
-
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, profile: "sp-123")
-    grant_args: dict = {}
-    monkeypatch.setattr(
-        deploy_mod,
-        "_grant_store_access",
-        lambda client, sp, session_store, memory_store: (
-            grant_args.update(sp=sp, session_store=session_store, memory_store=memory_store) or None
-        ),
-    )
-
-    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
-
-    assert result.exit_code == 0, result.output
-    # The grant fired for the bound session store, and its name was wired into app.yaml as
-    # AGENT_SESSION_STORE. AGENT_MEMORY_STORE is absent because no memory store is declared.
-    assert grant_args == {"sp": "sp-123", "session_store": "bound-sess", "memory_store": None}
-    env_entries = yaml.safe_load((src / "app.yaml").read_text()).get("env") or []
-    env = {e["name"]: e["value"] for e in env_entries}
-    assert env["AGENT_SESSION_STORE"] == "bound-sess"
-    assert "AGENT_MEMORY_STORE" not in env
+    assert "No deployment name given" in result.output
+    assert events == []

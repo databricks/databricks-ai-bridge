@@ -10,10 +10,10 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
-from databricks_agentbricks.agent_project import AgentProject, ToolSpec
 from databricks_agentbricks.cli import dev as dev_mod
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.project_config import write_project_metadata
+from databricks_agentbricks.projects.agent_project import AgentProject, ToolSpec
+from databricks_agentbricks.projects.config import write_project_metadata
 
 
 def _write_agent_manifest(
@@ -38,6 +38,11 @@ class _Ctx:
     def __init__(self, output: str = "text", profile=None):
         self.output = output
         self.profile = profile
+        self.api_client_provider = types.SimpleNamespace(
+            get=lambda: mock.Mock(
+                current_user="me@example.com", host="https://my-workspace.databricks.com"
+            )
+        )
 
     def client(self):
         return mock.Mock(current_user="me@example.com", host="https://my-workspace.databricks.com")
@@ -344,6 +349,9 @@ def test_dev_runs_offline_when_client_unavailable(tmp_path: pathlib.Path):
     class _OfflineCtx:
         output = "text"
         profile = None
+        api_client_provider = types.SimpleNamespace(
+            get=lambda: (_ for _ in ()).throw(AgentCliError("no databricks auth configured"))
+        )
 
         def client(self):
             raise AgentCliError("no databricks auth configured")
@@ -606,3 +614,16 @@ def test_dev_notes_bound_tracing_experiment(tmp_path: pathlib.Path):
     out = " ".join(result.output.split())  # collapse rich line-wrapping
     assert "Tracing experiment '/Shared/agentbricks_traces/mine' is bound" in out
     assert "Run `agentbricks deploy` to trace to the bound experiment" in out
+
+
+def test_dev_hides_active_venv_from_run_local(tmp_path: pathlib.Path, monkeypatch):
+    # run-local's `uv pip install` targets $VIRTUAL_ENV, so an activated venv would get the app's packages.
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    monkeypatch.setenv("VIRTUAL_ENV", "/some/other/.venv")
+    monkeypatch.setenv("AGENTBRICKS_DEV_TEST_MARKER", "kept")
+    with mock.patch.object(dev_mod, "_databricks") as db:
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code == 0, result.output
+    env = db.call_args.kwargs["env"]
+    assert "VIRTUAL_ENV" not in env
+    assert env["AGENTBRICKS_DEV_TEST_MARKER"] == "kept"
