@@ -12,6 +12,7 @@ functions.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import subprocess
 import time
@@ -366,6 +367,7 @@ class AppsClient:
             self._profile,
             cwd=str(source_dir),
             action="Could not start the agent locally.",
+            env=_get_run_local_env(),
         )
 
     def get_service_principal(self, app_name: str) -> Optional[str]:
@@ -643,3 +645,13 @@ def add_tool_resources_for_rollout(
 ) -> Optional[str]:
     """Add or upgrade tool resources before rollout without pruning or downgrading grants."""
     return _add_tool_resources_for_rollout(app, resources, profile, runner=_databricks)
+
+
+def _get_run_local_env() -> dict[str, str]:
+    """Our environment without ``VIRTUAL_ENV``.
+
+    ``run-local --prepare-environment`` creates the project's ``.venv`` but installs the app's
+    requirements with ``uv pip``, which targets ``$VIRTUAL_ENV`` first: an activated venv would get
+    the app's packages (and downgrades) instead of the project's own.
+    """
+    return {key: value for key, value in os.environ.items() if key != "VIRTUAL_ENV"}
