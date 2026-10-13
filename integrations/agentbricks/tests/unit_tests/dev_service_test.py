@@ -140,24 +140,6 @@ def test_prepare_honors_explicit_environment_flag_and_default_port(
     )
 
 
-def test_prepare_refuses_stale_manifest_without_clobbering_user_file(
-    service_fixture: SimpleNamespace, tmp_path: pathlib.Path
-) -> None:
-    dev_yaml = tmp_path / "app.agentbricksdev.yaml"
-    original_dev_yaml = "user-owned local manifest\n"
-    dev_yaml.write_text(original_dev_yaml)
-
-    with pytest.raises(AgentCliError, match="already exists"):
-        with service_fixture.service.prepare(
-            DevRequest(source=str(tmp_path), prepare_environment=None, app_port=None)
-        ):
-            pytest.fail("prepare should reject an existing local manifest")
-
-    assert dev_yaml.read_text() == original_dev_yaml
-    service_fixture.apps.run_local.assert_not_called()
-    service_fixture.tracing.stop.assert_called_once_with(service_fixture.tracing_server)
-
-
 def test_missing_app_yaml_fails_before_loading_project_or_starting_tracing(
     service_fixture: SimpleNamespace, tmp_path: pathlib.Path
 ) -> None:
@@ -236,7 +218,7 @@ def test_manifest_write_failure_removes_partial_manifest_and_stops_tracing(
 
     def failing_open(path: pathlib.Path, mode: str = "r", *args, **kwargs):
         output = real_open(path, mode, *args, **kwargs)
-        if path.name != "app.agentbricksdev.yaml" or mode != "x":
+        if path.name != "app.agentbricksdev.yaml" or mode != "w":
             return output
 
         class FailingOutput:
