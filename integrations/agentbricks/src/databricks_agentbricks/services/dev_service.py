@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import pathlib
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
-from typing import Protocol
+from dataclasses import dataclass, field
+from typing import Callable, Optional, Protocol
 
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.errors import AgentCliError
@@ -49,6 +49,8 @@ class DevRequest:
     source: str
     prepare_environment: bool | None
     app_port: int | None
+    # Extra env for the local-only manifest (e.g. the resolved Databricks profile).
+    local_env: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -99,10 +101,12 @@ class DevService:
         project_resolver: ProjectResolver,
         apps_client: AppsClient,
         local_tracing: LocalTracing,
+        preflight: Optional[Callable[[], None]] = None,
     ) -> None:
         self._project_resolver = project_resolver
         self._apps_client = apps_client
         self._local_tracing = local_tracing
+        self._preflight = preflight
 
     @contextmanager
     def prepare(self, request: DevRequest) -> Iterator[DevPlan]:
@@ -119,6 +123,11 @@ class DevService:
                 f"No app.yaml found at {app_yaml}.",
                 hint="Run from a scaffolded project, or pass --source <dir> (see `agentbricks init`).",
             )
+
+        # Auth is checked before anything is started: an unauthenticated external-browser profile
+        # would otherwise hang the local agent on a browser flow with no error.
+        if self._preflight is not None:
+            self._preflight()
 
         project = self._project_resolver.load(source_dir)
         if project is not None and project.tools:
@@ -141,7 +150,8 @@ class DevService:
             if prepare_environment is None:
                 prepare_environment = not (source_dir / ".venv").exists()
 
-            entry_point = _dev_entry_point(app_yaml, tracing_env or None)
+            manifest_env = {**request.local_env, **tracing_env}
+            entry_point = _dev_entry_point(app_yaml, manifest_env or None)
             preview = DevPreview(
                 source_dir=source_dir,
                 # Preserve the CLI's historical display/default behavior while retaining the

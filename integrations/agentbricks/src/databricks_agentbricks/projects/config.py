@@ -26,6 +26,11 @@ class ProjectMetadata:
     template: str | None
 
 
+def is_agentbricks_project(path: pathlib.Path) -> bool:
+    """Whether `path` is an Agent Bricks project root (scaffold metadata or an Apps manifest)."""
+    return (path / _CONFIG_PATH).is_file() or (path / "app.yaml").is_file()
+
+
 def write_project_metadata(
     project: pathlib.Path,
     *,

@@ -36,6 +36,7 @@ def _ctx(client, *, output="text"):
         profile="prof",
         output=output,
         api_client_provider=types.SimpleNamespace(get=lambda: client),
+        announce_workspace=lambda: None,
     )
 
 

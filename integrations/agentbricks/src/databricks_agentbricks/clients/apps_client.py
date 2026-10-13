@@ -145,7 +145,7 @@ class AppsClient:
             marker in detail.lower() for marker in ("resource_does_not_exist", "does not exist")
         ):
             return False
-        login = f"agentbricks login --profile {self._profile or '<profile>'}"
+        login = f"agentbricks auth login {self._profile or '<profile>'}"
         raise AgentCliError(
             f"Could not check whether deployment '{name}' exists.",
             hint=f"{detail or 'The `databricks apps get` command failed without a message.'}\n"

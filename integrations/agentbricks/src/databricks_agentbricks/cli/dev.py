@@ -11,20 +11,23 @@ from __future__ import annotations
 
 import pathlib
 import subprocess
-from typing import Optional
+from typing import Callable, Optional
 
 import click
 
 from databricks_agentbricks.cli.tracing import start_local_tracing_server, stop_local_tracing_server
+from databricks_agentbricks.cli.workspace_auth import preflight_auth
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.databricks_cli import _databricks
 from databricks_agentbricks.presentation.dev import (
+    announce_agent_profile,
     announce_bound_resources,
     local_trace_label,
 )
 from databricks_agentbricks.presentation.dev import (
     announce_local_url as _announce_local_url,
 )
+from databricks_agentbricks.projects.env_file import read_env
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.services.dev_service import (
     DevRequest,
@@ -43,12 +46,28 @@ class _CliLocalTracing:
         stop_local_tracing_server(server)
 
 
-def build_dev_service(obj) -> DevService:
+# `.env` credential sets that authenticate the agent on their own, without a profile.
+_ENV_CREDENTIALS = (
+    ("DATABRICKS_TOKEN",),
+    ("DATABRICKS_CLIENT_ID", "DATABRICKS_CLIENT_SECRET"),
+)
+
+
+def _env_credential(env_file: dict[str, str]) -> Optional[str]:
+    """The explicit credential `.env` sets (e.g. ``DATABRICKS_TOKEN``), or None."""
+    for names in _ENV_CREDENTIALS:
+        if all(env_file.get(name) for name in names):
+            return "/".join(names)
+    return None
+
+
+def build_dev_service(obj, preflight: Optional[Callable[[], None]] = None) -> DevService:
     """Compose the local workflow without opening a workspace API client."""
     return DevService(
         project_resolver=ProjectResolver(),
         apps_client=AppsClient(obj.profile, runner=_databricks),
         local_tracing=_CliLocalTracing(),
+        preflight=preflight,
     )
 
 
@@ -79,8 +98,9 @@ def dev(
     reach it: the chat UI if the project has one, otherwise a sample request against the agent's
     API.
 
-    Auth uses your Databricks profile (`-p` / `agentbricks login`), and the agent reaches Databricks model
-    serving through the AI Gateway on that profile — so there are no model keys to set up.
+    Auth uses your Databricks profile, resolved in this order: `-p`, the project's `.env`,
+    then `DATABRICKS_CONFIG_PROFILE`. The agent reaches Databricks model serving through the AI
+    Gateway on that profile — so there are no model keys to set up.
 
     Under the hood this wraps `databricks apps run-local`: it reads the command + env from
     `app.yaml` and runs the app the way the Apps runtime would, so local behavior matches a
@@ -96,11 +116,46 @@ def dev(
     `agentbricks deploy`, not here. So there's nothing to provision and no service-principal grant to make;
     that all happens at `agentbricks deploy` time.
     """
-    service = build_dev_service(obj)
+    source_dir = pathlib.Path(source)
+    # The CLI and the locally running agent read the same `.env`, so resolve the profile from it
+    # once here (dev also consults it below for explicit credentials).
+    env_file = read_env(source_dir / ".env")
+    obj.use_project_profile(source_dir, env_file)
+    env_credential = _env_credential(env_file)
+    # Explicit `.env` credentials authenticate the agent directly, so the profile needs neither
+    # validation nor a place in the dev manifest (a bare DATABRICKS_HOST is not a credential).
+    uses_env_credentials = bool(obj.profile and env_credential)
+    local_env: dict[str, str] = {}
+    if obj.profile and not uses_env_credentials:
+        # Landing the profile in the dev manifest puts it in the agent's process env, where it
+        # beats `.env` because the template loads dotenv with override=False.
+        local_env["DATABRICKS_CONFIG_PROFILE"] = obj.profile
+
+    def _preflight() -> None:
+        if not env_credential:
+            preflight_auth(obj.profile, obj.profile_info.source)
+
+    # Announced before the preflight so an auth failure still names its target. When `.env`
+    # credentials win, the resolved profile would name a different workspace than the agent
+    # actually uses, so it isn't announced.
+    if not uses_env_credentials:
+        obj.announce_workspace()
+    service = build_dev_service(obj, _preflight)
     with service.prepare(
-        DevRequest(source=source, prepare_environment=prepare_environment, app_port=app_port)
+        DevRequest(
+            source=source,
+            prepare_environment=prepare_environment,
+            app_port=app_port,
+            local_env=local_env,
+        )
     ) as plan:
         announce_bound_resources(plan.preview)
+        announce_agent_profile(
+            obj.profile,
+            obj.profile_info.source,
+            env_file.get("DATABRICKS_CONFIG_PROFILE"),
+            env_credential=env_credential if uses_env_credentials else None,
+        )
         _announce_local_url(
             plan.preview.source_dir,
             plan.preview.port,

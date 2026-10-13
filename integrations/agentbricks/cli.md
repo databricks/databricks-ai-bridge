@@ -27,18 +27,38 @@ See [Installation](README.md#installation) for installation details and shell co
 ## Authentication
 
 Agent Bricks CLI authenticates with a [Databricks configuration profile](https://docs.databricks.com/aws/en/dev-tools/cli/authentication).
-Run `agentbricks login` once to save a default profile, or pass `--profile` / `-p` on any command. Without
-a profile, the Databricks SDK's default authentication resolution is used. See
+Sign in with `agentbricks auth login <profile>` (a wrapper over `databricks auth login`), then
+select the profile with `--profile` / `-p` on any command or record it in the project's `.env`
+(`agentbricks init <dir> --profile <profile>`, or `agentbricks auth switch <profile>` later).
+Inside an Agent Bricks project (a directory with `.agentbricks/project.toml` or `app.yaml`) every
+command uses that project's `.env` profile. Nothing is saved outside the project: there is no
+global default profile. The profile is resolved in this order, most to least specific:
+
+1. `--profile` / `-p`
+2. the project `.env`'s `DATABRICKS_CONFIG_PROFILE` — only inside an Agent Bricks project; `dev` and
+   `deploy` resolve against their `--source` directory so the CLI and the locally running agent
+   (which reads the same `.env`) use one profile
+3. the `DATABRICKS_CONFIG_PROFILE` environment variable
+4. none — the Databricks SDK's default authentication resolution (`[DEFAULT]` in `~/.databrickscfg`)
+
+`dev` also passes the resolved profile to the agent (unless `.env` sets
+`DATABRICKS_TOKEN` or `DATABRICKS_CLIENT_ID`/`DATABRICKS_CLIENT_SECRET`, in which case the agent
+uses those credentials). Every command that reaches the workspace prints one line to stderr naming
+the profile, where it came from, and its host, e.g.
+`Using profile 'ml' (from .env) · https://my-workspace.cloud.databricks.com` (text output only). See
 [Authentication](README.md#authentication) for details.
 
 ## Global options
 
 These options apply to every command. Pass them before the command name, for example
-`agentbricks -p my-profile -o json sessions stores list`.
+`agentbricks -p my-profile -o json sessions stores list`. `--profile` / `-p` can also follow the
+command (`agentbricks sessions stores list -p my-profile`); given in both places, the later one wins.
+A trailing `-p` goes after the full subcommand, not after a group name — `agentbricks auth
+-p my-profile login` isn't recognized; write `agentbricks auth login -p my-profile`.
 
 | Option | Values | Default | Description |
 | --- | --- | --- | --- |
-| `--profile <PROFILE>` (`-p`) | string | - | `~/.databrickscfg` profile to authenticate with. |
+| `--profile <PROFILE>` (`-p`) | string | - | Databricks config profile to authenticate with. Highest-precedence input to the resolution described under [Authentication](#authentication). |
 | `--output <text\|json>` (`-o`) | `text` \| `json` | `text` | Output format. Use `json` for scripting. |
 | `--version` | flag | - | Show the version and exit. |
 | `--help` (`-h`) | flag | - | Show help for the command and exit. Works at every level. |
@@ -57,9 +77,8 @@ These options apply to every command. Pass them before the command name, for exa
 
 | Command | Description |
 | --- | --- |
-| [`login`](#agentbricks-login) | Authenticate and save a default profile |
-| [`logout`](#agentbricks-logout) | Forget the saved default profile |
 | [`init`](#agentbricks-init) | Scaffold a new agent project |
+| [`auth`](#agentbricks-auth) | Choose and sign in to a Databricks profile |
 | [`doctor`](#agentbricks-doctor) | Check an existing agent's Agent Bricks onboarding |
 | [`dev`](#agentbricks-dev) | Run the agent locally with a chat UI |
 | [`memory`](#agentbricks-memory) | Manage an agent's long-term memory |
@@ -73,36 +92,13 @@ These options apply to every command. Pass them before the command name, for exa
 
 ## Commands
 
-### `agentbricks login`
-
-Authenticate a profile and save it as the default, so later commands can omit -p.
-
-```
-agentbricks login [options]
-```
-
-
-_Options_
-
-| Option | Values | Default | Required | Description |
-| --- | --- | --- | --- | --- |
-| `--profile <PROFILE>` (`-p`) | string | - | no | Profile to authenticate with and remember as the default. |
-
-### `agentbricks logout`
-
-Forget the saved profile selection without deleting its credentials.
-
-```
-agentbricks logout
-```
-
 ### `agentbricks init`
 
 Scaffold a local agent project from an Agent Bricks CLI template.
 
-DIRECTORY is the target path to create (defaults to the template's own name). The directory must not already exist. Once scaffolded, deploy it with `agentbricks deploy <name> --source <directory>`.
+DIRECTORY is the target path to create (defaults to the template's own name). The directory must not already exist — except a project `init` itself scaffolded, where a rerun changes nothing and points at `agentbricks dev` / `agentbricks deploy` (use `agentbricks auth switch <profile>` to change its workspace). Use `--existing` to migrate a project Agent Bricks did not generate.
 
-Pass --profile (or set a default via `agentbricks login` / -p) to seed a local `.env` so the scaffolded project runs with `agentbricks dev` right away.
+The project's `.env` pins a Databricks profile: --profile (or the global -p, or DATABRICKS_CONFIG_PROFILE), else the default set with `databricks auth switch`, else `DEFAULT`, so the project keeps its workspace however the shell is set up later. With `DATABRICKS_HOST` set (env-var auth, e.g. CI) and no profile, `init` writes no `.env` and every command keeps using those environment variables (`agentbricks dev` passes them to the local agent through `databricks apps run-local`). In an interactive terminal, `init` then signs in to it, opening `databricks auth login` only if it isn't authenticated yet (which also creates a missing profile, asking for the workspace URL); a failed sign-in keeps the scaffold and lists `agentbricks auth login <profile>` as a next step. Non-interactive and CI runs skip sign-in (and warn if the profile isn't in your Databricks config yet). If nothing chose a profile and `[DEFAULT]` doesn't exist but other profiles do, `init` doesn't sign in, since that would add a machine-wide `[DEFAULT]`, and lists those profiles for `agentbricks auth switch` instead. Change the profile later with `agentbricks auth switch <profile>`. With `-o json`, the result includes `env_profile`, `workspace_host`, and `signed_in_user`.
 
 The scaffold is preconfigured to call Databricks model serving through the AI Gateway using that profile, so it can talk to a model with no separate endpoint or API key to set up.
 
@@ -136,12 +132,90 @@ _Options_
 | --- | --- | --- | --- | --- |
 | `--framework <langgraph|openai>` | `langgraph` \| `openai` | - | no | Agent framework: langgraph (LangGraph, default) or openai (OpenAI Agents SDK). |
 | `--server <agentbricks|custom>` | `agentbricks` \| `custom` | `agentbricks` | no | Use the managed invocation server (`agentbricks` is the existing `agent.toml` value) or a minimal custom FastAPI server. |
-| `--profile <PROFILE>` | string | - | no | Seed a local .env with this DATABRICKS_CONFIG_PROFILE so `agentbricks dev` works immediately (defaults to the profile from -p / `agentbricks login`). |
+| `--profile <PROFILE>` (`-p`) | string | - | no | DATABRICKS_CONFIG_PROFILE to seed the project's .env with, so `agentbricks dev` works right away (default: the global -p, then DATABRICKS_CONFIG_PROFILE, then DEFAULT; with no profile and DATABRICKS_HOST set, no .env is written). |
 | `--disable-chat-app` | flag | - | no | Scaffold the API-only backend, without the browser chat app. |
 | `--enable-chat-app` | flag | - | no | Deprecated: the chat app is included by default; this flag is a no-op. |
 | `--memory-store <MEMORY_STORE>` | string | - | no | Name for the declared memory store (default: derived from the directory, <dir>-memory). Only --server agentbricks declares stores by default. |
 | `--session-store <SESSION_STORE>` | string | - | no | Name for the declared session store (default: derived from the directory, <dir>-session). |
 | `--existing` | flag | - | no | Prepare a coding-agent migration bundle for an existing LangGraph or OpenAI Agents SDK project (defaults to `.`). Requires `--server agentbricks`. |
+
+### `agentbricks auth`
+
+Choose, inspect, and sign in to the Databricks profile a project uses.
+
+A project records its profile in its `.env`, and every command run inside the project uses it (the global `-p` overrides it). Outside a project the DATABRICKS_CONFIG_PROFILE environment variable applies, then the Databricks SDK's default authentication. `login` does not save anything: `switch` is what changes the project's profile (unlike `databricks auth switch`, it writes the project's `.env`, not a global default).
+
+| Subcommand | Description |
+| --- | --- |
+| [`auth switch`](#agentbricks-auth-switch) | Set the Databricks profile an Agent Bricks project uses. |
+| [`auth describe`](#agentbricks-auth-describe) | Show the profile the CLI would use in a directory, and where it came from. |
+| [`auth login`](#agentbricks-auth-login) | Sign in to a Databricks profile, opening a browser login if it isn't authenticated yet. |
+
+#### `agentbricks auth switch`
+
+Set the Databricks profile an Agent Bricks project uses.
+
+Updates DATABRICKS_CONFIG_PROFILE in the project's `.env` in place, leaving every other line alone; a project without a `.env` gets one seeded from `.env.example`. Nothing else about the project changes. In an interactive terminal it then signs in to the profile, opening `databricks auth login` only if it isn't authenticated yet (which also creates a profile missing from your Databricks config); a failed sign-in still keeps the new `.env` profile. Non-interactive and CI runs make no workspace calls, warn if the profile isn't in your Databricks config yet, and list `agentbricks auth login <profile>` as a next step. The directory must be an Agent Bricks project (it contains `.agentbricks/project.toml` or `app.yaml`). With `-o json`, the result includes `signed_in_user`.
+
+```
+agentbricks auth switch [options] NAME
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `NAME` | yes | - |
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--source <SOURCE>` | path | `.` | no | Project directory whose .env to update. Defaults to the current directory. |
+
+With `-o json`: `{"directory", "env_profile", "changed", "workspace_host", "signed_in_user"}`.
+
+#### `agentbricks auth describe`
+
+Show the profile the CLI would use in a directory, and where it came from.
+
+Resolution order: the global `-p`, the project's `.env` (inside an Agent Bricks project), the DATABRICKS_CONFIG_PROFILE environment variable, then the Databricks SDK's default authentication. Read-only; no workspace calls are made. The output shows the profile (or `none (Databricks SDK default)`), its source, the workspace host (for the SDK default: `DATABRICKS_HOST`, else the `[DEFAULT]` profile's host), and the project directory.
+
+```
+agentbricks auth describe [options]
+```
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--source <SOURCE>` | path | `.` | no | Project directory. Defaults to the current directory. |
+
+With `-o json`: `{"profile", "source", "workspace_host", "project"}`.
+
+#### `agentbricks auth login`
+
+Sign in to a Databricks profile, opening a browser login if it isn't authenticated yet.
+
+The profile is NAME, else the global `-p`, else the `.env` profile of the project in the current (or --source) directory; DATABRICKS_CONFIG_PROFILE and the SDK default are not used. With none of those, an interactive terminal hands off to `databricks auth login`, which lets you pick a profile (outside a terminal it fails with a hint). An authenticated profile is only validated. An unauthenticated one is signed in with `databricks auth login --profile NAME` in an interactive terminal (the Databricks CLI is required for that) and validated again; without a terminal, or in CI, it fails with a hint instead. Nothing is saved: use `agentbricks auth switch` to change the project's profile. The profile and where it came from are printed to stderr before anything else happens.
+
+```
+agentbricks auth login [options] [NAME]
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `NAME` | no | - |
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--source <SOURCE>` | path | `.` | no | Project directory whose .env picks the profile when NAME and -p are omitted. Defaults to the current directory. |
+
+With `-o json`: `{"profile", "source", "user", "host"}`.
 
 ### `agentbricks doctor`
 
@@ -175,7 +249,9 @@ Run your agent locally so you can try it before deploying.
 
 Starts the agent on a local server - by default http://localhost:8000 - and prints where to reach it: the chat UI if the project has one, otherwise a sample request against the agent's API.
 
-Auth uses your Databricks profile (`-p` / `agentbricks login`), and the agent reaches Databricks model serving through the AI Gateway on that profile - so there are no model keys to set up.
+Auth uses your Databricks profile, resolved in this order: `-p`, the project's `.env`, then `DATABRICKS_CONFIG_PROFILE`. The agent reaches Databricks model serving through the AI Gateway on that profile - so there are no model keys to set up.
+
+`dev` first checks that the resolved profile can authenticate and fails fast with the `agentbricks auth login` command to run - without the check, an unauthenticated external-browser profile hangs the agent on a browser login that never completes. (Skipped when `.env` sets `DATABRICKS_TOKEN` or `DATABRICKS_CLIENT_ID`/`DATABRICKS_CLIENT_SECRET`, which authenticate the agent directly.)
 
 Under the hood this wraps `databricks apps run-local`: it reads the command + env from `app.yaml` and runs the app the way the Apps runtime would, so local behavior matches a deployment. The environment is built on the first run and reused after; pass `--prepare-environment` to force a rebuild (e.g. after changing dependencies).
 
@@ -1113,7 +1189,7 @@ _Options_
 
 Deploy your agent to Databricks Apps and get back a hosted URL to try it.
 
-Rolls the agent out to Databricks Apps and prints the URL where you (or anyone you share it with) can use it. The deployed agent reaches Databricks model serving through the AI Gateway using the app's own identity - no model keys to configure - and `deploy` also reconciles the stores declared in agent.toml and wires in any tracing.
+Rolls the agent out to Databricks Apps and prints the URL where you (or anyone you share it with) can use it. The deployed agent reaches Databricks model serving through the AI Gateway using the app's own identity - no model keys to configure - and `deploy` also reconciles the stores declared in agent.toml and wires in any tracing. `deploy` first checks that the resolved profile can authenticate and fails fast with the `agentbricks auth login` command to run.
 
 NAME is recorded in agent.toml on the first deploy, so a later `agentbricks deploy` from the project directory can omit it (passing NAME again updates the recorded name). Deployed apps are named `agent-bricks-<name>`. A project with a recorded base name reuses that app when NAME is omitted; you can also pass the full app name to update it. Use the full app name with the `agentbricks deployments` commands.
 

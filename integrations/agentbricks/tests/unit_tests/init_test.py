@@ -15,17 +15,19 @@ import pytest
 import tomli
 from click.testing import CliRunner
 
+from databricks_agentbricks.cli import app as cli_app
 from databricks_agentbricks.cli import init as init_mod
+from databricks_agentbricks.cli import workspace_auth
+from databricks_agentbricks.cli.app import CliContext
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.types import AgentFramework, AgentServer
 
 
-class _Ctx:
-    """Stand-in for CliContext: init reads .output and .profile."""
+class _Ctx(CliContext):
+    """CliContext with the (output, profile) signature init tests pass."""
 
     def __init__(self, output: str = "text", profile=None):
-        self.output = output
-        self.profile = profile
+        super().__init__(profile, output)
 
 
 def _default_store_token(manifest: dict, slug: str = "proj") -> str:
@@ -278,56 +280,86 @@ def test_init_json_keeps_lowercase_framework_and_server(
     assert payload["server"] == server.value
 
 
-def test_write_env_seeds_profile_from_example(tmp_path: pathlib.Path):
-    (tmp_path / ".env.example").write_text(
-        "DATABRICKS_CONFIG_PROFILE=DEFAULT\n# MLFLOW_EXPERIMENT_ID=\n"
-    )
-    assert init_mod._write_env(tmp_path, "ml") is True
-    body = (tmp_path / ".env").read_text()
-    assert "DATABRICKS_CONFIG_PROFILE=ml" in body
+_ENV_EXAMPLE = {".env.example": "DATABRICKS_CONFIG_PROFILE=DEFAULT\n# MLFLOW_EXPERIMENT_ID=\n"}
+
+
+def _init(dest: pathlib.Path, *args: str, output: str = "text"):
+    copy = _copy_writing(_ENV_EXAMPLE)
+    with mock.patch.object(init_mod, "_copy_packaged_template", side_effect=copy):
+        return CliRunner().invoke(init_mod.init, [*args, str(dest)], obj=_Ctx(output=output))
+
+
+@pytest.mark.parametrize(
+    ("args", "env", "expected"),
+    [
+        (["-p", "ml"], {}, "ml"),
+        ([], {"DATABRICKS_CONFIG_PROFILE": "from-env-var"}, "from-env-var"),
+    ],
+)
+def test_init_writes_env_with_resolved_profile(
+    tmp_path: pathlib.Path, monkeypatch, args, env, expected
+):
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    dest = tmp_path / "proj"
+    result = _init(dest, *args)
+    assert result.exit_code == 0, result.output
+    body = (dest / ".env").read_text()
+    assert f"DATABRICKS_CONFIG_PROFILE={expected}\n" in body
     assert "# MLFLOW_EXPERIMENT_ID=" in body  # rest of the example preserved
 
 
-def test_write_env_never_clobbers_existing(tmp_path: pathlib.Path):
-    (tmp_path / ".env").write_text("DATABRICKS_CONFIG_PROFILE=keepme\n")
-    assert init_mod._write_env(tmp_path, "ml") is False
-    assert "keepme" in (tmp_path / ".env").read_text()
+def test_init_inside_another_project_does_not_inherit_its_env_profile(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    # The root group folds the cwd project's `.env` into the context, but the new project
+    # must not inherit that workspace.
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / ".env").write_text("DATABRICKS_CONFIG_PROFILE=cwd-project\n")
+    dest = tmp_path / "new-proj"
 
+    result = CliRunner().invoke(cli_app.agentbricks, ["init", str(dest)])
 
-def test_init_profile_flag_writes_env(tmp_path: pathlib.Path):
-    dest = tmp_path / "proj"
-    with mock.patch.object(
-        init_mod,
-        "_copy_packaged_template",
-        side_effect=_copy_writing({".env.example": "DATABRICKS_CONFIG_PROFILE=DEFAULT\n"}),
-    ):
-        result = CliRunner().invoke(init_mod.init, ["--profile", "ml", str(dest)], obj=_Ctx())
     assert result.exit_code == 0, result.output
-    assert "DATABRICKS_CONFIG_PROFILE=ml" in (dest / ".env").read_text()
+    body = (dest / ".env").read_text()
+    assert "cwd-project" not in body
+    assert "DATABRICKS_CONFIG_PROFILE=DEFAULT" in body
 
 
-def test_init_uses_ctx_profile_when_flag_absent(tmp_path: pathlib.Path):
+def test_init_with_databricks_host_and_no_profile_writes_no_env(
+    tmp_path: pathlib.Path, monkeypatch, validated_profile
+):
+    monkeypatch.setenv("DATABRICKS_HOST", "https://env.example")
+    monkeypatch.setattr(workspace_auth, "_is_interactive", lambda: True)
     dest = tmp_path / "proj"
-    with mock.patch.object(
-        init_mod,
-        "_copy_packaged_template",
-        side_effect=_copy_writing({".env.example": "DATABRICKS_CONFIG_PROFILE=DEFAULT\n"}),
-    ):
-        result = CliRunner().invoke(init_mod.init, [str(dest)], obj=_Ctx(profile="from-login"))
+    result = _init(dest, output="json")
     assert result.exit_code == 0, result.output
-    assert "DATABRICKS_CONFIG_PROFILE=from-login" in (dest / ".env").read_text()
+    assert not (dest / ".env").exists()
+    payload = json.loads(result.output)
+    assert payload["env_profile"] is None
+    assert payload["workspace_host"] == "https://env.example"
+    validated_profile.assert_not_called()  # interactive, but host env auth never signs in
 
 
-def test_init_no_profile_writes_no_env(tmp_path: pathlib.Path):
-    dest = tmp_path / "proj"
-    with mock.patch.object(
-        init_mod,
-        "_copy_packaged_template",
-        side_effect=_copy_writing({".env.example": "DATABRICKS_CONFIG_PROFILE=DEFAULT\n"}),
-    ):
-        result = CliRunner().invoke(init_mod.init, [str(dest)], obj=_Ctx())
+def test_init_signs_in_when_interactive(tmp_path: pathlib.Path, monkeypatch, validated_profile):
+    monkeypatch.setattr(workspace_auth, "_is_interactive", lambda: True)
+    result = _init(tmp_path / "proj", "--profile", "ml", output="json")
     assert result.exit_code == 0, result.output
-    assert not (dest / ".env").exists()  # no profile -> scaffold-only, no .env
+    validated_profile.assert_called_once_with("ml")
+    assert json.loads(result.output)["signed_in_user"] == "me@example.com"
+
+
+def test_init_noninteractive_shows_login_next_step(
+    tmp_path: pathlib.Path, write_databrickscfg, validated_profile
+):
+    write_databrickscfg("[ml]\nhost = https://ml.example\n")
+    result = _init(tmp_path / "proj", "--profile", "ml")
+    assert result.exit_code == 0, result.output
+    out = " ".join(result.output.split())
+    assert "Signed in as" not in out
+    assert "agentbricks auth login ml" in out
+    validated_profile.assert_not_called()
 
 
 def test_init_store_name_overrides(tmp_path: pathlib.Path):
