@@ -20,7 +20,7 @@ import subprocess
 from collections.abc import Callable, Collection
 from typing import Any
 
-from harness.process import log
+from harness.logs import log
 from harness.run import APP_PREFIX, E2EError, project_prefix, scratch_schema_prefix
 from harness.workspace import AppIdentity, Workspace
 

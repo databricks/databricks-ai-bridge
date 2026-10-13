@@ -20,6 +20,7 @@ import dataclasses
 import os
 import pathlib
 import re
+import subprocess
 import uuid
 from collections.abc import Iterator
 from typing import Any
@@ -27,7 +28,7 @@ from typing import Any
 import pytest
 from harness.cleanup import delete_app_resources, delete_run_leftovers
 from harness.cli import AgentbricksCli
-from harness.process import log, run_command
+from harness.logs import log, log_command
 from harness.run import RUN_ID_PATTERN, E2EError, RunConfig, run_output_dir
 from harness.target import (
     WORKSPACE_KINDS,
@@ -169,11 +170,22 @@ def run_config(request: pytest.FixtureRequest) -> RunConfig:
         return run
     # A directory per process: xdist workers build at the same time and must not share an output.
     dist = run.output / "dist" / os.environ.get("PYTEST_XDIST_WORKER", "main")
-    run_command(["uv", "build", "--wheel", "--out-dir", str(dist)], cwd=PACKAGE_DIR, timeout=600)
+    return dataclasses.replace(run, wheel=_build_wheel(dist))
+
+
+def _build_wheel(dist: pathlib.Path) -> pathlib.Path:
+    """Build this checkout's wheel, which every generated project installs instead of PyPI's."""
+    argv = ["uv", "build", "--wheel", "--out-dir", str(dist)]
+    log_command(argv, PACKAGE_DIR)
+    result = subprocess.run(
+        argv, cwd=PACKAGE_DIR, text=True, capture_output=True, timeout=600, check=False
+    )
+    if result.returncode != 0:
+        raise E2EError(f"uv build failed ({result.returncode}):\n{result.stderr or result.stdout}")
     wheels = sorted(dist.glob("*.whl"))
     if not wheels:
         raise E2EError("uv build produced no wheel")
-    return dataclasses.replace(run, wheel=wheels[-1])
+    return wheels[-1]
 
 
 # The workspace

@@ -49,7 +49,7 @@ Every resource a run creates carries its run id, and is deleted at three points:
 | `harness/cli.py` | The `agentbricks` CLI under test, and the agents it produces |
 | `harness/workspace.py` | Databricks SDK helpers for what is not under test: SQL, UC, Apps, grants |
 | `harness/cleanup.py` | Deleting what the suites create, per App and per run |
-| `harness/process.py` | Logging and subprocess helpers |
+| `harness/logs.py` | Test-log output; every command is echoed so a run's log replays it |
 | `<suite>/` | One folder per feature: `tools`, `memory_store`, `session_store`, `tracing` |
 
 `conftest.py` files are the only code pytest calls by name; everything in `harness/` is plain Python

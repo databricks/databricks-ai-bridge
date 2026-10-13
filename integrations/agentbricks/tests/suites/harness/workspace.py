@@ -22,7 +22,7 @@ from databricks.sdk.errors import DatabricksError, NotFound
 from databricks.sdk.service.catalog import PermissionsChange, Privilege, SecurableType, VolumeType
 from databricks.sdk.service.sql import ExecuteStatementRequestOnWaitTimeout, State, StatementState
 
-from harness.process import log
+from harness.logs import log
 from harness.run import TOOL_RESOURCE_PREFIX, E2EError, now
 
 GrantTuple = tuple[str, str, str, str]

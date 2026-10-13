@@ -14,7 +14,7 @@ import uuid
 from collections.abc import Iterator
 
 import pytest
-from harness.process import log
+from harness.logs import log
 from harness.run import AUTHORING_PATHS, E2EError, RunConfig, now, scratch_schema_prefix
 from harness.target import TargetWorkspace, require_workspace
 from tool_definitions import TOOL_DEFINITIONS, Tool

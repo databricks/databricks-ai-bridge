@@ -32,7 +32,7 @@ import tomli
 import tomlkit
 
 from harness.cleanup import record_app_identity
-from harness.process import last_lines, last_nonempty_line, log, log_command
+from harness.logs import last_lines, last_nonempty_line, log, log_command
 from harness.run import APP_PREFIX, E2E_MODEL, FRAMEWORKS, E2EError, RunConfig, now, project_prefix
 from harness.target import TargetWorkspace
 from harness.workspace import AppIdentity, Workspace
