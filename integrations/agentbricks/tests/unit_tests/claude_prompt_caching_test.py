@@ -112,7 +112,7 @@ def test_extra_body_overrides_and_schema_parameter_named_cache_control():
         "extra_body": {
             "model": NATIVE,
             "messages": [{"role": "system", "content": "Actual system"}],
-            "custom_inputs": {"id": "1"},
+            "custom_inputs": {"id": "1", "cache_control": "application data"},
         },
         "tools": [
             {
@@ -130,7 +130,10 @@ def test_extra_body_overrides_and_schema_parameter_named_cache_control():
     assert prepared["extra_body"]["messages"][0]["content"][0]["cache_control"] == {
         "type": "ephemeral"
     }
-    assert prepared["extra_body"]["custom_inputs"] == {"id": "1"}
+    assert prepared["extra_body"]["custom_inputs"] == {
+        "id": "1",
+        "cache_control": "application data",
+    }
     assert request == original
     request["extra_body"]["model"] = "databricks-gpt-5-2"
     assert prepare_claude_request(request) is request
@@ -216,3 +219,25 @@ def test_invalid_policy():
         ClaudeCachingOpenAI(cache_policy="invalid")
     with pytest.raises(ValueError, match="DATABRICKS_CLAUDE_PROMPT_CACHING"):
         prepare_claude_request({"model": NATIVE}, "invalid")
+
+
+@pytest.mark.parametrize(
+    "content, marked_index",
+    [
+        ("   ", None),
+        (None, None),
+        ([{"type": "text", "text": "A"}, {"type": "text", "text": ""}], 0),
+        ([{"type": "image_url", "image_url": {"url": "https://example.com/image.png"}}], 0),
+    ],
+)
+def test_legacy_cacheable_content_boundaries(content, marked_index):
+    request = {"model": LEGACY, "messages": [{"role": "user", "content": content}]}
+    original = deepcopy(request)
+    prepared = prepare_claude_request(request)
+    if marked_index is None:
+        assert prepared["messages"][0]["content"] == content
+    else:
+        assert prepared["messages"][0]["content"][marked_index]["cache_control"] == {
+            "type": "ephemeral"
+        }
+    assert request == original

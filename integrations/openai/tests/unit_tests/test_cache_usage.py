@@ -2,7 +2,7 @@
 
 import json
 from copy import deepcopy
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import httpx
@@ -150,3 +150,22 @@ def test_generic_clients_do_not_infer_or_copy_caching_policy(endpoint, model):
         client.chat.completions.create(model=model, messages=messages)
     assert requests[0]["messages"] == messages
     assert "cache_control" not in requests[0]
+
+
+def test_normalize_usage_preserves_details_and_input_totals():
+    from openai.types.chat import ChatCompletion
+
+    from databricks_openai.utils.cache_usage import normalize_cache_usage
+
+    data = {"usage": {**USAGE, "prompt_tokens_details": {"audio_tokens": 3}}}
+    normalized = cast(dict[str, Any], normalize_cache_usage(data, ChatCompletion))
+    assert normalized["usage"]["prompt_tokens_details"] == {
+        "audio_tokens": 3,
+        "cached_tokens": 4096,
+        "cache_write_tokens": 16,
+    }
+    assert normalized["usage"]["prompt_tokens"] == 5000
+    assert data["usage"]["prompt_tokens_details"] == {"audio_tokens": 3}
+    assert normalize_cache_usage(data, dict) is data
+    ordinary = {"usage": {"prompt_tokens": 10, "prompt_tokens_details": {"audio_tokens": 3}}}
+    assert normalize_cache_usage(ordinary, ChatCompletion) is ordinary
