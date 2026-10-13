@@ -7,6 +7,7 @@ import sys
 
 from databricks_agentbricks.skills import bundled_workflow_skill
 
+# Update these markers as new coding-agent harnesses are supported so they receive workflow hints.
 AGENT_ENV_MARKERS = (
     "AGENT",
     "AI_AGENT",
