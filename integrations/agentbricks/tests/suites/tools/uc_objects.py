@@ -9,7 +9,7 @@ from harness.run import E2EError
 from harness.workspace import Workspace
 
 NESTED_FUNCTION = "ab_nested_marker"
-FUNCTION = "ab_uc_marker"
+FUNCTION = "uc_marker"
 VOLUME = "ab_volume"
 # The MCP server exposes a function as catalog__schema__function, capped at 64 characters.
 MAX_TOOL_NAME_LENGTH = 64
