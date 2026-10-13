@@ -63,7 +63,7 @@ from langchain_core.utils.function_calling import (
 )
 from langchain_core.utils.pydantic import is_basemodel_subclass
 from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
-from openai.types.chat import ChatCompletion, ChatCompletionChunk
+from openai.types.chat import ChatCompletionChunk
 from openai.types.completion_usage import CompletionUsage
 from openai.types.responses import Response, ResponseStreamEvent, ResponseUsage
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -705,13 +705,25 @@ class ChatDatabricks(BaseChatModel):
             result["output_token_details"] = output_token_details
         return result
 
-    def _convert_response_to_chat_result(self, response: ChatCompletion) -> ChatResult:
+    def _convert_response_to_chat_result(self, response: Any) -> ChatResult:
+        if not hasattr(response, "choices"):
+            message = (
+                "ChatDatabricks expected a ChatCompletion response, "
+                f"but received {type(response).__name__}."
+            )
+            if isinstance(response, str):
+                if response.lstrip().lower().startswith(("<!doctype html", "<html")):
+                    message += (
+                        " The response is HTML, which may be a login page returned after a redirect."
+                        " Check that the Databricks host is a workspace URL and that authentication"
+                        " is configured correctly."
+                    )
+                else:
+                    message += " The response is plain text instead of a JSON chat completion."
+            raise ValueError(message)
+
         # Check if this is a ChatAgent response (has messages but no choices)
-        if (
-            hasattr(response, "choices")
-            and response.choices is None
-            and hasattr(response, "messages")
-        ):
+        if response.choices is None and hasattr(response, "messages"):
             return self._convert_chatagent_response_to_chat_result(response)
 
         generations = []

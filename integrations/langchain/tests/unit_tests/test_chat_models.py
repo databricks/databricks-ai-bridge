@@ -4,8 +4,9 @@ import json
 import time
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
+import httpx
 import mlflow  # noqa: F401
 import pytest
 from databricks import sdk
@@ -27,6 +28,7 @@ from langchain_core.messages.content import create_text_block
 from langchain_core.messages.tool import ToolCallChunk
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables import RunnableBinding, RunnableMap
+from openai import OpenAI
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 from openai.types.completion_usage import CompletionUsage
@@ -192,6 +194,54 @@ def test_chat_model_predict(llm: ChatDatabricks) -> None:
         ]
     )
     assert res.content == _MOCK_CHAT_RESPONSE["choices"][0]["message"]["content"]
+
+
+@pytest.mark.parametrize("response", ["not JSON", None, {}, [], b"not JSON"])
+def test_chat_model_unsupported_response(llm: ChatDatabricks, response: Any) -> None:
+    cast(Mock, llm.client.chat.completions.create).side_effect = lambda **kwargs: response
+
+    with pytest.raises(
+        ValueError,
+        match=f"expected a ChatCompletion response, but received {type(response).__name__}",
+    ):
+        llm.invoke("Hi")
+
+
+@pytest.mark.parametrize("html_prefix", ["<!DOCTYPE html>", "\n  <HTML>"])
+def test_chat_model_html_login_redirect(llm: ChatDatabricks, html_prefix: str) -> None:
+    requests = []
+    html = f"{html_prefix}<body>Sign in: private-login-page-content</body></html>"
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        if request.url.path == "/login":
+            return httpx.Response(200, headers={"content-type": "text/html"}, text=html)
+        return httpx.Response(303, headers={"location": "/login"})
+
+    with OpenAI(
+        api_key="test",
+        base_url="https://workspace.example/serving-endpoints",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond), follow_redirects=True),
+    ) as client:
+        llm.client = client
+        with pytest.raises(ValueError, match="HTML") as error:
+            llm.invoke("Hi")
+
+    assert requests == [("POST", "/serving-endpoints/chat/completions"), ("GET", "/login")]
+    assert "login page" in str(error.value)
+    assert "workspace URL" in str(error.value)
+    assert "authentication" in str(error.value)
+    assert "private-login-page-content" not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_chat_model_async_html_response(llm: ChatDatabricks) -> None:
+    client = AsyncMock()
+    client.chat.completions.create.return_value = "<html><body>Sign in</body></html>"
+
+    with patch("databricks_langchain.chat_models.get_async_openai_client", return_value=client):
+        with pytest.raises(ValueError, match="HTML"):
+            await llm.ainvoke("Hi")
 
 
 def test_chat_model_stream(llm: ChatDatabricks) -> None:
