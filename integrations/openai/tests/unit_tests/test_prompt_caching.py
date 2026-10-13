@@ -200,6 +200,42 @@ def test_custom_claude_endpoint_provider_override(endpoint):
     assert requests[0]["messages"][0]["content"][0]["cache_control"] == {"type": "ephemeral"}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("policy", ["auto", "off"])
+async def test_custom_claude_provider_fixes_empty_assistant_content(endpoint, asynchronous, policy):
+    workspace, requests = endpoint
+    messages: list[Any] = [
+        {"role": "user", "content": "Echo hello"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "1",
+                    "type": "function",
+                    "function": {"name": "echo", "arguments": '{"text": "hello"}'},
+                }
+            ],
+        },
+        {"role": "tool", "content": "hello", "tool_call_id": "1"},
+    ]
+    kwargs: dict[str, Any] = {
+        "workspace_client": workspace,
+        "prompt_caching": policy,
+        "prompt_cache_provider": "anthropic",
+    }
+    if asynchronous:
+        async with AsyncDatabricksOpenAI(**kwargs) as client:
+            await client.chat.completions.create(model="my-endpoint", messages=messages)
+    else:
+        with DatabricksOpenAI(**kwargs) as client:
+            client.chat.completions.create(model="my-endpoint", messages=messages)
+    assert requests[0]["messages"][1]["content"] == " "
+    if policy == "auto":
+        assert messages[1]["content"] == ""
+
+
 @pytest.mark.parametrize("location", ["messages", "extra_body", "tools"])
 def test_caller_cache_controls_take_precedence(endpoint, location):
     workspace, requests = endpoint
