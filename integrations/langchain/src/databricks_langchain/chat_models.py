@@ -707,20 +707,11 @@ class ChatDatabricks(BaseChatModel):
 
     def _convert_response_to_chat_result(self, response: Any) -> ChatResult:
         if not hasattr(response, "choices"):
-            message = (
+            raise ValueError(
                 "ChatDatabricks expected a ChatCompletion response, "
-                f"but received {type(response).__name__}."
+                f"but received {type(response).__name__}. "
+                "Check that the endpoint returns an OpenAI-compatible chat completion."
             )
-            if isinstance(response, str):
-                if response.lstrip().lower().startswith(("<!doctype html", "<html")):
-                    message += (
-                        " The response is HTML, which may be a login page returned after a redirect."
-                        " Check that the Databricks host is a workspace URL and that authentication"
-                        " is configured correctly."
-                    )
-                else:
-                    message += " The response is plain text instead of a JSON chat completion."
-            raise ValueError(message)
 
         # Check if this is a ChatAgent response (has messages but no choices)
         if response.choices is None and hasattr(response, "messages"):

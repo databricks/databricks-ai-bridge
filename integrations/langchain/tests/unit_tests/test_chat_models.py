@@ -207,16 +207,21 @@ def test_chat_model_unsupported_response(llm: ChatDatabricks, response: Any) -> 
         llm.invoke("Hi")
 
 
-@pytest.mark.parametrize("html_prefix", ["<!DOCTYPE html>", "\n  <HTML>"])
-def test_chat_model_html_login_redirect(llm: ChatDatabricks, html_prefix: str) -> None:
+@pytest.mark.parametrize(
+    "content_type, body",
+    [
+        ("text/html", "<!DOCTYPE html><html><body>private-response-content</body></html>"),
+        ("text/plain", "private-response-content"),
+    ],
+)
+def test_chat_model_non_json_response(llm: ChatDatabricks, content_type: str, body: str) -> None:
     requests = []
-    html = f"{html_prefix}<body>Sign in: private-login-page-content</body></html>"
 
     def respond(request: httpx.Request) -> httpx.Response:
         requests.append((request.method, request.url.path))
-        if request.url.path == "/login":
-            return httpx.Response(200, headers={"content-type": "text/html"}, text=html)
-        return httpx.Response(303, headers={"location": "/login"})
+        if request.url.path == "/response":
+            return httpx.Response(200, headers={"content-type": content_type}, text=body)
+        return httpx.Response(303, headers={"location": "/response"})
 
     with OpenAI(
         api_key="test",
@@ -224,14 +229,12 @@ def test_chat_model_html_login_redirect(llm: ChatDatabricks, html_prefix: str) -
         http_client=httpx.Client(transport=httpx.MockTransport(respond), follow_redirects=True),
     ) as client:
         llm.client = client
-        with pytest.raises(ValueError, match="HTML") as error:
+        with pytest.raises(ValueError, match="received str") as error:
             llm.invoke("Hi")
 
-    assert requests == [("POST", "/serving-endpoints/chat/completions"), ("GET", "/login")]
-    assert "login page" in str(error.value)
-    assert "workspace URL" in str(error.value)
-    assert "authentication" in str(error.value)
-    assert "private-login-page-content" not in str(error.value)
+    assert requests == [("POST", "/serving-endpoints/chat/completions"), ("GET", "/response")]
+    assert "OpenAI-compatible chat completion" in str(error.value)
+    assert "private-response-content" not in str(error.value)
 
 
 @pytest.mark.asyncio
@@ -240,7 +243,7 @@ async def test_chat_model_async_html_response(llm: ChatDatabricks) -> None:
     client.chat.completions.create.return_value = "<html><body>Sign in</body></html>"
 
     with patch("databricks_langchain.chat_models.get_async_openai_client", return_value=client):
-        with pytest.raises(ValueError, match="HTML"):
+        with pytest.raises(ValueError, match="received str"):
             await llm.ainvoke("Hi")
 
 
