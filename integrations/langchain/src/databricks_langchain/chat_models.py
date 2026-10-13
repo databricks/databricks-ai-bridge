@@ -641,52 +641,37 @@ class ChatDatabricks(BaseChatModel):
 
     @staticmethod
     def _convert_completion_usage_to_usage_metadata(usage: CompletionUsage) -> UsageMetadata:
+        # Databricks prompt_tokens already includes cache reads and writes. Some GPT responses
+        # include native cache counters too, so merge details without identifying the provider.
+        result: UsageMetadata = {
+            "input_tokens": usage.prompt_tokens or 0,
+            "output_tokens": usage.completion_tokens or 0,
+            "total_tokens": usage.total_tokens or 0,
+        }
+        input_token_details = None
+        if usage.prompt_tokens_details is not None:
+            input_token_details = InputTokenDetails(
+                audio=usage.prompt_tokens_details.audio_tokens or 0,
+                cache_read=usage.prompt_tokens_details.cached_tokens or 0,
+            )
         if (
             getattr(usage, "cache_read_input_tokens", None) is not None
             or getattr(usage, "cache_creation_input_tokens", None) is not None
         ):
-            # Databricks prompt_tokens already includes Claude cache reads and writes.
-            return UsageMetadata(
-                input_tokens=usage.prompt_tokens or 0,
-                output_tokens=usage.completion_tokens or 0,
-                total_tokens=usage.total_tokens or 0,
-                input_token_details=InputTokenDetails(
-                    cache_read=getattr(usage, "cache_read_input_tokens", None) or 0,
-                    cache_creation=getattr(usage, "cache_creation_input_tokens", None) or 0,
-                ),
+            if input_token_details is None:
+                input_token_details = InputTokenDetails()
+            input_token_details["cache_read"] = getattr(usage, "cache_read_input_tokens", None) or 0
+            input_token_details["cache_creation"] = (
+                getattr(usage, "cache_creation_input_tokens", None) or 0
             )
-        if usage.prompt_tokens_details is not None:
-            # Most likely an OpenAI Model
-            input_token_details = None
-            if usage.prompt_tokens_details:
-                input_token_details = InputTokenDetails(
-                    audio=usage.prompt_tokens_details.audio_tokens or 0,
-                    cache_read=usage.prompt_tokens_details.cached_tokens or 0,
-                )
-
-            output_token_details = None
-            if usage.completion_tokens_details is not None:
-                output_token_details = OutputTokenDetails(
-                    reasoning=usage.completion_tokens_details.reasoning_tokens or 0,
-                    audio=usage.completion_tokens_details.audio_tokens or 0,
-                )
-
-            result: UsageMetadata = {
-                "input_tokens": usage.prompt_tokens or 0,
-                "output_tokens": usage.completion_tokens or 0,
-                "total_tokens": usage.total_tokens or 0,
-            }
-            if input_token_details is not None:
-                result["input_token_details"] = input_token_details
-            if output_token_details is not None:
-                result["output_token_details"] = output_token_details
-            return result
-        else:
-            return UsageMetadata(
-                input_tokens=usage.prompt_tokens or 0,
-                output_tokens=usage.completion_tokens or 0,
-                total_tokens=usage.total_tokens or 0,
+        if input_token_details is not None:
+            result["input_token_details"] = input_token_details
+        if usage.completion_tokens_details is not None:
+            result["output_token_details"] = OutputTokenDetails(
+                reasoning=usage.completion_tokens_details.reasoning_tokens or 0,
+                audio=usage.completion_tokens_details.audio_tokens or 0,
             )
+        return result
 
     @staticmethod
     def _convert_responses_usage_to_usage_metadata(usage: ResponseUsage) -> UsageMetadata:

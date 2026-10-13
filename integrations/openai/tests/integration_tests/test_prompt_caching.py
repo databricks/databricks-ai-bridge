@@ -39,6 +39,10 @@ def context():
     )
 
 
+def _cache_read_tokens(usage):
+    return getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", 0) or 0
+
+
 def _assert_usage(usage):
     assert usage.prompt_tokens_details.cached_tokens > 0, "Repeated prefix did not read the cache"
     assert usage.total_tokens == usage.prompt_tokens + usage.completion_tokens
@@ -54,8 +58,11 @@ def test_sync_automatic_prompt_caching(route, context):
     with DatabricksOpenAI(
         workspace_client=WorkspaceClient(), use_ai_gateway=gateway, prompt_caching="auto"
     ) as client:
-        responses = [
-            client.chat.completions.create(
+        responses = []
+        # Gateway cache writes do not guarantee a read on the immediately following request.
+        # Bound warmup while still requiring real reuse of the unchanged system prefix.
+        for turn in range(4):
+            response = client.chat.completions.create(
                 model=model,
                 messages=[
                     {"role": "system", "content": context},
@@ -63,12 +70,13 @@ def test_sync_automatic_prompt_caching(route, context):
                 ],
                 max_tokens=10,
             )
-            for turn in range(2)
-        ]
+            responses.append(response)
+            if turn > 0 and _cache_read_tokens(response.usage) > 0:
+                break
     assert getattr(responses[0].usage, "cache_creation_input_tokens", 0) > 0, (
         "Fresh prefix did not write the cache"
     )
-    _assert_usage(responses[1].usage)
+    _assert_usage(responses[-1].usage)
 
 
 @pytest.mark.asyncio
@@ -82,7 +90,8 @@ async def test_async_stream_automatic_prompt_caching(route, context):
     async with AsyncDatabricksOpenAI(
         workspace_client=WorkspaceClient(), use_ai_gateway=gateway, prompt_caching="auto"
     ) as client:
-        for turn in range(2):
+        # Use the same bounded warmup as the synchronous client, with distinct user turns.
+        for turn in range(4):
             stream = await client.chat.completions.create(
                 model=model,
                 messages=[
@@ -100,8 +109,10 @@ async def test_async_stream_automatic_prompt_caching(route, context):
                         usage = chunk.usage
             assert usage is not None, "Streaming response omitted usage"
             usages.append(usage)
+            if turn > 0 and _cache_read_tokens(usage) > 0:
+                break
     assert usages[0].cache_creation_input_tokens > 0
-    _assert_usage(usages[1])
+    _assert_usage(usages[-1])
 
 
 @pytest.mark.asyncio

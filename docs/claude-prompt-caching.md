@@ -38,6 +38,9 @@ remain uncached, changed prefixes miss, and expired entries need another write. 
 more than ordinary input; savings depend on reuse. See [Databricks caching documentation](https://docs.databricks.com/aws/en/machine-learning/model-serving/score-foundation-models#prompt-cache)
 and [Anthropic caching documentation](https://platform.claude.com/docs/en/build-with-claude/prompt-caching).
 
+A cache write does not guarantee a hit on the very next gateway request. The live client checks
+allow up to four requests with an unchanged system prefix and require an actual cache read.
+
 Inspect actual cache-read counts, not just the presence of cache-control fields:
 
 - OpenAI: `usage.prompt_tokens_details.cached_tokens`; writes are `cache_write_tokens`.

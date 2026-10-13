@@ -1866,7 +1866,21 @@ def test_claude_usage_with_openai_details_preserves_writes_and_totals():
     converted = ChatDatabricks._convert_completion_usage_to_usage_metadata(usage)
     assert converted["input_tokens"] == 100
     assert converted["total_tokens"] == converted["input_tokens"] + converted["output_tokens"]
-    assert converted["input_token_details"] == {"cache_read": 30, "cache_creation": 20}
+    assert converted["input_token_details"] == {"audio": 0, "cache_read": 30, "cache_creation": 20}
+
+
+@pytest.mark.parametrize("cache_creation", [0, 7])
+def test_usage_with_both_counter_formats_preserves_audio_and_reasoning(cache_creation):
+    usage = _create_openai_completion_usage().model_copy(
+        update={"cache_read_input_tokens": 20, "cache_creation_input_tokens": cache_creation}
+    )
+    assert ChatDatabricks._convert_completion_usage_to_usage_metadata(usage) == {
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "total_tokens": 150,
+        "input_token_details": {"audio": 10, "cache_read": 20, "cache_creation": cache_creation},
+        "output_token_details": {"reasoning": 5, "audio": 3},
+    }
 
 
 @pytest.mark.parametrize(
