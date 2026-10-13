@@ -203,15 +203,31 @@ def test_chat_model_unsupported_response(llm: ChatDatabricks, response: Any) -> 
     with pytest.raises(
         ValueError,
         match=f"expected a ChatCompletion response, but received {type(response).__name__}",
-    ):
+    ) as error:
         llm.invoke("Hi")
+
+    assert f"Response: {response!r}" in str(error.value)
+
+
+def test_chat_model_long_unsupported_response(llm: ChatDatabricks) -> None:
+    response = "a" * 600
+    cast(Mock, llm.client.chat.completions.create).side_effect = lambda **kwargs: response
+
+    with pytest.raises(ValueError, match="received str") as error:
+        llm.invoke("Hi")
+
+    message = str(error.value)
+    assert "a" * 400 in message
+    assert response not in message
+    assert message.endswith("... (truncated)")
+    assert len(message) < 750
 
 
 @pytest.mark.parametrize(
     "content_type, body",
     [
-        ("text/html", "<!DOCTYPE html><html><body>private-response-content</body></html>"),
-        ("text/plain", "private-response-content"),
+        ("text/html", "<!DOCTYPE html><html><body>unexpected-response-content</body></html>"),
+        ("text/plain", "unexpected-response-content"),
     ],
 )
 def test_chat_model_non_json_response(llm: ChatDatabricks, content_type: str, body: str) -> None:
@@ -234,7 +250,7 @@ def test_chat_model_non_json_response(llm: ChatDatabricks, content_type: str, bo
 
     assert requests == [("POST", "/serving-endpoints/chat/completions"), ("GET", "/response")]
     assert "OpenAI-compatible chat completion" in str(error.value)
-    assert "private-response-content" not in str(error.value)
+    assert f"Response: {body!r}" in str(error.value)
 
 
 @pytest.mark.asyncio
@@ -243,8 +259,10 @@ async def test_chat_model_async_html_response(llm: ChatDatabricks) -> None:
     client.chat.completions.create.return_value = "<html><body>Sign in</body></html>"
 
     with patch("databricks_langchain.chat_models.get_async_openai_client", return_value=client):
-        with pytest.raises(ValueError, match="received str"):
+        with pytest.raises(ValueError, match="received str") as error:
             await llm.ainvoke("Hi")
+
+    assert "Response: '<html><body>Sign in</body></html>'" in str(error.value)
 
 
 def test_chat_model_stream(llm: ChatDatabricks) -> None:

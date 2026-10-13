@@ -707,10 +707,14 @@ class ChatDatabricks(BaseChatModel):
 
     def _convert_response_to_chat_result(self, response: Any) -> ChatResult:
         if not hasattr(response, "choices"):
+            response_preview = repr(response)
+            if len(response_preview) > 500:
+                response_preview = response_preview[:500] + "... (truncated)"
             raise ValueError(
                 "ChatDatabricks expected a ChatCompletion response, "
                 f"but received {type(response).__name__}. "
-                "Check that the endpoint returns an OpenAI-compatible chat completion."
+                "Check that the endpoint returns an OpenAI-compatible chat completion. "
+                f"Response: {response_preview}"
             )
 
         # Check if this is a ChatAgent response (has messages but no choices)
