@@ -106,6 +106,17 @@ Pass --profile (or set a default via `agentbricks login` / -p) to seed a local `
 
 The scaffold is preconfigured to call Databricks model serving through the AI Gateway using that profile, so it can talk to a model with no separate endpoint or API key to set up.
 
+New projects include the `agent-bricks-workflow` skill in `.agents/skills/`, with discovery pointers in
+`.claude/skills/` and `.agent/skills/`. Local `dev` is optional when the goal is deployment.
+JSON results include `workflow_skill` and `skill_pointers`.
+
+With `--existing`, prepare the separate `agent-bricks-migrate` bundle and pointers in all three
+discovery roots without changing existing application source or configuration. Coding agents in
+existing projects can read the bundled workflow skill at the path printed by the CLI's automatic
+stderr hint, enabled by default when a coding-agent environment is detected. Ordinary human
+invocations do not emit this hint. Set `AGENTBRICKS_DISABLE_AGENT_HINT=1` to disable hints without
+disabling skill installation or discovery.
+
 `--server agentbricks` selects the managed server, which supports foreground, streaming, and background invocations through one HTTP contract and Runtime Store. This existing server value is recorded in `agent.toml`. Pass `--server custom` for a minimal foreground-only FastAPI server.
 
 ```
