@@ -9,6 +9,7 @@ reports each tool independently and the sequence continues past a failure.
 from __future__ import annotations
 
 from harness.cli import AgentbricksCli
+from harness.logs import log
 from harness.workspace import Workspace
 from tool_definitions import Tool, assert_endpoint_invoke, bind, invoke_and_check
 
@@ -30,6 +31,11 @@ def test_deploy(
                 f"{sorted(workspace_client.granted_tuples(app))}"
             )
 
+    def wait_for_grant(tool: Tool) -> None:
+        if tool.grant is not None:
+            waited = workspace_client.wait_until_effective(app, tool.grant)
+            log(f"{tool.name}: {tool.grant[3]} effective for {app} after {waited:.0f}s")
+
     def grant_transitive_if_needed(tool: Tool) -> None:
         # The nested function is deliberately outside Agent Bricks' grants; the tool only works
         # once this manual grant is in place.
@@ -41,6 +47,7 @@ def test_deploy(
             with subtests.test(tool=tool.name):
                 bind(agentbricks_cli, project, tool)
                 agent = agentbricks_cli.deploy(project, app)
+                wait_for_grant(tool)
                 grant_transitive_if_needed(tool)
                 invoke_and_check(agent, tool)
                 for added in tools[: index + 1]:
@@ -53,6 +60,7 @@ def test_deploy(
     agent = agentbricks_cli.deploy(project, app)
     for tool in tools:
         with subtests.test(tool=tool.name):
+            wait_for_grant(tool)
             grant_transitive_if_needed(tool)
             invoke_and_check(agent, tool)
             assert_granted(tool)

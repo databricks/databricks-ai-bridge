@@ -257,6 +257,29 @@ class Workspace:
         """Whether Agent Bricks granted the App ``grant``, as (kind, name, type, permission)."""
         return grant in app_resource_tuples(tool_resources(self.app(app_name)))
 
+    def wait_until_effective(self, app_name: str, grant: GrantTuple, timeout: float = 120) -> float:
+        """Wait until a UC ``grant`` deploy added is effective for the App; returns the seconds waited.
+
+        Deploy reconciles the App's UC resources before returning, but the privilege can become
+        effective for its principal a little later; a tool called in between is denied.
+        """
+        kind, full_name, securable_type, privilege = grant
+        if kind != "uc_securable":
+            return 0.0
+        principal = self._principal(self.app(app_name))
+        started = time.monotonic()
+        while True:
+            held = effective_privileges(
+                self.client, SecurableType(securable_type), full_name, principal
+            )
+            if privilege in held or "ALL_PRIVILEGES" in held:
+                return time.monotonic() - started
+            if time.monotonic() - started > timeout:
+                raise E2EError(
+                    f"{privilege} on {full_name} not effective for {app_name} after {timeout:.0f}s: {held}"
+                )
+            time.sleep(5)
+
     def granted_tuples(self, app_name: str) -> set[GrantTuple]:
         return app_resource_tuples(tool_resources(self.app(app_name)))
 

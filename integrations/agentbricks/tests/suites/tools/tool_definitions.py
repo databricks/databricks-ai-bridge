@@ -95,9 +95,11 @@ def sandbox_tool(uc_function: UcFunction) -> Tool:
             "do not fabricate them."
         ),
         check=contains(uc_function.volume_marker),
-        add_args=("sandbox", "--scope", f"volume:{uc_function.volume}", "--auth", "app"),
+        # The CLI's default auth: the sandbox reads the volume as the user invoking the agent, so
+        # deploy adds no App grant. A manifest entry without `auth` would run as the App instead.
+        add_args=("sandbox", "--scope", f"volume:{uc_function.volume}"),
         toml=(
-            '[[tools]]\nid = "sandbox"\n'
+            '[[tools]]\nid = "sandbox"\nauth = "user"\n'
             'source = { kind = "sandbox", service = "system.ai.sandbox" }\n'
             "policy = { downscope = [\n"
             f'  {{ resource = "volume:{uc_function.volume}", permission = "read_only" }},\n'
@@ -105,8 +107,8 @@ def sandbox_tool(uc_function: UcFunction) -> Tool:
         ),
         files={},
         tool_id="sandbox",
-        app_auth=True,
-        grant=("uc_securable", uc_function.volume, "VOLUME", "READ_VOLUME"),
+        app_auth=False,
+        grant=None,
     )
 
 
@@ -121,7 +123,7 @@ def web_search_tool(**_resources: object) -> Tool:
         check=check_web_search,
         add_args=("mcp", "system.ai.web_search", "--auth", "app"),
         toml=(
-            '[[tools]]\nid = "web_search"\n'
+            '[[tools]]\nid = "web_search"\nauth = "app"\n'
             'source = { kind = "mcp", service = "system.ai.web_search" }\n'
         ),
         files={},
