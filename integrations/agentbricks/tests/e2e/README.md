@@ -4,7 +4,7 @@
 
 `sandbox_roundtrip_test.py` verifies that successful sandbox output and a controlled Python
 execution error both reach the next model turn, over JSON and SSE. Use a LangGraph agent with
-`system.ai.sandbox` configured and `databricks-langchain==0.21.0` installed:
+`system.ai.sandbox` configured and `databricks-langchain==0.22.0` installed:
 
 ```bash
 RUN_AGENTBRICKS_SANDBOX_E2E=1 AGENTBRICKS_E2E_AGENT_URL=<agent-url> \

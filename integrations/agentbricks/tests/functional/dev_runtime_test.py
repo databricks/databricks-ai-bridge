@@ -207,7 +207,7 @@ def test_scaffolded_agent_boots_and_answers_locally(
             'app = DurableAgentServer(auth_policy=InvocationAuthPolicy(("local-probe",)))',
         )
         runtime_main.write_text(source)
-    # Point the scaffold at both packages under test. CI supplies their built wheels; a local run
+    # Point the scaffold at the packages under test. CI supplies their built wheels; a local run
     # falls back to the corresponding editable working-tree checkout.
     agentbricks_wheel = os.environ.get("AGENTBRICKS_WHEEL")
     agentbricks_source = (
@@ -228,6 +228,27 @@ def test_scaffolded_agent_boots_and_answers_locally(
         bridge_source,
         direct_requirement="databricks-ai-bridge[memory]",
     )
+    integrations = pathlib.Path(__file__).resolve().parents[3]
+    openai_wheel = os.environ.get("OPENAI_WHEEL")
+    openai_source = (
+        {"path": openai_wheel}
+        if openai_wheel
+        else {"path": str(integrations / "openai"), "editable": True}
+    )
+    _pin_package_source(
+        project / "pyproject.toml",
+        "databricks-openai",
+        openai_source,
+        direct_requirement="databricks-openai>=0.18.0" if framework == "langgraph" else None,
+    )
+    if framework == "langgraph":
+        langchain_wheel = os.environ.get("LANGCHAIN_WHEEL")
+        langchain_source = (
+            {"path": langchain_wheel}
+            if langchain_wheel
+            else {"path": str(integrations / "langchain"), "editable": True}
+        )
+        _pin_package_source(project / "pyproject.toml", "databricks-langchain", langchain_source)
 
     # 2. Build the agent's venv (installs the databricks-agentbricks pinned above + its runtime deps).
     subprocess.run(

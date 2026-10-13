@@ -110,7 +110,7 @@ def test_init_scaffolds(run_agentbricks, tmp_path: pathlib.Path, extra) -> None:
     with (dest / "pyproject.toml").open("rb") as project_file:
         dependencies = tomli.load(project_file)["project"]["dependencies"]
     if "langgraph" in extra:
-        assert "databricks-langchain==0.21.0" in dependencies
+        assert "databricks-langchain==0.22.0" in dependencies
     else:
         assert not any(Requirement(dep).name == "databricks-langchain" for dep in dependencies)
 
@@ -118,7 +118,7 @@ def test_init_scaffolds(run_agentbricks, tmp_path: pathlib.Path, extra) -> None:
 def test_installed_langgraph_extra_pins_fixed_provider() -> None:
     requirements = [Requirement(dep) for dep in requires("databricks-agentbricks") or []]
     provider = next(dep for dep in requirements if dep.name == "databricks-langchain")
-    assert str(provider.specifier) == "==0.21.0"
+    assert str(provider.specifier) == "==0.22.0"
     assert provider.marker is not None
     assert provider.marker.evaluate({"extra": "langgraph"})
     assert not provider.marker.evaluate({"extra": "openai"})
