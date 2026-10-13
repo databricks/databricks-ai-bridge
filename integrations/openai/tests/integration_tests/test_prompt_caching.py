@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from typing import Any
 
 import pytest
 
@@ -49,6 +50,17 @@ def _assert_usage(usage):
     assert usage.prompt_tokens_details.cached_tokens == usage.cache_read_input_tokens
 
 
+def _cached_system_messages(context: str, turn: int) -> list[Any]:
+    # cache_control is a provider extension to OpenAI's content-block type.
+    return [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": context, "cache_control": {"type": "ephemeral"}}],
+        },
+        {"role": "user", "content": f"Reply OK: {turn}"},
+    ]
+
+
 def test_sync_automatic_prompt_caching(route, context):
     from databricks.sdk import WorkspaceClient
 
@@ -57,15 +69,14 @@ def test_sync_automatic_prompt_caching(route, context):
     gateway, model = route
     with DatabricksOpenAI(workspace_client=WorkspaceClient(), use_ai_gateway=gateway) as client:
         responses = []
+        # Native placement marks the final user block. Distinct standalone user queries
+        # need an explicit system point to reuse their common prefix.
         # Gateway cache writes do not guarantee a read on the immediately following request.
         # Bound warmup while still requiring real reuse of the unchanged system prefix.
         for turn in range(4):
             response = client.chat.completions.create(
                 model=model,
-                messages=[
-                    {"role": "system", "content": context},
-                    {"role": "user", "content": f"Reply OK: {turn}"},
-                ],
+                messages=_cached_system_messages(context, turn),
                 max_tokens=10,
                 extra_body={"cache_control": {"type": "ephemeral"}},
             )
@@ -93,10 +104,7 @@ async def test_async_stream_automatic_prompt_caching(route, context):
         for turn in range(4):
             stream = await client.chat.completions.create(
                 model=model,
-                messages=[
-                    {"role": "system", "content": context},
-                    {"role": "user", "content": f"Reply OK: {turn}"},
-                ],
+                messages=_cached_system_messages(context, turn),
                 max_tokens=10,
                 extra_body={"cache_control": {"type": "ephemeral"}},
                 stream=True,

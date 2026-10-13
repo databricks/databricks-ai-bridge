@@ -2,6 +2,7 @@
 
 import json
 from copy import deepcopy
+from typing import Any
 from unittest.mock import MagicMock
 
 import httpx
@@ -81,7 +82,10 @@ def assert_usage(usage):
 @pytest.mark.parametrize("location", ["none", "top", "block"])
 def test_sync_preserves_caller_request_and_reports_cache_usage(endpoint, location):
     workspace, requests = endpoint
-    messages = [{"role": "system", "content": "Stable"}, {"role": "user", "content": "Hello"}]
+    messages: list[Any] = [
+        {"role": "system", "content": "Stable"},
+        {"role": "user", "content": "Hello"},
+    ]
     extra_body = {}
     if location == "top":
         extra_body = {"cache_control": {"type": "ephemeral", "ttl": "1h"}}
@@ -141,7 +145,7 @@ def test_generic_clients_do_not_infer_or_copy_caching_policy(endpoint, model):
             raise AssertionError("Generic connectors must not copy payloads for cache placement")
 
     workspace, requests = endpoint
-    messages = [UncopyableDict(role="user", content="Hello")]
+    messages: list[Any] = [UncopyableDict(role="user", content="Hello")]
     with DatabricksOpenAI(workspace_client=workspace) as client:
         client.chat.completions.create(model=model, messages=messages)
     assert requests[0]["messages"] == messages

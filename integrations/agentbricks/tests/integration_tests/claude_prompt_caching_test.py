@@ -84,6 +84,7 @@ async def test_template_adapter_reuses_prefix_after_tool_turns(model, framework,
         from databricks_langchain import ChatDatabricks
         from langchain.agents import create_agent
         from langchain_core.messages import AIMessage
+        from langchain_core.runnables import RunnableConfig
         from langchain_core.tools import tool
         from langgraph.checkpoint.memory import MemorySaver
 
@@ -99,16 +100,17 @@ async def test_template_adapter_reuses_prefix_after_tool_turns(model, framework,
 
         graph = create_agent(
             model=TemplateChatDatabricks(
-                model=model,
+                endpoint=model,
                 workspace_client=WorkspaceClient(),
                 use_ai_gateway=gateway,
                 max_tokens=80,
+                max_retries=8,
             ),
             system_prompt=context,
             tools=[cache_echo],
             checkpointer=MemorySaver(),
         )
-        config = {"configurable": {"thread_id": str(uuid.uuid4())}}
+        config: RunnableConfig = {"configurable": {"thread_id": str(uuid.uuid4())}}
         for turn in range(4):
             text = f"cache verification {turn}"
             inputs = {
@@ -124,8 +126,8 @@ async def test_template_adapter_reuses_prefix_after_tool_turns(model, framework,
                 async for message, _ in graph.astream(
                     inputs, config=config, stream_mode="messages"
                 ):
-                    if getattr(message, "usage_metadata", None):
-                        usages.append(message.usage_metadata)
+                    if usage := getattr(message, "usage_metadata", None):
+                        usages.append(usage)
             else:
                 result = await graph.ainvoke(inputs, config=config)
                 usages = [

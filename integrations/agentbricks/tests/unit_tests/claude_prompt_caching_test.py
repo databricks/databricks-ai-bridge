@@ -2,6 +2,7 @@
 
 import json
 from copy import deepcopy
+from typing import Any
 from unittest.mock import MagicMock
 
 import httpx
@@ -55,7 +56,8 @@ def test_disabled_non_claude_and_unknown_alias_requests_are_untouched(model, pol
 @pytest.mark.parametrize("location", ["message", "tools", "top"])
 def test_caller_controls_take_precedence(location):
     control = {"type": "ephemeral", "ttl": "1h"}
-    request = {"model": NATIVE, "messages": [{"role": "system", "content": "Stable"}]}
+    messages: list[dict[str, Any]] = [{"role": "system", "content": "Stable"}]
+    request: dict[str, Any] = {"model": NATIVE, "messages": messages}
     if location == "message":
         request["messages"][0]["content"] = [
             {"type": "text", "text": "Stable", "cache_control": control}
