@@ -76,6 +76,64 @@ async def test_template_prompt_caching_default_and_opt_out(template, monkeypatch
     assert model.call_args.kwargs["use_ai_gateway"] is True
 
 
+def _load_custom_agent(framework, monkeypatch):
+    dependency = "databricks_langchain" if framework == "langgraph" else "databricks_openai"
+    pytest.importorskip(dependency, reason=f"Requires databricks-agentbricks[{framework}]")
+    path = TEMPLATES / f"custom-agent-{framework}" / "agent/agent.py"
+    spec = importlib.util.spec_from_file_location(f"custom_agent_{framework}", path)
+    assert spec is not None and spec.loader is not None
+    agent = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, agent)
+    spec.loader.exec_module(agent)
+    return agent
+
+
+@pytest.mark.parametrize("policy", [None, "off"])
+@pytest.mark.parametrize("headers", [{}, {"X-Test-Routing": "request"}])
+def test_custom_openai_prompt_caching_with_and_without_headers(monkeypatch, policy, headers):
+    agent = _load_custom_agent("openai", monkeypatch)
+    if policy is None:
+        monkeypatch.delenv("DATABRICKS_PROMPT_CACHING", raising=False)
+    else:
+        monkeypatch.setenv("DATABRICKS_PROMPT_CACHING", policy)
+    workspace = Mock()
+    monkeypatch.setattr(agent, "workspace_client", Mock(return_value=workspace))
+    monkeypatch.setattr(agent, "workspace_headers", Mock(return_value=headers))
+    client = Mock()
+    monkeypatch.setattr(agent, "AsyncDatabricksOpenAI", client)
+    configure = Mock()
+    monkeypatch.setattr(agent, "set_default_openai_client", configure)
+    monkeypatch.setattr(agent, "set_default_openai_api", Mock())
+    agent._configure_client()
+    assert client.call_args.kwargs["prompt_caching"] == (policy or "auto")
+    assert client.call_args.kwargs["workspace_client"] is workspace
+    assert client.call_args.kwargs.get("default_headers", {}) == headers
+    configure.assert_called_once_with(client.return_value)
+    agent.set_default_openai_api.assert_called_once_with("chat_completions")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", [None, "off"])
+async def test_custom_langgraph_prompt_caching_default_and_opt_out(monkeypatch, policy):
+    agent = _load_custom_agent("langgraph", monkeypatch)
+    if policy is None:
+        monkeypatch.delenv("DATABRICKS_PROMPT_CACHING", raising=False)
+    else:
+        monkeypatch.setenv("DATABRICKS_PROMPT_CACHING", policy)
+    workspace = Mock()
+    monkeypatch.setattr(agent, "workspace_client", Mock(return_value=workspace))
+    model = Mock()
+    monkeypatch.setattr(agent, "_RoutedChatDatabricks", model)
+    output = {"role": "assistant", "content": "OK"}
+    graph = Mock(ainvoke=AsyncMock(return_value={"messages": [output]}))
+    monkeypatch.setattr(agent, "create_agent", Mock(return_value=graph))
+    messages = [{"role": "user", "content": "Hello"}]
+    assert await agent.invoke(messages) == {"output": [output]}
+    assert model.call_args.kwargs["prompt_caching"] == (policy or "auto")
+    assert model.call_args.kwargs["workspace_client"] is workspace
+    graph.ainvoke.assert_awaited_once_with({"messages": messages})
+
+
 @pytest.mark.asyncio
 async def test_adapter_uses_context_session_and_namespaces_untrusted_actor(template, monkeypatch):
     framework, adapter, _agent = template

@@ -69,13 +69,24 @@ def _last_cacheable_block(message: dict[str, Any]) -> dict[str, Any] | None:
 def prepare_chat_request(
     kwargs: dict[str, Any], policy: PromptCaching, provider: PromptCacheProvider | None
 ) -> dict[str, Any]:
-    """Copy mutable inputs before model adaptations and add at most four cache points.
+    """Copy eligible Claude inputs before adaptations and add at most four cache points.
 
     System instructions cache the preceding tool definitions too. The final three user/tool
     request boundaries cache growing history, retaining previous boundaries even when a parallel
     tool batch exceeds Claude's automatic lookback window. Explicit caller controls take precedence
     over this policy, including controls supplied through ``extra_body``.
     """
+    if policy != "auto":
+        return kwargs
+    extra_body = kwargs.get("extra_body")
+    model = (
+        extra_body.get("model", kwargs.get("model"))
+        if isinstance(extra_body, dict)
+        else kwargs.get("model")
+    )
+    if not (provider == "anthropic" or (isinstance(model, str) and "claude" in model.lower())):
+        return kwargs
+
     kwargs = dict(kwargs)
     for key in ("messages", "tools"):
         value = kwargs.get(key)
@@ -88,11 +99,6 @@ def prepare_chat_request(
         kwargs["extra_body"] = extra_body
     else:
         extra_body = {}
-    model = extra_body.get("model", kwargs.get("model"))
-    if policy != "auto" or not (
-        provider == "anthropic" or (isinstance(model, str) and "claude" in model.lower())
-    ):
-        return kwargs
     if any(_has_cache_control(kwargs.get(key)) for key in ("messages", "tools", "extra_body")):
         return kwargs
 

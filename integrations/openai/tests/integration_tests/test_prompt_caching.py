@@ -151,7 +151,8 @@ async def test_agents_automatic_prompt_caching_with_tool_and_session(route, cont
             model_settings=ModelSettings(max_tokens=80),
             tools=[cache_echo],
         )
-        for turn in range(2):
+        cache_reads = []
+        for turn in range(4):
             text = f"cache verification {turn}"
             prompt = f"Call cache_echo with '{text}' and report its result."
             if stream:
@@ -165,6 +166,9 @@ async def test_agents_automatic_prompt_caching_with_tool_and_session(route, cont
                     agent, prompt, session=session, run_config=RunConfig(tracing_disabled=True)
                 )
             assert text in calls, "Agent did not execute the requested tool"
-            assert result.context_wrapper.usage.input_tokens_details.cached_tokens > 0
             usage = result.context_wrapper.usage
+            cache_reads.append(usage.input_tokens_details.cached_tokens or 0)
             assert usage.total_tokens == usage.input_tokens + usage.output_tokens
+            if turn > 0 and any(cache_reads):
+                break
+        assert any(cache_reads), f"No cache read after four session turns: {cache_reads}"

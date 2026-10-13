@@ -40,6 +40,8 @@ and [Anthropic caching documentation](https://platform.claude.com/docs/en/build-
 
 A cache write does not guarantee a hit on the very next gateway request. The live client checks
 allow up to four requests with an unchanged system prefix and require an actual cache read.
+Agent and graph checks retain at least two conversation turns and allow up to four turns to
+observe a real read; they fail if no read occurs within that bound.
 
 Inspect actual cache-read counts, not just the presence of cache-control fields:
 

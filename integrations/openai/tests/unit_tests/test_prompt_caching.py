@@ -142,6 +142,53 @@ def test_disabled_and_other_providers_have_no_added_controls(endpoint, policy, m
     assert requests[0]["messages"] == messages
 
 
+@pytest.mark.parametrize(
+    "policy,model,override,provider",
+    [
+        ("off", MODEL, None, None),
+        ("auto", "databricks-gpt-5-2", None, None),
+        ("off", "my-endpoint", None, "anthropic"),
+        ("auto", MODEL, "databricks-gpt-5-2", None),
+    ],
+)
+def test_ineligible_requests_accept_payloads_that_cannot_be_deepcopied(
+    endpoint, policy, model, override, provider
+):
+    class UncopyableDict(dict):
+        def __deepcopy__(self, memo):
+            raise AssertionError("Ineligible requests must not deepcopy caller payloads")
+
+    workspace, requests = endpoint
+    messages: list[Any] = [UncopyableDict(role="user", content="Hello")]
+    tools: list[Any] = [
+        UncopyableDict(type="function", function={"name": "echo", "parameters": {}})
+    ]
+    extra_body = UncopyableDict(custom_inputs={"marker": "unchanged"})
+    if override is not None:
+        extra_body["model"] = override
+    with DatabricksOpenAI(
+        workspace_client=workspace, prompt_caching=policy, prompt_cache_provider=provider
+    ) as client:
+        client.chat.completions.create(
+            model=model, messages=messages, tools=tools, extra_body=extra_body
+        )
+    assert requests[0]["model"] == (override or model)
+    assert requests[0]["messages"] == messages
+    assert requests[0]["custom_inputs"] == {"marker": "unchanged"}
+
+
+def test_extra_body_claude_model_override_is_annotated(endpoint):
+    workspace, requests = endpoint
+    messages: list[Any] = [{"role": "user", "content": "Hello"}]
+    with DatabricksOpenAI(workspace_client=workspace, prompt_caching="auto") as client:
+        client.chat.completions.create(
+            model="databricks-gpt-5-2", messages=messages, extra_body={"model": MODEL}
+        )
+    assert requests[0]["model"] == MODEL
+    assert requests[0]["messages"][0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+    assert messages == [{"role": "user", "content": "Hello"}]
+
+
 def test_custom_claude_endpoint_provider_override(endpoint):
     workspace, requests = endpoint
     with DatabricksOpenAI(
