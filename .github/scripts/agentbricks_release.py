@@ -29,6 +29,8 @@ PACKAGE_ROOT = Path("integrations/agentbricks")
 TAG_PREFIX = "databricks-agentbricks-v"
 # Commits the release automation itself makes on release branches and main.
 AUTOMATION_SUBJECT_PATTERN = re.compile(r"(Release Agent Bricks|Set Agent Bricks development version to) ")
+# Run summaries do not autolink bare issue references the way release pages do.
+PULL_REQUEST_REFERENCE_PATTERN = re.compile(r"(?<![\w/\[])#(?P<number>[1-9][0-9]*)\b")
 
 
 def parse_version(value: str, *, allow_dev: bool = False) -> tuple[int, int, int, int, int]:
@@ -128,7 +130,14 @@ def render_release_notes(
     lines = [f"## databricks-agentbricks {version}", ""]
     changes = [subject for subject in commits if not AUTOMATION_SUBJECT_PATTERN.match(subject)]
     if changes:
-        lines += ["### Changes", "", *(f"- {subject}" for subject in changes), ""]
+        pull_url = f"https://github.com/{repository}/pull"
+        linked = [
+            PULL_REQUEST_REFERENCE_PATTERN.sub(
+                lambda match: f"[#{match['number']}]({pull_url}/{match['number']})", subject
+            )
+            for subject in changes
+        ]
+        lines += ["### Changes", "", *(f"- {subject}" for subject in linked), ""]
     else:
         lines += ["No package changes since the previous release.", ""]
     if previous_tag:

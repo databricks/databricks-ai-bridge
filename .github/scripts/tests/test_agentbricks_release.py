@@ -212,7 +212,7 @@ class ReleaseNotesTest(unittest.TestCase):
         self.commit("integrations/agentbricks/pyproject.toml", "Release Agent Bricks 0.5.0")
         head = self.git("rev-parse", "HEAD")
         notes = release.release_notes(self.root, "0.5.0", head, "owner/repo")
-        self.assertIn("- [agentbricks] Add feature (#2)", notes)
+        self.assertIn("- [agentbricks] Add feature ([#2](https://github.com/owner/repo/pull/2))", notes)
         self.assertNotIn("Shipped before", notes)
         self.assertNotIn("Unrelated package change", notes)
         self.assertNotIn("Release Agent Bricks", notes)
@@ -232,14 +232,25 @@ class ReleaseNotesTest(unittest.TestCase):
         self.git("tag", "databricks-agentbricks-v0.4.1")
         self.git("switch", "--quiet", "main")
         notes = release.release_notes(self.root, "0.5.0", self.git("rev-parse", "HEAD"), "owner/repo")
-        self.assertIn("New in minor (#5)", notes)
+        self.assertIn("New in minor ([#5](https://github.com/owner/repo/pull/5))", notes)
         self.assertNotIn("Fix crash", notes)
 
     def test_first_release_lists_history_without_a_compare_link(self) -> None:
         head = self.commit("integrations/agentbricks/a.py", "Initial package (#1)")
         notes = release.release_notes(self.root, "0.1.0", head, "owner/repo")
-        self.assertIn("- Initial package (#1)", notes)
+        self.assertIn("- Initial package ([#1](https://github.com/owner/repo/pull/1))", notes)
         self.assertNotIn("compare", notes)
+
+    def test_every_pull_request_reference_is_linked(self) -> None:
+        notes = release.render_release_notes(
+            "0.5.0", None, ["Fix kwargs (#426, #429)", "Keep owner/repo#7 and C# as written"], "owner/repo"
+        )
+        self.assertIn(
+            "Fix kwargs ([#426](https://github.com/owner/repo/pull/426), "
+            "[#429](https://github.com/owner/repo/pull/429))",
+            notes,
+        )
+        self.assertIn("Keep owner/repo#7 and C# as written", notes)
 
     def test_release_without_package_changes_says_so(self) -> None:
         self.commit("integrations/agentbricks/a.py", "Base")
