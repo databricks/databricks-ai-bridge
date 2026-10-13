@@ -46,27 +46,24 @@ genie_agent = GenieAgent(
 
 ## Claude prompt caching
 
-With `databricks-langchain>=0.22.0`, configure the model before passing it to a LangGraph agent:
+`ChatDatabricks` forwards caller-supplied controls through `extra_body` and content blocks.
+For a Claude endpoint supporting native automatic placement (for example Sonnet 4.6):
 
 ```python
 llm = ChatDatabricks(
-    model="system.ai.claude-sonnet-4-5",
+    model="system.ai.claude-sonnet-4-6",
     use_ai_gateway=True,
-    prompt_caching="auto",
+    extra_params={"extra_body": {"cache_control": {"type": "ephemeral"}}},
 )
 ```
 
-The shared Databricks client adds explicit cache points to system instructions and recent
-user/tool-result boundaries on every Chat Completions request. The system prefix includes tool
-definitions. It leaves stored history untouched and uses up to four five-minute ephemeral cache
-points. Caller-supplied `cache_control` fields take precedence. For a custom-named Claude endpoint,
-set `prompt_cache_provider="anthropic"`. Other model providers are unchanged.
+The generic connector does not infer a caching policy. Agent Bricks templates use the separate
+Claude adapter in `databricks_agentkit.claude`; see the [template caching guide](../../docs/claude-prompt-caching.md)
+for configuration, older endpoints, and manual controls.
 
-The library default is `"off"`; Agent Bricks templates enable `"auto"`. Cache eligibility depends on
-the model's minimum prefix length, repeated content, and cache lifetime. Cache writes carry an
-additional charge. Inspect `message.usage_metadata["input_token_details"]` for `cache_read` and
-`cache_creation`; both are already included in `input_tokens`. Automatic placement requires Chat
-Completions and cannot be combined with `use_responses_api=True`.
+Inspect `message.usage_metadata["input_token_details"]` for `cache_read` and `cache_creation`,
+including streaming results. Both are already included in `input_tokens`. Cache eligibility and
+pricing depend on the endpoint and repeated prefix.
 
 ## Contribution Guide
 We welcome contributions! Please see our [contribution guidelines](https://github.com/databricks/databricks-ai-bridge/tree/main/integrations/langchain) for details.

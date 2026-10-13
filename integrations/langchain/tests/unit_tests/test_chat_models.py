@@ -805,24 +805,6 @@ def test_convert_tool_message_preserves_cache_control() -> None:
     assert message.content == content
 
 
-@pytest.mark.parametrize("async_client", [False, True])
-def test_prompt_caching_is_forwarded_to_shared_client(async_client):
-    target = "get_async_openai_client" if async_client else "get_openai_client"
-    with patch(f"databricks_langchain.chat_models.{target}") as get_client:
-        model = ChatDatabricks(
-            model="custom-endpoint", prompt_caching="auto", prompt_cache_provider="anthropic"
-        )
-        _ = model.async_client if async_client else model.client
-    get_client.assert_called_once_with(
-        workspace_client=None, prompt_caching="auto", prompt_cache_provider="anthropic"
-    )
-
-
-def test_prompt_caching_rejects_responses_api():
-    with pytest.raises(ValueError, match="requires the Chat Completions API"):
-        ChatDatabricks(model="test", prompt_caching="auto", use_responses_api=True)
-
-
 @pytest.mark.parametrize(
     ("role", "expected_output"),
     [
@@ -2293,3 +2275,18 @@ def test_chat_databricks_with_timeout_and_retries():
         assert chat.max_retries == 3
         assert chat.client == mock_openai_client
         mock_get_client.assert_called_once_with(workspace_client=None, timeout=45.0, max_retries=3)
+
+
+@pytest.mark.parametrize("async_client", [False, True])
+def test_native_cache_control_uses_existing_extra_body_passthrough(async_client):
+    target = "get_async_openai_client" if async_client else "get_openai_client"
+    control = {"cache_control": {"type": "ephemeral", "ttl": "1h"}}
+    with patch(f"databricks_langchain.chat_models.{target}") as get_client:
+        model = ChatDatabricks(
+            model="databricks-claude-sonnet-4-6", extra_params={"extra_body": control}
+        )
+        _ = model.async_client if async_client else model.client
+    get_client.assert_called_once_with(workspace_client=None)
+    inputs = model._prepare_inputs([HumanMessage(content="Hello")])
+    assert inputs["extra_body"] == control
+    assert inputs["messages"] == [{"role": "user", "content": "Hello"}]

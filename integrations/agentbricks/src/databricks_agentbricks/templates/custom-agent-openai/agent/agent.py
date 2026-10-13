@@ -2,7 +2,8 @@ import os
 from typing import Any
 
 from agents import Agent, Runner, set_default_openai_api, set_default_openai_client
-from databricks_openai import AsyncDatabricksOpenAI
+
+from databricks_agentkit.claude import ClaudeCachingOpenAI
 
 from databricks_agentkit import workspace_client, workspace_headers
 
@@ -13,15 +14,15 @@ def _configure_client() -> None:
     headers = workspace_headers()
     workspace = workspace_client()
     client = (
-        AsyncDatabricksOpenAI(
+        ClaudeCachingOpenAI(
+            cache_policy=os.getenv("DATABRICKS_CLAUDE_PROMPT_CACHING", "auto"),
             workspace_client=workspace,
             default_headers=headers,
-            prompt_caching=os.getenv("DATABRICKS_PROMPT_CACHING", "auto"),
         )
         if headers
-        else AsyncDatabricksOpenAI(
+        else ClaudeCachingOpenAI(
+            cache_policy=os.getenv("DATABRICKS_CLAUDE_PROMPT_CACHING", "auto"),
             workspace_client=workspace,
-            prompt_caching=os.getenv("DATABRICKS_PROMPT_CACHING", "auto"),
         )
     )
     set_default_openai_client(client)

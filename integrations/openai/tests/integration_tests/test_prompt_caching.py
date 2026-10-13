@@ -22,7 +22,7 @@ def route(request):
     gateway = request.param == "gateway"
     model = os.environ.get(
         "CLAUDE_CACHE_GATEWAY_MODEL" if gateway else "CLAUDE_CACHE_FMAPI_MODEL",
-        "system.ai.claude-sonnet-4-5" if gateway else "databricks-claude-sonnet-4-6",
+        "system.ai.claude-sonnet-4-6" if gateway else "databricks-claude-sonnet-4-6",
     )
     return gateway, model
 
@@ -55,9 +55,7 @@ def test_sync_automatic_prompt_caching(route, context):
     from databricks_openai import DatabricksOpenAI
 
     gateway, model = route
-    with DatabricksOpenAI(
-        workspace_client=WorkspaceClient(), use_ai_gateway=gateway, prompt_caching="auto"
-    ) as client:
+    with DatabricksOpenAI(workspace_client=WorkspaceClient(), use_ai_gateway=gateway) as client:
         responses = []
         # Gateway cache writes do not guarantee a read on the immediately following request.
         # Bound warmup while still requiring real reuse of the unchanged system prefix.
@@ -69,6 +67,7 @@ def test_sync_automatic_prompt_caching(route, context):
                     {"role": "user", "content": f"Reply OK: {turn}"},
                 ],
                 max_tokens=10,
+                extra_body={"cache_control": {"type": "ephemeral"}},
             )
             responses.append(response)
             if turn > 0 and _cache_read_tokens(response.usage) > 0:
@@ -88,7 +87,7 @@ async def test_async_stream_automatic_prompt_caching(route, context):
     gateway, model = route
     usages = []
     async with AsyncDatabricksOpenAI(
-        workspace_client=WorkspaceClient(), use_ai_gateway=gateway, prompt_caching="auto"
+        workspace_client=WorkspaceClient(), use_ai_gateway=gateway
     ) as client:
         # Use the same bounded warmup as the synchronous client, with distinct user turns.
         for turn in range(4):
@@ -99,6 +98,7 @@ async def test_async_stream_automatic_prompt_caching(route, context):
                     {"role": "user", "content": f"Reply OK: {turn}"},
                 ],
                 max_tokens=10,
+                extra_body={"cache_control": {"type": "ephemeral"}},
                 stream=True,
                 stream_options={"include_usage": True},
             )
@@ -142,13 +142,15 @@ async def test_agents_automatic_prompt_caching_with_tool_and_session(route, cont
     gateway, model = route
     session = SQLiteSession(str(uuid.uuid4()))
     async with AsyncDatabricksOpenAI(
-        workspace_client=WorkspaceClient(), use_ai_gateway=gateway, prompt_caching="auto"
+        workspace_client=WorkspaceClient(), use_ai_gateway=gateway
     ) as client:
         agent = Agent(
             name="cache-test",
             instructions=context,
             model=OpenAIChatCompletionsModel(model=model, openai_client=client),
-            model_settings=ModelSettings(max_tokens=80),
+            model_settings=ModelSettings(
+                max_tokens=80, extra_body={"cache_control": {"type": "ephemeral"}}
+            ),
             tools=[cache_echo],
         )
         cache_reads = []

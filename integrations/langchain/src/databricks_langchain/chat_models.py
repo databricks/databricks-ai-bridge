@@ -306,10 +306,6 @@ class ChatDatabricks(BaseChatModel):
     OpenAI-compatible API (``<ai_gateway_url>/openai/v1``). This allows use of provider-native
     features not available through the MLflow API. Cannot be combined with ``base_url`` or
     ``use_ai_gateway``. Defaults to False."""
-    prompt_caching: Literal["auto", "off"] = "off"
-    """Add explicit Claude cache points to Chat Completions requests when set to 'auto'."""
-    prompt_cache_provider: Optional[Literal["anthropic"]] = None
-    """Identify a Claude endpoint whose name does not contain 'claude'."""
 
     @model_validator(mode="after")
     def _validate_ai_gateway_flags(self) -> "ChatDatabricks":
@@ -318,8 +314,6 @@ class ChatDatabricks(BaseChatModel):
                 "Cannot set both `use_ai_gateway` and `use_ai_gateway_native_api` to True. "
                 "Please set only one of them."
             )
-        if self.prompt_caching == "auto" and self.use_responses_api:
-            raise ValueError("Automatic Claude prompt caching requires the Chat Completions API.")
         return self
 
     @property
@@ -353,10 +347,6 @@ class ChatDatabricks(BaseChatModel):
             openai_kwargs["use_ai_gateway"] = True
         if self.use_ai_gateway_native_api:
             openai_kwargs["use_ai_gateway_native_api"] = True
-        if self.prompt_caching != "off":
-            openai_kwargs["prompt_caching"] = self.prompt_caching
-        if self.prompt_cache_provider is not None:
-            openai_kwargs["prompt_cache_provider"] = self.prompt_cache_provider
         return openai_kwargs
 
     @cached_property

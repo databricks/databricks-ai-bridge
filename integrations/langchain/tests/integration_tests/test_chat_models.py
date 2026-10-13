@@ -69,7 +69,7 @@ async def test_langgraph_automatic_prompt_caching_with_tool_and_history(gateway,
 
     model = os.environ.get(
         "CLAUDE_CACHE_GATEWAY_MODEL" if gateway else "CLAUDE_CACHE_FMAPI_MODEL",
-        "system.ai.claude-sonnet-4-5" if gateway else "databricks-claude-sonnet-4-6",
+        "system.ai.claude-sonnet-4-6" if gateway else "databricks-claude-sonnet-4-6",
     )
     context = (
         str(uuid.uuid4())
@@ -84,7 +84,7 @@ async def test_langgraph_automatic_prompt_caching_with_tool_and_history(gateway,
             model=model,
             workspace_client=WorkspaceClient(),
             use_ai_gateway=gateway,
-            prompt_caching="auto",
+            extra_params={"extra_body": {"cache_control": {"type": "ephemeral"}}},
             max_tokens=80,
         ),
         system_prompt=context,

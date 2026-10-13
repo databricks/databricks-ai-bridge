@@ -4,6 +4,8 @@ from typing import Any
 
 from databricks.sdk import WorkspaceClient
 from databricks_langchain import ChatDatabricks
+
+from databricks_agentkit.claude import prepare_claude_request
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 
@@ -40,7 +42,13 @@ REQUIRE_APPROVAL = {"send_message": True}
 
 
 class _RoutedChatDatabricks(ChatDatabricks):
-    """Forward account-host workspace routing to the underlying OpenAI clients."""
+    """Apply template Claude controls and forward workspace routing."""
+
+    def _prepare_inputs(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        return prepare_claude_request(
+            super()._prepare_inputs(*args, **kwargs),
+            os.getenv("DATABRICKS_CLAUDE_PROMPT_CACHING", "auto"),
+        )
 
     def _get_client_kwargs(self) -> dict[str, Any]:
         kwargs = super()._get_client_kwargs()
@@ -112,7 +120,6 @@ async def create_agent_graph(
             endpoint=endpoint,
             workspace_client=workspace_client(),
             use_ai_gateway=True,
-            prompt_caching=os.getenv("DATABRICKS_PROMPT_CACHING", "auto"),
         ),
         tools=tools,
         middleware=middleware,
