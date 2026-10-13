@@ -36,6 +36,7 @@ from databricks_agentbricks.projects.types import (
     parse_framework,
     parse_server,
 )
+from databricks_agentbricks.skills import SKILL_DISCOVERY_ROOTS, install_workflow_skill
 
 # Templates ship inside this package (databricks_agentbricks/templates/), so `agentbricks init` always copies
 # the one for the installed CLI — the scaffold can't drift from the databricks-agentbricks it runs
@@ -85,7 +86,7 @@ _FRAMEWORK_VALUE_PHRASE = ", ".join(framework.value for framework in AgentFramew
 _MIGRATION_DIR = "agent-bricks-migrate"
 # Each coding agent discovers skills in its own configuration directory, so the bundle lives in one
 # tool-neutral directory and every agent gets a pointer to it rather than a copy of the reference.
-_POINTER_ROOTS = (".claude", ".agent")
+_POINTER_ROOTS = SKILL_DISCOVERY_ROOTS
 
 
 def _copy_packaged_template(
@@ -225,6 +226,7 @@ def _prepare_migration(
         template = _TEMPLATES[framework]
         overlays = (template.chat_app,) if chat_app_enabled else ()
         _copy_packaged_template(template.agentbricks_server, reference, overlays)
+        install_workflow_skill(reference)
         project_name = dest.resolve().name
         token = "".join(secrets.choice(string.ascii_lowercase) for _ in range(6))
         AgentProject.create(
@@ -380,6 +382,9 @@ def init(
     agent-bricks-migrate/, and point each supported coding agent's skills directory at it. Run the
     prompt in your coding agent to migrate the agent onto Agent Bricks; init leaves existing
     application source, dependencies, and configuration intact.
+
+    New projects include project-local workflow skills for coding agents. Local dev is optional
+    when your goal is deployment; read the workflow skill for a scoped validation checklist.
     """
     selected_framework = parse_framework(framework or AgentFramework.LANGGRAPH)
     selected_server = parse_server(server)
@@ -443,6 +448,7 @@ def init(
         project.write()
         env_profile = profile or obj.profile
         wrote_env = _write_env(dest, env_profile) if env_profile else False
+        workflow_skills = install_workflow_skill(dest)
     except Exception:
         shutil.rmtree(dest, ignore_errors=True)
         raise
@@ -460,6 +466,8 @@ def init(
                 "memory_store": memory_store,
                 "session_store": session_store,
                 "experiment_name": experiment_name,
+                "workflow_skill": str(workflow_skills[0]),
+                "skill_pointers": [str(path) for path in workflow_skills[1:]],
             }
         )
         return
@@ -469,6 +477,7 @@ def init(
         "Server": "Agent Bricks DurableAgentServer" if agentbricks_server else "Custom FastAPI",
         "Template ref": template_ref,
         "Directory": str(dest),
+        "Workflow skill": str(workflow_skills[0]),
     }
     if chat_app_enabled:
         fields["Chat app"] = "enabled"
@@ -489,7 +498,7 @@ def init(
             ("cp .env.example .env", "Create your local env file"),
             "Set DATABRICKS_CONFIG_PROFILE in .env (or re-run `agentbricks init --profile <profile>`)",
         ]
-    steps.append(("agentbricks dev", "Run the agent locally"))
+    steps.append(("agentbricks dev", "Optional: develop and test the agent locally"))
     if chat_app_enabled:
         steps.append("Open http://localhost:8000 to chat with it")
     steps.append(
