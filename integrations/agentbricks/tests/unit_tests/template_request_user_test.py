@@ -45,6 +45,38 @@ class RequestAuth:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("policy", [None, "off"])
+async def test_template_prompt_caching_default_and_opt_out(template, monkeypatch, policy):
+    framework, _adapter, agent = template
+    if policy is None:
+        monkeypatch.delenv("DATABRICKS_PROMPT_CACHING", raising=False)
+    else:
+        monkeypatch.setenv("DATABRICKS_PROMPT_CACHING", policy)
+    monkeypatch.setattr(agent, "workspace_client", Mock())
+    if framework == "langgraph":
+        model = Mock()
+        monkeypatch.setattr(agent, "_RoutedChatDatabricks", model)
+        monkeypatch.setattr(agent, "mcp_tools", AsyncMock(return_value=[]))
+        monkeypatch.setattr(agent, "memory_tools", lambda *_args: [])
+        monkeypatch.setattr(agent, "genie_tools", lambda **_kwargs: [])
+        monkeypatch.setattr(agent, "checkpointer", Mock())
+        monkeypatch.setattr(agent, "create_agent", Mock())
+        await agent.create_agent_graph("actor")
+    else:
+        import agents
+
+        model = Mock()
+        monkeypatch.setattr(agent, "AsyncDatabricksOpenAI", model)
+        monkeypatch.setattr(agent, "_check_databricks_auth", Mock())
+        monkeypatch.setattr(agent, "configure_tracing", Mock())
+        monkeypatch.setattr(agents, "set_default_openai_client", Mock())
+        monkeypatch.setattr(agents, "set_default_openai_api", Mock())
+        agent.configure()
+    assert model.call_args.kwargs["prompt_caching"] == (policy or "auto")
+    assert model.call_args.kwargs["use_ai_gateway"] is True
+
+
+@pytest.mark.asyncio
 async def test_adapter_uses_context_session_and_namespaces_untrusted_actor(template, monkeypatch):
     framework, adapter, _agent = template
     calls = []

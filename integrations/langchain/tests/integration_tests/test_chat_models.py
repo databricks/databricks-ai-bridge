@@ -44,6 +44,82 @@ RESPONSES_AGENT_ENDPOINT_WITH_TOOL_CALLING = "agents_ml-bbqiu-resp-fmapi"
 CHAT_AGENT_ENDPOINT_WITH_TOOL_CALLING = "agents_smurching-default-test_external_monitor_cuj"
 DATABRICKS_CLI_PROFILE = "dogfood"
 
+
+@pytest.mark.skipif(
+    os.environ.get("RUN_CLAUDE_PROMPT_CACHING_TESTS") != "1",
+    reason="Set RUN_CLAUDE_PROMPT_CACHING_TESTS=1 to verify live Claude cache reuse.",
+)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("gateway", [True, False], ids=["gateway", "fmapi"])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_langgraph_automatic_prompt_caching_with_tool_and_history(gateway, stream):
+    import uuid
+
+    from databricks.sdk import WorkspaceClient
+    from langchain.agents import create_agent
+
+    calls = []
+
+    @tool
+    def cache_echo(text: str) -> str:
+        """Echo the supplied text."""
+        calls.append(text)
+        return text
+
+    model = os.environ.get(
+        "CLAUDE_CACHE_GATEWAY_MODEL" if gateway else "CLAUDE_CACHE_FMAPI_MODEL",
+        "system.ai.claude-sonnet-4-5" if gateway else "databricks-claude-sonnet-4-6",
+    )
+    context = (
+        str(uuid.uuid4())
+        + "\n"
+        + (
+            "You are a data engineering assistant. Answer briefly and use the requested tool. "
+            * 450
+        )
+    )
+    graph = create_agent(
+        model=ChatDatabricks(
+            model=model,
+            workspace_client=WorkspaceClient(),
+            use_ai_gateway=gateway,
+            prompt_caching="auto",
+            max_tokens=80,
+        ),
+        system_prompt=context,
+        tools=[cache_echo],
+        checkpointer=MemorySaver(),
+    )
+    config = {"configurable": {"thread_id": str(uuid.uuid4())}}
+    for turn in range(2):
+        text = f"cache verification {turn}"
+        agent_input = {
+            "messages": [
+                {"role": "user", "content": f"Call cache_echo with '{text}' and report its result."}
+            ]
+        }
+        if stream:
+            usages = []
+            async for message, _metadata in graph.astream(
+                agent_input, config=config, stream_mode="messages"
+            ):
+                if getattr(message, "usage_metadata", None):
+                    usages.append(message.usage_metadata)
+        else:
+            result = await graph.ainvoke(agent_input, config=config)
+            usages = [
+                message.usage_metadata
+                for message in result["messages"]
+                if isinstance(message, AIMessage) and message.usage_metadata
+            ]
+        assert text in calls, "Agent did not execute the requested tool"
+        assert any(
+            usage.get("input_token_details", {}).get("cache_read", 0) > 0 for usage in usages
+        )
+        for usage in usages:
+            assert usage["total_tokens"] == usage["input_tokens"] + usage["output_tokens"]
+
+
 _RESPONSES_API_ENDPOINTS = [
     RESPONSES_AGENT_ENDPOINT_WITH_ANNOTATIONS,
     RESPONSES_AGENT_ENDPOINT_WITH_TOOL_CALLING,

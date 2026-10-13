@@ -55,6 +55,7 @@ def configure() -> None:
             workspace_client=workspace_client(),
             default_headers=workspace_headers() or None,
             use_ai_gateway=True,
+            prompt_caching=os.getenv("DATABRICKS_PROMPT_CACHING", "auto"),
         )
     )
     set_default_openai_api("chat_completions")

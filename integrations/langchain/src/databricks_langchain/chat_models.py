@@ -306,6 +306,10 @@ class ChatDatabricks(BaseChatModel):
     OpenAI-compatible API (``<ai_gateway_url>/openai/v1``). This allows use of provider-native
     features not available through the MLflow API. Cannot be combined with ``base_url`` or
     ``use_ai_gateway``. Defaults to False."""
+    prompt_caching: Literal["auto", "off"] = "off"
+    """Add explicit Claude cache points to Chat Completions requests when set to 'auto'."""
+    prompt_cache_provider: Optional[Literal["anthropic"]] = None
+    """Identify a Claude endpoint whose name does not contain 'claude'."""
 
     @model_validator(mode="after")
     def _validate_ai_gateway_flags(self) -> "ChatDatabricks":
@@ -314,6 +318,8 @@ class ChatDatabricks(BaseChatModel):
                 "Cannot set both `use_ai_gateway` and `use_ai_gateway_native_api` to True. "
                 "Please set only one of them."
             )
+        if self.prompt_caching == "auto" and self.use_responses_api:
+            raise ValueError("Automatic Claude prompt caching requires the Chat Completions API.")
         return self
 
     @property
@@ -347,6 +353,10 @@ class ChatDatabricks(BaseChatModel):
             openai_kwargs["use_ai_gateway"] = True
         if self.use_ai_gateway_native_api:
             openai_kwargs["use_ai_gateway_native_api"] = True
+        if self.prompt_caching != "off":
+            openai_kwargs["prompt_caching"] = self.prompt_caching
+        if self.prompt_cache_provider is not None:
+            openai_kwargs["prompt_cache_provider"] = self.prompt_cache_provider
         return openai_kwargs
 
     @cached_property
@@ -631,6 +641,20 @@ class ChatDatabricks(BaseChatModel):
 
     @staticmethod
     def _convert_completion_usage_to_usage_metadata(usage: CompletionUsage) -> UsageMetadata:
+        if (
+            getattr(usage, "cache_read_input_tokens", None) is not None
+            or getattr(usage, "cache_creation_input_tokens", None) is not None
+        ):
+            # Databricks prompt_tokens already includes Claude cache reads and writes.
+            return UsageMetadata(
+                input_tokens=usage.prompt_tokens or 0,
+                output_tokens=usage.completion_tokens or 0,
+                total_tokens=usage.total_tokens or 0,
+                input_token_details=InputTokenDetails(
+                    cache_read=getattr(usage, "cache_read_input_tokens", None) or 0,
+                    cache_creation=getattr(usage, "cache_creation_input_tokens", None) or 0,
+                ),
+            )
         if usage.prompt_tokens_details is not None:
             # Most likely an OpenAI Model
             input_token_details = None
@@ -657,22 +681,6 @@ class ChatDatabricks(BaseChatModel):
             if output_token_details is not None:
                 result["output_token_details"] = output_token_details
             return result
-        elif getattr(usage, "cache_read_input_tokens", None) is not None:
-            # Most likely Claude Model
-            cache_read_input_tokens = getattr(usage, "cache_read_input_tokens", None) or 0
-            cache_creation_input_tokens = getattr(usage, "cache_creation_input_tokens", None) or 0
-
-            usage_metadata = UsageMetadata(
-                input_tokens=(usage.prompt_tokens or 0)
-                + cache_read_input_tokens
-                + cache_creation_input_tokens,
-                output_tokens=usage.completion_tokens or 0,
-                total_tokens=usage.total_tokens or 0,
-                input_token_details=InputTokenDetails(
-                    cache_read=cache_read_input_tokens, cache_creation=cache_creation_input_tokens
-                ),
-            )
-            return usage_metadata
         else:
             return UsageMetadata(
                 input_tokens=usage.prompt_tokens or 0,
@@ -939,8 +947,10 @@ class ChatDatabricks(BaseChatModel):
                         final_usage = usage  # store for usage chunk at end
                     # Use model_dump instead of manual dict reconstruction
                     chunk_delta_dict = chunk_delta.model_dump(exclude_unset=True)
+                    # Databricks streams cumulative usage on content chunks. Emit it only in
+                    # the final usage chunk so LangChain aggregation does not count it twice.
                     chunk_message = _convert_dict_to_message_chunk(
-                        chunk_delta_dict, first_chunk_role, usage=usage
+                        chunk_delta_dict, first_chunk_role
                     )
                     generation_info = {}
                     if choice.finish_reason:
@@ -1050,8 +1060,9 @@ class ChatDatabricks(BaseChatModel):
                         final_usage = usage  # store for usage chunk at end
                     # Use model_dump instead of manual dict reconstruction
                     chunk_delta_dict = chunk_delta.model_dump(exclude_unset=True)
+                    # Keep cumulative provider usage out of additive content chunks.
                     chunk_message = _convert_dict_to_message_chunk(
-                        chunk_delta_dict, first_chunk_role, usage=usage
+                        chunk_delta_dict, first_chunk_role
                     )
                     generation_info = {}
                     if choice.finish_reason:
@@ -1438,7 +1449,15 @@ def _convert_message_to_dict(message: BaseMessage) -> dict:
         content = message.content
         if isinstance(content, list):
             content = [
-                {"type": "text", "text": block["text"]}
+                {
+                    "type": "text",
+                    "text": block["text"],
+                    **(
+                        {"cache_control": block["cache_control"]}
+                        if "cache_control" in block
+                        else {}
+                    ),
+                }
                 if isinstance(block, dict)
                 and block.get("type") == "text"
                 and isinstance(block.get("text"), str)

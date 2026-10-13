@@ -20,6 +20,14 @@ project and follow the generated prompt in your coding agent. The migration skil
 [AGENTKIT_CONTRACT.md](AGENTKIT_CONTRACT.md), which owns integration requirements. This README owns
 configuration and client examples; [AGENTS.md](AGENTS.md) provides the development map.
 
+## Claude prompt caching
+
+Claude Chat Completions use explicit prompt cache points by default. System instructions, tool
+definitions in the system prefix, and recent user/tool-result boundaries can be reused across
+model calls. Set `DATABRICKS_PROMPT_CACHING=off` to opt out. Other providers keep their request
+format. Cache hits require a sufficiently long, unchanged prefix within the cache lifetime;
+cache writes carry an additional charge.
+
 ## Run locally
 
 ```bash

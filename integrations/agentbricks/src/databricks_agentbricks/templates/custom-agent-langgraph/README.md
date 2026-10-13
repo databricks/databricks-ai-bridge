@@ -6,6 +6,11 @@ not use the managed `DurableAgentServer` HTTP server or durable runtime.
 This template does not load managed tool bindings from `agent.toml`, so `agentbricks tools add` is not
 supported. Wire framework-native Python tools and MCP servers directly in `agent/agent.py`.
 
+Claude Chat Completions use explicit prompt cache points by default when you select a Claude model.
+Set `DATABRICKS_PROMPT_CACHING=off` to opt out. Other providers keep their request format. Cache hits
+require a sufficiently long, unchanged prefix within the cache lifetime; cache writes carry an
+additional charge.
+
 ```bash
 agentbricks dev
 ```

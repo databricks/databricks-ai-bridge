@@ -1,3 +1,4 @@
+import os
 from typing import Any
 
 from databricks_langchain import ChatDatabricks
@@ -18,7 +19,11 @@ class _RoutedChatDatabricks(ChatDatabricks):
 
 async def invoke(messages: list[dict[str, Any]]) -> dict[str, Any]:
     agent = create_agent(
-        model=_RoutedChatDatabricks(endpoint=MODEL, workspace_client=workspace_client()),
+        model=_RoutedChatDatabricks(
+            endpoint=MODEL,
+            workspace_client=workspace_client(),
+            prompt_caching=os.getenv("DATABRICKS_PROMPT_CACHING", "auto"),
+        ),
         tools=[],
     )
     result = await agent.ainvoke({"messages": messages})

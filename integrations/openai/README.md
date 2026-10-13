@@ -58,6 +58,34 @@ second_response = client.chat.completions.create(
 
 ---
 
+## Claude prompt caching
+
+With `databricks-openai>=0.18.0`, enable explicit cache points for Claude Chat Completions:
+
+```python
+from databricks_openai import AsyncDatabricksOpenAI
+
+client = AsyncDatabricksOpenAI(use_ai_gateway=True, prompt_caching="auto")
+# Pass this client to OpenAIChatCompletionsModel, or set_default_openai_client(client).
+```
+
+The same setting works on `DatabricksOpenAI` and Foundation Model API endpoints. The policy caches
+system instructions (including the preceding tool definitions) and recent user/tool-result
+boundaries. It runs on every model request, including tool loops, without modifying stored history.
+Non-Claude models are unchanged. For a Claude endpoint with a custom name, also set
+`prompt_cache_provider="anthropic"`.
+
+The library default is `prompt_caching="off"`; Agent Bricks templates enable `"auto"`. Caller-supplied
+`cache_control` fields take precedence: when present, automatic placement is skipped. The policy
+uses up to four five-minute ephemeral cache points. Short prefixes below the model's minimum
+length are not cached, and cache writes carry an additional charge. This policy applies to Chat
+Completions; it does not add cache points to Responses requests.
+
+Cache reads are available in `response.usage.prompt_tokens_details.cached_tokens`, and writes in
+`response.usage.prompt_tokens_details.cache_write_tokens`, including streaming chunks. Native Claude
+counters are retained. Databricks `prompt_tokens` already includes cached tokens; do not add them
+again. See [prompt caching on Databricks](https://docs.databricks.com/aws/en/machine-learning/model-serving/score-foundation-models#prompt-cache).
+
 ## Contribution Guide
 We welcome contributions! Please see our [contribution guidelines](https://github.com/databricks/databricks-ai-bridge/tree/main/integrations/langchain) for details.
 

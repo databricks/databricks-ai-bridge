@@ -1,5 +1,5 @@
 import os
-from typing import Any, Generator
+from typing import Any, Generator, TypeVar
 
 from databricks.sdk import WorkspaceClient
 from httpx import AsyncClient, Auth, Client, Request, Response
@@ -8,6 +8,16 @@ from openai.resources.chat import AsyncChat, Chat
 from openai.resources.chat.completions import AsyncCompletions, Completions
 from openai.resources.responses import AsyncResponses, Responses
 from typing_extensions import override
+
+from databricks_openai.utils.prompt_caching import (
+    PromptCacheProvider,
+    PromptCaching,
+    normalize_cache_usage,
+    prepare_chat_request,
+    validate_prompt_caching,
+)
+
+_ResponseT = TypeVar("_ResponseT")
 
 # Prefix for routing requests to Databricks Apps
 _APPS_ENDPOINT_PREFIX = "apps/"
@@ -233,10 +243,18 @@ class DatabricksCompletions(Completions):
     """Completions that conditionally strips 'strict' from tools for non-GPT models."""
 
     def create(self, **kwargs):
+        kwargs = prepare_chat_request(
+            kwargs,
+            getattr(self._client, "prompt_caching", "off"),
+            getattr(self._client, "prompt_cache_provider", None),
+        )
         model = kwargs.get("model")
         if _should_strip_strict(model):
             _strip_strict_from_tools(kwargs.get("tools"))
-        if _is_claude_model(model):
+        if (
+            _is_claude_model(model)
+            or getattr(self._client, "prompt_cache_provider", None) == "anthropic"
+        ):
             _fix_empty_assistant_content_in_messages(kwargs.get("messages"))
         kwargs = _strip_strict_from_kwargs(kwargs)
         return super().create(**kwargs)
@@ -349,6 +367,10 @@ class DatabricksOpenAI(OpenAI):
             requests through it using the MLflow API. Defaults to False.
         follow_redirects: If True, the underlying HTTP client follows redirect responses.
             Defaults to True.
+        prompt_caching: Set to 'auto' to add explicit Claude cache points to Chat Completions
+            requests. Defaults to 'off'. Explicit caller cache controls take precedence.
+        prompt_cache_provider: Set to 'anthropic' for a Claude endpoint whose name does not
+            contain 'claude'. Defaults to None (detect from the model name).
         **kwargs: Additional keyword arguments forwarded to the underlying ``openai.OpenAI``
             client (e.g. ``timeout``, ``max_retries``, ``default_headers``).
 
@@ -394,8 +416,13 @@ class DatabricksOpenAI(OpenAI):
         use_ai_gateway_native_api: bool = False,
         use_ai_gateway: bool = False,
         follow_redirects: bool = True,
+        prompt_caching: PromptCaching = "off",
+        prompt_cache_provider: PromptCacheProvider | None = None,
         **kwargs: Any,
     ):
+        validate_prompt_caching(prompt_caching, prompt_cache_provider)
+        self.prompt_caching = prompt_caching
+        self.prompt_cache_provider = prompt_cache_provider
         if workspace_client is None:
             workspace_client = WorkspaceClient()
 
@@ -411,6 +438,13 @@ class DatabricksOpenAI(OpenAI):
             api_key=_get_openai_api_key(),
             http_client=_get_authorized_http_client(workspace_client, follow_redirects),
             **kwargs,
+        )
+
+    def _process_response_data(
+        self, *, data: object, cast_to: type[_ResponseT], response: Response
+    ) -> _ResponseT:
+        return super()._process_response_data(
+            data=normalize_cache_usage(data, cast_to), cast_to=cast_to, response=response
         )
 
     @override
@@ -437,10 +471,18 @@ class AsyncDatabricksCompletions(AsyncCompletions):
     """Async completions that conditionally strips 'strict' from tools for non-GPT models."""
 
     async def create(self, **kwargs):
+        kwargs = prepare_chat_request(
+            kwargs,
+            getattr(self._client, "prompt_caching", "off"),
+            getattr(self._client, "prompt_cache_provider", None),
+        )
         model = kwargs.get("model")
         if _should_strip_strict(model):
             _strip_strict_from_tools(kwargs.get("tools"))
-        if _is_claude_model(model):
+        if (
+            _is_claude_model(model)
+            or getattr(self._client, "prompt_cache_provider", None) == "anthropic"
+        ):
             _fix_empty_assistant_content_in_messages(kwargs.get("messages"))
         kwargs = _strip_strict_from_kwargs(kwargs)
         return await super().create(**kwargs)
@@ -517,6 +559,10 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
             requests through it using the MLflow API. Defaults to False.
         follow_redirects: If True, the underlying HTTP client follows redirect responses.
             Defaults to True.
+        prompt_caching: Set to 'auto' to add explicit Claude cache points to Chat Completions
+            requests. Defaults to 'off'. Explicit caller cache controls take precedence.
+        prompt_cache_provider: Set to 'anthropic' for a Claude endpoint whose name does not
+            contain 'claude'. Defaults to None (detect from the model name).
         **kwargs: Additional keyword arguments forwarded to the underlying ``openai.AsyncOpenAI``
             client (e.g. ``timeout``, ``max_retries``, ``default_headers``).
 
@@ -562,8 +608,13 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         use_ai_gateway_native_api: bool = False,
         use_ai_gateway: bool = False,
         follow_redirects: bool = True,
+        prompt_caching: PromptCaching = "off",
+        prompt_cache_provider: PromptCacheProvider | None = None,
         **kwargs: Any,
     ):
+        validate_prompt_caching(prompt_caching, prompt_cache_provider)
+        self.prompt_caching = prompt_caching
+        self.prompt_cache_provider = prompt_cache_provider
         if workspace_client is None:
             workspace_client = WorkspaceClient()
 
@@ -579,6 +630,13 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
             api_key=_get_openai_api_key(),
             http_client=_get_authorized_async_http_client(workspace_client, follow_redirects),
             **kwargs,
+        )
+
+    def _process_response_data(
+        self, *, data: object, cast_to: type[_ResponseT], response: Response
+    ) -> _ResponseT:
+        return super()._process_response_data(
+            data=normalize_cache_usage(data, cast_to), cast_to=cast_to, response=response
         )
 
     @property

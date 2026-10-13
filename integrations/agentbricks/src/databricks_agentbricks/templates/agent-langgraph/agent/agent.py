@@ -109,7 +109,10 @@ async def create_agent_graph(
         # use_ai_gateway routes to the Unity Catalog AI Gateway (`<host>/ai-gateway/mlflow/v1`), so
         # `endpoint` is a `system.ai.*` model name rather than a serving-endpoint name.
         model=_RoutedChatDatabricks(
-            endpoint=endpoint, workspace_client=workspace_client(), use_ai_gateway=True
+            endpoint=endpoint,
+            workspace_client=workspace_client(),
+            use_ai_gateway=True,
+            prompt_caching=os.getenv("DATABRICKS_PROMPT_CACHING", "auto"),
         ),
         tools=tools,
         middleware=middleware,

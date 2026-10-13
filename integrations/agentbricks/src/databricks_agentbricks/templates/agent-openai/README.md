@@ -21,6 +21,14 @@ To bring an existing Agents SDK agent, keep its normal execution code in `agent/
 `run_agent` function that returns the native streaming result, and make only the small payload/event
 mapping changes needed in `runtime/adapter.py`.
 
+## Claude prompt caching
+
+Claude Chat Completions use explicit prompt cache points by default. System instructions, tool
+definitions in the system prefix, and recent user/tool-result boundaries can be reused across
+model calls. Set `DATABRICKS_PROMPT_CACHING=off` to opt out. Other providers keep their request
+format. Cache hits require a sufficiently long, unchanged prefix within the cache lifetime;
+cache writes carry an additional charge.
+
 ## Run locally
 
 ```bash

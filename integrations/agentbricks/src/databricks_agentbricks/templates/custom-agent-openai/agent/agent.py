@@ -1,3 +1,4 @@
+import os
 from typing import Any
 
 from agents import Agent, Runner, set_default_openai_api, set_default_openai_client
@@ -12,9 +13,16 @@ def _configure_client() -> None:
     headers = workspace_headers()
     workspace = workspace_client()
     client = (
-        AsyncDatabricksOpenAI(workspace_client=workspace, default_headers=headers)
+        AsyncDatabricksOpenAI(
+            workspace_client=workspace,
+            default_headers=headers,
+            prompt_caching=os.getenv("DATABRICKS_PROMPT_CACHING", "auto"),
+        )
         if headers
-        else AsyncDatabricksOpenAI(workspace_client=workspace)
+        else AsyncDatabricksOpenAI(
+            workspace_client=workspace,
+            prompt_caching=os.getenv("DATABRICKS_PROMPT_CACHING", "auto"),
+        )
     )
     set_default_openai_client(client)
     set_default_openai_api("chat_completions")
