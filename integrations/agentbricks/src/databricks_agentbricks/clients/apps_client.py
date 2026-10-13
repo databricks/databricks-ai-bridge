@@ -130,14 +130,27 @@ class AppsClient:
         return payload if isinstance(payload, dict) else None
 
     def exists(self, name: str) -> bool:
-        """Whether the workspace has an app by this name, probed with a non-raising `apps get`.
+        """Whether the workspace has an app by this name — True/False only on a definitive answer.
 
-        A failed read is reported as "absent": the probe can't distinguish a missing app from a
-        workspace it can't reach, and the callers treat both as "nothing to reuse".
+        Only a definitive not-found counts as False; any other failure (bad auth, network) is raised
+        so it can't masquerade as "doesn't exist" and steer the caller into an app create.
         """
-        return (
-            self._run(["apps", "get", name], self._profile, capture=True, check=False).returncode
-            == 0
+        result = self._run(["apps", "get", name], self._profile, capture=True, check=False)
+        if result.returncode == 0:
+            return True
+        detail = (result.stderr or result.stdout or "").strip()
+        # Only a definitive not-found counts; a generic "not found" would let an unrelated 404
+        # masquerade as "the app is missing" and steer the caller into a create.
+        if any(
+            marker in detail.lower() for marker in ("resource_does_not_exist", "does not exist")
+        ):
+            return False
+        login = f"agentbricks login --profile {self._profile or '<profile>'}"
+        raise AgentCliError(
+            f"Could not check whether deployment '{name}' exists.",
+            hint=f"{detail or 'The `databricks apps get` command failed without a message.'}\n"
+            f"If the profile isn't signed in, run `{login}`; otherwise check the network and "
+            "the profile's host, then rerun the command.",
         )
 
     def list_all(self) -> list[dict]:
