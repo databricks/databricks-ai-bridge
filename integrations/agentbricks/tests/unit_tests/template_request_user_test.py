@@ -346,10 +346,13 @@ async def test_openai_request_exit_cancels_native_run(template, monkeypatch):
 @pytest.mark.parametrize(
     "model", ["system.ai.claude-sonnet-4-6", "system.ai.claude-sonnet-4-5", "system.ai.gpt-5-2"]
 )
-def test_generated_langgraph_prepares_claude_controls(template, monkeypatch, policy, model):
+@pytest.mark.parametrize("custom", [False, True])
+def test_generated_langgraph_prepares_claude_controls(template, monkeypatch, policy, model, custom):
     framework, _, agent = template
     if framework != "langgraph":
         pytest.skip("LangGraph preparation only")
+    if custom:
+        agent = _load_custom_agent("langgraph", monkeypatch)
     from unittest.mock import MagicMock
 
     from databricks.sdk import WorkspaceClient
