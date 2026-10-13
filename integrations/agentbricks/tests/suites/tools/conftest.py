@@ -8,7 +8,6 @@ any a crashed test left behind, by the run's prefix (see ``harness.cleanup``).
 from __future__ import annotations
 
 import datetime as dt
-import os
 import re
 import uuid
 from collections.abc import Iterator
@@ -51,11 +50,11 @@ def uc_function(scratch_schema: str, target_workspace: TargetWorkspace) -> UcFun
 
 
 @pytest.fixture(scope="session")
-def genie_space(target_workspace: TargetWorkspace) -> str:
+def genie_space(request: pytest.FixtureRequest, target_workspace: TargetWorkspace) -> str:
     # A space needs a warehouse and seeded tables, so it is a long-lived one rather than per run.
-    space_id = os.environ.get("AGENTBRICKS_E2E_GENIE_SPACE_ID")
+    space_id = request.config.getoption("genie_space_id")
     if not space_id:
-        pytest.skip("no Genie space; set AGENTBRICKS_E2E_GENIE_SPACE_ID")
+        pytest.skip("no Genie space; pass --genie-space-id")
     if re.fullmatch(r"[0-9a-f]{32}", space_id) is None:
         raise E2EError(f"Genie space id {space_id!r} is not 32 lowercase hex characters.")
     require_workspace(target_workspace, "a Genie space").require_genie_space(space_id)

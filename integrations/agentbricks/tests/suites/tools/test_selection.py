@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from harness.cli import AgentbricksCli
 from harness.workspace import Workspace
-from tool_definitions import PYTHON_MARKER, UC_MARKER, Tool, bind
+from tool_definitions import PYTHON_MARKER, UC_MARKER, Tool, bind, excerpt
 from uc_objects import UcFunction
 
 # Names the Unity Catalog function without its tool id, and the Python helper only to exclude it.
@@ -37,7 +37,7 @@ def test_selects_uc_function_not_python_marker(
     workspace_client.grant_transitive(app, uc_function.nested_function)
     serialized = agent.invoke(PROMPT, "deploy-selection")
 
-    assert UC_MARKER in serialized, f"The UC function tool was not called: {serialized[:2000]}"
+    assert UC_MARKER in serialized, f"The UC function tool was not called: {excerpt(serialized)}"
     assert PYTHON_MARKER not in serialized, (
-        f"The Python marker tool was called too: {serialized[:2000]}"
+        f"The Python marker tool was called too: {excerpt(serialized)}"
     )

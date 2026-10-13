@@ -15,7 +15,10 @@ uv run pytest tests/suites -n 6 --dist loadgroup \
 - Narrow it to a suite (`tests/suites/tools`), a file, or a test (`"...test_deploy.py::test_deploy[cli]"`).
 - `-n 6 --dist loadgroup` runs tests in parallel; `loadgroup` keeps the dev tests on one worker,
   because local dev servers share a proxy port.
-- `AGENTBRICKS_E2E_GENIE_SPACE_ID=<id>` adds the Genie tool; without it that tool is skipped.
+- Workspace resources the suite borrows but never creates are flags: `--catalog`,
+  `--warehouse-id`, and `--genie-space-id` (without one the Genie tool is skipped).
+- To set flags once for a shell or a CI job, use pytest's own `PYTEST_ADDOPTS`, e.g.
+  `export PYTEST_ADDOPTS="--databricks-profile <profile> --catalog <catalog>"`.
 - `--workspace fake` runs against no workspace; everything that needs one is skipped.
 - `--keep-resources` keeps leftovers for debugging; each test still deletes its own resources.
 
@@ -37,7 +40,7 @@ Every resource a run creates carries its run id, and is deleted at three points:
    uv run pytest tests/suites --cleanup-only --run-id <id> --databricks-profile <profile> --catalog <catalog>
    ```
 
-   CI passes its own `--run-id` (or `AGENTBRICKS_E2E_RUN_ID`) and runs this in an `always()` step.
+   CI passes its own `--run-id` and runs this in an `always()` step.
 
 ## Layout
 

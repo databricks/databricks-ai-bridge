@@ -130,6 +130,9 @@ class Agent:
                     raise
 
 
+_GATEWAY_UNAVAILABLE = re.compile(r"HTTP 50[234]\b")
+
+
 class AgentbricksCli:
     """Authors, runs and deploys projects with the CLI against a target workspace."""
 
@@ -186,10 +189,27 @@ class AgentbricksCli:
             "input": [{"role": "user", "content": prompt}],
         }
         target = [agent.app_name] if agent.app_name else ["--url", agent.base_url, "--no-auth"]
-        result = self.cli(
-            "endpoint", "invoke", *target, "--path", "/api/invocations", "--json", json.dumps(body)
+        argv = (
+            "endpoint",
+            "invoke",
+            *target,
+            "--path",
+            "/api/invocations",
+            "--json",
+            json.dumps(body),
         )
-        return result.stdout
+        for attempt in range(1, 4):
+            result = self.cli(*argv, check=False)
+            if result.returncode == 0:
+                return result.stdout
+            output = result.stderr or result.stdout
+            # Only the Apps gateway's "App not up" answers are retried (a staging App can restart
+            # under the test); any other failure is the CLI's and fails the test.
+            if attempt == 3 or _GATEWAY_UNAVAILABLE.search(output) is None:
+                raise E2EError(f"endpoint invoke failed ({result.returncode}): {output}")
+            log(f"attempt {attempt}/3 | endpoint invoke | App unavailable; retrying")
+            time.sleep(15)
+        raise AssertionError("unreachable")
 
     def _run_long(self, label: str, argv: Sequence[str], *, timeout: float) -> None:
         log_command(argv)

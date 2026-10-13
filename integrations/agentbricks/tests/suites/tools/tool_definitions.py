@@ -55,9 +55,17 @@ class ToolDefinition:
     build: Callable[..., Tool]
 
 
+def excerpt(serialized: str, head: int = 1000, tail: int = 3000) -> str:
+    """The response for a failure message: tool results come last, so keep the end, not just the start."""
+    if len(serialized) <= head + tail:
+        return serialized
+    omitted = len(serialized) - head - tail
+    return f"{serialized[:head]} ...[{omitted} chars omitted]... {serialized[-tail:]}"
+
+
 def contains(marker: str) -> Check:
     def check(serialized: str) -> None:
-        assert marker in serialized, f"Missing exact marker {marker!r}: {serialized[:2000]}"
+        assert marker in serialized, f"Missing exact marker {marker!r}: {excerpt(serialized)}"
 
     return check
 
@@ -66,7 +74,7 @@ def check_web_search(serialized: str) -> None:
     lowered = serialized.lower()
     tool_evidence = any(v in lowered for v in ("web_search", "web search", "search"))
     assert tool_evidence and "https" in lowered and len(serialized) >= 80, (
-        f"Missing web-search execution/result evidence: {serialized[:2000]}"
+        f"Missing web-search execution/result evidence: {excerpt(serialized)}"
     )
 
 
@@ -75,7 +83,7 @@ def check_genie(serialized: str) -> None:
     assert (
         any(v in lowered for v in ("genie_ask", "genie", "conversation_id"))
         and len(serialized) >= 80
-    ), f"Missing Genie execution/result evidence: {serialized[:2000]}"
+    ), f"Missing Genie execution/result evidence: {excerpt(serialized)}"
 
 
 def sandbox_tool(uc_function: UcFunction) -> Tool:

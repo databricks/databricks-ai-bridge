@@ -66,8 +66,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
     group.addoption(
         "--catalog",
-        default=os.environ.get("AGENTBRICKS_E2E_CATALOG", "main"),
-        help="Existing catalog for temporary test schemas (AGENTBRICKS_E2E_CATALOG, default main).",
+        default="main",
+        help="Existing catalog for temporary test schemas (default: main).",
     )
     group.addoption("--bridge-sha", help="Immutable bridge commit for generated App dependencies.")
     group.addoption(
@@ -75,7 +75,14 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         type=pathlib.Path,
         help="Prebuilt databricks-agentbricks wheel (default: build one from this checkout).",
     )
-    group.addoption("--warehouse-id", help="SQL warehouse for UC setup (default: first running).")
+    group.addoption(
+        "--warehouse-id",
+        help="SQL warehouse for UC setup (default: first running).",
+    )
+    group.addoption(
+        "--genie-space-id",
+        help="Existing Genie space for the Genie tool; without one that tool is skipped.",
+    )
     group.addoption(
         "--preprovisioned-app-catalog-access",
         action="store_true",
@@ -83,9 +90,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
     group.addoption(
         "--run-id",
-        default=os.environ.get("AGENTBRICKS_E2E_RUN_ID"),
         help="Names every resource of the run, so --cleanup-only can delete what a killed run left "
-        "(AGENTBRICKS_E2E_RUN_ID; default: random). 1-8 lowercase letters or digits.",
+        "(default: random). 1-8 lowercase letters or digits.",
     )
     group.addoption(
         "--keep-resources",
