@@ -138,7 +138,9 @@ class AgentbricksCli:
         self.run_config = run_config
         self.logs_dir = run_config.output / "logs"
         self.projects: list[Project] = []
-        self._env = {**os.environ, **target_workspace.env}
+        # The CLI prints a hint when it detects a coding agent; the suite must behave the same
+        # whoever launches it, and the hint would corrupt --output json errors on stderr.
+        self._env = {**os.environ, **target_workspace.env, "AGENTBRICKS_DISABLE_AGENT_HINT": "1"}
         self._sequence = 0
 
     # Process plumbing
