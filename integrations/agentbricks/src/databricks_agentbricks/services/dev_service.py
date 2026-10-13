@@ -209,23 +209,13 @@ def _dev_entry_point(
 
     # The Apps CLI rejects hidden or hyphenated entry-point filenames.
     dev_yaml = app_yaml.parent / _LOCAL_APP_YAML
-    created = False
     try:
-        # Never overwrite a file left by an earlier run or created by the user.  Exclusive creation
-        # also closes the race between a prior exists() check and this write.
-        with dev_yaml.open("x") as output:
-            created = True
+        # Overwritten on purpose: the name is dev's own, and a run stopped by a signal (an IDE stop
+        # button, `kill`) exits without its cleanup and leaves the file behind.
+        with dev_yaml.open("w") as output:
             output.write(manifest.to_yaml())
-    except FileExistsError as exc:
-        raise AgentCliError(
-            f"Could not write {dev_yaml}: it already exists.",
-            hint="Inspect and remove the old local-only manifest before retrying.",
-        ) from exc
-    except BaseException as exc:
-        # close() can also fail after a partial write; remove only a file this invocation created.
-        if created:
-            dev_yaml.unlink(missing_ok=True)
-        if isinstance(exc, OSError):
-            raise AgentCliError(f"Could not write {dev_yaml}: {exc}") from exc
-        raise
+    except OSError as exc:
+        # Don't leave a partial manifest for `apps run-local` to pick up.
+        dev_yaml.unlink(missing_ok=True)
+        raise AgentCliError(f"Could not write {dev_yaml}: {exc}") from exc
     return dev_yaml
