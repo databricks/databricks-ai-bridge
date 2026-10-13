@@ -108,6 +108,28 @@ If Databricks SDK default authentication is already configured, you can skip `ag
 You can also pass the global `--profile/-p` option before an individual command, for example
 `agentbricks --profile <profile> tools list`. Use `--output json` for scripting.
 
+The CLI sends best effort command usage telemetry after leaf commands. Its log records the static
+command path, package version, operating system, duration, and process outcome (exit code and, for
+nonzero exits, a bounded error category). Parameter entries are limited to options explicitly
+supplied on the command line. Free-form options contribute only their static name. Declared Click
+choices contribute an `AGENTBRICKS_CLI_`-prefixed value. Click boolean and numeric options
+contribute their typed values; non-finite floats and integers outside the log schema's 64-bit
+range remain presence-only. Hidden and deprecated options follow the same policy, and repeated
+options contribute one parameter entry per supplied value, up to 64 entries. Positional arguments,
+raw command arguments, paths, IDs, secrets, arbitrary free-form option values, and exception
+messages are omitted. Set
+`AGENTBRICKS_DISABLE_TELEMETRY=1` to disable these uploads.
+
+Telemetry runs only when a leaf command is invoked, whether its callback succeeds or fails. Help
+and errors rejected during Click parsing, before a leaf starts, do not produce an event. Uploads
+reuse the command's workspace client or let the Databricks SDK resolve the selected or default
+profile. Authenticate first with `agentbricks login --profile <profile>` or configure SDK auth;
+an SDK `external-browser` profile may prompt during telemetry even for local commands such as
+`init`. The CLI waits up to two seconds for client setup, authentication, and upload on a daemon
+thread, returning sooner if the worker finishes. This is not a delivery guarantee: unfinished
+uploads can be lost when the process exits after the allowance expires. Missing credentials or a
+failed upload never change the command result.
+
 ## Quickstart
 
 The shortest path from a blank directory to a running and deployed agent:
