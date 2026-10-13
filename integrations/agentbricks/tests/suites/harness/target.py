@@ -9,8 +9,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Protocol
 
-from common import RunConfig
-from workspace_client import Workspace
+import pytest
+
+from harness.run import RunConfig
+from harness.workspace import Workspace
 
 WORKSPACE_KINDS = ("live", "fake")
 
@@ -77,6 +79,14 @@ class FakeWorkspace:
 
     def __init__(self, run_config: RunConfig):
         raise TargetWorkspaceUnavailable("fake workspace not implemented yet")
+
+
+def require_workspace(target_workspace: TargetWorkspace, what: str) -> Workspace:
+    """The live workspace's SDK client; skips the calling test or fixture on any other target."""
+    workspace = target_workspace.client
+    if workspace is None:
+        pytest.skip(f"{what} needs a live workspace; got --workspace {target_workspace.name}")
+    return workspace
 
 
 def make_target_workspace(name: str, profile: str | None, run_config: RunConfig) -> TargetWorkspace:

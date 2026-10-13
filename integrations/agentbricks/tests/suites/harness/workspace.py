@@ -1,6 +1,8 @@
 """Databricks SDK helpers for the E2E suites and fixtures: the workspace, which is not under test.
 
-Everything here goes through the SDK except ``app_logs``, since the SDK has no Apps log API.
+``Workspace`` holds one operation per method (create, read, delete one thing); deciding what to
+delete and in which order is ``harness.cleanup``. Everything goes through the SDK except
+``app_logs``, since the SDK has no Apps log API.
 """
 
 from __future__ import annotations
@@ -8,25 +10,25 @@ from __future__ import annotations
 import dataclasses
 import datetime as dt
 import io
-import json
 import pathlib
 import re
 import subprocess
 import time
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Collection, Sequence
 from typing import Any, cast
 
-from common import TOOL_RESOURCE_PREFIX, E2EError, log, now
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import DatabricksError, NotFound
 from databricks.sdk.service.catalog import PermissionsChange, Privilege, SecurableType, VolumeType
 from databricks.sdk.service.sql import ExecuteStatementRequestOnWaitTimeout, State, StatementState
 
+from harness.process import log
+from harness.run import TOOL_RESOURCE_PREFIX, E2EError, now
+
 GrantTuple = tuple[str, str, str, str]
 
 _BRANCH = re.compile(r"projects/[^/]+/branches/[^/]+")
 _RUNTIME_DATABASE_PREFIX = "runtime-"
-_APPS_RECORD = "apps.jsonl"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -44,32 +46,6 @@ class AppIdentity:
             self.branch or other.branch,
             self.database_id or other.database_id,
         )
-
-
-def record_app_identity(output: pathlib.Path, app: str, identity: AppIdentity) -> None:
-    """Append one line for the controller's end-of-run sweep, which cannot see worker memory."""
-    line = json.dumps({"app": app, **dataclasses.asdict(identity)}) + "\n"
-    # One write per line: appends this small do not interleave across processes on POSIX.
-    with (output / _APPS_RECORD).open("a", encoding="utf-8") as record:
-        record.write(line)
-
-
-def recorded_app_identities(output: pathlib.Path) -> dict[str, AppIdentity]:
-    """Every App identity the run's workers recorded, by App name."""
-    path = output / _APPS_RECORD
-    identities: dict[str, AppIdentity] = {}
-    if not path.exists():
-        return identities
-    for line in path.read_text(encoding="utf-8").splitlines():
-        try:
-            data = json.loads(line)
-            identity = AppIdentity(
-                data.get("service_principal"), data.get("branch"), data.get("database_id")
-            )
-            identities[data["app"]] = identities.get(data["app"], AppIdentity()).merged(identity)
-        except (ValueError, KeyError, TypeError, AttributeError):
-            continue
-    return identities
 
 
 class Workspace:
@@ -196,7 +172,7 @@ class Workspace:
     # Temporary UC objects
 
     def create_schema(self, catalog: str, name: str, *, remove_after: dt.datetime) -> str:
-        """Create a schema and return its full name; ``RemoveAfter`` lets a sweeper delete it later."""
+        """Create a schema and return its full name; ``RemoveAfter`` lets a workspace janitor delete it later."""
         info = self.client.schemas.create(
             name,
             catalog,
@@ -530,106 +506,6 @@ def _wait(operation: Any) -> None:
     wait = getattr(operation, "wait", None)
     if callable(wait):
         wait()
-
-
-def _delete_each(
-    kind: str, find: Callable[[], list[str]], delete: Callable[[str], None]
-) -> list[str]:
-    """Delete everything ``find`` returns, continuing past failures; returns one line per failure."""
-    try:
-        names = find()
-    except Exception as exc:
-        return [f"{kind} lookup: {exc}"]
-    failures = []
-    for name in names:
-        try:
-            delete(name)
-        except Exception as exc:
-            failures.append(f"{kind} {name}: {exc}")
-    return failures
-
-
-def delete_lakebase_leftovers(
-    workspace: Workspace,
-    branch: str,
-    *,
-    principals: Collection[str],
-    database_ids: Collection[str] = (),
-) -> list[str]:
-    """Delete runtime databases and then the principals' roles on one branch.
-
-    A role that owns a database cannot be deleted, so databases go first. Only ``runtime-``
-    databases are touched, and both kinds are matched by principal UUID, never by name pattern.
-    """
-    return _delete_each(
-        "runtime database",
-        lambda: workspace.runtime_databases(branch, principals, database_ids),
-        workspace.delete_database,
-    ) + _delete_each(
-        "Lakebase role",
-        lambda: workspace.roles_of(branch, principals),
-        workspace.delete_role,
-    )
-
-
-def cleanup_app(
-    workspace: Workspace,
-    name: str,
-    *,
-    delete_store: Callable[[str, str], subprocess.CompletedProcess[str]] | None = None,
-    memory_store: str | None = None,
-    session_store: str | None = None,
-    has_app: bool = True,
-    runtime_store: bool = False,
-    identity: AppIdentity | None = None,
-) -> list[str]:
-    """Delete one project's stores and, if it has an App, everything the App's deploy created.
-
-    ``delete_store(kind, store)`` is the agentbricks CLI's store delete, which has no SDK surface.
-    ``identity`` is what was recorded at deploy time; it fills in whatever the live lookup misses.
-    Every step runs regardless of earlier failures except those that need the App gone. Returns a
-    description of each failure; an empty list means everything was deleted.
-    """
-    failures: list[str] = []
-
-    def attempt(label: str, action: Callable[..., object], *args: Any) -> bool:
-        try:
-            action(*args)
-        except Exception as exc:
-            failures.append(f"{label}: {exc}")
-            return False
-        return True
-
-    def delete_cli_store(kind: str, store: str) -> None:
-        assert delete_store is not None
-        result = delete_store(kind, store)
-        if result.returncode != 0:
-            raise E2EError((result.stderr or result.stdout).strip())
-
-    # Read before any delete: the principal and branch come from the App and its Runtime Store.
-    known = (identity or AppIdentity()).merged(
-        workspace.app_identity(name) if has_app else AppIdentity()
-    )
-    for kind, store in (("memory", memory_store), ("sessions", session_store)):
-        if store and delete_store:
-            attempt(f"{kind} store {store}", delete_cli_store, kind, store)
-    if not has_app:
-        return failures
-
-    attempt(f"catalog grant {name}", workspace.revoke_catalog_grant, name)
-    if runtime_store:
-        attempt(f"runtime store {name}", workspace.delete_runtime_store, name)
-    app_deleted = attempt(f"app {name}", workspace.delete_app, name)
-    if app_deleted:
-        attempt(f"deployment source {name}", workspace.delete_deployment_source, name)
-    if known.branch:
-        failures += delete_lakebase_leftovers(
-            workspace,
-            known.branch,
-            principals=[known.service_principal or ""],
-            database_ids=[known.database_id or ""],
-        )
-    return failures
 
 
 # Grant helpers

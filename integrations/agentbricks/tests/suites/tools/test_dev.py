@@ -8,8 +8,8 @@ reports each tool independently and the sequence continues past a failure.
 from __future__ import annotations
 
 import pytest
-from agentbricks_cli import AgentbricksCli
-from tools import (
+from harness.cli import AgentbricksCli
+from tool_definitions import (
     Tool,
     assert_endpoint_invoke,
     bind,

@@ -6,9 +6,9 @@ Real case still to write: an invocation exports a trace to the experiment.
 from __future__ import annotations
 
 import pytest
-from agentbricks_cli import AgentbricksCli
-from common import TOOL_RESOURCE_PREFIX
-from workspace_client import Workspace
+from harness.cli import AgentbricksCli
+from harness.run import TOOL_RESOURCE_PREFIX
+from harness.workspace import Workspace
 
 
 def test_tracing_experiment_bound(

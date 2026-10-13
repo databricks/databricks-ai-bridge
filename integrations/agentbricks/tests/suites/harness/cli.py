@@ -30,21 +30,12 @@ from typing import Any, Protocol
 
 import tomli
 import tomlkit
-from common import (
-    APP_PREFIX,
-    E2E_MODEL,
-    FRAMEWORKS,
-    E2EError,
-    RunConfig,
-    last_lines,
-    last_nonempty_line,
-    log,
-    log_command,
-    now,
-    project_prefix,
-)
-from target_workspace import TargetWorkspace
-from workspace_client import AppIdentity, Workspace, record_app_identity
+
+from harness.cleanup import record_app_identity
+from harness.process import last_lines, last_nonempty_line, log, log_command
+from harness.run import APP_PREFIX, E2E_MODEL, FRAMEWORKS, E2EError, RunConfig, now, project_prefix
+from harness.target import TargetWorkspace
+from harness.workspace import AppIdentity, Workspace
 
 _STORE_KINDS = {"memory": ("memory", "stores"), "sessions": ("sessions", "stores")}
 _DIRECT_HEADER = (
@@ -460,7 +451,7 @@ class AgentbricksCli:
         return agent
 
     def _record_identity(self, project: Project, app: str, workspace: Workspace) -> None:
-        """Keep the App's principal and Lakebase branch for cleanup, and for the controller's sweep."""
+        """Keep the App's principal and Lakebase branch for cleanup, including leftover cleanup after the run."""
         identity = project.identity.merged(workspace.app_identity(app))
         if identity != project.identity:
             project.identity = identity

@@ -5,8 +5,8 @@ from __future__ import annotations
 import dataclasses
 import uuid
 
-from common import E2EError
-from workspace_client import Workspace
+from harness.run import E2EError
+from harness.workspace import Workspace
 
 NESTED_FUNCTION = "ab_nested_marker"
 FUNCTION = "ab_uc_marker"

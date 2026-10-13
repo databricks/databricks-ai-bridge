@@ -8,9 +8,9 @@ reports each tool independently and the sequence continues past a failure.
 
 from __future__ import annotations
 
-from agentbricks_cli import AgentbricksCli
-from tools import Tool, assert_endpoint_invoke, bind, invoke_and_check
-from workspace_client import Workspace
+from harness.cli import AgentbricksCli
+from harness.workspace import Workspace
+from tool_definitions import Tool, assert_endpoint_invoke, bind, invoke_and_check
 
 
 def test_deploy(

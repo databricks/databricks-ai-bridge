@@ -6,9 +6,9 @@ import dataclasses
 import json
 from collections.abc import Callable, Mapping
 
-from agentbricks_cli import Agent, AgentbricksCli, Project
+from harness.cli import Agent, AgentbricksCli, Project
+from harness.workspace import GrantTuple
 from uc_objects import UcFunction
-from workspace_client import GrantTuple
 
 PYTHON_MARKER_FILE = "agent/tools/matrix_marker.py"
 PYTHON_MARKER_SOURCE = (

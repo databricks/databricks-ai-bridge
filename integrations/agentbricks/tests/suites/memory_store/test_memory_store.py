@@ -6,7 +6,7 @@ Real case still to write: the agent writes a memory in one invocation and recall
 from __future__ import annotations
 
 import pytest
-from agentbricks_cli import AgentbricksCli
+from harness.cli import AgentbricksCli
 
 
 @pytest.mark.usefixtures("workspace_client")

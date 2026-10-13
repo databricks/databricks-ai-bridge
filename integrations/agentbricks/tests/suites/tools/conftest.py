@@ -1,8 +1,8 @@
 """Tools suite: every test runs once per authoring path, over the tools the target workspace can support.
 
 Each test gets its own temporary UC schema (``ab_e2e_<run_id>_<random>``) holding the function and
-volume its tools use, and deletes it, grants included, in its own teardown. The controller sweeps
-any a crashed test left behind by the run's prefix (see ``provisioning``).
+volume its tools use, and deletes it, grants included, in its own teardown. Leftover cleanup deletes
+any a crashed test left behind, by the run's prefix (see ``harness.cleanup``).
 """
 
 from __future__ import annotations
@@ -14,17 +14,10 @@ import uuid
 from collections.abc import Iterator
 
 import pytest
-from common import (
-    AUTHORING_PATHS,
-    E2EError,
-    RunConfig,
-    log,
-    now,
-    scratch_schema_prefix,
-)
-from provisioning import require_workspace
-from target_workspace import TargetWorkspace
-from tools import TOOL_DEFINITIONS, Tool
+from harness.process import log
+from harness.run import AUTHORING_PATHS, E2EError, RunConfig, now, scratch_schema_prefix
+from harness.target import TargetWorkspace, require_workspace
+from tool_definitions import TOOL_DEFINITIONS, Tool
 from uc_objects import UcFunction, create_uc_function
 
 
@@ -40,7 +33,7 @@ def scratch_schema(
     """``catalog.schema`` of a schema private to this test, deleted with everything in it afterwards."""
     workspace = require_workspace(target_workspace, "a UC schema")
     name = f"{scratch_schema_prefix(run_config.run_id)}{uuid.uuid4().hex[:6]}"
-    # RemoveAfter lets a separate sweeper delete schemas of runs that crashed before any cleanup.
+    # RemoveAfter lets a workspace janitor delete schemas of runs that crashed before any cleanup.
     full_name = workspace.create_schema(catalog, name, remove_after=now() + dt.timedelta(hours=2))
     try:
         yield full_name

@@ -7,7 +7,7 @@ isolated between sessions.
 from __future__ import annotations
 
 import pytest
-from agentbricks_cli import AgentbricksCli
+from harness.cli import AgentbricksCli
 
 
 @pytest.mark.usefixtures("workspace_client")
