@@ -112,7 +112,9 @@ presence-only. Choice values use the `AGENTBRICKS_CLI_` prefix required by their
 Click choices must use non-sensitive labels. Repeated options produce one parameter entry per
 supplied value, up to 64 entries; hidden and deprecated options follow the same value policy. The
 emitter wraps each event in a FrontendLog payload and sends it to `/telemetry-ext` on a daemon
-thread, waiting at most 250 ms in the foreground. It reuses the command's workspace client or lets
+thread, waiting at most two seconds in the foreground, including client setup, authentication, and
+upload. This is a best-effort allowance, not a delivery guarantee: unfinished work can be lost when
+the process exits after the allowance expires. It reuses the command's workspace client or lets
 the SDK resolve the selected or default profile. Local commands may run without login, so an SDK
 `external-browser` profile can prompt during telemetry. Uploads are best effort: opt-out, missing
 credentials, and transport failures must not change command behavior. When changing this path,

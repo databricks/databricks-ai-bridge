@@ -18,6 +18,7 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.metadata import requires
@@ -86,7 +87,10 @@ def run_agentbricks(tmp_path: pathlib.Path):
 
 
 @pytest.mark.parametrize("profile_source", ["saved", "sdk"])
-def test_cli_posts_telemetry_to_local_receiver(run_agentbricks, tmp_path, profile_source) -> None:
+@pytest.mark.parametrize("command", ["memory-list", "slow-init"])
+def test_cli_posts_telemetry_to_local_receiver(
+    run_agentbricks, tmp_path, profile_source, command
+) -> None:
     uploads: queue.Queue[tuple[str, dict, str | None]] = queue.Queue()
     reads: queue.Queue[str] = queue.Queue()
 
@@ -112,6 +116,8 @@ def test_cli_posts_telemetry_to_local_receiver(run_agentbricks, tmp_path, profil
         def do_POST(self) -> None:
             length = int(self.headers["Content-Length"])
             body = json.loads(self.rfile.read(length))
+            if command == "slow-init":
+                time.sleep(0.1)
             self._respond_json({})
             uploads.put((self.path, body, self.headers.get("Authorization")))
 
@@ -136,18 +142,33 @@ def test_cli_posts_telemetry_to_local_receiver(run_agentbricks, tmp_path, profil
             else:
                 env_override["DATABRICKS_CONFIG_PROFILE"] = profile_name
 
-            result = run_agentbricks(
-                "-o",
-                "json",
-                "memory",
-                "stores",
-                "list",
-                "--page-size",
-                "7",
-                env_override=env_override,
-            )
+            if command == "slow-init":
+                instrumentation = tmp_path / "slow-client"
+                instrumentation.mkdir()
+                (instrumentation / "sitecustomize.py").write_text(
+                    "import time\n"
+                    "from databricks_agentkit import _api_client\n"
+                    "original = _api_client._workspace_client\n"
+                    "def delayed_client(profile):\n"
+                    "    time.sleep(1.15)\n"
+                    "    return original(profile)\n"
+                    "_api_client._workspace_client = delayed_client\n"
+                )
+                env_override["PYTHONPATH"] = str(instrumentation)
+                arguments = [
+                    "init",
+                    str(tmp_path / "agent"),
+                    "--framework",
+                    "openai",
+                    "--server",
+                    "custom",
+                ]
+            else:
+                arguments = ["memory", "stores", "list", "--page-size", "7"]
+            result = run_agentbricks("-o", "json", *arguments, env_override=env_override)
             assert result.stdout
-            assert reads.get(timeout=5).startswith("/api/2.0/agents/memory-stores")
+            if command == "memory-list":
+                assert reads.get(timeout=5).startswith("/api/2.0/agents/memory-stores")
             path, body, authorization = uploads.get(timeout=5)
         finally:
             server.shutdown()
@@ -161,18 +182,35 @@ def test_cli_posts_telemetry_to_local_receiver(run_agentbricks, tmp_path, profil
     frontend_log = json.loads(body["protoLogs"][0])
     assert uuid.UUID(frontend_log["frontend_log_event_id"])
     log = frontend_log["entry"]["agentbricks_cli_log"]
-    assert log["command_path"] == "agentbricks memory stores list"
+    assert log["command_path"] == (
+        "agentbricks init" if command == "slow-init" else "agentbricks memory stores list"
+    )
     assert log["exit_code"] == 0
-    assert {parameter["name"]: parameter for parameter in log["parameters"]} == {
+    expected_parameters: dict[str, dict[str, str | int]] = {
         "agentbricks.output": {
             "name": "agentbricks.output",
             "choice_value": "AGENTBRICKS_CLI_JSON",
         },
-        "agentbricks memory stores list.page_size": {
+    }
+    if command == "slow-init":
+        expected_parameters.update(
+            {
+                "agentbricks init.framework": {
+                    "name": "agentbricks init.framework",
+                    "choice_value": "AGENTBRICKS_CLI_OPENAI",
+                },
+                "agentbricks init.server": {
+                    "name": "agentbricks init.server",
+                    "choice_value": "AGENTBRICKS_CLI_CUSTOM",
+                },
+            }
+        )
+    else:
+        expected_parameters["agentbricks memory stores list.page_size"] = {
             "name": "agentbricks memory stores list.page_size",
             "int_value": 7,
-        },
-    }
+        }
+    assert {parameter["name"]: parameter for parameter in log["parameters"]} == expected_parameters
 
 
 def test_cli_and_every_command_help_load(run_agentbricks) -> None:

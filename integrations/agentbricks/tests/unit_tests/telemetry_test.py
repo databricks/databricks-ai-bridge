@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 import uuid
 from enum import Enum
 from types import SimpleNamespace
 from unittest import mock
 
 import click
+import pytest
 from click.core import ParameterSource
 from click.testing import CliRunner
 
@@ -248,7 +251,6 @@ def test_existing_workspace_client_receives_exact_transport_request(monkeypatch)
     api_client = _ApiClient()
     context = _Context(api_client)
     monkeypatch.delenv("AGENTBRICKS_DISABLE_TELEMETRY", raising=False)
-    monkeypatch.setattr(telemetry, "_MAX_FOREGROUND_WAIT_S", 1)
     monkeypatch.setattr(telemetry.time, "time", lambda: 12.3)
 
     with mock.patch("databricks_agentkit._api_client._workspace_client") as build:
@@ -269,7 +271,6 @@ def test_transport_payload_contains_static_parameter_names(monkeypatch):
     _explicit_option(context, "allow_user_scope_update", True)
 
     monkeypatch.delenv("AGENTBRICKS_DISABLE_TELEMETRY", raising=False)
-    monkeypatch.setattr(telemetry, "_MAX_FOREGROUND_WAIT_S", 1)
     monkeypatch.setattr(
         telemetry,
         "_workspace_client",
@@ -355,8 +356,97 @@ def test_sdk_auth_failure_is_best_effort():
 
 def test_transport_failure_is_silent_and_does_not_change_result(monkeypatch):
     context = _Context(_ApiClient(RuntimeError("transport detail")))
-    monkeypatch.setattr(telemetry, "_MAX_FOREGROUND_WAIT_S", 1)
+    monkeypatch.delenv("AGENTBRICKS_DISABLE_TELEMETRY", raising=False)
     telemetry.emit_command(context, execution_time_ms=1, exit_code=0)
+
+
+@pytest.mark.parametrize("setup_delay", [0.35, 1.15])
+def test_default_allowance_waits_for_slow_client_setup_and_upload(monkeypatch, setup_delay):
+    completed = threading.Event()
+    workers = []
+
+    class SlowApiClient(_ApiClient):
+        def do(self, method, path, *, body):
+            time.sleep(0.1)
+            result = super().do(method, path, body=body)
+            completed.set()
+            return result
+
+    api_client = SlowApiClient()
+
+    def build_client(ctx):
+        workers.append(threading.current_thread())
+        time.sleep(setup_delay)
+        return SimpleNamespace(api_client=api_client)
+
+    monkeypatch.delenv("AGENTBRICKS_DISABLE_TELEMETRY", raising=False)
+    monkeypatch.setattr(telemetry, "_workspace_client", build_client)
+    started = time.monotonic()
+    try:
+        telemetry.emit_command(_Context(), execution_time_ms=1, exit_code=0)
+        elapsed = time.monotonic() - started
+        assert completed.is_set()
+        assert elapsed >= setup_delay + 0.1
+        assert len(api_client.calls) == 1
+    finally:
+        for worker in workers:
+            worker.join(timeout=5)
+
+
+@pytest.mark.parametrize("blocked_stage", ["setup", "transport"])
+@pytest.mark.parametrize("exit_code", [0, 1])
+def test_default_allowance_bounds_blocked_worker_and_preserves_outcome(
+    monkeypatch, blocked_stage, exit_code
+):
+    release = threading.Event()
+    entered = threading.Event()
+    workers = []
+
+    def block():
+        workers.append(threading.current_thread())
+        entered.set()
+        release.wait(timeout=10)
+
+    class BlockedApiClient(_ApiClient):
+        def do(self, method, path, *, body):
+            block()
+            return super().do(method, path, body=body)
+
+    def build_client(ctx):
+        if blocked_stage == "setup":
+            block()
+        api_client = BlockedApiClient() if blocked_stage == "transport" else _ApiClient()
+        return SimpleNamespace(api_client=api_client)
+
+    failure = RuntimeError("original command failure")
+
+    @click.command(cls=AgentBricksCommand)
+    def command():
+        if exit_code:
+            raise failure
+        click.echo("original command output")
+
+    monkeypatch.delenv("AGENTBRICKS_DISABLE_TELEMETRY", raising=False)
+    monkeypatch.setattr(telemetry, "_workspace_client", build_client)
+    started = time.monotonic()
+    try:
+        result = CliRunner().invoke(command)
+        elapsed = time.monotonic() - started
+        assert entered.is_set()
+        assert result.exit_code == exit_code
+        if exit_code:
+            assert result.exception is failure
+        else:
+            assert result.output == "original command output\n"
+        assert telemetry._MAX_FOREGROUND_WAIT_S <= elapsed < telemetry._MAX_FOREGROUND_WAIT_S + 1
+        assert len(workers) == 1
+        assert workers[0].daemon
+        assert workers[0].is_alive()
+    finally:
+        release.set()
+        for worker in workers:
+            worker.join(timeout=5)
+            assert not worker.is_alive()
 
 
 def test_agentbricks_command_records_exit_outcome(monkeypatch):

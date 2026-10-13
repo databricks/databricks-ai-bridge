@@ -28,7 +28,7 @@ _TELEMETRY_PATH = "/telemetry-ext"
 
 # Keep the foreground wait short.  The worker is daemonized so an unavailable endpoint cannot hold
 # the CLI process open after this bound expires.
-_MAX_FOREGROUND_WAIT_S = 0.25
+_MAX_FOREGROUND_WAIT_S = 2.0
 _CHOICE_VALUE_PREFIX = "AGENTBRICKS_CLI_"
 
 _MAX_PARAMETER_ENTRIES = 64
