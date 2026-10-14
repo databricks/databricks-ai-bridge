@@ -6,9 +6,9 @@ to one memory per topic (``/{topic}.md``); ``recall`` searches the actor's memor
 written under other paths; ``forget`` removes a fact; ``list_memories`` lists what is stored. Facts
 persist across conversations.
 
-``forget`` and ``list_memories`` cover the actor's cross-session memories (those without a
-``session_id``), which is where ``remember`` writes. Memories saved with a ``session_id`` are never
-listed or edited by these tools.
+``remember`` writes cross-session memories (no ``session_id``). Memories saved under a session, by
+the SDK or a memory pipeline, are covered too and labeled with their session; ``forget`` edits every
+memory at a path unless the model names one session.
 
 ``memory_tools(actor)`` returns the tools when ``AGENT_MEMORY_STORE`` is set, else an empty list, so
 the model never sees them when memory is unconfigured. ``create_agent_graph`` composes them into its
@@ -73,11 +73,20 @@ def _fact_count(content: str) -> int:
     return sum(1 for line in content.splitlines() if line.strip())
 
 
+def _session(session_id: Optional[str]) -> Optional[str]:
+    # Models often send "" for an optional argument they mean to omit.
+    return (session_id or "").strip() or None
+
+
+def _label(memory: "Memory") -> str:
+    return f"{memory.path} [session {memory.session_id}]" if memory.session_id else memory.path
+
+
 def _format_recall(results: "list[MemorySearchResult]") -> str:
     lines: list[str] = []
     for result in results:
         memory = result.memory
-        lines.append(f"{memory.path}:")
+        lines.append(f"{_label(memory)}:")
         text = memory.content or memory.description or ""
         lines.extend(f"  {line}" for line in text.splitlines() if line.strip())
     return "\n".join(lines) or "No relevant memories."
@@ -89,7 +98,7 @@ def _format_listing(memories: "list[Memory]") -> str:
     lines: list[str] = []
     for memory in memories[:_LIST_LIMIT]:
         count = _fact_count(memory.content or "")
-        line = f"{memory.path} ({count} fact{'' if count == 1 else 's'})"
+        line = f"{_label(memory)} ({count} fact{'' if count == 1 else 's'})"
         lines.append(f"{line}: {memory.description}" if memory.description else line)
     if len(memories) > _LIST_LIMIT:
         lines.append(f"…and {len(memories) - _LIST_LIMIT} more.")
@@ -121,12 +130,17 @@ def memory_tools(actor: str, store: str | None = None) -> list[BaseTool]:
                 handle = AgentKitClient(workspace_client()).memory_stores._handle(store_id)
             return handle
 
-    def shared_memories(path: Optional[str] = None) -> "list[Memory]":
-        # The exact-path filter spans sessions, so filter by session and recheck the path here.
+    def memories(path: Optional[str] = None, session_id: Optional[str] = None) -> "list[Memory]":
+        # Recheck both filters: the API ignores session_id alongside path, and servers that
+        # predate the exact-path filter ignore path.
+        listed = memory_store().list(
+            actor_id=actor, path=path, session_id=session_id, page_size=_LIST_PAGE_SIZE
+        )
         return [
             memory
-            for memory in memory_store().list(actor_id=actor, path=path, page_size=_LIST_PAGE_SIZE)
-            if memory.session_id is None and (path is None or memory.path == path)
+            for memory in listed
+            if (path is None or memory.path == path)
+            and (session_id is None or memory.session_id == session_id)
         ]
 
     @tool
@@ -147,18 +161,25 @@ def memory_tools(actor: str, store: str | None = None) -> list[BaseTool]:
         return f"Remembered in {path}."
 
     @tool
-    def recall(query: str) -> str:
+    def recall(query: str, session_id: Optional[str] = None) -> str:
         """Search the user's long-term memory for facts relevant to the query.
 
         Args:
             query: What to look for, in natural language.
+            session_id: Only search memories saved under this session, as shown by
+                list_memories or recall. Omit it to search all of the user's memories.
         """
         return _format_recall(
-            memory_store().search(actor_id=actor, query=query, limit=_RECALL_RESULTS)
+            memory_store().search(
+                actor_id=actor,
+                query=query,
+                limit=_RECALL_RESULTS,
+                session_id=_session(session_id),
+            )
         )
 
     @tool
-    def forget(fact: str, topic: str) -> str:
+    def forget(fact: str, topic: str, session_id: Optional[str] = None) -> str:
         """Remove a fact from long-term memory.
 
         Use it when the user asks to forget something or a remembered fact is no longer true. To
@@ -167,6 +188,8 @@ def memory_tools(actor: str, store: str | None = None) -> list[BaseTool]:
         Args:
             fact: The fact to remove, as stored.
             topic: The fact's topic, or a path shown by list_memories or recall.
+            session_id: Only edit the memory saved under this session, as shown by list_memories
+                or recall. Omit it to remove the fact from every memory at the path.
         """
         fact = _normalized(fact)
         if not fact:
@@ -177,32 +200,50 @@ def memory_tools(actor: str, store: str | None = None) -> list[BaseTool]:
                 f"Invalid memory path {topic.strip()!r}: use a topic or a path shown by "
                 "list_memories."
             )
-        matches = shared_memories(path)
+        session_id = _session(session_id)
+        matches = memories(path, session_id)
+        where = f"{path} [session {session_id}]" if session_id else path
         if not matches:
-            return f"No memories in {path}."
-        memory = matches[0]
-        lines = (memory.content or "").splitlines()
+            return f"No memories in {where}."
         target = fact.casefold()
-        kept = [line for line in lines if _normalized(line).casefold() != target]
-        removed = len(lines) - len(kept)
+        removed = 0
+        for memory in matches:
+            lines = (memory.content or "").splitlines()
+            kept = [line for line in lines if _normalized(line).casefold() != target]
+            if len(kept) == len(lines):
+                continue
+            removed += len(lines) - len(kept)
+            # A read-modify-write, like remember's append: not atomic, so a concurrent write to
+            # this memory can be lost.
+            if any(line.strip() for line in kept):
+                memory.update(content="\n".join(kept))
+            else:
+                memory.delete()
         if not removed:
-            shown = "".join(f"\n  {line}" for line in lines if line.strip())
-            return f"Not found in {path}.{shown}"
-        # A read-modify-write, like remember's append: not atomic, so a concurrent write to this
-        # memory can be lost.
-        if any(line.strip() for line in kept):
-            memory.update(content="\n".join(kept))
-        else:
-            memory.delete()
-        return f"Forgot {removed} fact{'' if removed == 1 else 's'} in {path}."
+            shown = "".join(
+                f"\n  {line}"
+                for memory in matches
+                for line in (memory.content or "").splitlines()
+                if line.strip()
+            )
+            return f"Not found in {where}.{shown}"
+        return f"Forgot {removed} fact{'' if removed == 1 else 's'} in {where}."
 
     @tool
-    def list_memories() -> str:
-        """List what is stored in long-term memory: each memory's path and how many facts it holds.
+    def list_memories(session_id: Optional[str] = None) -> str:
+        """List what is stored in long-term memory: each memory's path, its session if it was saved
+        under one, and how many facts it holds.
 
         Check it to reuse an existing topic instead of inventing a near-duplicate, and to find a
         fact's path before forgetting it.
+
+        Args:
+            session_id: Only list memories saved under this session, as shown by list_memories
+                or recall. Omit it to list all of the user's memories.
         """
-        return _format_listing(sorted(shared_memories(), key=lambda memory: memory.path))
+        listed = memories(session_id=_session(session_id))
+        return _format_listing(
+            sorted(listed, key=lambda memory: (memory.path, memory.session_id or ""))
+        )
 
     return [remember, recall, forget, list_memories]

@@ -478,14 +478,17 @@ In an agent configured with `server = "agentbricks"`, add the memory tools so th
 
 - `remember(fact, topic)` appends the fact to one memory per topic, `/{topic}.md`, with the topic
   reduced to a safe path segment. Remembering a fact that is already there is a no-op.
-- `recall(query)` searches the actor's memories, including ones written under other paths.
-- `forget(fact, topic)` removes a matching fact, and deletes the memory once no facts remain.
-- `list_memories()` lists each memory's path and how many facts it holds.
+- `recall(query, session_id=None)` searches the actor's memories, including ones written under other
+  paths, or only the ones saved under `session_id`.
+- `forget(fact, topic, session_id=None)` removes a matching fact from every memory at the path, or
+  only from the one saved under `session_id`, and deletes a memory once no facts remain.
+- `list_memories(session_id=None)` lists each memory's path, its session if it has one, and how
+  many facts it holds, optionally only for one session.
 
-`forget` and `list_memories` cover only memories saved without a `session_id`, which is where
-`remember` writes. `memory_tools` resolves the store from the `[memory_store]` binding, carried to
-the runtime by the `AGENT_MEMORY_STORE` env var that `agentbricks deploy` injects, and returns no
-tools when no store is set, so the agent runs unchanged.
+`remember` writes memories without a `session_id`; memories saved under a session are labeled with
+it in `recall` and `list_memories`. `memory_tools` resolves the store from the `[memory_store]`
+binding, carried to the runtime by the `AGENT_MEMORY_STORE` env var that `agentbricks deploy`
+injects, and returns no tools when no store is set, so the agent runs unchanged.
 That "no store set" path is also how it runs under `agentbricks dev`, which runs locally: memory is off
 there (the store is provisioned and used only at deploy). The OpenAI Agents adapter exposes the same
 tools as `databricks_agentkit.openai.memory_tools(actor)`:

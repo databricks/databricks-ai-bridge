@@ -125,8 +125,7 @@ class MemoryStore:
         """Create a memory, failing with ``ALREADY_EXISTS`` if one exists at the same
         ``(actor_id, session_id, path)``.
 
-        ``write_mode`` is deprecated: the API never applied it. Use :meth:`put` to create or update
-        a memory at a path.
+        ``write_mode`` is deprecated. Use :meth:`put` to create or update a memory at a path.
         """
         return self._client._add_memory(
             self,
@@ -311,8 +310,8 @@ class MemoryStores:
                 source_type=source_type,
             )
         warnings.warn(
-            "add(write_mode=...) is deprecated because the memory API never applied it; use "
-            "put() to create or update a memory, or put(append=True) to append to it.",
+            "add(write_mode=...) is deprecated. Use put() to create or update a memory, or "
+            "put(append=True) to append to it.",
             DeprecationWarning,
             stacklevel=3,
         )

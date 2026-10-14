@@ -168,9 +168,13 @@ def test_configured_store_returns_four_tools_with_stable_parameters(framework, a
 
     assert set(tools) == {"remember", "recall", "forget", "list_memories"}
     assert set(_schema(tools["remember"], framework)["properties"]) == {"fact", "topic"}
-    assert set(_schema(tools["recall"], framework)["properties"]) == {"query"}
-    assert set(_schema(tools["forget"], framework)["properties"]) == {"fact", "topic"}
-    assert not _schema(tools["list_memories"], framework).get("properties")
+    assert set(_schema(tools["recall"], framework)["properties"]) == {"query", "session_id"}
+    assert set(_schema(tools["forget"], framework)["properties"]) == {
+        "fact",
+        "topic",
+        "session_id",
+    }
+    assert set(_schema(tools["list_memories"], framework)["properties"]) == {"session_id"}
 
 
 def test_remember_describes_topic_as_a_short_category(framework, api):
@@ -252,10 +256,22 @@ async def test_recall_requests_five_results_by_page_size(framework, api):
     assert call["query"] == "email"
     assert call["page_size"] == 5
     assert call.get("limit") is None
+    assert call.get("session_id") is None
+
+
+@pytest.mark.parametrize(("session_id", "sent"), [("s1", "s1"), (" s1 ", "s1"), ("", None)])
+@pytest.mark.asyncio
+async def test_recall_searches_one_session_when_given(framework, api, session_id, sent):
+    await _invoke(
+        _tools(framework)["recall"], {"query": "email", "session_id": session_id}, framework
+    )
+
+    (call,) = api.search_calls
+    assert call.get("session_id") == sent
 
 
 @pytest.mark.asyncio
-async def test_recall_shows_each_hit_path_and_content(framework, api):
+async def test_recall_shows_each_hit_path_session_and_content(framework, api):
     api.search_response = {
         "results": [
             {
@@ -272,6 +288,7 @@ async def test_recall_shows_each_hit_path_and_content(framework, api):
                     "name": f"memory-stores/{STORE}/entries/e2",
                     "actor_id": "alice",
                     "path": "/projects.md",
+                    "session_id": "s1",
                     "content": "Migrating billing to Lakebase.",
                 },
                 "score": 1.0,
@@ -285,7 +302,7 @@ async def test_recall_shows_each_hit_path_and_content(framework, api):
         "/preferences.md:\n"
         "  User prefers email.\n"
         "  User prefers dark mode.\n"
-        "/projects.md:\n"
+        "/projects.md [session s1]:\n"
         "  Migrating billing to Lakebase."
     )
 
@@ -443,38 +460,84 @@ async def test_forget_rejects_an_invalid_path_without_a_call(framework, api, pat
     assert api.calls == []
 
 
+@pytest.mark.parametrize("arguments", [{}, {"session_id": None}, {"session_id": ""}])
 @pytest.mark.asyncio
-async def test_forget_leaves_session_scoped_entries_alone(framework, api):
-    scoped = api.seed("/preferences.md", "User prefers email.", session_id="s1")
+async def test_forget_without_a_session_edits_every_memory_at_the_path(framework, api, arguments):
+    api.seed("/preferences.md", "User prefers email.", session_id="s1")
     shared = api.seed("/preferences.md", "User prefers email.\nTimezone is PST.")
-    tools = _tools(framework)
+    other = api.seed("/projects.md", "User prefers email.")
 
-    first = await _invoke(
-        tools["forget"], {"fact": "User prefers email.", "topic": "preferences"}, framework
-    )
-    del api.entries[shared]
-    second = await _invoke(
-        tools["forget"], {"fact": "User prefers email.", "topic": "preferences"}, framework
+    result = await _invoke(
+        _tools(framework)["forget"],
+        {"fact": "User prefers email.", "topic": "preferences", **arguments},
+        framework,
     )
 
-    assert first == "Forgot 1 fact in /preferences.md."
-    assert second == "No memories in /preferences.md."
-    assert _content(api, scoped) == "User prefers email."
+    assert result == "Forgot 2 facts in /preferences.md."
+    assert set(api.entries) == {shared, other}
+    assert _content(api, shared) == "Timezone is PST."
 
 
 @pytest.mark.asyncio
-async def test_list_memories_shows_paths_fact_counts_and_descriptions(framework, api):
+async def test_forget_with_a_session_edits_only_that_memory(framework, api):
+    scoped = api.seed("/preferences.md", "User prefers email.\nTimezone is PST.", session_id="s1")
+    shared = api.seed("/preferences.md", "User prefers email.")
+
+    result = await _invoke(
+        _tools(framework)["forget"],
+        {"fact": "User prefers email.", "topic": "preferences", "session_id": "s1"},
+        framework,
+    )
+
+    assert result == "Forgot 1 fact in /preferences.md [session s1]."
+    assert _content(api, scoped) == "Timezone is PST."
+    assert _content(api, shared) == "User prefers email."
+
+
+@pytest.mark.asyncio
+async def test_forget_with_an_unknown_session_writes_nothing(framework, api):
+    api.seed("/preferences.md", "User prefers email.")
+
+    result = await _invoke(
+        _tools(framework)["forget"],
+        {"fact": "User prefers email.", "topic": "preferences", "session_id": "s2"},
+        framework,
+    )
+
+    assert result == "No memories in /preferences.md [session s2]."
+    assert api.calls == ["list"]
+
+
+@pytest.mark.asyncio
+async def test_list_memories_shows_paths_sessions_fact_counts_and_descriptions(framework, api):
     api.seed("/projects.md", "Billing migration.\n\nQ3 launch.", description="Ongoing work")
     api.seed("/preferences.md", "User prefers email.")
     api.seed("/a/old.md", "")
-    api.seed("/scoped.md", "Session-only fact.", session_id="s1")
+    api.seed("/preferences.md", "Session-only fact.", session_id="s1")
     api.seed("/other-actor.md", "Someone else's fact.", actor_id="bob")
 
     result = await _invoke(_tools(framework)["list_memories"], {}, framework)
 
-    assert result == (
-        "/a/old.md (0 facts)\n/preferences.md (1 fact)\n/projects.md (2 facts): Ongoing work"
+    assert result.splitlines() == [
+        "/a/old.md (0 facts)",
+        "/preferences.md (1 fact)",
+        "/preferences.md [session s1] (1 fact)",
+        "/projects.md (2 facts): Ongoing work",
+    ]
+
+
+@pytest.mark.parametrize("session_id", ["s1", " s1 "])
+@pytest.mark.asyncio
+async def test_list_memories_lists_one_session_when_given(framework, api, session_id):
+    api.seed("/preferences.md", "User prefers email.")
+    api.seed("/preferences.md", "Session-only fact.", session_id="s1")
+    api.seed("/projects.md", "Other session fact.", session_id="s2")
+
+    result = await _invoke(
+        _tools(framework)["list_memories"], {"session_id": session_id}, framework
     )
+
+    assert result == "/preferences.md [session s1] (1 fact)"
 
 
 @pytest.mark.asyncio
@@ -504,7 +567,7 @@ async def test_list_memories_caps_the_output(framework, api):
 
 @pytest.mark.asyncio
 async def test_list_memories_with_an_empty_store(framework, api):
-    api.seed("/scoped.md", "Session-only fact.", session_id="s1")
+    api.seed("/other-actor.md", "Someone else's fact.", actor_id="bob")
 
     result = await _invoke(_tools(framework)["list_memories"], {}, framework)
 
