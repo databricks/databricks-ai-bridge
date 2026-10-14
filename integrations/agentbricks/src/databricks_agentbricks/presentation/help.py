@@ -357,7 +357,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("agentbricks tools add --help", "see all tool types you can add"),
         (
             "agentbricks tools add sandbox --scope volume:main.data.files",
-            "add a data sandbox tool",
+            "add a sandbox with a required volume scope",
         ),
         ("agentbricks tools add mcp system.ai.web_search", "add a managed MCP tool"),
         ("agentbricks tools remove mcp system.ai.web_search", "remove a tool binding"),
@@ -366,7 +366,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("tools", "add"): (
         (
             "agentbricks tools add sandbox --scope volume:main.data.files",
-            "add a data sandbox tool",
+            "add a sandbox with a required volume scope",
         ),
         ("agentbricks tools add mcp system.ai.web_search", "add a managed MCP tool"),
         (
@@ -379,7 +379,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("tools", "add", "sandbox"): (
         (
             "agentbricks tools add sandbox --scope volume:main.data.files",
-            "add a data sandbox tool",
+            "add a sandbox with a required volume scope",
         ),
     ),
     ("tools", "add", "mcp"): (

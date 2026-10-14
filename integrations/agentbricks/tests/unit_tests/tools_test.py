@@ -101,6 +101,34 @@ def test_add_sandbox_only_updates_manifest(tmp_path: pathlib.Path):
 
 
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("token_option", [(), ("--no-databricks-access-token-included",)])
+def test_add_sandbox_without_scope_does_not_change_project(tmp_path, framework, token_option):
+    project = _project(tmp_path, framework)
+    before = {path: path.read_bytes() for path in project.rglob("*") if path.is_file()}
+
+    result = CliRunner().invoke(
+        tools, ["add", "sandbox", *token_option, "--source", str(project)], obj=_Ctx()
+    )
+
+    assert result.exit_code != 0
+    assert "Missing option '--scope'" in result.output
+    assert {path: path.read_bytes() for path in project.rglob("*") if path.is_file()} == before
+
+
+def test_add_sandbox_empty_supplied_scope_does_not_change_project(tmp_path: pathlib.Path):
+    project = _project(tmp_path)
+    before = (project / "agent.toml").read_bytes()
+
+    result = CliRunner().invoke(
+        tools, ["add", "sandbox", "--scope", "", "--source", str(project)], obj=_Ctx()
+    )
+
+    assert result.exit_code != 0
+    assert "Sandbox scopes cannot be empty" in result.output
+    assert (project / "agent.toml").read_bytes() == before
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
 @pytest.mark.parametrize("legacy", [False, True])
 @pytest.mark.parametrize("permission", ["read_only", "read_write"])
 def test_add_table_sandbox_when_gate_is_enabled(
@@ -201,6 +229,23 @@ def test_add_sandbox_can_disable_databricks_token_env(tmp_path: pathlib.Path):
     loaded = AgentProject.load(project)
     assert loaded.tools[0].policy.databricks_access_token_included is False
     assert "databricks_access_token_included = false" in (project / "agent.toml").read_text()
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+def test_generic_mcp_directs_sandbox_to_scoped_command(tmp_path, framework):
+    project = _project(tmp_path, framework)
+    before = {path: path.read_bytes() for path in project.rglob("*") if path.is_file()}
+
+    result = CliRunner().invoke(
+        tools,
+        ["add", "mcp", "system.ai.sandbox", "--source", str(project)],
+        obj=_Ctx(),
+    )
+
+    assert result.exit_code != 0
+    assert "requires a sandbox binding with volume scopes" in result.output
+    assert "agentbricks tools add sandbox --scope volume:catalog.schema.volume" in result.output
+    assert {path: path.read_bytes() for path in project.rglob("*") if path.is_file()} == before
 
 
 def test_generic_mcp_rejects_sandbox_scope(tmp_path: pathlib.Path):

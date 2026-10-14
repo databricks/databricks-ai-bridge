@@ -242,6 +242,18 @@ def test_scope_update_plan_uses_exact_required_scopes(monkeypatch):
         ),
         (
             ToolSpec.sandbox(
+                "volumes-with-token",
+                scopes=[
+                    Scope.volume("cat.sch.first", "read_only"),
+                    Scope.volume("cat.sch.second", "read_write"),
+                ],
+                auth="user",
+                databricks_access_token_included=True,
+            ),
+            {"ai-gateway", "files", "workspace.workspace"},
+        ),
+        (
+            ToolSpec.sandbox(
                 "volume-no-token",
                 scopes=[Scope.volume("cat.sch.vol")],
                 auth="user",
@@ -257,6 +269,28 @@ def test_sandbox_policy_requests_resource_and_token_scopes(tmp_path, binding, ex
     project.add_tool(binding)
 
     assert required_user_api_scopes(project) == expected
+
+
+@pytest.mark.parametrize(
+    ("token_included", "expected"),
+    [
+        (True, {"ai-gateway", "files", "workspace.workspace"}),
+        (False, {"ai-gateway", "files"}),
+    ],
+)
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+def test_volume_sandbox_always_requests_files(tmp_path, framework, token_included, expected):
+    project = AgentProject.create(tmp_path, framework=framework, server="agentbricks")
+    project.add_tool(
+        ToolSpec.sandbox(
+            "sandbox",
+            scopes=[Scope.volume("cat.sch.vol")],
+            auth="user",
+            databricks_access_token_included=token_included,
+        )
+    )
+    assert required_user_api_scopes(project) == expected
+    assert "workspace" not in required_user_api_scopes(project)
 
 
 def test_required_user_api_scopes_union_only_user_bindings(tmp_path):

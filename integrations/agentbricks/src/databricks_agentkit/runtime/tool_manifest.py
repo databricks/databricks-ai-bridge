@@ -198,7 +198,14 @@ def _scope(value: object) -> ScopeRecord:
         raise ToolManifestError(
             "Workspace sandbox scopes are not supported yet. Use volume:<name> instead."
         )
-    if not separator or kind not in {"table", "volume"} or not resource_value:
+    parts = resource_value.split(".")
+    if (
+        not separator
+        or kind not in {"table", "volume"}
+        or len(parts) != 3
+        or any(not part for part in parts)
+        or any(character.isspace() for character in resource_value)
+    ):
         raise RuntimeError(f"Invalid agent.toml downscope resource: {resource!r}.")
     permission = _required_string(value.get("permission", "read_only"), "a permission")
     if permission not in {"read_only", "read_write"}:
@@ -249,10 +256,14 @@ def _tool(value: object) -> ToolRecord:
         databricks_access_token_included=databricks_access_token_included,
         auth=auth,
     )
-    if record.kind == "sandbox" and (record.service != "system.ai.sandbox" or not record.downscope):
-        raise RuntimeError("Sandbox bindings require system.ai.sandbox and a downscope.")
+    if record.kind == "sandbox" and record.service != "system.ai.sandbox":
+        raise RuntimeError("Sandbox bindings require system.ai.sandbox.")
+    if record.kind == "sandbox" and not record.downscope:
+        raise RuntimeError("Sandbox bindings require at least one volume in policy.downscope.")
     if record.kind == "mcp" and not record.service:
         raise RuntimeError("MCP bindings require source.service.")
+    if record.kind == "mcp" and record.service == "system.ai.sandbox":
+        raise RuntimeError("system.ai.sandbox requires a sandbox binding with volume scopes.")
     if record.kind == "uc_function" and not record.function:
         raise RuntimeError("UC function bindings require source.function.")
     if record.kind not in {"sandbox", "mcp", "uc_function", "genie_one", "genie_agent"}:
