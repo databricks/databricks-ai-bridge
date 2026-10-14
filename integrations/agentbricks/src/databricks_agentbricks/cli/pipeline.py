@@ -9,6 +9,7 @@ from typing import Any
 
 import click
 
+from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.render import field
 from databricks_agentkit import timefmt
@@ -222,7 +223,16 @@ def delete(obj, name, yes) -> None:
 @click.pass_obj
 def run(obj, name) -> None:
     """Manually run a Dreamer memory pipeline."""
-    data = obj.client().run_memory_pipeline(name)
+    try:
+        data = obj.client().run_memory_pipeline(name)
+    except AgentCliError as exc:
+        # ABORTED means the pipeline already has a run in progress; point at that run.
+        active = re.search(r"memory-pipelines/[^/\s]+/runs/[0-9]+", exc.message)
+        if exc.error_code == "ABORTED" and active:
+            exc.hint = (
+                f"Check its progress with `agentbricks memory pipeline runs get {active.group(0)}`."
+            )
+        raise
     if obj.output == "json":
         render.emit_json(data)
         return
