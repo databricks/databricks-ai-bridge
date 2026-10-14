@@ -516,7 +516,7 @@ class _AgentBricksApiClient:
         instructions: Optional[str] = None,
         trigger: Optional[str] = None,
     ) -> dict:
-        policy = _body(instructions=instructions)
+        policy = _body(model=model, instructions=instructions)
         if trigger is not None:
             if trigger not in MEMORY_PIPELINE_TRIGGERS:
                 raise AgentCliError(
@@ -524,16 +524,16 @@ class _AgentBricksApiClient:
                     f"Use one of: {', '.join(MEMORY_PIPELINE_TRIGGERS)}."
                 )
             policy["trigger"] = MEMORY_PIPELINE_TRIGGERS[trigger]
+        body = _body(
+            display_name=display_name,
+            session_store=session_store_path(session_store),
+            memory_store=memory_store_path(memory_store),
+            dreamer_policy=policy or None,
+        )
         return self._do(
             "POST",
             f"{_BASE}/memory-pipelines",
-            body=_body(
-                display_name=display_name,
-                session_store=session_store_path(session_store),
-                memory_store=memory_store_path(memory_store),
-                dreamer_policy=policy or None,
-                model=model,
-            ),
+            body=body,
         )
 
     def get_memory_pipeline(self, name: str) -> dict:
@@ -557,11 +557,8 @@ class _AgentBricksApiClient:
         model: Optional[str] = None,
         trigger: Optional[str] = None,
     ) -> dict:
-        body = _body(display_name=display_name, model=model)
-        mask = list(body)
-        policy = _body(instructions=instructions)
-        if instructions is not None:
-            mask.append("dreamer_policy.instructions")
+        body = _body(display_name=display_name)
+        policy = _body(model=model, instructions=instructions)
         if trigger is not None:
             if trigger not in MEMORY_PIPELINE_TRIGGERS:
                 raise AgentCliError(
@@ -569,13 +566,14 @@ class _AgentBricksApiClient:
                     f"Use one of: {', '.join(MEMORY_PIPELINE_TRIGGERS)}."
                 )
             policy["trigger"] = MEMORY_PIPELINE_TRIGGERS[trigger]
-            mask.append("dreamer_policy.trigger")
         if policy:
             body["dreamer_policy"] = policy
         if not body:
             raise AgentCliError(
                 "No fields to update. Provide --display-name, --instructions, --model, or --trigger."
             )
+        mask = [key for key in body if key != "dreamer_policy"]
+        mask.extend(f"dreamer_policy.{key}" for key in policy)
         return self._do(
             "PATCH",
             f"{_BASE}/{memory_pipeline_path(name)}",
