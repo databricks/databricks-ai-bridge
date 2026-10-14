@@ -131,9 +131,7 @@ def test_pipeline_create_does_not_retry_ambiguous_failures(workspace_client, mes
 @mock.patch("databricks.sdk.WorkspaceClient")
 def test_pipeline_create_schema_retry_is_bounded(workspace_client):
     c, do = _client(workspace_client)
-    do.side_effect = AgentCliError(
-        'Unknown field "model"', error_code="BAD_REQUEST"
-    )
+    do.side_effect = AgentCliError('Unknown field "model"', error_code="BAD_REQUEST")
     with pytest.raises(AgentCliError):
         c.create_memory_pipeline(memory_store="m", session_store="s", model="system.ai.dummy")
     assert do.call_count == 2
