@@ -7,17 +7,20 @@ from __future__ import annotations
 
 import pytest
 from harness.cli import AgentbricksCli, AgentEndpoint
+from harness.project import Project, pin_runtime
 from harness.run import TOOL_RESOURCE_PREFIX
 from harness.workspace import Workspace
 
 
 def test_tracing_experiment_bound(
-    agentbricks_cli: AgentbricksCli, workspace_client: Workspace
+    agentbricks_cli: AgentbricksCli, project: Project, workspace_client: Workspace
 ) -> None:
-    project = agentbricks_cli.new_project("cli")
+    agentbricks_cli.run(f"init --framework langgraph {project.path}", timeout=600)
+    pin_runtime(project, agentbricks_cli.run_config)
+    experiment_name = project.manifest().get("tracing", {}).get("experiment_name")
     agentbricks_cli.run(f"deploy {project.app_name} --source {project.path}", timeout=2400)
     AgentEndpoint.deployed(workspace_client, project.app_name)
-    assert project.experiment_name, "agent.toml binds no tracing experiment"
+    assert experiment_name, "agent.toml binds no tracing experiment"
 
     # Deploy attaches the experiment as an App resource that Agent Bricks does not own.
     experiments = [
@@ -25,9 +28,9 @@ def test_tracing_experiment_bound(
     ]
     assert experiments, "No experiment App resource among the non-tool resources"
     assert not any(r["name"].startswith(TOOL_RESOURCE_PREFIX) for r in experiments)
-    expected_id = workspace_client.experiment_id(project.experiment_name)
+    expected_id = workspace_client.experiment_id(experiment_name)
     assert any(str(r["experiment"].get("experiment_id")) == expected_id for r in experiments), (
-        f"{project.experiment_name} ({expected_id}) not in {experiments}"
+        f"{experiment_name} ({expected_id}) not in {experiments}"
     )
 
 

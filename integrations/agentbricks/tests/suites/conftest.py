@@ -29,6 +29,7 @@ import pytest
 from harness.cleanup import delete_app_resources, delete_run_leftovers, record_app_identity
 from harness.cli import AgentbricksCli
 from harness.logs import log, log_command
+from harness.project import Project, is_pinned
 from harness.run import RUN_ID_PATTERN, E2EError, RunConfig, run_output_dir
 from harness.target import (
     WORKSPACE_KINDS,
@@ -230,45 +231,68 @@ def pytest_runtest_logreport(report: pytest.TestReport) -> None:
 @pytest.fixture
 def agentbricks_cli(
     request: pytest.FixtureRequest, target_workspace: TargetWorkspace, run_config: RunConfig
-) -> Iterator[AgentbricksCli]:
-    """The CLI wrapper for one test; deletes every App and store the test created when it ends."""
-    cli = AgentbricksCli(target_workspace, run_config, request.node.name)
-    yield cli
-    if cli.projects and target_workspace.client is not None:
-        _delete_projects(cli, target_workspace.client, failed=request.node.nodeid in _failed_tests)
+) -> AgentbricksCli:
+    return AgentbricksCli(target_workspace, run_config, request.node.name)
 
 
-def _delete_projects(cli: AgentbricksCli, workspace: Workspace, *, failed: bool) -> None:
-    for project in cli.projects:
-        name = project.app_name
-        # Whatever deploy got as far as creating; read before anything is deleted, because the
-        # principal and branch come from the App and its Runtime Store.
-        identity = workspace.app_identity(name)
-        deployed = identity != AppIdentity()
-        if deployed:
-            # Leftover cleanup retries the Lakebase deletes from this record if they fail here.
-            record_app_identity(cli.run_config.output, name, identity)
-        if failed and identity.service_principal:
-            # The App is deleted next, so a failing test must capture its logs while it exists.
-            workspace.app_logs(name, cli.logs_dir / f"deploy-runtime-{name}.log")
-        try:
-            failures = delete_app_resources(
-                workspace,
-                name,
-                delete_store=lambda kind, store: cli.run(
-                    f"{kind} stores delete {store} --yes", timeout=600, check=False
-                ),
-                memory_store=project.memory_store_name,
-                session_store=project.session_store_name,
-                has_app=deployed,
-                # Every managed deploy creates a Runtime Store, with or without memory/session stores.
-                runtime_store=deployed,
-                identity=identity,
-            )
-        except Exception as exc:
-            failures = [str(exc)]
-        for failure in failures:
-            log(f"cleanup warning | {name} | {failure}")
+@pytest.fixture
+def project(
+    request: pytest.FixtureRequest,
+    agentbricks_cli: AgentbricksCli,
+    target_workspace: TargetWorkspace,
+    run_config: RunConfig,
+) -> Iterator[Project]:
+    """A run-scoped path and App name for the test to `agentbricks init`; deleted when it ends."""
+    project = Project.allocate(run_config)
+    workspace = target_workspace.client
+    if workspace is not None:
+        # Teardown deletes whatever App has this name, so it must not belong to anyone else.
+        workspace.assert_app_absent(project.app_name)
+    yield project
+    failed = request.node.nodeid in _failed_tests
+    if workspace is not None:
+        _delete_project(agentbricks_cli, workspace, project, failed=failed)
+    # Otherwise a test that forgot the pin would pass against the release on PyPI.
+    if not failed and (project.path / "pyproject.toml").exists() and not is_pinned(project):
+        raise E2EError(
+            f"{project.path} was never pinned to the runtime under test; call pin_runtime after init."
+        )
+
+
+def _delete_project(
+    cli: AgentbricksCli, workspace: Workspace, project: Project, *, failed: bool
+) -> None:
+    name = project.app_name
+    # Whatever deploy got as far as creating; read before anything is deleted, because the
+    # principal and branch come from the App and its Runtime Store.
+    identity = workspace.app_identity(name)
+    deployed = identity != AppIdentity()
+    if deployed:
+        # Leftover cleanup retries the Lakebase deletes from this record if they fail here.
+        record_app_identity(cli.run_config.output, name, identity)
+    if failed and identity.service_principal:
+        # The App is deleted next, so a failing test must capture its logs while it exists.
+        workspace.app_logs(name, cli.logs_dir / f"deploy-runtime-{name}.log")
+    # Deploy creates the stores agent.toml declares; memory stores are addressed by resource name.
+    memory_store = project.declared_store("memory")
+    try:
+        failures = delete_app_resources(
+            workspace,
+            name,
+            delete_store=lambda kind, store: cli.run(
+                f"{kind} stores delete {store} --yes", timeout=600, check=False
+            ),
+            memory_store=f"memory-stores/{memory_store}" if memory_store else None,
+            session_store=project.declared_store("session"),
+            has_app=deployed,
+            # Every managed deploy creates a Runtime Store, with or without memory/session stores.
+            runtime_store=deployed,
+            identity=identity,
+        )
+    except Exception as exc:
+        failures = [str(exc)]
+    for failure in failures:
+        log(f"cleanup warning | {name} | {failure}")
 
 
 # Deleting what the whole run left behind

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from harness.cli import AgentbricksCli, AgentEndpoint
+from harness.project import Project, pin_runtime
 from harness.run import TOOL_RESOURCE_PREFIX
 from harness.workspace import Workspace
 from tool_definitions import bind, uc_function_tool
@@ -11,6 +12,7 @@ from uc_objects import UcFunction
 
 def test_grants(
     agentbricks_cli: AgentbricksCli,
+    project: Project,
     workspace_client: Workspace,
     uc_function: UcFunction,
     authoring: str,
@@ -18,7 +20,8 @@ def test_grants(
 ) -> None:
     tool = uc_function_tool(uc_function)
     # `init` and direct authoring both bind tracing, a resource Agent Bricks does not own.
-    project = agentbricks_cli.new_project(authoring)
+    agentbricks_cli.run(f"init --framework langgraph {project.path}", timeout=600)
+    pin_runtime(project, agentbricks_cli.run_config)
     app = project.app_name
     if authoring == "cli":
         bind(agentbricks_cli, project, tool)

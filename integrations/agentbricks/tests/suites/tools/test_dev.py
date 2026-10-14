@@ -11,7 +11,8 @@ import contextlib
 from collections.abc import Iterator
 
 import pytest
-from harness.cli import AgentbricksCli, AgentEndpoint, Project, free_port
+from harness.cli import AgentbricksCli, AgentEndpoint, free_port
+from harness.project import Project, pin_runtime
 from tool_definitions import (
     Tool,
     assert_endpoint_invoke,
@@ -36,9 +37,14 @@ def dev(cli: AgentbricksCli, project: Project) -> Iterator[AgentEndpoint]:
 
 
 def test_dev(
-    agentbricks_cli: AgentbricksCli, tools: tuple[Tool, ...], authoring: str, subtests
+    agentbricks_cli: AgentbricksCli,
+    project: Project,
+    tools: tuple[Tool, ...],
+    authoring: str,
+    subtests,
 ) -> None:
-    project = agentbricks_cli.new_project(authoring)
+    agentbricks_cli.run(f"init --framework langgraph {project.path}", timeout=600)
+    pin_runtime(project, agentbricks_cli.run_config)
 
     if authoring == "cli":
         with subtests.test(step="rejects-unavailable-mcp"):

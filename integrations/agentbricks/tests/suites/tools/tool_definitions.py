@@ -8,7 +8,8 @@ import shlex
 import uuid
 from collections.abc import Callable, Mapping
 
-from harness.cli import AgentbricksCli, AgentEndpoint, Project
+from harness.cli import AgentbricksCli, AgentEndpoint
+from harness.project import Project
 from harness.workspace import GrantTuple
 from uc_objects import UcFunction
 

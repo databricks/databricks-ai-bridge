@@ -3,8 +3,7 @@
 Every CLI step is a real ``agentbricks`` subprocess, written as the command a developer would type
 (``cli.run("tools add ...")``), so a regression in the CLI fails the test that makes it. The only
 non-subprocess part is ``AgentEndpoint.invoke``, which POSTs to a running agent. Nothing in this
-module knows about any particular suite. It records the projects it creates in ``projects`` but
-deletes nothing: the ``agentbricks_cli`` fixture does.
+module knows about any particular suite or deletes anything: the ``project`` fixture does.
 """
 
 from __future__ import annotations
@@ -26,69 +25,16 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from collections.abc import Callable, Iterator, Mapping, Sequence
-from typing import Any, Protocol
-
-import tomli
-import tomlkit
+from collections.abc import Callable, Iterator, Mapping
+from typing import Any
 
 from harness.logs import last_lines, last_nonempty_line, log, log_command
-from harness.run import APP_PREFIX, E2E_MODEL, FRAMEWORKS, E2EError, RunConfig, now, project_prefix
+from harness.run import E2E_MODEL, E2EError, RunConfig, now
 from harness.target import TargetWorkspace
 from harness.workspace import Workspace
 
-_DIRECT_HEADER = (
-    'schema_version = 1\n\n[agent]\nframework = "{framework}"\nserver = "agentbricks"\n'
-)
 # The Apps gateway's answers while an App is not up, e.g. restarting after a redeploy.
 _GATEWAY_UNAVAILABLE = re.compile(r"HTTP 50[234]\b")
-
-
-class ToolSpec(Protocol):
-    """What ``write_manifest`` needs from a tool: its [[tools]] TOML and any user-owned files."""
-
-    toml: str
-    files: Mapping[str, str]
-
-
-@dataclasses.dataclass
-class Project:
-    authoring: str
-    path: pathlib.Path
-    app_name: str
-    memory_store_config: str | None = None
-    session_store_config: str | None = None
-    memory_resource: dict[str, Any] | None = None
-    session_resource: dict[str, Any] | None = None
-    memory_store_name: str | None = None
-    session_store_name: str | None = None
-    experiment_name: str | None = None
-
-    def manifest(self) -> dict[str, Any]:
-        return tomli.loads((self.path / "agent.toml").read_text(encoding="utf-8"))
-
-    def write_file(self, relative_path: str, content: str) -> None:
-        """Write a user-owned file in the project, as a developer would."""
-        target = self.path / relative_path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        log(f"# write {target}: user-owned file")
-        target.write_text(content, encoding="utf-8")
-
-    def write_manifest(self, tool_specs: Sequence[ToolSpec]) -> None:
-        """Direct authoring: write agent.toml with exactly these tools plus a tracing binding."""
-        sections: list[str] = [_DIRECT_HEADER.format(framework=FRAMEWORKS[0])]
-        sections.extend(spec.toml for spec in tool_specs if spec.toml)
-        # Follows default_experiment_name's shape so direct authoring carries the same tracing
-        # binding `agentbricks init` gives CLI authoring.
-        slug = re.sub(r"[^a-z0-9-]+", "-", self.path.name.lower()).strip("-") or "agent"
-        self.experiment_name = f"/Shared/agentbricks_traces/{slug}"
-        sections.append(f'[tracing]\nexperiment_name = "{self.experiment_name}"\n')
-        target = self.path / "agent.toml"
-        log(f"# write {target}: direct authoring; no agentbricks tools command")
-        target.write_text("\n".join(sections), encoding="utf-8")
-        for spec in tool_specs:
-            for relative_path, content in spec.files.items():
-                self.write_file(relative_path, content)
 
 
 @dataclasses.dataclass
@@ -206,7 +152,7 @@ class AgentEndpoint:
 
 
 class AgentbricksCli:
-    """Runs ``agentbricks`` commands against a target workspace and authors projects with them."""
+    """Runs ``agentbricks`` commands against a target workspace, logging each to its own files."""
 
     def __init__(self, target_workspace: TargetWorkspace, run_config: RunConfig, test_name: str):
         self.target_workspace = target_workspace
@@ -215,7 +161,6 @@ class AgentbricksCli:
         self.logs_dir = (
             run_config.output / "logs" / re.sub(r"[^A-Za-z0-9_.-]+", "-", test_name).strip("-")
         )
-        self.projects: list[Project] = []
         # The CLI prints a hint when it detects a coding agent; the suite must behave the same
         # whoever launches it, and the hint would corrupt --output json errors on stderr.
         self._env = {**os.environ, **target_workspace.env, "AGENTBRICKS_DISABLE_AGENT_HINT": "1"}
@@ -329,104 +274,6 @@ class AgentbricksCli:
             if text.strip():
                 log(text)
         return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
-
-    # Authoring
-
-    def new_project(self, authoring: str) -> Project:
-        """`agentbricks init` a uniquely named project and pin the runtime under test.
-
-        `init` binds a session store, a memory store and a tracing experiment by default, and CLI
-        authoring keeps them, so their stores are created here. Direct authoring replaces the
-        whole manifest with ``Project.write_manifest``.
-        """
-        name = f"{project_prefix(self.run_config.run_id)}{uuid.uuid4().hex[:6]}"
-        path = self.run_config.output / "projects" / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        project = Project(authoring, path, f"{APP_PREFIX}{name}")
-        workspace = self.target_workspace.client
-        if workspace is not None:
-            # Teardown deletes whatever App has this name, so it must not belong to anyone else.
-            workspace.assert_app_absent(project.app_name)
-        self.projects.append(project)
-        self.run(f"init --framework {FRAMEWORKS[0]} {path}", timeout=600)
-        if self.run_config.bridge_sha:
-            self._pin_bridge_sources(path)
-        else:
-            self._pin_project_wheel(path)
-        if authoring == "cli":
-            self._create_declared_stores(project)
-        return project
-
-    def _create_declared_stores(self, project: Project) -> None:
-        """Create the stores `init` declared in agent.toml, which deploy expects to exist."""
-        manifest = project.manifest()
-        project.memory_store_config = manifest.get("memory_store", {}).get("name")
-        project.session_store_config = manifest.get("session_store", {}).get("name")
-        project.experiment_name = manifest.get("tracing", {}).get("experiment_name")
-        if project.memory_store_config:
-            result = self.run(
-                f"--output json memory stores create --name {project.memory_store_config}"
-            )
-            project.memory_resource = json.loads(result.stdout)
-            name = project.memory_resource.get("name")
-            if isinstance(name, str) and name:
-                project.memory_store_name = name
-        if project.session_store_config:
-            result = self.run(
-                f"--output json sessions stores create --name {project.session_store_config}"
-            )
-            project.session_resource = json.loads(result.stdout)
-            project.session_store_name = project.session_store_config
-
-    def _pin_project_wheel(self, project: pathlib.Path) -> None:
-        wheel = self.run_config.wheel
-        assert wheel is not None
-        vendor_dir = project / "agentbricks_e2e_wheels"
-        vendor_dir.mkdir()
-        vendored_wheel = vendor_dir / wheel.name
-        shutil.copy2(wheel, vendored_wheel)
-        pyproject = project / "pyproject.toml"
-        document = tomlkit.parse(pyproject.read_text(encoding="utf-8"))
-        tool = document.setdefault("tool", {})
-        uv = tool.setdefault("uv", {})
-        sources = uv.setdefault("sources", {})
-        sources["databricks-agentbricks"] = {"path": vendored_wheel.relative_to(project).as_posix()}
-        log(
-            f"# write {pyproject}: "
-            f"pin databricks-agentbricks runtime to {vendored_wheel.relative_to(project)}"
-        )
-        pyproject.write_text(tomlkit.dumps(document), encoding="utf-8")
-
-    def _pin_bridge_sources(self, project: pathlib.Path) -> None:
-        bridge_sha = self.run_config.bridge_sha
-        pyproject = project / "pyproject.toml"
-        document = tomlkit.parse(pyproject.read_text(encoding="utf-8"))
-        dependencies = document["project"]["dependencies"]
-        if not any(
-            str(dependency).startswith("databricks-langchain") for dependency in dependencies
-        ):
-            dependencies.append("databricks-langchain>=0.17.0")
-        if "tool" not in document:
-            document["tool"] = tomlkit.table()
-        if "uv" not in document["tool"]:
-            document["tool"]["uv"] = tomlkit.table()
-        if "sources" not in document["tool"]["uv"]:
-            document["tool"]["uv"]["sources"] = tomlkit.table()
-        for package, subdirectory in (
-            ("databricks-agentbricks", "integrations/agentbricks"),
-            ("databricks-langchain", "integrations/langchain"),
-        ):
-            source = tomlkit.inline_table()
-            source.update(
-                {
-                    "git": "https://github.com/databricks/databricks-ai-bridge.git",
-                    "rev": bridge_sha,
-                    "subdirectory": subdirectory,
-                }
-            )
-            document["tool"]["uv"]["sources"][package] = source
-        log(f"# write {pyproject}: pin Agent Bricks and LangChain to {bridge_sha}")
-        pyproject.write_text(tomlkit.dumps(document), encoding="utf-8")
 
 
 def _agentbricks_bin() -> str:

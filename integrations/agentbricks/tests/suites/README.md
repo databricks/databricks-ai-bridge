@@ -29,9 +29,9 @@ The run id and output directory (logs, generated projects, `apps.jsonl`) are pri
 
 Every resource a run creates carries its run id, and is deleted at three points:
 
-1. **When each test ends**, by the fixture that made it: `agentbricks_cli` deletes the test's Apps and
-   everything their deploys created (`harness.cleanup.delete_app_resources`); `scratch_schema` deletes
-   the test's schema.
+1. **When each test ends**, by the fixture that made it: `project` deletes the test's App, its stores,
+   and everything its deploys created (`harness.cleanup.delete_app_resources`); `scratch_schema`
+   deletes the test's schema.
 2. **When the run ends**, `pytest_sessionfinish` deletes whatever a crashed test or a failed teardown
    left (`harness.cleanup.delete_run_leftovers`). A failure there fails the run.
 3. **After a run that was killed** before step 2, for example by a CI timeout:
@@ -50,6 +50,7 @@ Every resource a run creates carries its run id, and is deleted at three points:
 | `harness/run.py` | `RunConfig`, the run id, and the name prefixes every resource carries |
 | `harness/target.py` | The `--workspace live\|fake` seam the CLI and fixtures talk to |
 | `harness/cli.py` | Runs `agentbricks` commands (`cli.run("tools add ...")`), and the endpoints of the agents they start |
+| `harness/project.py` | A test's project: run-scoped path and App name, its files, and `pin_runtime` |
 | `harness/workspace.py` | Databricks SDK helpers for what is not under test: SQL, UC, Apps, grants |
 | `harness/cleanup.py` | Deleting what the suites create, per App and per run |
 | `harness/logs.py` | Test-log output; every command is echoed so a run's log replays it |
@@ -62,5 +63,7 @@ that you can follow through its imports.
 
 - **A tool:** add one `ToolDefinition(name, requires, build)` in `tools/tool_definitions.py`.
   `requires` names the fixtures it needs; tools whose fixtures skip are left out and logged.
-- **A suite:** add a folder with `test_*.py` files. Add a `conftest.py` only for resources the CLI
+- **A suite:** add a folder with `test_*.py` files. A test takes the `project` fixture, runs
+  `agentbricks_cli.run(f"init ... {project.path}")`, then `pin_runtime(project, ...)` so the project
+  runs the checkout's runtime; teardown fails a test that skips the pin. Add a `conftest.py` only for resources the CLI
   under test does not create itself; create them per test and delete them in the fixture's teardown.

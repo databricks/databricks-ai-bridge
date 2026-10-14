@@ -16,6 +16,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import pathlib
+import re
 import subprocess
 from collections.abc import Callable, Collection
 from typing import Any
@@ -25,6 +26,9 @@ from harness.run import APP_PREFIX, E2EError, project_prefix, scratch_schema_pre
 from harness.workspace import AppIdentity, Workspace
 
 _APPS_RECORD = "apps.jsonl"
+_STORE_MISSING = re.compile(
+    r"NOT_FOUND|RESOURCE_DOES_NOT_EXIST|does not exist|not found", re.IGNORECASE
+)
 
 
 # Identities recorded by per-test cleanup
@@ -130,8 +134,10 @@ def delete_app_resources(
     def delete_cli_store(kind: str, store: str) -> None:
         assert delete_store is not None
         result = delete_store(kind, store)
-        if result.returncode != 0:
-            raise E2EError((result.stderr or result.stdout).strip())
+        output = (result.stderr or result.stdout).strip()
+        # A store the test declared but never deployed was never created.
+        if result.returncode != 0 and not _STORE_MISSING.search(output):
+            raise E2EError(output)
 
     # Read before any delete: the principal and branch come from the App and its Runtime Store.
     known = (identity or AppIdentity()).merged(

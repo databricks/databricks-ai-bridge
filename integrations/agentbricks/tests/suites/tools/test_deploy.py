@@ -10,18 +10,21 @@ from __future__ import annotations
 
 from harness.cli import AgentbricksCli, AgentEndpoint
 from harness.logs import log
+from harness.project import Project, pin_runtime
 from harness.workspace import Workspace
 from tool_definitions import Tool, assert_endpoint_invoke, bind, invoke_and_check
 
 
 def test_deploy(
     agentbricks_cli: AgentbricksCli,
+    project: Project,
     workspace_client: Workspace,
     tools: tuple[Tool, ...],
     authoring: str,
     subtests,
 ) -> None:
-    project = agentbricks_cli.new_project(authoring)
+    agentbricks_cli.run(f"init --framework langgraph {project.path}", timeout=600)
+    pin_runtime(project, agentbricks_cli.run_config)
     app = project.app_name
 
     def assert_granted(tool: Tool) -> None:
