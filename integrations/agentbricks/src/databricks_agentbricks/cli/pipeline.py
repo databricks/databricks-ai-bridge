@@ -206,7 +206,16 @@ def update(obj, name, display_name, instructions, model, trigger) -> None:
 
 
 def _set_trigger(obj, name: str, trigger: str) -> None:
-    data = obj.client().update_memory_pipeline(name, trigger=trigger)
+    client = obj.client()
+    current = client.get_memory_pipeline(name)
+    policy = field(current, "dreamer_policy") or {}
+    current_trigger = field(policy, "trigger") or "MANUAL_ONLY"
+    if current_trigger == "TRIGGER_UNSPECIFIED":
+        current_trigger = "MANUAL_ONLY"
+    if current_trigger == MEMORY_PIPELINE_TRIGGERS[trigger]:
+        state = "paused" if trigger == "manual" else "resumed"
+        raise AgentCliError(f"Memory pipeline '{name}' is already {state}.")
+    data = client.update_memory_pipeline(name, trigger=trigger)
     if obj.output == "json":
         render.emit_json(data)
         return

@@ -588,6 +588,7 @@ agentbricks memory pipeline pause NAME
 
 Set `dreamer_policy.trigger` to `MANUAL_ONLY` to stop scheduled runs. Active runs continue;
 manual `run` calls remain available. `NAME` accepts a pipeline id or full resource name.
+Returns an error if the pipeline is already manual-only (paused).
 
 ##### `agentbricks memory pipeline resume`
 
@@ -597,6 +598,7 @@ agentbricks memory pipeline resume NAME
 
 Set `dreamer_policy.trigger` to `SCHEDULED` to enable automatic runs about every 24 hours.
 This also enables scheduling for a pipeline originally created as manual-only.
+Returns an error if the pipeline is already scheduled (resumed).
 Both commands update only the trigger and support the global `--output json` option.
 
 ##### `agentbricks memory pipeline delete`
