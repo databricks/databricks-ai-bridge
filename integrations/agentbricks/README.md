@@ -806,6 +806,9 @@ Space ID. Genie One needs no additional argument. `system.ai.sandbox` is represe
 sandbox recipe rather than a generic MCP add command. The list does not enumerate every workspace schema, individual
 operations inside MCP services, or custom Python tools.
 
+`system.ai.sandbox` cannot be added as generic MCP: use
+`agentbricks tools add sandbox --scope volume:catalog.schema.volume` so every call has a Volume policy.
+
 `agentbricks tools add mcp` looks up the service in the selected workspace before writing `agent.toml`.
 Use `agentbricks --profile <profile> tools add mcp <service>` to select a workspace. A missing service or
 failed lookup (including authentication or permission errors) leaves the project unchanged. This

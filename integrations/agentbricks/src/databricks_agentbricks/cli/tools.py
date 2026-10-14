@@ -250,6 +250,9 @@ def add_mcp(
 
     Use `agentbricks tools list --kind mcp` for available services. Review the target project's
     agent.toml to check configured managed tools and MCP bindings.
+
+    For system.ai.sandbox, use `agentbricks tools add sandbox --scope
+    volume:catalog.schema.volume` instead; a Volume policy is required.
     """
     _require_arg(service, "managed MCP service name (e.g. system.ai.web_search)")
     _add_spec(

@@ -173,6 +173,11 @@ class ToolSpec:
         elif kind == "mcp":
             if self.source.service is None:
                 raise AgentCliError("MCP tools require a service.")
+            if self.source.service == "system.ai.sandbox":
+                raise AgentCliError(
+                    "system.ai.sandbox requires a sandbox binding with volume scopes.",
+                    hint="Use agentbricks tools add sandbox --scope volume:catalog.schema.volume.",
+                )
             _three_part_name(self.source.service, "MCP service")
             if self.policy.downscope:
                 raise AgentCliError("Generic MCP tools do not accept sandbox scopes.")

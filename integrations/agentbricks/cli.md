@@ -1315,6 +1315,9 @@ Validate and add a Databricks-managed MCP service as a tool.
 
 Use `agentbricks tools list --kind mcp` for available services. Review the target project's agent.toml to check configured managed tools and MCP bindings.
 
+For `system.ai.sandbox`, use `agentbricks tools add sandbox --scope volume:catalog.schema.volume`
+instead. Generic MCP bindings to this service are rejected because a Volume policy is required.
+
 ```
 agentbricks tools add mcp SERVICE [options]
 ```

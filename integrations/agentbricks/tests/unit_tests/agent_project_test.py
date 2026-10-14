@@ -162,6 +162,26 @@ def test_unscoped_sandbox_is_rejected(tmp_path, monkeypatch, framework, reader, 
     assert path.read_bytes() == before
 
 
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("reader", ["project", "runtime"])
+def test_sandbox_service_requires_sandbox_binding(tmp_path, monkeypatch, framework, reader):
+    path = _write_manifest(
+        tmp_path,
+        f'schema_version = 1\n[agent]\nframework = "{framework}"\nserver = "agentbricks"\n'
+        '\n[[tools]]\nid = "sandbox"\nauth = "user"\n'
+        'source = { kind = "mcp", service = "system.ai.sandbox" }\n',
+    )
+    before = path.read_bytes()
+    monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
+
+    with pytest.raises((AgentCliError, RuntimeError), match="requires a sandbox binding"):
+        if reader == "project":
+            AgentProject.load(tmp_path)
+        else:
+            load_tools(expected_framework=framework)
+    assert path.read_bytes() == before
+
+
 @pytest.mark.parametrize("reader", ["project", "runtime"])
 @pytest.mark.parametrize("downscope", ["[]", '[{ resource = "volume:main.data" }]'])
 def test_supplied_invalid_sandbox_downscope_fails_closed(tmp_path, monkeypatch, reader, downscope):

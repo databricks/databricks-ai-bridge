@@ -262,6 +262,8 @@ def _tool(value: object) -> ToolRecord:
         raise RuntimeError("Sandbox bindings require at least one volume in policy.downscope.")
     if record.kind == "mcp" and not record.service:
         raise RuntimeError("MCP bindings require source.service.")
+    if record.kind == "mcp" and record.service == "system.ai.sandbox":
+        raise RuntimeError("system.ai.sandbox requires a sandbox binding with volume scopes.")
     if record.kind == "uc_function" and not record.function:
         raise RuntimeError("UC function bindings require source.function.")
     if record.kind not in {"sandbox", "mcp", "uc_function", "genie_one", "genie_agent"}:
