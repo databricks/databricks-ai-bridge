@@ -15,10 +15,12 @@ from click.testing import CliRunner
 from databricks.sdk.errors import Unauthenticated
 
 from databricks_agentbricks.cli import app as cli
-from databricks_agentbricks.cli import auth, workspace_auth
+from databricks_agentbricks.cli import auth
 from databricks_agentbricks.cli.app import CliContext
 from databricks_agentbricks.clients import api_client_provider
 from databricks_agentbricks.projects.env_file import read_env
+from databricks_agentbricks.projects.profiles import ProfileInfo
+from databricks_agentbricks.services import workspace_auth
 
 
 def _write_env(directory: pathlib.Path, profile: str) -> None:
@@ -45,11 +47,6 @@ def outside_project(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> 
     """A cwd that is not an Agent Bricks project (no app.yaml)."""
     monkeypatch.chdir(tmp_path)
     return tmp_path
-
-
-@pytest.fixture
-def interactive_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(workspace_auth, "_is_interactive", lambda: True)
 
 
 @pytest.fixture
@@ -86,11 +83,9 @@ def test_context_precedence_is_flag_then_env_file_then_env_var(tmp_path, monkeyp
     project.use_project_profile(tmp_path)
     flagged.use_project_profile(tmp_path)
 
-    assert ambient.profile_info == workspace_auth.ProfileInfo(
-        "from-env-var", "DATABRICKS_CONFIG_PROFILE"
-    )
-    assert project.profile_info == workspace_auth.ProfileInfo("proj", ".env")
-    assert flagged.profile_info == workspace_auth.ProfileInfo("from-flag", "--profile")
+    assert ambient.profile_info == ProfileInfo("from-env-var", "DATABRICKS_CONFIG_PROFILE")
+    assert project.profile_info == ProfileInfo("proj", ".env")
+    assert flagged.profile_info == ProfileInfo("from-flag", "--profile")
 
 
 def test_profile_flag_after_subcommand_wins(env_project):
@@ -224,13 +219,11 @@ def test_login_without_a_target_errors_with_hint_and_ignores_env_var(
 
 
 def test_login_runs_databricks_cli_when_unauthenticated_and_interactive(
-    monkeypatch, interactive_terminal
+    monkeypatch, interactive_terminal, databricks_login
 ):
     client = mock.Mock(host="https://ws.example")
     validate = mock.Mock(side_effect=[(None, Unauthenticated("expired")), ((client, "me"), None)])
     monkeypatch.setattr(workspace_auth, "_validate_bounded", validate)
-    databricks_login = mock.Mock(return_value=mock.Mock(returncode=0))
-    monkeypatch.setattr(workspace_auth.subprocess, "run", databricks_login)
 
     result = _invoke_profile(["login", "ml"])
 
@@ -239,12 +232,10 @@ def test_login_runs_databricks_cli_when_unauthenticated_and_interactive(
     assert "Logged in to 'ml'" in _flat(result.output)
 
 
-def test_login_noninteractive_unauthenticated_fails_without_browser(monkeypatch):
-    monkeypatch.setattr(
-        workspace_auth, "_validate_bounded", lambda profile: (None, Unauthenticated("expired"))
-    )
-    databricks_login = mock.Mock()
-    monkeypatch.setattr(workspace_auth.subprocess, "run", databricks_login)
+def test_login_noninteractive_unauthenticated_fails_without_browser(
+    fail_validation, databricks_login
+):
+    fail_validation(Unauthenticated("expired"))
 
     result = _invoke_profile(["login", "ml"])
 

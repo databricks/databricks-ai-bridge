@@ -41,11 +41,15 @@ def _write_text_atomically(path: pathlib.Path, text: str) -> None:
 
 def read_env(path: pathlib.Path) -> dict[str, str]:
     """Minimal KEY=VALUE reader for a project `.env` (python-dotenv is not a CLI dependency)."""
-    values: dict[str, str] = {}
     try:
         text = _read_text(path)
     except OSError:
-        return values
+        return {}
+    return _parse_env(text)
+
+
+def _parse_env(text: str) -> dict[str, str]:
+    values: dict[str, str] = {}
     for line in _lines(text):
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -112,11 +116,11 @@ def update_env_profile(dest: pathlib.Path, profile: str) -> bool:
     env_path = dest / ".env"
     if not env_path.exists():
         return write_env(dest, profile)
-    if read_env(env_path).get("DATABRICKS_CONFIG_PROFILE") == profile:
+    before = _read_text(env_path)
+    if _parse_env(before).get("DATABRICKS_CONFIG_PROFILE") == profile:
         # Compare the parsed profile, not the file text: a lone CRLF or trailing-newline
         # difference must not count as a change.
         return False
-    before = _read_text(env_path)
     bom = _BOM if before.startswith(_BOM) else ""
     lines = _with_profile_line(_lines(before), profile)
     _write_text_atomically(env_path, bom + "\n".join(lines) + "\n")

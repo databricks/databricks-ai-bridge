@@ -19,7 +19,6 @@ from click.testing import CliRunner
 
 from databricks_agentbricks.cli import deploy as deploy_mod
 from databricks_agentbricks.cli.app import CliContext
-from databricks_agentbricks.cli.workspace_auth import ProfileInfo
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.conversation_store_client import (
@@ -34,6 +33,7 @@ from databricks_agentbricks.clients.tracing_client import (
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.agent_project import AgentProject
 from databricks_agentbricks.projects.app_manifest import AppManifest
+from databricks_agentbricks.projects.profiles import ProfileInfo
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.services.deploy_service import (
     DeployRequest,
@@ -58,7 +58,9 @@ class _FakeApiClient:
 class _Ctx(CliContext):
     def __init__(self, *, output: str = "text", profile: str | None = "prof"):
         super().__init__(profile, output)
-        self.api_client_provider = types.SimpleNamespace(get=lambda: _FakeApiClient())
+        self.api_client_provider = types.SimpleNamespace(
+            get=lambda: _FakeApiClient(), use=lambda client: None
+        )
 
 
 @pytest.fixture(autouse=True)
@@ -174,7 +176,8 @@ class _DeployRunner:
 
 def _real_deploy_context(api: _DeployApi, *, output: str = "text"):
     ctx = CliContext("prof", output)
-    ctx.api_client_provider = types.SimpleNamespace(get=lambda: api)
+    # The preflight's validated client is discarded so every call reaches the fake `api`.
+    ctx.api_client_provider = types.SimpleNamespace(get=lambda: api, use=lambda client: None)
     return ctx
 
 
@@ -383,6 +386,7 @@ def test_deploy_resolves_profile_from_flag_then_source_env(
     write_databrickscfg(
         "[proj]\nhost = https://proj.example\n[flag]\nhost = https://flag.example\n"
     )
+    (tmp_path / "app.yaml").write_text("command: []\n")
     (tmp_path / ".env").write_text("DATABRICKS_CONFIG_PROFILE=proj\n")
     ctx = _Ctx(profile=flag_profile)
 

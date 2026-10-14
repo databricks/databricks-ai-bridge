@@ -23,13 +23,6 @@ from databricks_agentbricks.cli.memory import memory
 from databricks_agentbricks.cli.sessions import sessions
 from databricks_agentbricks.cli.tools import tools
 from databricks_agentbricks.cli.tracing import tracing
-from databricks_agentbricks.cli.workspace_auth import (
-    SOURCE_FLAG,
-    SOURCE_SDK_DEFAULT,
-    ProfileInfo,
-    legacy_default_profile,
-    resolve_profile,
-)
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
 from databricks_agentbricks.presentation.help import configure_help
 from databricks_agentbricks.presentation.profile import (
@@ -37,6 +30,16 @@ from databricks_agentbricks.presentation.profile import (
     warn_legacy_default_profile,
 )
 from databricks_agentbricks.projects.config import is_agentbricks_project
+from databricks_agentbricks.projects.env_file import read_env
+from databricks_agentbricks.projects.profiles import (
+    SOURCE_FLAG,
+    SOURCE_SDK_DEFAULT,
+    ProfileInfo,
+    auth_login_command,
+    auth_switch_command,
+    legacy_default_profile,
+    resolve_profile,
+)
 from databricks_agentkit._api_client import _AgentBricksApiClient
 
 
@@ -47,28 +50,38 @@ class CliContext:
         self.profile_info = resolve_profile(profile)
         self.output = output
         self._workspace_announced = False
+        self._project_dir: Optional[pathlib.Path] = None
+        self._project_env: dict[str, str] = {}
         self.api_client_provider = self._client_provider(self.profile)
 
     @property
     def profile(self) -> Optional[str]:
         return self.profile_info.name
 
-    def use_project_profile(
-        self, project_dir: pathlib.Path, env_values: Optional[dict[str, str]] = None
-    ) -> None:
+    def use_project_profile(self, project_dir: pathlib.Path) -> None:
         """Fold in the project's `.env` profile (see `resolve_profile`) unless `-p` was given.
 
-        The root group calls this for the current directory when it's an Agent Bricks project;
-        `dev` and `deploy` call it again with their source dir, whose `.env` then replaces the
+        The root group calls this for the current directory when it's an Agent Bricks project, and
+        commands with `--source` call it again for that project, whose `.env` then replaces the
         current directory's. Only an explicit `-p` outranks the `.env`.
-        ``env_values`` passes an already-parsed ``<project_dir>/.env`` so it isn't read twice.
         """
+        directory = project_dir.resolve()
+        if directory != self._project_dir:
+            self._project_dir = directory
+            self._project_env = read_env(directory / ".env")
         if self.profile_info.source == SOURCE_FLAG:
             return
-        resolved = resolve_profile(None, project_dir, env_values)
+        resolved = resolve_profile(None, directory, self._project_env)
         if resolved.name != self.profile_info.name:
             self.api_client_provider = self._client_provider(resolved.name)
         self.profile_info = resolved
+
+    def project_env(self, project_dir: pathlib.Path) -> dict[str, str]:
+        """`project_dir`'s parsed `.env`, reusing the one `use_project_profile` already read."""
+        directory = project_dir.resolve()
+        if directory == self._project_dir:
+            return self._project_env
+        return read_env(directory / ".env")
 
     def use_flag_profile(self, profile: str) -> None:
         """Apply a `-p/--profile` given after the subcommand; like the global one, it beats `.env`."""
@@ -150,9 +163,9 @@ def agentbricks(ctx: click.Context, profile: Optional[str], output: str) -> None
 
 
 _REMOVED_COMMANDS = {
-    "login": "Sign in with `agentbricks auth login <profile>`, and pick a project's profile with "
-    "`agentbricks auth switch <profile>`.",
-    "logout": "Profiles are now chosen per project in its .env (`agentbricks auth switch <profile>`); "
+    "login": f"Sign in with `{auth_login_command(None)}`, and pick a project's profile with "
+    f"`{auth_switch_command(None)}`.",
+    "logout": f"Profiles are now chosen per project in its .env (`{auth_switch_command(None)}`); "
     "there is no saved default to clear.",
 }
 

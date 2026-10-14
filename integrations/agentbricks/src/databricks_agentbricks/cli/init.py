@@ -26,27 +26,29 @@ from typing import Optional
 
 import click
 
-from databricks_agentbricks.cli.auth import sign_in_if_interactive
+from databricks_agentbricks.cli.auth import sign_in_chosen_profile
 from databricks_agentbricks.cli.tracing import default_experiment_name
-from databricks_agentbricks.cli.workspace_auth import (
-    SOURCE_ENV_VAR,
-    SOURCE_FLAG,
-    SOURCE_SETTINGS_DEFAULT,
-    can_prompt_login,
-    configured_profiles,
-    profile_exists,
-    profile_host,
-    settings_default_profile,
-)
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
-from databricks_agentbricks.presentation.profile import note_choose_profile, warn_unknown_profile
+from databricks_agentbricks.presentation.profile import note_choose_profile
 from databricks_agentbricks.projects.agent_project import AgentProject, default_store_name
 from databricks_agentbricks.projects.config import (
     _load_persisted_metadata,
     write_project_metadata,
 )
 from databricks_agentbricks.projects.env_file import write_env
+from databricks_agentbricks.projects.profiles import (
+    SOURCE_CONFIG_DEFAULT,
+    SOURCE_ENV_VAR,
+    SOURCE_FLAG,
+    auth_login_command,
+    auth_switch_command,
+    configured_profiles,
+    env_auth_configured,
+    profile_exists,
+    profile_host,
+    sdk_default_profile,
+)
 from databricks_agentbricks.projects.types import (
     AgentFramework,
     AgentServer,
@@ -154,20 +156,21 @@ def _report_already_initialized(obj, dest: pathlib.Path) -> None:
         return
     render.console().print(
         f"{dest} is already an Agent Bricks project; nothing was changed. Run `agentbricks dev` / "
-        f"`agentbricks deploy`, or `agentbricks auth switch <profile> --source {dest}` to change "
+        f"`agentbricks deploy`, or `{auth_switch_command(None)} --source {dest}` to change "
         "its workspace."
     )
 
 
 def _project_profile(obj, flag_profile: Optional[str]) -> Optional[tuple[str, str]]:
     """(profile, source) to pin in a new project's `.env`: `--profile`, the global `-p`, the
-    DATABRICKS_CONFIG_PROFILE env var, else None when DATABRICKS_HOST is set, else the default
-    chosen with `databricks auth switch`, else `DEFAULT` (the order the SDK itself falls back in).
+    DATABRICKS_CONFIG_PROFILE env var, else None when env-var auth is configured (DATABRICKS_HOST,
+    DATABRICKS_TOKEN, or DATABRICKS_CLIENT_ID), else the default chosen with `databricks auth
+    switch`, else `DEFAULT` (the order the SDK itself falls back in).
 
     Never the cwd project's `.env` — `init` may run inside another project, and the new project
     must not inherit its workspace. A pinned profile keeps the project on its workspace however
-    the shell is set up later; None when `DATABRICKS_HOST` is set because env-var auth (CI,
-    containers) already names the workspace and a `.env` profile would override it.
+    the shell is set up later; None under env-var auth because it (CI, containers) already names
+    the workspace and a `.env` profile would override it.
     """
     if flag_profile:
         return flag_profile, SOURCE_FLAG
@@ -176,12 +179,9 @@ def _project_profile(obj, flag_profile: Optional[str]) -> Optional[tuple[str, st
     env_profile = os.environ.get("DATABRICKS_CONFIG_PROFILE")
     if env_profile:
         return env_profile, SOURCE_ENV_VAR
-    if os.environ.get("DATABRICKS_HOST"):
+    if env_auth_configured():
         return None
-    switched = settings_default_profile()
-    if switched:
-        return switched, SOURCE_SETTINGS_DEFAULT
-    return "DEFAULT", "default"
+    return sdk_default_profile()
 
 
 def _migration_paths(dest: pathlib.Path, target: pathlib.Path) -> tuple[pathlib.Path, ...]:
@@ -365,7 +365,7 @@ def _prepare_migration(
     default=None,
     help="DATABRICKS_CONFIG_PROFILE to seed the project's .env with, so `agentbricks dev` works "
     "right away (default: the global -p, then DATABRICKS_CONFIG_PROFILE, then DEFAULT; with no "
-    "profile and DATABRICKS_HOST set, no .env is written).",
+    "profile and env-var auth set (DATABRICKS_HOST, DATABRICKS_TOKEN or DATABRICKS_CLIENT_ID), no .env is written).",
 )
 @click.option(
     "--disable-chat-app",
@@ -416,8 +416,8 @@ def init(
 
     The project's `.env` pins a Databricks profile: --profile (or the global -p, or
     DATABRICKS_CONFIG_PROFILE), else the default set with `databricks auth switch`, else
-    `DEFAULT`. With DATABRICKS_HOST set (env-var auth, e.g. CI) and no profile, no `.env` is
-    written and commands keep using those environment variables. In an interactive terminal,
+    `DEFAULT`. With env-var auth set (DATABRICKS_HOST, DATABRICKS_TOKEN or DATABRICKS_CLIENT_ID, e.g. CI) and no
+    profile, no `.env` is written and commands keep using those environment variables. In an interactive terminal,
     init then signs in to it, opening `databricks auth login` only if it isn't authenticated yet
     (which also creates a missing profile); non-interactive and CI runs skip sign-in. If nothing
     chose a profile and `[DEFAULT]` doesn't exist but other profiles do, init doesn't sign in
@@ -515,18 +515,19 @@ def init(
     # new machine-wide `[DEFAULT]` the user likely didn't want, so point at their profiles instead.
     other_profiles = (
         configured_profiles()
-        if project_profile and project_profile[1] == "default" and not profile_exists("DEFAULT")
+        if (
+            project_profile
+            and project_profile[1] == SOURCE_CONFIG_DEFAULT
+            and not profile_exists(project_profile[0])
+        )
         else []
     )
     if other_profiles:
         note_choose_profile(other_profiles, obj)
-    elif env_profile and not can_prompt_login():
-        # Interactive runs sign in right after scaffolding, which creates a missing profile.
-        warn_unknown_profile(env_profile, obj)
 
     # A failed sign-in doesn't undo the scaffold; the summary says how to retry.
     signed_in_user = (
-        sign_in_if_interactive(obj, *project_profile)
+        sign_in_chosen_profile(obj, *project_profile)
         if project_profile and not other_profiles
         else None
     )
@@ -574,18 +575,16 @@ def init(
         fields["Profile (.env)"] = env_profile
         fields["Workspace"] = workspace_host or "not configured yet"
     else:
-        fields["Auth"] = "environment variables (DATABRICKS_HOST); no .env written"
+        fields["Auth"] = "environment variables; no .env written"
         fields["Workspace"] = workspace_host or "not configured yet"
     if signed_in_user:
         fields["Signed in as"] = signed_in_user
     elif other_profiles:
-        steps.append(
-            ("agentbricks auth switch <profile>", f"Pick one of: {', '.join(other_profiles)}")
-        )
+        steps.append((auth_switch_command(None), f"Pick one of: {', '.join(other_profiles)}"))
     elif env_profile:
-        steps.append((f"agentbricks auth login {env_profile}", "Sign in before running the agent"))
+        steps.append((auth_login_command(env_profile), "Sign in before running the agent"))
     if not other_profiles:
-        steps.append(("agentbricks auth switch <profile>", "Use a different profile (optional)"))
+        steps.append((auth_switch_command(None), "Use a different profile (optional)"))
     steps.append(("agentbricks dev", "Optional: develop and test the agent locally"))
     if chat_app_enabled:
         steps.append("Open http://localhost:8000 to chat with it")

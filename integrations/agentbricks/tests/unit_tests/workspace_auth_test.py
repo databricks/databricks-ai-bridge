@@ -1,8 +1,8 @@
 """Unit tests for profile resolution, config-file lookups, and the auth preflight/login helpers.
 
 The workspace boundary (`_validate_profile` / `_validate_bounded`), the `databricks` CLI
-(`subprocess.run`), and the terminal check (`_is_interactive`) are stubbed so nothing touches the
-network or a browser. `DATABRICKS_CONFIG_FILE` points at a tmp file (see conftest.py).
+(`subprocess.run`), and the terminal check (`_is_interactive`) are stubbed (see conftest.py) so
+nothing touches the network or a browser. `DATABRICKS_CONFIG_FILE` points at a tmp file (see conftest.py).
 """
 
 from __future__ import annotations
@@ -14,8 +14,10 @@ from unittest import mock
 import pytest
 from databricks.sdk.errors import Unauthenticated
 
-from databricks_agentbricks.cli import workspace_auth
+from databricks_agentbricks.cli import auth
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.projects import profiles
+from databricks_agentbricks.services import workspace_auth
 
 _PROF_CFG = "[prof]\nhost = https://prof.example\n"
 
@@ -23,20 +25,6 @@ _PROF_CFG = "[prof]\nhost = https://prof.example\n"
 @pytest.fixture(autouse=True)
 def _disable_telemetry(monkeypatch):
     monkeypatch.setenv("AGENTBRICKS_DISABLE_TELEMETRY", "1")
-
-
-def _set_interactive(monkeypatch, interactive: bool = True) -> None:
-    monkeypatch.setattr(workspace_auth, "_is_interactive", lambda: interactive)
-
-
-def _fail_validation(monkeypatch, error: Exception) -> None:
-    monkeypatch.setattr(workspace_auth, "_validate_bounded", lambda profile: (None, error))
-
-
-def _stub_databricks_cli(monkeypatch, **mock_kwargs) -> mock.Mock:
-    databricks_login = mock.Mock(**mock_kwargs)
-    monkeypatch.setattr(workspace_auth.subprocess, "run", databricks_login)
-    return databricks_login
 
 
 # --- resolve_profile -------------------------------------------------------------------------
@@ -63,7 +51,7 @@ def test_resolve_profile_order(tmp_path, monkeypatch, flag, env_file, env_var, e
     if env_var is not None:
         monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", env_var)
 
-    assert workspace_auth.resolve_profile(flag, tmp_path) == workspace_auth.ProfileInfo(*expected)
+    assert profiles.resolve_profile(flag, tmp_path) == profiles.ProfileInfo(*expected)
 
 
 # --- config-file lookups ---------------------------------------------------------------------
@@ -74,7 +62,7 @@ def test_config_file_path_expands_tilde_and_tolerates_percent_in_values(tmp_path
     (tmp_path / "cfg").write_text(_PROF_CFG + "token = 100%secret\n")
     monkeypatch.setenv("DATABRICKS_CONFIG_FILE", "~/cfg")
 
-    assert workspace_auth.profile_host("prof") == "https://prof.example"
+    assert profiles.profile_host("prof") == "https://prof.example"
 
 
 @pytest.mark.parametrize(
@@ -95,20 +83,21 @@ def test_workspace_for_profile(write_databrickscfg, monkeypatch, cfg, env_host, 
     elif expected == "default":
         expected = ("https://d.example", "https://d.example ([DEFAULT] profile)")
 
-    assert workspace_auth.workspace_for_profile(profile) == expected
+    assert profiles.workspace_for_profile(profile) == expected
 
 
 # --- preflight_auth --------------------------------------------------------------------------
 
 
 def test_preflight_passes_when_profile_validates(validated_profile):
-    workspace_auth.preflight_auth("prof", "--profile")
+    client = workspace_auth.preflight_auth("prof", "--profile")
 
     validated_profile.assert_called_once_with("prof")
+    assert client is validated_profile.return_value[0][0]
 
 
-def test_preflight_failure_hints_at_login_and_retry(monkeypatch):
-    _fail_validation(monkeypatch, Unauthenticated("expired"))
+def test_preflight_failure_hints_at_login_and_retry(fail_validation):
+    fail_validation(Unauthenticated("expired"))
 
     with pytest.raises(AgentCliError) as raised:
         workspace_auth.preflight_auth("prof", ".env")
@@ -144,26 +133,26 @@ def test_preflight_external_browser_fails_fast(write_databrickscfg, validated_pr
 
 
 def test_authenticate_profile_returns_validated_client_without_login(
-    validated_profile, monkeypatch
+    validated_profile, databricks_login
 ):
-    databricks_login = _stub_databricks_cli(monkeypatch)
-
     assert (
-        workspace_auth.authenticate_profile("prof", "argument") == validated_profile.return_value[0]
+        workspace_auth.authenticate_profile("prof", "argument", interactive=False)
+        == validated_profile.return_value[0]
     )
     databricks_login.assert_not_called()
 
 
-def test_authenticate_profile_logs_in_then_revalidates(monkeypatch):
+def test_authenticate_profile_logs_in_then_revalidates(monkeypatch, databricks_login):
     client = mock.Mock()
     validate = mock.Mock(
         side_effect=[(None, Unauthenticated("expired")), ((client, "me@example.com"), None)]
     )
     monkeypatch.setattr(workspace_auth, "_validate_bounded", validate)
-    _set_interactive(monkeypatch)
-    databricks_login = _stub_databricks_cli(monkeypatch, return_value=mock.Mock(returncode=0))
 
-    assert workspace_auth.authenticate_profile("prof", "argument") == (client, "me@example.com")
+    assert workspace_auth.authenticate_profile("prof", "argument", interactive=True) == (
+        client,
+        "me@example.com",
+    )
 
     assert validate.call_count == 2
     # The child's stdout goes to stderr so it can't corrupt a command's machine-readable output.
@@ -175,13 +164,12 @@ def test_authenticate_profile_logs_in_then_revalidates(monkeypatch):
     )
 
 
-def test_authenticate_profile_reports_a_missing_databricks_cli(monkeypatch):
-    _fail_validation(monkeypatch, Unauthenticated("expired"))
-    _set_interactive(monkeypatch)
-    _stub_databricks_cli(monkeypatch, side_effect=FileNotFoundError)
+def test_authenticate_profile_reports_a_missing_databricks_cli(fail_validation, databricks_login):
+    fail_validation(Unauthenticated("expired"))
+    databricks_login.side_effect = FileNotFoundError
 
     with pytest.raises(AgentCliError, match="`databricks` CLI was not found"):
-        workspace_auth.authenticate_profile("prof", "argument")
+        workspace_auth.authenticate_profile("prof", "argument", interactive=True)
 
 
 # A non-auth error isn't fixed by a login, so it never opens one. An auth error would be, but only
@@ -190,22 +178,22 @@ def test_authenticate_profile_reports_a_missing_databricks_cli(monkeypatch):
     ("error", "ci", "interactive", "hint"),
     [
         (RuntimeError("no creds"), False, True, None),
-        (Unauthenticated("expired"), False, False, "databricks auth login --profile prof"),
-        (Unauthenticated("expired"), True, True, "databricks auth login --profile prof"),
+        (Unauthenticated("expired"), False, False, "agentbricks auth login prof"),
+        (Unauthenticated("expired"), True, True, "agentbricks auth login prof"),
     ],
     ids=["non-auth-error", "no-terminal", "ci"],
 )
 def test_authenticate_profile_raises_without_opening_a_login(
-    monkeypatch, error, ci, interactive, hint
+    request, monkeypatch, fail_validation, databricks_login, error, ci, interactive, hint
 ):
     if ci:
         monkeypatch.setenv("CI", "true")
-    _set_interactive(monkeypatch, interactive)
-    _fail_validation(monkeypatch, error)
-    databricks_login = _stub_databricks_cli(monkeypatch)
+    if interactive:
+        request.getfixturevalue("interactive_terminal")
+    fail_validation(error)
 
     with pytest.raises(AgentCliError) as raised:
-        workspace_auth.authenticate_profile("prof", ".env")
+        workspace_auth.authenticate_profile("prof", ".env", interactive=auth.can_prompt_login())
 
     assert f"Could not validate Databricks profile 'prof' (from .env): {error}" in str(raised.value)
     if hint is None:

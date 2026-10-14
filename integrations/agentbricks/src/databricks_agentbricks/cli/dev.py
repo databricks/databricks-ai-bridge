@@ -11,12 +11,11 @@ from __future__ import annotations
 
 import pathlib
 import subprocess
-from typing import Callable, Optional
+from typing import Optional
 
 import click
 
 from databricks_agentbricks.cli.tracing import start_local_tracing_server, stop_local_tracing_server
-from databricks_agentbricks.cli.workspace_auth import preflight_auth
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.databricks_cli import _databricks
 from databricks_agentbricks.presentation.dev import (
@@ -27,13 +26,13 @@ from databricks_agentbricks.presentation.dev import (
 from databricks_agentbricks.presentation.dev import (
     announce_local_url as _announce_local_url,
 )
-from databricks_agentbricks.projects.env_file import read_env
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.services.dev_service import (
     DevRequest,
     DevService,
     _dev_entry_point,  # noqa: F401 - compatibility re-export for existing callers
 )
+from databricks_agentbricks.services.workspace_auth import preflight_auth
 
 
 class _CliLocalTracing:
@@ -61,13 +60,12 @@ def _env_credential(env_file: dict[str, str]) -> Optional[str]:
     return None
 
 
-def build_dev_service(obj, preflight: Optional[Callable[[], None]] = None) -> DevService:
+def build_dev_service(obj) -> DevService:
     """Compose the local workflow without opening a workspace API client."""
     return DevService(
         project_resolver=ProjectResolver(),
         apps_client=AppsClient(obj.profile, runner=_databricks),
         local_tracing=_CliLocalTracing(),
-        preflight=preflight,
     )
 
 
@@ -116,11 +114,9 @@ def dev(
     `agentbricks deploy`, not here. So there's nothing to provision and no service-principal grant to make;
     that all happens at `agentbricks deploy` time.
     """
-    source_dir = pathlib.Path(source)
-    # The CLI and the locally running agent read the same `.env`, so resolve the profile from it
-    # once here (dev also consults it below for explicit credentials).
-    env_file = read_env(source_dir / ".env")
-    obj.use_project_profile(source_dir, env_file)
+    # The project's `.env` profile is already applied (see `_use_source_project_profile`); the
+    # locally running agent reads the same file, which dev also consults for explicit credentials.
+    env_file = obj.project_env(pathlib.Path(source))
     env_credential = _env_credential(env_file)
     # Explicit `.env` credentials authenticate the agent directly, so the profile needs neither
     # validation nor a place in the dev manifest (a bare DATABRICKS_HOST is not a credential).
@@ -131,16 +127,17 @@ def dev(
         # beats `.env` because the template loads dotenv with override=False.
         local_env["DATABRICKS_CONFIG_PROFILE"] = obj.profile
 
-    def _preflight() -> None:
-        if not env_credential:
-            preflight_auth(obj.profile, obj.profile_info.source)
-
     # Announced before the preflight so an auth failure still names its target. When `.env`
     # credentials win, the resolved profile would name a different workspace than the agent
     # actually uses, so it isn't announced.
     if not uses_env_credentials:
         obj.announce_workspace()
-    service = build_dev_service(obj, _preflight)
+    service = build_dev_service(obj)
+    service.check_project(source)
+    # Auth is checked before anything is started: an unauthenticated external-browser profile
+    # would otherwise hang the local agent on a browser flow with no error.
+    if not env_credential:
+        preflight_auth(obj.profile, obj.profile_info.source)
     with service.prepare(
         DevRequest(
             source=source,

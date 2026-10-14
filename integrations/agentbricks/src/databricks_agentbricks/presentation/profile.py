@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import click
 
-from databricks_agentbricks.cli.workspace_auth import (
+from databricks_agentbricks.presentation import render
+from databricks_agentbricks.projects.profiles import (
+    auth_login_command,
+    auth_switch_command,
     profile_exists,
     profile_host,
     workspace_for_profile,
 )
-from databricks_agentbricks.presentation import render
 
 
 def announce_workspace(profile: str | None, source: str, *, output: str) -> None:
@@ -32,7 +34,7 @@ def note_choose_profile(profiles: list[str], obj) -> None:
     if obj.output == "text":
         render.console().print(
             "[dim]No profile was chosen, so .env uses 'DEFAULT', which isn't in your Databricks "
-            f"config. Run `agentbricks auth switch <profile>` with one of: {', '.join(profiles)}.[/]"
+            f"config. Run `{auth_switch_command(None)}` with one of: {', '.join(profiles)}.[/]"
         )
 
 
@@ -45,7 +47,7 @@ def warn_unknown_profile(profile: str, obj) -> None:
     if obj.output == "text" and not profile_exists(profile):
         render.console().print(
             f"[dim].env set to profile '{profile}', but it isn't in your Databricks "
-            f"config yet. Run `agentbricks auth login {profile}` before `agentbricks dev`.[/]"
+            f"config yet. Run `{auth_login_command(profile)}` before `agentbricks dev`.[/]"
         )
 
 
@@ -77,7 +79,7 @@ def warn_legacy_default_profile(profile: str, output: str) -> None:
     click.echo(
         click.style(
             f"The default profile '{profile}' saved by the old `agentbricks login` is no longer "
-            f"used. Pass `-p {profile}`, or run `agentbricks auth switch {profile}` in the project "
+            f"used. Pass `-p {profile}`, or run `{auth_switch_command(profile)}` in the project "
             "(delete ~/.agentbricks/config.json to hide this).",
             dim=True,
         ),

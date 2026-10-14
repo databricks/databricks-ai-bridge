@@ -13,7 +13,7 @@ import subprocess
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Callable, Optional, Protocol
+from typing import Protocol
 
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.errors import AgentCliError
@@ -101,12 +101,20 @@ class DevService:
         project_resolver: ProjectResolver,
         apps_client: AppsClient,
         local_tracing: LocalTracing,
-        preflight: Optional[Callable[[], None]] = None,
     ) -> None:
         self._project_resolver = project_resolver
         self._apps_client = apps_client
         self._local_tracing = local_tracing
-        self._preflight = preflight
+
+    def check_project(self, source: str) -> pathlib.Path:
+        """Fail unless ``source`` has an ``app.yaml`` to run; returns that path. Local only."""
+        app_yaml = pathlib.Path(source) / "app.yaml"
+        if not app_yaml.exists():
+            raise AgentCliError(
+                f"No app.yaml found at {app_yaml}.",
+                hint="Run from a scaffolded project, or pass --source <dir> (see `agentbricks init`).",
+            )
+        return app_yaml
 
     @contextmanager
     def prepare(self, request: DevRequest) -> Iterator[DevPlan]:
@@ -117,17 +125,7 @@ class DevService:
         is removed along with the local tracing process even when either of those operations fails.
         """
         source_dir = pathlib.Path(request.source)
-        app_yaml = source_dir / "app.yaml"
-        if not app_yaml.exists():
-            raise AgentCliError(
-                f"No app.yaml found at {app_yaml}.",
-                hint="Run from a scaffolded project, or pass --source <dir> (see `agentbricks init`).",
-            )
-
-        # Auth is checked before anything is started: an unauthenticated external-browser profile
-        # would otherwise hang the local agent on a browser flow with no error.
-        if self._preflight is not None:
-            self._preflight()
+        app_yaml = self.check_project(request.source)
 
         project = self._project_resolver.load(source_dir)
         if project is not None and project.tools:

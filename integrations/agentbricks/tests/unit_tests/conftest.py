@@ -17,7 +17,9 @@ from unittest import mock
 import pytest
 
 from databricks_agentbricks.agent_hint import AGENT_ENV_MARKERS, AGENT_ENV_VALUES
-from databricks_agentbricks.cli import workspace_auth
+from databricks_agentbricks.cli import auth
+from databricks_agentbricks.clients import databricks_cli
+from databricks_agentbricks.services import workspace_auth
 
 _AMBIENT_ENV = ("DATABRICKS_CONFIG_PROFILE", "DATABRICKS_HOST", "DATABRICKS_TOKEN", "CI")
 
@@ -35,7 +37,7 @@ def databrickscfg_path(
     path = tmp_path_factory.mktemp("databricks-config") / ".databrickscfg"
     monkeypatch.setenv("DATABRICKS_CONFIG_FILE", str(path))
     monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("agentbricks-home")))
-    monkeypatch.setattr(workspace_auth, "_is_interactive", lambda: False)
+    monkeypatch.setattr(auth, "_is_interactive", lambda: False)
     return path
 
 
@@ -56,6 +58,30 @@ def validated_profile(monkeypatch: pytest.MonkeyPatch) -> mock.Mock:
     validate = mock.Mock(return_value=((client, "me@example.com"), None))
     monkeypatch.setattr(workspace_auth, "_validate_bounded", validate)
     return validate
+
+
+@pytest.fixture
+def interactive_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Someone is at the terminal, so a browser login could be completed."""
+    monkeypatch.setattr(auth, "_is_interactive", lambda: True)
+
+
+@pytest.fixture
+def fail_validation(monkeypatch: pytest.MonkeyPatch) -> Callable[[Exception], None]:
+    """Make the bounded SDK validation fail with the given error for any profile."""
+
+    def _fail(error: Exception) -> None:
+        monkeypatch.setattr(workspace_auth, "_validate_bounded", lambda profile: (None, error))
+
+    return _fail
+
+
+@pytest.fixture
+def databricks_login(monkeypatch: pytest.MonkeyPatch) -> mock.Mock:
+    """Stub the `databricks auth login` subprocess; it succeeds unless a test reconfigures it."""
+    login = mock.Mock(return_value=mock.Mock(returncode=0))
+    monkeypatch.setattr(databricks_cli.subprocess, "run", login)
+    return login
 
 
 @pytest.fixture(autouse=True)

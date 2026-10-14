@@ -27,6 +27,11 @@ class ApiClientProvider:
         self._client: Optional[_AgentBricksApiClient] = None
         self._lock = Lock()
 
+    def use(self, client: _AgentBricksApiClient) -> None:
+        """Adopt a client the command already validated, so first use doesn't build another."""
+        with self._lock:
+            self._client = client
+
     def get(self) -> _AgentBricksApiClient:
         """Return the shared client, constructing it on first use."""
         client = self._client

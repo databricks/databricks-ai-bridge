@@ -17,7 +17,6 @@ from click.testing import CliRunner
 
 from databricks_agentbricks.cli import app as cli_app
 from databricks_agentbricks.cli import init as init_mod
-from databricks_agentbricks.cli import workspace_auth
 from databricks_agentbricks.cli.app import CliContext
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.types import AgentFramework, AgentServer
@@ -328,10 +327,9 @@ def test_init_inside_another_project_does_not_inherit_its_env_profile(
 
 
 def test_init_with_databricks_host_and_no_profile_writes_no_env(
-    tmp_path: pathlib.Path, monkeypatch, validated_profile
+    tmp_path: pathlib.Path, monkeypatch, validated_profile, interactive_terminal
 ):
     monkeypatch.setenv("DATABRICKS_HOST", "https://env.example")
-    monkeypatch.setattr(workspace_auth, "_is_interactive", lambda: True)
     dest = tmp_path / "proj"
     result = _init(dest, output="json")
     assert result.exit_code == 0, result.output
@@ -342,8 +340,9 @@ def test_init_with_databricks_host_and_no_profile_writes_no_env(
     validated_profile.assert_not_called()  # interactive, but host env auth never signs in
 
 
-def test_init_signs_in_when_interactive(tmp_path: pathlib.Path, monkeypatch, validated_profile):
-    monkeypatch.setattr(workspace_auth, "_is_interactive", lambda: True)
+def test_init_signs_in_when_interactive(
+    tmp_path: pathlib.Path, validated_profile, interactive_terminal
+):
     result = _init(tmp_path / "proj", "--profile", "ml", output="json")
     assert result.exit_code == 0, result.output
     validated_profile.assert_called_once_with("ml")

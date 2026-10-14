@@ -11,7 +11,6 @@ import yaml
 from click.testing import CliRunner
 
 from databricks_agentbricks.cli import dev as dev_mod
-from databricks_agentbricks.cli import workspace_auth
 from databricks_agentbricks.cli.app import CliContext
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.agent_project import AgentProject, ToolSpec
@@ -705,11 +704,11 @@ def test_dev_env_credentials_replace_the_profile_only_when_complete(
     assert validated_profile.call_args_list == ([mock.call("proj")] if uses_profile else [])
 
 
-def test_dev_unauthenticated_profile_fails_before_run_local(tmp_path: pathlib.Path, monkeypatch):
+def test_dev_unauthenticated_profile_fails_before_run_local(
+    tmp_path: pathlib.Path, monkeypatch, fail_validation
+):
     _write_project(tmp_path, "DATABRICKS_CONFIG_PROFILE=proj\n")
-    monkeypatch.setattr(
-        workspace_auth, "_validate_bounded", lambda profile: (None, RuntimeError("expired"))
-    )
+    fail_validation(RuntimeError("expired"))
     run_local = mock.Mock()
     monkeypatch.setattr(dev_mod, "_databricks", run_local)
 

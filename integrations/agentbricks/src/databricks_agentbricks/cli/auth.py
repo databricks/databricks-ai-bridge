@@ -2,22 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import pathlib
+import sys
 from typing import Optional
 
 import click
 
-from databricks_agentbricks.cli.workspace_auth import (
-    SOURCE_ENV_FILE,
-    SOURCE_FLAG,
-    ProfileInfo,
-    authenticate_profile,
-    can_prompt_login,
-    profile_host,
-    resolve_profile,
-    run_databricks_login,
-    workspace_for_profile,
-)
+from databricks_agentbricks.clients.databricks_cli import run_databricks_login
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.profile import (
@@ -27,22 +19,44 @@ from databricks_agentbricks.presentation.profile import (
 )
 from databricks_agentbricks.projects.config import is_agentbricks_project
 from databricks_agentbricks.projects.env_file import read_env, update_env_profile
+from databricks_agentbricks.projects.profiles import (
+    SOURCE_ENV_FILE,
+    SOURCE_FLAG,
+    ProfileInfo,
+    auth_login_command,
+    auth_switch_command,
+    profile_host,
+    resolve_profile,
+    workspace_for_profile,
+)
+from databricks_agentbricks.services.workspace_auth import authenticate_profile
 
 _SOURCE_HELP = "Project directory. Defaults to the current directory."
 
 
-def sign_in_if_interactive(obj, profile: str, source: str) -> Optional[str]:
+def _is_interactive() -> bool:
+    return sys.stdin.isatty()
+
+
+def can_prompt_login() -> bool:
+    """Whether someone is at a terminal to complete a browser login (and this isn't CI)."""
+    return not os.getenv("CI") and _is_interactive()
+
+
+def sign_in_chosen_profile(obj, profile: str, source: str) -> Optional[str]:
     """Sign in to `profile` right after it's chosen, so `agentbricks dev` works right away.
 
     Interactive terminals only: a scripted or CI run never opens a browser or waits on the
-    workspace. A failed sign-in is reported, not raised, since the profile choice still stands.
+    workspace, and only warns when the profile isn't configured yet (an interactive sign-in
+    creates it). A failed sign-in is reported, not raised, since the profile choice still stands.
     Returns the signed-in user, or None when it was skipped or failed.
     """
     if not can_prompt_login():
+        warn_unknown_profile(profile, obj)
         return None
     announce_login(obj, profile, source)
     try:
-        _, user = authenticate_profile(profile, source)
+        _, user = authenticate_profile(profile, source, interactive=True)
     except AgentCliError as exc:
         warn_sign_in_failed(profile, exc, obj)
         return None
@@ -60,14 +74,16 @@ def _require_project(source: str) -> pathlib.Path:
     return directory
 
 
-def _resolve_for(obj, directory: pathlib.Path) -> ProfileInfo:
+def _resolve_for(obj, directory: pathlib.Path, in_project: bool) -> ProfileInfo:
     """The profile the CLI would use for `directory`: `-p`, its project `.env`, the env var, default."""
     if obj.profile_info.source == SOURCE_FLAG:
         return obj.profile_info
-    return resolve_profile(None, directory if is_agentbricks_project(directory) else None)
+    return resolve_profile(None, directory if in_project else None)
 
 
-def _login_target(obj, name: Optional[str], directory: pathlib.Path) -> Optional[tuple[str, str]]:
+def _login_target(
+    obj, name: Optional[str], env_profile: Optional[str]
+) -> Optional[tuple[str, str]]:
     """(profile, source) for `auth login`: NAME, the global `-p`, or the project's `.env` only.
 
     Signing in is an explicit act, so the ambient DATABRICKS_CONFIG_PROFILE and the SDK default
@@ -77,16 +93,14 @@ def _login_target(obj, name: Optional[str], directory: pathlib.Path) -> Optional
         return name, "argument"
     if obj.profile_info.source == SOURCE_FLAG and obj.profile_info.name:
         return obj.profile_info.name, SOURCE_FLAG
-    if is_agentbricks_project(directory):
-        env_profile = read_env(directory / ".env").get("DATABRICKS_CONFIG_PROFILE")
-        if env_profile:
-            return env_profile, SOURCE_ENV_FILE
+    if env_profile:
+        return env_profile, SOURCE_ENV_FILE
     if can_prompt_login():
         return None
     raise AgentCliError(
         "No profile to log in to.",
-        hint="Pass one (`agentbricks auth login <profile>`), or set the project's profile "
-        "with `agentbricks auth switch <profile>`.",
+        hint=f"Pass one (`{auth_login_command(None)}`), or set the project's profile "
+        f"with `{auth_switch_command(None)}`.",
     )
 
 
@@ -121,10 +135,7 @@ def auth_switch(obj, name: str, source: str) -> None:
     """
     directory = _require_project(source)
     changed = update_env_profile(directory, name)
-    if not can_prompt_login():
-        # Interactive runs sign in next, which creates a missing profile.
-        warn_unknown_profile(name, obj)
-    user = sign_in_if_interactive(obj, name, "argument")
+    user = sign_in_chosen_profile(obj, name, "argument")
     host = profile_host(name)
     if obj.output == "json":
         render.emit_json(
@@ -145,7 +156,7 @@ def auth_switch(obj, name: str, source: str) -> None:
     render.success(
         f"Project profile set → '{name}'" if changed else f"Project profile is already '{name}'",
         fields=fields,
-        next_steps=None if user else [(f"agentbricks auth login {name}", "Sign in")],
+        next_steps=None if user else [(auth_login_command(name), "Sign in")],
     )
 
 
@@ -165,9 +176,10 @@ def auth_describe(obj, source: str) -> None:
     authentication. Read-only; no workspace calls are made.
     """
     directory = pathlib.Path(source).resolve()
-    info = _resolve_for(obj, directory)
+    in_project = is_agentbricks_project(directory)
+    info = _resolve_for(obj, directory, in_project)
     host, workspace = workspace_for_profile(info.name)
-    project = str(directory) if is_agentbricks_project(directory) else None
+    project = str(directory) if in_project else None
     if obj.output == "json":
         render.emit_json(
             {
@@ -211,7 +223,12 @@ def auth_login(obj, name: Optional[str], source: str) -> None:
     instead. Nothing is saved: use `agentbricks auth switch` to change the project's profile.
     """
     directory = pathlib.Path(source).resolve()
-    target = _login_target(obj, name, directory)
+    env_profile = (
+        read_env(directory / ".env").get("DATABRICKS_CONFIG_PROFILE")
+        if is_agentbricks_project(directory)
+        else None
+    )
+    target = _login_target(obj, name, env_profile)
     if target is None:
         # `databricks auth login` picks the profile; it doesn't say which, so there's nothing to
         # validate or report beyond its own output.
@@ -223,7 +240,7 @@ def auth_login(obj, name: Optional[str], source: str) -> None:
         return
     chosen, origin = target
     announce_login(obj, chosen, origin)
-    client, user = authenticate_profile(chosen, origin)
+    client, user = authenticate_profile(chosen, origin, interactive=can_prompt_login())
     if obj.output == "json":
         render.emit_json({"profile": chosen, "source": origin, "user": user, "host": client.host})
         return
@@ -231,10 +248,8 @@ def auth_login(obj, name: Optional[str], source: str) -> None:
         f"Logged in to '{chosen}'",
         fields={"Profile": chosen, "Source": origin, "User": user, "Workspace": client.host},
     )
-    if is_agentbricks_project(directory):
-        env_profile = read_env(directory / ".env").get("DATABRICKS_CONFIG_PROFILE")
-        if env_profile and env_profile != chosen:
-            render.console().print(
-                f"[dim]This project still uses profile '{env_profile}' (from .env). "
-                f"Run `agentbricks auth switch {chosen}` to switch it.[/]"
-            )
+    if env_profile and env_profile != chosen:
+        render.console().print(
+            f"[dim]This project still uses profile '{env_profile}' (from .env). "
+            f"Run `{auth_switch_command(chosen)}` to switch it.[/]"
+        )
