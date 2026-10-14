@@ -114,6 +114,7 @@ def create(obj, memory_store, session_store, model, display_name, instructions, 
         fields={"Resource name": field(data, "name")},
         next_steps=[
             (f"agentbricks memory pipeline get {field(data, 'name')}", "View the pipeline"),
+            (f"agentbricks memory pipeline run {field(data, 'name')}", "Run the pipeline"),
         ],
     )
 
