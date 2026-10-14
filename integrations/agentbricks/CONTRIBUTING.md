@@ -204,6 +204,12 @@ the release branch and rerun with the same version. Once a version is tagged,
 use the next patch version for any further fixes (for example, `0.4.1` after `0.4.0`).
 Do not move an existing tag.
 
+After tagging, the workflow drafts a GitHub release for the tag. Its notes list the commits
+that touched `integrations/agentbricks/` since the previous Agent Bricks tag, leaving out
+fixes the previous release already shipped and the workflow's own version-stamp commits.
+Dry runs show the same notes in the run summary. Edit the draft if needed, and publish it
+once the package is on PyPI. A rerun leaves an existing release unchanged.
+
 On the first cut, the workflow also opens a draft PR to change the package version
 on `main` to the next minor development version (for example, `0.5.0.dev0` after
 cutting `0.4`). That version identifies development builds; it is not a published

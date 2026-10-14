@@ -106,10 +106,19 @@ jobs:
               for key in ('version', 'branch', 'tag', 'base_sha', 'branch_exists', 'next_dev_version'):
                   f.write(f'- **{key}:** `{plan[key]}`\n')
               f.write(f'- **Current version at source:** `{current}`\n')
-              f.write('- **Changes:** stamp the package and scaffold templates on the release branch, test the pushed commit, tag it, then open a next minor development version PR on the first cut. Publishing requires a separate approval.\n')
+              f.write('- **Changes:** stamp the package and scaffold templates on the release branch, test the pushed commit, tag it, draft a GitHub release with notes, then open a next minor development version PR on the first cut. Publishing requires a separate approval.\n')
               if tag_sha:
                   f.write(f'- {notice}\n')
           PY
+      - name: Preview release notes
+        env:
+          VERSION: ${{ inputs.version }}
+          BASE_SHA: ${{ steps.plan.outputs.base_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/agentbricks_release.py notes --version "$VERSION" --release-sha "$BASE_SHA" \
+            --root . --repository "$GITHUB_REPOSITORY" >> "$GITHUB_STEP_SUMMARY"
 
   cut:
     if: ${{ !inputs.dry_run }}
@@ -308,6 +317,25 @@ jobs:
             git tag "$TAG" "$RELEASE_SHA"
             git push origin "$TAG"
           fi
+      - name: Draft GitHub release notes
+        env:
+          VERSION: ${{ inputs.version }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          RELEASE_SHA: ${{ needs.cut.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A rerun keeps any notes a maintainer has already edited.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "GitHub release $TAG already exists; leaving its notes unchanged" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python3 workflow-tools/.github/scripts/agentbricks_release.py notes --version "$VERSION" \
+            --release-sha "$RELEASE_SHA" --root . --repository "$GITHUB_REPOSITORY" > "$RUNNER_TEMP/release-notes.md"
+          URL=$(gh release create "$TAG" --verify-tag --draft --title "databricks-agentbricks v$VERSION" \
+            --notes-file "$RUNNER_TEMP/release-notes.md")
+          echo "Draft GitHub release (publish it after the PyPI release): $URL" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Open next development version PR on first cut
         env:
           NEXT_DEV_VERSION: ${{ needs.plan.outputs.next_dev_version }}
