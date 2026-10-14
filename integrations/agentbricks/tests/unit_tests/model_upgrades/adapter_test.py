@@ -530,7 +530,7 @@ def test_run_one_warns_when_a_record_goes_over_the_latency_gate(mocker, monkeypa
 
 
 def test_run_one_predict_failure_yields_error_string(mocker):
-    """Predict raising should produce 'ERROR: ...' answer for the scorer to see."""
+    """Failed executions receive no credit, even if their cost and latency are low."""
     et = _EndpointTarget(name="ep1", candidate_models=["m1"], initial_model="m1")
 
     def boom(x):
@@ -554,12 +554,17 @@ def test_run_one_predict_failure_yields_error_string(mocker):
     )
 
     adapter = _AgentAdapter(state)
-    _, _, answer, _, _ = adapter._run_one(
+    score, objectives, answer, feedback, trace = adapter._run_one(
         {"model:ep1": "m1"}, inputs={}, expectations={"expected_response": "x"}
     )
     assert answer.startswith("ERROR:")
     assert "agent broke" in answer
-    assert seen == [answer]
+    assert seen == []
+    assert score == 0.0
+    assert objectives == {"quality": 0.0, "latency": 0.0, "cost": 0.0}
+    assert "REJECTED" in feedback and "agent broke" in feedback
+    assert trace == {"total_tokens": {}, "spans": []}
+    assert adapter._model_history["ep1"]["m1"] == [0.0]
 
 
 def test_run_one_cost_fallback_warns_when_no_tokens(mocker, recwarn):
@@ -815,3 +820,32 @@ def test_get_active_trace_flushes_async_logging_before_reading(monkeypatch):
     monkeypatch.setattr(opt.mlflow, "get_trace", lambda trace_id: calls.append(trace_id) or "trace")
     assert opt._get_active_trace() == "trace"
     assert calls == ["flush", "tr-1"]
+
+
+@pytest.mark.parametrize(
+    "values, expected", [([1.0], 1.0), ([1.0, 0.0], 0.5), ([1.0, "invalid"], 1.0), ([], 0.0)]
+)
+def test_mlflow_scorer_feedback_lists(values, expected, recwarn):
+    from mlflow.entities import Feedback
+    from mlflow.genai.scorers.base import Scorer
+
+    class ListScorer(Scorer):
+        name: str = "list_scorer"
+
+        def __call__(self, *, inputs=None, outputs=None, expectations=None):
+            return [Feedback(name=f"rating_{i}", value=value) for i, value in enumerate(values)]
+
+    scorer = ListScorer()
+    state = _state(scorers=[scorer])
+    assert _run_scorers([scorer], {}, {}, "answer", state=state) == pytest.approx(expected)
+    assert state.scorer_attempted == 1
+    assert state.scorer_succeeded == int(bool(values))
+
+
+@pytest.mark.parametrize("override", [True, False])
+def test_prompt_only_cost_uses_traced_calls(override):
+    rates = {"gpt-test": {"input": 10.0, "output": 20.0}} if override else {}
+    cost = _estimate_cost_usd(
+        {}, [], {}, rates, llm_calls=[{"model": "gpt-test", "input": 2000, "output": 2000}]
+    )
+    assert cost == pytest.approx(0.0042 if override else 0.008)

@@ -808,11 +808,14 @@ def _run_scorers(scorers, inputs, expectations, answer, *, trace=None, state=Non
         except Exception as e:
             _warn_once(name, "raised", f"{type(e).__name__}: {e}")
             continue
-        val = _convert_to_numeric(result)
-        if val is None:
-            _warn_once(name, "returned non-numeric", repr(result))
-            continue
-        numeric.append(val)
+        # MLflow scorers may return multiple named Feedback assessments.
+        results = result if isinstance(result, list) else [result]
+        for assessment in results:
+            val = _convert_to_numeric(assessment)
+            if val is None:
+                _warn_once(name, "returned non-numeric", repr(assessment))
+                continue
+            numeric.append(val)
     if numeric:
         if state is not None:
             state.scorer_succeeded += 1
@@ -890,9 +893,6 @@ def _estimate_cost_usd(candidate, endpoint_targets, total_tokens, token_costs, l
     across `endpoint_targets` and price each by its candidate alias -- coarse,
     but keeps a signal when the trace lacks per-span usage.
     """
-    if not endpoint_targets:
-        return 0.0
-
     if llm_calls:
         # A call to a model service (or its `_exp_<id>` clone) records the service's name, which no
         # catalog can price; price it as the model the candidate routes that service to.
@@ -924,6 +924,9 @@ def _estimate_cost_usd(candidate, endpoint_targets, total_tokens, token_costs, l
             )
             total += _rate_cost_usd(in_t, out_t, _FALLBACK_TOKEN_RATE)
         return total
+
+    if not endpoint_targets:
+        return 0.0
 
     # Fallback: no per-call data. Split trace-total tokens across endpoints.
     n = len(endpoint_targets)
@@ -986,13 +989,29 @@ class _AgentAdapter(gepa.GEPAAdapter):
         """Score a single record. Caller owns prompt-patching + endpoint sync."""
         state = self.state
         start = time.perf_counter()
+        prediction_failed = False
         try:
             answer = state.predict_fn(inputs)
         except Exception as e:
-            answer = f"ERROR: {e}"
+            prediction_failed = True
+            answer = f"ERROR: {type(e).__name__}: {e}"
         latency = time.perf_counter() - start
         mlflow_trace = _get_active_trace()
         trace = _extract_trace_summary()
+
+        if prediction_failed:
+            # A failed model must not look attractive to the bandit because it failed quickly.
+            for et in state.endpoint_targets:
+                model = candidate.get(_model_key(et), "")
+                if model:
+                    self._model_history[et.name][model].append(0.0)
+            return (
+                0.0,
+                {"quality": 0.0, "latency": 0.0, "cost": 0.0},
+                answer,
+                f"REJECTED: prediction failed ({answer})",
+                trace,
+            )
 
         if latency > state.latency_hard_gate:
             _warn_once(
