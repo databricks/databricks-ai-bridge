@@ -92,6 +92,31 @@ def test_poll_for_result_failed(genie, mock_workspace_client):
     assert genie_result.result == "Genie query failed with error: Test error"
 
 
+@pytest.mark.parametrize("state", ["FAILED", "CANCELED", "CLOSED"])
+def test_poll_for_result_query_result_not_succeeded(genie, mock_workspace_client, state):
+    mock_workspace_client.genie._api.do.side_effect = [
+        {
+            "status": "COMPLETED",
+            "conversation_id": "123",
+            "attachments": [
+                {
+                    "attachment_id": "789",
+                    "query": {"query": "SELECT *", "description": "Test description"},
+                }
+            ],
+        },
+        {
+            "statement_response": {
+                "status": {"state": state, "error": {"message": "Test error"}},
+            }
+        },
+    ]
+    genie_result = genie.poll_for_result("123", "456")
+    assert genie_result.result == f"No query result: {state}"
+    assert genie_result.query == "SELECT *"
+    assert genie_result.description == "Test description"
+
+
 def test_poll_for_result_cancelled(genie, mock_workspace_client):
     mock_workspace_client.genie._api.do.side_effect = [
         {"status": "CANCELLED"},
