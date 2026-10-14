@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from unittest import mock
 
@@ -10,6 +11,7 @@ from click.testing import CliRunner
 
 import databricks_agentbricks.cli.app as cli
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentkit._api_client import _AgentBricksApiClient
 
 PIPELINE = {
     "name": "memory-pipelines/p-123",
@@ -133,6 +135,34 @@ def test_pipeline_renders_nested_model(command, monkeypatch):
     assert result.exit_code == 0, result.output
     assert "nested-model" in result.output
     assert "system.ai.gpt-5-6-sol" not in result.output
+
+
+@pytest.mark.parametrize("command,trigger", [("pause", "MANUAL_ONLY"), ("resume", "SCHEDULED")])
+@pytest.mark.parametrize("output", ["text", "json"])
+@pytest.mark.parametrize("name", ["p-123", "memory-pipelines/p-123"])
+def test_pause_resume_update_only_trigger(command, trigger, output, name):
+    workspace = mock.Mock()
+    policy = PIPELINE["dreamer_policy"]
+    assert isinstance(policy, dict)
+    response = {
+        **PIPELINE,
+        "dreamer_policy": {**policy, "trigger": trigger},
+    }
+    workspace.api_client.do.return_value = response
+    ctx = _Ctx(_AgentBricksApiClient(workspace_client=workspace))
+    ctx.output = output
+    result = CliRunner().invoke(_pipeline(), [command, name], obj=ctx)
+    assert result.exit_code == 0, result.output
+    workspace.api_client.do.assert_called_once_with(
+        "PATCH",
+        "/api/2.0/agents/memory-pipelines/p-123",
+        query={"update_mask": "dreamer_policy.trigger"},
+        body={"name": "memory-pipelines/p-123", "dreamer_policy": {"trigger": trigger}},
+    )
+    if output == "json":
+        assert json.loads(result.stdout) == response
+    else:
+        assert trigger in result.stdout
 
 
 def test_create_accepts_store_names_and_model():

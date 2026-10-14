@@ -503,6 +503,8 @@ Manage pipelines that distill session history into long-term memory.
 | [`memory pipeline update`](#agentbricks-memory-pipeline-update) | Update a pipeline's display name, instructions, model, or trigger. |
 | [`memory pipeline delete`](#agentbricks-memory-pipeline-delete) | Delete a Dreamer memory pipeline and its backing job. |
 | [`memory pipeline run`](#agentbricks-memory-pipeline-run) | Manually run a Dreamer memory pipeline. |
+| [`memory pipeline pause`](#agentbricks-memory-pipeline-pause) | Pause scheduled runs; active runs continue and manual runs remain available. |
+| [`memory pipeline resume`](#agentbricks-memory-pipeline-resume) | Enable scheduled runs, automatically about every 24 hours. |
 | [`memory pipeline runs`](#agentbricks-memory-pipeline-runs) | Inspect memory pipeline runs. |
 
 ##### `agentbricks memory pipeline create`
@@ -577,6 +579,25 @@ updates use the `dreamer_policy.model` field mask. There is no legacy top-level 
 List and detail views accept either model location, preferring the nested value when present.
 `--trigger` updates `dreamer_policy.trigger`: `manual` maps to `MANUAL_ONLY`, and
 `scheduled` maps to `SCHEDULED`. Omit the flag to preserve the current trigger.
+
+##### `agentbricks memory pipeline pause`
+
+```sh
+agentbricks memory pipeline pause NAME
+```
+
+Set `dreamer_policy.trigger` to `MANUAL_ONLY` to stop scheduled runs. Active runs continue;
+manual `run` calls remain available. `NAME` accepts a pipeline id or full resource name.
+
+##### `agentbricks memory pipeline resume`
+
+```sh
+agentbricks memory pipeline resume NAME
+```
+
+Set `dreamer_policy.trigger` to `SCHEDULED` to enable automatic runs about every 24 hours.
+This also enables scheduling for a pipeline originally created as manual-only.
+Both commands update only the trigger and support the global `--output json` option.
 
 ##### `agentbricks memory pipeline delete`
 

@@ -157,6 +157,12 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("memory", "pipeline", "delete"): (
         ("agentbricks memory pipeline delete <pipeline>", "delete a memory pipeline"),
     ),
+    ("memory", "pipeline", "pause"): (
+        ("agentbricks memory pipeline pause <pipeline>", "pause scheduled runs"),
+    ),
+    ("memory", "pipeline", "resume"): (
+        ("agentbricks memory pipeline resume <pipeline>", "enable scheduled runs"),
+    ),
     ("memory", "pipeline", "run"): (
         ("agentbricks memory pipeline run <pipeline>", "start a Dreamer run"),
     ),
