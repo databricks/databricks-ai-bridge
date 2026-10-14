@@ -378,7 +378,11 @@ class Workspace:
     # Cleanup
 
     def delete_app(self, name: str) -> None:
-        self.client.apps.delete(name)
+        """Delete the App; a missing App counts as deleted."""
+        try:
+            self.client.apps.delete(name)
+        except NotFound:
+            return
         self._wait_for_app_deleted(name)
 
     def _wait_for_app_deleted(self, name: str, timeout: float = 1200) -> None:

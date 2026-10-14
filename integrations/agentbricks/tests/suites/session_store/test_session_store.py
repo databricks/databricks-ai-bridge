@@ -7,13 +7,16 @@ isolated between sessions.
 from __future__ import annotations
 
 import pytest
-from harness.cli import AgentbricksCli
+from harness.cli import AgentbricksCli, AgentEndpoint
+from harness.workspace import Workspace
 
 
-@pytest.mark.usefixtures("workspace_client")
-def test_session_store_created(agentbricks_cli: AgentbricksCli) -> None:
+def test_session_store_created(
+    agentbricks_cli: AgentbricksCli, workspace_client: Workspace
+) -> None:
     project = agentbricks_cli.new_project("cli")
-    agentbricks_cli.deploy(project)
+    agentbricks_cli.run(f"deploy {project.app_name} --source {project.path}", timeout=2400)
+    AgentEndpoint.deployed(workspace_client, project.app_name)
     resource = project.session_resource or {}
 
     assert resource.get("session_store_name") == project.session_store_config, resource

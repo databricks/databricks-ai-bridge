@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import shlex
+import uuid
 from collections.abc import Callable, Mapping
 
-from harness.cli import Agent, AgentbricksCli, Project
+from harness.cli import AgentbricksCli, AgentEndpoint, Project
 from harness.workspace import GrantTuple
 from uc_objects import UcFunction
 
@@ -31,8 +33,8 @@ class Tool:
     prompt: str
     # Asserts the serialized response proves the tool ran.
     check: Check
-    # `agentbricks tools add` arguments; None when the tool is a user-owned file instead.
-    add_args: tuple[str, ...] | None
+    # What follows `agentbricks tools add`; None when the tool is a user-owned file instead.
+    add_command: str | None
     # The [[tools]] entry for direct authoring, and any user-owned files the tool needs.
     toml: str
     files: Mapping[str, str]
@@ -97,7 +99,7 @@ def sandbox_tool(uc_function: UcFunction) -> Tool:
         check=contains(uc_function.volume_marker),
         # The CLI's default auth: the sandbox reads the volume as the user invoking the agent, so
         # deploy adds no App grant. A manifest entry without `auth` would run as the App instead.
-        add_args=("sandbox", "--scope", f"volume:{uc_function.volume}"),
+        add_command=f"sandbox --scope volume:{uc_function.volume}",
         toml=(
             '[[tools]]\nid = "sandbox"\nauth = "user"\n'
             'source = { kind = "sandbox", service = "system.ai.sandbox" }\n'
@@ -121,7 +123,7 @@ def web_search_tool(**_resources: object) -> Tool:
             "return the title and https URL of one result. Do not answer from memory."
         ),
         check=check_web_search,
-        add_args=("mcp", "system.ai.web_search", "--auth", "app"),
+        add_command="mcp system.ai.web_search --auth app",
         toml=(
             '[[tools]]\nid = "web_search"\nauth = "app"\n'
             'source = { kind = "mcp", service = "system.ai.web_search" }\n'
@@ -140,7 +142,7 @@ def python_tool() -> Tool:
             "Return its exact result."
         ),
         check=contains(PYTHON_MARKER),
-        add_args=None,
+        add_command=None,
         toml="",
         files={PYTHON_MARKER_FILE: PYTHON_MARKER_SOURCE},
         tool_id=None,
@@ -156,7 +158,7 @@ def uc_function_tool(uc_function: UcFunction) -> Tool:
             "'matrix'. Return the called tool's exact result."
         ),
         check=contains(UC_MARKER),
-        add_args=("uc-function", uc_function.function, "--name", "agentbricks_uc_marker"),
+        add_command=f"uc-function {uc_function.function} --name agentbricks_uc_marker",
         toml=(
             '[[tools]]\nid = "agentbricks_uc_marker"\n'
             f'source = {{ kind = "uc_function", function = "{uc_function.function}" }}\n'
@@ -178,7 +180,7 @@ def genie_tool(genie_space: str) -> Tool:
             "response."
         ),
         check=check_genie,
-        add_args=("genie-agent", genie_space, "--name", "genie", "--auth", "app"),
+        add_command=f"genie-agent {genie_space} --name genie --auth app",
         toml=(
             '[[tools]]\nid = "genie"\nauth = "app"\n'
             f'source = {{ kind = "genie_agent", space_id = "{genie_space}" }}\n'
@@ -202,13 +204,13 @@ TOOL_DEFINITIONS = (
 
 def bind(cli: AgentbricksCli, project: Project, tool: Tool) -> None:
     """CLI authoring: add one tool and confirm agent.toml declares it as intended."""
-    if tool.add_args is not None:
-        cli.tools_add(project, *tool.add_args)
+    if tool.add_command is not None:
+        cli.run(f"tools add {tool.add_command} --source {project.path}")
     for relative_path, content in tool.files.items():
-        cli.write_file(project, relative_path, content)
+        project.write_file(relative_path, content)
     if tool.tool_id is None:
         return
-    declared = {t["id"]: t for t in cli.manifest(project).get("tools", [])}
+    declared = {t["id"]: t for t in project.manifest().get("tools", [])}
     assert tool.tool_id in declared, (
         f"tools add did not declare {tool.tool_id!r}: {sorted(declared)}"
     )
@@ -222,14 +224,10 @@ def reject_unavailable_mcp(cli: AgentbricksCli, project: Project) -> None:
     """`tools add` must refuse an MCP service that does not exist and leave agent.toml untouched."""
     manifest = project.path / "agent.toml"
     before = manifest.read_bytes()
-    rejected = cli.tools_add(
-        project,
-        "mcp",
-        "system.ai.missing_service",
-        "--name",
-        "broken_mcp",
+    rejected = cli.run(
+        "--output json tools add mcp system.ai.missing_service --name broken_mcp "
+        f"--source {project.path}",
         check=False,
-        json_output=True,
     )
     assert rejected.returncode != 0 and manifest.read_bytes() == before, (
         "agentbricks tools add accepted an unavailable MCP service or changed agent.toml"
@@ -238,17 +236,29 @@ def reject_unavailable_mcp(cli: AgentbricksCli, project: Project) -> None:
     assert code in {"NOT_FOUND", "RESOURCE_DOES_NOT_EXIST"}, (
         f"Unexpected MCP validation error: {rejected.stderr}"
     )
-    cli.tools_remove(project, "mcp", "system.ai.missing_service")
-    assert not any(tool["id"] == "broken_mcp" for tool in cli.manifest(project).get("tools", [])), (
+    cli.run(f"tools remove mcp system.ai.missing_service --source {project.path}")
+    assert not any(tool["id"] == "broken_mcp" for tool in project.manifest().get("tools", [])), (
         "agentbricks tools remove left the broken MCP binding in agent.toml"
     )
 
 
-def invoke_and_check(agent: Agent, tool: Tool) -> None:
-    tool.check(agent.invoke(tool.prompt, f"{agent.runtime}-{tool.name}"))
+def invoke_and_check(endpoint: AgentEndpoint, tool: Tool) -> None:
+    tool.check(endpoint.invoke(tool.prompt, f"{endpoint.runtime}-{tool.name}"))
 
 
-def assert_endpoint_invoke(agentbricks_cli: AgentbricksCli, agent: Agent) -> None:
-    """The CLI's own invoke command reaches the running agent and gets a reply."""
-    output = agentbricks_cli.endpoint_invoke(agent, "Reply with the single word OK.")
+def assert_endpoint_invoke(cli: AgentbricksCli, endpoint: AgentEndpoint) -> None:
+    """`agentbricks endpoint invoke`, the call the CLI tells users to run after dev/deploy, gets a reply."""
+    invocation_id = str(uuid.uuid4())
+    body = json.dumps(
+        {
+            "id": invocation_id,
+            "session_id": invocation_id,
+            "input": [{"role": "user", "content": "Reply with the single word OK."}],
+        }
+    )
+    target = endpoint.app_name or f"--url {endpoint.base_url} --no-auth"
+    output = cli.run(
+        f"endpoint invoke {target} --path /api/invocations --json {shlex.quote(body)}",
+        retry_unavailable=True,
+    ).stdout
     assert "ok" in output.lower(), f"endpoint invoke returned no reply: {output[:500]}"

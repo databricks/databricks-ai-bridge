@@ -7,8 +7,11 @@ reports each tool independently and the sequence continues past a failure.
 
 from __future__ import annotations
 
+import contextlib
+from collections.abc import Iterator
+
 import pytest
-from harness.cli import AgentbricksCli
+from harness.cli import AgentbricksCli, AgentEndpoint, Project, free_port
 from tool_definitions import (
     Tool,
     assert_endpoint_invoke,
@@ -19,6 +22,17 @@ from tool_definitions import (
 
 # Local dev servers share run-local's proxy port, so all dev runs stay on one worker, in order.
 pytestmark = pytest.mark.xdist_group("dev")
+
+
+@contextlib.contextmanager
+def dev(cli: AgentbricksCli, project: Project) -> Iterator[AgentEndpoint]:
+    """`agentbricks dev` the project for the duration of the block."""
+    port = free_port()
+    # The template server binds $PORT, so an inherited PORT would override --app-port.
+    with cli.start(
+        f"dev --source {project.path} --app-port {port}", env={"PORT": str(port)}
+    ) as server:
+        yield AgentEndpoint.local(server, port)
 
 
 def test_dev(
@@ -32,16 +46,16 @@ def test_dev(
         for tool in tools:
             with subtests.test(tool=tool.name):
                 bind(agentbricks_cli, project, tool)
-                with agentbricks_cli.dev(project) as agent:
-                    invoke_and_check(agent, tool)
-        with subtests.test(step="endpoint-invoke"), agentbricks_cli.dev(project) as agent:
-            assert_endpoint_invoke(agentbricks_cli, agent)
+                with dev(agentbricks_cli, project) as endpoint:
+                    invoke_and_check(endpoint, tool)
+        with subtests.test(step="endpoint-invoke"), dev(agentbricks_cli, project) as endpoint:
+            assert_endpoint_invoke(agentbricks_cli, endpoint)
         return
 
-    agentbricks_cli.write_manifest(project, tools)
-    with agentbricks_cli.dev(project) as agent:
+    project.write_manifest(tools)
+    with dev(agentbricks_cli, project) as endpoint:
         for tool in tools:
             with subtests.test(tool=tool.name):
-                invoke_and_check(agent, tool)
+                invoke_and_check(endpoint, tool)
         with subtests.test(step="endpoint-invoke"):
-            assert_endpoint_invoke(agentbricks_cli, agent)
+            assert_endpoint_invoke(agentbricks_cli, endpoint)

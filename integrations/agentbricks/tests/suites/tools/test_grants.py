@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from harness.cli import AgentbricksCli
+from harness.cli import AgentbricksCli, AgentEndpoint
 from harness.run import TOOL_RESOURCE_PREFIX
 from harness.workspace import Workspace
 from tool_definitions import bind, uc_function_tool
@@ -23,8 +23,9 @@ def test_grants(
     if authoring == "cli":
         bind(agentbricks_cli, project, tool)
     else:
-        agentbricks_cli.write_manifest(project, [tool])
-    agentbricks_cli.deploy(project, app)
+        project.write_manifest([tool])
+    agentbricks_cli.run(f"deploy {app} --source {project.path}", timeout=2400)
+    AgentEndpoint.deployed(workspace_client, app)
 
     with subtests.test(check="transitive-function-not-auto-granted"):
         # Raises if the hidden nested function is already granted or listed as an App resource.

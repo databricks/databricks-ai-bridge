@@ -8,7 +8,7 @@ reports each tool independently and the sequence continues past a failure.
 
 from __future__ import annotations
 
-from harness.cli import AgentbricksCli
+from harness.cli import AgentbricksCli, AgentEndpoint
 from harness.logs import log
 from harness.workspace import Workspace
 from tool_definitions import Tool, assert_endpoint_invoke, bind, invoke_and_check
@@ -46,23 +46,25 @@ def test_deploy(
         for index, tool in enumerate(tools):
             with subtests.test(tool=tool.name):
                 bind(agentbricks_cli, project, tool)
-                agent = agentbricks_cli.deploy(project, app)
+                agentbricks_cli.run(f"deploy {app} --source {project.path}", timeout=2400)
+                endpoint = AgentEndpoint.deployed(workspace_client, app)
                 wait_for_grant(tool)
                 grant_transitive_if_needed(tool)
-                invoke_and_check(agent, tool)
+                invoke_and_check(endpoint, tool)
                 for added in tools[: index + 1]:
                     assert_granted(added)
         with subtests.test(step="endpoint-invoke"):
-            assert_endpoint_invoke(agentbricks_cli, agent)
+            assert_endpoint_invoke(agentbricks_cli, endpoint)
         return
 
-    agentbricks_cli.write_manifest(project, tools)
-    agent = agentbricks_cli.deploy(project, app)
+    project.write_manifest(tools)
+    agentbricks_cli.run(f"deploy {app} --source {project.path}", timeout=2400)
+    endpoint = AgentEndpoint.deployed(workspace_client, app)
     for tool in tools:
         with subtests.test(tool=tool.name):
             wait_for_grant(tool)
             grant_transitive_if_needed(tool)
-            invoke_and_check(agent, tool)
+            invoke_and_check(endpoint, tool)
             assert_granted(tool)
     with subtests.test(step="endpoint-invoke"):
-        assert_endpoint_invoke(agentbricks_cli, agent)
+        assert_endpoint_invoke(agentbricks_cli, endpoint)

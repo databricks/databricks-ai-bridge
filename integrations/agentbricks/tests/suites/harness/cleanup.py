@@ -7,7 +7,7 @@ Two entry points, both safe to repeat (a missing resource counts as deleted):
 - ``delete_run_leftovers``: whatever a crashed test or a failed teardown left. It runs once after
   every live run, and on its own with ``pytest tests/suites --cleanup-only --run-id <id>`` after a
   run that was killed before it could. It finds resources by the run's name prefix (Apps, source
-  folders, schemas) and by the App identities recorded at deploy time in ``<output>/apps.jsonl``
+  folders, schemas) and by the App identities per-test cleanup recorded in ``<output>/apps.jsonl``
   (Lakebase databases and roles, which outlive their App), so it touches nothing outside the run.
 """
 
@@ -27,7 +27,7 @@ from harness.workspace import AppIdentity, Workspace
 _APPS_RECORD = "apps.jsonl"
 
 
-# Identities recorded at deploy time
+# Identities recorded by per-test cleanup
 
 
 def record_app_identity(output: pathlib.Path, app: str, identity: AppIdentity) -> None:
@@ -113,7 +113,7 @@ def delete_app_resources(
     """Delete one project's stores and, if it has an App, everything the App's deploy created.
 
     ``delete_store(kind, store)`` is the agentbricks CLI's store delete, which has no SDK surface.
-    ``identity`` is what was recorded at deploy time; it fills in whatever the live lookup misses.
+    ``identity`` is what was recorded earlier; it fills in whatever the live lookup misses.
     Every step runs regardless of earlier failures except those that need the App gone. Returns a
     description of each failure; an empty list means everything was deleted.
     """

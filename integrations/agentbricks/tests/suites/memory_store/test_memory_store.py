@@ -6,13 +6,14 @@ Real case still to write: the agent writes a memory in one invocation and recall
 from __future__ import annotations
 
 import pytest
-from harness.cli import AgentbricksCli
+from harness.cli import AgentbricksCli, AgentEndpoint
+from harness.workspace import Workspace
 
 
-@pytest.mark.usefixtures("workspace_client")
-def test_memory_store_created(agentbricks_cli: AgentbricksCli) -> None:
+def test_memory_store_created(agentbricks_cli: AgentbricksCli, workspace_client: Workspace) -> None:
     project = agentbricks_cli.new_project("cli")
-    agentbricks_cli.deploy(project)
+    agentbricks_cli.run(f"deploy {project.app_name} --source {project.path}", timeout=2400)
+    AgentEndpoint.deployed(workspace_client, project.app_name)
     resource = project.memory_resource or {}
 
     assert resource.get("display_name") == project.memory_store_config, resource
