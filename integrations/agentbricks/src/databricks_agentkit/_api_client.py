@@ -511,19 +511,18 @@ class _AgentBricksApiClient:
         method: str,
         path: str,
         *,
-        body: dict,
-        query: Optional[dict] = None,
+        nested_body: dict,
+        nested_query: Optional[dict] = None,
         legacy_body: Optional[dict] = None,
         legacy_query: Optional[dict] = None,
-        nested_body: Optional[dict] = None,
     ) -> dict:
         """Send caller-built payloads, retrying once on explicit model-schema rejection.
 
-        Create supplies a dual-field body and both fallback bodies. Update supplies a
-        nested-model body/mask and its legacy fallback. Without a model, no fallback is supplied.
+        Both create and update try the nested shape first, then the legacy shape.
+        Without a model, no fallback is supplied.
         """
         try:
-            return self._do(method, path, body=body, query=query)
+            return self._do(method, path, body=nested_body, query=nested_query)
         except AgentCliError as exc:
             if legacy_body is None:
                 raise
@@ -546,13 +545,7 @@ class _AgentBricksApiClient:
                 unsupported_model or unknown_model
             ):
                 raise
-            if method == "POST":
-                # Both locations were sent. A bare "unknown field model" is ambiguous:
-                # require the parser to identify the containing message before retrying.
-                if unknown_model and "dreamerpolicy" in message:
-                    return self._do(method, path, body=legacy_body, query=legacy_query)
-                if unknown_model and "memorypipeline" in message and "dreamerpolicy" not in message:
-                    return self._do(method, path, body=nested_body, query=query)
+            if "memorypipeline" in message and "dreamerpolicy" not in message:
                 raise
             return self._do(method, path, body=legacy_body, query=legacy_query)
 
@@ -580,17 +573,16 @@ class _AgentBricksApiClient:
             memory_store=memory_store_path(memory_store),
             dreamer_policy=policy or None,
         )
-        legacy_body = nested_body = None
+        legacy_body = None
+        nested_body = body
         if model is not None:
             legacy_body = {**body, "model": model}
             nested_body = {**body, "dreamer_policy": {**policy, "model": model}}
-            body = {**nested_body, "model": model}
         return self._write_memory_pipeline(
             "POST",
             f"{_BASE}/memory-pipelines",
-            body=body,
-            legacy_body=legacy_body,
             nested_body=nested_body,
+            legacy_body=legacy_body,
         )
 
     def get_memory_pipeline(self, name: str) -> dict:
@@ -647,8 +639,8 @@ class _AgentBricksApiClient:
         return self._write_memory_pipeline(
             "PATCH",
             f"{_BASE}/{memory_pipeline_path(name)}",
-            query={"update_mask": ",".join(mask)},
-            body=body,
+            nested_query={"update_mask": ",".join(mask)},
+            nested_body=body,
             legacy_body=legacy_body,
             legacy_query=legacy_query,
         )

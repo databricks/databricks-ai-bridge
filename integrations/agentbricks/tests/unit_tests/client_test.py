@@ -49,10 +49,7 @@ def test_pipeline_model_schema_fallback(workspace_client, operation, model, code
     assert do.call_count == 2
     original, retried = do.call_args_list
     assert retried.kwargs["body"]["model"] == model
-    if operation == "create":
-        assert original.kwargs["body"]["model"] == model
-    else:
-        assert "model" not in original.kwargs["body"]
+    assert "model" not in original.kwargs["body"]
     assert original.kwargs["body"]["dreamer_policy"] == {
         "model": model,
         "instructions": "keep",
@@ -99,23 +96,14 @@ def test_pipeline_model_fallback_only_once(workspace_client):
 
 @pytest.mark.parametrize("model", ["system.ai.dummy", ""])
 @mock.patch("databricks.sdk.WorkspaceClient")
-def test_pipeline_create_removes_rejected_top_level_model(workspace_client, model):
+def test_pipeline_create_sends_only_nested_model_on_success(workspace_client, model):
     c, do = _client(workspace_client)
-    do.side_effect = [
-        AgentCliError(
-            "Cannot find field: model in message com.databricks.MemoryPipeline",
-            error_code="BAD_REQUEST",
-        ),
-        {"name": "memory-pipelines/new"},
-    ]
     c.create_memory_pipeline(
         memory_store="m", session_store="s", model=model, instructions="keep", trigger="manual"
     )
-    assert do.call_count == 2
-    first, second = do.call_args_list
-    assert first.kwargs["body"]["model"] == model
-    assert "model" not in second.kwargs["body"]
-    assert second.kwargs["body"]["dreamer_policy"] == {
+    assert do.call_count == 1
+    assert "model" not in do.call_args.kwargs["body"]
+    assert do.call_args.kwargs["body"]["dreamer_policy"] == {
         "model": model,
         "instructions": "keep",
         "trigger": "MANUAL_ONLY",
@@ -125,7 +113,7 @@ def test_pipeline_create_removes_rejected_top_level_model(workspace_client, mode
 @pytest.mark.parametrize(
     "message,code",
     [
-        ('Unknown field "model"', "BAD_REQUEST"),
+        ('Unknown field "model" in message MemoryPipeline', "BAD_REQUEST"),
         ('Unknown field "model" in message MemoryPipeline', "PERMISSION_DENIED"),
         ("Model not found", "BAD_REQUEST"),
         ("Timed out", "DEADLINE_EXCEEDED"),
@@ -144,7 +132,7 @@ def test_pipeline_create_does_not_retry_ambiguous_failures(workspace_client, mes
 def test_pipeline_create_schema_retry_is_bounded(workspace_client):
     c, do = _client(workspace_client)
     do.side_effect = AgentCliError(
-        'Unknown field "model" in message MemoryPipeline', error_code="BAD_REQUEST"
+        'Unknown field "model"', error_code="BAD_REQUEST"
     )
     with pytest.raises(AgentCliError):
         c.create_memory_pipeline(memory_store="m", session_store="s", model="system.ai.dummy")
@@ -362,7 +350,6 @@ def test_memory_pipeline_crud_uses_v2_resource_contract(workspace_client):
                 "memory_store": "memory-stores/support-memory",
                 "session_store": "session-stores/support-sessions",
                 "dreamer_policy": {"model": "system.ai.gpt-5-6-sol"},
-                "model": "system.ai.gpt-5-6-sol",
             },
         ),
         mock.call("GET", "/api/2.0/agents/memory-pipelines/p-123", query=None, body=None),
