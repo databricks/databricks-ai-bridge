@@ -339,7 +339,6 @@ class _AgentBricksApiClient:
         description: Optional[str] = None,
         session_id: Optional[str] = None,
         source_type: Optional[str] = None,
-        write_mode: Optional[str] = None,
     ) -> models.MemoryEntry:
         body = _body(
             actor_id=actor_id,
@@ -348,7 +347,6 @@ class _AgentBricksApiClient:
             description=description,
             session_id=session_id,
             source_type=source_type,
-            write_mode=write_mode,
         )
         return _as(
             models.MemoryEntry,
@@ -376,6 +374,7 @@ class _AgentBricksApiClient:
         page_size: Optional[int] = None,
         page_token: Optional[str] = None,
         read_mask: Optional[str] = None,
+        path: Optional[str] = None,
     ) -> models.MemoryEntryList:
         return _as(
             models.MemoryEntryList,
@@ -389,6 +388,7 @@ class _AgentBricksApiClient:
                     page_size=page_size,
                     page_token=page_token,
                     read_mask=read_mask,
+                    path=path,
                 ),
             ),
         )
