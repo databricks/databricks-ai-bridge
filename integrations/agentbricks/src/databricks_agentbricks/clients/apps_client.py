@@ -661,10 +661,14 @@ def add_tool_resources_for_rollout(
 
 
 def _get_run_local_env() -> dict[str, str]:
-    """Our environment without ``VIRTUAL_ENV``.
+    """Our environment without ``VIRTUAL_ENV`` or ``PORT``.
 
     ``run-local --prepare-environment`` creates the project's ``.venv`` but installs the app's
     requirements with ``uv pip``, which targets ``$VIRTUAL_ENV`` first: an activated venv would get
     the app's packages (and downgrades) instead of the project's own.
+
+    ``run-local`` sets ``PORT`` to ``--app-port`` only when it isn't already set, and the templates
+    listen on ``PORT``: a ``PORT`` exported for something else would move the app off the port the
+    proxy forwards to.
     """
-    return {key: value for key, value in os.environ.items() if key != "VIRTUAL_ENV"}
+    return {key: value for key, value in os.environ.items() if key not in ("VIRTUAL_ENV", "PORT")}
