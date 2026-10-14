@@ -6,7 +6,8 @@ the tool surface, route to the wrong one, so this is the one test that binds the
 
 from __future__ import annotations
 
-from harness.cli import AgentbricksCli, AgentEndpoint
+from harness.agent_endpoint import AgentEndpoint
+from harness.cli import AgentbricksCli
 from harness.project import Project, pin_runtime
 from harness.workspace import Workspace
 from tool_definitions import PYTHON_MARKER, UC_MARKER, Tool, bind, excerpt

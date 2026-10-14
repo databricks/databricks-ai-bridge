@@ -11,7 +11,8 @@ import contextlib
 from collections.abc import Iterator
 
 import pytest
-from harness.cli import AgentbricksCli, AgentEndpoint, free_port
+from harness.agent_endpoint import AgentEndpoint
+from harness.cli import AgentbricksCli, free_port
 from harness.project import Project, pin_runtime
 from tool_definitions import (
     Tool,

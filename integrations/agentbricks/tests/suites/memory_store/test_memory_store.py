@@ -8,7 +8,8 @@ from __future__ import annotations
 import json
 
 import pytest
-from harness.cli import AgentbricksCli, AgentEndpoint
+from harness.agent_endpoint import AgentEndpoint
+from harness.cli import AgentbricksCli
 from harness.project import Project, pin_runtime
 from harness.workspace import Workspace
 

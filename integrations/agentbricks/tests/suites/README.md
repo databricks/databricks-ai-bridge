@@ -49,7 +49,8 @@ Every resource a run creates carries its run id, and is deleted at three points:
 | `conftest.py` | All pytest wiring: options, hooks, and the fixtures every suite shares |
 | `harness/run.py` | `RunConfig`, the run id, and the name prefixes every resource carries |
 | `harness/target.py` | The `--workspace live\|fake` seam the CLI and fixtures talk to |
-| `harness/cli.py` | Runs `agentbricks` commands (`cli.run("tools add ...")`), and the endpoints of the agents they start |
+| `harness/cli.py` | Runs `agentbricks` commands: `cli.run("tools add ...")`, and `cli.start("dev ...")` in the background |
+| `harness/agent_endpoint.py` | `AgentEndpoint`: a running dev server or deployed App, and invoking it over HTTP |
 | `harness/project.py` | A test's project: run-scoped path and App name, its files, and `pin_runtime` |
 | `harness/workspace.py` | Databricks SDK helpers for what is not under test: SQL, UC, Apps, grants |
 | `harness/cleanup.py` | Deleting what the suites create, per App and per run |

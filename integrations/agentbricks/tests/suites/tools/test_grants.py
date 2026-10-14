@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from harness.cli import AgentbricksCli, AgentEndpoint
+from harness.agent_endpoint import AgentEndpoint
+from harness.cli import AgentbricksCli
 from harness.project import Project, pin_runtime
 from harness.run import TOOL_RESOURCE_PREFIX
 from harness.workspace import Workspace

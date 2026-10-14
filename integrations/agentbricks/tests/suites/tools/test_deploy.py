@@ -8,7 +8,8 @@ reports each tool independently and the sequence continues past a failure.
 
 from __future__ import annotations
 
-from harness.cli import AgentbricksCli, AgentEndpoint
+from harness.agent_endpoint import AgentEndpoint
+from harness.cli import AgentbricksCli
 from harness.logs import log
 from harness.project import Project, pin_runtime
 from harness.workspace import Workspace
