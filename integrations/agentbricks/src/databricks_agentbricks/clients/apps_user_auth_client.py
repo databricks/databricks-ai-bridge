@@ -100,7 +100,7 @@ def required_user_api_scopes(project: AgentProject | None) -> set[str]:
         if tool.auth != "user":
             continue
         if tool.source.kind == "uc_function":
-            scopes.add("unity-catalog")
+            scopes.add("mcp.functions")
             continue
         if tool.source.kind in ("genie_one", "genie_agent"):
             scopes.add("genie")

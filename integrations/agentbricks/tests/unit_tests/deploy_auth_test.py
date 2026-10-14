@@ -212,7 +212,7 @@ def test_user_auth_requires_explicit_auth_on_every_managed_binding(tmp_path):
         (ToolSpec.genie_agent("space", space_id="0" * 32, auth="user"), {"genie"}),
         (
             ToolSpec.uc_function("lookup", function="main.tools.lookup", auth="user"),
-            {"unity-catalog"},
+            {"mcp.functions"},
         ),
         (ToolSpec.uc_function("lookup", function="main.tools.lookup", auth="app"), set()),
         (ToolSpec.uc_function("lookup", function="main.tools.lookup"), set()),

@@ -799,7 +799,7 @@ Deploy derives Apps user scopes from explicit `auth = "user"` bindings and union
 | Managed MCP (governed ingress) | `ai-gateway` |
 | `system.ai.dbsql` | `ai-gateway`, `sql` |
 | `system.ai.genie_one_mcp` | `ai-gateway`, `genie` |
-| UC function | `unity-catalog` |
+| UC function | `mcp.functions` |
 | Sandbox with a Volume downscope | `ai-gateway`, `files` |
 | First-class Genie One or Genie Agent | `genie` |
 | Sandbox with token injection | `ai-gateway`, `workspace.workspace` |
