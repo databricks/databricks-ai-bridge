@@ -245,12 +245,23 @@ def test_sandbox_metadata_protects_token_env_policy_for_both_identities(adapter,
 
 
 @pytest.mark.parametrize("token_included", [True, False])
-def test_unscoped_sandbox_omits_downscope_even_with_caller_meta(
+def test_scoped_sandbox_preserves_downscope_with_token_opt_out(
     adapter, monkeypatch, token_included
 ):
-    sandbox = tool("user", "sandbox", "sandbox", databricks_access_token_included=token_included)
+    sandbox = tool(
+        "user",
+        "sandbox",
+        "sandbox",
+        downscope=(
+            SimpleNamespace(kind="volume", value="main.data.files", permission="read_only"),
+        ),
+        databricks_access_token_included=token_included,
+    )
     server = adapter._server_from_tool(sandbox, workspace_client_for=Mock())
-    expected_meta = {"databricks_access_token_included": token_included}
+    expected_meta = {
+        "downscope": {"volumes": [{"name": "main.data.files", "permission": "read_only"}]},
+        "databricks_access_token_included": token_included,
+    }
 
     if adapter.__name__.endswith("openai.mcp"):
         call_tool = AsyncMock(return_value=SimpleNamespace(isError=False))

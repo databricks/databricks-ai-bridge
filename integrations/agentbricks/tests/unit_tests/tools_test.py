@@ -101,27 +101,18 @@ def test_add_sandbox_only_updates_manifest(tmp_path: pathlib.Path):
 
 
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
-@pytest.mark.parametrize(
-    ("token_option", "token_included"),
-    [((), True), (("--no-databricks-access-token-included",), False)],
-)
-def test_add_sandbox_without_scope_uses_caller_grants(
-    tmp_path: pathlib.Path, framework, token_option, token_included
-):
+@pytest.mark.parametrize("token_option", [(), ("--no-databricks-access-token-included",)])
+def test_add_sandbox_without_scope_does_not_change_project(tmp_path, framework, token_option):
     project = _project(tmp_path, framework)
+    before = {path: path.read_bytes() for path in project.rglob("*") if path.is_file()}
 
     result = CliRunner().invoke(
         tools, ["add", "sandbox", *token_option, "--source", str(project)], obj=_Ctx()
     )
 
-    assert result.exit_code == 0, result.output
-    loaded = AgentProject.load(project).tools[0]
-    assert loaded.auth == "user"
-    assert loaded.policy.downscope == ()
-    assert loaded.policy.databricks_access_token_included is token_included
-    manifest = (project / "agent.toml").read_text()
-    assert "downscope" not in manifest
-    assert f"databricks_access_token_included = {str(token_included).lower()}" in manifest
+    assert result.exit_code != 0
+    assert "Missing option '--scope'" in result.output
+    assert {path: path.read_bytes() for path in project.rglob("*") if path.is_file()} == before
 
 
 def test_add_sandbox_empty_supplied_scope_does_not_change_project(tmp_path: pathlib.Path):

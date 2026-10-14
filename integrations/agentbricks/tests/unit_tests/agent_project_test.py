@@ -141,16 +141,25 @@ def test_scope_rejects_unsupported_table_resource():
 
 
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
-def test_unscoped_sandbox_round_trips_without_downscope_meta(tmp_path, monkeypatch, framework):
-    project = AgentProject.create(tmp_path, framework=framework, server="agentbricks")
-    project.add_tool(ToolSpec.sandbox("sandbox", scopes=[], auth="user"))
-    project.write()
+@pytest.mark.parametrize("reader", ["project", "runtime"])
+@pytest.mark.parametrize("policy", ["", "policy = {}", "policy = { downscope = [] }"])
+def test_unscoped_sandbox_is_rejected(tmp_path, monkeypatch, framework, reader, policy):
+    path = _write_manifest(
+        tmp_path,
+        f'schema_version = 1\n[agent]\nframework = "{framework}"\nserver = "agentbricks"\n'
+        '\n[[tools]]\nid = "sandbox"\nauth = "user"\n'
+        'source = { kind = "sandbox", service = "system.ai.sandbox" }\n'
+        f"{policy}\n",
+    )
+    before = path.read_bytes()
     monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
 
-    assert AgentProject.load(tmp_path).tools[0].policy.downscope == ()
-    record = load_tools(expected_framework=framework)[0]
-    assert record.downscope == ()
-    assert tool_manifest.sandbox_meta(record) == {"databricks_access_token_included": True}
+    with pytest.raises((AgentCliError, RuntimeError), match="at least one volume"):
+        if reader == "project":
+            AgentProject.load(tmp_path)
+        else:
+            load_tools(expected_framework=framework)
+    assert path.read_bytes() == before
 
 
 @pytest.mark.parametrize("reader", ["project", "runtime"])
@@ -559,6 +568,7 @@ def test_add_conflicting_tool_id_fails_without_writing(tmp_path: pathlib.Path):
     [
         (lambda: ToolSpec.mcp("web", service="not-three-parts"), "MCP service"),
         (lambda: ToolSpec.uc_function("lookup", function="catalog.schema"), "UC function"),
+        (lambda: ToolSpec.sandbox("sandbox", scopes=[]), "volume scope"),
         (
             lambda: ToolSpec.sandbox("sandbox", scopes=[Scope(kind="unknown", value="c.s.t")]),
             "scope kind",

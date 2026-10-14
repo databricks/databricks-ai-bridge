@@ -247,19 +247,24 @@ def test_sandbox_policy_requests_resource_and_token_scopes(tmp_path, binding, ex
     ("token_included", "expected"),
     [
         (True, {"ai-gateway", "files", "workspace.workspace"}),
-        (False, {"ai-gateway"}),
+        (False, {"ai-gateway", "files"}),
     ],
 )
-def test_unscoped_sandbox_requests_files_for_token_injection(tmp_path, token_included, expected):
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+def test_volume_sandbox_always_requests_files(tmp_path, framework, token_included, expected):
     from databricks_agentbricks.cli.app_auth import required_user_api_scopes
 
-    project = AgentProject.create(tmp_path, framework="langgraph", server="agentbricks")
+    project = AgentProject.create(tmp_path, framework=framework, server="agentbricks")
     project.add_tool(
         ToolSpec.sandbox(
-            "unscoped", scopes=[], auth="user", databricks_access_token_included=token_included
+            "sandbox",
+            scopes=[Scope.volume("cat.sch.vol")],
+            auth="user",
+            databricks_access_token_included=token_included,
         )
     )
     assert required_user_api_scopes(project) == expected
+    assert "workspace" not in required_user_api_scopes(project)
 
 
 def test_required_user_api_scopes_union_only_user_bindings(tmp_path):

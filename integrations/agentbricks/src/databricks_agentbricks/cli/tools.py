@@ -140,8 +140,8 @@ def tools() -> None:
     wire it in. `agentbricks tools add` manages these Databricks-managed tool types:
 
     \b
-      sandbox       Query Unity Catalog data via system.ai.sandbox with caller grants,
-                    or restrict access to volumes you choose.
+      sandbox       Query Unity Catalog data via system.ai.sandbox.
+                    Requires at least one volume scope.
       mcp           A Databricks-managed MCP service (see `agentbricks tools list --kind mcp`),
                     e.g. system.ai.web_search.
       uc-function   An existing Unity Catalog function (catalog.schema.function).
@@ -183,7 +183,8 @@ def _source_option(function):
     "--scope",
     "scopes",
     multiple=True,
-    help="Restrict to an allowed volume: resource. Repeat for multiple scopes.",
+    required=True,
+    help="Required volume:catalog.schema.volume. Repeat for multiple volumes.",
 )
 @click.option(
     "--permission",
@@ -210,9 +211,14 @@ def add_sandbox(
     auth: Literal["user", "app"],
     databricks_access_token_included: bool,
 ) -> None:
-    """Add a data sandbox tool (system.ai.sandbox) with caller grants by default.
+    """Add a data sandbox tool (system.ai.sandbox), scoped to Unity Catalog volumes.
 
-    Use --scope to restrict it to specific Unity Catalog volumes.
+    At least one --scope volume:catalog.schema.volume is required. Scopes default to
+    read_only; use --permission read_write only when writes are needed.
+
+    Databricks token export is enabled by default. User auth requests ai-gateway,
+    files, and workspace.workspace (not workspace). Files consent does not grant
+    access beyond the configured volumes and the user's Unity Catalog privileges.
 
     Review the target project's agent.toml to check configured managed tools and MCP bindings.
     """

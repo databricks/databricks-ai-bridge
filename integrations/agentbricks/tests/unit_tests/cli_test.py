@@ -105,7 +105,9 @@ def test_nested_command_help_shows_usage_options_and_examples():
     assert result.exit_code == 0, result.output
     assert "Usage: agentbricks tools add sandbox [OPTIONS]" in result.output
     assert "--scope TEXT" in result.output
-    assert "caller grants by default" in result.output
+    assert "at least one --scope volume:catalog.schema.volume is required" in result.output.lower()
+    assert "workspace.workspace (not workspace)" in result.output
+    assert "files" in result.output
     assert "EXAMPLES" in result.output
     assert "agentbricks tools add sandbox" in result.output
     assert "agentbricks tools add sandbox --scope volume:main.data.files" in result.output

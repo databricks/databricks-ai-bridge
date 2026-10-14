@@ -474,7 +474,7 @@ agentbricks [-p <profile>] [-o text|json]
     unbind     [--source PATH]
     list | get [--experiment-name NAME | --experiment-id ID] [--source PATH]
   tools
-    add sandbox      [--scope SCOPE ...]
+    add sandbox      --scope SCOPE [--scope SCOPE ...]
                      [--no-databricks-access-token-included] [--source PATH]
     add mcp          SERVICE [--name NAME] [--source PATH]
     add uc-function  FUNCTION [--name NAME] [--source PATH]
@@ -607,7 +607,6 @@ add` updates only this file; direct TOML edits have the same behavior. Both mana
 adapters read the managed bindings at runtime without generating or patching agent source:
 
 ```sh
-agentbricks tools add sandbox
 agentbricks tools add sandbox --scope volume:main.data.files
 agentbricks tools add mcp system.ai.web_search
 agentbricks tools add uc-function catalog.schema.lookup_ticket
@@ -730,10 +729,9 @@ Deploy derives Apps user scopes from explicit `auth = "user"` bindings and union
 | Managed MCP (governed ingress) | `ai-gateway` |
 | `system.ai.dbsql` | `ai-gateway`, `sql` |
 | `system.ai.genie_one_mcp` | `ai-gateway`, `genie` |
-| Sandbox with token injection (default), with or without a Volume policy | `ai-gateway`, `files`, `workspace.workspace` |
+| Volume-scoped sandbox with token injection (default) | `ai-gateway`, `files`, `workspace.workspace` |
 | Volume-scoped sandbox with token injection disabled | `ai-gateway`, `files` |
 | First-class Genie One or Genie Agent | `genie` |
-| Unscoped sandbox with token injection disabled | `ai-gateway` |
 
 For example, bind Genie tools in a current project with `server = "agentbricks"`:
 
@@ -760,15 +758,13 @@ The `system.ai.dbsql` managed MCP additionally requests the Apps `sql` user scop
 API consent, not `sql:restricted-query`; read-only enforcement remains the service policy plus the
 requesting user's Unity Catalog grants. DBSQL does not use Databricks Connect.
 
-Any user-auth sandbox with `databricks_access_token_included = true` requests the Apps
-`files` and `workspace.workspace` user scopes, even with an explicit Volume policy.
-Volume downscoping restricts only Unity Catalog Volumes; Workspace access remains governed by
-the caller's permissions. An explicit Volume downscope still requests `files` when token injection
-is disabled.
-OAuth consent does not grant Volume access: the requesting user still needs the corresponding
-Unity Catalog privileges. An explicit Volume downscope remains authoritative for UC Volume access;
-with no downscope, the sandbox uses the caller's grants. A sandbox binding with token injection
-disabled does not request `workspace.workspace`; its other resource-derived scopes still apply.
+Every user-auth sandbox requires a Volume downscope and requests the Apps `files` user scope,
+including when token export is disabled. This includes consent for code that uses the Files API;
+it does not grant additional Unity Catalog privileges or expand the configured Volume downscope.
+Token export is enabled by default for new CLI bindings and additionally requests
+`workspace.workspace`. Volume downscoping restricts Unity Catalog Volume access, not Workspace
+API access; the latter still requires the caller's permissions. A sandbox binding with token export
+disabled does not request `workspace.workspace`.
 Databricks Apps rejects the legacy bare `workspace` scope, so Agent Bricks requests
 `workspace.workspace`. These scopes are requested only for `auth = "user"`; `auth = "app"` uses
 the App service principal's permissions instead.
@@ -804,10 +800,10 @@ Every successful add (including an already-configured no-op) points you to the t
 points to that project's file. JSON add output includes its path in `manifest`.
 
 `agentbricks tools list` discovers **available integrations to add**, not configured bindings. By default
-it shows built-in add recipes and caller-visible MCP Services in `system.ai`. Some recipes need
-your resources, such as a concrete UC function name or Genie Space ID. Sandbox and Genie One
-need no additional argument. `system.ai.sandbox` is represented by the sandbox recipe rather than
-a generic MCP add command. The list does not enumerate every workspace schema, individual
+it shows built-in add recipes and caller-visible MCP Services in `system.ai`. A recipe may still
+need your resources: at least one sandbox Volume scope, a concrete UC function name, or a Genie
+Space ID. Genie One needs no additional argument. `system.ai.sandbox` is represented by its scoped
+sandbox recipe rather than a generic MCP add command. The list does not enumerate every workspace schema, individual
 operations inside MCP services, or custom Python tools.
 
 `agentbricks tools add mcp` looks up the service in the selected workspace before writing `agent.toml`.
@@ -867,22 +863,19 @@ If a manifest with `server = "agentbricks"` contains `source = { kind = "python"
 `[[tools]]` entry; the decorated tool in `agent/tools/` remains active. `agentbricks dev` and `agentbricks deploy`
 do not generate or patch Python tool code, and do not alter the manifest's `[[tools]]` bindings.
 
-By default, a sandbox has no downscope and uses the requesting user's Unity Catalog grants. Pass
-`--scope volume:catalog.schema.volume` to restrict UC Volume access to that volume; repeat the option
-for more volumes. Explicit volume scopes default to read-only access. Use `--permission read_write`
-only when the agent needs writes. Each scoped call carries the fixed downscope in MCP `_meta`,
-outside the tool arguments controlled by the model. Unscoped calls omit `_meta.downscope` entirely. New sandbox
-bindings expose the selected Databricks credential to sandbox code by default:
+The Agent Bricks CLI (`agentbricks`, formerly Mason) requires at least one Unity Catalog Volume
+scope for `system.ai.sandbox`. There is no unscoped CLI mode. Scope permissions default to
+`read_only`; repeat `--scope` for more volumes and use `--permission read_write` only when needed:
 
-```toml
-[[tools]]
-id = "sandbox"
-auth = "user"
-source = { kind = "sandbox", service = "system.ai.sandbox" }
-policy = { databricks_access_token_included = true }
+```sh
+agentbricks tools add sandbox --scope volume:main.data.files
+agentbricks tools add sandbox --name writable_sandbox \
+  --scope volume:main.data.files --scope volume:main.data.output --permission read_write
 ```
 
-An explicit volume restriction is represented as:
+Every sandbox call carries the fixed downscope in MCP `_meta`, outside the model-controlled tool
+arguments. New CLI bindings also export the selected Databricks credential to sandbox code by
+default, producing:
 
 ```toml
 [[tools]]
@@ -892,8 +885,8 @@ source = { kind = "sandbox", service = "system.ai.sandbox" }
 policy = { downscope = [{ resource = "volume:main.data.files", permission = "read_only" }], databricks_access_token_included = true }
 ```
 
-If you edit the manifest directly, omit `policy.downscope` for caller grants. An explicitly empty or
-invalid `policy.downscope` is rejected.
+If you edit the manifest directly, `policy.downscope` must contain at least one Volume.
+Both the CLI and runtime reject a missing, empty, or invalid downscope.
 
 Table sandbox scopes are not supported yet because Databricks Connect does not support table
 downscoping. Workspace sandbox scopes are also not supported yet; they have not been validated
