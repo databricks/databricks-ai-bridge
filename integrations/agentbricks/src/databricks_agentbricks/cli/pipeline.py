@@ -205,6 +205,39 @@ def update(obj, name, display_name, instructions, model, trigger) -> None:
     _render_detail(data)
 
 
+def _set_trigger(obj, name: str, trigger: str) -> None:
+    client = obj.client()
+    current = client.get_memory_pipeline(name)
+    policy = field(current, "dreamer_policy") or {}
+    current_trigger = field(policy, "trigger") or "MANUAL_ONLY"
+    if current_trigger == "TRIGGER_UNSPECIFIED":
+        current_trigger = "MANUAL_ONLY"
+    if current_trigger == MEMORY_PIPELINE_TRIGGERS[trigger]:
+        state = "paused" if trigger == "manual" else "resumed"
+        raise AgentCliError(f"Memory pipeline '{name}' is already {state}.")
+    data = client.update_memory_pipeline(name, trigger=trigger)
+    if obj.output == "json":
+        render.emit_json(data)
+        return
+    _render_detail(data)
+
+
+@pipeline.command("pause")
+@click.argument("name")
+@click.pass_obj
+def pause(obj, name) -> None:
+    """Pause scheduled runs; active runs continue and manual runs remain available."""
+    _set_trigger(obj, name, "manual")
+
+
+@pipeline.command("resume")
+@click.argument("name")
+@click.pass_obj
+def resume(obj, name) -> None:
+    """Enable scheduled runs, automatically about every 24 hours."""
+    _set_trigger(obj, name, "scheduled")
+
+
 @pipeline.command("delete")
 @click.argument("name")
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")

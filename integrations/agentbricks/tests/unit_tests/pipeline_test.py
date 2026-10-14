@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from unittest import mock
 
@@ -10,6 +11,7 @@ from click.testing import CliRunner
 
 import databricks_agentbricks.cli.app as cli
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentkit._api_client import _AgentBricksApiClient
 
 PIPELINE = {
     "name": "memory-pipelines/p-123",
@@ -133,6 +135,62 @@ def test_pipeline_renders_nested_model(command, monkeypatch):
     assert result.exit_code == 0, result.output
     assert "nested-model" in result.output
     assert "system.ai.gpt-5-6-sol" not in result.output
+
+
+@pytest.mark.parametrize("command,trigger", [("pause", "MANUAL_ONLY"), ("resume", "SCHEDULED")])
+@pytest.mark.parametrize("output", ["text", "json"])
+@pytest.mark.parametrize("name", ["p-123", "memory-pipelines/p-123"])
+def test_pause_resume_update_only_trigger(command, trigger, output, name):
+    workspace = mock.Mock()
+    policy = PIPELINE["dreamer_policy"]
+    assert isinstance(policy, dict)
+    response = {
+        **PIPELINE,
+        "dreamer_policy": {**policy, "trigger": trigger},
+    }
+    previous_trigger = "SCHEDULED" if command == "pause" else "MANUAL_ONLY"
+    workspace.api_client.do.side_effect = [
+        {**PIPELINE, "dreamer_policy": {**policy, "trigger": previous_trigger}},
+        response,
+    ]
+    ctx = _Ctx(_AgentBricksApiClient(workspace_client=workspace))
+    ctx.output = output
+    result = CliRunner().invoke(_pipeline(), [command, name], obj=ctx)
+    assert result.exit_code == 0, result.output
+    assert workspace.api_client.do.call_args_list == [
+        mock.call("GET", "/api/2.0/agents/memory-pipelines/p-123", query=None, body=None),
+        mock.call(
+            "PATCH",
+            "/api/2.0/agents/memory-pipelines/p-123",
+            query={"update_mask": "dreamer_policy.trigger"},
+            body={"name": "memory-pipelines/p-123", "dreamer_policy": {"trigger": trigger}},
+        ),
+    ]
+    if output == "json":
+        assert json.loads(result.stdout) == response
+    else:
+        assert trigger in result.stdout
+
+
+@pytest.mark.parametrize(
+    "command,policy,state",
+    [
+        ("pause", {"trigger": "MANUAL_ONLY"}, "paused"),
+        ("pause", {"trigger": "TRIGGER_UNSPECIFIED"}, "paused"),
+        ("pause", {}, "paused"),
+        ("resume", {"trigger": "SCHEDULED"}, "resumed"),
+    ],
+)
+def test_pause_resume_rejects_existing_state(command, policy, state):
+    workspace = mock.Mock()
+    workspace.api_client.do.return_value = {"dreamer_policy": policy}
+    ctx = _Ctx(_AgentBricksApiClient(workspace_client=workspace))
+    result = CliRunner().invoke(_pipeline(), [command, "p-123"], obj=ctx)
+    assert result.exit_code != 0
+    assert f"already {state}" in result.output
+    workspace.api_client.do.assert_called_once_with(
+        "GET", "/api/2.0/agents/memory-pipelines/p-123", query=None, body=None
+    )
 
 
 def test_create_accepts_store_names_and_model():
