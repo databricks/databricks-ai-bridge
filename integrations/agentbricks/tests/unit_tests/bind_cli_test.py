@@ -12,10 +12,10 @@ import pathlib
 import pytest
 from click.testing import CliRunner
 
-from databricks_agentbricks.agent_project import AgentProject
 from databricks_agentbricks.cli.memory import memory
 from databricks_agentbricks.cli.sessions import sessions
-from databricks_agentbricks.project_config import write_project_metadata
+from databricks_agentbricks.projects.agent_project import AgentProject
+from databricks_agentbricks.projects.config import write_project_metadata
 
 
 class _Ctx:

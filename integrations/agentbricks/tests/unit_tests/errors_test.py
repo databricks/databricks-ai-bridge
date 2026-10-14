@@ -66,6 +66,17 @@ def test_transient_error_gets_retry_hint():
     assert "transient" in mapped.hint.lower()
 
 
+def test_aborted_error_gets_no_retry_hint():
+    # ABORTED signals a concurrency conflict (e.g. a run already in progress); re-running the
+    # command hits the same conflict, so telling the user it is transient is misleading.
+    class AbortedError(RuntimeError):
+        error_code = "ABORTED"
+
+    mapped = wrap_api_error(AbortedError("pipeline already has a run in progress"))
+    assert mapped.error_code == "ABORTED"
+    assert mapped.hint is None
+
+
 def test_non_transient_error_keeps_original_message():
     class NotFoundError(RuntimeError):
         error_code = "NOT_FOUND"

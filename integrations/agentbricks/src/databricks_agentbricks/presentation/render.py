@@ -18,7 +18,7 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
-from databricks_agentbricks import theme
+from databricks_agentbricks.presentation import theme
 
 # Semantic styles from the facelift palette (see `theme.py`). Color carries meaning, never
 # decoration: LINK (blue) for URLs, COMMAND (cyan) for the actionable next step, SUCCESS (green)

@@ -65,7 +65,7 @@ class AgentCliError(click.ClickException):
             return
         # Render in the cargo/uv diagnostic grammar: a red `error:` (or cargo's
         # `error[CODE]:`) keyword, the message, and an indented `help:` line carrying the fix.
-        from databricks_agentbricks import render
+        from databricks_agentbricks.presentation import render
 
         render.diagnostic(
             "error",
@@ -100,7 +100,9 @@ def wrap_api_error(exc: Exception) -> AgentCliError:
     message = detail or _no_detail_message(error_code) or effective.__class__.__name__
     if error_code in _PREVIEW_ERROR_CODES:
         hint = _PREVIEW_HINT
-    elif error_code in TRANSIENT_ERROR_CODES:
+    # ABORTED stays retryable, but it also signals a concurrency conflict (e.g. a pipeline run
+    # already in progress) where re-running the command fails the same way, so skip the hint.
+    elif error_code in TRANSIENT_ERROR_CODES - {"ABORTED"}:
         hint = _TRANSIENT_HINT
     else:
         hint = None

@@ -1,5 +1,24 @@
 # Agent Bricks CLI agent-tool matrix
 
+## Sandbox model roundtrip
+
+`sandbox_roundtrip_test.py` verifies that successful sandbox output and a controlled Python
+execution error both reach the next model turn, over JSON and SSE. Use a LangGraph agent with
+`system.ai.sandbox` configured and `databricks-langchain==0.21.0` installed:
+
+```bash
+RUN_AGENTBRICKS_SANDBOX_E2E=1 AGENTBRICKS_E2E_AGENT_URL=<agent-url> \
+  AGENTBRICKS_E2E_OUTPUT=/tmp/sandbox-roundtrip \
+  python -m pytest tests/e2e/sandbox_roundtrip_test.py -v -s
+```
+
+For a deployed App, supply an OAuth bearer token through `AGENTBRICKS_E2E_APP_TOKEN`; never
+record it in test artifacts. Set `AGENTBRICKS_E2E_MODEL` to use a different entitled model.
+The test requires one sandbox call, a matching tool-call ID, a metadata-rich text block with a
+generated `id`, the expected structured execution outcome, and a final assistant response
+containing the unique marker. The original tool message retains the LangChain metadata: the
+provider strips it from the outbound model request, not from the stored transcript.
+
 ## MCP registration validation
 
 For a focused check of `agentbricks tools add mcp`, install the current `databricks-agentbricks` wheel and pytest
@@ -34,7 +53,7 @@ uv build --wheel --out-dir /tmp/agentbricks-tooling-dist
 uv run python tests/e2e/tool_matrix.py \
   --profile df1 \
   --app-auth-profile df1-oauth-mcp \
-  --wheel /tmp/agentbricks-tooling-dist/databricks_agentbricks-0.3.0-py3-none-any.whl \
+  --wheel /tmp/agentbricks-tooling-dist/databricks_agentbricks-0.5.0.dev0-py3-none-any.whl \
   --output /tmp/agentbricks-tool-matrix-df1 \
   --uc-schema supervisor_agent.mason_agent_tools_e2e \
   --genie-space-id "$AGENTBRICKS_E2E_GENIE_SPACE_ID" \
@@ -74,7 +93,10 @@ deployed tool matrix exercises valid managed tools.
 
 The deployed cases do not pre-grant the temporary UC function. They require `agentbricks deploy` to
 create the function/volume/Genie Apps resources, then inspect those permissions before
-invoking the App. Built-in `system.ai` MCP services use platform-managed access defaults and are
+invoking the App. The runner attaches a separate user-managed `sql_warehouse` App resource with
+`CAN_USE` for the Genie Space's backing warehouse before invoking Genie, and verifies the resource
+survives the CLI-authored repeat deploy; Agent Bricks does not grant this transitive dependency.
+Built-in `system.ai` MCP services use platform-managed access defaults and are
 validated through live Sandbox and web-search calls rather than direct grant inspection. External
 MCP services still receive direct service/catalog/schema grants. The temporary declared function
 calls a second, undeclared function: the harness proves Agent Bricks did not
@@ -90,10 +112,10 @@ uv run python tests/e2e/tool_matrix.py \
 ```
 
 Success is exactly `20 passed, 0 failed, 0 skipped`, two deploy grant snapshots, and one idempotent
-repeat deploy. Temporary Apps and UC resources are deleted after a successful run, with cleanup results
+repeat deploy. Temporary Apps, their synced `agentbricks_deployments/<app>` source folders, stores,
+Lakebase roles, and UC resources are deleted after every run, passing or failing, with cleanup results
 saved in `evidence.json`; App deletion is not considered complete until a follow-up read confirms
-absence. A failed run retains resources for diagnosis. Pass `--keep-resources` to retain resources after
-a successful run while debugging. The gated nightly test reports bounded dev/deploy log tails and
+absence. Pass `--keep-resources` to retain resources while debugging. The gated nightly test reports bounded dev/deploy log tails and
 captures App runtime logs for failed deployed cases.
 
 ## Declarative user-auth scope matrix
@@ -114,7 +136,7 @@ uv build --wheel --out-dir /tmp/agentbricks-auth-scope-dist
 uv run python tests/e2e/auth_scope_matrix.py \
   --profile df1 \
   --app-auth-profile df1-oauth-mcp \
-  --wheel /tmp/agentbricks-auth-scope-dist/databricks_agentbricks-0.3.0-py3-none-any.whl \
+  --wheel /tmp/agentbricks-auth-scope-dist/databricks_agentbricks-0.5.0.dev0-py3-none-any.whl \
   --output /tmp/agentbricks-auth-scope-matrix \
   --uc-schema aifx_benchmarks.agentbricks_auth_scope_e2e \
   --source-repo https://github.com/databricks/databricks-ai-bridge.git \

@@ -37,11 +37,22 @@ from typing import Any, Optional
 
 import click
 
-from databricks_agentbricks import render
+from databricks_agentbricks.clients.tracing_client import (
+    MLflowTraceTables,  # noqa: F401 - compatibility re-export
+    ResolvedTraceExperiment,  # noqa: F401 - compatibility re-export
+    TraceTable,  # noqa: F401 - compatibility re-export
+    TraceTableKind,  # noqa: F401 - compatibility re-export
+    _mlflow,
+    _set_tracking_uri,
+    _workspace_uri,
+    create_experiment_idempotent,  # noqa: F401 - compatibility re-export
+    uc_trace_tables,  # noqa: F401 - compatibility re-export
+)
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.trace_tables import (  # re-exported for callers of this module
-    TraceTable,
-    TraceTableKind,
+from databricks_agentbricks.presentation import render
+from databricks_agentbricks.presentation.tracing import (
+    TRACING_BIND_COMMAND,
+    experiment_url,  # noqa: F401 - compatibility re-export
 )
 from databricks_agentkit import timefmt
 
@@ -54,11 +65,6 @@ _TRACES_DIR = "agentbricks_traces"
 # an experiment (by id). MLflow turns tracing on only when it has both.
 TRACES_TRACKING_URI_ENV = "MLFLOW_TRACKING_URI"
 TRACES_EXPERIMENT_ID_ENV = "MLFLOW_EXPERIMENT_ID"
-
-# The command that binds (enables) tracing. Referenced parameter-free by deploy's "deployed without
-# tracing" guidance and by `unbind`'s "turn it back on" step, so those hints can't go stale if the
-# flags change; the command's own `--help` documents the flags.
-TRACING_BIND_COMMAND = "agentbricks tracing bind"
 
 
 def default_experiment_name(project: Optional[str], token: Optional[str] = None) -> str:
@@ -77,34 +83,6 @@ def default_experiment_name(project: Optional[str], token: Optional[str] = None)
     return f"/Shared/{_TRACES_DIR}/{slug}{middle}"
 
 
-def experiment_url(host: Optional[str], experiment_id: str) -> Optional[str]:
-    """The workspace MLflow experiment Traces page, or None when the host is unavailable."""
-    if not host or host == "unknown":
-        return None
-    return f"{host.rstrip('/')}/ml/experiments/{experiment_id}?compareRunsMode=TRACES"
-
-
-def _mlflow():
-    """Import mlflow lazily and return the module.
-
-    mlflow-skinny is a base dependency, so this can't fail on a correct install; the lazy import
-    exists only to keep it off the CLI startup path (``cli.py`` imports this module eagerly).
-    """
-    import mlflow  # noqa: PLC0415 - intentional lazy import (startup cost, not optionality)
-
-    return mlflow
-
-
-def _workspace_uri(profile: Optional[str]) -> str:
-    """The MLflow tracking URI for the workspace (honoring Agent Bricks' --profile)."""
-    return f"databricks://{profile}" if profile else "databricks"
-
-
-def _set_tracking_uri(mlflow, profile: Optional[str]) -> None:
-    """Point MLflow at the workspace (honoring Agent Bricks' --profile)."""
-    mlflow.set_tracking_uri(_workspace_uri(profile))
-
-
 # An experiment linked to a UC schema for trace storage carries this tag (the destination schema);
 # managed experiments don't. UC-backed experiments are supported for trace export at deploy (the
 # app's service principal is granted MODIFY on their UC OTEL tables) and for reads via `list`/`get`
@@ -119,118 +97,6 @@ def _is_uc_backed(experiment) -> bool:
     guards a missing attribute.
     """
     return _UC_TRACE_TAG in (getattr(experiment, "tags", None) or {})
-
-
-# The "unified" trace-table tag names a read-side VIEW over the base OTEL tables, not a writable base
-# table (MODIFY on a view fails), so it's excluded from the grant set.
-_UC_TRACE_UNIFIED_TAG = "mlflow.experiment.databricksTraceStorageTable"
-
-# The per-kind base-table tags: each value is the fully-qualified ``<catalog>.<schema>.<table>`` the
-# deployed app must be granted MODIFY on.
-_UC_TRACE_SPAN_TAG = "mlflow.experiment.databricksTraceSpanStorageTable"
-_UC_TRACE_LOG_TAG = "mlflow.experiment.databricksTraceLogStorageTable"
-_UC_TRACE_ANNOTATION_TAG = "mlflow.experiment.databricksTraceAnnotationStorageTable"
-# MLflow does NOT emit a metrics storage tag today, but read it if present (it takes precedence over
-# the destination-path derivation below), so Agent Bricks picks the metrics table up automatically if
-# MLflow starts tagging it.
-_UC_TRACE_METRIC_TAG = "mlflow.experiment.databricksTraceMetricStorageTable"
-
-
-@dataclass(frozen=True)
-class MLflowTraceTables:
-    """The UC OTEL base tables backing a UC experiment's traces (fully-qualified names; None when absent).
-
-    The base tables are spans, logs, annotations, and metrics - all four are granted MODIFY.
-    """
-
-    spans: Optional[str] = None
-    logs: Optional[str] = None
-    annotations: Optional[str] = None
-    metrics: Optional[str] = None
-
-    def otel_tables(self) -> list[TraceTable]:
-        """Present TraceTable entries in a stable order, for grants + resource naming."""
-        return [
-            TraceTable(kind=kind, full_name=name)
-            for kind, name in (
-                (TraceTableKind.SPANS, self.spans),
-                (TraceTableKind.LOGS, self.logs),
-                (TraceTableKind.ANNOTATIONS, self.annotations),
-                (TraceTableKind.METRICS, self.metrics),
-            )
-            if name
-        ]
-
-    def __bool__(self) -> bool:
-        return bool(self.otel_tables())
-
-
-def _metrics_table_from_destination(tags: dict) -> Optional[str]:
-    """The ``_otel_metrics`` base table, derived from the destination path.
-
-    MLflow creates a fourth OTEL base table (metrics) but, unlike spans/logs/annotations, does not emit
-    a per-kind storage tag for it - so its name is derived from the destination path
-    (``databricksTraceDestinationPath``) by the same ``<...>_otel_metrics`` convention used for the
-    other tables. It's granted because Databricks requires MODIFY on every OTEL base table to export
-    traces, even though the agent-tracing export path does not write metrics rows today (a MODIFY grant
-    on an unwritten - or absent - table is harmless). Returns None when there's no destination path.
-    """
-    parts = (tags.get(_UC_TRACE_TAG) or "").split(".")
-    if len(parts) == 3:
-        return f"{'.'.join(parts)}_otel_metrics"
-    if len(parts) == 2:
-        return f"{'.'.join(parts)}.mlflow_experiment_trace_otel_metrics"
-    return None
-
-
-def uc_trace_tables(experiment) -> MLflowTraceTables:
-    """The UC OTEL base tables backing a UC experiment's traces; empty when managed.
-
-    A UC-backed experiment stores traces in Unity Catalog base tables the deployed app must be granted
-    MODIFY on (spans, logs, annotations, metrics). MLflow records spans/logs/annotations as per-kind
-    storage-table tags whose value is the fully-qualified ``<catalog>.<schema>.<table>`` - those tags
-    are the source of truth (the ``UnityCatalog`` entity only surfaces spans/logs, so reading tags is
-    what catches the annotations table). Reading these specific tags naturally excludes the "unified"
-    ``databricksTraceStorageTable`` tag, which names a read-side VIEW, not a writable table; the
-    modeling is intentionally explicit per kind. The metrics table is always derived from the
-    destination path because MLflow does not emit a per-kind tag for it (see
-    ``_metrics_table_from_destination``). Falls back to deriving all names from the destination path
-    when the per-kind tags are absent. Returns an empty ``MLflowTraceTables`` for a managed experiment.
-    """
-    tags = getattr(experiment, "tags", None) or {}
-    if _UC_TRACE_TAG not in tags:
-        return MLflowTraceTables()
-    tables = MLflowTraceTables(
-        spans=tags.get(_UC_TRACE_SPAN_TAG) or None,
-        logs=tags.get(_UC_TRACE_LOG_TAG) or None,
-        annotations=tags.get(_UC_TRACE_ANNOTATION_TAG) or None,
-        metrics=tags.get(_UC_TRACE_METRIC_TAG) or _metrics_table_from_destination(tags),
-    )
-    # Gate on the TAGGED base tables (not metrics, which is always derived from the destination path):
-    # when any per-kind tag is present, that's the authoritative layout; otherwise fall through to
-    # deriving all base names from the destination path.
-    if tables.spans or tables.logs or tables.annotations:
-        return tables
-    # Fallback: derive from the destination path (`<catalog>.<schema>[.<table_prefix>]`) when the
-    # per-kind storage tags aren't present.
-    parts = (tags.get(_UC_TRACE_TAG) or "").split(".")
-    if len(parts) == 3:
-        prefix = ".".join(parts)
-        return MLflowTraceTables(
-            spans=f"{prefix}_otel_spans",
-            logs=f"{prefix}_otel_logs",
-            annotations=f"{prefix}_otel_annotations",
-            metrics=f"{prefix}_otel_metrics",
-        )
-    if len(parts) == 2:
-        base = ".".join(parts)
-        return MLflowTraceTables(
-            spans=f"{base}.mlflow_experiment_trace_otel_spans",
-            logs=f"{base}.mlflow_experiment_trace_otel_logs",
-            annotations=f"{base}.mlflow_experiment_trace_otel_annotations",
-            metrics=f"{base}.mlflow_experiment_trace_otel_metrics",
-        )
-    return MLflowTraceTables()
 
 
 # MLflow reads the warehouse a UC trace read goes through from this env var - its only supported knob
@@ -284,54 +150,12 @@ def _get_experiment_by_id(mlflow, experiment_id: str):
         raise
 
 
-@dataclass(frozen=True)
-class ResolvedTraceExperiment:
-    """The workspace experiment a deploy resolves for tracing: its id and its UC OTEL base tables.
-
-    ``tables`` is empty for a managed experiment; for a UC-backed one it carries the per-kind tables
-    the app's service principal must be granted MODIFY on so it can export traces (see
-    ``app_resources.apply_trace_resources``).
-    """
-
-    experiment_id: str
-    tables: MLflowTraceTables
-
-
-def create_experiment_idempotent(
-    profile: Optional[str], client, name: str
-) -> ResolvedTraceExperiment:
-    """Create the experiment ``name`` if missing; return a ``ResolvedTraceExperiment`` (idempotent).
-
-    ``create_experiment`` won't make the intermediate workspace folder for a nested path (e.g.
-    ``/Users/<you>/agentbricks_traces/<project>``), so the parent dir is created first. Used by
-    dev/deploy to provision the experiment that traces log to.
-
-    Returns a ``ResolvedTraceExperiment``: for an existing UC-backed experiment, ``tables`` are the UC
-    OTEL base tables the deployed app must be granted MODIFY on (see ``uc_trace_tables``); for a
-    managed experiment - and for one just created, since Agent Bricks only creates managed experiments
-    - it is an empty ``MLflowTraceTables``.
-    """
-    mlflow = _mlflow()
-    _set_tracking_uri(mlflow, profile)
-    experiment = mlflow.get_experiment_by_name(name)
-    if experiment:
-        return ResolvedTraceExperiment(
-            experiment_id=experiment.experiment_id, tables=uc_trace_tables(experiment)
-        )
-    parent = name.rsplit("/", 1)[0]
-    if parent:
-        client.ensure_workspace_dir(parent)
-    return ResolvedTraceExperiment(
-        experiment_id=mlflow.create_experiment(name), tables=MLflowTraceTables()
-    )
-
-
 def _resolve_experiment_name(source: pathlib.Path | str) -> Optional[str]:
     """This project's bound ``experiment_name``, or None when tracing is unbound (off).
 
     Resolves by name, not a stored id, so it stays correct across workspaces/profiles.
     """
-    from databricks_agentbricks.agent_project import (
+    from databricks_agentbricks.projects.agent_project import (
         AgentProject,  # noqa: PLC0415 - avoid import cycle
     )
 
@@ -482,6 +306,8 @@ def _trace_to_json(trace: Any) -> dict:
 
 # --- local dev tracing (`agentbricks dev`) ----------------------------------------
 
+# TODO: Move the local MLflow server helpers into clients/local_tracing_client.py and
+# inject that client into DevService instead of adapting these CLI functions in cli/dev.py.
 # Local-only scratch dir (gitignored) under a dev project: holds the sqlite tracing store + artifacts.
 _AGENTBRICKS_LOCAL_DIR = ".agentbricks"
 # The local tracing server's MLflow: a broad 3.x range (the runtime's floor). `agentbricks dev` writes the
@@ -720,13 +546,13 @@ def tracing_bind(obj, experiment_name, experiment_id, source) -> None:
     (e.g. from the experiment's URL) is a convenience: it's resolved to the experiment's name and
     stored as a name, never as an id.
     """
-    from databricks_agentbricks.agent_project import AgentProject  # noqa: PLC0415
+    from databricks_agentbricks.projects.agent_project import AgentProject  # noqa: PLC0415
 
     _check_experiment_flags(experiment_name, experiment_id, require_one=True)
 
     # The name to store. --experiment-id is resolved to the experiment's name (Agent Bricks stores
     # names, not ids). A UC-backed experiment is supported for trace export: deploy grants the app's
-    # service principal MODIFY on its UC OTEL tables (see app_resources.apply_trace_resources).
+    # service principal MODIFY on its UC OTEL tables through TracingClient.
     name = experiment_name
     if experiment_id:
         mlflow = _mlflow()
@@ -780,7 +606,7 @@ def tracing_unbind(obj, source) -> None:
     Deploy-only: `agentbricks dev` still traces locally to its own MLflow server, so you keep local traces
     while the deployed agent stays untraced.
     """
-    from databricks_agentbricks.agent_project import AgentProject  # noqa: PLC0415
+    from databricks_agentbricks.projects.agent_project import AgentProject  # noqa: PLC0415
 
     project = AgentProject.load(pathlib.Path(source))
     project.unbind_tracing()

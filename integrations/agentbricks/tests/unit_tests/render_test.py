@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from rich.console import Console
 
-from databricks_agentbricks import render
+from databricks_agentbricks.presentation import render
 from databricks_agentkit import timefmt
 
 
@@ -170,7 +170,7 @@ def test_diagnostic_colors_only_the_keyword_leaving_message_and_fix_readable(mon
 
     from rich.console import Console
 
-    from databricks_agentbricks.theme import AGENTBRICKS_THEME
+    from databricks_agentbricks.presentation.theme import AGENTBRICKS_THEME
 
     # Test ANSI styling independently of the test runner's terminal settings.
     monkeypatch.setenv("NO_COLOR", "1")

@@ -4,6 +4,29 @@ This guide covers the Agent Bricks CLI (`agentbricks`), AgentKit, the runtime, a
 including how to run and test changes locally and on Databricks Apps. The current Python
 distribution is `databricks-agentbricks`; installing it provides the `agentbricks` command and AgentKit.
 
+## Architecture and placement
+
+Use the deploy, dev, and invoke decomposition as the reference for new work. A simple command can
+call an existing client or project helper; multi-step operations belong in an injectable service.
+Place code by its primary responsibility:
+
+- **Single responsibility:** CLI commands handle interaction, services coordinate workflows,
+  provisioners manage individual resources, and clients encapsulate external APIs.
+- **Law of Demeter / information hiding:** Services call direct collaborators rather than reaching
+  through them into SDK clients or resource internals; collaborators return typed facts.
+- **Dependency injection:** Supply collaborators explicitly so workflows can be tested without
+  globals or live workspace APIs.
+- **Explicit data flow:** Provisioners return state and manifest patches; services own the sequence
+  and intermediate state instead of relying on mutable provisioner state or call-order dependencies.
+
+Keep shared utilities at the top of `src/databricks_agentbricks/`: external adapters in `clients/`,
+local configuration in `projects/`, output rendering in `presentation/`, and the framework-neutral
+`Reporter` protocol in `reporting.py`. Keep Click command entry points in `cli/`. Workflow entry
+points belong directly in `services/` as `deploy_service.py`, `dev_service.py`, and
+`invoke_service.py`; put helpers used only by one workflow in `services/deployment/` or
+`services/invoke/`, not in new top-level feature packages. Services should not import Click or
+CLI presentation code.
+
 ## Three kinds of change, and how each is sourced
 
 There are three layers a contributor edits. Knowing which one you're changing tells you what to
@@ -75,6 +98,34 @@ cat /tmp/scratch-agent/.venv/lib/python*/site-packages/databricks_agentkit-*.dis
 agentbricks deployments logs agent-bricks-<name>
 ```
 
+## CLI telemetry
+
+The `agentbricks` console entry point runs `databricks_agentbricks.cli:main`. In `cli/app.py`,
+`configure_help(agentbricks)` upgrades the registered Click tree: each leaf becomes an
+`AgentBricksCommand`, whose `invoke` calls `cli/telemetry.py` after its callback succeeds or
+fails. New leaves registered before `configure_help` use the same hook without adding telemetry
+calls. Click parsing failures and help exit before leaf invocation, so they are not logged.
+
+The emitter derives command paths and option names from static Click definitions. It emits values
+for declared Click choices and typed boolean and numeric options; free-form values remain
+presence-only. Choice values use the `AGENTBRICKS_CLI_` prefix required by their data shape. New
+Click choices must use non-sensitive labels. Repeated options produce one parameter entry per
+supplied value, up to 64 entries; hidden and deprecated options follow the same value policy. The
+emitter wraps each event in a FrontendLog payload and sends it to `/telemetry-ext` on a daemon
+thread, waiting at most two seconds in the foreground, including client setup, authentication, and
+upload. This is a best-effort allowance, not a delivery guarantee: unfinished work can be lost when
+the process exits after the allowance expires. It reuses the command's workspace client or lets
+the SDK resolve the selected or default profile. Local commands may run without login, so an SDK
+`external-browser` profile can prompt during telemetry. Uploads are best effort: opt-out, missing
+credentials, and transport failures must not change command behavior. When changing this path,
+update `tests/unit_tests/telemetry_test.py` and the telemetry description in `README.md`.
+
+Run `uv run pytest tests/functional/cli_smoke_test.py -k telemetry_to_local_receiver -q` from
+`integrations/agentbricks` to exercise the installed CLI, Click hook, SDK authentication, and HTTP
+upload against a temporary local receiver. It verifies the FrontendLog payload without workspace
+credentials; it does not verify Lumberjack ingestion, which requires a test workspace with the
+registered schema deployed.
+
 ## Keeping docs in sync
 
 [`cli.md`](cli.md) is the CLI command reference - every command, subcommand, argument, and option.
@@ -103,6 +154,36 @@ the same change, in `src/databricks_agentbricks/cli/doctor.py`:
 Also refresh the framework references and examples in `cli.md` and `README.md`, and add doctor test
 coverage for the new framework in `tests/unit_tests/doctor_test.py`.
 
+## Testing coding-agent skills
+
+The workflow skill is bundled under `src/databricks_agentbricks/templates/agent-bricks-workflow/`.
+Keep migration instructions separate and share maintained references rather than copying the
+entire CLI manual into a skill. Verify changes offline before running a live agent journey:
+
+```sh
+python -m pytest tests/unit_tests/skills_test.py tests/unit_tests/agent_hint_test.py \
+  tests/unit_tests/init_test.py tests/unit_tests/cli_test.py
+```
+
+These tests exercise real scaffold generation, portable skill metadata and references, shared-bundle
+discovery pointers, idempotency, conflict preservation, rollback, agent detection, help output,
+opt-out behavior, and JSON stdout. Invocation examples belong in each template's
+`AGENTKIT_CONTRACT.md`, not the framework-neutral workflow skill; validate them against the runtime
+schema and template adapter. Build a wheel and confirm the skill and reference files are
+present too; editable-install tests alone do not verify distribution contents.
+
+For native discovery, open a fresh scaffold in the coding agent, confirm `agent-bricks-workflow`
+appears in its skill list, and ask it to plan an Agent Bricks deployment without executing live
+commands. Repeat with Claude Code and Codex at minimum; installed agent versions and settings can
+affect discovery. Reading the bundled skill at the path printed by the CLI's coding-agent hint
+is the fallback, not evidence of native automatic discovery.
+
+A later end-to-end comparison should use the same prompt, model/effort, framework, workspace, and
+success criteria in fresh directories and sessions. Compare baseline against the new CLI while
+recording skill adoption, documentation reads, unnecessary dev runs, validation calls, and elapsed
+time. Separate provisioning time from agent planning and validation time. Do not claim improved
+completion time from unit tests or skip requested validation to make a benchmark faster.
+
 ## Cutting a release
 
 Run **Cut Agent Bricks release** from the Actions tab with a version such as `0.4.0` or
@@ -122,6 +203,12 @@ all scaffolds, tests the pushed commit, and tags that commit as
 the release branch and rerun with the same version. Once a version is tagged,
 use the next patch version for any further fixes (for example, `0.4.1` after `0.4.0`).
 Do not move an existing tag.
+
+After tagging, the workflow drafts a GitHub release for the tag. Its notes list the commits
+that touched `integrations/agentbricks/` since the previous Agent Bricks tag, leaving out
+fixes the previous release already shipped and the workflow's own version-stamp commits.
+Dry runs show the same notes in the run summary. Edit the draft if needed, and publish it
+once the package is on PyPI. A rerun leaves an existing release unchanged.
 
 On the first cut, the workflow also opens a draft PR to change the package version
 on `main` to the next minor development version (for example, `0.5.0.dev0` after

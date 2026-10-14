@@ -103,6 +103,7 @@ def test_cleanup_deletes_stores_runtime_app_and_matching_lakebase_role(
     monkeypatch.setattr(runner, "databricks", fake_databricks)
     monkeypatch.setattr(runner, "run", fake_run)
     monkeypatch.setattr(runner, "_wait_for_app_deleted", lambda name, **kwargs: None)
+    monkeypatch.setattr(runner, "_delete_deployment_source", lambda name: None)
 
     runner.cleanup()
 
@@ -140,6 +141,7 @@ def test_cleanup_keeps_role_when_store_deletion_fails(tmp_path: pathlib.Path, mo
         runner, "_app_role_target", lambda name: "projects/test/branches/test/roles/sp"
     )
     monkeypatch.setattr(runner, "_wait_for_app_deleted", lambda name, **kwargs: None)
+    monkeypatch.setattr(runner, "_delete_deployment_source", lambda name: None)
     commands = []
 
     def fake_run(argv, **kwargs):
@@ -169,6 +171,7 @@ def test_cleanup_keeps_role_when_runtime_store_deletion_fails(
         runner, "_app_role_target", lambda name: "projects/test/branches/test/roles/sp"
     )
     monkeypatch.setattr(runner, "_wait_for_app_deleted", lambda name, **kwargs: None)
+    monkeypatch.setattr(runner, "_delete_deployment_source", lambda name: None)
     commands = []
 
     def fake_run(argv, **kwargs):
@@ -207,6 +210,7 @@ def test_cleanup_treats_missing_runtime_store_as_deleted(
         runner, "_app_role_target", lambda name: "projects/test/branches/test/roles/sp"
     )
     monkeypatch.setattr(runner, "_wait_for_app_deleted", lambda name, **kwargs: None)
+    monkeypatch.setattr(runner, "_delete_deployment_source", lambda name: None)
     commands = []
 
     def fake_run(argv, **kwargs):
@@ -241,3 +245,66 @@ def test_role_lookup_rejects_other_app_owner(tmp_path: pathlib.Path, monkeypatch
     monkeypatch.setattr(runner, "databricks", fake_databricks)
 
     assert runner._app_role_target("test-app") is None
+
+
+class _FakeWorkspaceClient:
+    def __init__(self, delete_error: Exception | None = None):
+        self.deleted: list[tuple[str, bool]] = []
+        self._delete_error = delete_error
+        self.current_user = type(
+            "CurrentUser", (), {"me": lambda _: type("User", (), {"user_name": "ci-sp"})()}
+        )()
+        self.workspace = type("Workspace", (), {"delete": self._delete})()
+
+    def _delete(self, path: str, recursive: bool = False) -> None:
+        self.deleted.append((path, recursive))
+        if self._delete_error is not None:
+            raise self._delete_error
+
+
+def test_delete_deployment_source_removes_synced_app_folder(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    wheel = tmp_path / "agentbricks.whl"
+    wheel.write_bytes(b"wheel")
+    runner = Runner(None, tmp_path, wheel)
+    client = _FakeWorkspaceClient()
+    monkeypatch.setitem(Runner.cleanup.__globals__, "WorkspaceClient", lambda profile: client)
+
+    runner._delete_deployment_source("test-app")
+
+    path = "/Workspace/Users/ci-sp/agentbricks_deployments/test-app"
+    assert client.deleted == [(path, True)]
+    assert runner.cleanup_results == [{"resource": f"workspace:{path}", "status": "deleted"}]
+
+
+def test_delete_deployment_source_treats_missing_folder_as_deleted(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    wheel = tmp_path / "agentbricks.whl"
+    wheel.write_bytes(b"wheel")
+    runner = Runner(None, tmp_path, wheel)
+    client = _FakeWorkspaceClient(delete_error=_NAMESPACE["NotFound"]("missing"))
+    monkeypatch.setitem(Runner.cleanup.__globals__, "WorkspaceClient", lambda profile: client)
+
+    runner._delete_deployment_source("test-app")
+
+    assert runner.cleanup_results[0]["status"] == "deleted"
+
+
+def test_delete_deployment_source_records_failure(tmp_path: pathlib.Path, monkeypatch) -> None:
+    wheel = tmp_path / "agentbricks.whl"
+    wheel.write_bytes(b"wheel")
+    runner = Runner(None, tmp_path, wheel)
+    client = _FakeWorkspaceClient(delete_error=RuntimeError("timed out"))
+    monkeypatch.setitem(Runner.cleanup.__globals__, "WorkspaceClient", lambda profile: client)
+
+    runner._delete_deployment_source("test-app")
+
+    assert runner.cleanup_results == [
+        {
+            "resource": "workspace:/Workspace/Users/ci-sp/agentbricks_deployments/test-app",
+            "status": "failed",
+            "detail": "timed out",
+        }
+    ]

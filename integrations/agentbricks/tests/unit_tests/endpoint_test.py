@@ -9,11 +9,12 @@ import pytest
 from click.testing import CliRunner
 
 from databricks_agentbricks.cli import endpoint as endpoint_mod
-from databricks_agentbricks.cli import endpoint_output as endpoint_output_mod
-from databricks_agentbricks.cli import endpoint_request as endpoint_request_mod
-from databricks_agentbricks.cli import endpoint_transport as endpoint_transport_mod
 from databricks_agentbricks.cli.endpoint import endpoint
-from databricks_agentbricks.cli.endpoint_transport import EndpointRequest, EndpointResponse
+from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.presentation import endpoint as endpoint_output_mod
+from databricks_agentbricks.services.invoke import request as endpoint_request_mod
+from databricks_agentbricks.services.invoke import transport as endpoint_transport_mod
+from databricks_agentbricks.services.invoke.transport import EndpointRequest, EndpointResponse
 
 
 class _Ctx:
@@ -50,7 +51,7 @@ def test_request_url_merges_query_parameters():
 
 
 def test_request_url_rejects_absolute_path():
-    with pytest.raises(endpoint_mod.AgentCliError, match="must be relative"):
+    with pytest.raises(AgentCliError, match="must be relative"):
         endpoint_request_mod.request_url(
             "https://app.example",
             "https://other.example/run",
@@ -130,9 +131,21 @@ def test_invoke_deployed_app_resolves_oauth_and_generated_session(monkeypatch):
             captured["request"] = request
             return _response({"ok": True}, url=request.url)
 
-    monkeypatch.setattr(endpoint_mod, "_app_url", lambda name, profile: "https://app.example")
-    monkeypatch.setattr(endpoint_mod, "_authorization_header", lambda profile: "Bearer token")
     monkeypatch.setattr(endpoint_mod, "HttpSession", FakeSession)
+    monkeypatch.setattr(
+        endpoint_mod,
+        "AppsClient",
+        lambda profile: type(
+            "FakeAppsClient", (), {"get_app_url": lambda self, name: "https://app.example"}
+        )(),
+    )
+    monkeypatch.setattr(
+        endpoint_mod,
+        "WorkspaceOAuthAuthenticator",
+        lambda profile: type(
+            "FakeAuthenticator", (), {"authorization_header": lambda self: "Bearer token"}
+        )(),
+    )
 
     result = CliRunner().invoke(
         endpoint,
@@ -195,8 +208,14 @@ def test_url_can_explicitly_request_oauth(monkeypatch):
             captured["request"] = request
             return _response({"ok": True}, url=request.url)
 
-    monkeypatch.setattr(endpoint_mod, "_authorization_header", lambda profile: "Bearer token")
     monkeypatch.setattr(endpoint_mod, "HttpSession", FakeSession)
+    monkeypatch.setattr(
+        endpoint_mod,
+        "WorkspaceOAuthAuthenticator",
+        lambda profile: type(
+            "FakeAuthenticator", (), {"authorization_header": lambda self: "Bearer token"}
+        )(),
+    )
 
     result = CliRunner().invoke(
         endpoint,
@@ -310,7 +329,7 @@ def test_http_session_wraps_connection_errors():
     session = endpoint_transport_mod.HttpSession()
     session._opener = FailingOpener()
 
-    with pytest.raises(endpoint_mod.AgentCliError, match="Could not reach endpoint"):
+    with pytest.raises(AgentCliError, match="Could not reach endpoint"):
         session.send(
             EndpointRequest(
                 url="http://localhost:1/run",
