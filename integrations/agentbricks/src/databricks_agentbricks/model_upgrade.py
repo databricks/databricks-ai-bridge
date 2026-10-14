@@ -499,16 +499,21 @@ def upgrade_requirement() -> str:
         ) from exc
 
 
-def workspace_project_path(user: str, project_name: str, root: pathlib.Path) -> str:
+def workspace_project_path(
+    user: str, project_name: str, root: pathlib.Path, upgrade_id: str
+) -> str:
     """Where `models upgrade` syncs the project: its own folder, never the deployed app's source.
 
     The folder name carries a hash of the project's local path, so two copies of a project with the
-    same deployment name (a scratch copy, say) never upload over each other.
+    same deployment name (a scratch copy, say) never upload over each other. Each upgrade gets a
+    separate snapshot so a later submission cannot overwrite a queued run's source or eval data.
     """
     import hashlib  # noqa: PLC0415
 
     digest = hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:8]
-    return f"/Workspace/Users/{user}/agentbricks_model_upgrades/{project_name}-{digest}"
+    return (
+        f"/Workspace/Users/{user}/agentbricks_model_upgrades/{project_name}-{digest}/{upgrade_id}"
+    )
 
 
 def submit_upgrade_run(

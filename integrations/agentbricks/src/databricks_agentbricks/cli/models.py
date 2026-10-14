@@ -29,7 +29,7 @@ import click
 from databricks_agentbricks.cli import prompts as prompt_registry
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
-from databricks_agentkit.runtime.model_services import destination_model, system_ai_name
+from databricks_agentkit.runtime.model_services import destination_model
 
 _BIND_COMMAND = "agentbricks experimental models bind <catalog>.<schema>.<name> [--role <role>] --default system.ai.<model>"
 
@@ -204,11 +204,11 @@ def models_bind(
     doesn't exist (routed to --default), grants the app's service principal EXECUTE on it, and points
     the agent at it via AGENT_MODEL_SERVICE_<ROLE>.
     """
+    from databricks_agentbricks.model_upgrade import system_ai_name  # noqa: PLC0415
     from databricks_agentbricks.projects.agent_project import (  # noqa: PLC0415
         DEFAULT_MODEL_ROLE,
         AgentProject,
     )
-    from databricks_agentbricks.model_upgrade import system_ai_name  # noqa: PLC0415
     from databricks_agentkit.runtime.tool_manifest import model_service_env  # noqa: PLC0415
 
     role = role or DEFAULT_MODEL_ROLE
@@ -1015,14 +1015,19 @@ def models_upgrade(
 
 def _run_locally(obj, project, config, services, current, by_role) -> dict:
     """Run the search in this process and record it like a finished job run."""
+    import contextlib  # noqa: PLC0415
     import os  # noqa: PLC0415
+    import sys  # noqa: PLC0415
 
     from databricks_agentbricks import model_upgrade  # noqa: PLC0415
 
     if obj.profile:
         # The search's workspace client and MLflow both resolve auth from the environment.
         os.environ["DATABRICKS_CONFIG_PROFILE"] = obj.profile
-    with render.progress("Running the search locally (this can take hours)…"):
+    output = (
+        contextlib.redirect_stdout(sys.stderr) if obj.output == "json" else contextlib.nullcontext()
+    )
+    with output, render.progress("Running the search locally (this can take hours)…"):
         report = model_upgrade.run_and_record(project.root, config)
     entry = {
         "upgrade_id": config.upgrade_id,
@@ -1050,7 +1055,10 @@ def _run_as_job(
     from databricks_agentbricks.clients.databricks_cli import _databricks  # noqa: PLC0415
 
     ws_path = model_upgrade.workspace_project_path(
-        client.current_user, str(project.deployment_name or project.root.name), project.root
+        client.current_user,
+        str(project.deployment_name or project.root.name),
+        project.root,
+        config.upgrade_id,
     )
     with render.status(f"Uploading the project to {ws_path}…"):
         # --full: an incremental sync trusts its local snapshot and can leave stale remote files in
