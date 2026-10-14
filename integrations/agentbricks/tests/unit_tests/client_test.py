@@ -25,44 +25,32 @@ from databricks_agentkit._api_client import (
 @pytest.mark.parametrize("model", ["system.ai.gpt-5.6-luna", ""])
 @pytest.mark.parametrize("operation", ["create", "update"])
 @mock.patch("databricks.sdk.WorkspaceClient")
-def test_pipeline_model_schema_fallback(workspace_client, operation, model, code):
+def test_pipeline_model_schema_errors_are_not_retried(workspace_client, operation, model, code):
     c, do = _client(workspace_client)
     message = (
         'Unknown field "model" in message DreamerPolicy'
         if operation == "create"
         else "unsupported update path: dreamer_policy.model"
     )
-    do.side_effect = [AgentCliError(message, error_code=code), {"ok": True}]
-    if operation == "create":
-        result = c.create_memory_pipeline(
-            memory_store="m",
-            session_store="s",
-            model=model,
-            instructions="keep",
-            trigger="scheduled",
-        )
-    else:
-        result = c.update_memory_pipeline(
-            "p", model=model, instructions="keep", trigger="scheduled"
-        )
-    assert result == {"ok": True}
-    assert do.call_count == 2
-    original, retried = do.call_args_list
-    assert retried.kwargs["body"]["model"] == model
-    assert "model" not in original.kwargs["body"]
-    assert original.kwargs["body"]["dreamer_policy"] == {
+    do.side_effect = AgentCliError(message, error_code=code)
+    with pytest.raises(AgentCliError, match=message):
+        if operation == "create":
+            c.create_memory_pipeline(
+                memory_store="m",
+                session_store="s",
+                model=model,
+                instructions="keep",
+                trigger="scheduled",
+            )
+        else:
+            c.update_memory_pipeline("p", model=model, instructions="keep", trigger="scheduled")
+    assert do.call_count == 1
+    assert "model" not in do.call_args.kwargs["body"]
+    assert do.call_args.kwargs["body"]["dreamer_policy"] == {
         "model": model,
         "instructions": "keep",
         "trigger": "SCHEDULED",
     }
-    assert original.args == retried.args
-    if operation == "update":
-        assert retried.kwargs["query"] == {
-            "update_mask": "model,dreamer_policy.instructions,dreamer_policy.trigger"
-        }
-    else:
-        assert retried.kwargs["body"]["session_store"] == "session-stores/s"
-        assert retried.kwargs["body"]["memory_store"] == "memory-stores/m"
 
 
 @pytest.mark.parametrize(
@@ -84,14 +72,14 @@ def test_pipeline_model_does_not_retry_unrelated_failures(workspace_client, code
 
 
 @mock.patch("databricks.sdk.WorkspaceClient")
-def test_pipeline_model_fallback_only_once(workspace_client):
+def test_pipeline_model_update_has_no_legacy_fallback(workspace_client):
     c, do = _client(workspace_client)
     do.side_effect = AgentCliError(
         "unsupported update path: dreamer_policy.model", error_code="INVALID_PARAMETER_VALUE"
     )
     with pytest.raises(AgentCliError):
         c.update_memory_pipeline("p", model="")
-    assert do.call_count == 2
+    assert do.call_count == 1
 
 
 @pytest.mark.parametrize("model", ["system.ai.dummy", ""])
@@ -129,12 +117,12 @@ def test_pipeline_create_does_not_retry_ambiguous_failures(workspace_client, mes
 
 
 @mock.patch("databricks.sdk.WorkspaceClient")
-def test_pipeline_create_schema_retry_is_bounded(workspace_client):
+def test_pipeline_create_has_no_legacy_fallback(workspace_client):
     c, do = _client(workspace_client)
     do.side_effect = AgentCliError('Unknown field "model"', error_code="BAD_REQUEST")
     with pytest.raises(AgentCliError):
         c.create_memory_pipeline(memory_store="m", session_store="s", model="system.ai.dummy")
-    assert do.call_count == 2
+    assert do.call_count == 1
 
 
 def _client(workspace_client):

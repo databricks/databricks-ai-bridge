@@ -572,10 +572,8 @@ agentbricks memory pipeline update p-123 --instructions @/path/to/instructions.m
 ```
 
 Instructions are sent as `dreamer_policy.instructions` with that leaf field in the update mask.
-`--model ""` clears the override. Create and update send `dreamer_policy.model` first and
-retry once with legacy top-level `model` (and its update mask for update) on explicit
-schema rejection. Other errors are not retried. Older create endpoints that silently
-ignore the nested field will not trigger the fallback.
+`--model ""` clears the override. Create and update send only `dreamer_policy.model`;
+updates use the `dreamer_policy.model` field mask. There is no legacy top-level model fallback.
 List and detail views accept either model location, preferring the nested value when present.
 `--trigger` updates `dreamer_policy.trigger`: `manual` maps to `MANUAL_ONLY`, and
 `scheduled` maps to `SCHEDULED`. Omit the flag to preserve the current trigger.
