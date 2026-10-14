@@ -9,6 +9,7 @@ import pytest
 from click.testing import CliRunner
 
 import databricks_agentbricks.cli.app as cli
+from databricks_agentbricks.errors import AgentCliError
 
 PIPELINE = {
     "name": "memory-pipelines/p-123",
@@ -288,6 +289,29 @@ def test_run_triggers_pipeline_and_renders_returned_run():
     assert client.calls == [("run", "p-123")]
     assert "memory-pipelines/p-123/runs/run-456" in result.output
     assert "PIPELINE_RUN_STATE_PENDING" in result.output
+
+
+def test_run_conflict_points_at_in_progress_run():
+    active = "memory-pipelines/p-123/runs/501787146174076"
+
+    class ConflictClient(_Client):
+        def run_memory_pipeline(self, name):
+            raise AgentCliError(
+                f"memory-pipelines/{name} already has a run in progress: {active}. "
+                "Wait for it to finish before starting another.",
+                error_code="ABORTED",
+            )
+
+    result = CliRunner().invoke(
+        _pipeline(), ["run", "p-123"], obj=_Ctx(ConflictClient()), standalone_mode=False
+    )
+
+    assert isinstance(result.exception, AgentCliError)
+    assert result.exception.error_code == "ABORTED"
+    # The user can't fix a conflict by re-running; tell them how to inspect the blocking run.
+    assert result.exception.hint == (
+        f"Check its progress with `agentbricks memory pipeline runs get {active}`."
+    )
 
 
 @pytest.mark.parametrize("command", ["create", "update"])
