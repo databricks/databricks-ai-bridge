@@ -1,0 +1,35 @@
+{
+  "name": "@databricks/appkit-agent-playground-custom-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "NODE_ENV=development tsx watch --env-file=.env server/index.ts",
+    "start": "tsx server/index.ts"
+  },
+  "dependencies": {
+    "@databricks/appkit": "^0.21.0",
+    "@databricks/appkit-agent": "file:../..",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "@ai-sdk/react": "^3.0.59",
+    "ai": "^6.0.70",
+    "swr": "^2.2.5",
+    "reflect-metadata": "^0.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@types/node": "^22.0.0",
+    "@vitejs/plugin-react": "^4.2.1",
+    "tsx": "^4.20.0",
+    "typescript": "^5.4.0",
+    "vite": "npm:rolldown-vite@latest"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@databricks/appkit",
+      "esbuild",
+      "protobufjs"
+    ]
+  }
+}
