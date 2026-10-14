@@ -379,7 +379,9 @@ def test_upgrade_uploads_project_and_submits_job_without_switching(tmp_path, stu
     assert payload["run"] is None  # returned once submitted
 
     ((sync_args,),) = [stub_job["synced"]]
-    ws_path = model_upgrade.workspace_project_path("me@example.com", "agent-langgraph", project)
+    ws_path = model_upgrade.workspace_project_path(
+        "me@example.com", "agent-langgraph", project, payload["upgrade_id"]
+    )
     assert ws_path.startswith(
         "/Workspace/Users/me@example.com/agentbricks_model_upgrades/agent-langgraph-"
     )
@@ -936,6 +938,7 @@ def test_upgrade_can_run_locally_without_a_job(tmp_path, stub_job, monkeypatch):
     ran = []
 
     def _run_and_record(root, config):
+        print("optimizer progress: evaluating candidates")  # noqa: T201 - reproduce optimizer stdout
         ran.append((root, config))
         return _report("system.ai.claude-haiku-4-5")
 
@@ -947,6 +950,8 @@ def test_upgrade_can_run_locally_without_a_job(tmp_path, stub_job, monkeypatch):
         _Ctx(_JobClient(), "json"),
     )  # fmt: skip
     assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["run"]["report"]["best_score"] > 0
+    assert "optimizer progress: evaluating candidates" in result.stderr
     assert len(ran) == 1 and ran[0][0] == project
     assert stub_job["synced"] == [] and "submit" not in stub_job  # nothing uploaded or submitted
     (run,) = model_upgrade.read_history(project)["runs"]

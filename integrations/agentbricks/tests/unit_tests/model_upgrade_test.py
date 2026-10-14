@@ -308,10 +308,27 @@ def test_two_copies_of_a_project_upload_to_different_folders(tmp_path):
     """A scratch copy with the same deployment name must not upload over the original's files."""
     original, copy = tmp_path / "wanderbricks", tmp_path / "scratch"
     original.mkdir(), copy.mkdir()
-    a = model_upgrade.workspace_project_path("me@example.com", "smu-wanderbricks", original)
-    b = model_upgrade.workspace_project_path("me@example.com", "smu-wanderbricks", copy)
+    a = model_upgrade.workspace_project_path(
+        "me@example.com", "smu-wanderbricks", original, "upgrade-a"
+    )
+    b = model_upgrade.workspace_project_path(
+        "me@example.com", "smu-wanderbricks", copy, "upgrade-a"
+    )
     assert a != b
-    assert a == model_upgrade.workspace_project_path("me@example.com", "smu-wanderbricks", original)
+    assert a == model_upgrade.workspace_project_path(
+        "me@example.com", "smu-wanderbricks", original, "upgrade-a"
+    )
+
+
+def test_queued_upgrades_keep_separate_source_snapshots(tmp_path):
+    first = model_upgrade.workspace_project_path("me@example.com", "agent", tmp_path, "upgrade-a")
+    second = model_upgrade.workspace_project_path("me@example.com", "agent", tmp_path, "upgrade-b")
+    assert first != second
+    assert first.endswith("/upgrade-a")
+    assert second.endswith("/upgrade-b")
+    assert first == model_upgrade.workspace_project_path(
+        "me@example.com", "agent", tmp_path, "upgrade-a"
+    )
 
 
 def test_run_upgrade_reports_candidates_rejected_on_the_sample(monkeypatch):
