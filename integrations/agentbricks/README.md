@@ -967,9 +967,12 @@ removed from `agent.toml` before using `agentbricks dev` or `agentbricks deploy`
 The table implementation is retained behind a disabled code-level gate so it can be enabled when
 Databricks Connect supports table downscoping. There is no CLI option to bypass that gate.
 
-With `databricks_access_token_included = true`, the sandbox receives `DATABRICKS_HOST`, a short-lived
-`DATABRICKS_TOKEN`, and `DATABRICKS_AUTH_TYPE`. A user-auth sandbox can use that credential
-for Workspace APIs permitted by the caller's permissions, even with an explicit Volume policy.
+With `databricks_access_token_included = true`, AgentKit requests that the sandbox backend make the
+selected Databricks credential available to sandbox code. Use SDK unified authentication with
+`WorkspaceClient()` rather than assuming `DATABRICKS_TOKEN` is present in the environment.
+Credential resolution alone does not prove API authorization: the backend must issue a token whose
+scopes the target API accepts. A user-auth sandbox requests Workspace API access under the caller's
+permissions, even with an explicit Volume policy.
 The Volume policy limits only UC Volume access to the configured volumes; it does not restrict
 Workspace access or choose the identity: `auth = "user"` uses the request user's
 OBO credential, while `auth = "app"` uses the Databricks App service principal. Use
