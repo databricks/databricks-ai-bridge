@@ -61,20 +61,20 @@ def test_dev(
                     f"--path /api/invocations --json {invocation_json(OK_PROMPT)}"
                 ).stdout
             assert_replied_ok(output)
-        return
-
-    project.write_manifest(tools)
-    port = free_port()
-    with agentbricks_cli.start(
-        f"dev --source {project.path} --app-port {port}", env={"PORT": str(port)}
-    ) as server:
-        endpoint = AgentEndpoint.local(server, port)
-        for tool in tools:
-            with subtests.test(tool=tool.name):
-                invoke_and_check(endpoint, tool)
-        with subtests.test(step="endpoint-invoke"):
-            output = agentbricks_cli.run(
-                f"endpoint invoke --url {endpoint.base_url} --no-auth "
-                f"--path /api/invocations --json {invocation_json(OK_PROMPT)}"
-            ).stdout
-            assert_replied_ok(output)
+    elif authoring == "direct":
+        project.write_manifest(tools)
+        port = free_port()
+        with agentbricks_cli.start(
+            f"dev --source {project.path} --app-port {port}", env={"PORT": str(port)}
+        ) as server:
+            endpoint = AgentEndpoint.local(server, port)
+            for tool in tools:
+                with subtests.test(tool=tool.name):
+                    invoke_and_check(endpoint, tool)
+            # Reuses the running server rather than restarting dev for this one call.
+            with subtests.test(step="endpoint-invoke"):
+                output = agentbricks_cli.run(
+                    f"endpoint invoke --url {endpoint.base_url} --no-auth "
+                    f"--path /api/invocations --json {invocation_json(OK_PROMPT)}"
+                ).stdout
+                assert_replied_ok(output)

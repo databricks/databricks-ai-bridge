@@ -68,24 +68,17 @@ def test_deploy(
                 invoke_and_check(endpoint, tool)
                 for added in tools[: index + 1]:
                     assert_granted(added)
-        with subtests.test(step="endpoint-invoke"):
-            assert_replied_ok(
-                agentbricks_cli.run(
-                    f"endpoint invoke {app} --path /api/invocations --json {invocation_json(OK_PROMPT)}",
-                    retry_unavailable=True,
-                ).stdout
-            )
-        return
+    elif authoring == "direct":
+        project.write_manifest(tools)
+        agentbricks_cli.run(f"deploy {app} --source {project.path}", timeout=2400)
+        endpoint = AgentEndpoint.deployed(workspace_client, app)
+        for tool in tools:
+            with subtests.test(tool=tool.name):
+                wait_for_grant(tool)
+                grant_transitive_if_needed(tool)
+                invoke_and_check(endpoint, tool)
+                assert_granted(tool)
 
-    project.write_manifest(tools)
-    agentbricks_cli.run(f"deploy {app} --source {project.path}", timeout=2400)
-    endpoint = AgentEndpoint.deployed(workspace_client, app)
-    for tool in tools:
-        with subtests.test(tool=tool.name):
-            wait_for_grant(tool)
-            grant_transitive_if_needed(tool)
-            invoke_and_check(endpoint, tool)
-            assert_granted(tool)
     with subtests.test(step="endpoint-invoke"):
         assert_replied_ok(
             agentbricks_cli.run(
