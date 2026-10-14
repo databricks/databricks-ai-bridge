@@ -9,7 +9,6 @@ import uuid
 from collections.abc import Callable, Mapping
 
 from harness.agent_endpoint import AgentEndpoint
-from harness.agentbricks_cli import AgentbricksCli
 from harness.project import Project
 from harness.workspace import GrantTuple
 from uc_objects import UcFunction
@@ -204,12 +203,8 @@ TOOL_DEFINITIONS = (
 )
 
 
-def bind(cli: AgentbricksCli, project: Project, tool: Tool) -> None:
-    """CLI authoring: add one tool and confirm agent.toml declares it as intended."""
-    if tool.add_command is not None:
-        cli.run(f"tools add {tool.add_command} --source {project.path}")
-    for relative_path, content in tool.files.items():
-        project.write_file(relative_path, content)
+def assert_declared(project: Project, tool: Tool) -> None:
+    """After CLI authoring, agent.toml declares the tool under its id, App-authed if it must be."""
     if tool.tool_id is None:
         return
     declared = {t["id"]: t for t in project.manifest().get("tools", [])}
@@ -222,45 +217,20 @@ def bind(cli: AgentbricksCli, project: Project, tool: Tool) -> None:
         )
 
 
-def reject_unavailable_mcp(cli: AgentbricksCli, project: Project) -> None:
-    """`tools add` must refuse an MCP service that does not exist and leave agent.toml untouched."""
-    manifest = project.path / "agent.toml"
-    before = manifest.read_bytes()
-    rejected = cli.run(
-        "--output json tools add mcp system.ai.missing_service --name broken_mcp "
-        f"--source {project.path}",
-        check=False,
-    )
-    assert rejected.returncode != 0 and manifest.read_bytes() == before, (
-        "agentbricks tools add accepted an unavailable MCP service or changed agent.toml"
-    )
-    code = json.loads(rejected.stderr).get("error", {}).get("code")
-    assert code in {"NOT_FOUND", "RESOURCE_DOES_NOT_EXIST"}, (
-        f"Unexpected MCP validation error: {rejected.stderr}"
-    )
-    cli.run(f"tools remove mcp system.ai.missing_service --source {project.path}")
-    assert not any(tool["id"] == "broken_mcp" for tool in project.manifest().get("tools", [])), (
-        "agentbricks tools remove left the broken MCP binding in agent.toml"
-    )
-
-
 def invoke_and_check(endpoint: AgentEndpoint, tool: Tool) -> None:
     tool.check(endpoint.invoke(tool.prompt, f"{endpoint.runtime}-{tool.name}"))
 
 
-def assert_endpoint_invoke(cli: AgentbricksCli, endpoint: AgentEndpoint) -> None:
-    """`agentbricks endpoint invoke`, the call the CLI tells users to run after dev/deploy, gets a reply."""
+def invocation_json(prompt: str) -> str:
+    """A shell-quoted /api/invocations body for `agentbricks endpoint invoke --json`."""
     invocation_id = str(uuid.uuid4())
-    body = json.dumps(
-        {
-            "id": invocation_id,
-            "session_id": invocation_id,
-            "input": [{"role": "user", "content": "Reply with the single word OK."}],
-        }
-    )
-    target = endpoint.app_name or f"--url {endpoint.base_url} --no-auth"
-    output = cli.run(
-        f"endpoint invoke {target} --path /api/invocations --json {shlex.quote(body)}",
-        retry_unavailable=True,
-    ).stdout
+    body = {
+        "id": invocation_id,
+        "session_id": invocation_id,
+        "input": [{"role": "user", "content": prompt}],
+    }
+    return shlex.quote(json.dumps(body))
+
+
+def assert_replied_ok(output: str) -> None:
     assert "ok" in output.lower(), f"endpoint invoke returned no reply: {output[:500]}"

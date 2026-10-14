@@ -78,6 +78,10 @@ class Project:
         log(f"# write {target}: user-owned file")
         target.write_text(content, encoding="utf-8")
 
+    def write_files(self, files: Mapping[str, str]) -> None:
+        for relative_path, content in files.items():
+            self.write_file(relative_path, content)
+
     def write_manifest(self, tool_specs: Sequence[ToolSpec]) -> None:
         """Direct authoring: write agent.toml with exactly these tools plus a tracing binding."""
         sections: list[str] = [_DIRECT_HEADER.format(framework=FRAMEWORKS[0])]
@@ -90,8 +94,7 @@ class Project:
         log(f"# write {target}: direct authoring; no agentbricks tools command")
         target.write_text("\n".join(sections), encoding="utf-8")
         for spec in tool_specs:
-            for relative_path, content in spec.files.items():
-                self.write_file(relative_path, content)
+            self.write_files(spec.files)
 
 
 def _pin_project_wheel(project: pathlib.Path, wheel: pathlib.Path) -> None:

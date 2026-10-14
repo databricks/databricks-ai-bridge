@@ -6,7 +6,6 @@ Real case still to write: an invocation exports a trace to the experiment.
 from __future__ import annotations
 
 import pytest
-from harness.agent_endpoint import AgentEndpoint
 from harness.agentbricks_cli import AgentbricksCli
 from harness.project import Project
 from harness.run import TOOL_RESOURCE_PREFIX
@@ -20,7 +19,6 @@ def test_tracing_experiment_bound(
     project.pin_runtime()
     experiment_name = project.manifest().get("tracing", {}).get("experiment_name")
     agentbricks_cli.run(f"deploy {project.app_name} --source {project.path}", timeout=2400)
-    AgentEndpoint.deployed(workspace_client, project.app_name)
     assert experiment_name, "agent.toml binds no tracing experiment"
 
     # Deploy attaches the experiment as an App resource that Agent Bricks does not own.

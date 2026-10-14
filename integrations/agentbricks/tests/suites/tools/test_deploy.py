@@ -13,7 +13,15 @@ from harness.agentbricks_cli import AgentbricksCli
 from harness.logs import log
 from harness.project import Project
 from harness.workspace import Workspace
-from tool_definitions import Tool, assert_endpoint_invoke, bind, invoke_and_check
+from tool_definitions import (
+    Tool,
+    assert_declared,
+    assert_replied_ok,
+    invocation_json,
+    invoke_and_check,
+)
+
+OK_PROMPT = "Reply with the single word OK."
 
 
 def test_deploy(
@@ -49,7 +57,10 @@ def test_deploy(
     if authoring == "cli":
         for index, tool in enumerate(tools):
             with subtests.test(tool=tool.name):
-                bind(agentbricks_cli, project, tool)
+                if tool.add_command:
+                    agentbricks_cli.run(f"tools add {tool.add_command} --source {project.path}")
+                project.write_files(tool.files)
+                assert_declared(project, tool)
                 agentbricks_cli.run(f"deploy {app} --source {project.path}", timeout=2400)
                 endpoint = AgentEndpoint.deployed(workspace_client, app)
                 wait_for_grant(tool)
@@ -58,7 +69,12 @@ def test_deploy(
                 for added in tools[: index + 1]:
                     assert_granted(added)
         with subtests.test(step="endpoint-invoke"):
-            assert_endpoint_invoke(agentbricks_cli, endpoint)
+            assert_replied_ok(
+                agentbricks_cli.run(
+                    f"endpoint invoke {app} --path /api/invocations --json {invocation_json(OK_PROMPT)}",
+                    retry_unavailable=True,
+                ).stdout
+            )
         return
 
     project.write_manifest(tools)
@@ -71,4 +87,9 @@ def test_deploy(
             invoke_and_check(endpoint, tool)
             assert_granted(tool)
     with subtests.test(step="endpoint-invoke"):
-        assert_endpoint_invoke(agentbricks_cli, endpoint)
+        assert_replied_ok(
+            agentbricks_cli.run(
+                f"endpoint invoke {app} --path /api/invocations --json {invocation_json(OK_PROMPT)}",
+                retry_unavailable=True,
+            ).stdout
+        )

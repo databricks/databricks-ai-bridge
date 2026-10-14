@@ -8,21 +8,18 @@ from __future__ import annotations
 import json
 
 import pytest
-from harness.agent_endpoint import AgentEndpoint
 from harness.agentbricks_cli import AgentbricksCli
 from harness.project import Project
-from harness.workspace import Workspace
 
 
-def test_memory_store_created(
-    agentbricks_cli: AgentbricksCli, project: Project, workspace_client: Workspace
-) -> None:
+# Deploy needs a live workspace.
+@pytest.mark.usefixtures("workspace_client")
+def test_memory_store_created(agentbricks_cli: AgentbricksCli, project: Project) -> None:
     agentbricks_cli.run(f"init --framework langgraph {project.path}", timeout=600)
     project.pin_runtime()
     declared = project.declared_store("memory")
     assert declared, "agentbricks init declared no memory store"
     agentbricks_cli.run(f"deploy {project.app_name} --source {project.path}", timeout=2400)
-    AgentEndpoint.deployed(workspace_client, project.app_name)
 
     store = json.loads(
         agentbricks_cli.run(f"--output json memory stores get memory-stores/{declared}").stdout

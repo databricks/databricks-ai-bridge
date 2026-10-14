@@ -10,7 +10,7 @@ from harness.agent_endpoint import AgentEndpoint
 from harness.agentbricks_cli import AgentbricksCli
 from harness.project import Project
 from harness.workspace import Workspace
-from tool_definitions import PYTHON_MARKER, UC_MARKER, Tool, bind, excerpt
+from tool_definitions import PYTHON_MARKER, UC_MARKER, Tool, assert_declared, excerpt
 from uc_objects import UcFunction
 
 # Names the Unity Catalog function without its tool id, and the Python helper only to exclude it.
@@ -33,7 +33,10 @@ def test_selects_uc_function_not_python_marker(
     app = project.app_name
     if authoring == "cli":
         for tool in tools:
-            bind(agentbricks_cli, project, tool)
+            if tool.add_command:
+                agentbricks_cli.run(f"tools add {tool.add_command} --source {project.path}")
+            project.write_files(tool.files)
+            assert_declared(project, tool)
     else:
         project.write_manifest(tools)
     agentbricks_cli.run(f"deploy {app} --source {project.path}", timeout=2400)

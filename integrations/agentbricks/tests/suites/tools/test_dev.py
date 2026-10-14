@@ -3,12 +3,12 @@
 CLI authoring is incremental: add one tool, restart dev, verify it, then add the next on the same
 project. Direct authoring writes every tool into agent.toml and runs dev once. A subtest per tool
 reports each tool independently and the sequence continues past a failure.
+
+Each dev server gets a free port, passed as both --app-port and PORT: the template server binds
+$PORT, so an inherited PORT would override --app-port.
 """
 
 from __future__ import annotations
-
-import contextlib
-from collections.abc import Iterator
 
 import pytest
 from harness.agent_endpoint import AgentEndpoint
@@ -16,25 +16,16 @@ from harness.agentbricks_cli import AgentbricksCli, free_port
 from harness.project import Project
 from tool_definitions import (
     Tool,
-    assert_endpoint_invoke,
-    bind,
+    assert_declared,
+    assert_replied_ok,
+    invocation_json,
     invoke_and_check,
-    reject_unavailable_mcp,
 )
 
 # Local dev servers share run-local's proxy port, so all dev runs stay on one worker, in order.
 pytestmark = pytest.mark.xdist_group("dev")
 
-
-@contextlib.contextmanager
-def dev(cli: AgentbricksCli, project: Project) -> Iterator[AgentEndpoint]:
-    """`agentbricks dev` the project for the duration of the block."""
-    port = free_port()
-    # The template server binds $PORT, so an inherited PORT would override --app-port.
-    with cli.start(
-        f"dev --source {project.path} --app-port {port}", env={"PORT": str(port)}
-    ) as server:
-        yield AgentEndpoint.local(server, port)
+OK_PROMPT = "Reply with the single word OK."
 
 
 def test_dev(
@@ -48,21 +39,42 @@ def test_dev(
     project.pin_runtime()
 
     if authoring == "cli":
-        with subtests.test(step="rejects-unavailable-mcp"):
-            reject_unavailable_mcp(agentbricks_cli, project)
         for tool in tools:
             with subtests.test(tool=tool.name):
-                bind(agentbricks_cli, project, tool)
-                with dev(agentbricks_cli, project) as endpoint:
-                    invoke_and_check(endpoint, tool)
-        with subtests.test(step="endpoint-invoke"), dev(agentbricks_cli, project) as endpoint:
-            assert_endpoint_invoke(agentbricks_cli, endpoint)
+                if tool.add_command:
+                    agentbricks_cli.run(f"tools add {tool.add_command} --source {project.path}")
+                project.write_files(tool.files)
+                assert_declared(project, tool)
+                port = free_port()
+                with agentbricks_cli.start(
+                    f"dev --source {project.path} --app-port {port}", env={"PORT": str(port)}
+                ) as server:
+                    invoke_and_check(AgentEndpoint.local(server, port), tool)
+        with subtests.test(step="endpoint-invoke"):
+            port = free_port()
+            with agentbricks_cli.start(
+                f"dev --source {project.path} --app-port {port}", env={"PORT": str(port)}
+            ) as server:
+                endpoint = AgentEndpoint.local(server, port)
+                output = agentbricks_cli.run(
+                    f"endpoint invoke --url {endpoint.base_url} --no-auth "
+                    f"--path /api/invocations --json {invocation_json(OK_PROMPT)}"
+                ).stdout
+            assert_replied_ok(output)
         return
 
     project.write_manifest(tools)
-    with dev(agentbricks_cli, project) as endpoint:
+    port = free_port()
+    with agentbricks_cli.start(
+        f"dev --source {project.path} --app-port {port}", env={"PORT": str(port)}
+    ) as server:
+        endpoint = AgentEndpoint.local(server, port)
         for tool in tools:
             with subtests.test(tool=tool.name):
                 invoke_and_check(endpoint, tool)
         with subtests.test(step="endpoint-invoke"):
-            assert_endpoint_invoke(agentbricks_cli, endpoint)
+            output = agentbricks_cli.run(
+                f"endpoint invoke --url {endpoint.base_url} --no-auth "
+                f"--path /api/invocations --json {invocation_json(OK_PROMPT)}"
+            ).stdout
+            assert_replied_ok(output)

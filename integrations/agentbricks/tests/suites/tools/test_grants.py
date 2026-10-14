@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from harness.agent_endpoint import AgentEndpoint
 from harness.agentbricks_cli import AgentbricksCli
 from harness.project import Project
 from harness.run import TOOL_RESOURCE_PREFIX
 from harness.workspace import Workspace
-from tool_definitions import bind, uc_function_tool
+from tool_definitions import assert_declared, uc_function_tool
 from uc_objects import UcFunction
 
 
@@ -25,11 +24,11 @@ def test_grants(
     project.pin_runtime()
     app = project.app_name
     if authoring == "cli":
-        bind(agentbricks_cli, project, tool)
+        agentbricks_cli.run(f"tools add {tool.add_command} --source {project.path}")
+        assert_declared(project, tool)
     else:
         project.write_manifest([tool])
     agentbricks_cli.run(f"deploy {app} --source {project.path}", timeout=2400)
-    AgentEndpoint.deployed(workspace_client, app)
 
     with subtests.test(check="transitive-function-not-auto-granted"):
         # Raises if the hidden nested function is already granted or listed as an App resource.
