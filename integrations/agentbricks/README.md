@@ -545,7 +545,7 @@ agentbricks [-p <profile>] [-o text|json]
     add sandbox      --scope SCOPE [--scope SCOPE ...]
                      [--no-databricks-access-token-included] [--source PATH]
     add mcp          SERVICE [--name NAME] [--source PATH]
-    add uc-function  FUNCTION [--name NAME] [--source PATH]
+    add uc-function  FUNCTION [--name NAME] [--auth user|app] [--source PATH]
     add genie-one    [--name NAME] [--auth user|app] [--source PATH]
     add genie-agent  SPACE_ID [--name NAME] [--auth user|app] [--source PATH]
     list             [--kind sandbox|mcp|uc-function|genie-one|genie-agent]
@@ -686,8 +686,9 @@ agentbricks tools list
 
 ### Managed tool identity and migration
 
-`agentbricks tools add mcp`, `agentbricks tools add sandbox`, `agentbricks tools add genie-one`, and
-`agentbricks tools add genie-agent` write explicit `auth = "user"` by default.
+`agentbricks tools add mcp`, `agentbricks tools add sandbox`, `agentbricks tools add uc-function`,
+`agentbricks tools add genie-one`, and `agentbricks tools add genie-agent` write explicit
+`auth = "user"` by default.
 Use `--auth app` for the App service principal instead. This field is on the tool entry, not
 inside `source` or `policy`:
 
@@ -698,7 +699,8 @@ auth = "user"
 source = { kind = "mcp", service = "system.ai.web_search" }
 ```
 
-Direct UC-function bindings remain app/default identity and do not accept `--auth user`.
+UC-function bindings use the request user's permissions by default. Use `--auth app` to execute
+with the App service principal's permissions instead.
 Managed-tool add commands write the selected identity to `agent.toml`; inspect that manifest to
 review configured bindings. Missing legacy auth continues to mean App identity at runtime; it is
 never silently upgraded to user identity.
@@ -797,6 +799,7 @@ Deploy derives Apps user scopes from explicit `auth = "user"` bindings and union
 | Managed MCP (governed ingress) | `ai-gateway` |
 | `system.ai.dbsql` | `ai-gateway`, `sql` |
 | `system.ai.genie_one_mcp` | `ai-gateway`, `genie` |
+| UC function | `unity-catalog` |
 | Sandbox with a Volume downscope | `ai-gateway`, `files` |
 | First-class Genie One or Genie Agent | `genie` |
 | Sandbox with token injection | `ai-gateway`, `workspace.workspace` |

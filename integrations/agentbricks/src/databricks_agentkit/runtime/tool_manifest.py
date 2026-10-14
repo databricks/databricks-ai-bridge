@@ -232,8 +232,6 @@ def _tool(value: object) -> ToolRecord:
     auth = value.get("auth")
     if auth is not None and auth not in ("user", "app"):
         raise ToolManifestError("Tool auth must be 'user' or 'app'.")
-    if kind == "uc_function" and auth == "user":
-        raise ToolManifestError("UC function auth supports only app/default identity.")
     if kind == "python":
         raise ToolManifestError(
             "Python tools are code-first and cannot be declared in agent.toml. "
