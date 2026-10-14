@@ -507,22 +507,26 @@ class _AgentBricksApiClient:
     # --- memory pipelines ---------------------------------------------------
 
     def _write_memory_pipeline(
-        self, method: str, path: str, *, body: dict, query: Optional[dict] = None
+        self,
+        method: str,
+        path: str,
+        *,
+        body: dict,
+        query: Optional[dict] = None,
+        legacy_body: Optional[dict] = None,
+        legacy_query: Optional[dict] = None,
+        nested_body: Optional[dict] = None,
     ) -> dict:
-        if "model" not in body:
-            return self._do(method, path, body=body, query=query)
-        nested = {key: value for key, value in body.items() if key != "model"}
-        nested["dreamer_policy"] = {**(body.get("dreamer_policy") or {}), "model": body["model"]}
-        nested_query = dict(query) if query is not None else None
-        if nested_query is not None and "update_mask" in nested_query:
-            nested_query["update_mask"] = ",".join(
-                "dreamer_policy.model" if field == "model" else field
-                for field in nested_query["update_mask"].split(",")
-            )
+        """Send caller-built payloads, retrying once on explicit model-schema rejection.
+
+        Create supplies a dual-field body and both fallback bodies. Update supplies a
+        nested-model body/mask and its legacy fallback. Without a model, no fallback is supplied.
+        """
         try:
-            request_body = {**nested, "model": body["model"]} if method == "POST" else nested
-            return self._do(method, path, body=request_body, query=nested_query)
+            return self._do(method, path, body=body, query=query)
         except AgentCliError as exc:
+            if legacy_body is None:
+                raise
             # Retry only an explicit rejection of the nested model schema. In particular,
             # never retry model validation, authorization, or ambiguous write failures.
             message = str(exc).lower()
@@ -546,11 +550,11 @@ class _AgentBricksApiClient:
                 # Both locations were sent. A bare "unknown field model" is ambiguous:
                 # require the parser to identify the containing message before retrying.
                 if unknown_model and "dreamerpolicy" in message:
-                    return self._do(method, path, body=body, query=query)
+                    return self._do(method, path, body=legacy_body, query=legacy_query)
                 if unknown_model and "memorypipeline" in message and "dreamerpolicy" not in message:
-                    return self._do(method, path, body=nested, query=query)
+                    return self._do(method, path, body=nested_body, query=query)
                 raise
-            return self._do(method, path, body=body, query=query)
+            return self._do(method, path, body=legacy_body, query=legacy_query)
 
     def create_memory_pipeline(
         self,
@@ -570,16 +574,23 @@ class _AgentBricksApiClient:
                     f"Use one of: {', '.join(MEMORY_PIPELINE_TRIGGERS)}."
                 )
             policy["trigger"] = MEMORY_PIPELINE_TRIGGERS[trigger]
+        body = _body(
+            display_name=display_name,
+            session_store=session_store_path(session_store),
+            memory_store=memory_store_path(memory_store),
+            dreamer_policy=policy or None,
+        )
+        legacy_body = nested_body = None
+        if model is not None:
+            legacy_body = {**body, "model": model}
+            nested_body = {**body, "dreamer_policy": {**policy, "model": model}}
+            body = {**nested_body, "model": model}
         return self._write_memory_pipeline(
             "POST",
             f"{_BASE}/memory-pipelines",
-            body=_body(
-                display_name=display_name,
-                session_store=session_store_path(session_store),
-                memory_store=memory_store_path(memory_store),
-                dreamer_policy=policy or None,
-                model=model,
-            ),
+            body=body,
+            legacy_body=legacy_body,
+            nested_body=nested_body,
         )
 
     def get_memory_pipeline(self, name: str) -> dict:
@@ -603,11 +614,12 @@ class _AgentBricksApiClient:
         model: Optional[str] = None,
         trigger: Optional[str] = None,
     ) -> dict:
-        body = _body(display_name=display_name, model=model)
-        mask = list(body)
+        body = _body(display_name=display_name)
+        display_mask = list(body)
+        policy_mask = []
         policy = _body(instructions=instructions)
         if instructions is not None:
-            mask.append("dreamer_policy.instructions")
+            policy_mask.append("dreamer_policy.instructions")
         if trigger is not None:
             if trigger not in MEMORY_PIPELINE_TRIGGERS:
                 raise AgentCliError(
@@ -615,18 +627,30 @@ class _AgentBricksApiClient:
                     f"Use one of: {', '.join(MEMORY_PIPELINE_TRIGGERS)}."
                 )
             policy["trigger"] = MEMORY_PIPELINE_TRIGGERS[trigger]
-            mask.append("dreamer_policy.trigger")
+            policy_mask.append("dreamer_policy.trigger")
         if policy:
             body["dreamer_policy"] = policy
-        if not body:
+        if not body and model is None:
             raise AgentCliError(
                 "No fields to update. Provide --display-name, --instructions, --model, or --trigger."
             )
+        body = {"name": memory_pipeline_path(name), **body}
+        mask = [*display_mask, *policy_mask]
+        legacy_body = legacy_query = None
+        if model is not None:
+            # Build the two masks directly; never rewrite a serialized update mask.
+            legacy_mask = [*display_mask, "model", *policy_mask]
+            legacy_body = {**body, "model": model}
+            legacy_query = {"update_mask": ",".join(legacy_mask)}
+            body = {**body, "dreamer_policy": {**policy, "model": model}}
+            mask = [*display_mask, "dreamer_policy.model", *policy_mask]
         return self._write_memory_pipeline(
             "PATCH",
             f"{_BASE}/{memory_pipeline_path(name)}",
             query={"update_mask": ",".join(mask)},
-            body={"name": memory_pipeline_path(name), **body},
+            body=body,
+            legacy_body=legacy_body,
+            legacy_query=legacy_query,
         )
 
     def delete_memory_pipeline(self, name: str) -> dict:
