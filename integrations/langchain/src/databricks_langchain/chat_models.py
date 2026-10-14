@@ -63,7 +63,7 @@ from langchain_core.utils.function_calling import (
 )
 from langchain_core.utils.pydantic import is_basemodel_subclass
 from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
-from openai.types.chat import ChatCompletion, ChatCompletionChunk
+from openai.types.chat import ChatCompletionChunk
 from openai.types.completion_usage import CompletionUsage
 from openai.types.responses import Response, ResponseStreamEvent, ResponseUsage
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -705,13 +705,20 @@ class ChatDatabricks(BaseChatModel):
             result["output_token_details"] = output_token_details
         return result
 
-    def _convert_response_to_chat_result(self, response: ChatCompletion) -> ChatResult:
+    def _convert_response_to_chat_result(self, response: Any) -> ChatResult:
+        if not hasattr(response, "choices"):
+            response_preview = repr(response)
+            if len(response_preview) > 500:
+                response_preview = response_preview[:500] + "... (truncated)"
+            raise ValueError(
+                "ChatDatabricks expected a ChatCompletion response, "
+                f"but received {type(response).__name__}. "
+                "Check that the endpoint returns an OpenAI-compatible chat completion. "
+                f"Response: {response_preview}"
+            )
+
         # Check if this is a ChatAgent response (has messages but no choices)
-        if (
-            hasattr(response, "choices")
-            and response.choices is None
-            and hasattr(response, "messages")
-        ):
+        if response.choices is None and hasattr(response, "messages"):
             return self._convert_chatagent_response_to_chat_result(response)
 
         generations = []
