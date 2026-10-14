@@ -271,10 +271,18 @@ memory.delete()
 
 The root collections manage stores: `agentkit.memory_stores.create/get/list` and
 `agentkit.session_stores.create/get/list`. A returned store owns operations on its
-contents, such as `memory_store.add()`, `memory_store.get("memory-id")`,
-`memory_store.list()`, and `memory_store.search()`, or `session_store.add()`,
-`session_store.get("session-id")`, and `session_store.list()`. Returned memories,
-sessions, and stores own their `update()` and `delete()` operations.
+contents, such as `memory_store.add()`, `memory_store.put()`,
+`memory_store.get("memory-id")`, `memory_store.list()`, and `memory_store.search()`, or
+`session_store.add()`, `session_store.get("session-id")`, and `session_store.list()`.
+Returned memories, sessions, and stores own their `update()` and `delete()` operations.
+
+`memory_store.add()` fails with `ALREADY_EXISTS` when a memory already exists at the
+same `actor_id`, `session_id`, and `path`. `memory_store.put()` creates the memory or
+updates the existing one: it replaces the content, or with `append=True` adds `content`
+as new lines, skipping lines already present. `put()` is not atomic, so concurrent
+writers to one path can overwrite each other. `add()`'s `write_mode` argument is
+deprecated; use `put()` instead. `memory_store.list(actor_id=..., path=...)` returns the
+memories at one exact path.
 
 All `list()` methods return iterators that automatically consume server pages. List
 `page_size` and search `limit` values must be between 1 and 100. `session.list_items()`
@@ -450,7 +458,8 @@ from databricks_agentkit import AgentKitClient
 agentkit = AgentKitClient(WorkspaceClient())
 
 memory_store = agentkit.memory_stores.create("support-agent-memory")
-memory_store.add(
+# put() creates the entry, or replaces its content if one already exists at this path.
+memory_store.put(
     actor_id="user-123",
     path="/preferences/communication.md",
     content="Prefers email over phone. Timezone: PST.",
@@ -462,15 +471,27 @@ results = memory_store.search(actor_id="user-123", query="communication preferen
 ```
 
 To browse rather than search, `memory_store.list(actor_id=..., path_prefix=...)` returns entries
-directly.
+directly, and `memory_store.list(actor_id=..., path=...)` returns the entries at one exact path.
 
 In an agent configured with `server = "agentbricks"`, add the memory tools so the model can read and write memory during a run.
-`memory_tools(actor)` exposes `remember` and `recall` bound to one actor's partition; it resolves the
-store from the `[memory_store]` binding, carried to the runtime by the `AGENT_MEMORY_STORE` env var
-that `agentbricks deploy` injects, and returns no tools when no store is set, so the agent runs unchanged.
+`memory_tools(actor)` returns four tools bound to one actor's partition:
+
+- `remember(fact, topic)` appends the fact to one memory per topic, `/{topic}.md`, with the topic
+  reduced to a safe path segment. Remembering a fact that is already there is a no-op.
+- `recall(query, session_id=None)` searches the actor's memories, including ones written under other
+  paths, or only the ones saved under `session_id`.
+- `forget(fact, topic, session_id=None)` removes a matching fact from every memory at the path, or
+  only from the one saved under `session_id`, and deletes a memory once no facts remain.
+- `list_memories(session_id=None)` lists each memory's path, its session if it has one, and how
+  many facts it holds, optionally only for one session.
+
+`remember` writes memories without a `session_id`; memories saved under a session are labeled with
+it in `recall` and `list_memories`. `memory_tools` resolves the store from the `[memory_store]`
+binding, carried to the runtime by the `AGENT_MEMORY_STORE` env var that `agentbricks deploy`
+injects, and returns no tools when no store is set, so the agent runs unchanged.
 That "no store set" path is also how it runs under `agentbricks dev`, which runs locally: memory is off
-there (the store is provisioned and used only at deploy). The OpenAI Agents adapter exposes the same as
-`memory_tools()`:
+there (the store is provisioned and used only at deploy). The OpenAI Agents adapter exposes the same
+tools as `databricks_agentkit.openai.memory_tools(actor)`:
 
 ```python
 from databricks_agentkit.langgraph import memory_tools
