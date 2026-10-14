@@ -809,7 +809,7 @@ def _render_applied(result: dict) -> None:
 )
 @click.option(
     "--quality-weight",
-    type=click.FloatRange(min=0),
+    type=click.FloatRange(min=0.0),
     default=0.7,
     show_default=True,
     help="How much the scorers' quality counts toward picking the winner. The three weights are "
@@ -817,21 +817,21 @@ def _render_applied(result: dict) -> None:
 )
 @click.option(
     "--latency-weight",
-    type=click.FloatRange(min=0),
+    type=click.FloatRange(min=0.0),
     default=0.2,
     show_default=True,
     help="How much latency counts toward picking the winner.",
 )
 @click.option(
     "--cost-weight",
-    type=click.FloatRange(min=0),
+    type=click.FloatRange(min=0.0),
     default=0.1,
     show_default=True,
     help="How much token cost counts toward picking the winner.",
 )
 @click.option(
     "--latency-gate",
-    type=click.FloatRange(min=1),
+    type=click.FloatRange(min=1.0),
     default=60.0,
     show_default=True,
     help="Seconds. A record slower than this scores 0 on every objective. Raise it for agents "
