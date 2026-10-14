@@ -36,6 +36,9 @@ class ToolSpec(Protocol):
 class Project:
     path: pathlib.Path
     app_name: str
+    # The runtime under test: the wheel built from this checkout, or a bridge commit.
+    wheel: pathlib.Path | None = None
+    bridge_sha: str | None = None
 
     @classmethod
     def allocate(cls, run_config: RunConfig) -> Project:
@@ -43,7 +46,21 @@ class Project:
         name = f"{project_prefix(run_config.run_id)}{uuid.uuid4().hex[:6]}"
         path = run_config.output / "projects" / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        return cls(path, f"{APP_PREFIX}{name}")
+        return cls(path, f"{APP_PREFIX}{name}", run_config.wheel, run_config.bridge_sha)
+
+    def pin_runtime(self) -> None:
+        """Point the project's databricks-agentbricks dependency at the runtime under test."""
+        if self.bridge_sha:
+            _pin_bridge_sources(self.path, self.bridge_sha)
+        else:
+            assert self.wheel is not None
+            _pin_project_wheel(self.path, self.wheel)
+
+    def is_pinned(self) -> bool:
+        pyproject = self.path / "pyproject.toml"
+        document = tomli.loads(pyproject.read_text(encoding="utf-8"))
+        sources = document.get("tool", {}).get("uv", {}).get("sources", {})
+        return "databricks-agentbricks" in sources
 
     def manifest(self) -> dict[str, Any]:
         return tomli.loads((self.path / "agent.toml").read_text(encoding="utf-8"))
@@ -75,25 +92,6 @@ class Project:
         for spec in tool_specs:
             for relative_path, content in spec.files.items():
                 self.write_file(relative_path, content)
-
-
-def pin_runtime(project: Project, run_config: RunConfig) -> None:
-    """Point the project's databricks-agentbricks dependency at the runtime under test.
-
-    That is the wheel built from this checkout, or the bridge commit given by ``--bridge-sha``.
-    """
-    if run_config.bridge_sha:
-        _pin_bridge_sources(project.path, run_config.bridge_sha)
-    else:
-        assert run_config.wheel is not None
-        _pin_project_wheel(project.path, run_config.wheel)
-
-
-def is_pinned(project: Project) -> bool:
-    pyproject = project.path / "pyproject.toml"
-    document = tomli.loads(pyproject.read_text(encoding="utf-8"))
-    sources = document.get("tool", {}).get("uv", {}).get("sources", {})
-    return "databricks-agentbricks" in sources
 
 
 def _pin_project_wheel(project: pathlib.Path, wheel: pathlib.Path) -> None:

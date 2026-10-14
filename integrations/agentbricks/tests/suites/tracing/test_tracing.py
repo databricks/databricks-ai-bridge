@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import pytest
 from harness.agent_endpoint import AgentEndpoint
-from harness.cli import AgentbricksCli
-from harness.project import Project, pin_runtime
+from harness.agentbricks_cli import AgentbricksCli
+from harness.project import Project
 from harness.run import TOOL_RESOURCE_PREFIX
 from harness.workspace import Workspace
 
@@ -17,7 +17,7 @@ def test_tracing_experiment_bound(
     agentbricks_cli: AgentbricksCli, project: Project, workspace_client: Workspace
 ) -> None:
     agentbricks_cli.run(f"init --framework langgraph {project.path}", timeout=600)
-    pin_runtime(project, agentbricks_cli.run_config)
+    project.pin_runtime()
     experiment_name = project.manifest().get("tracing", {}).get("experiment_name")
     agentbricks_cli.run(f"deploy {project.app_name} --source {project.path}", timeout=2400)
     AgentEndpoint.deployed(workspace_client, project.app_name)

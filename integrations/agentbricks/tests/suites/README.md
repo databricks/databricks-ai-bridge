@@ -49,9 +49,9 @@ Every resource a run creates carries its run id, and is deleted at three points:
 | `conftest.py` | All pytest wiring: options, hooks, and the fixtures every suite shares |
 | `harness/run.py` | `RunConfig`, the run id, and the name prefixes every resource carries |
 | `harness/target.py` | The `--workspace live\|fake` seam the CLI and fixtures talk to |
-| `harness/cli.py` | Runs `agentbricks` commands: `cli.run("tools add ...")`, and `cli.start("dev ...")` in the background |
+| `harness/agentbricks_cli.py` | Runs `agentbricks` commands: `cli.run("tools add ...")`, and `cli.start("dev ...")` in the background |
 | `harness/agent_endpoint.py` | `AgentEndpoint`: a running dev server or deployed App, and invoking it over HTTP |
-| `harness/project.py` | A test's project: run-scoped path and App name, its files, and `pin_runtime` |
+| `harness/project.py` | A test's project: run-scoped path and App name, its files, and `pin_runtime()` |
 | `harness/workspace.py` | Databricks SDK helpers for what is not under test: SQL, UC, Apps, grants |
 | `harness/cleanup.py` | Deleting what the suites create, per App and per run |
 | `harness/logs.py` | Test-log output; every command is echoed so a run's log replays it |
@@ -65,6 +65,6 @@ that you can follow through its imports.
 - **A tool:** add one `ToolDefinition(name, requires, build)` in `tools/tool_definitions.py`.
   `requires` names the fixtures it needs; tools whose fixtures skip are left out and logged.
 - **A suite:** add a folder with `test_*.py` files. A test takes the `project` fixture, runs
-  `agentbricks_cli.run(f"init ... {project.path}")`, then `pin_runtime(project, ...)` so the project
+  `agentbricks_cli.run(f"init ... {project.path}")`, then `project.pin_runtime()` so the project
   runs the checkout's runtime; teardown fails a test that skips the pin. Add a `conftest.py` only for resources the CLI
   under test does not create itself; create them per test and delete them in the fixture's teardown.

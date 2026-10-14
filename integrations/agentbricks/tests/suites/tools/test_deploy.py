@@ -9,9 +9,9 @@ reports each tool independently and the sequence continues past a failure.
 from __future__ import annotations
 
 from harness.agent_endpoint import AgentEndpoint
-from harness.cli import AgentbricksCli
+from harness.agentbricks_cli import AgentbricksCli
 from harness.logs import log
-from harness.project import Project, pin_runtime
+from harness.project import Project
 from harness.workspace import Workspace
 from tool_definitions import Tool, assert_endpoint_invoke, bind, invoke_and_check
 
@@ -25,7 +25,7 @@ def test_deploy(
     subtests,
 ) -> None:
     agentbricks_cli.run(f"init --framework langgraph {project.path}", timeout=600)
-    pin_runtime(project, agentbricks_cli.run_config)
+    project.pin_runtime()
     app = project.app_name
 
     def assert_granted(tool: Tool) -> None:

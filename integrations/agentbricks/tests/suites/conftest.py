@@ -26,10 +26,10 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from harness.agentbricks_cli import AgentbricksCli
 from harness.cleanup import delete_app_resources, delete_run_leftovers, record_app_identity
-from harness.cli import AgentbricksCli
 from harness.logs import log, log_command
-from harness.project import Project, is_pinned
+from harness.project import Project
 from harness.run import RUN_ID_PATTERN, E2EError, RunConfig, run_output_dir
 from harness.target import (
     WORKSPACE_KINDS,
@@ -253,7 +253,7 @@ def project(
     if workspace is not None:
         _delete_project(agentbricks_cli, workspace, project, failed=failed)
     # Otherwise a test that forgot the pin would pass against the release on PyPI.
-    if not failed and (project.path / "pyproject.toml").exists() and not is_pinned(project):
+    if not failed and (project.path / "pyproject.toml").exists() and not project.is_pinned():
         raise E2EError(
             f"{project.path} was never pinned to the runtime under test; call pin_runtime after init."
         )

@@ -15,7 +15,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
-from harness.cli import BackgroundCommand
+from harness.agentbricks_cli import BackgroundCommand
 from harness.logs import last_lines, last_nonempty_line, log
 from harness.run import E2E_MODEL, E2EError, now
 from harness.workspace import Workspace
