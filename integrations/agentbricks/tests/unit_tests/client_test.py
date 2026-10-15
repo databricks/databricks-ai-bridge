@@ -132,6 +132,16 @@ def _client(workspace_client):
     return _AgentBricksApiClient(profile="p"), inst.api_client.do
 
 
+@pytest.fixture
+def sleep(monkeypatch):
+    retry_sleep = mock.Mock(name="agentkit_retry_sleep")
+    # Patching time.sleep would also capture SDK retries on background telemetry threads.
+    monkeypatch.setattr(
+        "databricks_agentkit._api_client.time", types.SimpleNamespace(sleep=retry_sleep)
+    )
+    return retry_sleep
+
+
 @pytest.mark.parametrize(
     "client_class",
     [AgentKitClient],
@@ -878,7 +888,6 @@ class _TransientError(RuntimeError):
     error_code = "CANCELLED"
 
 
-@mock.patch("databricks_agentkit._api_client.time.sleep")
 @mock.patch("databricks.sdk.WorkspaceClient")
 def test_delete_runtime_store_retries_transient_errors(workspace_client, sleep):
     client, do = _client(workspace_client)
@@ -889,7 +898,6 @@ def test_delete_runtime_store_retries_transient_errors(workspace_client, sleep):
     sleep.assert_called_once()
 
 
-@mock.patch("databricks_agentkit._api_client.time.sleep")
 @mock.patch("databricks.sdk.WorkspaceClient")
 def test_do_retries_transient_error_then_succeeds(workspace_client, sleep):
     client, do = _client(workspace_client)
@@ -902,7 +910,6 @@ def test_do_retries_transient_error_then_succeeds(workspace_client, sleep):
     sleep.assert_called_once()
 
 
-@mock.patch("databricks_agentkit._api_client.time.sleep")
 @mock.patch("databricks.sdk.WorkspaceClient")
 @pytest.mark.parametrize(
     ("method_name", "args"),
@@ -924,7 +931,6 @@ def test_create_store_does_not_retry_transient_error_by_default(
     sleep.assert_not_called()
 
 
-@mock.patch("databricks_agentkit._api_client.time.sleep")
 @mock.patch("databricks.sdk.WorkspaceClient")
 def test_do_stops_after_max_attempts(workspace_client, sleep):
     client, do = _client(workspace_client)
@@ -938,7 +944,6 @@ def test_do_stops_after_max_attempts(workspace_client, sleep):
     assert "None" not in exc_info.value.message
 
 
-@mock.patch("databricks_agentkit._api_client.time.sleep")
 @mock.patch("databricks.sdk.WorkspaceClient")
 def test_do_does_not_retry_non_transient_error(workspace_client, sleep):
     client, do = _client(workspace_client)
@@ -955,7 +960,6 @@ def test_do_does_not_retry_non_transient_error(workspace_client, sleep):
     sleep.assert_not_called()
 
 
-@mock.patch("databricks_agentkit._api_client.time.sleep")
 @mock.patch("databricks.sdk.WorkspaceClient")
 def test_do_does_not_retry_transient_error_for_pop(workspace_client, sleep):
     client, do = _client(workspace_client)
