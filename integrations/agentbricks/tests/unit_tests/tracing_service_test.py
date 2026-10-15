@@ -86,6 +86,32 @@ def test_local_target_closes_server_when_mlflow_lookup_fails(tmp_path: pathlib.P
     local.stop.assert_called_once_with(server)
 
 
+def test_bound_workspace_lookup_failure_reads_local_store(tmp_path: pathlib.Path):
+    (tmp_path / "agent.toml").write_text(
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "agentbricks"\n'
+        '\n[tracing]\nexperiment_name = "/Shared/traces"\n'
+    )
+    (tmp_path / ".agentbricks").mkdir()
+    (tmp_path / ".agentbricks" / "mlflow.db").write_text("")
+    server = mock.Mock()
+    mlflow = mock.create_autospec(MLflowTraceClient, instance=True)
+    mlflow.experiment_by_name.side_effect = [
+        ConnectionError("workspace unavailable"),
+        types.SimpleNamespace(experiment_id="local-1"),
+    ]
+    local = mock.create_autospec(LocalTracingClient, instance=True)
+    local.start_read.return_value = LocalTracingStart(server, "http://127.0.0.1:5599")
+
+    with TraceTargetResolver(mlflow, local).resolve(tmp_path, None, None, None) as target:
+        assert target == TraceReadTarget("http://127.0.0.1:5599", "local-1", local=True)
+
+    mlflow.experiment_by_name.assert_has_calls(
+        [mock.call("/Shared/traces"), mock.call(tmp_path.name)]
+    )
+    mlflow.select_local.assert_called_once_with("http://127.0.0.1:5599")
+    local.stop.assert_called_once_with(server)
+
+
 def test_no_bound_experiment_or_local_store_does_not_open_workspace(tmp_path: pathlib.Path):
     mlflow = mock.create_autospec(MLflowTraceClient, instance=True)
     local = mock.create_autospec(LocalTracingClient, instance=True)

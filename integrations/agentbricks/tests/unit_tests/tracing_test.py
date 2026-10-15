@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import types
 from unittest import mock
 
@@ -701,6 +702,38 @@ def test_get_by_explicit_experiment_id(tmp_path: pathlib.Path):
     assert not any(
         str(c.args[0]).startswith("sqlite:///") for c in mlflow.set_tracking_uri.call_args_list
     )
+
+
+def test_get_text_renders_trace_details(tmp_path: pathlib.Path):
+    _project(tmp_path)
+    mlflow = mock.Mock()
+    mlflow.get_experiment.return_value = mock.Mock(tags={})
+    mlflow.get_trace.return_value = types.SimpleNamespace(
+        info=types.SimpleNamespace(
+            trace_id="returned-id",
+            status="OK",
+            execution_time_ms=5,
+            timestamp_ms=1,
+            request_preview="request preview",
+            response_preview="response preview",
+        ),
+        data=types.SimpleNamespace(spans=[object(), object()]),
+    )
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
+        mock.patch.object(tracing_mod, "_set_tracking_uri"),
+    ):
+        result = CliRunner().invoke(
+            tracing_mod.tracing_get,
+            ["requested-id", "--experiment-id", "eid-1", "--source", str(tmp_path)],
+            obj=_Ctx(output="text"),
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "requested-id" in result.output
+    assert re.search(r"Spans\s+2", result.output)
+    assert "request preview" in result.output
+    assert "response preview" in result.output
 
 
 def test_get_rejects_both_name_and_id(tmp_path: pathlib.Path):
