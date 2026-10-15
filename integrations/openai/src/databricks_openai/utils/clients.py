@@ -472,20 +472,15 @@ class DatabricksOpenAI(OpenAI):
             **kwargs,
         )
 
-    def _process_response_data(
-        self, *, data: object, cast_to: type[_ResponseT], response: Response
-    ) -> _ResponseT:
-        return super()._process_response_data(
-            data=normalize_cache_usage(data, cast_to), cast_to=cast_to, response=response
-        )
-
     @override
     def _process_response_data(
         self, *, data: object, cast_to: type[_ResponseT], response: Response
     ) -> _ResponseT:
         if cast_to in (ChatCompletion, ChatCompletionChunk):
             _normalize_gemini_tool_signatures(data)
-        return super()._process_response_data(data=data, cast_to=cast_to, response=response)
+        return super()._process_response_data(
+            data=normalize_cache_usage(data, cast_to), cast_to=cast_to, response=response
+        )
 
     @override
     @property
