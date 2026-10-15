@@ -29,8 +29,10 @@ The run id and output directory (logs, generated projects, `apps.jsonl`) are pri
 
 Every resource a run creates carries its run id, and is deleted at three points:
 
-1. **When each test ends**, by the fixture that made it: `project` deletes the test's App and its
-   stores through the CLI, as a user would; `scratch_schema` deletes the test's schema.
+1. **When each test ends**, the test's own cleanup runs. Each test registers the delete command
+   for everything it creates with the `cleanup` fixture, like Go's `t.Cleanup`, e.g.
+   `cleanup(f"deployments delete {app} --yes")`; registered commands run newest first, pass or fail.
+   Fixtures delete what they create, such as `scratch_schema` and its schema.
 2. **When the run ends**, `pytest_sessionfinish` deletes everything carrying the run's name prefix
    that is still there (stores, Apps, synced source folders, schemas) and the Apps' Lakebase roles,
    which `deployments delete` leaves behind (`harness.cleanup.delete_run_leftovers`). A failure
@@ -67,5 +69,7 @@ rather than inside it: it is plain Python the suites import as `harness` (via `p
   `requires` names the fixtures it needs; tools whose fixtures skip are left out and logged.
 - **A suite:** add a folder with `test_*.py` files. A test takes the `project` fixture, runs
   `agentbricks_cli.run(f"init ... {project.path}")`, then `project.pin_runtime()` so the project
-  runs the checkout's runtime; teardown fails a test that skips the pin. Add a `conftest.py` only for resources the CLI
-  under test does not create itself; create them per test and delete them in the fixture's teardown.
+  runs the checkout's runtime; teardown fails a test that skips the pin. Register a `cleanup(...)`
+  delete command for everything the test creates, before the step that creates it if a failed step
+  can leave it behind. Add a `conftest.py` only for resources the CLI under test does not create
+  itself; create them per test and delete them in the fixture's teardown.

@@ -26,7 +26,7 @@ from typing import Any
 
 import pytest
 from harness.agentbricks_cli import AgentbricksCli
-from harness.cleanup import delete_run_leftovers, record_app_identity
+from harness.cleanup import Cleanup, delete_run_leftovers, record_app_identity
 from harness.logs import log, log_command
 from harness.project import Project
 from harness.run import RUN_ID_PATTERN, E2EError, RunConfig, run_output_dir
@@ -226,22 +226,34 @@ def agentbricks_cli(
 
 
 @pytest.fixture
+def cleanup(agentbricks_cli: AgentbricksCli) -> Iterator[Cleanup]:
+    """Register the delete commands for what the test creates; they run when it ends."""
+    registered = Cleanup(agentbricks_cli)
+    yield registered
+    registered.run_all()
+
+
+@pytest.fixture
 def project(
     request: pytest.FixtureRequest,
+    cleanup: Cleanup,
     agentbricks_cli: AgentbricksCli,
     target_workspace: TargetWorkspace,
     run_config: RunConfig,
 ) -> Iterator[Project]:
-    """A run-scoped path and App name for the test to `agentbricks init`; deleted when it ends."""
+    """A run-scoped path and App name for the test to `agentbricks init`.
+
+    Depends on ``cleanup`` so that its teardown runs first, while the test's App still exists.
+    """
     project = Project.allocate(run_config)
     workspace = target_workspace.client
     if workspace is not None:
-        # Teardown deletes whatever App has this name, so it must not belong to anyone else.
+        # The test deletes whatever App has this name, so it must not belong to anyone else.
         workspace.assert_app_absent(project.app_name)
     yield project
     failed = request.node.nodeid in _failed_tests
     if workspace is not None:
-        _delete_project(agentbricks_cli, workspace, project, failed=failed)
+        _record_app(agentbricks_cli, workspace, project.app_name, failed=failed)
     # Otherwise a test that forgot the pin would pass against the release on PyPI.
     if not failed and (project.path / "pyproject.toml").exists() and not project.is_pinned():
         raise E2EError(
@@ -249,37 +261,14 @@ def project(
         )
 
 
-def _delete_project(
-    cli: AgentbricksCli, workspace: Workspace, project: Project, *, failed: bool
-) -> None:
-    name = project.app_name
-    # Whatever deploy got as far as creating; read before anything is deleted, because the
-    # principal and branch come from the App and its Runtime Store.
+def _record_app(cli: AgentbricksCli, workspace: Workspace, name: str, *, failed: bool) -> None:
+    """Keep what is lost once the test's cleanup deletes its App."""
     identity = workspace.app_identity(name)
     if identity.service_principal or identity.branch:
-        # Leftover cleanup deletes what the CLI leaves behind from this record.
+        # Leftover cleanup deletes the App's Lakebase role from this record.
         record_app_identity(cli.run_config.output, name, identity)
     if failed and identity.service_principal:
-        # The App is deleted next, so a failing test must capture its logs while it exists.
         workspace.app_logs(name, cli.logs_dir / f"deploy-runtime-{name}.log")
-    # Deploy creates the stores agent.toml declares; memory stores are addressed by resource name.
-    commands = []
-    if memory_store := project.declared_store("memory"):
-        commands.append(f"memory stores delete memory-stores/{memory_store} --yes")
-    if session_store := project.declared_store("session"):
-        commands.append(f"sessions stores delete {session_store} --yes")
-    if identity.service_principal:
-        commands.append(f"deployments delete {name} --yes")
-    try:
-        # The grant the test made, revoked while the App's principal still exists.
-        workspace.revoke_catalog_grant(name)
-    except Exception as exc:
-        log(f"cleanup warning | {name} | catalog grant: {exc}")
-    # Failures only warn: the end-of-run cleanup deletes whatever is left.
-    for command in commands:
-        result = cli.run(command, timeout=1200, check=False)
-        if result.returncode != 0:
-            log(f"cleanup warning | {name} | {(result.stderr or result.stdout).strip()}")
 
 
 # Deleting what the whole run left behind

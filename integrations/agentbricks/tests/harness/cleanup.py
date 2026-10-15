@@ -1,11 +1,11 @@
-"""Deleting what the E2E suites create: per App when a test ends, and per run afterwards.
+"""Deleting what the E2E suites create: per test when it ends, and per run afterwards.
 
-The ``project`` fixture deletes each test's App and stores through the CLI when the test ends, after
-recording the App's identity with ``record_app_identity``. ``delete_run_leftovers`` deletes whatever
-is left: everything carrying the run's name prefix (stores, Apps, synced source folders, schemas),
-found through the CLI where it can list them, and the Apps' Lakebase roles, found from the recorded
-identities because they outlive their App. It is safe to repeat (a missing resource counts as
-deleted), runs once after every live run, and runs on its own with
+Each test registers the delete commands for what it creates with the ``cleanup`` fixture
+(``Cleanup``), which runs them when the test ends, pass or fail. ``delete_run_leftovers`` deletes
+whatever is left: everything carrying the run's name prefix (stores, Apps, synced source folders,
+schemas), found through the CLI where it can list them, and the Apps' Lakebase roles, found from
+the identities the ``project`` fixture records because they outlive their App. It is safe to repeat
+(a missing resource counts as deleted), runs once after every live run, and runs on its own with
 ``pytest tests/suites --cleanup-only --run-id <id>`` after a run that was killed before it could.
 """
 
@@ -14,15 +14,55 @@ from __future__ import annotations
 import dataclasses
 import json
 import pathlib
-from collections.abc import Iterator
+import re
+from collections.abc import Callable, Iterator
 from typing import Any
 
 from harness.agentbricks_cli import AgentbricksCli
 from harness.logs import log
-from harness.run import APP_PREFIX, project_prefix, scratch_schema_prefix
+from harness.run import APP_PREFIX, E2EError, project_prefix, scratch_schema_prefix
 from harness.workspace import AppIdentity, Workspace
 
 _APPS_RECORD = "apps.jsonl"
+_MISSING = re.compile(r"NOT_FOUND|RESOURCE_DOES_NOT_EXIST|does not exist|not found", re.IGNORECASE)
+
+
+# One test
+
+
+class Cleanup:
+    """What a test registers runs when it ends, newest first, pass or fail, like Go's ``t.Cleanup``.
+
+    Register right after the step that creates something, or before it when a failed step can
+    still leave it behind. Something already gone counts as deleted; any other failure only warns,
+    because ``delete_run_leftovers`` retries everything the run left.
+    """
+
+    def __init__(self, cli: AgentbricksCli):
+        self._cli = cli
+        self._steps: list[tuple[str, Callable[[], None]]] = []
+
+    def __call__(self, command: str) -> None:
+        """Run ``agentbricks <command>`` when the test ends."""
+        self._steps.append((command, lambda: self._run(command)))
+
+    def call(self, function: Callable[..., object], *args: object) -> None:
+        """Call ``function(*args)`` when the test ends, for what no CLI command deletes."""
+        self._steps.append((getattr(function, "__name__", "cleanup"), lambda: function(*args)))
+
+    def run_all(self) -> None:
+        while self._steps:
+            label, step = self._steps.pop()
+            try:
+                step()
+            except Exception as exc:
+                log(f"cleanup warning | {label} | {exc}")
+
+    def _run(self, command: str) -> None:
+        result = self._cli.run(command, timeout=1200, check=False)
+        message = (result.stderr or result.stdout).strip()
+        if result.returncode != 0 and not _MISSING.search(message):
+            raise E2EError(message)
 
 
 # Identities recorded by per-test cleanup

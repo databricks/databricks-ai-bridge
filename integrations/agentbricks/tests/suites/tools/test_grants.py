@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from harness.agentbricks_cli import AgentbricksCli
+from harness.cleanup import Cleanup
 from harness.project import Project
 from harness.workspace import Workspace
 from tool_definitions import assert_declared, uc_function_tool
@@ -14,6 +15,7 @@ from uc_objects import UcFunction
 def test_grants(
     agentbricks_cli: AgentbricksCli,
     project: Project,
+    cleanup: Cleanup,
     workspace_client: Workspace,
     uc_function: UcFunction,
     authoring: str,
@@ -23,6 +25,10 @@ def test_grants(
     agentbricks_cli.run(f"init --framework langgraph {project.path}", timeout=600)
     project.pin_runtime()
     app = project.app_name
+    # Registered before deploy: a deploy that fails partway can still leave them behind.
+    cleanup(f"memory stores delete memory-stores/{project.declared_store('memory')} --yes")
+    cleanup(f"sessions stores delete {project.declared_store('session')} --yes")
+    cleanup(f"deployments delete {app} --yes")
     if authoring == "cli":
         agentbricks_cli.run(f"tools add {tool.add_command} --source {project.path}")
         assert_declared(project, tool)
@@ -37,5 +43,6 @@ def test_grants(
 
     with subtests.test(check="manual-grant-is-direct-and-effective"):
         granted = workspace_client.grant_transitive(deployment, uc_function.nested_function)
+        cleanup.call(workspace_client.revoke_catalog_grant, app)
         assert "EXECUTE" in granted["direct_privileges"]
         assert "EXECUTE" in granted["effective_privileges"]

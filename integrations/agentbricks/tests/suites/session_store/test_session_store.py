@@ -10,14 +10,21 @@ import json
 
 import pytest
 from harness.agentbricks_cli import AgentbricksCli
+from harness.cleanup import Cleanup
 from harness.project import Project
 
 
 # Deploy needs a live workspace.
 @pytest.mark.usefixtures("workspace_client")
-def test_session_store_created(agentbricks_cli: AgentbricksCli, project: Project) -> None:
+def test_session_store_created(
+    agentbricks_cli: AgentbricksCli, project: Project, cleanup: Cleanup
+) -> None:
     agentbricks_cli.run(f"init --framework langgraph {project.path}", timeout=600)
     project.pin_runtime()
+    # Registered before deploy: a deploy that fails partway can still leave them behind.
+    cleanup(f"memory stores delete memory-stores/{project.declared_store('memory')} --yes")
+    cleanup(f"sessions stores delete {project.declared_store('session')} --yes")
+    cleanup(f"deployments delete {project.app_name} --yes")
     declared = project.declared_store("session")
     assert declared, "agentbricks init declared no session store"
     agentbricks_cli.run(f"deploy {project.app_name} --source {project.path}", timeout=2400)

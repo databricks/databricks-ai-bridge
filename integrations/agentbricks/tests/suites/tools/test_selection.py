@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 
 from harness.agentbricks_cli import AgentbricksCli
+from harness.cleanup import Cleanup
 from harness.project import Project
 from harness.workspace import Workspace
 from tool_definitions import (
@@ -31,6 +32,7 @@ PROMPT = (
 def test_selects_uc_function_not_python_marker(
     agentbricks_cli: AgentbricksCli,
     project: Project,
+    cleanup: Cleanup,
     workspace_client: Workspace,
     tools: tuple[Tool, ...],
     uc_function: UcFunction,
@@ -39,6 +41,10 @@ def test_selects_uc_function_not_python_marker(
     agentbricks_cli.run(f"init --framework langgraph {project.path}", timeout=600)
     project.pin_runtime()
     app = project.app_name
+    # Registered before deploy: a deploy that fails partway can still leave them behind.
+    cleanup(f"memory stores delete memory-stores/{project.declared_store('memory')} --yes")
+    cleanup(f"sessions stores delete {project.declared_store('session')} --yes")
+    cleanup(f"deployments delete {app} --yes")
     if authoring == "cli":
         for tool in tools:
             if tool.add_command:
@@ -51,6 +57,7 @@ def test_selects_uc_function_not_python_marker(
     deployment = json.loads(agentbricks_cli.run(f"--output json deployments get {app}").stdout)
     # The nested function is deliberately outside Agent Bricks' grants.
     workspace_client.grant_transitive(deployment, uc_function.nested_function)
+    cleanup.call(workspace_client.revoke_catalog_grant, app)
     serialized = agentbricks_cli.run(
         f"--output json endpoint invoke {app} --path /api/invocations "
         f"--json {invocation_json(PROMPT)}",

@@ -9,15 +9,23 @@ import json
 
 import pytest
 from harness.agentbricks_cli import AgentbricksCli
+from harness.cleanup import Cleanup
 from harness.project import Project
 from harness.workspace import Workspace, app_resources
 
 
 def test_tracing_experiment_bound(
-    agentbricks_cli: AgentbricksCli, project: Project, workspace_client: Workspace
+    agentbricks_cli: AgentbricksCli,
+    project: Project,
+    cleanup: Cleanup,
+    workspace_client: Workspace,
 ) -> None:
     agentbricks_cli.run(f"init --framework langgraph {project.path}", timeout=600)
     project.pin_runtime()
+    # Registered before deploy: a deploy that fails partway can still leave them behind.
+    cleanup(f"memory stores delete memory-stores/{project.declared_store('memory')} --yes")
+    cleanup(f"sessions stores delete {project.declared_store('session')} --yes")
+    cleanup(f"deployments delete {project.app_name} --yes")
     experiment_name = project.manifest().get("tracing", {}).get("experiment_name")
     agentbricks_cli.run(f"deploy {project.app_name} --source {project.path}", timeout=2400)
     assert experiment_name, "agent.toml binds no tracing experiment"
