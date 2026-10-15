@@ -80,11 +80,6 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="Existing Genie space for the Genie tool; without one that tool is skipped.",
     )
     group.addoption(
-        "--preprovisioned-app-catalog-access",
-        action="store_true",
-        help="Skip per-App USE CATALOG grants because catalog access is pre-provisioned.",
-    )
-    group.addoption(
         "--run-id",
         help="Names every resource of the run, so --cleanup-only can delete what a killed run left "
         "(default: random). 1-8 lowercase letters or digits.",
@@ -143,7 +138,6 @@ def _base_run_config(config: pytest.Config) -> RunConfig:
         run_id=run_id,
         output=output,
         warehouse_id=option("warehouse_id"),
-        preprovisioned_app_catalog_access=bool(option("preprovisioned_app_catalog_access")),
         wheel=option("wheel"),
     )
     config.stash[_RUN_KEY] = run

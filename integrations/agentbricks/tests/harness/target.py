@@ -70,7 +70,6 @@ class LiveWorkspace:
             self._client = Workspace(
                 self.profile,
                 warehouse_id=self._run_config.warehouse_id,
-                preprovisioned_app_catalog_access=self._run_config.preprovisioned_app_catalog_access,
             )
         return self._client
 

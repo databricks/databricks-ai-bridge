@@ -52,5 +52,4 @@ class RunConfig:
     output: pathlib.Path
     # Operator override; None lets the workspace pick the first running warehouse.
     warehouse_id: str | None
-    preprovisioned_app_catalog_access: bool
     wheel: pathlib.Path | None

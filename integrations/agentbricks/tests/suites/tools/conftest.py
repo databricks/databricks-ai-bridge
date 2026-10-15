@@ -45,7 +45,7 @@ def scratch_schema(
 
 @pytest.fixture
 def uc_function(scratch_schema: str, target_workspace: TargetWorkspace) -> UcFunction:
-    """The marker functions and volume in ``scratch_schema``."""
+    """The marker function and volume in ``scratch_schema``."""
     return create_uc_function(require_workspace(target_workspace, "a UC function"), scratch_schema)
 
 

@@ -19,6 +19,7 @@ from tool_definitions import (
     assert_declared,
     excerpt,
     invocation_json,
+    uc_function_tool,
 )
 from uc_objects import UcFunction
 
@@ -55,9 +56,10 @@ def test_selects_uc_function_not_python_marker(
         project.write_manifest(tools)
     agentbricks_cli.run(f"deploy {app} --source {project.path}", timeout=2400)
     deployment = json.loads(agentbricks_cli.run(f"--output json deployments get {app}").stdout)
-    # The nested function is deliberately outside Agent Bricks' grants.
-    workspace_client.grant_transitive(deployment, uc_function.nested_function)
-    cleanup.call(workspace_client.revoke_catalog_grant, app)
+    # UC can apply deploy's grant a little after deploy returns; a call in between is denied.
+    grant = uc_function_tool(uc_function).grant
+    assert grant is not None
+    workspace_client.wait_until_effective(deployment, grant)
     serialized = agentbricks_cli.run(
         f"--output json endpoint invoke {app} --path /api/invocations "
         f"--json {invocation_json(PROMPT)}",

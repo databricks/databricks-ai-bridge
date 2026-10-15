@@ -46,10 +46,6 @@ class Cleanup:
         """Run ``agentbricks <command>`` when the test ends."""
         self._steps.append((command, lambda: self._run(command)))
 
-    def call(self, function: Callable[..., object], *args: object) -> None:
-        """Call ``function(*args)`` when the test ends, for what no CLI command deletes."""
-        self._steps.append((getattr(function, "__name__", "cleanup"), lambda: function(*args)))
-
     def run_all(self) -> None:
         while self._steps:
             label, step = self._steps.pop()

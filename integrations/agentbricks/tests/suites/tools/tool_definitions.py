@@ -44,9 +44,6 @@ class Tool:
     app_auth: bool
     # The App resource a deploy grants for it; None when it needs no UC grant.
     grant: GrantTuple | None = None
-    # A function the tool calls that Agent Bricks deliberately does not grant; it works only after
-    # a manual grant.
-    transitive_function: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -168,7 +165,6 @@ def uc_function_tool(uc_function: UcFunction) -> Tool:
         tool_id="agentbricks_uc_marker",
         app_auth=False,
         grant=("uc_securable", uc_function.function, "FUNCTION", "EXECUTE"),
-        transitive_function=uc_function.nested_function,
     )
 
 

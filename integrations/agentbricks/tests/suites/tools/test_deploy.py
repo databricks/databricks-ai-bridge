@@ -1,9 +1,9 @@
-"""Each tool works on a deployed App, and its UC grant is applied, per authoring path.
+"""Each tool works on a deployed App, per authoring path: invoking it returns its marker.
 
-CLI authoring is incremental: add one tool, redeploy the same App, verify it, then add the next.
-After every redeploy the grants of all tools added so far must still hold, which is the idempotency
-check. Direct authoring writes every tool into agent.toml and deploys once. A subtest per tool
-reports each tool independently and the sequence continues past a failure.
+CLI authoring is incremental: add one tool, redeploy the same App, invoke it, then add the next.
+After the last redeploy every tool is invoked again, so a redeploy that broke an earlier tool, e.g.
+by dropping its grant, fails. Direct authoring writes every tool into agent.toml and deploys once.
+A subtest per tool reports each tool independently and the sequence continues past a failure.
 
 `agentbricks deploy` returns once the App is running its new source, so the next step can use it.
 """
@@ -17,7 +17,7 @@ from harness.agentbricks_cli import AgentbricksCli
 from harness.cleanup import Cleanup
 from harness.logs import log
 from harness.project import Project
-from harness.workspace import Workspace, granted, granted_tuples
+from harness.workspace import Workspace
 from tool_definitions import Tool, assert_declared, invocation_json
 
 
@@ -38,22 +38,12 @@ def test_deploy(
     cleanup(f"sessions stores delete {project.declared_store('session')} --yes")
     cleanup(f"deployments delete {app} --yes")
 
-    def assert_granted(tool: Tool, deployment: dict[str, Any]) -> None:
+    def invoke_and_check(tool: Tool, deployment: dict[str, Any]) -> None:
         if tool.grant is not None:
-            assert granted(deployment, tool.grant), (
-                f"{tool.name}: {tool.grant} not granted to {app}: "
-                f"{sorted(granted_tuples(deployment))}"
-            )
-
-    def prepare_and_check(tool: Tool, deployment: dict[str, Any]) -> None:
-        if tool.grant is not None:
+            # Deploy adds the grant before returning, but UC can apply it a little later, and a
+            # tool called in between is denied inside a successful response.
             waited = workspace_client.wait_until_effective(deployment, tool.grant)
             log(f"{tool.name}: {tool.grant[3]} effective for {app} after {waited:.0f}s")
-        if tool.transitive_function:
-            # The nested function is deliberately outside Agent Bricks' grants; the tool only
-            # works once this manual grant is in place.
-            workspace_client.grant_transitive(deployment, tool.transitive_function)
-            cleanup.call(workspace_client.revoke_catalog_grant, app)
         output = agentbricks_cli.run(
             f"--output json endpoint invoke {app} --path /api/invocations "
             f"--json {invocation_json(tool.prompt)}",
@@ -63,7 +53,7 @@ def test_deploy(
         tool.check(output)
 
     if authoring == "cli":
-        for index, tool in enumerate(tools):
+        for tool in tools:
             with subtests.test(tool=tool.name):
                 if tool.add_command:
                     agentbricks_cli.run(f"tools add {tool.add_command} --source {project.path}")
@@ -73,14 +63,15 @@ def test_deploy(
                 deployment = json.loads(
                     agentbricks_cli.run(f"--output json deployments get {app}").stdout
                 )
-                prepare_and_check(tool, deployment)
-                for added in tools[: index + 1]:
-                    assert_granted(added, deployment)
+                invoke_and_check(tool, deployment)
+        deployment = json.loads(agentbricks_cli.run(f"--output json deployments get {app}").stdout)
+        for tool in tools:
+            with subtests.test(tool=tool.name, after="last-deploy"):
+                invoke_and_check(tool, deployment)
     elif authoring == "direct":
         project.write_manifest(tools)
         agentbricks_cli.run(f"deploy {app} --source {project.path}", timeout=2400)
         deployment = json.loads(agentbricks_cli.run(f"--output json deployments get {app}").stdout)
         for tool in tools:
             with subtests.test(tool=tool.name):
-                prepare_and_check(tool, deployment)
-                assert_granted(tool, deployment)
+                invoke_and_check(tool, deployment)

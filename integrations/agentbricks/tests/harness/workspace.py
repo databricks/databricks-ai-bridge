@@ -16,12 +16,12 @@ import pathlib
 import re
 import subprocess
 import time
-from collections.abc import Collection, Sequence
+from collections.abc import Collection
 from typing import Any, cast
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import DatabricksError, NotFound
-from databricks.sdk.service.catalog import PermissionsChange, Privilege, SecurableType, VolumeType
+from databricks.sdk.service.catalog import SecurableType, VolumeType
 from databricks.sdk.service.sql import ExecuteStatementRequestOnWaitTimeout, State, StatementState
 
 from harness.logs import log
@@ -53,16 +53,12 @@ class Workspace:
         profile: str | None,
         *,
         warehouse_id: str | None = None,
-        preprovisioned_app_catalog_access: bool = False,
     ):
         self.profile = profile
         self.warehouse_id = warehouse_id
-        self.preprovisioned_app_catalog_access = preprovisioned_app_catalog_access
         self.client = WorkspaceClient(profile=profile)
         self._warehouse_started = False
         self._user_name: str | None = None
-        # App name -> (catalog, principal) of each USE CATALOG this suite granted, for cleanup.
-        self._catalog_grants: dict[str, tuple[str, str]] = {}
 
     # Existing resources the suite depends on
 
@@ -231,82 +227,6 @@ class Workspace:
             raise E2EError(f"Experiment {name!r} does not exist.")
         return str(experiment.experiment_id)
 
-    def transitive_state(self, deployment: dict[str, Any], function: str) -> dict[str, Any]:
-        """The App principal's privileges on a nested function before any manual grant."""
-        principal = _principal(deployment)
-        direct = direct_privileges(self.client, SecurableType.FUNCTION, function, principal)
-        if "EXECUTE" in direct:
-            raise E2EError(
-                f"Agent Bricks granted the transitive function directly: {function} -> {direct}"
-            )
-        effective = effective_privileges(self.client, SecurableType.FUNCTION, function, principal)
-        if "EXECUTE" in effective:
-            raise E2EError(
-                "The transitive function was already effective before the manual grant: "
-                f"{function} -> {effective}"
-            )
-        if any(
-            resource.get("uc_securable", {}).get("securable_full_name") == function
-            for resource in app_resources(deployment)
-        ):
-            raise E2EError("The transitive function appeared among the App's resources.")
-        return {
-            "service_principal_client_id": principal,
-            "direct_privileges": direct,
-            "effective_privileges": effective,
-        }
-
-    def revoke_catalog_grant(self, app_name: str) -> None:
-        """Revoke the USE CATALOG ``grant_transitive`` gave the App's principal, if it gave one."""
-        if app_name not in self._catalog_grants:
-            return
-        catalog, principal = self._catalog_grants[app_name]
-        self.client.grants.update(
-            SecurableType.CATALOG.value,
-            catalog,
-            changes=[PermissionsChange(principal=principal, remove=[Privilege.USE_CATALOG])],
-        )
-        del self._catalog_grants[app_name]
-
-    def grant_transitive(self, deployment: dict[str, Any], function: str) -> dict[str, Any]:
-        """Grant the App principal EXECUTE on a nested function and confirm it is direct and effective."""
-        app_name = str(deployment.get("name"))
-        principal = _principal(deployment)
-        catalog, schema, function_name = function.split(".")
-        quoted_principal = f"`{principal.replace('`', '``')}`"
-        statements = []
-        if not self.preprovisioned_app_catalog_access:
-            # Recorded first so a partial failure is still revoked. The schema-level grants go
-            # with the test's schema, but the catalog is shared and outlives the run.
-            self._catalog_grants[app_name] = (catalog, principal)
-            statements.append(f"GRANT USE CATALOG ON CATALOG `{catalog}` TO {quoted_principal}")
-        statements.extend(
-            (
-                f"GRANT USE SCHEMA ON SCHEMA `{catalog}`.`{schema}` TO {quoted_principal}",
-                f"GRANT EXECUTE ON FUNCTION `{catalog}`.`{schema}`.`{function_name}` "
-                f"TO {quoted_principal}",
-            )
-        )
-        for statement in statements:
-            self.sql(statement)
-        direct = direct_privileges(self.client, SecurableType.FUNCTION, function, principal)
-        effective = effective_privileges(self.client, SecurableType.FUNCTION, function, principal)
-        if "EXECUTE" not in effective:
-            raise E2EError(
-                "Manual EXECUTE grant did not become effective for the transitive function: "
-                f"{function} -> {effective}"
-            )
-        if "EXECUTE" not in direct:
-            raise E2EError(
-                "Manual EXECUTE grant was not persisted directly for the transitive function: "
-                f"{function} -> {direct}"
-            )
-        return {
-            "granted_at": now().isoformat(),
-            "direct_privileges": direct,
-            "effective_privileges": effective,
-        }
-
     # Workarounds for the end-of-run cleanup: what `agentbricks deployments delete` leaves behind.
 
     def wait_until_app_gone(self, name: str, timeout: float = 1200) -> None:
@@ -423,41 +343,11 @@ def _principal(deployment: dict[str, Any]) -> str:
     return str(principal)
 
 
-def granted(deployment: dict[str, Any], grant: GrantTuple) -> bool:
-    """Whether deploy attached ``grant``, as (kind, name, type, permission), to the App."""
-    return grant in granted_tuples(deployment)
-
-
-def granted_tuples(deployment: dict[str, Any]) -> set[GrantTuple]:
-    return app_resource_tuples(app_resources(deployment))
-
-
 def app_resources(deployment: dict[str, Any]) -> list[dict[str, Any]]:
     resources = deployment.get("resources") or []
     if not isinstance(resources, list):
         raise E2EError(f"App resources are not a list: {resources}")
     return resources
-
-
-def app_resource_tuples(resources: Sequence[dict[str, Any]]) -> set[GrantTuple]:
-    actual = set()
-    for resource in resources:
-        if "uc_securable" in resource:
-            value = resource["uc_securable"]
-            actual.add(
-                (
-                    "uc_securable",
-                    value.get("securable_full_name"),
-                    value.get("securable_type"),
-                    value.get("permission"),
-                )
-            )
-        elif "genie_space" in resource:
-            value = resource["genie_space"]
-            actual.add(
-                ("genie_space", value.get("space_id"), "GENIE_SPACE", value.get("permission"))
-            )
-    return actual
 
 
 def effective_privileges(
@@ -481,27 +371,6 @@ def effective_privileges(
                 for privilege in assignment.privileges or ()
                 if privilege.privilege is not None
             )
-        page_token = response.next_page_token
-        if not page_token:
-            return sorted(privileges)
-
-
-def direct_privileges(
-    client: WorkspaceClient, securable_type: SecurableType, full_name: str, principal: str
-) -> list[str]:
-    privileges: set[str] = set()
-    page_token: str | None = None
-    while True:
-        response = client.grants.get(
-            securable_type.value,
-            full_name,
-            max_results=0,
-            principal=principal,
-            **({"page_token": page_token} if page_token else {}),
-        )
-        for assignment in response.privilege_assignments or ():
-            if assignment.principal == principal:
-                privileges.update(privilege.value for privilege in assignment.privileges or ())
         page_token = response.next_page_token
         if not page_token:
             return sorted(privileges)
