@@ -142,6 +142,29 @@ def test_verify_evidence_rejects_failed_required_cleanup(tmp_path):
     assert tool_matrix.verify_evidence(path) == 1
 
 
+@pytest.mark.parametrize(
+    ("latest_status", "confirmed", "expected"),
+    [("deleted", True, 0), ("failed", False, 1), ("deleted", False, 1)],
+)
+def test_verify_evidence_uses_latest_cleanup_attempt_per_resource(
+    tmp_path, latest_status, confirmed, expected
+):
+    path = tmp_path / "evidence.json"
+    evidence = _evidence(cleanup_required=True)
+    evidence["cleanup"] = [
+        {"resource": "app:test", "status": "failed", "detail": "temporary failure"},
+        {
+            "resource": "app:test",
+            "status": latest_status,
+            **({"confirmed_absent_at": evidence["ended_at"]} if confirmed else {}),
+        },
+    ]
+    path.write_text(json.dumps(evidence))
+
+    assert tool_matrix.verify_evidence(path) == expected
+    assert json.loads(path.read_text())["cleanup"][0]["status"] == "failed"
+
+
 def test_verify_evidence_allows_explicit_keep_resources(tmp_path):
     path = tmp_path / "evidence.json"
     evidence = _evidence(cleanup_required=False)
