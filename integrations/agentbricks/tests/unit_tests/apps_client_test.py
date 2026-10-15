@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import types
 
 import pytest
@@ -127,3 +128,69 @@ def test_wait_for_running_times_out(monkeypatch):
     monkeypatch.setattr(apps_client_mod.time, "sleep", lambda s: None)  # don't actually wait
     with pytest.raises(AgentCliError):
         client.wait_for_active("app", timeout_s=0)
+
+
+@pytest.mark.parametrize("profile", [None, "DEFAULT", "profile with spaces"])
+def test_deploy_failure_suggests_status_and_logs_with_the_selected_profile(monkeypatch, profile):
+    # Exercise the real runner's uncaptured failure path: Apps emits its own diagnostic to
+    # the terminal, then Agent Bricks must explain how to investigate it in this workspace.
+    from databricks_agentbricks.clients.databricks_cli import _databricks
+
+    calls = []
+
+    def fail_deploy(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return types.SimpleNamespace(returncode=1, stdout=None, stderr=None)
+
+    monkeypatch.setattr(apps_client_mod.subprocess, "run", fail_deploy)
+    with pytest.raises(AgentCliError, match="Could not deploy 'agent-bricks-demo'") as raised:
+        AppsClient(profile, runner=_databricks).deploy("agent-bricks-demo", "/Workspace/source")
+
+    hint = raised.value.hint or ""
+    prefix = ["agentbricks"] + (["--profile", profile] if profile else [])
+    assert shlex.join([*prefix, "deployments", "get", "agent-bricks-demo"]) in hint
+    assert shlex.join([*prefix, "deployments", "logs", "agent-bricks-demo"]) in hint
+    assert "before retrying" in hint
+    assert "same project" in hint
+    # Preserve the blocking, streaming invocation; do not retry or run extra control-plane calls.
+    assert len(calls) == 1
+    assert calls[0][0][1:6] == [
+        "apps",
+        "deploy",
+        "agent-bricks-demo",
+        "--source-code-path",
+        "/Workspace/source",
+    ]
+    assert calls[0][1]["capture_output"] is False
+
+
+def test_deploy_failure_preserves_original_message_code_and_detail():
+    original = AgentCliError(
+        "The deployment request was rejected.",
+        error_code="PERMISSION_DENIED",
+        hint="Backend detail.",
+    )
+
+    def fail_deploy(*args, **kwargs):
+        raise original
+
+    with pytest.raises(AgentCliError) as raised:
+        AppsClient("DEFAULT", runner=fail_deploy).deploy("agent-bricks-demo", "/Workspace/source")
+
+    assert raised.value.message == original.message
+    assert raised.value.error_code == original.error_code
+    assert (raised.value.hint or "").startswith("Backend detail.")
+    assert "deployments logs agent-bricks-demo" in (raised.value.hint or "")
+    assert raised.value.__cause__ is original
+
+
+def test_successful_deploy_preserves_the_streaming_invocation():
+    calls = []
+    AppsClient("DEFAULT", runner=_runner(calls)).deploy("agent-bricks-demo", "/Workspace/source")
+    assert calls == [
+        (
+            ["apps", "deploy", "agent-bricks-demo", "--source-code-path", "/Workspace/source"],
+            "DEFAULT",
+            {"action": "Could not deploy 'agent-bricks-demo'."},
+        )
+    ]

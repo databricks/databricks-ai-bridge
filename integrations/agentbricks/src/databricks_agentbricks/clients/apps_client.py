@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import shlex
 import subprocess
 import time
 from collections.abc import Collection, Sequence
@@ -353,11 +354,28 @@ class AppsClient:
 
     def deploy(self, name: str, ws_path: str) -> None:
         """Roll out the uploaded source as the app's active deployment."""
-        self._run(
-            ["apps", "deploy", name, "--source-code-path", ws_path],
-            self._profile,
-            action=f"Could not deploy '{name}'.",
-        )
+        try:
+            self._run(
+                ["apps", "deploy", name, "--source-code-path", ws_path],
+                self._profile,
+                action=f"Could not deploy '{name}'.",
+            )
+        except AgentCliError as exc:
+            # The blocking Apps command streams its diagnostic, but may only suggest `/logz`.
+            # Give users commands they can run in the same workspace without guessing the cause
+            # of a build, startup, permission, or service failure (or blindly retrying it).
+            command = ["agentbricks"]
+            if self._profile:
+                command += ["--profile", self._profile]
+            status = shlex.join([*command, "deployments", "get", name])
+            logs = shlex.join([*command, "deployments", "logs", name])
+            guidance = (
+                f"Inspect `{status}` for deployment status and `{logs}` for build/startup logs "
+                "before retrying. After addressing the reported failure, rerun your deploy "
+                "command from the same project directory."
+            )
+            hint = f"{exc.hint}\n{guidance}" if exc.hint else guidance
+            raise AgentCliError(exc.message, error_code=exc.error_code, hint=hint) from exc
 
     def run_local(
         self,
