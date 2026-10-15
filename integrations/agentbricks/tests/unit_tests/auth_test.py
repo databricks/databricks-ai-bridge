@@ -18,6 +18,7 @@ from databricks_agentbricks.cli import app as cli
 from databricks_agentbricks.cli import auth
 from databricks_agentbricks.cli.app import CliContext
 from databricks_agentbricks.clients import api_client_provider
+from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.env_file import read_env
 from databricks_agentbricks.projects.profiles import ProfileInfo
 from databricks_agentbricks.services import workspace_auth
@@ -53,6 +54,7 @@ def outside_project(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> 
 def fake_api_client(monkeypatch: pytest.MonkeyPatch) -> mock.Mock:
     """Replace the workspace client the provider builds, so first use makes no SDK calls."""
     client_cls = mock.Mock()
+    client_cls.return_value.host = None
     monkeypatch.setattr(api_client_provider, "_AgentBricksApiClient", client_cls)
     return client_cls
 
@@ -123,6 +125,35 @@ def test_first_workspace_call_names_profile_and_host_once(
     assert captured.err.count("Using profile 'ws' (from --profile) · https://ws.example") == 1
 
 
+def test_first_workspace_call_reports_resolved_host_once(
+    capsys, write_databrickscfg, fake_api_client
+):
+    write_databrickscfg("[ws]\nhost = https://profile.example\n")
+    fake_api_client.return_value.host = "https://resolved.example"
+    ctx = _ctx("ws")
+
+    ctx.client()
+    ctx.client()
+
+    error_output = capsys.readouterr().err
+    assert error_output.count("Using profile 'ws' (from --profile) · https://resolved.example") == 1
+    assert "https://profile.example" not in error_output
+
+
+def test_failed_client_construction_still_names_offline_workspace(
+    capsys, write_databrickscfg, fake_api_client
+):
+    write_databrickscfg("[ws]\nhost = https://profile.example\n")
+    fake_api_client.side_effect = AgentCliError("synthetic authentication failure")
+
+    with pytest.raises(AgentCliError):
+        _ctx("ws").client()
+
+    assert (
+        "Using profile 'ws' (from --profile) · https://profile.example" in capsys.readouterr().err
+    )
+
+
 def test_workspace_notice_names_sdk_default_auth(capsys, monkeypatch, fake_api_client):
     monkeypatch.setenv("DATABRICKS_HOST", "https://env.example")
 
@@ -132,6 +163,60 @@ def test_workspace_notice_names_sdk_default_auth(capsys, monkeypatch, fake_api_c
         "Using Databricks SDK default auth · https://env.example (from DATABRICKS_HOST)"
         in capsys.readouterr().err
     )
+
+
+def test_workspace_notice_reports_environment_host_for_named_profile(
+    capsys, monkeypatch, write_databrickscfg, fake_api_client
+):
+    write_databrickscfg("[ws]\nhost = https://profile.example\n")
+    monkeypatch.setenv("DATABRICKS_HOST", "https://env.example")
+    monkeypatch.setenv("DATABRICKS_TOKEN", "test-token")
+
+    _ctx("ws").client()
+
+    assert "Using profile 'ws' (from --profile) · https://env.example (from DATABRICKS_HOST)" in (
+        capsys.readouterr().err
+    )
+
+
+def test_describe_and_workspace_notice_report_switched_default(
+    outside_project, capsys, write_databrickscfg, fake_api_client, validated_profile
+):
+    write_databrickscfg(
+        "[DEFAULT]\nhost = https://default.example\n"
+        "[__settings__]\ndefault_profile = switched\n"
+        "[switched]\nhost = https://switched.example\n"
+    )
+
+    assert _get_json(["auth", "describe"])["workspace_host"] == "https://switched.example"
+    validated_profile.assert_not_called()
+    fake_api_client.assert_not_called()
+    _ctx().client()
+
+    assert "https://switched.example ([switched] profile)" in capsys.readouterr().err
+
+
+def test_describe_reports_environment_host_even_with_a_flagged_profile(
+    outside_project, monkeypatch, write_databrickscfg, validated_profile
+):
+    write_databrickscfg("[ws]\nhost = https://profile.example\n")
+    monkeypatch.setenv("DATABRICKS_HOST", "https://env.example")
+    monkeypatch.setenv("DATABRICKS_TOKEN", "test-token")
+
+    assert _get_json(["auth", "describe", "-p", "ws"])["workspace_host"] == "https://env.example"
+    validated_profile.assert_not_called()
+
+
+def test_login_notice_reports_environment_host(
+    outside_project, monkeypatch, write_databrickscfg, validated_profile
+):
+    write_databrickscfg("[ws]\nhost = https://profile.example\n")
+    monkeypatch.setenv("DATABRICKS_HOST", "https://env.example")
+
+    result = _invoke_profile(["login", "ws"])
+
+    assert result.exit_code == 0, result.output
+    assert "Logging in to profile 'ws' (from argument) — https://env.example" in result.output
 
 
 def test_workspace_notice_is_silent_for_json(capsys, fake_api_client):

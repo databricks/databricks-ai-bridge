@@ -665,7 +665,7 @@ def _run_dev(source: pathlib.Path, monkeypatch, env_file: str, profile=None):
 @pytest.mark.parametrize(
     ("flag_profile", "expected", "note"),
     [
-        (None, "proj", "Using profile 'proj' (from .env) · https://proj.example"),
+        (None, "proj", "Using profile 'proj' (from .env) · https://ws.example"),
         ("flag", "flag", "will run with profile 'flag' (from --profile), not .env's 'proj'"),
     ],
 )

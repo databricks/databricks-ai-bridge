@@ -148,6 +148,15 @@ the agent (unless `.env` sets `DATABRICKS_TOKEN` or `DATABRICKS_CLIENT_ID`/
 `DATABRICKS_CLIENT_SECRET`). Every command that reaches the workspace prints one stderr line naming
 the profile, where it came from, and its host, so the target workspace is never implicit.
 
+Selecting a profile preserves the SDK's precedence for exported credential fields such as
+`DATABRICKS_HOST` and `DATABRICKS_TOKEN`; the workspace notice shows the environment host when it
+overrides the profile's host. With no selected profile or environment credentials, the default
+chosen with `databricks auth switch` takes precedence over `[DEFAULT]`.
+
+`dev` and `deploy` validate authentication before starting work. An external-browser profile's
+valid or refreshable Python SDK token cache is reused without opening a browser. If that cache
+is missing or unusable, run the suggested `auth login` command in an interactive terminal.
+
 The CLI sends best effort command usage telemetry after leaf commands. Its log records the static
 command path, package version, operating system, duration, and process outcome (exit code and, for
 nonzero exits, a bounded error category). Parameter entries are limited to options explicitly

@@ -70,9 +70,30 @@ def test_config_file_path_expands_tilde_and_tolerates_percent_in_values(tmp_path
     [
         (_PROF_CFG, None, "prof", ("https://prof.example",) * 2),
         ("[DEFAULT]\nhost = https://d.example\n", "https://env.example", None, "env"),
+        (_PROF_CFG, "https://env.example", "prof", "env"),
         ("[DEFAULT]\nhost = https://d.example\n", None, None, "default"),
+        (
+            "[DEFAULT]\nhost = https://d.example\n"
+            "[__settings__]\ndefault_profile = prof\n" + _PROF_CFG,
+            None,
+            None,
+            ("https://prof.example", "https://prof.example ([prof] profile)"),
+        ),
+        (
+            "[__settings__]\ndefault_profile = prof\n" + _PROF_CFG,
+            None,
+            None,
+            ("https://prof.example", "https://prof.example ([prof] profile)"),
+        ),
     ],
-    ids=["named-profile", "databricks-host", "default-section"],
+    ids=[
+        "named-profile",
+        "databricks-host",
+        "databricks-host-overrides-named-profile",
+        "default-section",
+        "switched-default-overrides-default-section",
+        "switched-default-without-default-section",
+    ],
 )
 def test_workspace_for_profile(write_databrickscfg, monkeypatch, cfg, env_host, profile, expected):
     write_databrickscfg(cfg)
@@ -84,6 +105,15 @@ def test_workspace_for_profile(write_databrickscfg, monkeypatch, cfg, env_host, 
         expected = ("https://d.example", "https://d.example ([DEFAULT] profile)")
 
     assert profiles.workspace_for_profile(profile) == expected
+
+
+def test_environment_auth_without_a_host_does_not_fall_back_to_config(
+    write_databrickscfg, monkeypatch
+):
+    write_databrickscfg("[DEFAULT]\nhost = https://d.example\n")
+    monkeypatch.setenv("DATABRICKS_TOKEN", "test-token")
+
+    assert profiles.workspace_for_profile(None) == (None, "none configured")
 
 
 # --- preflight_auth --------------------------------------------------------------------------
@@ -120,13 +150,16 @@ def test_validate_bounded_gives_up_after_the_timeout(monkeypatch):
     assert isinstance(error, TimeoutError)
 
 
-def test_preflight_external_browser_fails_fast(write_databrickscfg, validated_profile, monkeypatch):
+def test_preflight_external_browser_validates_cached_credentials(
+    write_databrickscfg, validated_profile
+):
     write_databrickscfg("[prof]\nhost = https://ws.example\nauth_type = external-browser\n")
 
-    with pytest.raises(AgentCliError):
-        workspace_auth.preflight_auth("prof", "--profile")
+    assert (
+        workspace_auth.preflight_auth("prof", "--profile") is validated_profile.return_value[0][0]
+    )
 
-    validated_profile.assert_not_called()
+    validated_profile.assert_called_once_with("prof")
 
 
 # --- authenticate_profile --------------------------------------------------------------------

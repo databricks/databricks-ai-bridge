@@ -127,17 +127,19 @@ def dev(
         # beats `.env` because the template loads dotenv with override=False.
         local_env["DATABRICKS_CONFIG_PROFILE"] = obj.profile
 
-    # Announced before the preflight so an auth failure still names its target. When `.env`
-    # credentials win, the resolved profile would name a different workspace than the agent
-    # actually uses, so it isn't announced.
-    if not uses_env_credentials:
-        obj.announce_workspace()
     service = build_dev_service(obj)
     service.check_project(source)
     # Auth is checked before anything is started: an unauthenticated external-browser profile
     # would otherwise hang the local agent on a browser flow with no error.
     if not env_credential:
-        preflight_auth(obj.profile, obj.profile_info.source)
+        try:
+            validated = preflight_auth(obj.profile, obj.profile_info.source)
+        except Exception:
+            obj.announce_workspace()
+            raise
+        obj.announce_workspace(validated.host)
+    elif not uses_env_credentials:
+        obj.announce_workspace()
     with service.prepare(
         DevRequest(
             source=source,

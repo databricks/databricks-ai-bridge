@@ -25,6 +25,7 @@ from databricks_agentkit import models
 
 if TYPE_CHECKING:
     from databricks.sdk import WorkspaceClient
+    from databricks.sdk.credentials_provider import CredentialsStrategy
 
 _BASE = "/api/2.0/agents"
 _MCP_SERVICES_PATH = "/api/2.1/unity-catalog/mcp-services"
@@ -149,12 +150,17 @@ def _bound_retry_timeout(client: WorkspaceClient) -> WorkspaceClient:
     return client
 
 
-def _workspace_client(profile: Optional[str]) -> WorkspaceClient:
+def _workspace_client(
+    profile: Optional[str], *, credentials_strategy: Optional[CredentialsStrategy] = None
+) -> WorkspaceClient:
     # Imported here (not at module top) so the ~0.7s databricks.sdk import is paid only when a
     # command actually builds a client, not on every CLI invocation.
     from databricks.sdk import WorkspaceClient
 
-    client = _bound_retry_timeout(WorkspaceClient(profile=profile))
+    auth_kwargs: dict[str, Any] = (
+        {"credentials_strategy": credentials_strategy} if credentials_strategy is not None else {}
+    )
+    client = _bound_retry_timeout(WorkspaceClient(profile=profile, **auth_kwargs))
     if not profile or not client.config.workspace_id:
         return client
 
@@ -169,6 +175,7 @@ def _workspace_client(profile: Optional[str]) -> WorkspaceClient:
             profile=profile,
             host=configured_host,
             custom_headers={"X-Databricks-Org-Id": workspace_id},
+            **auth_kwargs,
         )
     )
 
@@ -181,11 +188,18 @@ class _AgentBricksApiClient:
         profile: Optional[str] = None,
         *,
         workspace_client: Optional[WorkspaceClient] = None,
+        credentials_strategy: Optional[CredentialsStrategy] = None,
     ) -> None:
         if profile is not None and workspace_client is not None:
             raise ValueError("profile and workspace_client are mutually exclusive")
+        if credentials_strategy is not None and workspace_client is not None:
+            raise ValueError("credentials_strategy and workspace_client are mutually exclusive")
         try:
-            self._w = workspace_client or _workspace_client(profile)
+            self._w = workspace_client or (
+                _workspace_client(profile, credentials_strategy=credentials_strategy)
+                if credentials_strategy is not None
+                else _workspace_client(profile)
+            )
         except Exception as exc:  # noqa: BLE001 - surfaced as a clean CLI error
             raise AgentCliError(
                 f"Could not initialize Databricks auth: {exc}",
