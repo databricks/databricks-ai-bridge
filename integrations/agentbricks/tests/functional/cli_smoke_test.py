@@ -88,7 +88,7 @@ def run_agentbricks(tmp_path: pathlib.Path):
 
 
 @pytest.mark.parametrize("profile_source", ["saved", "sdk"])
-@pytest.mark.parametrize("command", ["memory-list", "slow-init"])
+@pytest.mark.parametrize("command", ["memory-list", "slow-init", "default-init"])
 def test_cli_posts_telemetry_to_local_receiver(
     run_agentbricks, tmp_path, profile_source, command
 ) -> None:
@@ -164,6 +164,8 @@ def test_cli_posts_telemetry_to_local_receiver(
                     "--server",
                     "custom",
                 ]
+            elif command == "default-init":
+                arguments = ["init", str(tmp_path / "agent")]
             else:
                 arguments = ["memory", "stores", "list", "--page-size", "7"]
             result = run_agentbricks("-o", "json", *arguments, env_override=env_override)
@@ -184,25 +186,45 @@ def test_cli_posts_telemetry_to_local_receiver(
     assert uuid.UUID(frontend_log["frontend_log_event_id"])
     log = frontend_log["entry"]["agentbricks_cli_log"]
     assert log["command_path"] == (
-        "agentbricks init" if command == "slow-init" else "agentbricks memory stores list"
+        "agentbricks memory stores list" if command == "memory-list" else "agentbricks init"
     )
     assert log["exit_code"] == 0
-    expected_parameters: dict[str, dict[str, str | int]] = {
+    expected_parameters: dict[str, dict[str, str | bool | int]] = {
         "agentbricks.output": {
             "name": "agentbricks.output",
             "choice_value": "AGENTBRICKS_CLI_JSON",
         },
     }
-    if command == "slow-init":
+    if command != "memory-list":
         expected_parameters.update(
             {
                 "agentbricks init.framework": {
                     "name": "agentbricks init.framework",
-                    "choice_value": "AGENTBRICKS_CLI_OPENAI",
+                    "choice_value": (
+                        "AGENTBRICKS_CLI_OPENAI"
+                        if command == "slow-init"
+                        else "AGENTBRICKS_CLI_LANGGRAPH"
+                    ),
                 },
                 "agentbricks init.server": {
                     "name": "agentbricks init.server",
-                    "choice_value": "AGENTBRICKS_CLI_CUSTOM",
+                    "choice_value": (
+                        "AGENTBRICKS_CLI_CUSTOM"
+                        if command == "slow-init"
+                        else "AGENTBRICKS_CLI_AGENTBRICKS"
+                    ),
+                },
+                "agentbricks init.existing": {
+                    "name": "agentbricks init.existing",
+                    "bool_value": False,
+                },
+                "agentbricks init.disable_chat_app": {
+                    "name": "agentbricks init.disable_chat_app",
+                    "bool_value": False,
+                },
+                "agentbricks init.enable_chat_app": {
+                    "name": "agentbricks init.enable_chat_app",
+                    "bool_value": False,
                 },
             }
         )
