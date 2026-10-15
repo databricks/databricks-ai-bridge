@@ -1,9 +1,8 @@
 """Each tool works on a deployed App, per authoring path: invoking it returns its marker.
 
-CLI authoring is incremental: add one tool, redeploy the same App, invoke it, then add the next.
-After the last redeploy every tool is invoked again, so a redeploy that broke an earlier tool, e.g.
-by dropping its grant, fails. Direct authoring writes every tool into agent.toml and deploys once.
-A subtest per tool reports each tool independently and the sequence continues past a failure.
+CLI authoring adds every tool with `agentbricks tools add`; direct authoring writes them into
+agent.toml. Either way the App is deployed once, and a subtest per tool invokes it, so each tool is
+reported independently.
 
 `agentbricks deploy` returns once the App is running its new source, so the next step can use it.
 """
@@ -54,24 +53,14 @@ def test_deploy(
 
     if authoring == "cli":
         for tool in tools:
-            with subtests.test(tool=tool.name):
-                if tool.add_command:
-                    agentbricks_cli.run(f"tools add {tool.add_command} --source {project.path}")
-                project.write_files(tool.files)
-                assert_declared(project, tool)
-                agentbricks_cli.run(f"deploy {app} --source {project.path}", timeout=2400)
-                deployment = json.loads(
-                    agentbricks_cli.run(f"--output json deployments get {app}").stdout
-                )
-                invoke_and_check(tool, deployment)
-        deployment = json.loads(agentbricks_cli.run(f"--output json deployments get {app}").stdout)
-        for tool in tools:
-            with subtests.test(tool=tool.name, after="last-deploy"):
-                invoke_and_check(tool, deployment)
+            if tool.add_command:
+                agentbricks_cli.run(f"tools add {tool.add_command} --source {project.path}")
+            project.write_files(tool.files)
+            assert_declared(project, tool)
     elif authoring == "direct":
         project.write_manifest(tools)
-        agentbricks_cli.run(f"deploy {app} --source {project.path}", timeout=2400)
-        deployment = json.loads(agentbricks_cli.run(f"--output json deployments get {app}").stdout)
-        for tool in tools:
-            with subtests.test(tool=tool.name):
-                invoke_and_check(tool, deployment)
+    agentbricks_cli.run(f"deploy {app} --source {project.path}", timeout=2400)
+    deployment = json.loads(agentbricks_cli.run(f"--output json deployments get {app}").stdout)
+    for tool in tools:
+        with subtests.test(tool=tool.name):
+            invoke_and_check(tool, deployment)

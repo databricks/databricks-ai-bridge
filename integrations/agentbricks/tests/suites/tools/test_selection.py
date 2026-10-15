@@ -1,7 +1,8 @@
 """MULTI-TOOL SELECTION check (deploy-only): with every tool bound, the agent picks the one asked for.
 
-The incremental tests cannot catch a regression where binding several tools makes the model, or
-the tool surface, route to the wrong one, so this is the one test that binds them all at once.
+`test_deploy` names the tool in each prompt; this prompt names only what the tool does, so it
+catches a regression where binding several tools makes the model, or the tool surface, route to the
+wrong one.
 """
 
 from __future__ import annotations
