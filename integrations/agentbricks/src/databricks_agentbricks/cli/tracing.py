@@ -46,9 +46,10 @@ from databricks_agentbricks.clients.tracing_client import (
     _set_tracking_uri,
     _workspace_uri,
     create_experiment_idempotent,  # noqa: F401 - compatibility re-export
+    fetch_trace,
     uc_trace_tables,  # noqa: F401 - compatibility re-export
 )
-from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.errors import AgentCliError, wrap_api_error
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.tracing import (
     TRACING_BIND_COMMAND,
@@ -171,12 +172,14 @@ class _TraceReadTarget:
     """Where `list`/`get` read traces from: an MLflow ``tracking_uri`` and the ``experiment_id`` in it.
 
     ``local`` marks the local ``agentbricks dev`` store (served over a short-lived REST server) so callers can
-    label it. A field is None when there's nothing to read (no experiment resolved).
+    label it. ``trace_location`` qualifies plain trace IDs for the selected UC experiment.
+    A field is None when there's nothing to read (no experiment resolved).
     """
 
     tracking_uri: Optional[str]
     experiment_id: Optional[str]
     local: bool = False
+    trace_location: Optional[str] = None
 
 
 @contextmanager
@@ -220,7 +223,11 @@ def _with_trace_read_target(
             experiment = None
         if experiment is not None:
             _require_warehouse_for_uc_read(experiment, warehouse_id)
-            yield _TraceReadTarget(_workspace_uri(profile), experiment.experiment_id)
+            yield _TraceReadTarget(
+                _workspace_uri(profile),
+                experiment.experiment_id,
+                trace_location=(getattr(experiment, "tags", None) or {}).get(_UC_TRACE_TAG),
+            )
             return
     # Unbound, not provisioned, or unreachable -> the local dev store, if any. `agentbricks dev` traces
     # locally regardless of the binding, so its store is worth reading even when tracing is unbound.
@@ -265,7 +272,11 @@ def _workspace_experiment_target(
                 hint="Check the id, or omit it to use this project's experiment.",
             )
         _require_warehouse_for_uc_read(experiment, warehouse_id)
-        return _TraceReadTarget(_workspace_uri(profile), experiment_id)
+        return _TraceReadTarget(
+            _workspace_uri(profile),
+            experiment_id,
+            trace_location=(getattr(experiment, "tags", None) or {}).get(_UC_TRACE_TAG),
+        )
     experiment = mlflow.get_experiment_by_name(experiment_name)
     if experiment is None:
         raise AgentCliError(
@@ -273,7 +284,11 @@ def _workspace_experiment_target(
             hint="Check the name, or omit it to use this project's experiment.",
         )
     _require_warehouse_for_uc_read(experiment, warehouse_id)
-    return _TraceReadTarget(_workspace_uri(profile), experiment.experiment_id)
+    return _TraceReadTarget(
+        _workspace_uri(profile),
+        experiment.experiment_id,
+        trace_location=(getattr(experiment, "tags", None) or {}).get(_UC_TRACE_TAG),
+    )
 
 
 def _attr(obj: Any, *paths: str, default: Any = None) -> Any:
@@ -715,7 +730,22 @@ def tracing_get(obj, trace_id, experiment_name, experiment_id, warehouse_id, sou
                 # UC-ness can't be known in this fallthrough, so the provided warehouse is exported
                 # for the fetch (harmless for a managed experiment). Not restored - one-shot process.
                 os.environ[_SQL_WAREHOUSE_ENV] = warehouse
-        trace = mlflow.get_trace(trace_id, silent=True)
+        try:
+            trace = fetch_trace(
+                mlflow,
+                trace_id,
+                tracking_uri=target.tracking_uri,
+                trace_location=target.trace_location,
+            )
+        except Exception as exc:  # noqa: BLE001 - render retrieval failures in the CLI error format
+            from mlflow.exceptions import MlflowException  # noqa: PLC0415 - lazy import
+
+            if isinstance(exc, MlflowException) and exc.error_code in {
+                "RESOURCE_DOES_NOT_EXIST",
+                "NOT_FOUND",
+            }:
+                raise AgentCliError(f"No trace found with id {trace_id!r}.") from exc
+            raise wrap_api_error(exc) from exc
         if trace is None:
             raise AgentCliError(f"No trace found with id {trace_id!r}.")
         if obj.output == "json":
