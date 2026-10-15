@@ -44,24 +44,69 @@ logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def _open_mcp_session(server_url: str, auth: DatabricksOAuthClientProvider):
+async def _open_mcp_session(
+    server_url: str,
+    auth: DatabricksOAuthClientProvider,
+    timeout: float | None = None,
+    terminate_on_close: bool | None = None,
+    client_kwargs: dict[str, Any] | None = None,
+):
     """Open an authenticated MCP session against ``server_url``.
 
     Yields an object exposing ``list_tools()`` and ``call_tool()`` and works
     with both mcp 1.x (transport + ``ClientSession``) and mcp 2.x (``Client``).
+
+    Args:
+        server_url: The MCP server URL to connect to.
+        auth: Databricks auth provider attached to the underlying HTTP client.
+        timeout: Optional per-request timeout, in seconds, for the underlying
+            HTTP client. When ``None`` (the default), the installed mcp
+            version's own default is used unchanged: 5 seconds for mcp>=2.0.0
+            (``httpx2.AsyncClient``'s default) or 30 seconds for mcp<2.0.0
+            (``streamablehttp_client``'s default). Tools that take longer to
+            respond than that default -- for example a Genie space warming up
+            a new conversation -- will need an explicit, larger value here.
+        terminate_on_close: Optional override for whether the MCP session is
+            explicitly terminated when the transport closes. Defaults to the
+            installed mcp version's own default (``True`` on both mcp 1.x and
+            2.x). Forwarded to ``streamable_http_client``/``streamablehttp_client``.
+        client_kwargs: Optional extra keyword arguments merged into the
+            underlying HTTP client construction -- most commonly ``headers``,
+            e.g. to set ``{"Accept-Encoding": "identity"}`` when a proxy in
+            front of an external MCP server mishandles response compression.
+            On mcp<2.0.0 this also accepts that version's other
+            ``streamablehttp_client`` kwargs, such as ``sse_read_timeout`` or
+            ``httpx_client_factory``. Must not include ``auth`` or
+            ``timeout``/``terminate_on_close`` (set those via the dedicated
+            parameters above); passing them here raises a ``TypeError`` from
+            the underlying constructor, since it would be supplied twice.
     """
+    extra = client_kwargs or {}
     if _MCP_V2:
         # mcp 2.x: auth is attached to an httpx2 client passed to the
         # transport, and ``Client`` performs the initialize handshake itself.
-        async with httpx2.AsyncClient(auth=auth, follow_redirects=True) as http_client:
+        # ``terminate_on_close`` lives on the transport call, not the client.
+        client_call_kwargs: dict[str, Any] = {"auth": auth, "follow_redirects": True, **extra}
+        if timeout is not None:
+            client_call_kwargs["timeout"] = timeout
+        async with httpx2.AsyncClient(**client_call_kwargs) as http_client:
+            transport_call_kwargs: dict[str, Any] = {"http_client": http_client}
+            if terminate_on_close is not None:
+                transport_call_kwargs["terminate_on_close"] = terminate_on_close
             async with Client(
-                streamable_http_client(server_url, http_client=http_client)
+                streamable_http_client(server_url, **transport_call_kwargs)
             ) as session:
                 yield session
     else:
-        # mcp 1.x: auth is a keyword on the transport and the session must be
+        # mcp 1.x: auth, timeout, headers, terminate_on_close, etc. are all
+        # keywords directly on the transport, and the session must be
         # explicitly initialized.
-        async with streamablehttp_client(url=server_url, auth=auth) as (
+        transport_call_kwargs = {"auth": auth, **extra}
+        if timeout is not None:
+            transport_call_kwargs["timeout"] = timeout
+        if terminate_on_close is not None:
+            transport_call_kwargs["terminate_on_close"] = terminate_on_close
+        async with streamablehttp_client(url=server_url, **transport_call_kwargs) as (
             read_stream,
             write_stream,
             _,
@@ -224,10 +269,19 @@ class DatabricksMCPClient:
 
         return None
 
-    async def _get_tools_async(self) -> List[Tool]:
+    async def _get_tools_async(
+        self,
+        timeout: float | None = None,
+        terminate_on_close: bool | None = None,
+        client_kwargs: dict[str, Any] | None = None,
+    ) -> List[Tool]:
         """Fetch tools from the MCP endpoint asynchronously."""
         async with _open_mcp_session(
-            self.server_url, DatabricksOAuthClientProvider(self.client)
+            self.server_url,
+            DatabricksOAuthClientProvider(self.client),
+            timeout=timeout,
+            terminate_on_close=terminate_on_close,
+            client_kwargs=client_kwargs,
         ) as session:
             return (await session.list_tools()).tools
 
@@ -235,10 +289,17 @@ class DatabricksMCPClient:
         self,
         tool_name: str,
         arguments: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        terminate_on_close: bool | None = None,
+        client_kwargs: dict[str, Any] | None = None,
     ) -> CallToolResult:
         """Call the tool with the given name and input."""
         async with _open_mcp_session(
-            self.server_url, DatabricksOAuthClientProvider(self.client)
+            self.server_url,
+            DatabricksOAuthClientProvider(self.client),
+            timeout=timeout,
+            terminate_on_close=terminate_on_close,
+            client_kwargs=client_kwargs,
         ) as session:
             return await session.call_tool(tool_name, arguments)
 
@@ -267,42 +328,128 @@ class DatabricksMCPClient:
         return name.replace("__", ".")
 
     @_handle_mcp_errors
-    def list_tools(self) -> List[Tool]:
+    def list_tools(
+        self,
+        timeout: float | None = None,
+        terminate_on_close: bool | None = None,
+        client_kwargs: dict[str, Any] | None = None,
+    ) -> List[Tool]:
         """
         Lists the tools for the current MCP Server. This method uses the `streamablehttp_client` from mcp to fetch all the tools from the MCP server.
+
+        Args:
+            timeout (float, optional): Per-request timeout in seconds for the
+                underlying HTTP client. Defaults to None, which uses the
+                installed mcp version's own default (5s for mcp>=2.0.0, 30s
+                for mcp<2.0.0).
+            terminate_on_close (bool, optional): Whether the MCP session is
+                explicitly terminated when the transport closes. Defaults to
+                None, which uses the installed mcp version's own default
+                (True on both mcp 1.x and 2.x).
+            client_kwargs (dict[str, Any], optional): Extra keyword arguments
+                merged into the underlying HTTP client construction, most
+                commonly `headers` -- e.g. `{"Accept-Encoding": "identity"}`
+                to work around a server or proxy that mishandles response
+                compression. On mcp<2.0.0 this also accepts that version's
+                other `streamablehttp_client` kwargs (e.g. `sse_read_timeout`).
+                Must not include `auth`, `timeout`, or `terminate_on_close`.
 
         Returns:
             List[mcp.types.Tool]: A list of tools for the current MCP Server.
         """
-        return asyncio.run(self._get_tools_async())
+        return asyncio.run(
+            self._get_tools_async(
+                timeout=timeout,
+                terminate_on_close=terminate_on_close,
+                client_kwargs=client_kwargs,
+            )
+        )
 
     @_handle_mcp_errors
-    def call_tool(self, tool_name: str, arguments: dict[str, Any] | None = None) -> CallToolResult:
+    def call_tool(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        terminate_on_close: bool | None = None,
+        client_kwargs: dict[str, Any] | None = None,
+    ) -> CallToolResult:
         """
         Calls the tool with the given name and input. This method uses the `streamablehttp_client` from mcp to call the tool.
 
         Args:
             tool_name (str): The name of the tool to call.
             arguments (dict[str, Any], optional): The arguments to pass to the tool. Defaults to None.
+            timeout (float, optional): Per-request timeout in seconds for the
+                underlying HTTP client. Defaults to None, which uses the
+                installed mcp version's own default (5s for mcp>=2.0.0, 30s
+                for mcp<2.0.0). Tools that can take longer to respond -- for
+                example a Genie space warming up a new conversation -- should
+                pass an explicit, larger value here.
+            terminate_on_close (bool, optional): Whether the MCP session is
+                explicitly terminated when the transport closes. Defaults to
+                None, which uses the installed mcp version's own default
+                (True on both mcp 1.x and 2.x).
+            client_kwargs (dict[str, Any], optional): Extra keyword arguments
+                merged into the underlying HTTP client construction, most
+                commonly `headers` -- e.g. `{"Accept-Encoding": "identity"}`
+                to work around a server or proxy that mishandles response
+                compression. On mcp<2.0.0 this also accepts that version's
+                other `streamablehttp_client` kwargs (e.g. `sse_read_timeout`).
+                Must not include `auth`, `timeout`, or `terminate_on_close`.
 
         Returns:
             mcp.types.CallToolResult: The result of the tool call.
         """
-        return asyncio.run(self._call_tools_async(tool_name, arguments))
+        return asyncio.run(
+            self._call_tools_async(
+                tool_name,
+                arguments,
+                timeout=timeout,
+                terminate_on_close=terminate_on_close,
+                client_kwargs=client_kwargs,
+            )
+        )
 
     @_handle_mcp_errors
-    async def alist_tools(self) -> List[Tool]:
+    async def alist_tools(
+        self,
+        timeout: float | None = None,
+        terminate_on_close: bool | None = None,
+        client_kwargs: dict[str, Any] | None = None,
+    ) -> List[Tool]:
         """
         Async version of list_tools. Lists the tools for the current MCP Server.
+
+        Args:
+            timeout (float, optional): Per-request timeout in seconds for the
+                underlying HTTP client. Defaults to None, which uses the
+                installed mcp version's own default (5s for mcp>=2.0.0, 30s
+                for mcp<2.0.0).
+            terminate_on_close (bool, optional): Whether the MCP session is
+                explicitly terminated when the transport closes. Defaults to
+                None, which uses the installed mcp version's own default
+                (True on both mcp 1.x and 2.x).
+            client_kwargs (dict[str, Any], optional): Extra keyword arguments
+                merged into the underlying HTTP client construction, most
+                commonly `headers`. Must not include `auth`, `timeout`, or
+                `terminate_on_close`.
 
         Returns:
             List[mcp.types.Tool]: A list of tools for the current MCP Server.
         """
-        return await self._get_tools_async()
+        return await self._get_tools_async(
+            timeout=timeout, terminate_on_close=terminate_on_close, client_kwargs=client_kwargs
+        )
 
     @_handle_mcp_errors
     async def acall_tool(
-        self, tool_name: str, arguments: dict[str, Any] | None = None
+        self,
+        tool_name: str,
+        arguments: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        terminate_on_close: bool | None = None,
+        client_kwargs: dict[str, Any] | None = None,
     ) -> CallToolResult:
         """
         Async version of call_tool. Calls the tool with the given name and input.
@@ -310,11 +457,31 @@ class DatabricksMCPClient:
         Args:
             tool_name (str): The name of the tool to call.
             arguments (dict[str, Any], optional): The arguments to pass to the tool. Defaults to None.
+            timeout (float, optional): Per-request timeout in seconds for the
+                underlying HTTP client. Defaults to None, which uses the
+                installed mcp version's own default (5s for mcp>=2.0.0, 30s
+                for mcp<2.0.0). Tools that can take longer to respond -- for
+                example a Genie space warming up a new conversation -- should
+                pass an explicit, larger value here.
+            terminate_on_close (bool, optional): Whether the MCP session is
+                explicitly terminated when the transport closes. Defaults to
+                None, which uses the installed mcp version's own default
+                (True on both mcp 1.x and 2.x).
+            client_kwargs (dict[str, Any], optional): Extra keyword arguments
+                merged into the underlying HTTP client construction, most
+                commonly `headers`. Must not include `auth`, `timeout`, or
+                `terminate_on_close`.
 
         Returns:
             mcp.types.CallToolResult: The result of the tool call.
         """
-        return await self._call_tools_async(tool_name, arguments)
+        return await self._call_tools_async(
+            tool_name,
+            arguments,
+            timeout=timeout,
+            terminate_on_close=terminate_on_close,
+            client_kwargs=client_kwargs,
+        )
 
     def get_databricks_resources(self) -> List[DatabricksResource]:
         """
