@@ -19,7 +19,6 @@ from __future__ import annotations
 import dataclasses
 import os
 import pathlib
-import re
 import subprocess
 import uuid
 from collections.abc import Iterator
@@ -67,7 +66,6 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default="main",
         help="Existing catalog for temporary test schemas (default: main).",
     )
-    group.addoption("--bridge-sha", help="Immutable bridge commit for generated App dependencies.")
     group.addoption(
         "--wheel",
         type=pathlib.Path,
@@ -104,9 +102,6 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    sha = config.getoption("bridge_sha")
-    if sha is not None and re.fullmatch(r"[0-9a-f]{40}", sha) is None:
-        raise pytest.UsageError("--bridge-sha must be a 40-character lowercase Git commit SHA.")
     run_id = config.getoption("run_id")
     if run_id is not None and RUN_ID_PATTERN.fullmatch(run_id) is None:
         raise pytest.UsageError("--run-id must be 1-8 lowercase letters or digits.")
@@ -149,7 +144,6 @@ def _base_run_config(config: pytest.Config) -> RunConfig:
         output=output,
         warehouse_id=option("warehouse_id"),
         preprovisioned_app_catalog_access=bool(option("preprovisioned_app_catalog_access")),
-        bridge_sha=option("bridge_sha"),
         wheel=option("wheel"),
     )
     config.stash[_RUN_KEY] = run
@@ -169,7 +163,7 @@ def run_config(request: pytest.FixtureRequest) -> RunConfig:
     run = _base_run_config(request.config)
     run.output.mkdir(parents=True, exist_ok=True)
     log(f"Agent Bricks E2E output: {run.output} (run {run.run_id})")
-    if run.wheel or run.bridge_sha:
+    if run.wheel:
         return run
     # A directory per process: xdist workers build at the same time and must not share an output.
     dist = run.output / "dist" / os.environ.get("PYTEST_XDIST_WORKER", "main")

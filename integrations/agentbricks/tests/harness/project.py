@@ -17,7 +17,7 @@ import tomli
 import tomlkit
 
 from harness.logs import log
-from harness.run import APP_PREFIX, RunConfig, project_prefix
+from harness.run import APP_PREFIX, E2EError, RunConfig, project_prefix
 
 
 class ToolSpec(Protocol):
@@ -31,9 +31,8 @@ class ToolSpec(Protocol):
 class Project:
     path: pathlib.Path
     app_name: str
-    # The runtime under test: the wheel built from this checkout, or a bridge commit.
-    wheel: pathlib.Path | None = None
-    bridge_sha: str | None = None
+    # The runtime under test: the wheel built from this checkout, or the one --wheel gives.
+    wheel: pathlib.Path
 
     @classmethod
     def allocate(cls, run_config: RunConfig) -> Project:
@@ -41,15 +40,14 @@ class Project:
         name = f"{project_prefix(run_config.run_id)}{uuid.uuid4().hex[:6]}"
         path = run_config.output / "projects" / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        return cls(path, f"{APP_PREFIX}{name}", run_config.wheel, run_config.bridge_sha)
+        if run_config.wheel is None:
+            # Only the run_config fixture builds it; the bare run config is for cleanup.
+            raise E2EError("The run has no runtime wheel to pin projects to.")
+        return cls(path, f"{APP_PREFIX}{name}", run_config.wheel)
 
     def pin_runtime(self) -> None:
         """Point the project's databricks-agentbricks dependency at the runtime under test."""
-        if self.bridge_sha:
-            _pin_bridge_sources(self.path, self.bridge_sha)
-        else:
-            assert self.wheel is not None
-            _pin_project_wheel(self.path, self.wheel)
+        _pin_project_wheel(self.path, self.wheel)
 
     def is_pinned(self) -> bool:
         pyproject = self.path / "pyproject.toml"
@@ -107,33 +105,4 @@ def _pin_project_wheel(project: pathlib.Path, wheel: pathlib.Path) -> None:
         f"# write {pyproject}: "
         f"pin databricks-agentbricks runtime to {vendored_wheel.relative_to(project)}"
     )
-    pyproject.write_text(tomlkit.dumps(document), encoding="utf-8")
-
-
-def _pin_bridge_sources(project: pathlib.Path, bridge_sha: str) -> None:
-    pyproject = project / "pyproject.toml"
-    document = tomlkit.parse(pyproject.read_text(encoding="utf-8"))
-    dependencies = document["project"]["dependencies"]
-    if not any(str(dependency).startswith("databricks-langchain") for dependency in dependencies):
-        dependencies.append("databricks-langchain>=0.17.0")
-    if "tool" not in document:
-        document["tool"] = tomlkit.table()
-    if "uv" not in document["tool"]:
-        document["tool"]["uv"] = tomlkit.table()
-    if "sources" not in document["tool"]["uv"]:
-        document["tool"]["uv"]["sources"] = tomlkit.table()
-    for package, subdirectory in (
-        ("databricks-agentbricks", "integrations/agentbricks"),
-        ("databricks-langchain", "integrations/langchain"),
-    ):
-        source = tomlkit.inline_table()
-        source.update(
-            {
-                "git": "https://github.com/databricks/databricks-ai-bridge.git",
-                "rev": bridge_sha,
-                "subdirectory": subdirectory,
-            }
-        )
-        document["tool"]["uv"]["sources"][package] = source
-    log(f"# write {pyproject}: pin Agent Bricks and LangChain to {bridge_sha}")
     pyproject.write_text(tomlkit.dumps(document), encoding="utf-8")
