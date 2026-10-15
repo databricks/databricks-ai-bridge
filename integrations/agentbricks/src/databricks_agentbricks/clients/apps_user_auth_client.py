@@ -136,12 +136,14 @@ def plan_app_user_scope_update(
     *,
     allow_existing_app_update: bool,
     required_scopes: set[str] | None = None,
+    required_scope_sources: dict[str, list[str]] | None = None,
 ) -> AppUserScopeUpdatePlan:
     """Plan user-scope creation or addition without changing the Databricks App.
 
     A new App can be created with the requested user API scopes automatically. An existing App is
     left unchanged unless all requested scopes are already present or the caller explicitly allows
     Agent Bricks to add the missing scopes.
+    Optional scope-source labels explain the required bindings before asking for that permission.
     """
     try:
         apps = WorkspaceClient(profile=profile).apps
@@ -159,12 +161,24 @@ def plan_app_user_scope_update(
     requested = {"ai-gateway"} if required_scopes is None else required_scopes
     scopes = tuple(sorted({*(configured or ()), *requested}))
     if existing is not None and scopes != configured and not allow_existing_app_update:
+        missing = sorted(set(scopes) - set(configured or ()))
+        sources = required_scope_sources or {}
+        dependencies = [
+            f"{scope} is required by {', '.join(sources[scope])}."
+            for scope in missing
+            if sources.get(scope)
+        ]
         raise AgentCliError(
-            f"App '{name}' is missing required user API scopes; re-run with "
+            f"App '{name}' is missing required user API scopes: {', '.join(missing)}; re-run with "
             "--allow-user-scope-update to add them.",
-            hint="Review the existing App scopes and coordinate with other owners first. Agent Bricks "
-            "preserves unrelated scopes; later deploys do not need the flag once all required "
-            "scopes are present.",
+            hint=" ".join(
+                [
+                    *dependencies,
+                    "Review the existing App scopes and coordinate with other owners first. "
+                    "Agent Bricks preserves unrelated scopes; later deploys do not need the flag "
+                    "once all required scopes are present.",
+                ]
+            ),
         )
     return AppUserScopeUpdatePlan(apps=apps, name=name, existing_scopes=configured, scopes=scopes)
 
@@ -254,5 +268,6 @@ class AppsUserAuthClient:
             self._profile,
             allow_existing_app_update=allow_existing_app_update,
             required_scopes=self.required_user_api_scopes(project),
+            required_scope_sources=required_user_api_scope_sources(project),
         )
         return AppAuthPlan(scope_update=plan)

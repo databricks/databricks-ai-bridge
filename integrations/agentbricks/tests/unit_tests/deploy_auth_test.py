@@ -297,6 +297,59 @@ def test_existing_app_requires_explicit_scope_update_permission(monkeypatch):
         )
 
 
+@pytest.mark.parametrize(
+    "binding,scope,resource",
+    [
+        (
+            ToolSpec.mcp("search", service="system.ai.web_search", auth="user"),
+            "ai-gateway",
+            "system.ai.web_search",
+        ),
+        (
+            ToolSpec.uc_function("lookup", function="main.tools.lookup", auth="user"),
+            "mcp.functions",
+            "main.tools.lookup",
+        ),
+        (
+            ToolSpec.sandbox("volume", scopes=[Scope.volume("cat.sch.vol")], auth="user"),
+            "files",
+            "system.ai.sandbox",
+        ),
+    ],
+)
+def test_scope_permission_error_explains_missing_scopes_and_bindings(
+    tmp_path, monkeypatch, binding, scope, resource
+):
+    project = AgentProject.create(tmp_path, framework="langgraph", server="agentbricks")
+    project.add_tool(binding)
+    apps, _ = _sdk(monkeypatch, App(name="app", user_api_scopes=["sql"]))
+
+    with pytest.raises(AgentCliError, match=scope) as raised:
+        AppsUserAuthClient("selected").plan_user_auth(
+            "app", project, allow_existing_app_update=False
+        )
+
+    assert raised.value.hint is not None
+    assert f"{scope} is required by tool {binding.id!r}" in raised.value.hint
+    assert resource in raised.value.hint
+    assert "sql is required by" not in raised.value.hint
+    apps.create.assert_not_called()
+    apps.update.assert_not_called()
+
+
+def test_scope_permission_error_explains_explicit_scope_source(tmp_path, monkeypatch):
+    project = _project_with_user_auth(tmp_path, scopes=("files",))
+    _sdk(monkeypatch, App(name="app", user_api_scopes=["sql"]))
+
+    with pytest.raises(AgentCliError, match="files") as raised:
+        AppsUserAuthClient("selected").plan_user_auth(
+            "app", project, allow_existing_app_update=False
+        )
+
+    assert raised.value.hint is not None
+    assert "files is required by [auth.user].additional_api_scopes" in raised.value.hint
+
+
 def test_existing_scoped_app_does_not_require_repeated_scope_update_permission(monkeypatch):
     existing = App(
         name="app",

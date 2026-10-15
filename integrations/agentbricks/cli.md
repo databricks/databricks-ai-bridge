@@ -1136,6 +1136,14 @@ _Options_
 
 Deploy your agent to Databricks Apps and get back a hosted URL to try it.
 
+Deploy explains which user API scopes are being added and which `auth = "user"` tool bindings or
+`[auth.user].additional_api_scopes` entries require them. For example, a user-auth web-search
+binding requires `ai-gateway`; a sandbox with volume access also requires `files`. App-auth tools
+do not add user API scopes. These API scopes are separate from Unity Catalog data privileges.
+An existing App missing a required scope reports the scope and its source before asking for
+`--allow-user-scope-update`. Redeploying with the required scopes already present reports them as
+unchanged and avoids the re-consent warning.
+
 Rolls the agent out to Databricks Apps and prints the URL where you (or anyone you share it with) can use it. The deployed agent reaches Databricks model serving through the AI Gateway using the app's own identity - no model keys to configure - and `deploy` also reconciles the stores declared in agent.toml and wires in any tracing.
 
 NAME is recorded in agent.toml on the first deploy, so a later `agentbricks deploy` from the project directory can omit it (passing NAME again updates the recorded name). Deployed apps are named `agent-bricks-<name>`. A project with a recorded base name reuses that app when NAME is omitted; you can also pass the full app name to update it. Use the full app name with the `agentbricks deployments` commands.
