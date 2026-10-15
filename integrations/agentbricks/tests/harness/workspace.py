@@ -310,8 +310,7 @@ class Workspace:
             "effective_privileges": effective,
         }
 
-    # Workarounds: cleanup that no public command does yet. `agentbricks deployments delete`
-    # removes the App and its Runtime Store; these cover what it leaves behind.
+    # Workarounds for the end-of-run cleanup: what `agentbricks deployments delete` leaves behind.
 
     def wait_until_app_gone(self, name: str, timeout: float = 1200) -> None:
         """Block until the App is gone; `apps delete` returns while it is still deleting."""
@@ -338,16 +337,6 @@ class Workspace:
             dict[str, Any],
             self.client.api_client.do("GET", f"/api/2.0/agents/runtime-stores/{app_name}"),
         )
-
-    def delete_runtime_store(self, app_name: str) -> None:
-        """Delete a Runtime Store whose App is gone, which `deployments delete` cannot reach.
-
-        A missing store counts as deleted.
-        """
-        try:
-            self.client.api_client.do("DELETE", f"/api/2.0/agents/runtime-stores/{app_name}")
-        except NotFound:
-            pass
 
     def app_identity(self, app_name: str) -> AppIdentity:
         """The App's principal and Lakebase location as far as they still exist; never raises."""
@@ -438,10 +427,6 @@ class Workspace:
 
     def _deployments_dir(self) -> str:
         return f"/Workspace/Users/{self.user_name}/agentbricks_deployments"
-
-    def delete_deployment_source(self, app_name: str) -> None:
-        """Delete the App's synced source folder; a missing folder counts as deleted."""
-        self.delete_workspace_path(f"{self._deployments_dir()}/{app_name}")
 
     def deployment_sources_with_prefix(self, prefix: str) -> list[str]:
         try:

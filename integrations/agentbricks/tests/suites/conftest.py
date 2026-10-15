@@ -264,7 +264,7 @@ def _delete_project(
     identity = workspace.app_identity(name)
     deployed = identity != AppIdentity()
     if deployed:
-        # Leftover cleanup retries the Lakebase deletes from this record if they fail here.
+        # Leftover cleanup deletes what the CLI leaves behind from this record.
         record_app_identity(cli.run_config.output, name, identity)
     if failed and identity.service_principal:
         # The App is deleted next, so a failing test must capture its logs while it exists.
@@ -276,9 +276,9 @@ def _delete_project(
             cli,
             workspace,
             name,
+            identity,
             memory_store=f"memory-stores/{memory_store}" if memory_store else None,
             session_store=project.declared_store("session"),
-            identity=identity,
         )
     except Exception as exc:
         failures = [str(exc)]
