@@ -121,6 +121,11 @@ class ProjectCase:
     session_store_name: str | None = None
 
 
+@dataclasses.dataclass(frozen=True)
+class RuntimeStoreCleanupTarget:
+    role_name: str | None
+
+
 class Transcript:
     def __init__(self, path: pathlib.Path):
         self.path = path
@@ -1305,46 +1310,58 @@ class Runner:
         temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         os.replace(temporary, target)
 
-    def _app_role_target(self, app: str) -> str | None:
+    def _runtime_store_cleanup_target(self, app: str) -> RuntimeStoreCleanupTarget | None:
+        """Verify the Runtime Store's owner before resolving its App's Lakebase role."""
+        client = WorkspaceClient(profile=self.profile)
         try:
-            app_record = self.databricks(["apps", "get", app])
-            principal = app_record.get("service_principal_client_id")
-            store = self.databricks(["api", "get", f"/api/2.0/agents/runtime-stores/{app}"])
-            owner = store.get("owner", {}).get("app", {})
-            branch = store.get("storage_backend", {}).get("lakebase", {}).get("branch")
+            store = client.api_client.do("GET", f"/api/2.0/agents/runtime-stores/{app}")
+        except NotFound:
+            return None
+        if not isinstance(store, dict):
+            raise MatrixError(f"Runtime Store API returned an invalid resource for {app}.")
+        record = cast(dict[str, Any], store)
+        principal = client.apps.get(app).service_principal_client_id
+        owner = record.get("owner", {}).get("app", {})
+        branch = record.get("storage_backend", {}).get("lakebase", {}).get("branch")
+        if (
+            not isinstance(principal, str)
+            or not principal
+            or record.get("name") != f"runtime-stores/{app}"
+            or owner.get("name") != app
+            or owner.get("service_principal_id") != principal
+            or not isinstance(branch, str)
+            or not re.fullmatch(r"projects/[^/]+/branches/[^/]+", branch)
+        ):
+            raise MatrixError(f"Runtime Store ownership/backend for {app} was not verified.")
+        roles = cast(list[dict[str, Any]], self.databricks(["postgres", "list-roles", branch]))
+        targets = []
+        for role in roles:
+            status = role.get("status", {})
+            if status.get("postgres_role") != principal:
+                continue
+            name = role.get("name")
             if (
-                not principal
-                or store.get("name") != f"runtime-stores/{app}"
-                or owner.get("name") != app
-                or owner.get("service_principal_id") != principal
-                or not isinstance(branch, str)
-                or not re.fullmatch(r"projects/[^/]+/branches/[^/]+", branch)
+                status.get("identity_type") != "SERVICE_PRINCIPAL"
+                or not isinstance(name, str)
+                or not re.fullmatch(rf"{re.escape(branch)}/roles/[^/]+", name)
             ):
-                self.transcript.write(
-                    f"cleanup warning | Lakebase role for {app} | ownership not verified"
-                )
-                return None
-            roles = cast(list[dict[str, Any]], self.databricks(["postgres", "list-roles", branch]))
-            for role in roles:
-                status = role.get("status", {})
-                name = role.get("name")
-                if (
-                    status.get("postgres_role") == principal
-                    and status.get("identity_type") == "SERVICE_PRINCIPAL"
-                    and isinstance(name, str)
-                    and name.startswith(f"{branch}/roles/")
-                ):
-                    return name
-        except Exception as exc:
-            self.transcript.write(f"cleanup warning | Lakebase role lookup for {app} | {exc}")
-        return None
+                raise MatrixError(f"Lakebase role ownership for {app} was not verified.")
+            targets.append(name)
+        if len(targets) > 1:
+            raise MatrixError(f"Multiple Lakebase roles matched App {app}.")
+        return RuntimeStoreCleanupTarget(role_name=targets[0] if targets else None)
 
     def cleanup(self) -> None:
-        role_targets = {
-            case.app_name: self._app_role_target(case.app_name)
-            for case in self.cases
-            if case.memory_store_name or case.session_store_name
-        }
+        # Every Agent Bricks Runtime deployment gets a managed Runtime Store, including the direct
+        # fixture without memory/session bindings. Resolve ownership while the App still exists.
+        runtime_targets: dict[str, RuntimeStoreCleanupTarget | None] = {}
+        for app in self.apps:
+            try:
+                runtime_targets[app] = self._runtime_store_cleanup_target(app)
+            except Exception as exc:
+                self.cleanup_results.append(
+                    {"resource": f"runtime-store:{app}", "status": "failed", "detail": str(exc)}
+                )
         apps_with_stores = {
             case.app_name
             for case in self.cases
@@ -1388,48 +1405,34 @@ class Runner:
             if stores_ok:
                 cleaned_stores.add(case.app_name)
 
-        apps_with_deleted_runtime_stores: set[str] = set()
         for app in self.apps:
-            if app in apps_with_stores:
-                # The deploy-created Runtime Store owns a dedicated Lakebase database; it must be
-                # deleted before the role, or the role delete fails on database ownership.
-                result = self.run(
-                    [
-                        "databricks",
-                        "api",
-                        "delete",
-                        f"/api/2.0/agents/runtime-stores/{app}",
-                        *self._profile_args(),
-                    ],
-                    timeout=600,
-                    check=False,
-                )
-                output = f"{result.stdout}\n{result.stderr}".strip()
-                if result.returncode == 0 or "404" in output or "not_found" in output.lower():
-                    apps_with_deleted_runtime_stores.add(app)
-                    self.cleanup_results.append(
-                        {"resource": f"runtime-store:{app}", "status": "deleted"}
-                    )
-                else:
-                    self.cleanup_results.append(
-                        {
-                            "resource": f"runtime-store:{app}",
-                            "status": "failed",
-                            "detail": output,
-                        }
-                    )
-            result = self.run(
-                ["databricks", "apps", "delete", app, *self._profile_args()],
-                timeout=600,
-                check=False,
-            )
-            if result.returncode != 0:
+            if app not in runtime_targets:
+                continue
+            runtime_target = runtime_targets[app]
+            try:
+                client = WorkspaceClient(profile=self.profile)
+                # The store owns a dedicated database; delete it before its App and role. Keep the
+                # App identity on failure so a later cleanup can repeat the ownership check.
+                if runtime_target is not None:
+                    try:
+                        client.api_client.do("DELETE", f"/api/2.0/agents/runtime-stores/{app}")
+                    except NotFound:
+                        pass
                 self.cleanup_results.append(
-                    {
-                        "resource": f"app:{app}",
-                        "status": "failed",
-                        "detail": (result.stderr or result.stdout).strip(),
-                    }
+                    {"resource": f"runtime-store:{app}", "status": "deleted"}
+                )
+            except Exception as exc:
+                self.cleanup_results.append(
+                    {"resource": f"runtime-store:{app}", "status": "failed", "detail": str(exc)}
+                )
+                continue
+            try:
+                client.apps.delete(app)
+            except NotFound:
+                pass
+            except Exception as exc:
+                self.cleanup_results.append(
+                    {"resource": f"app:{app}", "status": "failed", "detail": str(exc)}
                 )
                 continue
             try:
@@ -1447,8 +1450,8 @@ class Runner:
                 }
             )
             self._delete_deployment_source(app)
-            role_target = role_targets.get(app)
-            if role_target and app in cleaned_stores and app in apps_with_deleted_runtime_stores:
+            role_target = runtime_target.role_name if runtime_target is not None else None
+            if role_target and app in cleaned_stores:
                 try:
                     result = self.run(
                         [
@@ -1461,11 +1464,19 @@ class Runner:
                         timeout=600,
                         check=False,
                     )
+                    deleted = result.returncode == 0
+                    if not deleted:
+                        try:
+                            client.postgres.get_role(role_target)
+                        except NotFound:
+                            deleted = True
+                        except Exception:
+                            pass
                     role_result = {
                         "resource": f"lakebase-role:{role_target}",
-                        "status": "deleted" if result.returncode == 0 else "failed",
+                        "status": "deleted" if deleted else "failed",
                     }
-                    if result.returncode != 0:
+                    if not deleted:
                         role_result["detail"] = (result.stderr or result.stdout).strip()
                     self.cleanup_results.append(role_result)
                 except Exception as exc:
