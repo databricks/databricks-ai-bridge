@@ -11,7 +11,7 @@ provider and therefore one client.
 from __future__ import annotations
 
 from threading import Lock
-from typing import Optional
+from typing import Callable, Optional
 
 from databricks_agentkit._api_client import _AgentBricksApiClient
 
@@ -19,10 +19,18 @@ from databricks_agentkit._api_client import _AgentBricksApiClient
 class ApiClientProvider:
     """Own exactly one lazily created API client for a CLI invocation."""
 
-    def __init__(self, profile: Optional[str]) -> None:
+    def __init__(
+        self, profile: Optional[str], on_first_use: Optional[Callable[[], None]] = None
+    ) -> None:
         self._profile = profile
+        self._on_first_use = on_first_use
         self._client: Optional[_AgentBricksApiClient] = None
         self._lock = Lock()
+
+    def use(self, client: _AgentBricksApiClient) -> None:
+        """Adopt a client the command already validated, so first use doesn't build another."""
+        with self._lock:
+            self._client = client
 
     def get(self) -> _AgentBricksApiClient:
         """Return the shared client, constructing it on first use."""
@@ -32,5 +40,7 @@ class ApiClientProvider:
 
         with self._lock:
             if self._client is None:
+                if self._on_first_use is not None:
+                    self._on_first_use()
                 self._client = _AgentBricksApiClient(self._profile)
             return self._client

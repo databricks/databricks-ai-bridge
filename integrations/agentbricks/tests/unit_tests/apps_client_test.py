@@ -56,7 +56,7 @@ def test_exists_raises_when_the_probe_fails_for_another_reason(stderr):
         client.exists("agent-bricks-myapp")
     hint = raised.value.hint or ""
     assert hint.startswith(stderr or "The `databricks apps get` command failed without a message.")
-    assert "`agentbricks login --profile prof`" in hint
+    assert "`agentbricks auth login prof`" in hint
 
 
 def test_service_principal_parses_from_json():

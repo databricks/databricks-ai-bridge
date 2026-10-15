@@ -98,7 +98,11 @@ def present_deleted(name: str, *, output: Optional[str]) -> None:
     render.success(f"Deleted deployment '{name}'")
 
 
-def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> None:
+def present_deploy_result(
+    result: DeployResult,
+    *,
+    output: Optional[str],
+) -> None:
     """Report a finished deploy: the machine payload for `--output json`, else the success panel."""
     if output == "json":
         store_grant_attempted = result.memory_grant_attempted or result.session_grant_attempted

@@ -60,6 +60,8 @@ def invoke(
     auth,
 ) -> None:
     """Send one HTTP request to a Databricks App or arbitrary URL."""
+    if app:
+        obj.announce_workspace()
     service = build_invoke_service(obj)
     request = InvokeRequest(
         app=app,

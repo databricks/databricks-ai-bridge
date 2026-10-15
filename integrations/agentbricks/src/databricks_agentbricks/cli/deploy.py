@@ -60,6 +60,7 @@ from databricks_agentbricks.services.deployment.provisioners import (
     TracingProvisioner,
 )
 from databricks_agentbricks.services.deployment.tool_access_provisioner import ToolAccessProvisioner
+from databricks_agentbricks.services.workspace_auth import preflight_auth
 
 
 def build_deploy_service(obj) -> DeployService:
@@ -162,6 +163,10 @@ def deploy(
     not authentication and not the session id itself (send the session id in the request body):
       X-Routing-Key: <uuid>
     """
+    obj.announce_workspace()
+    # Validate auth before any deployment work: an unauthenticated profile would otherwise fail
+    # deep into the deploy (or hang on a browser flow), far from anything actionable.
+    obj.api_client_provider.use(preflight_auth(obj.profile, obj.profile_info.source))
     request = DeployRequest(
         name=name,
         source=source,
@@ -186,6 +191,7 @@ def deployments() -> None:
 @click.pass_obj
 def deployments_list(obj) -> None:
     """List Agent Bricks deployments (apps named `agent-bricks-*`)."""
+    obj.announce_workspace()
     present_deployments_list(build_deploy_service(obj).list_deployments(), output=obj.output)
 
 
@@ -194,6 +200,7 @@ def deployments_list(obj) -> None:
 @click.pass_obj
 def deployments_get(obj, name) -> None:
     """Get an agent deployment's details."""
+    obj.announce_workspace()
     present_deployment_detail(build_deploy_service(obj).get(name), name, output=obj.output)
 
 
@@ -202,6 +209,7 @@ def deployments_get(obj, name) -> None:
 @click.pass_obj
 def deployments_logs(obj, name) -> None:
     """Stream a deployment's logs."""
+    obj.announce_workspace()
     build_deploy_service(obj).logs(name)
 
 
@@ -210,6 +218,7 @@ def deployments_logs(obj, name) -> None:
 @click.pass_obj
 def deployments_start(obj, name) -> None:
     """Start a deployment."""
+    obj.announce_workspace()
     build_deploy_service(obj).start(name)
     present_started(name, output=obj.output)
 
@@ -224,6 +233,7 @@ def deployments_stop(obj, name, yes) -> None:
         click.confirm(
             f"Stop deployment '{name}'? This cannot be undone.", default=False, abort=True
         )
+    obj.announce_workspace()
     build_deploy_service(obj).stop(name)
     present_stopped(name, output=obj.output)
 
@@ -234,6 +244,7 @@ def deployments_stop(obj, name, yes) -> None:
 @click.pass_obj
 def deployments_delete(obj, name, yes) -> None:
     """Delete a deployment and, when managed provisioning is enabled, its Runtime Store."""
+    obj.announce_workspace()
     service = build_deploy_service(obj)
     target = f"deployment '{name}'"
     if not yes and service.deletes_runtime_store_data():
