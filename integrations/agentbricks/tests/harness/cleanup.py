@@ -64,6 +64,21 @@ class Cleanup:
 # Identities recorded by per-test cleanup
 
 
+def app_identity(cli: AgentbricksCli, workspace: Workspace, name: str) -> AppIdentity:
+    """The App's principal and Lakebase branch as far as they still exist; never raises."""
+    principal: str | None = None
+    result = cli.run(f"--output json deployments get {name}", check=False)
+    message = (result.stderr or result.stdout).strip()
+    if result.returncode == 0:
+        try:
+            principal = json.loads(result.stdout).get("service_principal_client_id")
+        except (ValueError, AttributeError):
+            log(f"cleanup warning | principal lookup for {name} | {message}")
+    elif not _MISSING.search(message):
+        log(f"cleanup warning | principal lookup for {name} | {message}")
+    return AppIdentity(principal, workspace.lakebase_branch(name))
+
+
 def record_app_identity(output: pathlib.Path, app: str, identity: AppIdentity) -> None:
     """Append one line for leftover cleanup, which runs in another process and cannot see worker memory."""
     line = json.dumps({"app": app, **dataclasses.asdict(identity)}) + "\n"
@@ -169,7 +184,7 @@ def _delete_leaked_apps(
             continue
         log(f"deleting leaked App {name}")
         # The principal stops resolving once the App is gone, and the later steps need it.
-        record_app_identity(output, name, workspace.app_identity(name))
+        record_app_identity(output, name, app_identity(cli, workspace, name))
         result = cli.run(f"deployments delete {name} --yes", timeout=1200, check=False)
         if result.returncode != 0:
             log(f"cleanup warning | {name} | {(result.stderr or result.stdout).strip()}")

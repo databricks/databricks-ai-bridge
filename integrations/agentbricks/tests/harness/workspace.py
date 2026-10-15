@@ -161,9 +161,6 @@ class Workspace:
 
     # Apps
 
-    def app(self, name: str) -> dict[str, Any]:
-        return self.client.apps.get(name).as_dict()
-
     def assert_app_absent(self, name: str) -> None:
         try:
             self.client.apps.get(name)
@@ -255,26 +252,17 @@ class Workspace:
             self.client.api_client.do("GET", f"/api/2.0/agents/runtime-stores/{app_name}"),
         )
 
-    def app_identity(self, app_name: str) -> AppIdentity:
-        """The App's principal and Lakebase location as far as they still exist; never raises."""
-        principal: str | None = None
-        branch: str | None = None
-        try:
-            principal = self.app(app_name).get("service_principal_client_id")
-        except NotFound:
-            pass
-        except Exception as exc:
-            log(f"cleanup warning | principal lookup for {app_name} | {exc}")
+    def lakebase_branch(self, app_name: str) -> str | None:
+        """The Lakebase branch of the App's Runtime Store, if it still exists; never raises."""
         try:
             lakebase = self.runtime_store(app_name).get("storage_backend", {}).get("lakebase", {})
-            candidate = lakebase.get("branch")
-            if isinstance(candidate, str) and _BRANCH.fullmatch(candidate):
-                branch = candidate
         except NotFound:
-            pass
+            return None
         except Exception as exc:
             log(f"cleanup warning | Runtime Store lookup for {app_name} | {exc}")
-        return AppIdentity(principal, branch)
+            return None
+        branch = lakebase.get("branch")
+        return branch if isinstance(branch, str) and _BRANCH.fullmatch(branch) else None
 
     def roles_of(self, branch: str, principals: Collection[str]) -> list[str]:
         """Resource names of the branch's roles for these principals.

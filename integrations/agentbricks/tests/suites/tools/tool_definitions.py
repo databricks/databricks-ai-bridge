@@ -152,8 +152,8 @@ def uc_function_tool(uc_function: UcFunction) -> Tool:
     return Tool(
         name="uc_function",
         prompt=(
-            f"You must call the tool named {uc_function.function.replace('.', '__')} with value "
-            "'matrix'. Return the called tool's exact result."
+            "You must call the Unity Catalog function tool that computes the Agent Bricks marker, "
+            "with value 'matrix'. Return the called tool's exact result."
         ),
         check=contains(UC_MARKER),
         add_command=f"uc-function {uc_function.function} --name agentbricks_uc_marker",

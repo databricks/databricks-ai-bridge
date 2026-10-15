@@ -26,7 +26,7 @@ from typing import Any
 
 import pytest
 from harness.agentbricks_cli import AgentbricksCli
-from harness.cleanup import Cleanup, delete_run_leftovers, record_app_identity
+from harness.cleanup import Cleanup, app_identity, delete_run_leftovers, record_app_identity
 from harness.logs import log, log_command
 from harness.project import Project
 from harness.run import RUN_ID_PATTERN, E2EError, RunConfig, run_output_dir
@@ -257,7 +257,7 @@ def project(
 
 def _record_app(cli: AgentbricksCli, workspace: Workspace, name: str, *, failed: bool) -> None:
     """Keep what is lost once the test's cleanup deletes its App."""
-    identity = workspace.app_identity(name)
+    identity = app_identity(cli, workspace, name)
     if identity.service_principal or identity.branch:
         # Leftover cleanup deletes the App's Lakebase role from this record.
         record_app_identity(cli.run_config.output, name, identity)
