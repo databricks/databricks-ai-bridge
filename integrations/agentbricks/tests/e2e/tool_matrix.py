@@ -641,6 +641,8 @@ class Runner:
                 self.uc_function or "",
                 "--name",
                 "agentbricks_uc_marker",
+                "--auth",
+                "app",
             ],
             [
                 "tools",
@@ -671,7 +673,7 @@ class Runner:
                 f"managed bindings mismatch: expected {sorted(expected)}, got {sorted(tool_ids)}"
             )
         tools_by_id = {tool["id"]: tool for tool in manifest.get("tools", [])}
-        for tool_id in ("sandbox", "web_search", "genie"):
+        for tool_id in sorted(expected):
             if tools_by_id[tool_id].get("auth") != "app":
                 raise MatrixError(f"CLI-authored {tool_id} binding is not App-auth.")
 
