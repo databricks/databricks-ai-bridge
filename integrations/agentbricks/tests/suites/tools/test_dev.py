@@ -1,9 +1,9 @@
 """Each tool works in `agentbricks dev`, per authoring path.
 
-CLI authoring is incremental: add one tool, restart dev, verify it, then add the next on the same
-project. Direct authoring writes every tool into agent.toml and runs dev once. A subtest per tool
-reports each tool independently and the sequence continues past a failure. Every check calls the
-dev server with `agentbricks endpoint invoke`, the command the CLI tells users to run.
+CLI authoring adds every tool with `agentbricks tools add`; direct authoring writes them into
+agent.toml. Either way dev runs once, and a subtest per tool invokes it, so each tool is reported
+independently. Every check calls the dev server with `agentbricks endpoint invoke`, the command the
+CLI tells users to run.
 
 Each dev server gets a free port, passed as both --app-port and PORT: the template server binds
 $PORT, so an inherited PORT would override --app-port.
@@ -41,24 +41,17 @@ def test_dev(
 
     if authoring == "cli":
         for tool in tools:
-            with subtests.test(tool=tool.name):
-                if tool.add_command:
-                    agentbricks_cli.run(f"tools add {tool.add_command} --source {project.path}")
-                project.write_files(tool.files)
-                assert_declared(project, tool)
-                port = free_port()
-                with agentbricks_cli.start(
-                    f"dev --source {project.path} --app-port {port}", env={"PORT": str(port)}
-                ) as server:
-                    server.wait_until_serving(port)
-                    check(tool, port)
+            if tool.add_command:
+                agentbricks_cli.run(f"tools add {tool.add_command} --source {project.path}")
+            project.write_files(tool.files)
+            assert_declared(project, tool)
     elif authoring == "direct":
         project.write_manifest(tools)
-        port = free_port()
-        with agentbricks_cli.start(
-            f"dev --source {project.path} --app-port {port}", env={"PORT": str(port)}
-        ) as server:
-            server.wait_until_serving(port)
-            for tool in tools:
-                with subtests.test(tool=tool.name):
-                    check(tool, port)
+    port = free_port()
+    with agentbricks_cli.start(
+        f"dev --source {project.path} --app-port {port}", env={"PORT": str(port)}
+    ) as server:
+        server.wait_until_serving(port)
+        for tool in tools:
+            with subtests.test(tool=tool.name):
+                check(tool, port)
