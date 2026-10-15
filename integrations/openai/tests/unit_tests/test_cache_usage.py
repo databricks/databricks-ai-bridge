@@ -200,7 +200,7 @@ def test_partial_native_usage_preserves_other_unified_details(
     assert details is not None
     assert details.audio_tokens == expected["audio_tokens"]
     assert details.cached_tokens == expected["cached_tokens"]
-    assert details.cache_write_tokens == expected["cache_write_tokens"]
+    assert getattr(details, "cache_write_tokens", None) == expected["cache_write_tokens"]
     assert response.usage.prompt_tokens == 5000
     assert response.usage.total_tokens == 5002
     assert original_details == {"audio_tokens": 3, "cached_tokens": 12, "cache_write_tokens": 8}
