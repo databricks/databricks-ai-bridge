@@ -20,6 +20,8 @@ def normalize_cache_usage(data: object, cast_to: type) -> object:
     ):
         return data
     details = dict(usage.get("prompt_tokens_details") or {})
-    details["cached_tokens"] = usage.get("cache_read_input_tokens") or 0
-    details["cache_write_tokens"] = usage.get("cache_creation_input_tokens") or 0
+    if usage.get("cache_read_input_tokens") is not None:
+        details["cached_tokens"] = usage["cache_read_input_tokens"]
+    if usage.get("cache_creation_input_tokens") is not None:
+        details["cache_write_tokens"] = usage["cache_creation_input_tokens"]
     return {**data, "usage": {**usage, "prompt_tokens_details": details}}

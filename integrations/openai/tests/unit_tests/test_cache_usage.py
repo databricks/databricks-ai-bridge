@@ -169,3 +169,38 @@ def test_normalize_usage_preserves_details_and_input_totals():
     assert normalize_cache_usage(data, dict) is data
     ordinary = {"usage": {"prompt_tokens": 10, "prompt_tokens_details": {"audio_tokens": 3}}}
     assert normalize_cache_usage(ordinary, ChatCompletion) is ordinary
+
+
+@pytest.mark.parametrize(
+    ("native_key", "detail_key"),
+    [
+        ("cache_read_input_tokens", "cached_tokens"),
+        ("cache_creation_input_tokens", "cache_write_tokens"),
+    ],
+)
+@pytest.mark.parametrize("native_value", [None, 0, 7])
+def test_partial_native_usage_preserves_other_unified_details(
+    endpoint, monkeypatch, native_key, detail_key, native_value
+):
+    original_details = {"audio_tokens": 3, "cached_tokens": 12, "cache_write_tokens": 8}
+    monkeypatch.delitem(USAGE, "cache_read_input_tokens")
+    monkeypatch.delitem(USAGE, "cache_creation_input_tokens")
+    monkeypatch.setitem(USAGE, native_key, native_value)
+    monkeypatch.setitem(USAGE, "prompt_tokens_details", original_details)
+    workspace, _ = endpoint
+    with DatabricksOpenAI(workspace_client=workspace) as client:
+        response = client.chat.completions.create(
+            model=MODEL, messages=[{"role": "user", "content": "Hello"}]
+        )
+    expected = {**original_details}
+    if native_value is not None:
+        expected[detail_key] = native_value
+    assert response.usage is not None
+    details = response.usage.prompt_tokens_details
+    assert details is not None
+    assert details.audio_tokens == expected["audio_tokens"]
+    assert details.cached_tokens == expected["cached_tokens"]
+    assert details.cache_write_tokens == expected["cache_write_tokens"]
+    assert response.usage.prompt_tokens == 5000
+    assert response.usage.total_tokens == 5002
+    assert original_details == {"audio_tokens": 3, "cached_tokens": 12, "cache_write_tokens": 8}
