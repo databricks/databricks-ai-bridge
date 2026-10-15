@@ -297,6 +297,33 @@ the existing CLI commands remain separate.
 
 ## Runtime
 
+### Transactional tools and recovery
+
+Runtime recovery is at-least-once. Reusing an invocation UUID prevents accepting a second
+invocation with different input; it does not guarantee that a tool's remote side effect executes
+once. A worker can stop after a remote service commits a payment but before the runtime saves the
+tool result. The replacement worker cannot distinguish that case from an uncommitted payment.
+
+For tools that change a PIN, block a card, or make a payment, enforce idempotency in the service that
+owns the transaction:
+
+1. Give each operation a stable key scoped to the customer and operation. Persist it before calling
+   the tool and reuse it on recovery. A tool-call ID is useful only when your framework restores that
+   same call; a newly generated call needs the previously persisted business-operation key.
+2. Send the key to the downstream API. That service must atomically record the key and commit the
+   effect, return the recorded result for a repeated key, and reject different input under that key.
+3. After a timeout or worker restart, query or retry with the same key. Do not generate a new key or
+   infer success from the model's text.
+4. Retain downstream keys for at least the application's retry and recovery window. If the service
+   has no idempotency or transaction-status API, stop for reconciliation rather than automatically
+   replaying an ambiguous effect.
+
+A separate “already called” check followed by a remote API call is not atomic and leaves the same
+crash window. The runtime cannot provide a universal exactly-once guarantee across an arbitrary
+remote service. Approval and the template's recovery instructions help control a workflow, but
+neither substitutes for downstream deduplication. Request-user tool mode currently cannot recover
+after worker failure; choosing App auth enables recovery and makes this contract necessary.
+
 `DurableAgentServer` runs your agent through one HTTP API for synchronous, streaming, and background
 invocations. Register an `@app.invoke` handler, publish progress with `await context.emit(event)`,
 and return a JSON result. You can also add your own FastAPI endpoints.
