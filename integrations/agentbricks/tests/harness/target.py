@@ -6,6 +6,7 @@ that needs a real workspace is skipped rather than failed.
 
 from __future__ import annotations
 
+import enum
 from collections.abc import Mapping, Sequence
 from typing import Protocol
 
@@ -14,7 +15,13 @@ import pytest
 from harness.run import RunConfig
 from harness.workspace import Workspace
 
-WORKSPACE_KINDS = ("live", "fake")
+
+class WorkspaceKind(str, enum.Enum):
+    LIVE = "live"
+    FAKE = "fake"
+
+    def __str__(self) -> str:
+        return self.value
 
 
 class TargetWorkspaceUnavailable(Exception):
@@ -22,7 +29,7 @@ class TargetWorkspaceUnavailable(Exception):
 
 
 class TargetWorkspace(Protocol):
-    name: str
+    name: WorkspaceKind
 
     @property
     def env(self) -> Mapping[str, str]:
@@ -41,7 +48,7 @@ class TargetWorkspace(Protocol):
 
 
 class LiveWorkspace:
-    name = "live"
+    name = WorkspaceKind.LIVE
 
     def __init__(self, profile: str | None, run_config: RunConfig):
         self.profile = profile
@@ -72,7 +79,7 @@ class LiveWorkspace:
 class FakeWorkspace:
     """Seam for the in-process fake: DATABRICKS_HOST/DATABRICKS_TOKEN env, no CLI args, no Workspace."""
 
-    name = "fake"
+    name = WorkspaceKind.FAKE
     env: Mapping[str, str] = {}
     cli_args: Sequence[str] = ()
     client: Workspace | None = None
@@ -89,7 +96,9 @@ def require_workspace(target_workspace: TargetWorkspace, what: str) -> Workspace
     return workspace
 
 
-def make_target_workspace(name: str, profile: str | None, run_config: RunConfig) -> TargetWorkspace:
-    if name == "fake":
+def make_target_workspace(
+    kind: WorkspaceKind, profile: str | None, run_config: RunConfig
+) -> TargetWorkspace:
+    if kind is WorkspaceKind.FAKE:
         return FakeWorkspace(run_config)
     return LiveWorkspace(profile, run_config)

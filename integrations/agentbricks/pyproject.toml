@@ -96,6 +96,8 @@ extend = "../../pyproject.toml"
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit_tests"]
+# Lets the suites under tests/suites import the shared tests/harness package as `harness`.
+pythonpath = ["tests"]
 
 [tool.ty.environment]
 root = ["./src", "./tests"]

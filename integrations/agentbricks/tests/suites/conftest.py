@@ -32,9 +32,9 @@ from harness.logs import log, log_command
 from harness.project import Project
 from harness.run import RUN_ID_PATTERN, E2EError, RunConfig, run_output_dir
 from harness.target import (
-    WORKSPACE_KINDS,
     TargetWorkspace,
     TargetWorkspaceUnavailable,
+    WorkspaceKind,
     make_target_workspace,
     require_workspace,
 )
@@ -53,8 +53,9 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     group = parser.getgroup("agentbricks", "Agent Bricks E2E suites")
     group.addoption(
         "--workspace",
-        choices=WORKSPACE_KINDS,
-        default="live",
+        type=WorkspaceKind,
+        choices=list(WorkspaceKind),
+        default=WorkspaceKind.LIVE,
         help="live runs against a Databricks workspace; fake skips whatever needs one.",
     )
     group.addoption(

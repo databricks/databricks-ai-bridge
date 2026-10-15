@@ -46,19 +46,20 @@ Every resource a run creates carries its run id, and is deleted at three points:
 
 | Path | What it is |
 |---|---|
-| `conftest.py` | All pytest wiring: options, hooks, and the fixtures every suite shares |
-| `harness/run.py` | `RunConfig`, the run id, and the name prefixes every resource carries |
-| `harness/target.py` | The `--workspace live\|fake` seam the CLI and fixtures talk to |
-| `harness/agentbricks_cli.py` | Runs `agentbricks` commands: `cli.run("tools add ...")`, and `cli.start("dev ...")` in the background |
-| `harness/agent_endpoint.py` | `AgentEndpoint`: a running dev server or deployed App, and invoking it over HTTP |
-| `harness/project.py` | A test's project: run-scoped path and App name, its files, and `pin_runtime()` |
-| `harness/workspace.py` | Databricks SDK helpers for what is not under test: SQL, UC, Apps, grants |
-| `harness/cleanup.py` | Deleting what the suites create, per App and per run |
-| `harness/logs.py` | Test-log output; every command is echoed so a run's log replays it |
-| `<suite>/` | One folder per feature: `tools`, `memory_store`, `session_store`, `tracing` |
+| `tests/suites/conftest.py` | All pytest wiring: options, hooks, and the fixtures every suite shares |
+| `tests/harness/run.py` | `RunConfig`, the run id, and the name prefixes every resource carries |
+| `tests/harness/target.py` | The `--workspace live\|fake` seam the CLI and fixtures talk to |
+| `tests/harness/agentbricks_cli.py` | Runs `agentbricks` commands: `cli.run("tools add ...")`, and `cli.start("dev ...")` in the background |
+| `tests/harness/agent_endpoint.py` | `AgentEndpoint`: a running dev server or deployed App, and invoking it over HTTP |
+| `tests/harness/project.py` | A test's project: run-scoped path and App name, its files, and `pin_runtime()` |
+| `tests/harness/workspace.py` | Databricks SDK helpers for what is not under test: SQL, UC, Apps, grants |
+| `tests/harness/cleanup.py` | Deleting what the suites create, per App and per run |
+| `tests/harness/logs.py` | Test-log output; every command is echoed so a run's log replays it |
+| `tests/suites/<suite>/` | One folder per feature: `tools`, `memory_store`, `session_store`, `tracing` |
 
-`conftest.py` files are the only code pytest calls by name; everything in `harness/` is plain Python
-that you can follow through its imports.
+`conftest.py` files are the only code pytest calls by name. `tests/harness/` sits next to `tests/suites/`
+rather than inside it: it is plain Python the suites import as `harness` (via `pythonpath` in
+`pyproject.toml`), not a suite.
 
 ## Adding things
 
