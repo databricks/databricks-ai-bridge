@@ -1316,7 +1316,8 @@ _Options_
 
 Adding a tool with `--auth user` reports that request-user mode affects every invocation, including
 the current limitations on worker-failure recovery and human approval. JSON output carries these
-notices in a `warnings` array. Use `--auth app` when the tool should run as the App service principal.
+notices in a `warnings` array. Choose `--auth app` only when the tool should use the App service
+principal's permissions; this choice changes the identity used to access Databricks resources.
 
 Discover available integrations and manage an agent's tool bindings.
 

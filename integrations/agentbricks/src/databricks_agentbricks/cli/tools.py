@@ -64,8 +64,8 @@ def _emit_change(
             f"Tool {spec.id!r} uses the signed-in user's identity (auth = 'user'). "
             "Request-user mode applies to every invocation: worker-failure recovery and "
             "human approval are unsupported while any managed tool uses user auth. "
-            "Choose --auth app to run tools as the App service principal when those "
-            "features are needed."
+            "Use --auth app only when the tool should use the App service principal's "
+            "permissions instead of the signed-in user's."
         )
     payload = {
         "schema_version": 1,

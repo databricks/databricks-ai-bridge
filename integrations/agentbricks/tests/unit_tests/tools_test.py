@@ -62,11 +62,19 @@ def test_add_managed_tool_writes_explicit_auth(tmp_path, arguments, auth):
 
 
 @pytest.mark.parametrize("auth", ["app", "user"])
-def test_add_tool_json_reports_auth_limitations(tmp_path, auth):
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["mcp", "system.ai.web_search"],
+        ["sandbox", "--scope", "volume:main.data.files"],
+        ["uc-function", "main.tools.lookup"],
+    ],
+)
+def test_add_tool_json_reports_auth_limitations(tmp_path, auth, arguments):
     project = _project(tmp_path)
     result = CliRunner().invoke(
         tools,
-        ["add", "uc-function", "main.tools.lookup", "--auth", auth, "--source", str(project)],
+        ["add", *arguments, "--auth", auth, "--source", str(project)],
         obj=_Ctx("json"),
     )
     assert result.exit_code == 0, result.output
@@ -74,6 +82,9 @@ def test_add_tool_json_reports_auth_limitations(tmp_path, auth):
     assert bool(payload["warnings"]) == (auth == "user")
     if auth == "user":
         assert "human approval" in payload["warnings"][0]
+        assert "Use --auth app only when" in payload["warnings"][0]
+        assert "App service principal's permissions" in payload["warnings"][0]
+    assert payload["tool"]["auth"] == auth
 
 
 def test_add_user_uc_function_preserves_legacy_binding_auth(tmp_path):
