@@ -671,7 +671,11 @@ def test_get_missing_trace_has_clean_error(output, trace_id, error_code, message
     target = tracing_mod._TraceReadTarget("http://127.0.0.1:5000", "eid-1")
     with (
         mock.patch.object(tracing_mod, "_with_trace_read_target", return_value=nullcontext(target)),
-        mock.patch("mlflow.tracing.fluent.get_tracking_uri", return_value=target.tracking_uri),
+        # Newer MLflow resolves UC trace locations before calling TracingClient; older supported
+        # versions do not import get_tracking_uri in this module.
+        mock.patch(
+            "mlflow.tracing.fluent.get_tracking_uri", return_value=target.tracking_uri, create=True
+        ),
         mock.patch("mlflow.tracing.fluent.TracingClient") as client,
     ):
         client.return_value.get_trace.side_effect = MlflowException(message, error_code=error_code)
