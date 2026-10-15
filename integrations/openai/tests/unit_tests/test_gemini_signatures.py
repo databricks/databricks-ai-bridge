@@ -62,7 +62,9 @@ def _transport(streaming, captured):
             return httpx.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
-                content=f"data: {json.dumps(response)}\n\ndata: [DONE]\n\n".encode(),
+                stream=httpx.ByteStream(
+                    f"data: {json.dumps(response)}\n\ndata: [DONE]\n\n".encode()
+                ),
             )
         return httpx.Response(200, json=response)
 
@@ -101,6 +103,7 @@ def test_sync_signature_round_trip_and_stream_lifecycle(streaming):
                 )
                 if streaming:
                     assert isinstance(result, Stream)
+                    assert not result.response.is_closed
                     with result:
                         chunk = next(result)
                     assert result.response.is_closed
@@ -125,6 +128,7 @@ async def test_async_signature_round_trip_and_stream_lifecycle(streaming):
                 )
                 if streaming:
                     assert isinstance(result, AsyncStream)
+                    assert not result.response.is_closed
                     async with result:
                         chunk = await anext(result)
                     assert result.response.is_closed
@@ -147,3 +151,77 @@ def test_signature_replay_preserves_existing_gateway_value():
         captured[0]["messages"][1]["tool_calls"][0]["thoughtSignature"] == "existing-gateway-value"
     )
     assert history == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_native_agents_sdk_preserves_signatures_across_two_tool_turns(streaming):
+    from agents import Agent, OpenAIChatCompletionsModel, RunConfig, Runner, function_tool
+
+    executed = []
+    captured = []
+
+    @function_tool
+    def echo(text: str) -> str:
+        """Echo text."""
+        executed.append(text)
+        return text
+
+    def handle(request):
+        body = json.loads(request.content)
+        captured.append(body)
+        turn = len(captured) - 1
+        for message in body["messages"]:
+            for call in message.get("tool_calls", []):
+                if call.get("thoughtSignature") != f"signature-{call['id']}":
+                    return httpx.Response(400, json={"error": {"message": "Missing signature"}})
+        response = _completion(streaming)
+        message = response["choices"][0]["delta" if streaming else "message"]
+        if turn < 2:
+            call = message["tool_calls"][0]
+            call["id"] = f"call-{turn}"
+            call["function"]["arguments"] = json.dumps({"text": ["one", "two"][turn]})
+            call["thoughtSignature"] = f"signature-call-{turn}"
+        else:
+            message.pop("tool_calls")
+            message["content"] = "DONE"
+            response["choices"][0]["finish_reason"] = "stop"
+        if streaming:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=httpx.ByteStream(
+                    f"data: {json.dumps(response)}\n\ndata: [DONE]\n\n".encode()
+                ),
+            )
+        return httpx.Response(200, json=response)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http_client:
+        with patch(
+            "databricks_openai.utils.clients._get_authorized_async_http_client",
+            return_value=http_client,
+        ):
+            async with AsyncDatabricksOpenAI(workspace_client=_workspace()) as client:
+                agent = Agent(
+                    name="Test",
+                    model=OpenAIChatCompletionsModel(
+                        model="system.ai.gemini-3-8-flash", openai_client=client
+                    ),
+                    tools=[echo],
+                )
+                config = RunConfig(tracing_disabled=True)
+                if streaming:
+                    result = Runner.run_streamed(
+                        agent, "Echo twice.", run_config=config, max_turns=3
+                    )
+                    async for _ in result.stream_events():
+                        pass
+                else:
+                    result = await Runner.run(agent, "Echo twice.", run_config=config, max_turns=3)
+
+    assert result.final_output == "DONE"
+    assert executed == ["one", "two"]
+    assert len(captured) == 3
+    assert [
+        call["id"] for message in captured[-1]["messages"] for call in message.get("tool_calls", [])
+    ] == ["call-0", "call-1"]
