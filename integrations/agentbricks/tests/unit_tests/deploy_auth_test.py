@@ -210,6 +210,12 @@ def test_user_auth_requires_explicit_auth_on_every_managed_binding(tmp_path):
         ),
         (ToolSpec.genie_one(auth="user"), {"genie"}),
         (ToolSpec.genie_agent("space", space_id="0" * 32, auth="user"), {"genie"}),
+        (
+            ToolSpec.uc_function("lookup", function="main.tools.lookup", auth="user"),
+            {"mcp.functions"},
+        ),
+        (ToolSpec.uc_function("lookup", function="main.tools.lookup", auth="app"), set()),
+        (ToolSpec.uc_function("lookup", function="main.tools.lookup"), set()),
         (ToolSpec.mcp("dbsql", service="system.ai.dbsql", auth="app"), set()),
     ],
 )
@@ -218,6 +224,7 @@ def test_required_user_api_scopes_follow_binding(tmp_path, binding, expected):
     project.add_tool(binding)
 
     assert required_user_api_scopes(project) == expected
+    assert requires_user_auth(project) is (binding.auth == "user")
     assert required_user_api_scopes(None) == set()
 
 

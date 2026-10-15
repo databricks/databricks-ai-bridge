@@ -281,6 +281,8 @@ def test_existing_init_includes_migration_skill_from_wheel(
     [
         ["sandbox", "--scope", "volume:catalog.schema.volume"],
         ["uc-function", "catalog.schema.function"],
+        ["uc-function", "catalog.schema.function", "--auth", "user"],
+        ["uc-function", "catalog.schema.function", "--auth", "app"],
         ["genie-one"],
         ["genie-agent", "0" * 32],
     ],
@@ -311,6 +313,8 @@ def test_tools_offline_add_review_manifest_remove(
             if not changed:
                 assert "already configured" in added.stdout
         assert [tool["id"] for tool in tomli.loads(manifest.read_text())["tools"]] == ["tested"]
+        expected_auth = args[args.index("--auth") + 1] if "--auth" in args else "user"
+        assert tomli.loads(manifest.read_text())["tools"][0]["auth"] == expected_auth
     run_agentbricks("tools", "remove", "tested", "--source", str(project))
     assert tomli.loads(manifest.read_text()).get("tools", []) == []
     assert {

@@ -87,15 +87,18 @@ def tool(
     )
 
 
-def test_clients_are_selected_per_tool_and_request(adapter):
+@pytest.mark.parametrize("kind", ["mcp", "uc_function"])
+def test_clients_are_selected_per_tool_and_request(adapter, kind):
     alice, bob, app = [
         SimpleNamespace(config=SimpleNamespace(host="https://workspace")) for _ in range(3)
     ]
     for user in (alice, bob):
         resolver = Mock(side_effect=lambda mode, user=user: user if mode == "user" else app)
         for mode in ("user", "app", None):
-            server = adapter._server_from_tool(tool(mode), workspace_client_for=resolver)
+            server = adapter._server_from_tool(tool(mode, kind=kind), workspace_client_for=resolver)
             assert server.workspace_client is (user if mode == "user" else app)
+            if adapter.__name__.endswith("openai.mcp"):
+                assert server._agentbricks_request_user is (mode == "user")
         assert [call.args for call in resolver.call_args_list] == [("user",), ("app",), ("app",)]
     adapter.workspace_client.assert_not_called()
 
@@ -107,21 +110,23 @@ def test_framework_adapters_share_auth_classification(adapter):
     assert adapter._tool_error is mcp_tool_error
 
 
-def test_explicit_deployed_user_without_resolver_fails_closed(adapter, monkeypatch):
+@pytest.mark.parametrize("kind", ["mcp", "uc_function"])
+def test_explicit_deployed_user_without_resolver_fails_closed(adapter, monkeypatch, kind):
     from databricks_agentkit.runtime.auth import AuthError
 
     monkeypatch.setenv("DATABRICKS_APP_NAME", "my-agent")
     with pytest.raises(AuthError) as raised:
-        adapter._server_from_tool(tool("user"))
+        adapter._server_from_tool(tool("user", kind=kind))
     assert raised.value.code == "MCP_USER_AUTHORIZATION_MISSING"
     assert raised.value.integration_id == "search"
     adapter.workspace_client.assert_not_called()
 
 
-def test_legacy_and_local_default_identity_remain_supported(adapter):
+@pytest.mark.parametrize("kind", ["mcp", "uc_function"])
+def test_legacy_and_local_default_identity_remain_supported(adapter, kind):
     for mode in (None, "app", "user"):
         assert (
-            adapter._server_from_tool(tool(mode)).workspace_client
+            adapter._server_from_tool(tool(mode, kind=kind)).workspace_client
             is adapter.workspace_client.return_value
         )
 

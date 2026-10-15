@@ -160,8 +160,6 @@ class ToolSpec:
             return
         if not _TOOL_ID.fullmatch(self.id):
             raise AgentCliError(f"Invalid tool id {self.id!r}.")
-        if kind == "uc_function" and self.auth == "user":
-            raise AgentCliError("UC function auth supports only app/default identity.")
         if kind == "sandbox":
             if self.source.service != "system.ai.sandbox":
                 raise AgentCliError("Sandbox tools must bind system.ai.sandbox.")
@@ -211,7 +209,7 @@ class ToolSpec:
 
     @classmethod
     def uc_function(
-        cls, tool_id: str, *, function: str, auth: Literal["app"] | None = None
+        cls, tool_id: str, *, function: str, auth: Literal["user", "app"] | None = None
     ) -> "ToolSpec":
         return cls(
             id=tool_id,
