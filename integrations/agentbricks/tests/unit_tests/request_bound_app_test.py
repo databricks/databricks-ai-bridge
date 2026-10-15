@@ -85,7 +85,7 @@ async def test_request_user_sync_uses_runtime_without_persisting_auth(deployed):
         }
     )
     assert status.status_code == events.status_code == 200
-    assert status.json() == first.json()
+    assert status.json() == {**first.json(), "attempt": 1, "is_recovery": False}
     assert 'event: delta\ndata: {"type": "delta", "content": "one"}' in events.text
     assert 'event: delta\ndata: {"type": "delta", "content": "two"}' in events.text
     assert len(contexts) == 1
@@ -175,6 +175,8 @@ async def test_request_user_auth_composes_with_existing_runtime_background_mode(
     assert completed.json() == {
         "id": invocation_id,
         "status": "completed",
+        "attempt": 1,
+        "is_recovery": False,
         "output": {"value": "hello"},
     }
     assert_auth_not_persisted(store)
@@ -221,6 +223,8 @@ async def test_request_user_streams_ordered_persisted_events(deployed):
     assert status.json() == {
         "id": invocation_id,
         "status": "completed",
+        "attempt": 1,
+        "is_recovery": False,
         "output": {"ignored": "stream output"},
     }
     assert events.text == response.text

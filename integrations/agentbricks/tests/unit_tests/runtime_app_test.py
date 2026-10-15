@@ -382,7 +382,13 @@ async def test_background_sync_returns_202_and_can_be_polled() -> None:
         "status": "queued",
         "status_url": f"/api/invocations/{_RUN_1}",
     }
-    assert completed == {"id": _RUN_1, "status": "completed", "output": "hello"}
+    assert completed == {
+        "id": _RUN_1,
+        "status": "completed",
+        "attempt": 1,
+        "is_recovery": False,
+        "output": "hello",
+    }
 
 
 @pytest.mark.asyncio
@@ -703,7 +709,13 @@ async def test_mcp_permission_failure_returns_safe_error() -> None:
     }
     assert response.status_code == 403
     assert response.json() == {"error": expected_error}
-    assert state.json() == {"id": _RUN_1, "status": "failed", "error": expected_error}
+    assert state.json() == {
+        "id": _RUN_1,
+        "status": "failed",
+        "attempt": 1,
+        "is_recovery": False,
+        "error": expected_error,
+    }
 
 
 def test_app_is_asgi_app_with_instance_scoped_decorators() -> None:
@@ -801,5 +813,16 @@ def test_state_payload_nests_completed_application_response() -> None:
     assert DurableAgentServer._state_payload(state) == {
         "id": _RUN_2,
         "status": "completed",
+        "attempt": 1,
+        "is_recovery": False,
         "output": {"id": "application-id", "status": "application-status"},
     }
+
+
+@pytest.mark.parametrize("attempt", [0, 1, 2, 3])
+@pytest.mark.parametrize("status", list(InvocationStatus))
+def test_status_payload_exposes_recovery_attempts(attempt, status):
+    state = Invocation(_RUN_1, status, attempt, {"input": "hello"}, "result")
+    payload = DurableAgentServer._state_payload(state)
+    assert payload["attempt"] == attempt
+    assert payload["is_recovery"] == (attempt > 1)
