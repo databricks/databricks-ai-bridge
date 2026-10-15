@@ -298,6 +298,8 @@ class _ClickInvocation:
 
     @staticmethod
     def _entries(contexts: list[tuple[Any, Any, str]]) -> tuple[_ParameterEntry, ...]:
+        """Collect options generically from Click's parsed values, including resolved defaults."""
+
         entries: list[_ParameterEntry] = []
         seen_names: set[str] = set()
         path_parts: list[str] = []
@@ -319,16 +321,24 @@ class _ClickInvocation:
                 entry_name = f"{context_path}.{parameter_name}"
                 if len(entry_name) > _MAX_STATIC_NAME_LENGTH or entry_name in seen_names:
                     continue
-                if context.get_parameter_source(parameter_name) is not ParameterSource.COMMANDLINE:
+                source = context.get_parameter_source(parameter_name)
+                if source not in (ParameterSource.COMMANDLINE, ParameterSource.DEFAULT):
                     continue
                 if parameter_name not in values:
                     continue
+                # Click has already resolved and converted defaults (including callables). Read
+                # the value used by the command rather than evaluating its default a second time.
                 value = values[parameter_name]
                 option_values = (
                     value if parameter.multiple and isinstance(value, tuple) else (value,)
                 )
                 for option_value in option_values:
-                    entries.append(_ParameterEntry.from_option(entry_name, parameter, option_value))
+                    entry = _ParameterEntry.from_option(entry_name, parameter, option_value)
+                    # Defaults contribute only values already supported by the bounded wire types.
+                    # Do not add presence-only entries for omitted free-form or unresolved options.
+                    if source is ParameterSource.DEFAULT and len(entry.to_dict()) == 1:
+                        continue
+                    entries.append(entry)
                     if len(entries) >= _MAX_PARAMETER_ENTRIES:
                         return tuple(entries)
                 seen_names.add(entry_name)
