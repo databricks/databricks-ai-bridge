@@ -53,7 +53,9 @@ is no shared session index.
 Transcript responses include only user, assistant, tool, system, and human-decision message items;
 non-message items remain in Session Store but are never returned to the chat UI.
 
-Human-in-the-loop pauses are **in-process only**: a paused run (the Agents SDK `RunState`) is held in
-memory by `agent/agent.py`, not in the session transcript, so — unlike the LangGraph template — it is
-not durable even with a managed Session Store, and the unmanaged history path never reports pending
-interrupts. Resume a pause on the same process that created it.
+Human-in-the-loop pauses use separate harness checkpoints: `agent/checkpoints.py` persists the paused
+Agents SDK `RunState` outside the conversation transcript. A bound Session Store preserves pending
+approvals across worker restarts; without a binding, they stay process-local. Concurrent workers
+require a shared Runtime Store to serialize invocations within a session. Transcript history does
+not restore the approval prompt; clients must retain the interrupt's call IDs to submit decisions.
+See [AGENTKIT_CONTRACT.md](AGENTKIT_CONTRACT.md) for validation and accepted-approval recovery semantics.
