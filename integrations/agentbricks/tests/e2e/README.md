@@ -150,6 +150,10 @@ Lakebase roles, and UC resources are deleted after every run, passing or failing
 saved in `evidence.json`; App deletion is not considered complete until a follow-up read confirms
 absence. Pass `--keep-resources` to retain resources while debugging. The gated nightly test reports bounded dev/deploy log tails and
 captures App runtime logs for failed deployed cases.
+Runtime Store cleanup covers every matrix App, including direct authoring without memory/session
+bindings. It verifies the store's App owner and service principal before deletion and retains the
+App if ownership checks or bound-store, Runtime Store, or role deletion fail. Verified role targets
+remain in runner state and evidence for retries after the Runtime Store has been removed.
 
 ## Declarative user-auth scope matrix
 

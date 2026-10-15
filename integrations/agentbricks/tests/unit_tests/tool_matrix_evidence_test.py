@@ -397,7 +397,7 @@ def test_wait_for_app_deleted_polls_until_not_found(monkeypatch, tmp_path):
     assert calls == 2
 
 
-def test_cleanup_records_failed_when_app_absence_is_not_confirmed(tmp_path):
+def test_cleanup_records_failed_when_app_absence_is_not_confirmed(tmp_path, monkeypatch):
     wheel = tmp_path / "wheel.whl"
     wheel.write_bytes(b"wheel")
     runner = tool_matrix.Runner("profile", tmp_path / "out", wheel)
@@ -405,21 +405,25 @@ def test_cleanup_records_failed_when_app_absence_is_not_confirmed(tmp_path):
     runner.run = lambda *args, **kwargs: type(
         "Result", (), {"returncode": 0, "stdout": "", "stderr": ""}
     )()
+    runner._runtime_store_cleanup_target = lambda name: None
+    client = type("Client", (), {"apps": type("Apps", (), {"delete": lambda _, name: None})()})()
 
     def fail_confirmation(name):
         raise tool_matrix.MatrixError("App still exists")
 
     runner._wait_for_app_deleted = fail_confirmation
+    monkeypatch.setattr(tool_matrix, "WorkspaceClient", lambda profile: client)
 
     runner.cleanup()
 
     assert runner.cleanup_complete is False
     assert runner.cleanup_results == [
+        {"resource": "runtime-store:agent-bricks-test", "status": "deleted"},
         {
             "resource": "app:agent-bricks-test",
             "status": "failed",
             "detail": "App still exists",
-        }
+        },
     ]
 
 
