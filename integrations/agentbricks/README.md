@@ -22,11 +22,10 @@ Install it from PyPI:
 pip install databricks-agentbricks
 ```
 
-From source:
-
-```sh
-pip install 'git+https://github.com/databricks/databricks-ai-bridge.git#subdirectory=integrations/agentbricks'
-```
+Install from PyPI rather than from this repository. Templates on `main` can depend on SDK changes that
+are not yet released, while generated projects install the released SDK from PyPI, so a CLI installed
+from source can scaffold projects that fail to start. To work on Agent Bricks itself, see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 The base package includes the CLI, store SDK, and `DurableAgentServer` HTTP runtime. Generated projects
 declare their framework dependencies automatically.
@@ -122,6 +121,30 @@ credentials. For non-interactive use, authenticate the profile first. You can sk
 Databricks SDK default authentication is already configured, or pass `--profile/-p` before an
 individual command. Use `--output json` for scripting.
 
+### CLI telemetry
+
+The CLI sends best effort command usage telemetry after leaf commands. Its log records the static
+command path, package version, operating system, duration, and process outcome (exit code and, for
+nonzero exits, a bounded error category). Parameter entries are limited to options explicitly
+supplied on the command line. Free-form options contribute only their static name. Declared Click
+choices contribute an `AGENTBRICKS_CLI_`-prefixed value. Click boolean and numeric options
+contribute their typed values; non-finite floats and integers outside the log schema's 64-bit
+range remain presence-only. Hidden and deprecated options follow the same policy, and repeated
+options contribute one parameter entry per supplied value, up to 64 entries. Positional arguments,
+raw command arguments, paths, IDs, secrets, arbitrary free-form option values, and exception
+messages are omitted. Set
+`AGENTBRICKS_DISABLE_TELEMETRY=1` to disable these uploads.
+
+Telemetry runs only when a leaf command is invoked, whether its callback succeeds or fails. Help
+and errors rejected during Click parsing, before a leaf starts, do not produce an event. Uploads
+reuse the command's workspace client or let the Databricks SDK resolve the selected or default
+profile. Authenticate first with `agentbricks login --profile <profile>` or configure SDK auth;
+an SDK `external-browser` profile may prompt during telemetry even for local commands such as
+`init`. The CLI waits up to two seconds for client setup, authentication, and upload on a daemon
+thread, returning sooner if the worker finishes. This is not a delivery guarantee: unfinished
+uploads can be lost when the process exits after the allowance expires. Missing credentials or a
+failed upload never change the command result.
+
 ## How it works
 
 `agentbricks init` copies framework and runtime files into your project; you own and can edit
@@ -135,6 +158,7 @@ Databricks App.
 
 | Task | Guide |
 | --- | --- |
+| Use a coding agent with the bundled workflow skill | [Coding-agent skills](docs/coding-agent-skills.md) |
 | Configure memory, sessions, or the AgentKit SDK | [Memory and sessions](docs/memory-and-sessions.md) |
 | Add managed MCP, sandbox, UC function, or Genie tools | [Agent tools](docs/agent-tools.md) |
 | Control deployment dependencies and resource lifecycle | [Deployment and lifecycle](docs/deploy-and-maintain.md) |

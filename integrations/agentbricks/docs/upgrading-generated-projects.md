@@ -31,7 +31,8 @@ To adopt a new release while preserving your changes:
    `pyproject.toml`. Pin an exact version when you need the same direct dependency on every build.
 2. Run `uv lock`, `agentbricks dev --prepare-environment`, and `uv run pytest` from the project.
    The explicit environment rebuild is needed because later `dev` runs reuse `.venv`.
-3. Upgrade the CLI, scaffold a **different directory** with the same `--framework`, `--server`,
+3. Install the same target CLI version with `pip install --upgrade databricks-agentbricks==<version>`.
+   Scaffold a **different directory** with the same `--framework`, `--server`,
    and `--disable-chat-app` choices as your project, and compare its `agent/`, `runtime/`,
    `app.yaml`, and `pyproject.toml` with your project. Merge the template changes you want and run
    the project tests again. `init` refuses to overwrite an existing directory; it does not upgrade
@@ -39,3 +40,8 @@ To adopt a new release while preserving your changes:
 4. Redeploy the existing app name and inspect `agentbricks deployments logs <app-name>` for the
    resolved packages and startup errors. Check the agent through its URL or an
    [endpoint invocation](../README.md#invoke-from-the-command-line).
+
+Use a released CLI with its compatible released SDK for normal upgrades. Templates on `main` can
+require SDK changes absent from the latest PyPI package; installing the CLI from source does not
+make a generated project use that source runtime. For unreleased development, configure both layers
+as described in [CONTRIBUTING.md](../CONTRIBUTING.md#testing-sdk--runtime-changes-in-a-scaffold).

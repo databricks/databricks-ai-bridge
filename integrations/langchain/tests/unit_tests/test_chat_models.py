@@ -1003,13 +1003,13 @@ def test_convert_lc_messages_to_responses_api_with_complex_content():
 def test_convert_responses_api_chunk_to_lc_chunk_text_delta():
     """Test _convert_responses_api_chunk_to_lc_chunk with text delta."""
     chunk = ResponseTextDeltaEvent.model_construct(
-        type="response.output_text.delta", item_id="item_123", delta="Hello"
+        output_index=1, type="response.output_text.delta", item_id="item_123", delta="Hello"
     )
 
     result = _convert_responses_api_chunk_to_lc_chunk(chunk)
 
     assert isinstance(result, AIMessageChunk)
-    assert result.content == [{"type": "text", "text": "Hello"}]
+    assert result.content == [{"type": "text", "text": "Hello", "index": 1}]
     assert result.id == "item_123"
 
 
@@ -1105,7 +1105,7 @@ def test_convert_responses_api_chunk_to_lc_chunk_message():
 def test_convert_responses_api_chunk_to_lc_chunk_skip_duplicate():
     """Test _convert_responses_api_chunk_to_lc_chunk skips duplicate text."""
     previous_chunk = ResponseTextDeltaEvent.model_construct(
-        type="response.output_text.delta", item_id="item_123", delta="Hello"
+        output_index=1, type="response.output_text.delta", item_id="item_123", delta="Hello"
     )
 
     chunk = ResponseOutputItemDoneEvent.model_construct(
@@ -1124,7 +1124,7 @@ def test_convert_responses_api_chunk_to_lc_chunk_skip_duplicate():
 def test_convert_responses_api_chunk_to_lc_chunk_skip_duplicate_with_annotations():
     """Test _convert_responses_api_chunk_to_lc_chunk skips duplicate text."""
     previous_chunk = ResponseTextDeltaEvent.model_construct(
-        type="response.output_text.delta", item_id="item_123", delta="Hello"
+        output_index=1, type="response.output_text.delta", item_id="item_123", delta="Hello"
     )
 
     chunk = ResponseOutputItemDoneEvent.model_construct(
@@ -1305,18 +1305,25 @@ def test_convert_chatagent_response_to_chat_result():
     assert result == expected
 
 
-def test_chat_databricks_responses_api_stream():
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_stream", [False, True])
+async def test_chat_databricks_responses_api_stream(async_stream):
     """Test ChatDatabricks streaming with responses API using mocked client."""
     from unittest.mock import Mock, patch
 
     # Create mock streaming response chunks
     mock_chunks = [
         ResponseTextDeltaEvent.model_construct(
-            type="response.output_text.delta", item_id="item_123", delta="Hello"
+            output_index=1, type="response.output_text.delta", item_id="item_123", delta="mari"
         ),
         ResponseTextDeltaEvent.model_construct(
-            type="response.output_text.delta", item_id="item_123", delta=" world"
+            output_index=1,
+            type="response.output_text.delta",
+            item_id="item_123",
+            delta="gold\n```python\nprint(17 * 23)\n```",
         ),
+        SimpleNamespace(type="response.output_text.done", item_id="item_123"),
+        SimpleNamespace(type="response.content_part.done", item_id="item_123"),
         ResponseOutputItemDoneEvent.model_construct(
             type="response.output_item.done",
             item=ResponseOutputMessage.model_construct(
@@ -1324,37 +1331,54 @@ def test_chat_databricks_responses_api_stream():
                 id="item_123",
                 content=[
                     ResponseOutputText.model_construct(
-                        type="output_text", text="Hello world", id="text_123"
+                        type="output_text",
+                        text="marigold\n```python\nprint(17 * 23)\n```",
+                        id="text_123",
                     )
                 ],
             ),
         ),
     ]
 
-    with patch("databricks_langchain.chat_models.get_openai_client") as mock_get_client:
+    client_factory = "get_async_openai_client" if async_stream else "get_openai_client"
+    with patch(f"databricks_langchain.chat_models.{client_factory}") as mock_get_client:
         mock_client = Mock()
         mock_get_client.return_value = mock_client
-
-        # Mock the responses.create method to return our chunks
-        mock_client.responses.create.return_value = iter(mock_chunks)
-
         llm = ChatDatabricks(model="test-model", use_responses_api=True)
-
         messages = [HumanMessage(content="Hello")]
-        chunks = list(llm.stream(messages))
+        if async_stream:
+            from unittest.mock import AsyncMock
+
+            async def stream_chunks():
+                for chunk in mock_chunks:
+                    yield chunk
+
+            mock_client.responses.create = AsyncMock(return_value=stream_chunks())
+            chunks = [chunk async for chunk in llm.astream(messages)]
+        else:
+            mock_client.responses.create.return_value = iter(mock_chunks)
+            chunks = list(llm.stream(messages))
 
         # receives one additional chunk that is empty content, chunk_position=last
         assert len(chunks) == 3
 
         # Check first chunk
         assert isinstance(chunks[0], AIMessageChunk)
-        assert chunks[0].content == [{"type": "text", "text": "Hello"}]
+        assert chunks[0].content == [{"type": "text", "text": "mari", "index": 1}]
         assert chunks[0].id == "item_123"
 
         # Check second chunk
         assert isinstance(chunks[1], AIMessageChunk)
-        assert chunks[1].content == [{"type": "text", "text": " world"}]
+        assert chunks[1].content == [
+            {"type": "text", "text": "gold\n```python\nprint(17 * 23)\n```", "index": 1}
+        ]
         assert chunks[1].id == "item_123"
+        reasoning = AIMessageChunk(content=[{"type": "reasoning", "encrypted_content": "opaque"}])
+        combined = reasoning + chunks[0] + chunks[1]
+        assert combined.content[0] == reasoning.content[0]
+        assert combined.content[1:] == [
+            {"type": "text", "text": "marigold\n```python\nprint(17 * 23)\n```", "index": 1}
+        ]
 
 
 ### Test ChatDatabricks initialization and configuration ###
@@ -1652,6 +1676,7 @@ def test_convert_chatagent_response_with_custom_outputs():
 
 def test_convert_responses_api_chunk_with_custom_outputs():
     chunk = ResponseTextDeltaEvent.model_construct(
+        output_index=1,
         type="response.output_text.delta",
         item_id="item_123",
         delta="Hello",
@@ -1661,7 +1686,7 @@ def test_convert_responses_api_chunk_with_custom_outputs():
     result = _convert_responses_api_chunk_to_lc_chunk(chunk)
 
     assert isinstance(result, AIMessageChunk)
-    assert result.content == [{"type": "text", "text": "Hello"}]
+    assert result.content == [{"type": "text", "text": "Hello", "index": 1}]
     assert hasattr(result, "custom_outputs")
     assert result.custom_outputs == {"chunk_index": 0}
 
@@ -1824,6 +1849,8 @@ def test_convert_responses_usage_to_usage_metadata_with_none_details():
     assert result["total_tokens"] == 150
     assert result.get("input_token_details") is None
     assert result.get("output_token_details") is None
+    # Providers can omit token details; the result must still be a valid message payload.
+    assert AIMessageChunk(content="", usage_metadata=result).usage_metadata == result
 
 
 ### Test usage extraction methods ###

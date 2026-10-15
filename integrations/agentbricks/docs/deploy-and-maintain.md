@@ -38,10 +38,10 @@ updates the App, rolls out the source, then attempts the App's store and trace a
 name that the caller cannot access causes an error. A grant failure can leave a deployed App without the
 corresponding feature; inspect deploy warnings.
 `agentbricks memory/sessions bind` and `unbind` edit `agent.toml`; they do not delete remote stores.
-After a memory or session unbind, redeploy currently leaves any earlier `AGENT_MEMORY_STORE` or
-`AGENT_SESSION_STORE` setting in `app.yaml` in place. Remove the stale setting from `app.yaml` before
-redeploying if you want the App to stop using that store. A clean tracing unbind is removed on the
-next deploy.
+For projects with `agent.toml`, the next deploy after a clean unbind removes the corresponding
+`AGENT_MEMORY_STORE`, `AGENT_SESSION_STORE`, or tracing setting from `app.yaml`. Unbinding does not
+revoke existing store grants; coordinate access removal separately with the store owner. A standalone
+source directory without `agent.toml` retains its manually configured environment settings.
 Default store names contain a six-letter token (`<name>-<token>-memory` and
 `<name>-<token>-sessions`); use `agentbricks memory bind <name>` or
 `agentbricks sessions bind <name>` to select existing stores. The default tracing experiment is
@@ -56,9 +56,9 @@ managed Runtime Store.
 | Project files and dependencies | `init` copies a template; `dev` builds `.venv` from `pyproject.toml`. | Source files stay on disk. The local environment is reused until `dev --prepare-environment` rebuilds it. | Deploy syncs source and resolves dependencies again without the local `uv.lock`. App deletion leaves the local project alone. |
 | Databricks App | Deploy creates the named App or reuses it, then updates compute and source. | `dev` serves the project locally without creating an App. | Redeploy with the same name updates that App; `agentbricks deployments delete <app-name>` deletes it. |
 | Invocation Runtime Store | The current default deploy creates or reuses an App-owned database in the workspace's shared Lakebase project. An internal legacy path uses a per-App Lakebase project. | `dev` keeps invocation status, results, and events in process; they disappear on restart. | Deployed invocation records persist across restart and redeploy. Queued work can resume; active work needs a recovery handler and may run more than once. `agentbricks deployments delete` removes the managed store before the App; the legacy delete path does not explicitly remove its Lakebase project. |
-| Managed tool access | Deploy reconciles direct App-auth tool grants from `agent.toml` before source upload, then finalizes Agent Bricks-owned App resources after rollout; request-user tools use the caller's permissions. | `dev` creates no App service principal or Apps grants. | Removing a tool binding removes Agent Bricks-owned Apps resources on redeploy. MCP and Workspace grants are additive; see [automatic App-identity access](agent-tools.md#automatic-app-identity-access-on-deploy). |
-| Memory Store | Deploy creates a declared store if missing or reuses an accessible store by name, then attempts the App grant. | Managed long-term memory is off in `dev`. | Memory persists independently of the App; redeploy reuses the bound store. Unbinding or deleting the App does not delete it. Remove the stale `app.yaml` setting to detach it after unbind; use the separate store delete command when appropriate. |
-| Session Store | Deploy creates or reuses a declared store by name, then attempts the App grant. | `dev` keeps conversation state in process, so a restart loses it. | A bound store preserves LangGraph checkpoints and OpenAI Agents SDK transcripts across restart and redeploy. OpenAI pending approval `RunState` stays in process. Unbinding or deleting the App does not delete the store; remove the stale `app.yaml` setting to detach it. |
+| Managed tool access | Deploy reconciles direct App-auth tool grants from `agent.toml` before source upload, then finalizes Agent Bricks-owned App resources after rollout; request-user tools use the caller's permissions. | `dev` creates no App service principal or Apps grants. | Removing a tool binding removes Agent Bricks-owned Apps resources on redeploy. MCP grants are additive; see [automatic App-identity access](agent-tools.md#automatic-app-identity-access-on-deploy). |
+| Memory Store | Deploy creates a declared store if missing or reuses an accessible store by name, then attempts the App grant. | Managed long-term memory is off in `dev`. | Memory persists independently of the App; redeploy reuses the bound store. Unbinding or deleting the App does not delete it. Redeploy after unbind to detach the store, and use the separate store delete command when appropriate. |
+| Session Store | Deploy creates or reuses a declared store by name, then attempts the App grant. | `dev` keeps conversation state in process, so a restart loses it. | A bound store preserves LangGraph checkpoints and OpenAI Agents SDK transcripts across restart and redeploy. The current OpenAI harness also saves paused approval `RunState` separately from transcripts; see the release and adoption note below. Unbinding or deleting the App does not delete the store; redeploy after unbind to detach it. |
 | MLflow traces | `dev` uses a local MLflow server; deploy attempts to create or reuse the bound workspace experiment and grant App access. | Local traces are recorded in `.agentbricks/`; they remain on disk after `dev` stops. | Deployed traces remain in the workspace experiment. Unbinding removes the App's tracing configuration on a later clean deploy; it does not delete the experiment. |
 
 Redeploying an older App can attach the current managed Runtime Store without migrating invocation
@@ -78,5 +78,48 @@ worker loss; the OpenAI Agents SDK template replays the input against its saved 
 Recovery can repeat external side effects, so make tools idempotent. For request-user-authenticated
 tools, credentials are not persisted and background recovery is unsupported.
 
+### OpenAI approval durability and upgrades
+
+On current `main`, the generated OpenAI harness saves paused SDK `RunState` in a separate Session
+Store checkpoint before emitting an interrupt. A bound Session Store preserves pending approvals
+across worker loss; concurrent workers also require a shared Runtime Store. Without a binding,
+pauses remain process-local. Clients must retain interrupt call IDs; transcript history alone does
+not reconstruct approval prompts.
+
+The harness validates decisions before changing state and persists a consumed marker before running
+accepted tools. Duplicate or recovered resumes cannot rerun an accepted approval. A failure after
+acceptance can leave uncertain side effects; inspect the invocation and tool outcome before starting
+a new ordinary turn. Other replayed work still requires idempotent tools. Request-user approvals
+remain unsupported.
+
+This harness fix landed after `databricks-agentbricks` 0.5.1 and is not included in that release.
+Existing projects own their copied harness: upgrading the package alone does not add checkpoint
+callbacks. Follow the [upgrade guide](upgrading-generated-projects.md) to adopt the updated
+`agent/agent.py`, `agent/checkpoints.py`, and `runtime/adapter.py` together from a compatible version.
+The [OpenAI integration contract](../src/databricks_agentbricks/templates/agent-openai/AGENTKIT_CONTRACT.md#recovery-and-durability)
+owns the detailed requirements.
+
 The default chat UI keeps its session ID across page reloads; see [invoke HTTP endpoints](../README.md#invoke-from-the-command-line)
 for the explicit API request shape.
+
+## Inspect and clean up a project
+
+Read `agent.toml` for the recorded agent name, declared memory/session stores, tracing, and tool
+bindings. A declaration does not confirm that the resource exists or that the deployed app can use it.
+
+| Inspect | Command | Details |
+| --- | --- | --- |
+| Local onboarding checks | `agentbricks doctor .` | Offline; does not verify bindings or deployed resources. |
+| Agent Bricks apps in a workspace | `agentbricks -p <profile> deployments list` | Lists apps with the `agent-bricks-` prefix in the selected workspace, including other projects. |
+| App status and URL | `agentbricks -p <profile> deployments get agent-bricks-<name>` | Queries the selected workspace for the named app. |
+| Memory store IDs and details | `agentbricks -p <profile> memory stores list`, then `agentbricks -p <profile> memory stores get <resource-name>` | Workspace-wide; can include other projects' stores. Use the ID or resource name, not the display name. |
+| Session store names and details | `agentbricks -p <profile> sessions stores list`, then `agentbricks -p <profile> sessions stores get <name>` | Workspace-wide; can include other projects' stores. Use the store name. |
+
+Review each confirmation. Delete a store only after confirming that you own it and no other agent
+needs it, using the same profile and identifier used to inspect it.
+
+| Clean up | Command | Details |
+| --- | --- | --- |
+| Deployment | `agentbricks -p <profile> deployments delete agent-bricks-<name>` | Managed Runtime Store cleanup checks the app identity and runs before app deletion; a cleanup failure retains the app for retry. Memory/session stores, tracing experiments, tools, and source files are retained. |
+| [Memory store](../cli.md#agentbricks-memory-stores-delete) | `agentbricks -p <profile> memory stores delete <resource-name>` | Soft-deletes the store after confirmation. |
+| [Session store](../cli.md#agentbricks-sessions-stores-delete) | `agentbricks -p <profile> sessions stores delete <name>` | Deletes the store after confirmation. |

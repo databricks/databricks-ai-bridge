@@ -22,7 +22,7 @@ pip install databricks-agentbricks
 
 The `databricks-agentbricks` distribution provides the `agentbricks` command and AgentKit SDK.
 
-See [Installation](README.md#installation) for installing from source and
+See [Installation](README.md#installation) for installation details and
 [Commands](README.md#commands) for shell completion.
 
 ## Authentication
@@ -107,6 +107,17 @@ Pass --profile (or set a default via `agentbricks login` / -p) to seed a local `
 
 The scaffold is preconfigured to call Databricks model serving through the AI Gateway using that profile, so it can talk to a model with no separate endpoint or API key to set up.
 
+New projects include the `agent-bricks-workflow` skill in `.agents/skills/`, with discovery pointers in
+`.claude/skills/` and `.agent/skills/`. Local `dev` is optional when the goal is deployment.
+JSON results include `workflow_skill` and `skill_pointers`.
+
+With `--existing`, prepare the separate `agent-bricks-migrate` bundle and pointers in all three
+discovery roots without changing existing application source or configuration. Coding agents in
+existing projects can read the bundled workflow skill at the path printed by the CLI's automatic
+stderr hint, enabled by default when a coding-agent environment is detected. Ordinary human
+invocations do not emit this hint. Set `AGENTBRICKS_DISABLE_AGENT_HINT=1` to disable hints without
+disabling skill installation or discovery.
+
 `--server agentbricks` selects the managed server, which supports foreground, streaming, and background invocations through one HTTP contract and Runtime Store. This existing server value is recorded in `agent.toml`. Pass `--server custom` for a minimal foreground-only FastAPI server.
 
 ```
@@ -124,7 +135,7 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
-| `--framework <langgraph|openai>` | `langgraph` \| `openai` | - | no | Agent framework to scaffold (defaults to langgraph). |
+| `--framework <langgraph|openai>` | `langgraph` \| `openai` | - | no | Agent framework: langgraph (LangGraph, default) or openai (OpenAI Agents SDK). |
 | `--server <agentbricks|custom>` | `agentbricks` \| `custom` | `agentbricks` | no | Use the managed invocation server (`agentbricks` is the existing `agent.toml` value) or a minimal custom FastAPI server. |
 | `--profile <PROFILE>` | string | - | no | Seed a local .env with this DATABRICKS_CONFIG_PROFILE so `agentbricks dev` works immediately (defaults to the profile from -p / `agentbricks login`). |
 | `--disable-chat-app` | flag | - | no | Scaffold the API-only backend, without the browser chat app. |
@@ -468,7 +479,7 @@ _Options_
 
 Remove the memory store binding from the agent's agent.toml.
 
-Only edits agent.toml; the managed store itself is untouched (delete it with `agentbricks memory stores delete`).
+This only edits agent.toml. The next `agentbricks deploy` removes the managed environment reference from app.yaml; previously granted managed-store access is not revoked.
 
 ```
 agentbricks memory unbind [options]
@@ -490,9 +501,12 @@ Manage pipelines that distill session history into long-term memory.
 | [`memory pipeline create`](#agentbricks-memory-pipeline-create) | Create a Dreamer memory pipeline. |
 | [`memory pipeline list`](#agentbricks-memory-pipeline-list) | List Dreamer memory pipelines in the workspace. |
 | [`memory pipeline get`](#agentbricks-memory-pipeline-get) | Get a Dreamer memory pipeline by id or resource name. |
-| [`memory pipeline update`](#agentbricks-memory-pipeline-update) | Update a pipeline's display name or instructions. |
+| [`memory pipeline update`](#agentbricks-memory-pipeline-update) | Update a pipeline's display name, instructions, model, or trigger. |
 | [`memory pipeline delete`](#agentbricks-memory-pipeline-delete) | Delete a Dreamer memory pipeline and its backing job. |
 | [`memory pipeline run`](#agentbricks-memory-pipeline-run) | Manually run a Dreamer memory pipeline. |
+| [`memory pipeline pause`](#agentbricks-memory-pipeline-pause) | Pause scheduled runs; active runs continue and manual runs remain available. |
+| [`memory pipeline resume`](#agentbricks-memory-pipeline-resume) | Enable scheduled runs, automatically about every 24 hours. |
+| [`memory pipeline runs`](#agentbricks-memory-pipeline-runs) | Inspect memory pipeline runs. |
 
 ##### `agentbricks memory pipeline create`
 
@@ -507,10 +521,18 @@ agentbricks memory pipeline create --memory-store TEXT --session-store TEXT [opt
 | `--model` | string | - | no | Model service used for Dreamer distillation. |
 | `--display-name` | string | - | no | Optional human-readable pipeline name. |
 | `--instructions` | string | - | no | Instructions steering distillation: inline text or @path to a UTF-8 file. |
+| `--trigger <manual\|scheduled>` | `manual` \| `scheduled` | `manual` | no | How runs start: only when you start one, or also automatically about every 24 hours. |
 
 ```bash
 agentbricks memory pipeline create --memory-store agent-memory --session-store agent-sessions \
   --model system.ai.gpt-5-6-sol
+```
+
+Create a pipeline that also runs automatically about every 24 hours:
+
+```bash
+agentbricks memory pipeline create --memory-store agent-memory --session-store agent-sessions \
+  --trigger scheduled
 ```
 
 ##### `agentbricks memory pipeline list`
@@ -541,13 +563,44 @@ agentbricks memory pipeline update NAME [options]
 | Option | Type | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--display-name` | string | - | no | New human-readable pipeline name. |
+| `--model` | string | - | no | Model service for distillation; empty string clears the override. |
+| `--trigger <manual\|scheduled>` | `manual` \| `scheduled` | - | no | How runs start: only when you start one, or also automatically about every 24 hours. |
 | `--instructions` | string | - | no | Instructions steering distillation: inline text or @path to a UTF-8 file. |
 
 Load complex instructions from a UTF-8 file (also supported by `create`):
 
 ```sh
-agentbricks memory pipeline update p-123 --instructions @/path/to/instructions.md
+agentbricks memory pipeline update p-123 --instructions @/path/to/instructions.md \
+  --model system.ai.gpt-5-6-sol
 ```
+
+Instructions are sent as `dreamer_policy.instructions` with that leaf field in the update mask.
+`--model ""` clears the override. Create and update send only `dreamer_policy.model`;
+updates use the `dreamer_policy.model` field mask. There is no legacy top-level model fallback.
+List and detail views accept either model location, preferring the nested value when present.
+`--trigger` updates `dreamer_policy.trigger`: `manual` maps to `MANUAL_ONLY`, and
+`scheduled` maps to `SCHEDULED`. Omit the flag to preserve the current trigger.
+
+##### `agentbricks memory pipeline pause`
+
+```sh
+agentbricks memory pipeline pause NAME
+```
+
+Set `dreamer_policy.trigger` to `MANUAL_ONLY` to stop scheduled runs. Active runs continue;
+manual `run` calls remain available. `NAME` accepts a pipeline id or full resource name.
+Returns an error if the pipeline is already manual-only (paused).
+
+##### `agentbricks memory pipeline resume`
+
+```sh
+agentbricks memory pipeline resume NAME
+```
+
+Set `dreamer_policy.trigger` to `SCHEDULED` to enable automatic runs about every 24 hours.
+This also enables scheduling for a pipeline originally created as manual-only.
+Returns an error if the pipeline is already scheduled (resumed).
+Both commands update only the trigger and support the global `--output json` option.
 
 ##### `agentbricks memory pipeline delete`
 
@@ -558,6 +611,26 @@ agentbricks memory pipeline delete NAME [options]
 | Option | Type | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--yes`, `-y` | flag | false | no | Skip the confirmation prompt. |
+
+##### `agentbricks memory pipeline runs`
+
+| Subcommand | Description |
+| --- | --- |
+| [`memory pipeline runs get`](#agentbricks-memory-pipeline-runs-get) | Get run details through the Databricks CLI. |
+
+###### `agentbricks memory pipeline runs get`
+
+```sh
+agentbricks --profile dogfood memory pipeline runs get \
+  memory-pipelines/2043d0c0-7d15-496e-83af-b6893165038f/runs/418898433707211
+```
+
+`NAME` must be `memory-pipelines/<pipeline-id>/runs/<numeric-run-id>`. This command
+extracts the run ID and calls `databricks jobs get-run <run-id>`, forwarding the selected
+profile. The Databricks CLI must be installed and available on `PATH`. Its stdout, stderr,
+and exit code are passed through unchanged, with terminal streams inherited to preserve native
+coloring; Agent Bricks `--output` does not reformat the result.
+The pipeline ID is not sent to Jobs or checked against the run.
 
 ##### `agentbricks memory pipeline run`
 
@@ -823,7 +896,7 @@ _Options_
 
 Remove the session store binding from the agent's agent.toml.
 
-Only edits agent.toml; the managed store itself is untouched (delete it with `agentbricks sessions stores delete`).
+This only edits agent.toml. The next `agentbricks deploy` removes the managed environment reference from app.yaml; previously granted managed-store access is not revoked.
 
 ```
 agentbricks sessions unbind [options]
@@ -1247,7 +1320,7 @@ Discover available integrations and manage an agent's tool bindings.
 
 Tools are what let an agent act beyond the language model itself - query governed data, call a service, or run a function - and each one is recorded in agent.toml so `agentbricks dev` / `agentbricks deploy` wire it in. `agentbricks tools add` manages these Databricks-managed tool types:
 
-sandbox Query Unity Catalog data via system.ai.sandbox, scoped to the tables, volumes, or paths you choose. mcp A Databricks-managed MCP service (see `agentbricks tools list --kind mcp`), e.g. system.ai.web_search. uc-function An existing Unity Catalog function (catalog.schema.function). genie-one Workspace-wide Genie One MCP tools. genie-agent Native Genie conversation tools for a configured space ID.
+sandbox Query Unity Catalog data via system.ai.sandbox, scoped to the volumes you choose. mcp A Databricks-managed MCP service (see `agentbricks tools list --kind mcp`), e.g. system.ai.web_search. uc-function An existing Unity Catalog function (catalog.schema.function). genie-one Workspace-wide Genie One MCP tools. genie-agent Native Genie conversation tools for a configured space ID.
 
 Browse available integrations with `agentbricks tools list`, add one with `agentbricks tools add <type>`, and drop a binding with `agentbricks tools remove`. Review agent.toml for configured managed tools and MCP bindings. The list shows addable integrations, not configured bindings or individual operations inside an MCP service. Custom Python tools are code-first - write them directly in your project's code rather than through the CLI.
 
@@ -1290,7 +1363,7 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
-| `--scope <SCOPES>` | string | - | yes | Allowed table:, volume:, or workspace: resource. Repeat for multiple scopes. |
+| `--scope <SCOPES>` | string | - | yes | Allowed volume: resource. Repeat for multiple scopes. |
 | `--permission <read_only|read_write>` | `read_only` \| `read_write` | `read_only` | no | - |
 | `--name <TOOL_ID>` | string | `sandbox` | no | - |
 | `--auth <user|app>` | `user` \| `app` | `user` | no | - |
@@ -1342,6 +1415,7 @@ _Options_
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--name <TOOL_ID>` | string | - | no | - |
+| `--auth <user|app>` | `user` \| `app` | `user` | no | - |
 | `--source <SOURCE>` | path | `.` | no | Agent project containing agent.toml. |
 
 ##### `agentbricks tools add genie-one`

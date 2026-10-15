@@ -8,6 +8,8 @@ import pathlib
 import subprocess
 import sys
 import zipfile
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from databricks.sdk.errors import NotFound
@@ -19,9 +21,33 @@ tool_matrix = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = tool_matrix
 _SPEC.loader.exec_module(tool_matrix)
 
+_EXPECTED_WHEEL_SOURCE_FILES = frozenset(
+    {
+        "databricks_agentkit/_api_client.py",
+        "databricks_agentbricks/cli/deploy.py",
+        "databricks_agentbricks/clients/api_client_provider.py",
+        "databricks_agentbricks/clients/apps_client.py",
+        "databricks_agentbricks/clients/apps_user_auth_client.py",
+        "databricks_agentbricks/clients/conversation_store_client.py",
+        "databricks_agentbricks/clients/databricks_cli.py",
+        "databricks_agentbricks/clients/legacy_runtime_store.py",
+        "databricks_agentbricks/clients/managed_runtime_store.py",
+        "databricks_agentbricks/clients/tracing_client.py",
+        "databricks_agentbricks/projects/agent_project.py",
+        "databricks_agentbricks/projects/app_manifest.py",
+        "databricks_agentbricks/projects/config.py",
+        "databricks_agentbricks/projects/resolver.py",
+        "databricks_agentbricks/services/deploy_service.py",
+        "databricks_agentbricks/services/deployment/config.py",
+        "databricks_agentbricks/services/deployment/names.py",
+        "databricks_agentbricks/services/deployment/provisioners.py",
+        "databricks_agentbricks/services/deployment/tool_access.py",
+        "databricks_agentbricks/services/deployment/tool_access_provisioner.py",
+    }
+)
+
 
 def _evidence(*, cleanup_required: bool, cleanup_status: str = "deleted") -> dict:
-    table_marker = "AGENTBRICKS_TABLE_0123456789abcdef"
     volume_marker = "AGENTBRICKS_VOLUME_fedcba9876543210"
     rows = [
         {
@@ -31,11 +57,9 @@ def _evidence(*, cleanup_required: bool, cleanup_status: str = "deleted") -> dic
             "tool_kind": tool,
             "status": "pass",
             "expected": {
-                "sandbox_table": table_marker,
                 "sandbox_volume": volume_marker,
             }.get(tool, "semantic result"),
             "actual": {
-                "sandbox_table": json.dumps({"output": table_marker}),
                 "sandbox_volume": json.dumps({"output": volume_marker}),
             }.get(tool, json.dumps({"output": "semantic result"})),
         }
@@ -70,7 +94,7 @@ def _evidence(*, cleanup_required: bool, cleanup_status: str = "deleted") -> dic
             "source_head_sha": "a" * 40,
             "source_dirty": False,
             "wheel_source_matches": True,
-            "wheel_source_sha256": {"databricks_agentbricks/tool_access.py": "b" * 64},
+            "wheel_source_sha256": {member: "b" * 64 for member in _EXPECTED_WHEEL_SOURCE_FILES},
         },
         "template_repo": "/tmp/databricks-ai-bridge",
         "template_ref": "feature",
@@ -83,7 +107,6 @@ def _evidence(*, cleanup_required: bool, cleanup_status: str = "deleted") -> dic
             "uv": "uv 0.8",
             "python": "Python 3.12",
         },
-        "table_marker": table_marker,
         "volume_marker": volume_marker,
         "volume_file_path": (
             "/Volumes/supervisor_agent/mason_agent_tools_e2e/matrix_volume/marker.txt"
@@ -244,10 +267,8 @@ def _source_checkout_and_wheel(tmp_path: pathlib.Path) -> tuple[pathlib.Path, st
     repo = tmp_path / "repo"
     source_root = repo / "integrations" / "agentbricks" / "src"
     sources = {
-        "databricks_agentkit/_api_client.py": b"WORKSPACE_CLIENT = True\n",
-        "databricks_agentbricks/tool_access.py": b"TOOL_ACCESS = True\n",
-        "databricks_agentbricks/app_resources.py": b"APP_RESOURCES = True\n",
-        "databricks_agentbricks/cli/deploy.py": b"DEPLOY = True\n",
+        member: f"SOURCE = {index}\n".encode()
+        for index, member in enumerate(sorted(_EXPECTED_WHEEL_SOURCE_FILES))
     }
     for member, content in sources.items():
         path = source_root / member
@@ -266,6 +287,16 @@ def _source_checkout_and_wheel(tmp_path: pathlib.Path) -> tuple[pathlib.Path, st
     return repo, commit_sha, wheel
 
 
+def test_wheel_source_files_exist_in_agentbricks_checkout():
+    source_root = pathlib.Path(__file__).parents[2] / "src"
+    assert set(tool_matrix._WHEEL_SOURCE_FILES) == _EXPECTED_WHEEL_SOURCE_FILES
+    missing = [
+        member for member in _EXPECTED_WHEEL_SOURCE_FILES if not (source_root / member).is_file()
+    ]
+
+    assert not missing, f"_WHEEL_SOURCE_FILES contains stale paths: {missing}"
+
+
 def test_source_provenance_ties_wheel_modules_to_claimed_checkout(tmp_path):
     repo, commit_sha, wheel = _source_checkout_and_wheel(tmp_path)
 
@@ -274,19 +305,14 @@ def test_source_provenance_ties_wheel_modules_to_claimed_checkout(tmp_path):
     assert provenance["source_head_sha"] == commit_sha
     assert provenance["source_dirty"] is False
     assert provenance["wheel_source_matches"] is True
-    assert set(provenance["wheel_source_sha256"]) == {
-        "databricks_agentkit/_api_client.py",
-        "databricks_agentbricks/tool_access.py",
-        "databricks_agentbricks/app_resources.py",
-        "databricks_agentbricks/cli/deploy.py",
-    }
+    assert set(provenance["wheel_source_sha256"]) == _EXPECTED_WHEEL_SOURCE_FILES
 
 
 def test_source_provenance_rejects_unrelated_wheel(tmp_path):
     repo, commit_sha, wheel = _source_checkout_and_wheel(tmp_path)
     with zipfile.ZipFile(wheel) as archive:
         contents = {member: archive.read(member) for member in tool_matrix._WHEEL_SOURCE_FILES}
-    contents["databricks_agentbricks/tool_access.py"] = b"WRONG = True\n"
+    contents["databricks_agentbricks/services/deployment/tool_access.py"] = b"WRONG = True\n"
     with zipfile.ZipFile(wheel, "w") as archive:
         for member, content in contents.items():
             archive.writestr(member, content)
@@ -400,7 +426,6 @@ def test_cli_authoring_records_app_auth_for_managed_deployed_tools(tmp_path):
     )
     runner = tool_matrix.Runner("profile", tmp_path / "out", tmp_path / "wheel.whl")
     runner.uc_function = "supervisor_agent.mason_agent_tools_e2e.marker"
-    runner.uc_table = "supervisor_agent.mason_agent_tools_e2e.matrix_table"
     runner.uc_volume = "supervisor_agent.mason_agent_tools_e2e.matrix_volume"
     runner.genie_space_id = "0" * 32
     bindings = []
@@ -453,7 +478,6 @@ def test_cli_authoring_includes_temporary_volume_scope(tmp_path):
     )
     runner = tool_matrix.Runner("profile", tmp_path / "out", tmp_path / "wheel.whl")
     runner.uc_function = "supervisor_agent.mason_agent_tools_e2e.marker"
-    runner.uc_table = "supervisor_agent.mason_agent_tools_e2e.matrix_table"
     runner.uc_volume = "supervisor_agent.mason_agent_tools_e2e.matrix_volume"
     runner.genie_space_id = "0" * 32
     commands: list[list[str]] = []
@@ -496,7 +520,6 @@ def test_cli_authoring_includes_temporary_volume_scope(tmp_path):
     sandbox = next(command for command in commands if "sandbox" in command and "add" in command)
     scopes = [sandbox[index + 1] for index, value in enumerate(sandbox) if value == "--scope"]
     assert scopes == [
-        "table:supervisor_agent.mason_agent_tools_e2e.matrix_table",
         "volume:supervisor_agent.mason_agent_tools_e2e.matrix_volume",
     ]
 
@@ -506,19 +529,14 @@ def test_direct_authoring_includes_temporary_volume_scope(tmp_path):
     project.mkdir()
     runner = tool_matrix.Runner("profile", tmp_path / "out", tmp_path / "wheel.whl")
     runner.uc_function = "supervisor_agent.mason_agent_tools_e2e.marker"
-    runner.uc_table = "supervisor_agent.mason_agent_tools_e2e.matrix_table"
     runner.uc_volume = "supervisor_agent.mason_agent_tools_e2e.matrix_volume"
     runner.genie_space_id = "0" * 32
 
-    runner._author_direct(project, "langgraph")
+    runner._author_direct(project, "langgraph", "abc123")
 
     manifest = tool_matrix.tomli.loads((project / "agent.toml").read_text())
     sandbox = next(tool for tool in manifest["tools"] if tool["id"] == "sandbox")
     assert sandbox["policy"]["downscope"] == [
-        {
-            "resource": "table:supervisor_agent.mason_agent_tools_e2e.matrix_table",
-            "permission": "read_only",
-        },
         {
             "resource": "volume:supervisor_agent.mason_agent_tools_e2e.matrix_volume",
             "permission": "read_only",
@@ -526,7 +544,7 @@ def test_direct_authoring_includes_temporary_volume_scope(tmp_path):
     ]
 
 
-def test_create_uc_function_seeds_hidden_table_and_volume_markers(monkeypatch, tmp_path):
+def test_create_uc_function_seeds_hidden_volume_marker(monkeypatch, tmp_path):
     wheel = tmp_path / "wheel.whl"
     wheel.write_bytes(b"wheel")
     runner = tool_matrix.Runner("profile", tmp_path / "out", wheel)
@@ -544,13 +562,8 @@ def test_create_uc_function_seeds_hidden_table_and_volume_markers(monkeypatch, t
 
     runner.create_uc_function("supervisor_agent.mason_agent_tools_e2e")
 
-    assert runner.table_marker
     assert runner.volume_marker
-    assert runner.table_marker != runner.volume_marker
-    table_statement = next(
-        statement for statement in statements if statement.startswith("CREATE TABLE")
-    )
-    assert f"SELECT '{runner.table_marker}' AS marker" in table_statement
+    assert not any(statement.startswith("CREATE TABLE") for statement in statements)
     assert uploads == [
         (
             runner.volume_file_path,
@@ -564,14 +577,12 @@ def test_create_uc_function_seeds_hidden_table_and_volume_markers(monkeypatch, t
     )
 
 
-def test_exercise_reads_table_and_volume_without_disclosing_markers(tmp_path):
+def test_exercise_reads_volume_without_disclosing_marker(tmp_path):
     wheel = tmp_path / "wheel.whl"
     wheel.write_bytes(b"wheel")
     runner = tool_matrix.Runner("profile", tmp_path / "out", wheel)
     runner.uc_function = "supervisor_agent.mason_agent_tools_e2e.marker"
-    runner.uc_table = "supervisor_agent.mason_agent_tools_e2e.matrix_table"
     runner.uc_volume = "supervisor_agent.mason_agent_tools_e2e.matrix_volume"
-    runner.table_marker = "AGENTBRICKS_TABLE_0123456789abcdef"
     runner.volume_marker = "AGENTBRICKS_VOLUME_fedcba9876543210"
     runner.volume_file_path = (
         "/Volumes/supervisor_agent/mason_agent_tools_e2e/matrix_volume/marker.txt"
@@ -579,9 +590,6 @@ def test_exercise_reads_table_and_volume_without_disclosing_markers(tmp_path):
     prompts: dict[str, str] = {}
 
     responses = {
-        "sandbox_table": {
-            "output": "AnalysisException: initial incorrect query\n" * 200 + runner.table_marker
-        },
         "sandbox_volume": {"output": runner.volume_marker},
         "mcp": {
             "output": "web_search returned Databricks Model Context Protocol documentation "
@@ -609,12 +617,10 @@ def test_exercise_reads_table_and_volume_without_disclosing_markers(tmp_path):
     sandbox_rows = {
         row.tool_kind: row for row in runner.rows if row.tool_kind.startswith("sandbox_")
     }
-    assert set(sandbox_rows) == {"sandbox_table", "sandbox_volume"}
+    assert set(sandbox_rows) == {"sandbox_volume"}
     assert {row.status for row in sandbox_rows.values()} == {"pass"}
-    assert runner.table_marker in sandbox_rows["sandbox_table"].actual
-    assert f"SELECT marker FROM {runner.uc_table}" in prompts["sandbox_table"]
+    assert runner.volume_marker in sandbox_rows["sandbox_volume"].actual
     assert runner.volume_file_path in prompts["sandbox_volume"]
-    assert all(runner.table_marker not in prompt for prompt in prompts.values())
     assert all(runner.volume_marker not in prompt for prompt in prompts.values())
 
 
@@ -623,9 +629,7 @@ def test_exercise_rejects_sandbox_response_without_exact_hidden_marker(tmp_path)
     wheel.write_bytes(b"wheel")
     runner = tool_matrix.Runner("profile", tmp_path / "out", wheel)
     runner.uc_function = "supervisor_agent.mason_agent_tools_e2e.marker"
-    runner.uc_table = "supervisor_agent.mason_agent_tools_e2e.matrix_table"
     runner.uc_volume = "supervisor_agent.mason_agent_tools_e2e.matrix_volume"
-    runner.table_marker = "AGENTBRICKS_TABLE_0123456789abcdef"
     runner.volume_marker = "AGENTBRICKS_VOLUME_fedcba9876543210"
     runner.volume_file_path = (
         "/Volumes/supervisor_agent/mason_agent_tools_e2e/matrix_volume/marker.txt"
@@ -633,8 +637,6 @@ def test_exercise_rejects_sandbox_response_without_exact_hidden_marker(tmp_path)
 
     def invoke(label, url, prompt, headers):
         tool_kind = label.rsplit("-", 1)[-1]
-        if tool_kind == "sandbox_table":
-            return {"output": runner.table_marker}
         if tool_kind == "sandbox_volume":
             return {"output": "volume read succeeded"}
         if tool_kind == "mcp":
@@ -658,7 +660,6 @@ def test_exercise_rejects_sandbox_response_without_exact_hidden_marker(tmp_path)
     runner._exercise(case, "dev", "http://localhost:8400", {}, tmp_path / "dev.log")
 
     rows = {row.tool_kind: row for row in runner.rows}
-    assert rows["sandbox_table"].status == "pass"
     assert rows["sandbox_volume"].status == "fail"
     assert runner.volume_marker in rows["sandbox_volume"].error
 
@@ -696,3 +697,113 @@ def test_cleanup_deletes_volume_marker_file_before_dropping_volume(monkeypatch, 
         {"resource": f"volume:{runner.uc_volume}", "status": "deleted"},
     ]
     assert runner.cleanup_complete is True
+
+
+def test_attach_genie_warehouse_preserves_existing_app_resources(monkeypatch, tmp_path):
+    runner = tool_matrix.Runner("profile", tmp_path / "out", tmp_path / "wheel.whl")
+    runner.genie_space_id = "0" * 32
+    workspace = SimpleNamespace(genie=Mock())
+    workspace.genie.get_space.return_value = SimpleNamespace(warehouse_id="warehouse-1")
+    monkeypatch.setattr(tool_matrix, "WorkspaceClient", lambda profile: workspace)
+    resources = [
+        {"name": "user-owned", "sql_warehouse": {"id": "other-warehouse", "permission": "CAN_USE"}},
+        {"name": "agentbricks-tool-genie", "genie_space": {"space_id": runner.genie_space_id}},
+    ]
+    app = {"name": "agent-bricks-test", "resources": resources}
+    updates: list[dict] = []
+
+    def fake_databricks(args):
+        if args[:2] == ["apps", "create-update"]:
+            updates.append(json.loads(args[args.index("--json") + 1]))
+            return {}
+        assert args == ["apps", "get", "agent-bricks-test"]
+        return {"name": app["name"], "resources": updates[0]["app"]["resources"]}
+
+    monkeypatch.setattr(runner, "databricks", fake_databricks)
+
+    result = runner._attach_genie_warehouse(app)
+
+    assert updates == [
+        {
+            "app": {
+                "resources": [
+                    *resources,
+                    {
+                        "name": tool_matrix._GENIE_WAREHOUSE_RESOURCE_NAME,
+                        "sql_warehouse": {"id": "warehouse-1", "permission": "CAN_USE"},
+                    },
+                ]
+            },
+            "update_mask": "resources",
+        }
+    ]
+    assert result["resources"] == updates[0]["app"]["resources"]
+    assert not tool_matrix._GENIE_WAREHOUSE_RESOURCE_NAME.startswith("agentbricks-tool-")
+    assert 2 <= len(tool_matrix._GENIE_WAREHOUSE_RESOURCE_NAME) <= 30
+    workspace.genie.get_space.assert_called_once_with(runner.genie_space_id)
+
+
+def test_attach_genie_warehouse_rejects_space_without_warehouse(monkeypatch, tmp_path):
+    runner = tool_matrix.Runner("profile", tmp_path / "out", tmp_path / "wheel.whl")
+    runner.genie_space_id = "0" * 32
+    workspace = SimpleNamespace(genie=Mock())
+    workspace.genie.get_space.return_value = SimpleNamespace(warehouse_id=None)
+    monkeypatch.setattr(tool_matrix, "WorkspaceClient", lambda profile: workspace)
+    databricks = Mock()
+    monkeypatch.setattr(runner, "databricks", databricks)
+
+    with pytest.raises(tool_matrix.MatrixError, match="no backing SQL warehouse"):
+        runner._attach_genie_warehouse({"name": "agent-bricks-test", "resources": []})
+
+    databricks.assert_not_called()
+
+
+def test_grant_snapshot_requires_user_managed_genie_warehouse(monkeypatch, tmp_path):
+    runner = tool_matrix.Runner("profile", tmp_path / "out", tmp_path / "wheel.whl")
+    runner.uc_function = "main.tools.marker"
+    runner.transitive_uc_function = "main.tools.nested"
+    runner.uc_volume = "main.tools.volume"
+    runner.genie_space_id = "0" * 32
+    resources = [
+        {"name": "user-owned"},
+        {
+            "name": "agentbricks-tool-function",
+            "uc_securable": {
+                "securable_full_name": runner.uc_function,
+                "securable_type": "FUNCTION",
+                "permission": "EXECUTE",
+            },
+        },
+        {
+            "name": "agentbricks-tool-volume",
+            "uc_securable": {
+                "securable_full_name": runner.uc_volume,
+                "securable_type": "VOLUME",
+                "permission": "READ_VOLUME",
+            },
+        },
+        {
+            "name": "agentbricks-tool-genie",
+            "genie_space": {"space_id": runner.genie_space_id, "permission": "CAN_RUN"},
+        },
+    ]
+    app = {"service_principal_client_id": "app-sp", "resources": resources}
+
+    with pytest.raises(tool_matrix.MatrixError, match="user-managed Genie SQL warehouse"):
+        runner._grant_snapshot(app)
+
+    resources.append(
+        {
+            "name": tool_matrix._GENIE_WAREHOUSE_RESOURCE_NAME,
+            "sql_warehouse": {"id": "warehouse-1", "permission": "CAN_USE"},
+        }
+    )
+    monkeypatch.setattr(tool_matrix, "WorkspaceClient", lambda profile: Mock())
+
+    def stop_at_direct_grants(*args):
+        raise RuntimeError("manual warehouse resource verified")
+
+    monkeypatch.setattr(tool_matrix, "_direct_privileges", stop_at_direct_grants)
+
+    with pytest.raises(RuntimeError, match="manual warehouse resource verified"):
+        runner._grant_snapshot(app)

@@ -6,10 +6,11 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "databricks-agentbricks>=0.3.0",
-    "databricks-langchain>=0.17.0",
+    "databricks-langchain==0.21.0",
     "databricks-sdk>=0.124.0",
     "fastapi>=0.129.0",
     "langchain>=1.0.0",
+    "mcp<2",  # langchain-mcp-adapters 0.3.1 uses the MCP 1.x API.
     "python-dotenv>=1.2.1",
     "uvicorn>=0.41.0",
 ]

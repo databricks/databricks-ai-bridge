@@ -25,6 +25,12 @@ Use `AgentKitClient` from `databricks_agentkit` with an authenticated Databricks
 manages its entries or sessions; returned memories and sessions own their `update()` and
 `delete()` operations.
 
+`memory_store.add()` fails with `ALREADY_EXISTS` when a memory already exists at the same
+`actor_id`, `session_id`, and `path`. `memory_store.put()` creates or updates that memory: it
+replaces content, or appends new lines with `append=True`, skipping lines already present. `put()`
+is not atomic, so concurrent writers to one path can overwrite each other. `add()`'s `write_mode`
+argument is deprecated; use `put()` instead.
+
 All `list()` methods return iterators that consume server pages automatically. List `page_size` and
 search `limit` values must be between 1 and 100. `session.list_items()` also auto-pages.
 
@@ -91,7 +97,8 @@ from databricks_agentkit import AgentKitClient
 agentkit = AgentKitClient(WorkspaceClient())
 
 memory_store = agentkit.memory_stores.create("support-agent-memory")
-memory_store.add(
+# put() creates the entry, or replaces its content if one already exists at this path.
+memory_store.put(
     actor_id="user-123",
     path="/preferences/communication.md",
     content="Prefers email over phone. Timezone: PST.",
@@ -103,7 +110,7 @@ results = memory_store.search(actor_id="user-123", query="communication preferen
 ```
 
 To browse rather than search, `memory_store.list(actor_id=..., path_prefix=...)` returns entries
-directly.
+directly, and `memory_store.list(actor_id=..., path=...)` returns the entries at one exact path.
 
 > **`actor_id` partitions data; it is not access control.** Both stores are workspace-scoped and
 > authorized at the store level, so any principal that can reach a store can read and write every
@@ -131,8 +138,20 @@ agent = create_agent(model=..., tools=[...], checkpointer=checkpointer())
 result = await agent.ainvoke(inputs, config=thread_config(session_id))
 ```
 
-Add the memory tools to the model and execution tool list. `memory_tools(actor)` exposes `remember`
-and `recall` bound to one actor's partition. It resolves the store from the `[memory_store]` binding,
+Add the memory tools to the model and execution tool list. `memory_tools(actor)` returns four tools
+bound to one actor's partition:
+
+- `remember(fact, topic)` appends the fact to one memory per topic, `/{topic}.md`, with the topic
+  reduced to a safe path segment. Remembering a fact that is already there is a no-op.
+- `recall(query, session_id=None)` searches the actor's memories, including ones written under other
+  paths, or only the ones saved under `session_id`.
+- `forget(fact, topic, session_id=None)` removes a matching fact from every memory at the path, or
+  only from the one saved under `session_id`, and deletes a memory once no facts remain.
+- `list_memories(session_id=None)` lists each memory's path, its session if it has one, and how
+  many facts it holds, optionally only for one session.
+
+`remember` writes memories without a `session_id`; memories saved under a session are labeled with
+it in `recall` and `list_memories`. The helper resolves the store from the `[memory_store]` binding,
 carried to the runtime by the `AGENT_MEMORY_STORE` environment variable that `agentbricks deploy`
 injects. It returns no tools when no store is set, so the agent runs unchanged:
 
@@ -199,5 +218,10 @@ agentbricks memory bind support-agent-memory
 agentbricks deploy my-agent
 ```
 
-Memory and session stores are independent resources: deleting one never affects the other. For runtime
+Memory and session stores are independent resources: deleting one never affects the other.
+For projects with `agent.toml`, unbinding either store removes its declaration; the next deploy
+removes the corresponding `AGENT_MEMORY_STORE` or `AGENT_SESSION_STORE` entry from `app.yaml`.
+Unbinding does not delete the store or revoke an existing grant to the App's service principal.
+If access must be revoked, coordinate that separately with the store owner or workspace admin.
+For runtime
 hooks, endpoint behavior, and recovery, see the [runtime guide](../src/databricks_agentkit/runtime/README.md).

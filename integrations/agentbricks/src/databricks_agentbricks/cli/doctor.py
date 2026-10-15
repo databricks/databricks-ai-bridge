@@ -23,8 +23,8 @@ import yaml
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 
-from databricks_agentbricks.agent_project import AgentProject
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.projects.agent_project import AgentProject
 
 _SUPPORTED_FRAMEWORKS = ("langgraph", "openai")
 _MAX_CONFIG_BYTES = 512 * 1024

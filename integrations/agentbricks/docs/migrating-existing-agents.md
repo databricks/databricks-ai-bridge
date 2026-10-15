@@ -37,15 +37,15 @@ the files it finds.
 
 This writes `agent-bricks-migrate/` containing a skill, a prompt to paste into your coding agent,
 `references/migration.json`, and a reference project generated from the templates bundled with the
-installed CLI. The bundle sits outside any single agent's configuration directory; `.claude/skills/`
-and `.agent/skills/` each receive a small skill that points at it, so Claude Code, Codex, and
+installed CLI. The bundle sits outside any single agent's configuration directory; `.agents/skills/`,
+`.claude/skills/`, and `.agent/skills/` each receive a small skill that points at it, so Claude Code, Codex, and
 similar tools discover the same instructions without duplicating the reference. Agent Bricks CLI
 prepares the instructions; the coding agent performs and verifies the conversion. Init leaves application
 source, dependencies, `.env`, and existing `.agentbricks/project.toml` configuration intact and refuses to overwrite
 existing migration files.
 
 The bundle is scaffolding for the migration, not part of the application: delete `agent-bricks-migrate/`
-and the two pointer skills once the conversion is done, and keep them out of commits meanwhile.
+and its three pointer skills once the conversion is done, and keep them out of commits meanwhile.
 
 The skill follows the shared managed-runtime contract for the selected framework, included in new projects and
 migration references:

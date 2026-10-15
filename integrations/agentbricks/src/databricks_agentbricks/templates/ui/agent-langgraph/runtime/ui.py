@@ -136,10 +136,6 @@ def _tracing() -> dict:
     return {"enabled": enabled, "experiment_id": experiment_id or None, "url": url}
 
 
-# Cap the picker: the gateway's schema can list more models than belong in a dropdown.
-_MODEL_LIMIT = 20
-
-
 def _default_model() -> str:
     """The agent's configured default endpoint (``agent.agent.MODEL``), imported lazily.
 
@@ -152,17 +148,14 @@ def _default_model() -> str:
 
 
 def _rank_models(default: str, names: list[str]) -> list[str]:
-    """Pin the default first, then the remaining gateway models alphabetically, without duplicates.
-
-    Truncation therefore only ever sheds models beyond the cap, never the configured default.
-    """
+    """Pin the default first, then every remaining gateway model, without duplicates."""
     ordered = [default, *sorted(n for n in names if n != default)]
     seen: set[str] = set()
     return [n for n in ordered if not (n in seen or seen.add(n))]
 
 
 def _discover_chat_models() -> list[str]:
-    """The AI Gateway chat models for the picker: default first, then the rest, capped.
+    """The AI Gateway chat models for the picker: default first, then every listed model.
 
     Best-effort: if listing fails (missing permission, repeated transient errors), fall back to just
     the default so the picker still works. The default is always present and first.
@@ -172,7 +165,7 @@ def _discover_chat_models() -> list[str]:
         names = list_ai_gateway_model_services(workspace_client())
     except Exception:  # noqa: BLE001 - a broken listing must not break the whole config endpoint
         names = []
-    return _rank_models(default, names)[:_MODEL_LIMIT]
+    return _rank_models(default, names)
 
 
 class _ManagedStateClient:
@@ -310,28 +303,9 @@ def _require_session() -> None:
 
 
 async def _checkpoint_history(session_id: str, actor: str) -> dict[str, Any]:
-    from agent.agent import create_agent_graph
+    from databricks_agentkit.langgraph import read_history
 
-    from databricks_agentkit.langgraph.session_store import thread_config
-
-    graph = await create_agent_graph(actor)
-    snapshot = await graph.aget_state(thread_config(session_id, actor))
-    values = snapshot.values if isinstance(snapshot.values, dict) else {}
-    items = []
-    for index, message in enumerate(values.get("messages", [])):
-        data = message.model_dump() if hasattr(message, "model_dump") else message
-        items.append(
-            {
-                "item_id": str(getattr(message, "id", None) or index),
-                "data": data if isinstance(data, dict) else {"content": str(data)},
-            }
-        )
-    interrupts = [
-        {"id": interrupt.id, "value": interrupt.value}
-        for task in getattr(snapshot, "tasks", ())
-        for interrupt in getattr(task, "interrupts", ())
-    ]
-    return {"session_id": session_id, "session_items": items, "interrupts": interrupts}
+    return await read_history(session_id, actor)
 
 
 def _chat_sessions(result: dict[str, Any]) -> list[dict[str, Any]]:
@@ -520,7 +494,17 @@ def install_ui(app: FastAPI) -> None:
     @app.get("/api/demo/session/items", include_in_schema=False)
     async def list_session_items(request: Request) -> dict:
         session_id = _request_session_id(request)
-        if _session_store():
-            result = await _managed_call(_state_client().list_session_items, session_id)
-            return _chat_session_items(result)
-        return await _checkpoint_history(session_id, _request_actor(request))
+        actor = _request_actor(request)
+        if not app.auth_policy.requires_user:
+            return await _checkpoint_history(session_id, actor)
+
+        from databricks_agentkit.runtime.auth import RequestAuthContext
+
+        auth = RequestAuthContext.from_headers(request.headers)
+        try:
+            result = await _checkpoint_history(
+                auth.namespace("session", session_id), auth.namespace("actor", actor)
+            )
+            return {**result, "session_id": session_id}
+        finally:
+            auth.close()

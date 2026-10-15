@@ -5,14 +5,52 @@ from __future__ import annotations
 import json
 import types
 from typing import Any
+from unittest import mock
 
-from databricks_agentbricks import app_resources as sa
-from databricks_agentbricks.trace_tables import TraceTable, TraceTableKind
+from databricks_agentbricks.clients.apps_client import AppsClient
+from databricks_agentbricks.clients.legacy_runtime_store import LakebaseBackend
+from databricks_agentbricks.clients.tracing_client import (
+    TraceTable,
+    TraceTableKind,
+    TracingClient,
+)
 
 
-def _backend(database: str, resource_name: str) -> sa.LakebaseBackend:
+class _ResourceClientHarness:
+    """Exercise the split resource clients through their current owner methods.
+
+    The resource helpers used to be a single ``app_resources`` module.  They now belong to
+    ``AppsClient`` (postgres/tool resources) and ``TracingClient`` (trace resources). This tiny
+    test-only harness keeps the assertions focused on the wire payloads while injecting the CLI
+    runner rather than patching a module global.
+    """
+
+    _runner = staticmethod(lambda *args, **kwargs: None)
+
+    def attach_postgres_backends(self, app, backends, profile):
+        return AppsClient(profile, runner=self._runner).attach_postgres_backends(app, backends)
+
+    def reconcile_trace_resources(self, app, experiment_id, tables, profile):
+        apps = AppsClient(profile, runner=self._runner)
+        return TracingClient(mock.Mock(), apps, profile).reconcile_app_resources(
+            app, experiment_id, tables
+        )
+
+    def apply_tool_resources(self, app, resources, profile):
+        return AppsClient(profile, runner=self._runner).apply_tool_resources(app, resources)
+
+    def add_tool_resources_for_rollout(self, app, resources, profile):
+        return AppsClient(profile, runner=self._runner).add_tool_resources_for_rollout(
+            app, resources
+        )
+
+
+clients = _ResourceClientHarness()
+
+
+def _backend(database: str, resource_name: str) -> LakebaseBackend:
     """Build a LakebaseBackend for resource-attach tests."""
-    return sa.LakebaseBackend(
+    return LakebaseBackend(
         project="proj",
         branch="production",
         endpoint_id="primary",
@@ -28,11 +66,15 @@ def test_apply_postgres_resources_sends_all_backends_in_one_update(monkeypatch):
 
     def fake_db(args, profile, **kw):
         captured["args"] = args
+        if args[:2] == ["apps", "get"]:
+            return types.SimpleNamespace(
+                returncode=0, stdout=json.dumps({"resources": []}), stderr=""
+            )
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(sa, "_databricks", fake_db)
+    monkeypatch.setattr(clients, "_runner", fake_db)
     backends = [_backend("s", "postgres"), _backend("memory-x", "postgres-memory")]
-    assert sa.apply_postgres_resources("app", backends, "prof") is None
+    assert clients.attach_postgres_backends("app", backends, "prof") is None
     payload = json.loads(captured["args"][captured["args"].index("--json") + 1])
     names = {r["name"] for r in payload["app"]["resources"]}
     assert names == {"postgres", "postgres-memory"}  # one update carries both
@@ -53,9 +95,9 @@ def test_apply_postgres_resources_preserves_existing_and_updates_ours(monkeypatc
         resources[:] = payload["app"]["resources"]
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(sa, "_databricks", fake_db)
+    monkeypatch.setattr(clients, "_runner", fake_db)
     backend = _backend("db-new", "postgres-runtime-store")
-    assert sa.apply_postgres_resources("myapp", [backend], "prof") is None
+    assert clients.attach_postgres_backends("myapp", [backend], "prof") is None
     # The user-owned resource is preserved; our managed resource is replaced (not duplicated).
     assert [r["name"] for r in resources] == ["user-owned", "postgres-runtime-store"]
     ours = next(r for r in resources if r["name"] == "postgres-runtime-store")
@@ -76,9 +118,9 @@ def test_resource_update_is_masked_to_resources(monkeypatch):
         captured["args"] = args
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(sa, "_databricks", fake_db)
+    monkeypatch.setattr(clients, "_runner", fake_db)
     assert (
-        sa.apply_postgres_resources("app", [_backend("db", "postgres-runtime-store")], "prof")
+        clients.attach_postgres_backends("app", [_backend("db", "postgres-runtime-store")], "prof")
         is None
     )
     assert captured["args"][:2] == [
@@ -92,8 +134,8 @@ def test_resource_update_is_masked_to_resources(monkeypatch):
 
 def test_apply_postgres_resources_reports_failure(monkeypatch):
     monkeypatch.setattr(
-        sa,
-        "_databricks",
+        clients,
+        "_runner",
         lambda args, profile, **kw: (
             types.SimpleNamespace(returncode=1, stdout="", stderr="denied: needs MANAGE")
             if args[:2] == ["apps", "create-update"]
@@ -102,7 +144,9 @@ def test_apply_postgres_resources_reports_failure(monkeypatch):
             )
         ),
     )
-    err = sa.apply_postgres_resources("app", [_backend("db", "postgres-runtime-store")], "prof")
+    err = clients.attach_postgres_backends(
+        "app", [_backend("db", "postgres-runtime-store")], "prof"
+    )
     assert err == "denied: needs MANAGE"
 
 
@@ -118,12 +162,12 @@ def test_runtime_store_resource_coexists_with_a_second_managed_resource(monkeypa
         resources[:] = payload["app"]["resources"]
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(sa, "_databricks", fake_db)
+    monkeypatch.setattr(clients, "_runner", fake_db)
     runtime_store = _backend("runtime-db", "postgres-runtime-store")
     other = _backend("other", "postgres-other")
 
-    assert sa.apply_postgres_resources("app", [runtime_store], "prof") is None
-    assert sa.apply_postgres_resources("app", [other], "prof") is None
+    assert clients.attach_postgres_backends("app", [runtime_store], "prof") is None
+    assert clients.attach_postgres_backends("app", [other], "prof") is None
 
     assert {resource["name"] for resource in resources} == {
         "postgres-runtime-store",
@@ -146,8 +190,8 @@ def test_apply_trace_resources_managed_experiment_writes_only_the_experiment(mon
         captured["args"] = args
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(sa, "_databricks", fake_db)
-    assert sa.apply_trace_resources("app", "exp-1", [], "prof") is None
+    monkeypatch.setattr(clients, "_runner", fake_db)
+    assert clients.reconcile_trace_resources("app", "exp-1", [], "prof") is None
     payload = json.loads(captured["args"][captured["args"].index("--json") + 1])
     assert payload["update_mask"] == "resources"  # masked upsert, like the other resources
     written = payload["app"]["resources"]
@@ -168,13 +212,13 @@ def test_apply_trace_resources_uc_experiment_adds_one_table_resource_per_table(m
         captured["args"] = args
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(sa, "_databricks", fake_db)
+    monkeypatch.setattr(clients, "_runner", fake_db)
     tables = [
         TraceTable(TraceTableKind.SPANS, "cat.schema.otel_spans"),
         TraceTable(TraceTableKind.LOGS, "cat.schema.otel_logs"),
         TraceTable(TraceTableKind.METRICS, "cat.schema.otel_metrics"),
     ]
-    assert sa.apply_trace_resources("app", "exp-uc", tables, "prof") is None
+    assert clients.reconcile_trace_resources("app", "exp-uc", tables, "prof") is None
     payload = json.loads(captured["args"][captured["args"].index("--json") + 1])
     written = payload["app"]["resources"]
     assert [r["name"] for r in written] == [
@@ -217,14 +261,14 @@ def test_apply_trace_resources_names_stay_within_databricks_apps_30_char_limit(m
         captured["args"] = args
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(sa, "_databricks", fake_db)
+    monkeypatch.setattr(clients, "_runner", fake_db)
     tables = [
         TraceTable(TraceTableKind.SPANS, "c.s.otel_spans"),
         TraceTable(TraceTableKind.LOGS, "c.s.otel_logs"),
         TraceTable(TraceTableKind.ANNOTATIONS, "c.s.otel_annotations"),
         TraceTable(TraceTableKind.METRICS, "c.s.otel_metrics"),
     ]
-    assert sa.apply_trace_resources("app", "exp-uc", tables, "prof") is None
+    assert clients.reconcile_trace_resources("app", "exp-uc", tables, "prof") is None
     payload = json.loads(captured["args"][captured["args"].index("--json") + 1])
     names = [r["name"] for r in payload["app"]["resources"]]
     assert any(n.endswith("annotations") for n in names)  # the longest name is exercised
@@ -259,8 +303,8 @@ def test_apply_trace_resources_converges_when_rebinding_uc_to_managed(monkeypatc
         resources[:] = payload["app"]["resources"]
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(sa, "_databricks", fake_db)
-    assert sa.apply_trace_resources("app", "exp-managed", [], "prof") is None
+    monkeypatch.setattr(clients, "_runner", fake_db)
+    assert clients.reconcile_trace_resources("app", "exp-managed", [], "prof") is None
     # stale table resources are gone, the user resource is preserved, the experiment resource is
     # re-written to point at the managed experiment
     assert [r["name"] for r in resources] == ["user-owned", "agentbricks-trace-experiment"]
@@ -270,8 +314,8 @@ def test_apply_trace_resources_converges_when_rebinding_uc_to_managed(monkeypatc
 
 def test_apply_trace_resources_reports_failure(monkeypatch):
     monkeypatch.setattr(
-        sa,
-        "_databricks",
+        clients,
+        "_runner",
         lambda args, profile, **kw: (
             types.SimpleNamespace(returncode=1, stdout="", stderr="denied: needs MANAGE")
             if args[:2] == ["apps", "create-update"]
@@ -280,14 +324,14 @@ def test_apply_trace_resources_reports_failure(monkeypatch):
             )
         ),
     )
-    err = sa.apply_trace_resources(
+    err = clients.reconcile_trace_resources(
         "app", "exp-1", [TraceTable(TraceTableKind.SPANS, "cat.schema.otel_spans")], "prof"
     )
     assert err == "denied: needs MANAGE"
 
 
 def _fake_db_get_fails(calls):
-    """A `_databricks` stub whose `apps get` fails; records every command's first two args."""
+    """A CLI runner stub whose `apps get` fails; records every command's first two args."""
 
     def fake_db(args, profile, **kw):
         calls.append(args[:2])
@@ -305,8 +349,8 @@ def test_apply_trace_resources_skips_write_when_current_resources_unreadable(mon
     # proceeding with an empty `preserved` would drop every OTHER resource the app has. Bail with a
     # reason and perform NO write, leaving the app's resources (and existing trace grants) intact.
     calls: list[list[str]] = []
-    monkeypatch.setattr(sa, "_databricks", _fake_db_get_fails(calls))
-    err = sa.apply_trace_resources(
+    monkeypatch.setattr(clients, "_runner", _fake_db_get_fails(calls))
+    err = clients.reconcile_trace_resources(
         "app", "exp-1", [TraceTable(TraceTableKind.SPANS, "cat.schema.otel_spans")], "prof"
     )
     assert err and "apps get failed" in err
@@ -316,8 +360,10 @@ def test_apply_trace_resources_skips_write_when_current_resources_unreadable(mon
 def test_apply_postgres_resources_skips_write_when_current_resources_unreadable(monkeypatch):
     # Same guard for the postgres reconcile - a failed read bails before the full-array replace.
     calls: list[list[str]] = []
-    monkeypatch.setattr(sa, "_databricks", _fake_db_get_fails(calls))
-    err = sa.apply_postgres_resources("app", [_backend("db", "postgres-runtime-store")], "prof")
+    monkeypatch.setattr(clients, "_runner", _fake_db_get_fails(calls))
+    err = clients.attach_postgres_backends(
+        "app", [_backend("db", "postgres-runtime-store")], "prof"
+    )
     assert err and "apps get failed" in err
     assert ["apps", "create-update"] not in calls  # never wrote
 
@@ -341,8 +387,8 @@ def test_apply_trace_resources_prunes_everything_when_unbound(monkeypatch):
         resources[:] = payload["app"]["resources"]
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(sa, "_databricks", fake_db)
-    assert sa.apply_trace_resources("app", None, [], "prof") is None
+    monkeypatch.setattr(clients, "_runner", fake_db)
+    assert clients.reconcile_trace_resources("app", None, [], "prof") is None
     assert resources == [{"name": "user-owned", "secret": {}}]
 
 
@@ -381,9 +427,9 @@ def test_apply_tool_resources_replaces_complete_owned_subset_and_preserves_unrel
         resources[:] = payload["app"]["resources"]
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(sa, "_databricks", fake_db)
+    monkeypatch.setattr(clients, "_runner", fake_db)
 
-    assert sa.apply_tool_resources("app", desired, "prof") is None
+    assert clients.apply_tool_resources("app", desired, "prof") is None
 
     expected_resources = [
         {"name": "user-owned", "secret": {"scope": "keep"}},
@@ -455,9 +501,9 @@ def test_apply_tool_resources_additively_retains_stale_and_stronger_resources(mo
         resources[:] = payload["app"]["resources"]
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(sa, "_databricks", fake_db)
+    monkeypatch.setattr(clients, "_runner", fake_db)
 
-    assert sa.add_tool_resources_for_rollout("app", desired, "prof") is None
+    assert clients.add_tool_resources_for_rollout("app", desired, "prof") is None
 
     assert resources == expected_resources
     current_resource = next(r for r in resources if r["name"] == "agentbricks-tool-current")
@@ -486,9 +532,9 @@ def test_apply_tool_resources_fails_when_readback_is_missing_desired_resource(mo
             )
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(sa, "_databricks", fake_db)
+    monkeypatch.setattr(clients, "_runner", fake_db)
 
-    error = sa.apply_tool_resources("app", desired, "prof")
+    error = clients.apply_tool_resources("app", desired, "prof")
 
     assert error == "Could not verify App tool resources: Agent Bricks-owned resources do not match"
     assert reads == 2
@@ -531,9 +577,9 @@ def test_apply_tool_resources_accepts_server_enriched_readback(monkeypatch):
             )
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(sa, "_databricks", fake_db)
+    monkeypatch.setattr(clients, "_runner", fake_db)
 
-    assert sa.apply_tool_resources("app", desired, "prof") is None
+    assert clients.apply_tool_resources("app", desired, "prof") is None
 
 
 def test_apply_tool_resources_fails_closed_when_readback_fails(monkeypatch):
@@ -552,9 +598,9 @@ def test_apply_tool_resources_fails_closed_when_readback_fails(monkeypatch):
             return types.SimpleNamespace(returncode=1, stdout="", stderr="readback denied")
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(sa, "_databricks", fake_db)
+    monkeypatch.setattr(clients, "_runner", fake_db)
 
-    error = sa.apply_tool_resources(
+    error = clients.apply_tool_resources(
         "app", [{"name": "agentbricks-tool-new", "uc_securable": {}}], "prof"
     )
 
@@ -574,9 +620,9 @@ def test_apply_tool_resources_unchanged_state_reads_once_without_update(monkeypa
             stderr="",
         )
 
-    monkeypatch.setattr(sa, "_databricks", fake_db)
+    monkeypatch.setattr(clients, "_runner", fake_db)
 
-    assert sa.apply_tool_resources("app", desired, "prof") is None
+    assert clients.apply_tool_resources("app", desired, "prof") is None
     assert calls == [["apps", "get", "app", "-o", "json"]]
 
 
@@ -597,11 +643,11 @@ def test_apply_tool_resources_prunes_owned_resources_and_skips_unchanged_update(
         resources[:] = payload["app"]["resources"]
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(sa, "_databricks", fake_db)
+    monkeypatch.setattr(clients, "_runner", fake_db)
 
-    assert sa.apply_tool_resources("app", [], "prof") is None
+    assert clients.apply_tool_resources("app", [], "prof") is None
     assert resources == [{"name": "user-owned", "secret": {}}]
-    assert sa.apply_tool_resources("app", [], "prof") is None
+    assert clients.apply_tool_resources("app", [], "prof") is None
     assert len(updates) == 1
 
 
@@ -611,9 +657,9 @@ def test_apply_tool_resources_reports_failure(monkeypatch):
             return types.SimpleNamespace(returncode=0, stdout='{"resources": []}', stderr="")
         return types.SimpleNamespace(returncode=1, stdout="", stderr="denied: needs MANAGE")
 
-    monkeypatch.setattr(sa, "_databricks", fake_db)
+    monkeypatch.setattr(clients, "_runner", fake_db)
 
-    error = sa.apply_tool_resources(
+    error = clients.apply_tool_resources(
         "app", [{"name": "agentbricks-tool-new", "uc_securable": {}}], "prof"
     )
 
@@ -627,9 +673,9 @@ def test_apply_tool_resources_read_failure_is_fail_closed(monkeypatch):
         calls.append(args)
         return types.SimpleNamespace(returncode=1, stdout="", stderr="cannot read app")
 
-    monkeypatch.setattr(sa, "_databricks", fake_db)
+    monkeypatch.setattr(clients, "_runner", fake_db)
 
-    error = sa.apply_tool_resources(
+    error = clients.apply_tool_resources(
         "app", [{"name": "agentbricks-tool-new", "uc_securable": {}}], "prof"
     )
 

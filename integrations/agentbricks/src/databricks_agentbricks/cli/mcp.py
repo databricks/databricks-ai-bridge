@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from databricks_agentbricks.agent_project import _three_part_name
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.projects.agent_project import _three_part_name
 
 _RESOURCE_PREFIX = "mcp-services/"
 
@@ -71,5 +71,5 @@ def _list_services(client: Any, schema: str) -> list[dict[str, str]]:
 
 def _add_command(service: str) -> str:
     if service == "system.ai.sandbox":
-        return "agentbricks tools add sandbox --scope table:catalog.schema.table"
+        return "agentbricks tools add sandbox --scope volume:catalog.schema.volume"
     return f"agentbricks tools add mcp {service}"

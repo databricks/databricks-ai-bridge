@@ -77,7 +77,7 @@ def test_kind_mcp_replaces_default_scope(monkeypatch):
 @pytest.mark.parametrize(
     ("kind", "add_command"),
     [
-        ("sandbox", "agentbricks tools add sandbox --scope table:catalog.schema.table"),
+        ("sandbox", "agentbricks tools add sandbox --scope volume:catalog.schema.volume"),
         ("uc-function", "agentbricks tools add uc-function catalog.schema.function"),
         ("genie-one", "agentbricks tools add genie-one"),
         ("genie-agent", "agentbricks tools add genie-agent SPACE_ID"),
@@ -121,7 +121,9 @@ def test_discovered_sandbox_uses_scoped_recipe(monkeypatch):
     assert result.exit_code == 0, result.output
     tool = json.loads(result.stdout)["available_tools"][0]
     assert tool["kind"] == "mcp"
-    assert tool["add_command"] == "agentbricks tools add sandbox --scope table:catalog.schema.table"
+    assert (
+        tool["add_command"] == "agentbricks tools add sandbox --scope volume:catalog.schema.volume"
+    )
 
 
 def test_empty_discovery_is_complete(monkeypatch):

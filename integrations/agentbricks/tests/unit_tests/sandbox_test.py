@@ -16,6 +16,7 @@ from click.testing import CliRunner
 
 from databricks_agentbricks.cli import sandbox as sandbox_mod
 from databricks_agentbricks.cli.sandbox import add_sandbox
+from databricks_agentkit.runtime import tool_manifest
 
 _EMPTY_MCPS = '''"""MCP servers to offer the agent."""
 
@@ -106,7 +107,7 @@ def test_add_sandbox_uses_langgraph_adapter_and_injects_fixed_meta(
 
     result = CliRunner().invoke(
         add_sandbox,
-        ["--source", str(project), "--scope", "table:samples.nyctaxi.trips"],
+        ["--source", str(project), "--scope", "volume:main.data.files"],
         obj=_TextCtx(),
     )
 
@@ -197,9 +198,9 @@ def test_add_sandbox_uses_langgraph_adapter_and_injects_fixed_meta(
         {
             "meta": {
                 "downscope": {
-                    "tables": [
+                    "volumes": [
                         {
-                            "name": "samples.nyctaxi.trips",
+                            "name": "main.data.files",
                             "permission": "read_only",
                         }
                     ]
@@ -217,7 +218,7 @@ def test_add_sandbox_infers_legacy_langgraph_project_from_dependencies(tmp_path:
 
     result = CliRunner().invoke(
         add_sandbox,
-        ["--source", str(project), "--scope", "table:samples.nyctaxi.trips"],
+        ["--source", str(project), "--scope", "volume:main.data.files"],
         obj=_TextCtx(),
     )
 
@@ -411,7 +412,7 @@ def test_generated_server_overrides_caller_downscope_without_changing_arguments(
     assert server.connection["tool_filter"] == {"allowed_tool_names": ["sandbox", "run_code"]}
 
 
-def test_add_sandbox_supports_workspace_table_and_read_write_scopes(tmp_path: pathlib.Path):
+def test_add_sandbox_supports_multiple_volumes_and_read_write_scopes(tmp_path: pathlib.Path):
     project, mcps = _project(tmp_path)
 
     result = CliRunner().invoke(
@@ -420,9 +421,9 @@ def test_add_sandbox_supports_workspace_table_and_read_write_scopes(tmp_path: pa
             "--source",
             str(project),
             "--scope",
-            "/Workspace/Users/alice@example.com",
+            "volume:catalog.schema.input",
             "--scope",
-            "table:catalog.schema.records",
+            "volume:catalog.schema.files",
             "--permission",
             "read_write",
         ],
@@ -431,11 +432,71 @@ def test_add_sandbox_supports_workspace_table_and_read_write_scopes(tmp_path: pa
 
     assert result.exit_code == 0, result.output
     generated = mcps.read_text()
-    assert '"workspace_paths": [' in generated
-    assert '"path": "/Workspace/Users/alice@example.com"' in generated
-    assert '"tables": [' in generated
-    assert '"name": "catalog.schema.records"' in generated
+    assert '"volumes": [' in generated
+    assert '"name": "catalog.schema.input"' in generated
+    assert '"name": "catalog.schema.files"' in generated
     assert generated.count('"permission": "read_write"') == 2
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("permission", ["read_only", "read_write"])
+def test_legacy_table_policy_is_reused_only_when_gate_is_enabled(
+    tmp_path, monkeypatch, framework, permission
+):
+    monkeypatch.setattr(tool_manifest, "SANDBOX_TABLE_SCOPES_ENABLED", True)
+    if framework == "langgraph":
+        project, mcps, _ = _langgraph_project(tmp_path)
+        template = "sandbox_mcp_langgraph.py"
+    else:
+        project, mcps = _project(tmp_path)
+        template = "sandbox_mcp.py"
+    args = [
+        "--source",
+        str(project),
+        "--scope",
+        "table:main.data.rows",
+        "--scope",
+        "volume:main.data.files",
+        "--permission",
+        permission,
+    ]
+    result = CliRunner().invoke(add_sandbox, args, obj=_JsonCtx())
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["scopes"] == ["main.data.files", "table:main.data.rows"]
+    assert sandbox_mod._existing_policy(mcps.read_text(), template_name=template) == {
+        "volumes": [{"name": "main.data.files", "permission": permission}],
+        "tables": [{"name": "main.data.rows", "permission": permission}],
+    }
+    before = {path: path.read_bytes() for path in project.rglob("*") if path.is_file()}
+    repeated = CliRunner().invoke(add_sandbox, args, obj=_JsonCtx())
+    assert repeated.exit_code == 0, repeated.output
+    assert json.loads(repeated.output)["status"] == "already_configured"
+    assert {path: path.read_bytes() for path in project.rglob("*") if path.is_file()} == before
+
+    monkeypatch.setattr(tool_manifest, "SANDBOX_TABLE_SCOPES_ENABLED", False)
+    rejected = CliRunner().invoke(
+        add_sandbox,
+        ["--source", str(project), "--scope", "volume:main.data.files"],
+        obj=_TextCtx(),
+    )
+    assert rejected.exit_code != 0
+    assert {path: path.read_bytes() for path in project.rglob("*") if path.is_file()} == before
+
+
+def test_legacy_add_sandbox_rejects_workspace_paths_containing_colons_without_writes(tmp_path):
+    project, mcps = _project(tmp_path)
+    before = mcps.read_bytes()
+
+    result = CliRunner().invoke(
+        add_sandbox,
+        ["--source", str(project), "--scope", "/Workspace/Shared/report:2026"],
+        obj=_TextCtx(),
+    )
+
+    assert result.exit_code != 0
+    assert "Workspace sandbox scopes are not supported" in result.output
+    assert mcps.read_bytes() == before
 
 
 def test_add_sandbox_appends_to_existing_server_list(tmp_path: pathlib.Path):
@@ -598,6 +659,45 @@ def test_add_sandbox_rejects_invalid_scope_without_touching_file(tmp_path: pathl
     assert result.exit_code != 0
     assert "catalog.schema.volume" in result.output
     assert mcps.read_text() == _EMPTY_MCPS
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("permission", ["read_only", "read_write"])
+@pytest.mark.parametrize(
+    ("scope", "message"),
+    [
+        ("table:main.data.rows", "Table sandbox scopes are not supported"),
+        ("workspace:/Workspace/Shared", "Workspace sandbox scopes are not supported"),
+        ("/Workspace/Shared", "Workspace sandbox scopes are not supported"),
+    ],
+)
+def test_legacy_add_sandbox_rejects_unsupported_scope_without_writes(
+    tmp_path, framework, permission, scope, message
+):
+    if framework == "langgraph":
+        project, _, _ = _langgraph_project(tmp_path)
+    else:
+        project, _ = _project(tmp_path)
+    before = {path: path.read_bytes() for path in project.rglob("*") if path.is_file()}
+
+    result = CliRunner().invoke(
+        add_sandbox,
+        [
+            "--source",
+            str(project),
+            "--scope",
+            "volume:main.data.files",
+            "--scope",
+            scope,
+            "--permission",
+            permission,
+        ],
+        obj=_TextCtx(),
+    )
+
+    assert result.exit_code != 0
+    assert message in result.output
+    assert {path: path.read_bytes() for path in project.rglob("*") if path.is_file()} == before
 
 
 @pytest.mark.parametrize(

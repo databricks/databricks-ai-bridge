@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 from runtime import ui
 
 from databricks_agentkit import DurableAgentServer
+from databricks_agentkit.runtime.auth import InvocationAuthPolicy
 from databricks_agentkit.runtime.store import (
     RUNTIME_STORE_DATABASE_ENV,
     RUNTIME_STORE_LAKEBASE_BRANCH_ENV,
@@ -122,7 +123,7 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
     else:
         monkeypatch.delenv("AGENT_MEMORY_STORE", raising=False)
         monkeypatch.delenv("AGENT_SESSION_STORE", raising=False)
-    if history:
+    if history or configured:
         monkeypatch.setattr(ui, "_checkpoint_history", _session_history)
     # Keep model discovery deterministic and offline (no AI Gateway listing call).
     monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-sonnet-4-5")
@@ -131,7 +132,9 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
     async def invoke_handler(request, context):
         return {"output": []}
 
-    app = DurableAgentServer(runtime_store=InMemoryRuntimeStore())
+    app = DurableAgentServer(
+        runtime_store=InMemoryRuntimeStore(), auth_policy=InvocationAuthPolicy()
+    )
     app.invoke(invoke_handler)
     app.recover(invoke_handler)
     ui.install_ui(app)
@@ -421,56 +424,44 @@ def test_discover_chat_models_falls_back_to_default_on_error(monkeypatch):
     assert ui._discover_chat_models() == ["system.ai.claude-sonnet-4-5"]
 
 
-def test_discover_chat_models_caps_the_picker(monkeypatch):
+def test_discover_chat_models_keeps_every_model(monkeypatch):
     monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-sonnet-4-5")
     monkeypatch.setattr(
         ui,
         "list_ai_gateway_model_services",
-        # More services than the cap allows; synthetic because no real catalog is this long.
         lambda _client: [f"system.ai.test-model-{i:03d}" for i in range(30)],
     )
     monkeypatch.setattr(ui, "workspace_client", lambda: object())
 
     result = ui._discover_chat_models()
-    assert len(result) == ui._MODEL_LIMIT
-    assert result[0] == "system.ai.claude-sonnet-4-5"  # the default survives truncation
+    assert result == ["system.ai.claude-sonnet-4-5"] + [
+        f"system.ai.test-model-{i:03d}" for i in range(30)
+    ]
 
 
 @pytest.mark.asyncio
 async def test_checkpoint_history_reads_messages_and_interrupts(monkeypatch):
-    import agent.agent as agent_module
+    from types import SimpleNamespace
 
-    class Message:
-        id = "message-1"
+    from langchain_core.messages import HumanMessage
 
-        def model_dump(self):
-            return {"type": "human", "content": "saved message"}
+    from databricks_agentkit.langgraph import session_store
 
-    class Snapshot:
-        values = {"messages": [Message()]}
-        tasks = [
-            type(
-                "Task",
-                (),
-                {"interrupts": [_FakeInterrupt({"approval": True}, "int-1")]},
-            )()
-        ]
+    message = HumanMessage(content="saved message", id="message-1")
 
-    class FakeAgent:
-        async def aget_state(self, config):
-            assert config == {
-                "configurable": {
-                    "thread_id": "saved-session",
-                    "actor_id": "alice",
-                }
+    async def saved_checkpoint(config):
+        assert config == {
+            "configurable": {
+                "thread_id": "saved-session",
+                "actor_id": "alice",
             }
-            return Snapshot()
+        }
+        return SimpleNamespace(
+            checkpoint={"channel_values": {"messages": [message]}},
+            pending_writes=[("task", "__interrupt__", [_FakeInterrupt({"approval": True}, "int-1")])],
+        )
 
-    async def fake_create_agent_graph(actor):
-        assert actor == "alice"
-        return FakeAgent()
-
-    monkeypatch.setattr(agent_module, "create_agent_graph", fake_create_agent_graph)
+    monkeypatch.setattr(session_store, "history_checkpoint", saved_checkpoint)
     result = await ui._checkpoint_history("saved-session", "alice")
 
     assert result == {
@@ -478,7 +469,7 @@ async def test_checkpoint_history_reads_messages_and_interrupts(monkeypatch):
         "session_items": [
             {
                 "item_id": "message-1",
-                "data": {"type": "human", "content": "saved message"},
+                "data": message.model_dump(),
             }
         ],
         "interrupts": [{"id": "int-1", "value": {"approval": True}}],
@@ -549,7 +540,7 @@ def test_managed_memory_and_session_routes(monkeypatch):
     assert [
         item["data"]["content"]
         for item in client.get("/api/demo/session/items").json()["session_items"]
-    ] == ["s1", "saved reply"]
+    ] == ["s1", "checkpoint reply"]
 
     opened = client.post("/api/demo/sessions/s2/open")
     assert opened.json() == {

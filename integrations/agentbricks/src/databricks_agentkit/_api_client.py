@@ -91,6 +91,10 @@ def memory_pipeline_path(name: str) -> str:
     return f"memory-pipelines/{raw}"
 
 
+# CLI trigger names → API `DreamerPolicy.Trigger` values.
+MEMORY_PIPELINE_TRIGGERS = {"manual": "MANUAL_ONLY", "scheduled": "SCHEDULED"}
+
+
 def memory_entry_path(store: str, entry: str) -> str:
     entry = (entry or "").strip().strip("/")
     if entry.startswith("memory-stores/"):
@@ -335,7 +339,6 @@ class _AgentBricksApiClient:
         description: Optional[str] = None,
         session_id: Optional[str] = None,
         source_type: Optional[str] = None,
-        write_mode: Optional[str] = None,
     ) -> models.MemoryEntry:
         body = _body(
             actor_id=actor_id,
@@ -344,7 +347,6 @@ class _AgentBricksApiClient:
             description=description,
             session_id=session_id,
             source_type=source_type,
-            write_mode=write_mode,
         )
         return _as(
             models.MemoryEntry,
@@ -372,6 +374,7 @@ class _AgentBricksApiClient:
         page_size: Optional[int] = None,
         page_token: Optional[str] = None,
         read_mask: Optional[str] = None,
+        path: Optional[str] = None,
     ) -> models.MemoryEntryList:
         return _as(
             models.MemoryEntryList,
@@ -385,6 +388,7 @@ class _AgentBricksApiClient:
                     page_size=page_size,
                     page_token=page_token,
                     read_mask=read_mask,
+                    path=path,
                 ),
             ),
         )
@@ -510,17 +514,26 @@ class _AgentBricksApiClient:
         model: Optional[str] = None,
         display_name: Optional[str] = None,
         instructions: Optional[str] = None,
+        trigger: Optional[str] = None,
     ) -> dict:
+        policy = _body(model=model, instructions=instructions)
+        if trigger is not None:
+            if trigger not in MEMORY_PIPELINE_TRIGGERS:
+                raise AgentCliError(
+                    f"Unsupported memory pipeline trigger: {trigger!r}. "
+                    f"Use one of: {', '.join(MEMORY_PIPELINE_TRIGGERS)}."
+                )
+            policy["trigger"] = MEMORY_PIPELINE_TRIGGERS[trigger]
+        body = _body(
+            display_name=display_name,
+            session_store=session_store_path(session_store),
+            memory_store=memory_store_path(memory_store),
+            dreamer_policy=policy or None,
+        )
         return self._do(
             "POST",
             f"{_BASE}/memory-pipelines",
-            body=_body(
-                display_name=display_name,
-                session_store=session_store_path(session_store),
-                memory_store=memory_store_path(memory_store),
-                instructions=instructions,
-                model=model,
-            ),
+            body=body,
         )
 
     def get_memory_pipeline(self, name: str) -> dict:
@@ -541,17 +554,31 @@ class _AgentBricksApiClient:
         *,
         display_name: Optional[str] = None,
         instructions: Optional[str] = None,
+        model: Optional[str] = None,
+        trigger: Optional[str] = None,
     ) -> dict:
-        body = _body(display_name=display_name, instructions=instructions)
+        body = _body(display_name=display_name)
+        policy = _body(model=model, instructions=instructions)
+        if trigger is not None:
+            if trigger not in MEMORY_PIPELINE_TRIGGERS:
+                raise AgentCliError(
+                    f"Unsupported memory pipeline trigger: {trigger!r}. "
+                    f"Use one of: {', '.join(MEMORY_PIPELINE_TRIGGERS)}."
+                )
+            policy["trigger"] = MEMORY_PIPELINE_TRIGGERS[trigger]
+        if policy:
+            body["dreamer_policy"] = policy
         if not body:
-            raise AgentCliError("No fields to update. Provide --display-name or --instructions.")
-        body = {"name": memory_pipeline_path(name), **body}
-        update_mask = ",".join(key for key in body if key != "name")
+            raise AgentCliError(
+                "No fields to update. Provide --display-name, --instructions, --model, or --trigger."
+            )
+        mask = [key for key in body if key != "dreamer_policy"]
+        mask.extend(f"dreamer_policy.{key}" for key in policy)
         return self._do(
             "PATCH",
             f"{_BASE}/{memory_pipeline_path(name)}",
-            query={"update_mask": update_mask},
-            body=body,
+            query={"update_mask": ",".join(mask)},
+            body={"name": memory_pipeline_path(name), **body},
         )
 
     def delete_memory_pipeline(self, name: str) -> dict:

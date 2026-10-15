@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import click
+import pytest
 from click.testing import CliRunner
 
 import databricks_agentbricks.cli.app as cli
-from databricks_agentbricks.cli import help as help_mod
+from databricks_agentbricks.presentation import help as help_mod
 
 
 def _command_paths(group: click.Group, prefix: tuple[str, ...] = ()):
@@ -47,6 +48,13 @@ def test_root_registers_supported_commands():
     assert "durability" not in names
     assert "help" not in names
     assert "add-sandbox" not in names
+
+
+@pytest.mark.parametrize("arguments", [["skills"], ["skills", "show"], ["skills", "install", "."]])
+def test_skills_are_not_a_public_cli_command(arguments):
+    result = CliRunner().invoke(cli.agentbricks, arguments)
+    assert result.exit_code != 0
+    assert "unknown command `skills`" in result.output
 
 
 def test_pipeline_is_nested_under_memory():
@@ -106,7 +114,7 @@ def test_nested_command_help_shows_usage_options_and_examples():
     assert "Usage: agentbricks tools add sandbox [OPTIONS]" in result.output
     assert "--scope TEXT" in result.output
     assert "EXAMPLES" in result.output
-    assert "agentbricks tools add sandbox --scope table:samples.nyctaxi.trips" in result.output
+    assert "agentbricks tools add sandbox --scope volume:main.data.files" in result.output
 
 
 def test_tools_help_explains_add_workflow():
@@ -142,7 +150,7 @@ def test_tools_add_help_explains_types_and_project_targeting():
     assert "Subcommands target the current directory by default" in result.output
     assert "Pass --source PATH to target another project." in result.output
     for example in (
-        "agentbricks tools add sandbox --scope table:samples.nyctaxi.trips",
+        "agentbricks tools add sandbox --scope volume:main.data.files",
         "agentbricks tools add mcp system.ai.web_search",
         "agentbricks tools add uc-function catalog.schema.lookup_ticket",
     ):

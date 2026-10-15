@@ -9,7 +9,8 @@ from typing import Any, cast
 import pytest
 import tomli
 
-from databricks_agentbricks.agent_project import (
+from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.projects.agent_project import (
     AgentProject,
     Scope,
     ToolPolicy,
@@ -17,8 +18,7 @@ from databricks_agentbricks.agent_project import (
     ToolSpec,
     default_store_name,
 )
-from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.project_types import AgentFramework, AgentServer
+from databricks_agentbricks.projects.types import AgentFramework, AgentServer
 from databricks_agentkit.runtime import tool_manifest
 from databricks_agentkit.runtime.tool_manifest import ToolManifestError, load_tools
 
@@ -28,12 +28,8 @@ from databricks_agentkit.runtime.tool_manifest import ToolManifestError, load_to
 def test_auth_round_trip_through_both_manifest_parsers(tmp_path, monkeypatch, kind, auth):
     _write_manifest(tmp_path)
     project = AgentProject.load(tmp_path)
-    if kind == "uc_function" and auth == "user":
-        with pytest.raises(AgentCliError, match="auth"):
-            ToolSpec.uc_function("tool", function="main.tools.lookup", auth=auth)
-        return
     if kind == "sandbox":
-        spec = ToolSpec.sandbox("tool", scopes=[Scope.table("main.data.table")], auth=auth)
+        spec = ToolSpec.sandbox("tool", scopes=[Scope.volume("main.data.files")], auth=auth)
     elif kind == "mcp":
         spec = ToolSpec.mcp("tool", service="system.ai.web_search", auth=auth)
     elif kind == "genie_one":
@@ -74,7 +70,9 @@ def test_genie_specs_reject_invalid_auth(kind):
         ToolSpec("tool", source, auth=cast(Any, "invalid"))
 
 
-def test_runtime_manifest_rejects_user_uc_function(tmp_path, monkeypatch):
+def test_user_uc_function_requires_request_auth(tmp_path, monkeypatch):
+    from databricks_agentkit.runtime.auth import InvocationAuthPolicy
+
     path = _write_manifest(tmp_path)
     with path.open("a") as output:
         output.write(
@@ -82,8 +80,9 @@ def test_runtime_manifest_rejects_user_uc_function(tmp_path, monkeypatch):
             'source = {kind = "uc_function", function = "main.tools.lookup"}\n'
         )
     monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
-    with pytest.raises(RuntimeError, match="auth"):
-        load_tools(expected_framework="langgraph")
+    policy = InvocationAuthPolicy.from_manifest()
+    assert policy.user_tools == ("lookup",)
+    assert policy.requires_user is True
 
 
 def _write_manifest(root: pathlib.Path, body: str | None = None) -> pathlib.Path:
@@ -94,6 +93,101 @@ def _write_manifest(root: pathlib.Path, body: str | None = None) -> pathlib.Path
         encoding="utf-8",
     )
     return path
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("reader", ["project", "runtime"])
+@pytest.mark.parametrize(
+    ("resource", "message"),
+    [
+        ("table:main.data.rows", "Table sandbox scopes are not supported"),
+        ("workspace:/Workspace/Shared", "Workspace sandbox scopes are not supported"),
+    ],
+)
+def test_manifest_rejects_unsupported_downscope_without_writes(
+    tmp_path, monkeypatch, framework, reader, resource, message
+):
+    manifest = _write_manifest(
+        tmp_path,
+        f"""schema_version = 1
+
+[agent]
+framework = "{framework}"
+server = "agentbricks"
+
+[[tools]]
+id = "sandbox"
+source = {{ kind = "sandbox", service = "system.ai.sandbox" }}
+policy = {{ downscope = [{{ resource = "{resource}", permission = "read_only" }}] }}
+""",
+    )
+    before = manifest.read_bytes()
+    monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
+    error_type = AgentCliError if reader == "project" else RuntimeError
+
+    with pytest.raises(error_type, match=message):
+        if reader == "project":
+            AgentProject.load(tmp_path)
+        else:
+            load_tools(expected_framework=framework)
+
+    assert manifest.read_bytes() == before
+
+
+def test_scope_rejects_unsupported_table_resource():
+    with pytest.raises(AgentCliError, match="Table sandbox scopes are not supported"):
+        Scope(kind="table", value="main.data.rows")
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("permission", ["read_only", "read_write"])
+def test_table_scopes_round_trip_when_gate_is_enabled(tmp_path, monkeypatch, framework, permission):
+    monkeypatch.setattr(tool_manifest, "SANDBOX_TABLE_SCOPES_ENABLED", True)
+    project = AgentProject.create(tmp_path, framework=framework, server="agentbricks")
+    project.add_tool(
+        ToolSpec.sandbox(
+            "sandbox",
+            scopes=[
+                Scope.parse("table:main.data.rows", permission),
+                Scope.volume("main.data.files"),
+            ],
+        )
+    )
+    manifest = project.write()
+    before = manifest.read_bytes()
+    monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
+
+    assert (
+        AgentProject.load(tmp_path).tools[0].policy.downscope[0].resource == "table:main.data.rows"
+    )
+    record = load_tools(expected_framework=framework)[0]
+    assert tool_manifest.sandbox_meta(record) == {
+        "downscope": {
+            "tables": [{"name": "main.data.rows", "permission": permission}],
+            "volumes": [{"name": "main.data.files", "permission": "read_only"}],
+        },
+        "databricks_access_token_included": True,
+    }
+
+    monkeypatch.setattr(tool_manifest, "SANDBOX_TABLE_SCOPES_ENABLED", False)
+    with pytest.raises(AgentCliError, match="Table sandbox scopes are not supported"):
+        AgentProject.load(tmp_path)
+    with pytest.raises(ToolManifestError, match="Table sandbox scopes are not supported"):
+        load_tools(expected_framework=framework)
+    assert manifest.read_bytes() == before
+
+
+def test_scope_rejects_unsupported_workspace_resource():
+    with pytest.raises(AgentCliError, match="Workspace sandbox scopes are not supported"):
+        Scope(kind="workspace", value="/Workspace/Shared")
+
+
+@pytest.mark.parametrize(
+    "value", ["/Workspace/Shared/report:2026", "workspace:/Workspace/Shared/report:2026"]
+)
+def test_scope_parse_rejects_workspace_paths_containing_colons(value):
+    with pytest.raises(AgentCliError, match="Workspace sandbox scopes are not supported"):
+        Scope.parse(value)
 
 
 def test_user_auth_defaults_match_across_cli_and_runtime(tmp_path, monkeypatch):
@@ -191,7 +285,7 @@ def test_agent_project_round_trips_tool_specs_without_losing_comments(tmp_path: 
     project = AgentProject.load(tmp_path)
 
     changed = project.add_tool(
-        ToolSpec.sandbox("sandbox", scopes=[Scope.table("samples.nyctaxi.trips")])
+        ToolSpec.sandbox("sandbox", scopes=[Scope.volume("main.data.files")])
     )
     project.write()
 
@@ -202,7 +296,7 @@ def test_agent_project_round_trips_tool_specs_without_losing_comments(tmp_path: 
     assert loaded.server == "agentbricks"
     assert loaded.tools[0].source.kind == "sandbox"
     assert loaded.tools[0].policy.downscope == (
-        Scope(kind="table", value="samples.nyctaxi.trips", permission="read_only"),
+        Scope(kind="volume", value="main.data.files", permission="read_only"),
     )
     assert loaded.tools[0].policy.databricks_access_token_included is True
     assert (
@@ -223,7 +317,7 @@ server = "agentbricks"
 [[tools]]
 id = "sandbox"
 source = { kind = "sandbox", service = "system.ai.sandbox" }
-policy = { downscope = [{ resource = "workspace:/Workspace/Shared" }] }
+policy = { downscope = [{ resource = "volume:main.data.files" }] }
 """,
     )
 
@@ -245,7 +339,7 @@ server = "agentbricks"
 [[tools]]
 id = "sandbox"
 source = {{ kind = "sandbox", service = "system.ai.sandbox" }}
-policy = {{ downscope = [{{ resource = "workspace:/Workspace/Shared" }}], databricks_access_token_included = {value} }}
+policy = {{ downscope = [{{ resource = "volume:main.data.files" }}], databricks_access_token_included = {value} }}
 """,
     )
 
@@ -339,7 +433,7 @@ def test_genie_specs_reject_unrelated_sources(kind, field):
 def test_genie_specs_reject_downscope(kind):
     values = {"space_id": "a" * 32} if kind == "genie_agent" else {}
     with pytest.raises(AgentCliError, match="downscope"):
-        ToolSpec("sales", ToolSource(kind=kind, **values), ToolPolicy((Scope.table("c.s.t"),)))
+        ToolSpec("sales", ToolSource(kind=kind, **values), ToolPolicy((Scope.volume("c.s.v"),)))
 
 
 @pytest.mark.parametrize("kind", ["genie_one", "mcp", "uc_function", "sandbox"])
@@ -488,7 +582,7 @@ def test_write_is_atomic_when_replace_fails(tmp_path: pathlib.Path, monkeypatch)
     def fail_replace(source, target):
         raise OSError("replace failed")
 
-    monkeypatch.setattr("databricks_agentbricks.agent_project.os.replace", fail_replace)
+    monkeypatch.setattr("databricks_agentbricks.projects.agent_project.os.replace", fail_replace)
     with pytest.raises(AgentCliError, match="replace failed"):
         project.write()
 

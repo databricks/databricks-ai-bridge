@@ -36,11 +36,10 @@ from databricks.sdk.service.catalog import SecurableType
 FRAMEWORKS = ("langgraph",)
 AUTHORING_PATHS = ("cli", "direct")
 RUNTIMES = ("dev", "deploy")
-TOOL_KINDS = ("sandbox_table", "sandbox_volume", "mcp", "python", "uc_function", "genie")
+TOOL_KINDS = ("sandbox_volume", "mcp", "python", "uc_function", "genie")
 E2E_MODEL = "system.ai.gpt-5-2"
 
 PROMPTS = {
-    "sandbox_table": "",
     "sandbox_volume": "",
     "mcp": (
         "You must use a tool from the configured system.ai.web_search MCP server. "
@@ -58,7 +57,6 @@ PROMPTS = {
 }
 
 EXPECTED = {
-    "sandbox_table": "the exact hidden marker read from the temporary UC table",
     "sandbox_volume": "the exact hidden marker read from the temporary UC volume file",
     "python": "AGENTBRICKS_PYTHON_OK",
     "uc_function": "AGENTBRICKS_UC_OK:matrix",
@@ -68,10 +66,28 @@ EXPECTED = {
 
 _WHEEL_SOURCE_FILES = (
     "databricks_agentkit/_api_client.py",
-    "databricks_agentbricks/tool_access.py",
-    "databricks_agentbricks/app_resources.py",
     "databricks_agentbricks/cli/deploy.py",
+    "databricks_agentbricks/clients/api_client_provider.py",
+    "databricks_agentbricks/clients/apps_client.py",
+    "databricks_agentbricks/clients/apps_user_auth_client.py",
+    "databricks_agentbricks/clients/conversation_store_client.py",
+    "databricks_agentbricks/clients/databricks_cli.py",
+    "databricks_agentbricks/clients/legacy_runtime_store.py",
+    "databricks_agentbricks/clients/managed_runtime_store.py",
+    "databricks_agentbricks/clients/tracing_client.py",
+    "databricks_agentbricks/projects/agent_project.py",
+    "databricks_agentbricks/projects/app_manifest.py",
+    "databricks_agentbricks/projects/config.py",
+    "databricks_agentbricks/projects/resolver.py",
+    "databricks_agentbricks/services/deploy_service.py",
+    "databricks_agentbricks/services/deployment/config.py",
+    "databricks_agentbricks/services/deployment/names.py",
+    "databricks_agentbricks/services/deployment/provisioners.py",
+    "databricks_agentbricks/services/deployment/tool_access.py",
+    "databricks_agentbricks/services/deployment/tool_access_provisioner.py",
 )
+
+_GENIE_WAREHOUSE_RESOURCE_NAME = "ab-e2e-genie-warehouse"
 
 
 class MatrixError(RuntimeError):
@@ -170,9 +186,7 @@ class Runner:
         self.cases: list[ProjectCase] = []
         self.uc_function: str | None = None
         self.transitive_uc_function: str | None = None
-        self.uc_table: str | None = None
         self.uc_volume: str | None = None
-        self.table_marker: str | None = None
         self.volume_marker: str | None = None
         self.volume_file_path: str | None = None
         self.warehouse_id: str | None = None
@@ -397,13 +411,6 @@ class Runner:
         # Leave room for catalog and schema in the 64-character MCP tool name.
         function_name = f"ab_uc_{suffix}"
         self.uc_function = f"{catalog}.{schema_name}.{function_name}"
-        table_name = f"agentbricks_table_{suffix}"
-        self.uc_table = f"{catalog}.{schema_name}.{table_name}"
-        self.table_marker = f"AGENTBRICKS_TABLE_{uuid.uuid4().hex}"
-        self.sql(
-            f"CREATE TABLE `{catalog}`.`{schema_name}`.`{table_name}` "
-            f"AS SELECT '{self.table_marker}' AS marker"
-        )
         volume_name = f"agentbricks_volume_{suffix}"
         self.uc_volume = f"{catalog}.{schema_name}.{volume_name}"
         self.sql(f"CREATE VOLUME `{catalog}`.`{schema_name}`.`{volume_name}`")
@@ -463,7 +470,7 @@ class Runner:
                 if authoring == "cli":
                     self._author_cli(project)
                 else:
-                    self._author_direct(project, framework)
+                    self._author_direct(project, framework, run_suffix)
                 self._write_python_marker(project)
                 app_name = f"agent-bricks-t-{framework[:2]}-{authoring[:2]}-{run_suffix}"
                 case = ProjectCase(framework, authoring, project, app_name)
@@ -566,8 +573,8 @@ class Runner:
         pyproject.write_text(tomlkit.dumps(document), encoding="utf-8")
 
     def _author_cli(self, project: pathlib.Path) -> None:
-        if self.uc_table is None or self.uc_volume is None:
-            raise MatrixError("Sandbox table and volume were not created.")
+        if self.uc_volume is None:
+            raise MatrixError("Sandbox volume was not created.")
         manifest = project / "agent.toml"
         before = manifest.read_bytes()
         rejected = self.run(
@@ -617,8 +624,6 @@ class Runner:
                 "add",
                 "sandbox",
                 "--scope",
-                f"table:{self.uc_table}",
-                "--scope",
                 f"volume:{self.uc_volume}",
                 "--auth",
                 "app",
@@ -665,17 +670,22 @@ class Runner:
             if tools_by_id[tool_id].get("auth") != "app":
                 raise MatrixError(f"CLI-authored {tool_id} binding is not App-auth.")
 
-    def _author_direct(self, project: pathlib.Path, framework: str) -> None:
-        if self.uc_table is None or self.uc_volume is None:
-            raise MatrixError("Sandbox table and volume were not created.")
+    def _author_direct(self, project: pathlib.Path, framework: str, run_suffix: str) -> None:
+        if self.uc_volume is None:
+            raise MatrixError("Sandbox volume was not created.")
+        # `agentbricks init` binds a default tracing experiment, which deploy attaches as a non-tool
+        # App resource; mirror that here so the direct path also carries one (and the deploy-resource
+        # preservation check has something to preserve). Follows default_experiment_name's shape.
+        slug = re.sub(r"[^a-z0-9-]+", "-", project.name.lower()).strip("-") or "agent"
+        experiment_name = f"/Shared/agentbricks_traces/{slug}-{run_suffix}"
         fixture = pathlib.Path(__file__).parent / "fixtures" / "direct_agent.toml"
         manifest = (
             fixture.read_text(encoding="utf-8")
             .replace("__FRAMEWORK__", framework)
             .replace("__UC_FUNCTION__", self.uc_function or "")
             .replace("__GENIE_SPACE_ID__", self.genie_space_id or "")
-            .replace("__UC_TABLE__", self.uc_table)
             .replace("__UC_VOLUME__", self.uc_volume)
+            .replace("__EXPERIMENT_NAME__", experiment_name)
         )
         target = project / "agent.toml"
         self.transcript.file_step(target, "direct authoring; no agentbricks tools command")
@@ -789,6 +799,7 @@ class Runner:
                 timeout=2400,
             )
             app = self._wait_for_app(case.app_name)
+            app = self._attach_genie_warehouse(app)
             initial_grants = self._grant_snapshot(app)
             repeat_grants = None
             idempotent = None
@@ -920,6 +931,60 @@ class Runner:
             time.sleep(15)
         raise MatrixError(f"App {name} did not become ACTIVE.")
 
+    def _attach_genie_warehouse(self, app: dict[str, Any]) -> dict[str, Any]:
+        space_id = self.genie_space_id
+        if not space_id:
+            raise MatrixError("A Genie space is required to provision its backing warehouse.")
+        warehouse_id = WorkspaceClient(profile=self.profile).genie.get_space(space_id).warehouse_id
+        if not warehouse_id:
+            raise MatrixError(f"Genie space {space_id!r} has no backing SQL warehouse.")
+        app_name = app.get("name")
+        resources = app.get("resources") or []
+        if not isinstance(app_name, str) or not app_name:
+            raise MatrixError(f"App response has no name: {app}")
+        if not isinstance(resources, list) or not all(
+            isinstance(resource, dict) for resource in resources
+        ):
+            raise MatrixError(f"App resources are not a list of objects: {resources}")
+        desired = {
+            "name": _GENIE_WAREHOUSE_RESOURCE_NAME,
+            "sql_warehouse": {"id": warehouse_id, "permission": "CAN_USE"},
+        }
+        matching = [resource for resource in resources if resource.get("name") == desired["name"]]
+        if matching and matching != [desired]:
+            raise MatrixError("Existing matrix Genie warehouse resource does not match the space.")
+        if not matching:
+            self.databricks(
+                [
+                    "apps",
+                    "create-update",
+                    app_name,
+                    "--json",
+                    json.dumps(
+                        {
+                            "app": {"resources": [*resources, desired]},
+                            "update_mask": "resources",
+                        }
+                    ),
+                ]
+            )
+        for _ in range(24):
+            updated = self.databricks(["apps", "get", app_name])
+            current_resources = updated.get("resources")
+            if isinstance(current_resources, list) and any(
+                isinstance(resource, dict)
+                and resource.get("name") == desired["name"]
+                and isinstance(resource.get("sql_warehouse"), dict)
+                and all(
+                    resource["sql_warehouse"].get(key) == value
+                    for key, value in desired["sql_warehouse"].items()
+                )
+                for resource in current_resources
+            ):
+                return updated
+            time.sleep(5)
+        raise MatrixError(f"App {app_name!r} did not attach the Genie SQL warehouse.")
+
     def _grant_snapshot(self, app: dict[str, Any]) -> dict[str, Any]:
         principal = app.get("service_principal_client_id")
         if not principal or self.uc_function is None or self.transitive_uc_function is None:
@@ -945,9 +1010,15 @@ class Runner:
         )
         if not unrelated_resources:
             raise MatrixError("Expected a non-tool App resource to prove preservation on redeploy.")
+        if not any(
+            resource.get("name") == _GENIE_WAREHOUSE_RESOURCE_NAME
+            and isinstance(resource.get("sql_warehouse"), dict)
+            and resource["sql_warehouse"].get("permission") == "CAN_USE"
+            for resource in unrelated_resources
+        ):
+            raise MatrixError("The App is missing its user-managed Genie SQL warehouse resource.")
         expected_app_resources = {
             ("uc_securable", self.uc_function, "FUNCTION", "EXECUTE"),
-            ("uc_securable", self.uc_table, "TABLE", "SELECT"),
             ("uc_securable", self.uc_volume, "VOLUME", "READ_VOLUME"),
             ("genie_space", self.genie_space_id or "", "GENIE_SPACE", "CAN_RUN"),
         }
@@ -1081,16 +1152,7 @@ class Runner:
             started = time.monotonic()
             prompt = PROMPTS[tool_kind]
             expected_marker: str | None = None
-            if tool_kind == "sandbox_table":
-                if self.uc_table is None or self.table_marker is None:
-                    raise MatrixError("Sandbox table marker was not created.")
-                prompt = (
-                    "You must call the sandbox tool. In the sandbox, use Python and Spark SQL "
-                    f"to run SELECT marker FROM {self.uc_table} and read its sole row. "
-                    "Return only the exact value read from the table; do not fabricate it."
-                )
-                expected_marker = self.table_marker
-            elif tool_kind == "sandbox_volume":
+            if tool_kind == "sandbox_volume":
                 if self.volume_file_path is None or self.volume_marker is None:
                     raise MatrixError("Sandbox volume marker was not created.")
                 prompt = (
@@ -1147,8 +1209,9 @@ class Runner:
         invocation_id = str(uuid.uuid4())
         body = {
             "id": invocation_id,
+            # session_id is a top-level invocation field; the adapter rejects it nested in input.
+            "session_id": invocation_id,
             "input": {
-                "session_id": invocation_id,
                 "model": E2E_MODEL,
                 "messages": [{"role": "user", "content": prompt}],
             },
@@ -1224,9 +1287,7 @@ class Runner:
             "wheel_sha256": _sha256(self.wheel),
             "uc_function": self.uc_function,
             "transitive_uc_function": self.transitive_uc_function,
-            "uc_table": self.uc_table,
             "uc_volume": self.uc_volume,
-            "table_marker": self.table_marker,
             "volume_marker": self.volume_marker,
             "volume_file_path": self.volume_file_path,
             "genie_space_id": self.genie_space_id,
@@ -1325,7 +1386,36 @@ class Runner:
             if stores_ok:
                 cleaned_stores.add(case.app_name)
 
+        apps_with_deleted_runtime_stores: set[str] = set()
         for app in self.apps:
+            if app in apps_with_stores:
+                # The deploy-created Runtime Store owns a dedicated Lakebase database; it must be
+                # deleted before the role, or the role delete fails on database ownership.
+                result = self.run(
+                    [
+                        "databricks",
+                        "api",
+                        "delete",
+                        f"/api/2.0/agents/runtime-stores/{app}",
+                        *self._profile_args(),
+                    ],
+                    timeout=600,
+                    check=False,
+                )
+                output = f"{result.stdout}\n{result.stderr}".strip()
+                if result.returncode == 0 or "404" in output or "not_found" in output.lower():
+                    apps_with_deleted_runtime_stores.add(app)
+                    self.cleanup_results.append(
+                        {"resource": f"runtime-store:{app}", "status": "deleted"}
+                    )
+                else:
+                    self.cleanup_results.append(
+                        {
+                            "resource": f"runtime-store:{app}",
+                            "status": "failed",
+                            "detail": output,
+                        }
+                    )
             result = self.run(
                 ["databricks", "apps", "delete", app, *self._profile_args()],
                 timeout=600,
@@ -1354,8 +1444,9 @@ class Runner:
                     "confirmed_absent_at": dt.datetime.now(dt.timezone.utc).isoformat(),
                 }
             )
+            self._delete_deployment_source(app)
             role_target = role_targets.get(app)
-            if role_target and app in cleaned_stores:
+            if role_target and app in cleaned_stores and app in apps_with_deleted_runtime_stores:
                 try:
                     result = self.run(
                         [
@@ -1419,22 +1510,6 @@ class Runner:
                         "detail": str(exc),
                     }
                 )
-        if self.uc_table:
-            catalog, schema, table_name = self.uc_table.split(".")
-            try:
-                self.sql(f"DROP TABLE IF EXISTS `{catalog}`.`{schema}`.`{table_name}`")
-                self.cleanup_results.append(
-                    {"resource": f"table:{self.uc_table}", "status": "deleted"}
-                )
-            except Exception as exc:
-                self.transcript.write(f"cleanup warning | UC table | {exc}")
-                self.cleanup_results.append(
-                    {
-                        "resource": f"table:{self.uc_table}",
-                        "status": "failed",
-                        "detail": str(exc),
-                    }
-                )
         if self.uc_volume:
             catalog, schema, volume_name = self.uc_volume.split(".")
             if self.volume_file_path:
@@ -1474,6 +1549,29 @@ class Runner:
             result.get("status") == "failed" for result in self.cleanup_results
         )
         self._write_evidence()
+
+    def _delete_deployment_source(self, app: str) -> None:
+        # `agentbricks deploy` syncs source to this default path; `apps delete` leaves it behind.
+        # TODO: switch to `agentbricks deployments delete` once it also removes the synced source.
+        path: str | None = None
+        try:
+            client = WorkspaceClient(profile=self.profile)
+            user = client.current_user.me().user_name
+            path = f"/Workspace/Users/{user}/agentbricks_deployments/{app}"
+            try:
+                client.workspace.delete(path, recursive=True)
+            except NotFound:
+                pass
+            self.cleanup_results.append({"resource": f"workspace:{path}", "status": "deleted"})
+        except Exception as exc:
+            self.transcript.write(f"cleanup warning | deployment source for {app} | {exc}")
+            self.cleanup_results.append(
+                {
+                    "resource": f"workspace:{path or app}",
+                    "status": "failed",
+                    "detail": str(exc),
+                }
+            )
 
     def _wait_for_app_deleted(self, name: str, timeout: float = 1200) -> None:
         client = WorkspaceClient(profile=self.profile)
@@ -1563,7 +1661,7 @@ def _http_json(url: str, body: dict[str, Any], headers: dict[str, str]) -> dict[
 
 def _assert_semantics(tool_kind: str, serialized: str, expected_marker: str | None = None) -> None:
     lowered = serialized.lower()
-    if tool_kind in {"sandbox_table", "sandbox_volume"}:
+    if tool_kind == "sandbox_volume":
         if expected_marker is None:
             raise MatrixError(f"No hidden marker was provided for {tool_kind!r}.")
         if expected_marker not in serialized:
@@ -1611,8 +1709,8 @@ def _curl_command(invocation_url: str, prompt: str, authenticated: bool) -> str:
     body = json.dumps(
         {
             "id": "<client-generated-uuid>",
+            "session_id": "<stable-session-id>",
             "input": {
-                "session_id": "<stable-session-id>",
                 "model": E2E_MODEL,
                 "messages": [{"role": "user", "content": prompt}],
             },
@@ -1790,13 +1888,11 @@ def verify_evidence(path: pathlib.Path, *, require_cleanup: bool = True) -> int:
             sys.stdout.write(f"duplicate rows: {duplicates}\n")
         return 1
     sandbox_markers = {
-        "sandbox_table": document.get("table_marker"),
         "sandbox_volume": document.get("volume_marker"),
     }
     volume_file_path = document.get("volume_file_path")
     if (
         any(not isinstance(marker, str) or not marker for marker in sandbox_markers.values())
-        or sandbox_markers["sandbox_table"] == sandbox_markers["sandbox_volume"]
         or not isinstance(volume_file_path, str)
         or not volume_file_path.startswith("/Volumes/")
     ):
@@ -1857,6 +1953,23 @@ def verify_evidence(path: pathlib.Path, *, require_cleanup: bool = True) -> int:
         )
     ):
         sys.stdout.write("cleanup evidence: required cleanup is incomplete or failed\n")
+        if isinstance(cleanup, list):
+            for result in cleanup:
+                if result.get("status") == "failed":
+                    sys.stdout.write(
+                        f"cleanup failed | {result.get('resource')} | {result.get('detail')}\n"
+                    )
+                # cleanup() always stamps confirmed_absent_at on deleted apps, so
+                # this only fires for evidence from an older runner or a hand-edited file.
+                elif (
+                    result.get("resource", "").startswith("app:")
+                    and result.get("status") == "deleted"
+                    and not result.get("confirmed_absent_at")
+                ):
+                    sys.stdout.write(
+                        f"cleanup unconfirmed | {result.get('resource')} |"
+                        " missing confirmed_absent_at\n"
+                    )
         return 1
     sys.stdout.write(
         f"{len(grant_checks)} grant snapshots passed; {len(repeated)} repeat deploy idempotent\n"
@@ -1969,14 +2082,21 @@ def main() -> int:
         return verify_evidence(runner.output / "evidence.json")
     finally:
         if not precheck_passed:
+            # Nothing reruns cleanup after CI, so retained resources accumulate until workspace
+            # quotas (e.g. the 500-role Lakebase limit) break later runs. Logs and evidence keep
+            # the diagnosis; pass --keep-resources to retain live resources instead.
+            if runner.cleanup_required:
+                try:
+                    runner.cleanup()
+                except Exception as exc:
+                    runner.transcript.write(f"cleanup warning | {exc}")
             runner.ended_at = dt.datetime.now(dt.timezone.utc).isoformat()
             try:
                 runner._write_evidence()
             except Exception as exc:
                 runner.transcript.write(f"evidence warning | {exc}")
-            runner.transcript.write(
-                "Resources retained after failure for diagnosis; rerun cleanup after fixing."
-            )
+            if not runner.cleanup_required:
+                runner.transcript.write("Resources retained after failure (--keep-resources).")
 
 
 if __name__ == "__main__":

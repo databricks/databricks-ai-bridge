@@ -8,12 +8,12 @@ from typing import Any, Literal
 
 import click
 
-from databricks_agentbricks import render
-from databricks_agentbricks.agent_project import AgentProject, Scope, ToolSpec
-from databricks_agentbricks.cli.help import _example_epilog
 from databricks_agentbricks.cli.mcp import _add_command, _list_services, _validate_schema
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.project_config import require_managed_tool_support
+from databricks_agentbricks.presentation import render
+from databricks_agentbricks.presentation.help import _example_epilog
+from databricks_agentbricks.projects.agent_project import AgentProject, Scope, ToolSpec
+from databricks_agentbricks.projects.config import require_managed_tool_support
 
 
 def _identifier(value: str) -> str:
@@ -141,7 +141,7 @@ def tools() -> None:
 
     \b
       sandbox       Query Unity Catalog data via system.ai.sandbox, scoped
-                    to the tables, volumes, or paths you choose.
+                    to the volumes you choose.
       mcp           A Databricks-managed MCP service (see `agentbricks tools list --kind mcp`),
                     e.g. system.ai.web_search.
       uc-function   An existing Unity Catalog function (catalog.schema.function).
@@ -184,7 +184,7 @@ def _source_option(function):
     "scopes",
     multiple=True,
     required=True,
-    help="Allowed table:, volume:, or workspace: resource. Repeat for multiple scopes.",
+    help="Allowed volume: resource. Repeat for multiple scopes.",
 )
 @click.option(
     "--permission",
@@ -255,12 +255,14 @@ def add_mcp(
 @add.command("uc-function")
 @click.argument("function_name")
 @click.option("--name", "tool_id", default=None)
+@click.option("--auth", type=click.Choice(["user", "app"]), default="user", show_default=True)
 @_source_option
 @click.pass_obj
 def add_uc_function(
     obj: Any,
     function_name: str,
     tool_id: str | None,
+    auth: Literal["user", "app"],
     source: pathlib.Path,
 ) -> None:
     """Add an existing Unity Catalog function (catalog.schema.function) as a tool.
@@ -274,6 +276,7 @@ def add_uc_function(
         ToolSpec.uc_function(
             tool_id or _default_id(function_name),
             function=function_name,
+            auth=auth,
         ),
     )
 

@@ -17,7 +17,7 @@ from click.testing import CliRunner
 
 from databricks_agentbricks.cli import init as init_mod
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.project_types import AgentFramework, AgentServer
+from databricks_agentbricks.projects.types import AgentFramework, AgentServer
 
 
 class _Ctx:
@@ -424,7 +424,8 @@ def test_existing_prepares_migration_without_changing_application(
 
     # Every supported agent finds the one bundle through a pointer, rather than its own copy.
     pointers = [
-        tmp_path / root / "skills/agent-bricks-migrate/SKILL.md" for root in (".claude", ".agent")
+        tmp_path / root / "skills/agent-bricks-migrate/SKILL.md"
+        for root in (".agents", ".claude", ".agent")
     ]
     assert payload["pointers"] == [str(pointer) for pointer in pointers]
     for pointer in pointers:

@@ -8,7 +8,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from databricks_agentbricks.agent_project import AgentProject, ToolSpec
+from databricks_agentbricks.projects.agent_project import AgentProject, ToolSpec
 from databricks_agentkit import DurableAgentServer
 from databricks_agentkit.runtime.store import (
     RUNTIME_STORE_DATABASE_ENV,
@@ -403,6 +403,47 @@ async def test_foreground_stream_returns_sse() -> None:
     assert "event: run.started" in response.text
     assert 'event: delta\ndata: {"type": "delta", "content": "hello"}' in response.text
     assert "event: run.completed" in response.text
+
+
+@pytest.mark.asyncio
+async def test_persisted_delta_wakes_concurrent_streams_before_poll_interval() -> None:
+    initial_reads = asyncio.Event()
+    finish = asyncio.Event()
+
+    class ObservedStore(InMemoryRuntimeStore):
+        reads = 0
+
+        async def events(self, invocation_id=None, after_sequence=None, session_id=None):
+            events = await super().events(invocation_id, after_sequence, session_id)
+            self.reads += 1
+            if self.reads == 2:
+                initial_reads.set()
+            return events
+
+    app = DurableAgentServer(runtime_store=ObservedStore())
+    app._runtime.poll_seconds = 60
+
+    @app.invoke
+    async def invoke(input, context):
+        await initial_reads.wait()
+        await context.emit({"type": "delta", "content": "hello"})
+        await finish.wait()
+        return input
+
+    async with running_client(app) as client:
+        await client.post("/api/invocations", json={"id": _RUN_1, "background": True})
+        streams = [app._event_stream(_RUN_1, after=1) for _ in range(2)]
+        try:
+            chunks = await asyncio.wait_for(asyncio.gather(*(anext(s) for s in streams)), 2)
+            assert (
+                chunks
+                == ['id: 2\nevent: delta\ndata: {"type": "delta", "content": "hello"}\n\n'] * 2
+            )
+        finally:
+            finish.set()
+            for stream in streams:
+                await stream.aclose()
+        assert app._stream_updates == {}
 
 
 @pytest.mark.asyncio

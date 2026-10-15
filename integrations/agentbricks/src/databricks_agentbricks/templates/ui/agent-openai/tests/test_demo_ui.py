@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 from runtime import ui
 
 from databricks_agentkit import DurableAgentServer
+from databricks_agentkit.runtime.auth import InvocationAuthPolicy
 from databricks_agentkit.runtime.store import (
     RUNTIME_STORE_DATABASE_ENV,
     RUNTIME_STORE_LAKEBASE_BRANCH_ENV,
@@ -125,7 +126,9 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
     async def invoke_handler(request, context):
         return {"output": []}
 
-    app = DurableAgentServer(runtime_store=InMemoryRuntimeStore())
+    app = DurableAgentServer(
+        runtime_store=InMemoryRuntimeStore(), auth_policy=InvocationAuthPolicy()
+    )
     app.invoke(invoke_handler)
     app.recover(invoke_handler)
     ui.install_ui(app)
@@ -416,19 +419,19 @@ def test_discover_chat_models_falls_back_to_default_on_error(monkeypatch):
     assert ui._discover_chat_models() == ["system.ai.claude-sonnet-4-5"]
 
 
-def test_discover_chat_models_caps_the_picker(monkeypatch):
+def test_discover_chat_models_keeps_every_model(monkeypatch):
     monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-sonnet-4-5")
     monkeypatch.setattr(
         ui,
         "list_ai_gateway_model_services",
-        # More services than the cap allows; synthetic because no real catalog is this long.
         lambda _client: [f"system.ai.test-model-{i:03d}" for i in range(30)],
     )
     monkeypatch.setattr(ui, "workspace_client", lambda: object())
 
     result = ui._discover_chat_models()
-    assert len(result) == ui._MODEL_LIMIT
-    assert result[0] == "system.ai.claude-sonnet-4-5"  # the default survives truncation
+    assert result == ["system.ai.claude-sonnet-4-5"] + [
+        f"system.ai.test-model-{i:03d}" for i in range(30)
+    ]
 
 
 @pytest.mark.asyncio
@@ -442,7 +445,7 @@ async def test_local_history_reads_messages_from_in_process_session(monkeypatch)
                 {"role": "assistant", "content": "saved reply"},
             ]
 
-    monkeypatch.setattr(ss, "session_store", lambda session_id: _FakeSession())
+    monkeypatch.setattr(ss, "session_store", lambda session_id, actor=None: _FakeSession())
     result = await ui._local_history("saved-session")
 
     assert result == {

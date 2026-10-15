@@ -8,12 +8,12 @@ import pytest
 from click.testing import CliRunner
 
 from databricks_agentbricks.cli import deploy as deploy_mod
+from databricks_agentbricks.clients import managed_runtime_store
 from databricks_agentbricks.errors import AgentCliError
 
 
 @pytest.fixture(autouse=True)
 def _managed_runtime_store(monkeypatch):
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "sp-123")
     monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", True)
 
 
@@ -31,13 +31,34 @@ def _runtime_store_response(app_name="agent-bricks-myapp", sp="sp-123"):
     }
 
 
+def _ctx(client, *, output="text"):
+    return types.SimpleNamespace(
+        profile="prof",
+        output=output,
+        api_client_provider=types.SimpleNamespace(get=lambda: client),
+    )
+
+
+def _cli_runner(*, identity=True):
+    def run(args, profile, **kwargs):
+        if args[:2] == ["apps", "get"]:
+            if not identity:
+                return types.SimpleNamespace(returncode=1, stdout="", stderr="not found")
+            return types.SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"service_principal_client_id": "sp-123"}),
+                stderr="",
+            )
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    return run
+
+
 def test_reconcile_runtime_store_creates_with_app_identity() -> None:
     client = mock.Mock()
     client.create_runtime_store.return_value = _runtime_store_response()
 
-    backend = deploy_mod.managed_runtime_store.get_or_create_backend(
-        client, "agent-bricks-myapp", "sp-123"
-    )
+    backend = managed_runtime_store.get_or_create_backend(client, "agent-bricks-myapp", "sp-123")
 
     assert backend.branch == "projects/databricks-internal-custom-agents/branches/production"
     assert backend.database_id == "runtime-agent-bricks-myapp-550e8400-e29b-41d4-a716-446655440000"
@@ -52,9 +73,7 @@ def test_reconcile_runtime_store_reuses_on_already_exists() -> None:
     client.create_runtime_store.side_effect = AgentCliError("exists", error_code="ALREADY_EXISTS")
     client.get_runtime_store.return_value = _runtime_store_response()
 
-    backend = deploy_mod.managed_runtime_store.get_or_create_backend(
-        client, "agent-bricks-myapp", "sp-123"
-    )
+    backend = managed_runtime_store.get_or_create_backend(client, "agent-bricks-myapp", "sp-123")
 
     assert backend.database_id.startswith("runtime-agent-bricks-myapp-")
     client.get_runtime_store.assert_called_once_with("agent-bricks-myapp")
@@ -80,9 +99,7 @@ def test_reconcile_runtime_store_rejects_a_different_or_incomplete_owner(app_nam
     client.get_runtime_store.return_value = resource
 
     with pytest.raises(AgentCliError, match="does not belong to this app identity"):
-        deploy_mod.managed_runtime_store.get_or_create_backend(
-            client, "agent-bricks-myapp", "sp-123"
-        )
+        managed_runtime_store.get_or_create_backend(client, "agent-bricks-myapp", "sp-123")
 
 
 @pytest.mark.parametrize("operation", ["create", "get"])
@@ -98,28 +115,24 @@ def test_reconcile_runtime_store_propagates_api_failure(operation):
         client.create_runtime_store.side_effect = error
 
     with pytest.raises(AgentCliError) as exc:
-        deploy_mod.managed_runtime_store.get_or_create_backend(
-            client, "agent-bricks-myapp", "sp-123"
-        )
+        managed_runtime_store.get_or_create_backend(client, "agent-bricks-myapp", "sp-123")
     assert exc.value is error
 
 
 def test_reconcile_runtime_store_requires_app_service_principal() -> None:
     with pytest.raises(AgentCliError, match="app's service principal"):
-        deploy_mod.managed_runtime_store.get_or_create_backend(
-            mock.Mock(), "agent-bricks-myapp", None
-        )
+        managed_runtime_store.get_or_create_backend(mock.Mock(), "agent-bricks-myapp", None)
 
 
 def test_managed_delete_finishes_before_deleting_app(monkeypatch):
     client = mock.Mock()
     client.get_runtime_store.return_value = _runtime_store_response()
-    cli = mock.Mock()
+    cli = mock.Mock(side_effect=_cli_runner())
     calls = mock.Mock()
     calls.attach_mock(client, "runtime")
     calls.attach_mock(cli, "cli")
     monkeypatch.setattr(deploy_mod, "_databricks", cli)
-    ctx = types.SimpleNamespace(profile="prof", output="json", client=lambda: client)
+    ctx = _ctx(client, output="json")
 
     result = CliRunner().invoke(
         deploy_mod.deployments_delete, ["agent-bricks-myapp", "--yes"], obj=ctx
@@ -128,6 +141,12 @@ def test_managed_delete_finishes_before_deleting_app(monkeypatch):
     assert result.exit_code == 0, result.output
     assert json.loads(result.output) == {"deleted": "agent-bricks-myapp"}
     assert calls.mock_calls == [
+        mock.call.cli(
+            ["apps", "get", "agent-bricks-myapp", "-o", "json"],
+            "prof",
+            capture=True,
+            check=False,
+        ),
         mock.call.runtime.get_runtime_store("agent-bricks-myapp"),
         mock.call.runtime.delete_runtime_store("agent-bricks-myapp"),
         mock.call.cli(
@@ -144,9 +163,9 @@ def test_managed_cleanup_errors_retain_the_app(monkeypatch, operation, error_cod
     client = mock.Mock()
     client.get_runtime_store.return_value = _runtime_store_response()
     getattr(client, operation).side_effect = AgentCliError("cleanup failed", error_code=error_code)
-    cli = mock.Mock()
+    cli = mock.Mock(side_effect=_cli_runner())
     monkeypatch.setattr(deploy_mod, "_databricks", cli)
-    ctx = types.SimpleNamespace(profile="prof", output="text", client=lambda: client)
+    ctx = _ctx(client)
 
     result = CliRunner().invoke(
         deploy_mod.deployments_delete, ["agent-bricks-myapp", "--yes"], obj=ctx
@@ -154,7 +173,9 @@ def test_managed_cleanup_errors_retain_the_app(monkeypatch, operation, error_cod
 
     assert result.exit_code != 0
     assert "deployment was retained" in result.output
-    cli.assert_not_called()
+    assert not any(
+        call.args and call.args[0][:2] == ["apps", "delete"] for call in cli.call_args_list
+    )
 
 
 @pytest.mark.parametrize("operation", ["get_runtime_store", "delete_runtime_store"])
@@ -162,24 +183,24 @@ def test_managed_store_already_absent_allows_app_deletion(monkeypatch, operation
     client = mock.Mock()
     client.get_runtime_store.return_value = _runtime_store_response()
     getattr(client, operation).side_effect = AgentCliError("absent", error_code="NOT_FOUND")
-    cli = mock.Mock()
+    cli = mock.Mock(side_effect=_cli_runner())
     monkeypatch.setattr(deploy_mod, "_databricks", cli)
-    ctx = types.SimpleNamespace(profile="prof", output="text", client=lambda: client)
+    ctx = _ctx(client)
 
     result = CliRunner().invoke(
         deploy_mod.deployments_delete, ["agent-bricks-myapp", "--yes"], obj=ctx
     )
 
     assert result.exit_code == 0, result.output
-    cli.assert_called_once()
+    assert any(call.args and call.args[0][:2] == ["apps", "delete"] for call in cli.call_args_list)
 
 
 def test_managed_delete_rejects_a_different_owner(monkeypatch):
     client = mock.Mock()
     client.get_runtime_store.return_value = _runtime_store_response(sp="different-sp")
-    cli = mock.Mock()
+    cli = mock.Mock(side_effect=_cli_runner())
     monkeypatch.setattr(deploy_mod, "_databricks", cli)
-    ctx = types.SimpleNamespace(profile="prof", output="text", client=lambda: client)
+    ctx = _ctx(client)
 
     result = CliRunner().invoke(
         deploy_mod.deployments_delete, ["agent-bricks-myapp", "--yes"], obj=ctx
@@ -187,7 +208,9 @@ def test_managed_delete_rejects_a_different_owner(monkeypatch):
 
     assert result.exit_code != 0
     client.delete_runtime_store.assert_not_called()
-    cli.assert_not_called()
+    assert not any(
+        call.args and call.args[0][:2] == ["apps", "delete"] for call in cli.call_args_list
+    )
 
 
 def test_managed_delete_rejects_an_unexpected_resource_name(monkeypatch):
@@ -195,9 +218,9 @@ def test_managed_delete_rejects_an_unexpected_resource_name(monkeypatch):
     resource = _runtime_store_response()
     resource["name"] = "runtime-stores/other-app"
     client.get_runtime_store.return_value = resource
-    cli = mock.Mock()
+    cli = mock.Mock(side_effect=_cli_runner())
     monkeypatch.setattr(deploy_mod, "_databricks", cli)
-    ctx = types.SimpleNamespace(profile="prof", output="text", client=lambda: client)
+    ctx = _ctx(client)
 
     result = CliRunner().invoke(
         deploy_mod.deployments_delete, ["agent-bricks-myapp", "--yes"], obj=ctx
@@ -205,14 +228,16 @@ def test_managed_delete_rejects_an_unexpected_resource_name(monkeypatch):
 
     assert result.exit_code != 0
     client.delete_runtime_store.assert_not_called()
-    cli.assert_not_called()
+    assert not any(
+        call.args and call.args[0][:2] == ["apps", "delete"] for call in cli.call_args_list
+    )
 
 
 def test_managed_delete_cannot_skip_cleanup_when_identity_lookup_fails(monkeypatch):
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: None)
-    cli = mock.Mock()
+    cli = mock.Mock(side_effect=_cli_runner(identity=False))
     monkeypatch.setattr(deploy_mod, "_databricks", cli)
-    ctx = types.SimpleNamespace(profile="prof", output="text", client=mock.Mock())
+    client = mock.Mock()
+    ctx = _ctx(client)
 
     result = CliRunner().invoke(
         deploy_mod.deployments_delete, ["agent-bricks-myapp", "--yes"], obj=ctx
@@ -220,22 +245,24 @@ def test_managed_delete_cannot_skip_cleanup_when_identity_lookup_fails(monkeypat
 
     assert result.exit_code != 0
     assert "deployment was retained" in result.output
-    ctx.client.assert_not_called()
-    cli.assert_not_called()
+    client.assert_not_called()
+    assert cli.call_count == 1
+    assert cli.call_args.args[0][:2] == ["apps", "get"]
 
 
 def test_legacy_delete_preserves_existing_behavior(monkeypatch):
     monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", False)
-    cli = mock.Mock()
+    cli = mock.Mock(side_effect=_cli_runner())
     monkeypatch.setattr(deploy_mod, "_databricks", cli)
-    ctx = types.SimpleNamespace(profile="prof", output="text", client=mock.Mock())
+    client = mock.Mock()
+    ctx = _ctx(client)
 
     result = CliRunner().invoke(
         deploy_mod.deployments_delete, ["agent-bricks-myapp", "--yes"], obj=ctx
     )
 
     assert result.exit_code == 0, result.output
-    ctx.client.assert_not_called()
+    client.assert_not_called()
     cli.assert_called_once_with(
         ["apps", "delete", "agent-bricks-myapp"],
         "prof",
