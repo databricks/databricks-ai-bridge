@@ -1165,6 +1165,21 @@ def test_async_lakebase_sqlalchemy_infers_username():
     assert sa.username == "alice@databricks.com"
 
 
+def test_async_lakebase_sqlalchemy_accepts_explicit_username():
+    workspace = _make_workspace(user_name="ignored@databricks.com")
+    patch_engine, patch_event, _ = _make_sqlalchemy_patches(workspace)
+
+    with patch_engine, patch_event:
+        sa = AsyncLakebaseSQLAlchemy(
+            instance_name="lake-instance",
+            username="app-service-principal",
+            workspace_client=workspace,
+        )
+
+    assert sa.username == "app-service-principal"
+    workspace.current_user.me.assert_not_called()
+
+
 def test_async_lakebase_sqlalchemy_engine_property():
     """Test that engine property returns the created AsyncEngine."""
     workspace = _make_workspace()
@@ -1207,6 +1222,27 @@ def test_async_lakebase_sqlalchemy_creates_engine_with_correct_url():
     assert url.host == "db.host"
     assert url.port == 5432
     assert url.database == "databricks_postgres"
+
+
+def test_async_lakebase_sqlalchemy_uses_explicit_database():
+    from unittest.mock import patch
+
+    workspace = _make_workspace()
+    mock_engine = MagicMock(sync_engine=MagicMock())
+
+    with (
+        patch(
+            "sqlalchemy.ext.asyncio.create_async_engine", return_value=mock_engine
+        ) as mock_create,
+        patch("sqlalchemy.event.listens_for", return_value=lambda f: f),
+    ):
+        AsyncLakebaseSQLAlchemy(
+            instance_name="lake-instance",
+            database="runtime-store-db",
+            workspace_client=workspace,
+        )
+
+    assert mock_create.call_args.args[0].database == "runtime-store-db"
 
 
 def test_async_lakebase_sqlalchemy_passes_extra_engine_kwargs():

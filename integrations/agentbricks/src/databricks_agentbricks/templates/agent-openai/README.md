@@ -1,0 +1,156 @@
+# OpenAI Agents template
+
+An OpenAI Agents SDK agent served by `databricks_agentkit.DurableAgentServer`. The managed runtime keeps invocation state and
+events in memory during `agentbricks dev`. Deployment attaches a persistent Runtime Store, so invocation
+state and events survive process loss and interrupted work can be recovered.
+
+The generated project separates portable agent execution from the managed HTTP protocol:
+
+```text
+client -> runtime/main.py -> runtime/adapter.py -> agent/agent.py:run_agent
+```
+
+- `agent/agent.py` owns the framework-native agent, sessions, tools, MCP lifetime, HITL state, and
+  `run_agent`.
+- `agent/checkpoints.py` persists the example's checkpoints through the Session Store.
+- `runtime/adapter.py` owns the agent-author integration hooks: runtime input/output translation plus
+  `invoke` and `recover`.
+- `runtime/main.py` constructs the server and registers those hooks.
+
+To bring an existing Agents SDK agent, keep its normal execution code in `agent/agent.py`, expose a
+`run_agent` function that returns the native streaming result, and make only the small payload/event
+mapping changes needed in `runtime/adapter.py`.
+
+## Run locally
+
+```bash
+agentbricks dev
+```
+
+The API is available at `http://localhost:8000/api/invocations`. Every request supplies a UUID `id`.
+That ID is the invocation identifier and idempotency key. Supply the stable application session as
+the top-level `session_id`; agent-specific values live inside the opaque `input` object:
+
+```bash
+SESSION_ID=$(uuidgen)
+INVOCATION_ID=$(uuidgen)
+
+curl -sS http://localhost:8000/api/invocations \
+  -H 'Content-Type: application/json' \
+  -d "{\"id\":\"$INVOCATION_ID\",\"session_id\":\"$SESSION_ID\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":\"What time is it? Use your tool.\"}]}}"
+```
+
+Reuse `SESSION_ID` for multi-turn conversation history. Generate a new `INVOCATION_ID` for each
+turn. Retrying the same request with the same invocation ID returns the persisted result; changing
+the request while reusing the ID returns `409`.
+
+## Invocation modes
+
+- Foreground: omit `background` and `stream`; the response contains the agent result under `output`.
+- Foreground streaming: set `stream: true`; the response is SSE backed by persisted events.
+- Background: set `background: true`; poll the returned `status_url`.
+- Background streaming: set both flags; the `202` response includes `status_url` and `events_url`.
+
+```bash
+INVOCATION_ID=$(uuidgen)
+curl -sN http://localhost:8000/api/invocations \
+  -H 'Content-Type: application/json' \
+  -d "{\"id\":\"$INVOCATION_ID\",\"session_id\":\"$SESSION_ID\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":\"Count to three.\"}]},\"stream\":true}"
+
+INVOCATION_ID=$(uuidgen)
+curl -sS http://localhost:8000/api/invocations \
+  -H 'Content-Type: application/json' \
+  -d "{\"id\":\"$INVOCATION_ID\",\"session_id\":\"$SESSION_ID\",\"input\":{\"messages\":[{\"role\":\"user\",\"content\":\"Summarize durable agents.\"}]},\"background\":true}" | jq
+curl -sS "http://localhost:8000/api/invocations/$INVOCATION_ID" | jq
+```
+
+SSE records contain events translated by `runtime/adapter.py`: token `delta`s, completed `message`s,
+and HITL `interrupt`s. Replay from a cursor with
+`GET /api/invocations/{id}/events?after={sequence}`.
+
+## Human approval
+
+`send_message` requires approval. When output or the event stream contains an `interrupt`, submit a
+new invocation with the same application session:
+
+```json
+{
+  "id": "<new-uuid>",
+  "session_id": "<same-session-id>",
+  "input": {
+    "resume": {"decisions": [{"type": "approve", "call_id": "<action-request-call-id>"}]}
+  }
+}
+```
+
+Supply one decision per `action_requests` entry, in order, using its `call_id`. A decision's `type`
+must be `approve` or `reject`; rejections may include a string `message`.
+
+Pending approvals survive restarts when a Session Store is bound. The harness saves the paused SDK
+state separately from conversation history; without a binding, it stays process-local. Invalid
+decisions leave the approval intact. A valid decision consumes it before execution, so submitting
+it again cannot repeat the action. If execution fails after acceptance, check the invocation and
+tool side effects: the outcome may be uncertain, and the approval will not be retried automatically.
+You can start a new conversation turn; any later approval prompt requires its own decisions.
+Concurrent workers require a shared Runtime Store to serialize invocations within a session.
+
+## Crash recovery
+
+`runtime/main.py` always registers the adapter's `invoke` and `recover` hooks. Both call the same
+`agent.agent.run_agent` function. OpenAI Agents SDK does not currently expose LangGraph-style node
+checkpoints. An approval already accepted by the harness cannot be recovered by rerunning it. For
+other invocations, `recover` replays the original application input against the same session. The
+adapter prepends a developer instruction telling the agent that this is a recovery attempt and that
+some tool calls or external side effects may already have completed or may still be in progress.
+When deployment attaches a Runtime Store, invocation state and emitted events survive process loss
+and the runtime can call `recover` on a replacement worker. Without a Runtime Store, invocation state
+remains process-local and interrupted work is not automatically recovered. Replayed turns may repeat
+external side effects; tools must be idempotent.
+
+## Chat app
+
+The browser UI is included by default. It generates a stable application session ID in local
+storage, sends it as the top-level `session_id`, and generates a fresh invocation UUID per turn.
+Use `agentbricks init --framework openai --disable-chat-app` for API-only output.
+
+## Configure and deploy
+
+- Change the model, instructions, tools, and framework-native execution in `agent/agent.py`.
+- Change `runtime/adapter.py` only to map a different application input/output contract.
+- Add local tools under `agent/tools/`; modules are auto-discovered.
+- Add MCP servers in `agent/mcps.py` or with `agentbricks tools add mcp`.
+- Bind long-term memory with `agentbricks memory bind <store>`.
+- Bind durable transcript history with `agentbricks sessions bind <store>`.
+
+```bash
+agentbricks --profile <profile> deploy agent-openai --source .
+```
+
+When deployment provisions a dedicated Runtime Store, only the app-owned
+`databricks_agentkit_runtime_<hash>` schema and runtime tables are added. Managed Runtime Store
+deployments use their own default schema.
+
+To keep a session on one app replica (sticky routing), set the `X-Routing-Key` request header to your
+stable session id on every call. It is a routing hint only: non-blank, no more than 128 UTF-8 bytes,
+used verbatim, and it takes precedence over the legacy `__Host-databricks-app-router` cookie. It is not
+authentication and is never used as the application's session id. Send that separately as the
+top-level `session_id` in the request body.
+
+# Request-user authorization
+
+Declared tools in `agent.toml` select `auth = "user"` or `auth = "app"`; legacy missing auth
+continues to use the application/default identity. Deployed user tools require the request resolver
+and never fall back to application credentials. Model, memory-service, session-service, and custom
+MCP server credentials are unchanged.
+
+`runtime/main.py` derives the invocation policy after `configure()`. The runtime adapter namespaces
+public session IDs and actor values for the request owner, then passes only `workspace_client_for`
+to the framework-native agent. Internal session keys are never returned to clients.
+
+User-policy invocations use the existing Runtime for synchronous, streaming, and background calls,
+including status polling, event replay, and invocation-ID idempotency. The Runtime Store persists no
+credential; request-user authentication remains process-local for the active first attempt. A
+replacement attempt fails with `MCP_USER_AUTH_RECOVERY_UNSUPPORTED` before agent code runs. Approval
+interruptions remain unsupported and fail with `MCP_USER_AUTH_HITL_UNSUPPORTED`, without storing a
+credential-bearing `RunState`. Existing namespaced memory and conversation-store behavior is
+unchanged; OBO does not add another saver.

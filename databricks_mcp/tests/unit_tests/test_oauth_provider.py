@@ -6,6 +6,14 @@ from databricks.sdk import WorkspaceClient
 from databricks_mcp import DatabricksOAuthClientProvider
 
 
+def test_oauth_provider_uses_workspace_token_without_resource_fallback():
+    workspace_client = MagicMock(spec=WorkspaceClient)
+
+    provider = DatabricksOAuthClientProvider(workspace_client=workspace_client)
+
+    assert provider.context.server_url == ""
+
+
 @pytest.mark.asyncio
 async def test_oauth_provider():
     workspace_client = WorkspaceClient(host="https://test-databricks.com", token="test-token")
