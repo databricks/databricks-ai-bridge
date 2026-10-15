@@ -41,6 +41,7 @@ _COMMANDS = (
     "deployments",
     "endpoint",
     "tools",
+    "experimental",
 )
 
 
@@ -217,6 +218,58 @@ def test_cli_and_every_command_help_load(run_agentbricks) -> None:
     assert "Usage" in run_agentbricks("--help").stdout
     for command in _COMMANDS:
         run_agentbricks(command, "--help")
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+def test_model_and_prompt_bindings_from_installed_cli(run_agentbricks, tmp_path, framework):
+    """Exercise local binding commands through the shipped console script without auth."""
+    project = tmp_path / "bound-agent"
+    run_agentbricks("init", "--framework", framework, str(project))
+    for role in ("router", "writer"):
+        result = run_agentbricks(
+            "-o",
+            "json",
+            "experimental",
+            "models",
+            "bind",
+            f"main.test.{role}",
+            "--role",
+            role,
+            "--default",
+            "system.ai.claude-sonnet-4-5",
+            "--source",
+            str(project),
+        )
+        assert json.loads(result.stdout)["role"] == role
+    run_agentbricks(
+        "-o",
+        "json",
+        "experimental",
+        "prompts",
+        "bind",
+        "main.test.writer_prompt",
+        "--key",
+        "writer",
+        "--source",
+        str(project),
+    )
+    manifest = tomli.loads((project / "agent.toml").read_text())
+    assert set(manifest["experimental"]["model_services"]) == {"router", "writer"}
+    assert manifest["experimental"]["prompts"] == {"writer": "main.test.writer_prompt"}
+    for role in ("router", "writer"):
+        run_agentbricks(
+            "experimental",
+            "models",
+            "unbind",
+            "--role",
+            role,
+            "--source",
+            str(project),
+        )
+    run_agentbricks("experimental", "prompts", "unbind", "writer", "--source", str(project))
+    manifest = tomli.loads((project / "agent.toml").read_text())
+    assert "experimental" not in manifest
+    assert manifest["agent"]["framework"] == framework
 
 
 def test_installed_wheel_exposes_agentkit_sdk() -> None:

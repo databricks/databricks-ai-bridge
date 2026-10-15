@@ -26,6 +26,9 @@ from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.reporting import Reporter
 from databricks_agentbricks.services import deploy_service as deploy_service_mod
 from databricks_agentbricks.services.deploy_service import DeployRequest, DeployService
+from databricks_agentbricks.services.deployment.model_binding_provisioner import (
+    ModelBindingProvisioner,
+)
 from databricks_agentbricks.services.deployment.provisioners import (
     AppProvisioner,
     GrantOutcome,
@@ -99,6 +102,7 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace
         tracing_provisioner=tracing,
         runtime_store_provisioner=runtime,
         tool_access_provisioner=tool_access,
+        model_binding_provisioner=ModelBindingProvisioner(provider, Mock(spec=Reporter)),
         reporter=reporter,
     )
     return SimpleNamespace(

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import dataclasses
 import pathlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
@@ -38,6 +38,9 @@ from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.projects.types import AgentServer
 from databricks_agentbricks.reporting import Reporter
 from databricks_agentbricks.services.deployment.config import _PIP_INDEX_ENVS
+from databricks_agentbricks.services.deployment.model_binding_provisioner import (
+    ModelBindingProvisioner,
+)
 from databricks_agentbricks.services.deployment.names import (
     _DEPLOYMENT_PREFIX,
     DeploymentName,
@@ -53,6 +56,7 @@ from databricks_agentbricks.services.deployment.provisioners import (
     TracingProvisioner,
 )
 from databricks_agentbricks.services.deployment.tool_access_provisioner import ToolAccessProvisioner
+from databricks_agentkit.runtime.tool_manifest import MODEL_SERVICE_ENV_PREFIX
 
 
 def _field(obj: Any, name: str) -> Any:
@@ -121,6 +125,10 @@ class DeployResult:
     pip_index_url: Optional[str]
     instance_count: Optional[int]
     uses_runtime_api: bool
+    model_services: dict[str, str] = field(default_factory=dict)
+    prompts: dict[str, str] = field(default_factory=dict)
+    model_service_grant_error: Optional[str] = None
+    prompt_grant_error: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -160,6 +168,7 @@ class DeployService:
         tracing_provisioner: TracingProvisioner,
         runtime_store_provisioner: RuntimeStoreProvisioner,
         tool_access_provisioner: ToolAccessProvisioner,
+        model_binding_provisioner: ModelBindingProvisioner,
         reporter: Reporter,
     ) -> None:
         self._project_resolver = project_resolver
@@ -171,6 +180,7 @@ class DeployService:
         self._tracing_provisioner = tracing_provisioner
         self._runtime_store_provisioner = runtime_store_provisioner
         self._tool_access_provisioner = tool_access_provisioner
+        self._model_binding_provisioner = model_binding_provisioner
         self._reporter = reporter
 
     # --- lifecycle verbs ----------------------------------------------------
@@ -263,6 +273,7 @@ class DeployService:
         #    this deployment run and passed explicitly to later phases.
         memory = self._memory_store_provisioner.reconcile(ctx)
         session = self._session_store_provisioner.reconcile(ctx)
+        bindings = self._model_binding_provisioner.reconcile(ctx)
         tracing = self._tracing_provisioner.reconcile(ctx)
         runtime = self._runtime_store_provisioner.reconcile(ctx)
 
@@ -271,6 +282,7 @@ class DeployService:
             tracing.manifest,
             memory.manifest,
             session.manifest,
+            bindings.manifest,
             runtime.manifest,
         )
         env: dict[str, str] = {}
@@ -284,8 +296,15 @@ class DeployService:
         # 2. Patch app.yaml before creating the app. The managed Runtime Store fields are added after
         #    app creation because that API requires the app's service principal.
         created_app_yaml = (
-            AppManifest.upsert_env_file(source_dir, env, env_removals)
-            if (env or env_removals)
+            AppManifest.upsert_env_file(
+                source_dir,
+                env,
+                env_removals,
+                prune_prefixes=(MODEL_SERVICE_ENV_PREFIX,)
+                if prepared.agent_project is not None
+                else (),
+            )
+            if (env or env_removals or prepared.agent_project is not None)
             else False
         )
         # 3. Ensure the app exists and its compute is active. Create only when new; the compute wait
@@ -331,11 +350,17 @@ class DeployService:
         #    reconciled store identifier; store clients need no knowledge of Apps.
         store_service_principal = (
             self._apps_client.get_service_principal(name)
-            if memory.store_name or session.store_name
+            if memory.store_name
+            or session.store_name
+            or bindings.model_services
+            or bindings.prompts
             else None
         )
         memory_grant = self._memory_store_provisioner.grant(memory, store_service_principal)
         session_grant = self._session_store_provisioner.grant(session, store_service_principal)
+        model_grant, prompt_grant = self._model_binding_provisioner.grant(
+            bindings, store_service_principal
+        )
         trace_grant = self._tracing_provisioner.grant(ctx, tracing)
 
         return DeployResult(
@@ -353,6 +378,10 @@ class DeployService:
             trace_grant_error=trace_grant.error,
             memory_grant_error=memory_grant.error,
             session_grant_error=session_grant.error,
+            model_services=dict(bindings.model_services),
+            prompts=dict(bindings.prompts),
+            model_service_grant_error=model_grant.error,
+            prompt_grant_error=prompt_grant.error,
             memory_grant_attempted=memory_grant.attempted,
             session_grant_attempted=session_grant.attempted,
             tool_access=ToolAccessSummary(
