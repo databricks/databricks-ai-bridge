@@ -83,6 +83,12 @@ include = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/databricks_agentkit", "src/databricks_agentbricks"]
 
+[tool.uv]
+# Applies only to this project's own environments (tests, CI), not to installs of the package.
+# Releases after 4.2.0 change the order InMemorySaver returns pending writes, which
+# template_langgraph_history_test asserts on.
+constraint-dependencies = ["langgraph-checkpoint<=4.2.0"]
+
 [tool.uv.sources]
 databricks-ai-bridge = { path = "../..", editable = true }
 
