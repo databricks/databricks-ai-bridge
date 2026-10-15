@@ -112,11 +112,14 @@ You can also pass the global `--profile/-p` option before an individual command,
 
 The CLI sends best effort command usage telemetry after leaf commands. Its log records the static
 command path, package version, operating system, duration, and process outcome (exit code and, for
-nonzero exits, a bounded error category). Parameter entries are limited to options explicitly
-supplied on the command line. Free-form options contribute only their static name. Declared Click
+nonzero exits, a bounded error category). Parameter entries include explicitly supplied options
+and parsed Click defaults with supported typed values. Omitted free-form options and unresolved
+`None` defaults produce no entry. Environment, prompt, and default-map inputs are not included.
+Explicit free-form options contribute only their static name. Declared Click
 choices contribute an `AGENTBRICKS_CLI_`-prefixed value. Click boolean and numeric options
-contribute their typed values; non-finite floats and integers outside the log schema's 64-bit
-range remain presence-only. Hidden and deprecated options follow the same policy, and repeated
+contribute their typed values; explicitly supplied non-finite floats and integers outside the log
+schema's 64-bit range remain presence-only, while unsupported defaults are omitted. Hidden and
+deprecated options follow the same policy, and repeated
 options contribute one parameter entry per supplied value, up to 64 entries. Positional arguments,
 raw command arguments, paths, IDs, secrets, arbitrary free-form option values, and exception
 messages are omitted. Set

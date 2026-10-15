@@ -135,7 +135,7 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
-| `--framework <langgraph|openai>` | `langgraph` \| `openai` | - | no | Agent framework: langgraph (LangGraph, default) or openai (OpenAI Agents SDK). |
+| `--framework <langgraph|openai>` | `langgraph` \| `openai` | `langgraph` | no | Agent framework: langgraph (LangGraph, default) or openai (OpenAI Agents SDK). |
 | `--server <agentbricks|custom>` | `agentbricks` \| `custom` | `agentbricks` | no | Use the managed invocation server (`agentbricks` is the existing `agent.toml` value) or a minimal custom FastAPI server. |
 | `--profile <PROFILE>` | string | - | no | Seed a local .env with this DATABRICKS_CONFIG_PROFILE so `agentbricks dev` works immediately (defaults to the profile from -p / `agentbricks login`). |
 | `--disable-chat-app` | flag | - | no | Scaffold the API-only backend, without the browser chat app. |

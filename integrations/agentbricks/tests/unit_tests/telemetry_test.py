@@ -218,6 +218,8 @@ def test_real_init_telemetry_captures_safe_options_without_values(monkeypatch, t
         "agentbricks init.server",
         "agentbricks init.disable_chat_app",
         "agentbricks init.profile",
+        "agentbricks init.existing",
+        "agentbricks init.enable_chat_app",
     }
     encoded = json.dumps(log)
     assert "private-project-name" not in encoded
@@ -501,7 +503,7 @@ def test_agentbricks_command_rethrows_unexpected_exception(monkeypatch):
     assert result.exception is failure
 
 
-def test_build_log_captures_only_explicit_options_and_typed_values():
+def test_build_log_captures_explicit_options_and_typed_values():
     context = _real_context("deploy")
     _explicit_option(context, "instance_count", 3)
     _explicit_option(context, "workspace_path", "private-secret")
@@ -525,14 +527,62 @@ def test_build_log_captures_only_explicit_options_and_typed_values():
     assert "private-secret" not in encoded
 
 
-def test_build_log_omits_default_options():
+def test_build_log_includes_typed_defaults():
     context = _real_context("deploy")
     _explicit_option(context, "instance_count", 2, source=ParameterSource.DEFAULT)
-    assert "parameters" not in _log(context, exit_code=0)
+    assert _log(context, exit_code=0)["parameters"] == [
+        {"name": "agentbricks deploy.instance_count", "int_value": 2}
+    ]
 
     pipeline_context = _real_context("memory", "pipeline", "create")
     _explicit_option(pipeline_context, "trigger", "manual", source=ParameterSource.DEFAULT)
-    assert "parameters" not in _log(pipeline_context, exit_code=0)
+    assert _log(pipeline_context, exit_code=0)["parameters"] == [
+        {
+            "name": "agentbricks memory pipeline create.trigger",
+            "choice_value": "AGENTBRICKS_CLI_MANUAL",
+        }
+    ]
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_real_init_defaults_are_emitted_for_success_and_failure(monkeypatch, tmp_path, fails):
+    records = []
+    monkeypatch.setattr(
+        telemetry, "emit_command", lambda ctx, **kwargs: records.append(_log(ctx, **kwargs))
+    )
+    destination = tmp_path / "private-project"
+    if fails:
+        destination.mkdir()
+    result = CliRunner().invoke(cli.agentbricks, ["init", str(destination)])
+    assert result.exit_code == (1 if fails else 0), result.output
+    assert len(records) == 1
+    log = records[0]
+    parameters = {p["name"]: p for p in log["parameters"]}
+    assert parameters["agentbricks init.framework"]["choice_value"] == "AGENTBRICKS_CLI_LANGGRAPH"
+    assert parameters["agentbricks init.server"]["choice_value"] == "AGENTBRICKS_CLI_AGENTBRICKS"
+    assert parameters["agentbricks init.existing"]["bool_value"] is False
+    assert parameters["agentbricks init.disable_chat_app"]["bool_value"] is False
+    assert log["exit_code"] == result.exit_code
+    assert "private-project" not in json.dumps(log)
+    assert "agentbricks init.profile" not in parameters
+    assert "agentbricks init.memory_store" not in parameters
+    assert "agentbricks init.session_store" not in parameters
+
+
+def test_default_free_form_and_unresolved_values_are_omitted():
+    context = _real_context("init")
+    _explicit_option(context, "profile", "private-profile", source=ParameterSource.DEFAULT)
+    _explicit_option(context, "framework", None, source=ParameterSource.DEFAULT)
+    assert "parameters" not in _log(context, exit_code=0)
+
+
+@pytest.mark.parametrize(
+    "source", [ParameterSource.ENVIRONMENT, ParameterSource.DEFAULT_MAP, ParameterSource.PROMPT]
+)
+def test_other_option_sources_remain_omitted(source):
+    context = _real_context("init")
+    _explicit_option(context, "server", "custom", source=source)
+    assert "parameters" not in _log(context, exit_code=0)
 
 
 def test_pipeline_choice_uses_registered_data_shape_prefix():
