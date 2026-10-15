@@ -163,10 +163,14 @@ def deploy(
     not authentication and not the session id itself (send the session id in the request body):
       X-Routing-Key: <uuid>
     """
-    obj.announce_workspace()
     # Validate auth before any deployment work: an unauthenticated profile would otherwise fail
     # deep into the deploy (or hang on a browser flow), far from anything actionable.
-    obj.api_client_provider.use(preflight_auth(obj.profile, obj.profile_info.source))
+    try:
+        validated = preflight_auth(obj.profile, obj.profile_info.source)
+    except Exception:
+        obj.announce_workspace()
+        raise
+    obj.api_client_provider.use(validated)
     request = DeployRequest(
         name=name,
         source=source,
@@ -244,11 +248,18 @@ def deployments_stop(obj, name, yes) -> None:
 @click.pass_obj
 def deployments_delete(obj, name, yes) -> None:
     """Delete a deployment and, when managed provisioning is enabled, its Runtime Store."""
-    obj.announce_workspace()
     service = build_deploy_service(obj)
+    # Managed cleanup reaches the shared API provider, whose notice uses the resolved host.
+    # A CLI-only delete has no SDK client to consult, so use the offline lookup there.
+    if not service.deletes_runtime_store_data():
+        obj.announce_workspace()
     target = f"deployment '{name}'"
     if not yes and service.deletes_runtime_store_data():
         target += " and its Runtime Store data"
     render.confirm_destroy(target, assume_yes=yes)
-    service.delete(name)
+    try:
+        service.delete(name)
+    except Exception:
+        obj.announce_workspace()
+        raise
     present_deleted(name, output=obj.output)

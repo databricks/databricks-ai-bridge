@@ -89,11 +89,16 @@ class CliContext:
             self.api_client_provider = self._client_provider(profile)
         self.profile_info = ProfileInfo(profile, SOURCE_FLAG)
 
-    def announce_workspace(self) -> None:
+    def announce_workspace(self, resolved_host: Optional[str] = None) -> None:
         """Name the profile and workspace once, when the command first reaches the workspace."""
         if not self._workspace_announced:
             self._workspace_announced = True
-            announce_workspace(self.profile, self.profile_info.source, output=self.output)
+            announce_workspace(
+                self.profile,
+                self.profile_info.source,
+                output=self.output,
+                resolved_host=resolved_host,
+            )
             # Before profiles moved into `.env`, this case used the profile `agentbricks login` saved.
             legacy_profile = legacy_default_profile()
             if legacy_profile and self.profile_info.source == SOURCE_SDK_DEFAULT:

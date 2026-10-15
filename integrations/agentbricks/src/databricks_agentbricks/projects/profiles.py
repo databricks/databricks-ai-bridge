@@ -164,21 +164,24 @@ def sdk_default_profile() -> tuple[str, str]:
 
 
 def workspace_for_profile(profile: Optional[str]) -> tuple[Optional[str], Optional[str]]:
-    """The workspace a profile points at, as (host, display text); (None, None) when unknown.
+    """An offline workspace estimate as (host, display text), for notices and `auth describe`.
 
-    For display only: without a profile the text names where the host came from
-    (DATABRICKS_HOST, else the config file's `[DEFAULT]`), because "no workspace" is the answer
-    the caller needs to surface. It does not claim to mirror the SDK's full default resolution.
+    An exported host wins even with an explicit profile. Without a profile, common environment
+    credentials suppress the file; otherwise prefer the switched default, then `[DEFAULT]`.
+    Callers with a constructed SDK client should use its resolved host instead.
     """
-    if profile:
-        host = profile_host(profile)
-        return host, host
     env_host = os.environ.get("DATABRICKS_HOST")
     if env_host:
         return env_host, f"{env_host} (from DATABRICKS_HOST)"
-    default_host = profile_host(configparser.DEFAULTSECT)
+    if profile:
+        host = profile_host(profile)
+        return host, host
+    if env_auth_configured():
+        return None, "none configured"
+    default_profile, _ = sdk_default_profile()
+    default_host = profile_host(default_profile)
     if default_host:
-        return default_host, f"{default_host} ([DEFAULT] profile)"
+        return default_host, f"{default_host} ([{default_profile}] profile)"
     return None, "none configured"
 
 

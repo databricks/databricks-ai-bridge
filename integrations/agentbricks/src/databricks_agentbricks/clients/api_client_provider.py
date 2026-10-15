@@ -20,7 +20,9 @@ class ApiClientProvider:
     """Own exactly one lazily created API client for a CLI invocation."""
 
     def __init__(
-        self, profile: Optional[str], on_first_use: Optional[Callable[[], None]] = None
+        self,
+        profile: Optional[str],
+        on_first_use: Optional[Callable[[Optional[str]], None]] = None,
     ) -> None:
         self._profile = profile
         self._on_first_use = on_first_use
@@ -31,6 +33,8 @@ class ApiClientProvider:
         """Adopt a client the command already validated, so first use doesn't build another."""
         with self._lock:
             self._client = client
+        if self._on_first_use is not None:
+            self._on_first_use(client.host)
 
     def get(self) -> _AgentBricksApiClient:
         """Return the shared client, constructing it on first use."""
@@ -40,7 +44,12 @@ class ApiClientProvider:
 
         with self._lock:
             if self._client is None:
+                try:
+                    self._client = _AgentBricksApiClient(self._profile)
+                except Exception:
+                    if self._on_first_use is not None:
+                        self._on_first_use(None)
+                    raise
                 if self._on_first_use is not None:
-                    self._on_first_use()
-                self._client = _AgentBricksApiClient(self._profile)
+                    self._on_first_use(self._client.host)
             return self._client

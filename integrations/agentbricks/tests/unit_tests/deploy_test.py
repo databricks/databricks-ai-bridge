@@ -59,7 +59,7 @@ class _Ctx(CliContext):
     def __init__(self, *, output: str = "text", profile: str | None = "prof"):
         super().__init__(profile, output)
         self.api_client_provider = types.SimpleNamespace(
-            get=lambda: _FakeApiClient(), use=lambda client: None
+            get=lambda: _FakeApiClient(), use=lambda client: self.announce_workspace(client.host)
         )
 
 
@@ -334,6 +334,30 @@ def test_deploy_help_exposes_instance_count_and_routing_key():
     assert "X-Routing-Key" in result.output
 
 
+@pytest.mark.parametrize("managed", [True, False], ids=["managed", "cli-only"])
+def test_delete_announces_the_workspace_used_by_its_client(write_databrickscfg, managed):
+    write_databrickscfg("[prof]\nhost = https://profile.example\n")
+    ctx = CliContext("prof", "text")
+    service = mock.Mock()
+    service.deletes_runtime_store_data.return_value = managed
+    if managed:
+        service.delete.side_effect = lambda name: ctx.client()
+    with (
+        mock.patch.object(deploy_mod, "build_deploy_service", return_value=service),
+        mock.patch(
+            "databricks_agentbricks.clients.api_client_provider._AgentBricksApiClient",
+            return_value=_FakeApiClient(),
+        ) as client,
+    ):
+        result = CliRunner().invoke(deploy_mod.deployments, ["delete", "demo", "--yes"], obj=ctx)
+
+    assert result.exit_code == 0, result.output
+    host = "https://workspace.example" if managed else "https://profile.example"
+    assert result.output.count(f"Using profile 'prof' (from --profile) · {host}") == 1
+    assert client.call_count == int(managed)
+    service.delete.assert_called_once_with("demo")
+
+
 def test_deploy_rejects_instance_count_above_platform_limit():
     result = CliRunner().invoke(deploy_mod.deploy, ["demo", "--instances", "6"], obj=_Ctx())
 
@@ -400,7 +424,8 @@ def test_deploy_resolves_profile_from_flag_then_source_env(
     assert build.call_args.args[0] is ctx
     validated_profile.assert_called_once_with(expected)
     out = " ".join(result.output.split())
-    assert f"Using profile '{expected}' (from {source}) · https://{expected}.example" in out
+    assert f"Using profile '{expected}' (from {source}) · https://ws.example" in out
+    assert f"https://{expected}.example" not in out
 
 
 def test_deploy_json_preserves_additive_tool_access_contract(tmp_path: pathlib.Path):

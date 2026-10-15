@@ -9,12 +9,13 @@ from databricks_agentbricks.projects.profiles import (
     auth_login_command,
     auth_switch_command,
     profile_exists,
-    profile_host,
     workspace_for_profile,
 )
 
 
-def announce_workspace(profile: str | None, source: str, *, output: str) -> None:
+def announce_workspace(
+    profile: str | None, source: str, *, output: str, resolved_host: str | None = None
+) -> None:
     """One dim stderr line naming the profile and workspace a command is about to use.
 
     Every workspace command shares it so the target is never implicit. Text-only, like the
@@ -22,7 +23,9 @@ def announce_workspace(profile: str | None, source: str, *, output: str) -> None
     """
     if output != "text":
         return
-    _, workspace = workspace_for_profile(profile)
+    host, workspace = workspace_for_profile(profile)
+    if resolved_host and resolved_host != host:
+        workspace = resolved_host
     who = f"profile '{profile}' (from {source})" if profile else "Databricks SDK default auth"
     click.echo(
         click.style(f"Using {who} · {workspace or 'no host configured'}", dim=True), err=True
@@ -55,11 +58,15 @@ def announce_login(obj, profile: str, source: str) -> None:
     """Say which profile is being signed in to, before any browser flow starts."""
     if obj.output != "text":
         return
-    host = profile_host(profile)
-    where = host or (
-        "not in your Databricks config yet; `databricks auth login` will create it"
-        if not profile_exists(profile)
-        else "no host configured"
+    host, workspace = workspace_for_profile(profile)
+    where = (
+        workspace
+        if host
+        else (
+            "not in your Databricks config yet; `databricks auth login` will create it"
+            if not profile_exists(profile)
+            else "no host configured"
+        )
     )
     # stderr, not render's console (stdout-only): visible before any browser flow without
     # polluting `-o json` stdout.
