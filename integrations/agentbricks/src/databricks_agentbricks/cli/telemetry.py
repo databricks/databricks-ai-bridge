@@ -298,6 +298,8 @@ class _ClickInvocation:
 
     @staticmethod
     def _entries(contexts: list[tuple[Any, Any, str]]) -> tuple[_ParameterEntry, ...]:
+        """Collect options generically from Click's parsed values, including resolved defaults."""
+
         entries: list[_ParameterEntry] = []
         seen_names: set[str] = set()
         path_parts: list[str] = []
@@ -324,6 +326,8 @@ class _ClickInvocation:
                     continue
                 if parameter_name not in values:
                     continue
+                # Click has already resolved and converted defaults (including callables). Read
+                # the value used by the command rather than evaluating its default a second time.
                 value = values[parameter_name]
                 option_values = (
                     value if parameter.multiple and isinstance(value, tuple) else (value,)

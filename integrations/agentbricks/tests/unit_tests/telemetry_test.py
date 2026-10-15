@@ -545,6 +545,57 @@ def test_build_log_includes_typed_defaults():
 
 
 @pytest.mark.parametrize("fails", [False, True])
+@pytest.mark.parametrize("args", [[], ["--mode", "fast", "--enabled", "--count", "3"]])
+def test_new_commands_emit_click_resolved_defaults_automatically(monkeypatch, fails, args):
+    records = []
+    timeout_default = mock.Mock(return_value="1.5")
+    monkeypatch.setattr(
+        telemetry, "emit_command", lambda ctx, **kwargs: records.append(_log(ctx, **kwargs))
+    )
+
+    @click.group(name="inventory")
+    @click.option("--output", type=click.Choice(["text", "json"]), default="text")
+    def inventory(output):
+        pass
+
+    @inventory.command(cls=AgentBricksCommand)
+    @click.option("--mode", type=click.Choice(["safe", "fast"]), default="safe")
+    @click.option("--enabled/--disabled", default=False)
+    @click.option("--count", type=int, default=0)
+    @click.option("--timeout", type=float, default=timeout_default)
+    @click.option(
+        "--scope", type=click.Choice(["all", "new"]), multiple=True, default=("all", "new")
+    )
+    @click.option("--profile", default="private-profile")
+    def scan(mode, enabled, count, timeout, scope, profile):
+        assert (mode, enabled, count) == (("fast", True, 3) if args else ("safe", False, 0))
+        assert timeout == 1.5
+        assert scope == ("all", "new")
+        if fails:
+            raise click.ClickException("private-error")
+
+    result = CliRunner().invoke(inventory, ["scan", *args])
+
+    assert result.exit_code == (1 if fails else 0), result.output
+    timeout_default.assert_called_once_with()
+    assert len(records) == 1
+    assert records[0]["exit_code"] == result.exit_code
+    assert records[0]["parameters"] == [
+        {"name": "inventory.output", "choice_value": "AGENTBRICKS_CLI_TEXT"},
+        {
+            "name": "inventory scan.mode",
+            "choice_value": "AGENTBRICKS_CLI_FAST" if args else "AGENTBRICKS_CLI_SAFE",
+        },
+        {"name": "inventory scan.enabled", "bool_value": bool(args)},
+        {"name": "inventory scan.count", "int_value": 3 if args else 0},
+        {"name": "inventory scan.timeout", "double_value": 1.5},
+        {"name": "inventory scan.scope", "choice_value": "AGENTBRICKS_CLI_ALL"},
+        {"name": "inventory scan.scope", "choice_value": "AGENTBRICKS_CLI_NEW"},
+    ]
+    assert "private-" not in json.dumps(records)
+
+
+@pytest.mark.parametrize("fails", [False, True])
 def test_real_init_defaults_are_emitted_for_success_and_failure(monkeypatch, tmp_path, fails):
     records = []
     monkeypatch.setattr(
