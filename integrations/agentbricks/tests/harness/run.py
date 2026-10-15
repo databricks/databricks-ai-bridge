@@ -14,7 +14,6 @@ import tempfile
 
 AUTHORING_PATHS = ("cli", "direct")
 E2E_MODEL = "system.ai.gpt-5-2"
-TOOL_RESOURCE_PREFIX = "agentbricks-tool-"
 APP_PREFIX = "agent-bricks-"
 
 

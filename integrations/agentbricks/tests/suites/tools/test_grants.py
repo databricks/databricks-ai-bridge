@@ -1,4 +1,4 @@
-"""Deploy grants that belong to no single tool (deploy-only): nothing transitive, nothing lost."""
+"""Deploy grants only what a tool binds: a function the bound UC function calls needs a manual grant."""
 
 from __future__ import annotations
 
@@ -6,8 +6,7 @@ import json
 
 from harness.agentbricks_cli import AgentbricksCli
 from harness.project import Project
-from harness.run import TOOL_RESOURCE_PREFIX
-from harness.workspace import Workspace, non_tool_resources
+from harness.workspace import Workspace
 from tool_definitions import assert_declared, uc_function_tool
 from uc_objects import UcFunction
 
@@ -21,7 +20,6 @@ def test_grants(
     subtests,
 ) -> None:
     tool = uc_function_tool(uc_function)
-    # `init` and direct authoring both bind tracing, a resource Agent Bricks does not own.
     agentbricks_cli.run(f"init --framework langgraph {project.path}", timeout=600)
     project.pin_runtime()
     app = project.app_name
@@ -41,8 +39,3 @@ def test_grants(
         granted = workspace_client.grant_transitive(deployment, uc_function.nested_function)
         assert "EXECUTE" in granted["direct_privileges"]
         assert "EXECUTE" in granted["effective_privileges"]
-
-    with subtests.test(check="non-tool-resource-preserved"):
-        unrelated = non_tool_resources(deployment)
-        assert unrelated, "No non-tool App resource; the tracing experiment should be attached"
-        assert not any(r["name"].startswith(TOOL_RESOURCE_PREFIX) for r in unrelated)

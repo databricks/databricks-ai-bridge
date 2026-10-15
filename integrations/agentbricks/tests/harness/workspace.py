@@ -25,7 +25,7 @@ from databricks.sdk.service.catalog import PermissionsChange, Privilege, Securab
 from databricks.sdk.service.sql import ExecuteStatementRequestOnWaitTimeout, State, StatementState
 
 from harness.logs import log
-from harness.run import TOOL_RESOURCE_PREFIX, E2EError, now
+from harness.run import E2EError, now
 
 GrantTuple = tuple[str, str, str, str]
 
@@ -250,9 +250,9 @@ class Workspace:
             )
         if any(
             resource.get("uc_securable", {}).get("securable_full_name") == function
-            for resource in tool_resources(deployment)
+            for resource in app_resources(deployment)
         ):
-            raise E2EError("The transitive function appeared in Agent Bricks-owned Apps resources.")
+            raise E2EError("The transitive function appeared among the App's resources.")
         return {
             "service_principal_client_id": principal,
             "direct_privileges": direct,
@@ -468,30 +468,14 @@ def granted(deployment: dict[str, Any], grant: GrantTuple) -> bool:
 
 
 def granted_tuples(deployment: dict[str, Any]) -> set[GrantTuple]:
-    return app_resource_tuples(tool_resources(deployment))
+    return app_resource_tuples(app_resources(deployment))
 
 
-def _split_resources(app: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    resources = app.get("resources") or []
+def app_resources(deployment: dict[str, Any]) -> list[dict[str, Any]]:
+    resources = deployment.get("resources") or []
     if not isinstance(resources, list):
         raise E2EError(f"App resources are not a list: {resources}")
-
-    def name(resource: dict[str, Any]) -> str:
-        return str(resource.get("name", ""))
-
-    owned = [r for r in resources if name(r).startswith(TOOL_RESOURCE_PREFIX)]
-    other = [r for r in resources if not name(r).startswith(TOOL_RESOURCE_PREFIX)]
-    return sorted(owned, key=name), sorted(other, key=name)
-
-
-def tool_resources(app: dict[str, Any]) -> list[dict[str, Any]]:
-    """The App resources Agent Bricks owns, i.e. those it names with ``TOOL_RESOURCE_PREFIX``."""
-    return _split_resources(app)[0]
-
-
-def non_tool_resources(app: dict[str, Any]) -> list[dict[str, Any]]:
-    """The App resources Agent Bricks does not own, e.g. the tracing experiment."""
-    return _split_resources(app)[1]
+    return resources
 
 
 def app_resource_tuples(resources: Sequence[dict[str, Any]]) -> set[GrantTuple]:

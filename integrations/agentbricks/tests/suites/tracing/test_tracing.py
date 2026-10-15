@@ -10,8 +10,7 @@ import json
 import pytest
 from harness.agentbricks_cli import AgentbricksCli
 from harness.project import Project
-from harness.run import TOOL_RESOURCE_PREFIX
-from harness.workspace import Workspace, non_tool_resources
+from harness.workspace import Workspace, app_resources
 
 
 def test_tracing_experiment_bound(
@@ -26,10 +25,9 @@ def test_tracing_experiment_bound(
         agentbricks_cli.run(f"--output json deployments get {project.app_name}").stdout
     )
 
-    # Deploy attaches the experiment as an App resource that Agent Bricks does not own.
-    experiments = [r for r in non_tool_resources(deployment) if "experiment" in r]
-    assert experiments, "No experiment App resource among the non-tool resources"
-    assert not any(r["name"].startswith(TOOL_RESOURCE_PREFIX) for r in experiments)
+    # Deploy attaches the experiment as an App resource.
+    experiments = [r for r in app_resources(deployment) if "experiment" in r]
+    assert experiments, "No experiment App resource"
     expected_id = workspace_client.experiment_id(experiment_name)
     assert any(str(r["experiment"].get("experiment_id")) == expected_id for r in experiments), (
         f"{experiment_name} ({expected_id}) not in {experiments}"
