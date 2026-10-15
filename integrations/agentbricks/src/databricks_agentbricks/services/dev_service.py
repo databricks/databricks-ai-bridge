@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pathlib
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Protocol
@@ -91,7 +91,8 @@ class DevService:
 
     The service owns validation, project metadata, the local-only manifest, and lifecycle cleanup.
     It does not own output or a workspace client; those concerns are supplied by the CLI through
-    ``LocalTracing`` and ``AppsClient``.
+    ``LocalTracing`` and ``AppsClient``. ``port_in_use`` reports whether a local port is taken, so
+    tests can simulate a busy port without binding a real socket.
     """
 
     def __init__(
@@ -99,10 +100,12 @@ class DevService:
         project_resolver: ProjectResolver,
         apps_client: AppsClient,
         local_tracing: LocalTracing,
+        port_in_use: Callable[[int], bool],
     ) -> None:
         self._project_resolver = project_resolver
         self._apps_client = apps_client
         self._local_tracing = local_tracing
+        self._port_in_use = port_in_use
 
     @contextmanager
     def prepare(self, request: DevRequest) -> Iterator[DevPlan]:
@@ -123,6 +126,15 @@ class DevService:
         project = self._project_resolver.load(source_dir)
         if project is not None and project.tools:
             require_managed_tool_support(source_dir)
+
+        # Fail before starting tracing or writing the local manifest: `apps run-local` does not
+        # report a busy port clearly, and a stopped `agentbricks dev` can leave its server running.
+        port = request.app_port or _DEFAULT_APP_PORT
+        if self._port_in_use(port):
+            raise AgentCliError(
+                f"Port {port} is already in use (possibly a previous agentbricks dev run).",
+                hint="Stop that process, or run `agentbricks dev --app-port <port>` with a free port.",
+            )
 
         # Resource bindings are read only for the preview/presentation.  Dev is fully local and
         # deliberately does not provision, fetch, or otherwise contact any workspace resource.
@@ -146,7 +158,7 @@ class DevService:
                 source_dir=source_dir,
                 # Preserve the CLI's historical display/default behavior while retaining the
                 # caller's explicit value separately in ``requested_port``.
-                port=request.app_port or _DEFAULT_APP_PORT,
+                port=port,
                 server=project.server if project else None,
                 tracing_uri=tracing_env.get("MLFLOW_TRACKING_URI"),
                 local_experiment_name=tracing_env.get("MLFLOW_EXPERIMENT_NAME"),
