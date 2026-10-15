@@ -290,8 +290,12 @@ def test_memory_store_client_distinguishes_inaccessible_existing_store():
     provider = mock.Mock(spec=ApiClientProvider)
     provider.get.return_value = api
 
-    with pytest.raises(AgentCliError, match="already exists but you don't have access"):
+    with pytest.raises(AgentCliError, match="already exists but you don't have access") as exc:
         MemoryStoreClient(provider).ensure("mem")
+
+    assert exc.value.hint is not None
+    assert "agentbricks memory bind <existing-store>" in exc.value.hint
+    assert "--no-create-stores" not in exc.value.hint
 
 
 def test_session_store_client_reuses_existing_store():
@@ -316,6 +320,21 @@ def test_session_store_client_reports_permission_hint():
 
     with pytest.raises(AgentCliError, match="permission to create session store 'sessions'"):
         SessionStoreClient(provider).ensure("sessions")
+
+
+def test_session_store_client_distinguishes_inaccessible_existing_store():
+    api = mock.Mock()
+    api.create_session_store.side_effect = AgentCliError("exists", error_code="ALREADY_EXISTS")
+    api.get_session_store.side_effect = AgentCliError("denied", error_code="PERMISSION_DENIED")
+    provider = mock.Mock(spec=ApiClientProvider)
+    provider.get.return_value = api
+
+    with pytest.raises(AgentCliError, match="already exists but you don't have access") as exc:
+        SessionStoreClient(provider).ensure("sessions")
+
+    assert exc.value.hint is not None
+    assert "agentbricks sessions bind <existing-store>" in exc.value.hint
+    assert "--no-create-stores" not in exc.value.hint
 
 
 def test_deploy_help_exposes_instance_count_and_routing_key():
