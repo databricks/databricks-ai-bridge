@@ -1973,24 +1973,29 @@ def verify_evidence(path: pathlib.Path, *, require_cleanup: bool = True) -> int:
         sys.stdout.write("cleanup evidence: cleanup_required was not recorded\n")
         return 1
     cleanup = document.get("cleanup", [])
+    cleanup_valid = isinstance(cleanup, list) and all(
+        isinstance(result, dict) and isinstance(result.get("resource"), str) for result in cleanup
+    )
+    # Keep earlier attempts in evidence, but evaluate each resource's latest observation.
+    latest_cleanup = {result["resource"]: result for result in cleanup} if cleanup_valid else {}
     if (
         require_cleanup
         and cleanup_required
         and (
             document.get("cleanup_complete") is not True
-            or not isinstance(cleanup, list)
-            or any(result.get("status") == "failed" for result in cleanup)
+            or not cleanup_valid
+            or any(result.get("status") == "failed" for result in latest_cleanup.values())
             or any(
                 result.get("resource", "").startswith("app:")
                 and result.get("status") == "deleted"
                 and not result.get("confirmed_absent_at")
-                for result in cleanup
+                for result in latest_cleanup.values()
             )
         )
     ):
         sys.stdout.write("cleanup evidence: required cleanup is incomplete or failed\n")
-        if isinstance(cleanup, list):
-            for result in cleanup:
+        if cleanup_valid:
+            for result in latest_cleanup.values():
                 if result.get("status") == "failed":
                     sys.stdout.write(
                         f"cleanup failed | {result.get('resource')} | {result.get('detail')}\n"
