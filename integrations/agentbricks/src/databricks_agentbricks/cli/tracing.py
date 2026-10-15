@@ -715,7 +715,7 @@ def tracing_get(obj, trace_id, experiment_name, experiment_id, warehouse_id, sou
                 # UC-ness can't be known in this fallthrough, so the provided warehouse is exported
                 # for the fetch (harmless for a managed experiment). Not restored - one-shot process.
                 os.environ[_SQL_WAREHOUSE_ENV] = warehouse
-        trace = mlflow.get_trace(trace_id)
+        trace = mlflow.get_trace(trace_id, silent=True)
         if trace is None:
             raise AgentCliError(f"No trace found with id {trace_id!r}.")
         if obj.output == "json":

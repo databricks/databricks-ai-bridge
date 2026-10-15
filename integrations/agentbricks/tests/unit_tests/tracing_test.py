@@ -12,6 +12,7 @@ import json
 import os
 import pathlib
 import types
+from contextlib import nullcontext
 from unittest import mock
 
 import pytest
@@ -596,7 +597,7 @@ def test_get_reads_uc_backed_experiment_through_warehouse(tmp_path, monkeypatch)
     monkeypatch.delenv(_WAREHOUSE_ENV, raising=False)
     seen = {}
 
-    def _get_trace(trace_id):
+    def _get_trace(trace_id, **_kwargs):
         seen["warehouse"] = os.environ.get(_WAREHOUSE_ENV)  # captured at fetch time
         return _trace(trace_id)
 
@@ -647,6 +648,47 @@ def test_get_reports_missing_trace(tmp_path: pathlib.Path):
         )
     assert result.exit_code != 0
     assert "No trace found" in result.output
+
+
+@pytest.mark.parametrize("output", ["text", "json"])
+@pytest.mark.parametrize(
+    ("trace_id", "error_code", "message"),
+    [
+        ("invalid-id", "INVALID_PARAMETER_VALUE", "Invalid request id"),
+        ("tr-00000000000000000000000000000000", "RESOURCE_DOES_NOT_EXIST", "Trace not found"),
+    ],
+)
+def test_get_missing_trace_has_clean_error(output, trace_id, error_code, message, monkeypatch):
+    # Exercise MLflow's real get_trace error handling: it logs a warning by default before returning
+    # None. A mock get_trace returning None misses that warning and the resulting polluted JSON.
+    from mlflow.exceptions import MlflowException
+
+    from databricks_agentbricks import errors
+    from databricks_agentbricks.cli.app import agentbricks
+
+    monkeypatch.setenv("AGENTBRICKS_DISABLE_TELEMETRY", "1")
+    monkeypatch.setattr(errors, "_OUTPUT_MODE", "text")
+    target = tracing_mod._TraceReadTarget("http://127.0.0.1:5000", "eid-1")
+    with (
+        mock.patch.object(tracing_mod, "_with_trace_read_target", return_value=nullcontext(target)),
+        # Newer MLflow resolves UC trace locations before calling TracingClient; older supported
+        # versions do not import get_tracking_uri in this module.
+        mock.patch(
+            "mlflow.tracing.fluent.get_tracking_uri", return_value=target.tracking_uri, create=True
+        ),
+        mock.patch("mlflow.tracing.fluent.TracingClient") as client,
+    ):
+        client.return_value.get_trace.side_effect = MlflowException(message, error_code=error_code)
+        result = CliRunner().invoke(agentbricks, ["--output", output, "tracing", "get", trace_id])
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert "Failed to get trace" not in result.stderr
+    expected = f"No trace found with id {trace_id!r}."
+    if output == "json":
+        assert json.loads(result.stderr) == {"error": {"message": expected}}
+    else:
+        assert expected in result.stderr
 
 
 def test_get_by_explicit_experiment_id(tmp_path: pathlib.Path):
