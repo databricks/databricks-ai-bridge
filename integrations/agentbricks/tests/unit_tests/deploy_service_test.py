@@ -413,7 +413,23 @@ def test_required_auth_reports_note_and_uses_auth_app_state(
     assert prepared.auth_plan.app_existed is True
     assert prepared.deployment_exists is True
     deployment_fixture.reporter.note.assert_called_once()
+    assert "API scopes unchanged" in deployment_fixture.reporter.note.call_args.args[0]
+    assert "re-consent" not in deployment_fixture.reporter.note.call_args.args[0]
     deployment_fixture.apps.exists.assert_not_called()
+
+
+def test_auth_scope_note_names_added_scope_and_requiring_tool(deployment_fixture, tmp_path):
+    project = AgentProject.create(tmp_path, framework="langgraph", server="agentbricks")
+    project.add_tool(ToolSpec.mcp("web_search", service="system.ai.web_search", auth="user"))
+    deployment_fixture.resolver.load.return_value = project
+    deployment_fixture.app.prepare_app_auth.return_value = _auth_plan(
+        existing_scopes=(), scopes=("ai-gateway",)
+    )
+    deployment_fixture.service._prepare_deployment(tmp_path, _request(tmp_path))
+    message = deployment_fixture.reporter.note.call_args.args[0]
+    assert "adding API scopes: ai-gateway" in message
+    assert "tool 'web_search' (system.ai.web_search, auth=user)" in message
+    assert "re-consent" in message
 
 
 @pytest.mark.parametrize(
