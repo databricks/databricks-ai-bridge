@@ -28,6 +28,7 @@ from typing import Any, Callable, List, Optional, cast
 
 import gepa
 import mlflow
+from databricks.sdk.errors import NotFound, TemporarilyUnavailable
 from mlflow.entities import Feedback
 from mlflow.genai.judges import CategoricalRating
 
@@ -152,6 +153,8 @@ class _State:
     token_costs: dict
     model_selection: str = "bandit"
     last_gateway_synced: dict = field(default_factory=dict)
+    backend_controls: dict = field(default_factory=dict)
+    expected_backends: dict = field(default_factory=dict)
     created_exp_endpoints: list = field(default_factory=list)
     scorer_attempted: int = 0
     scorer_succeeded: int = 0
@@ -437,12 +440,56 @@ def _resolve_system_ai_name(fmapi_endpoint):
     return _resolve_model_info(fmapi_endpoint)["name"]
 
 
+_ROUTE_READY_TIMEOUT_S = 120.0
+_ROUTE_POLL_INTERVAL_S = 2.0
+_ROUTE_READY_MATCHES = 3
+
+
+def _probe_backend_model(name: str) -> str:
+    """Read an inference response's model ID without adding a probe to the agent trace."""
+    response = _client().api_client.do(
+        "POST",
+        "/ai-gateway/mlflow/v1/chat/completions",
+        body={
+            "model": name,
+            "messages": [{"role": "user", "content": "Reply OK."}],
+            "max_tokens": 16,
+        },
+    )
+    model = response.get("model") if isinstance(response, dict) else None
+    if not isinstance(model, str) or not model:
+        raise RuntimeError(f"Inference for {name!r} did not return a backend model identity")
+    return model
+
+
+def _wait_for_endpoint_model(name: str, expected: str, *, timeout: float | None = None) -> None:
+    """Wait for consecutive responses matching a direct control, not the config read-back."""
+    deadline = time.monotonic() + (_ROUTE_READY_TIMEOUT_S if timeout is None else timeout)
+    matches = 0
+    observed = "no response"
+    while time.monotonic() < deadline:
+        try:
+            observed = _probe_backend_model(name)
+        except (NotFound, TemporarilyUnavailable) as exc:
+            # A newly created service can be absent from inference while its route propagates.
+            observed = type(exc).__name__
+        matches = matches + 1 if observed == expected else 0
+        if matches >= _ROUTE_READY_MATCHES:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(_ROUTE_POLL_INTERVAL_S, remaining))
+    raise TimeoutError(
+        f"Route {name!r} did not stabilize on backend {expected!r}; last observed {observed!r}. "
+        "Candidate evaluation stopped without accepting a score."
+    )
+
+
 def _sync_destinations(candidate, state, *, use_exp):
     """Push candidate model choices to gateway endpoints.
 
-    Skips endpoints already at the requested model via `state.last_gateway_synced`,
-    which is per-_State so consecutive optimize calls in the same kernel don't
-    skip a needed update because of stale cross-call state.
+    Experimental routes enter the cache only after inference matches a direct model control.
+    The control and readiness caches belong to one optimization run.
     """
     cache = state.last_gateway_synced
     updated = False
@@ -452,7 +499,18 @@ def _sync_destinations(candidate, state, *, use_exp):
         if model is None:
             continue
         if model != cache.get(ep_name):
+            # Invalidate first: a failed switch must not leave the old model marked ready.
+            cache.pop(ep_name, None)
+            state.expected_backends.pop(ep_name, None)
             _set_endpoint_model(ep_name, model)
+            if use_exp:
+                target = _resolve_system_ai_name(model)
+                if target not in state.backend_controls:
+                    state.backend_controls[target] = _probe_backend_model(target)
+                expected = state.backend_controls[target]
+                print(f"  Waiting for {ep_name} to serve backend {expected}...")
+                _wait_for_endpoint_model(ep_name, expected)
+                state.expected_backends[ep_name] = expected
             cache[ep_name] = model
             print(f"  {ep_name} -> {model}")
             updated = True
@@ -740,6 +798,40 @@ def _extract_trace_summary():
 # ---------------------------------------------------------------------------
 
 
+def _candidate_route_mismatches(trace, expected: dict[str, str]) -> dict[str, str]:
+    """Check actual agent responses as well as probes, since replicas can disagree."""
+    if not expected:
+        return {}
+    mismatches = {}
+    observed = False
+    spans = trace.data.spans if trace and trace.data else []
+    for span in spans:
+        inputs = span.inputs
+        outputs = span.outputs
+        if isinstance(inputs, str):
+            inputs = json.loads(inputs)
+        if isinstance(outputs, str):
+            outputs = json.loads(outputs)
+        name = inputs.get("model") if isinstance(inputs, dict) else None
+        if name not in expected:
+            continue
+        observed = True
+        model = outputs.get("model") if isinstance(outputs, dict) else None
+        if not isinstance(model, str) or not model:
+            raise RuntimeError(
+                f"Cannot verify candidate backend for {name!r}: its trace has no response model ID. "
+                "Enable MLflow autologging with request and response capture."
+            )
+        if model != expected[name]:
+            mismatches[name] = model
+    if not observed:
+        raise RuntimeError(
+            "Cannot verify candidate backend: no calls to an experimental service were traced. "
+            "Enable MLflow autologging and route the agent through its bound model services."
+        )
+    return mismatches
+
+
 def _convert_to_numeric(score):
     if isinstance(score, Feedback):
         score = score.value
@@ -988,15 +1080,30 @@ class _AgentAdapter(gepa.GEPAAdapter):
     def _run_one(self, candidate, inputs, expectations):
         """Score a single record. Caller owns prompt-patching + endpoint sync."""
         state = self.state
-        start = time.perf_counter()
-        prediction_failed = False
-        try:
-            answer = state.predict_fn(inputs)
-        except Exception as e:
-            prediction_failed = True
-            answer = f"ERROR: {type(e).__name__}: {e}"
-        latency = time.perf_counter() - start
-        mlflow_trace = _get_active_trace()
+        deadline = time.monotonic() + _ROUTE_READY_TIMEOUT_S
+        while True:
+            start = time.perf_counter()
+            prediction_failed = False
+            try:
+                answer = state.predict_fn(inputs)
+            except Exception as e:
+                prediction_failed = True
+                answer = f"ERROR: {type(e).__name__}: {e}"
+            latency = time.perf_counter() - start
+            mlflow_trace = _get_active_trace()
+            if prediction_failed:
+                break
+            mismatches = _candidate_route_mismatches(mlflow_trace, state.expected_backends)
+            if not mismatches:
+                break
+            # Discard stale-backend attempts before scoring or updating bandit history. Only the
+            # verified attempt's latency, trace, and cost contribute to the candidate's score.
+            for name, observed in mismatches.items():
+                expected = state.expected_backends[name]
+                print(f"  {name} served {observed}, expected {expected}; waiting before retrying.")
+                _wait_for_endpoint_model(
+                    name, expected, timeout=max(0.0, deadline - time.monotonic())
+                )
         trace = _extract_trace_summary()
 
         if prediction_failed:
@@ -1465,6 +1572,10 @@ def optimize_prompts_and_models(
         the cost component to use real token usage; without it, cost
         degenerates to a per-model constant via the 500/200 fallback and
         the library emits a warn-once.
+      - Model searches require traces containing each request's service name and the response's
+        model ID. Route changes wait for three consecutive inference responses matching a direct
+        model control, with a 120-second polling timeout. Each evaluation checks its own responses
+        too; stale attempts are retried without scoring, and unverifiable routing stops the run.
       - At least 10% of evaluations must produce a numeric scorer score;
         below that the call raises at the end so a misconfigured scorer
         doesn't silently report `delta=0`.

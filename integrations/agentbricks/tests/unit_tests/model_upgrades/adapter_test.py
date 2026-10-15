@@ -832,7 +832,9 @@ def test_mlflow_scorer_feedback_lists(values, expected, recwarn):
     class ListScorer(Scorer):
         name: str = "list_scorer"
 
-        def __call__(self, *, inputs=None, outputs=None, expectations=None):
+        def __call__(
+            self, *, inputs=None, outputs=None, expectations=None, trace=None, session=None
+        ):
             return [Feedback(name=f"rating_{i}", value=value) for i, value in enumerate(values)]
 
     scorer = ListScorer()

@@ -22,6 +22,8 @@ class _State:
     def __init__(self, targets):
         self.endpoint_targets = targets
         self.last_gateway_synced = {}
+        self.backend_controls = {}
+        self.expected_backends = {}
         self.created_exp_endpoints = []
 
 

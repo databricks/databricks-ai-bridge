@@ -37,6 +37,9 @@ def pytest_configure(config):
         "markers",
         "real_pricing: exercise the real _mlflow_model_cost wrapper (no stub)",
     )
+    config.addinivalue_line(
+        "markers", "route_readiness: exercise inference readiness and validation"
+    )
 
 
 class _Mocker:
@@ -79,6 +82,14 @@ class _NoWorkspace:
 def _no_workspace(mocker):
     mocker.patch(f"{_OPT}._client", return_value=_NoWorkspace())
     mocker.patch(f"{_OPT}._model_info_cache", {})
+
+
+@pytest.fixture(autouse=True)
+def _stub_route_readiness(request, mocker):
+    if request.node.get_closest_marker("route_readiness"):
+        return
+    mocker.patch(f"{_OPT}._probe_backend_model", return_value="test-backend")
+    mocker.patch(f"{_OPT}._wait_for_endpoint_model")
 
 
 @pytest.fixture(autouse=True)
