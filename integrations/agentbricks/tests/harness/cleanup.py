@@ -14,18 +14,16 @@ from __future__ import annotations
 import dataclasses
 import json
 import pathlib
-import re
 import time
 from collections.abc import Callable, Iterator
 from typing import Any
 
-from harness.agentbricks_cli import AgentbricksCli
+from harness.agentbricks_cli import AgentbricksCli, not_found
 from harness.logs import log
 from harness.run import APP_PREFIX, E2EError, now, project_prefix, scratch_schema_prefix
 from harness.workspace import AppIdentity, Workspace
 
 _APPS_RECORD = "apps.jsonl"
-_MISSING = re.compile(r"NOT_FOUND|RESOURCE_DOES_NOT_EXIST|does not exist|not found", re.IGNORECASE)
 
 
 # One test
@@ -57,23 +55,11 @@ class Cleanup:
 
     def _run(self, command: str) -> None:
         result = self._cli.run(command, timeout=1200, check=False)
-        message = (result.stderr or result.stdout).strip()
-        if result.returncode != 0 and not _MISSING.search(message):
-            raise E2EError(message)
+        if result.returncode != 0 and not not_found(result):
+            raise E2EError((result.stderr or result.stdout).strip())
 
 
 # Identities recorded by per-test cleanup
-
-
-def app_exists(cli: AgentbricksCli, name: str) -> bool:
-    """Whether `agentbricks deployments get` finds the App; raises when it can't tell."""
-    result = cli.run(f"--output json deployments get {name}", check=False)
-    if result.returncode == 0:
-        return True
-    message = (result.stderr or result.stdout).strip()
-    if _MISSING.search(message):
-        return False
-    raise E2EError(f"Could not tell whether App {name} exists: {message}")
 
 
 def app_identity(cli: AgentbricksCli, workspace: Workspace, name: str) -> AppIdentity:
@@ -86,7 +72,7 @@ def app_identity(cli: AgentbricksCli, workspace: Workspace, name: str) -> AppIde
             principal = json.loads(result.stdout).get("service_principal_client_id")
         except (ValueError, AttributeError):
             log(f"cleanup warning | principal lookup for {name} | {message}")
-    elif not _MISSING.search(message):
+    elif not not_found(result):
         log(f"cleanup warning | principal lookup for {name} | {message}")
     return AppIdentity(principal, workspace.lakebase_branch(name))
 
@@ -216,7 +202,7 @@ def _wait_until_app_gone(cli: AgentbricksCli, name: str, timeout: float = 1200) 
     """Block until the App is gone; `deployments delete` returns while it is still deleting."""
     started = time.monotonic()
     next_tick = 0.0
-    while app_exists(cli, name):
+    while not not_found(cli.run(f"--output json deployments get {name}", check=False)):
         elapsed = time.monotonic() - started
         if elapsed >= timeout:
             raise E2EError(f"App {name!r} still existed {timeout:.0f}s after delete returned.")

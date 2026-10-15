@@ -31,6 +31,9 @@ from harness.target import TargetWorkspace
 # `endpoint invoke`'s error for a 5xx answer: the App restarting after a redeploy, a new App's
 # session store coming up, or a model call failing on the server.
 _SERVER_ERROR = re.compile(r"HTTP 5\d\d\b")
+_NOT_FOUND = re.compile(
+    r"NOT_FOUND|RESOURCE_DOES_NOT_EXIST|does not exist|not found", re.IGNORECASE
+)
 
 
 @dataclasses.dataclass
@@ -219,6 +222,11 @@ def terminate_process_group(process: subprocess.Popen[str], *, grace: float = 20
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+
+
+def not_found(result: subprocess.CompletedProcess[str]) -> bool:
+    """Whether a command failed because what it names doesn't exist, e.g. an App already deleted."""
+    return result.returncode != 0 and bool(_NOT_FOUND.search(result.stderr or result.stdout))
 
 
 def free_port() -> int:

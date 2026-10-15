@@ -25,10 +25,9 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from harness.agentbricks_cli import AgentbricksCli
+from harness.agentbricks_cli import AgentbricksCli, not_found
 from harness.cleanup import (
     Cleanup,
-    app_exists,
     app_identity,
     delete_run_leftovers,
     record_app_identity,
@@ -249,8 +248,13 @@ def project(
     workspace = target_workspace.client
     if workspace is not None:
         # The test deletes whatever App has this name, so it must not belong to anyone else.
-        if app_exists(agentbricks_cli, project.app_name):
+        existing = agentbricks_cli.run(
+            f"--output json deployments get {project.app_name}", check=False
+        )
+        if existing.returncode == 0:
             raise E2EError(f"App {project.app_name} already exists; refusing to deploy over it.")
+        if not not_found(existing):
+            raise E2EError(f"Could not check App {project.app_name}: {existing.stderr}")
     yield project
     failed = request.node.nodeid in _failed_tests
     if workspace is not None:
