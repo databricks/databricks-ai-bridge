@@ -152,7 +152,8 @@ absence. Pass `--keep-resources` to retain resources while debugging. The gated 
 captures App runtime logs for failed deployed cases.
 Runtime Store cleanup covers every matrix App, including direct authoring without memory/session
 bindings. It verifies the store's App owner and service principal before deletion and retains the
-App if ownership checks or Runtime Store deletion fail, so cleanup can be retried safely.
+App if ownership checks or bound-store, Runtime Store, or role deletion fail. Verified role targets
+remain in runner state and evidence for retries after the Runtime Store has been removed.
 
 ## Declarative user-auth scope matrix
 

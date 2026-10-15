@@ -124,6 +124,8 @@ class ProjectCase:
 @dataclasses.dataclass(frozen=True)
 class RuntimeStoreCleanupTarget:
     role_name: str | None
+    app_principal: str
+    store_present: bool = True
 
 
 class Transcript:
@@ -188,6 +190,7 @@ class Runner:
         self.agentbricks = self.runner_venv / "bin" / "agentbricks"
         self.rows: list[EvidenceRow] = []
         self.apps: list[str] = []
+        self._runtime_cleanup_targets: dict[str, RuntimeStoreCleanupTarget] = {}
         self.cases: list[ProjectCase] = []
         self.uc_function: str | None = None
         self.transitive_uc_function: str | None = None
@@ -1303,6 +1306,10 @@ class Runner:
             "cleanup_required": self.cleanup_required,
             "cleanup_complete": self.cleanup_complete,
             "cleanup": self.cleanup_results,
+            "runtime_store_cleanup_targets": [
+                {"app_name": app, "role_name": target.role_name}
+                for app, target in self._runtime_cleanup_targets.items()
+            ],
             "rows": [dataclasses.asdict(row) for row in self.rows],
         }
         target = self.output / "evidence.json"
@@ -1316,7 +1323,14 @@ class Runner:
         try:
             store = client.api_client.do("GET", f"/api/2.0/agents/runtime-stores/{app}")
         except NotFound:
-            return None
+            previous = self._runtime_cleanup_targets.get(app)
+            if previous is None:
+                return None
+            if client.apps.get(app).service_principal_client_id != previous.app_principal:
+                raise MatrixError(
+                    f"App identity changed while cleanup for {app} was pending."
+                ) from None
+            return dataclasses.replace(previous, store_present=False)
         if not isinstance(store, dict):
             raise MatrixError(f"Runtime Store API returned an invalid resource for {app}.")
         record = cast(dict[str, Any], store)
@@ -1349,7 +1363,11 @@ class Runner:
             targets.append(name)
         if len(targets) > 1:
             raise MatrixError(f"Multiple Lakebase roles matched App {app}.")
-        return RuntimeStoreCleanupTarget(role_name=targets[0] if targets else None)
+        target = RuntimeStoreCleanupTarget(
+            role_name=targets[0] if targets else None, app_principal=principal
+        )
+        self._runtime_cleanup_targets[app] = target
+        return target
 
     def cleanup(self) -> None:
         # Every Agent Bricks Runtime deployment gets a managed Runtime Store, including the direct
@@ -1370,10 +1388,11 @@ class Runner:
         cleaned_stores = set(self.apps) - apps_with_stores
         for case in self.cases:
             stores_ok = True
-            for label, name, command in (
-                ("memory store", case.memory_store_name, ["memory", "stores", "delete"]),
-                ("session store", case.session_store_name, ["sessions", "stores", "delete"]),
+            for label, attribute, command in (
+                ("memory store", "memory_store_name", ["memory", "stores", "delete"]),
+                ("session store", "session_store_name", ["sessions", "stores", "delete"]),
             ):
+                name = getattr(case, attribute)
                 if not name:
                     continue
                 try:
@@ -1396,6 +1415,7 @@ class Runner:
                         self.cleanup_results.append(
                             {"resource": resource_name, "status": "deleted"}
                         )
+                        setattr(case, attribute, None)
                 except Exception as exc:
                     stores_ok = False
                     self.transcript.write(f"cleanup warning | {label} {name} | {exc}")
@@ -1406,14 +1426,14 @@ class Runner:
                 cleaned_stores.add(case.app_name)
 
         for app in self.apps:
-            if app not in runtime_targets:
+            if app not in runtime_targets or app not in cleaned_stores:
                 continue
             runtime_target = runtime_targets[app]
             try:
                 client = WorkspaceClient(profile=self.profile)
                 # The store owns a dedicated database; delete it before its App and role. Keep the
                 # App identity on failure so a later cleanup can repeat the ownership check.
-                if runtime_target is not None:
+                if runtime_target is not None and runtime_target.store_present:
                     try:
                         client.api_client.do("DELETE", f"/api/2.0/agents/runtime-stores/{app}")
                     except NotFound:
@@ -1426,32 +1446,8 @@ class Runner:
                     {"resource": f"runtime-store:{app}", "status": "failed", "detail": str(exc)}
                 )
                 continue
-            try:
-                client.apps.delete(app)
-            except NotFound:
-                pass
-            except Exception as exc:
-                self.cleanup_results.append(
-                    {"resource": f"app:{app}", "status": "failed", "detail": str(exc)}
-                )
-                continue
-            try:
-                self._wait_for_app_deleted(app)
-            except MatrixError as exc:
-                self.cleanup_results.append(
-                    {"resource": f"app:{app}", "status": "failed", "detail": str(exc)}
-                )
-                continue
-            self.cleanup_results.append(
-                {
-                    "resource": f"app:{app}",
-                    "status": "deleted",
-                    "confirmed_absent_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-                }
-            )
-            self._delete_deployment_source(app)
             role_target = runtime_target.role_name if runtime_target is not None else None
-            if role_target and app in cleaned_stores:
+            if role_target:
                 try:
                     result = self.run(
                         [
@@ -1479,6 +1475,8 @@ class Runner:
                     if not deleted:
                         role_result["detail"] = (result.stderr or result.stdout).strip()
                     self.cleanup_results.append(role_result)
+                    if not deleted:
+                        continue
                 except Exception as exc:
                     self.transcript.write(f"cleanup warning | Lakebase role {role_target} | {exc}")
                     self.cleanup_results.append(
@@ -1488,6 +1486,32 @@ class Runner:
                             "detail": str(exc),
                         }
                     )
+                    continue
+            try:
+                client.apps.delete(app)
+            except NotFound:
+                pass
+            except Exception as exc:
+                self.cleanup_results.append(
+                    {"resource": f"app:{app}", "status": "failed", "detail": str(exc)}
+                )
+                continue
+            try:
+                self._wait_for_app_deleted(app)
+            except MatrixError as exc:
+                self.cleanup_results.append(
+                    {"resource": f"app:{app}", "status": "failed", "detail": str(exc)}
+                )
+                continue
+            self.cleanup_results.append(
+                {
+                    "resource": f"app:{app}",
+                    "status": "deleted",
+                    "confirmed_absent_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                }
+            )
+            self._delete_deployment_source(app)
+            self._runtime_cleanup_targets.pop(app, None)
         if self.uc_function:
             catalog, schema, function_name = self.uc_function.split(".")
             try:
@@ -1558,9 +1582,8 @@ class Runner:
                         "detail": str(exc),
                     }
                 )
-        self.cleanup_complete = not any(
-            result.get("status") == "failed" for result in self.cleanup_results
-        )
+        latest_status = {result["resource"]: result["status"] for result in self.cleanup_results}
+        self.cleanup_complete = "failed" not in latest_status.values()
         self._write_evidence()
 
     def _delete_deployment_source(self, app: str) -> None:

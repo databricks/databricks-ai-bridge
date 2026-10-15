@@ -172,8 +172,8 @@ def test_cleanup_deletes_runtime_and_role_with_or_without_bound_stores(
         ]
     expected += [
         ["sdk", "DELETE", f"/api/2.0/agents/runtime-stores/{client.app}"],
-        ["sdk", "apps", "delete", client.app],
         ["databricks", "postgres", "delete-role", role],
+        ["sdk", "apps", "delete", client.app],
     ]
     assert commands == expected
     assert {
@@ -196,8 +196,7 @@ def test_cleanup_keeps_role_when_bound_store_deletion_fails(
     monkeypatch.setattr(runner, "run", fake_run)
     runner.cleanup()
 
-    assert ["sdk", "apps", "delete", client.app] in commands
-    assert not any("delete-role" in command for command in commands)
+    assert all(command[0] == str(runner.agentbricks) for command in commands)
     assert runner.cleanup_complete is False
 
 
@@ -216,6 +215,68 @@ def test_cleanup_retains_app_identity_when_runtime_store_deletion_fails(
         "detail": "resource is in use",
     } in runner.cleanup_results
     assert runner.cleanup_complete is False
+
+
+def test_cleanup_retries_only_the_failed_bound_store_before_app_teardown(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    runner, client, commands, _ = _cleanup_runner(tmp_path, monkeypatch, authoring="cli")
+    memory_attempts = 0
+
+    def fake_run(argv, **kwargs):
+        nonlocal memory_attempts
+        commands.append(list(argv))
+        if "memory" in argv:
+            memory_attempts += 1
+            return subprocess.CompletedProcess(argv, 1 if memory_attempts == 1 else 0, "", "")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(runner, "run", fake_run)
+    runner.cleanup()
+    assert runner.cleanup_complete is False
+    assert not any(command[0] == "sdk" for command in commands)
+
+    runner.cleanup()
+
+    assert memory_attempts == 2
+    assert sum("sessions" in command for command in commands) == 1
+    assert ["sdk", "apps", "delete", client.app] in commands
+    assert runner.cleanup_complete is True
+
+
+@pytest.mark.parametrize("identity_changed", [False, True])
+def test_cleanup_preserves_verified_role_target_for_retry_after_runtime_store_deletion(
+    tmp_path: pathlib.Path, monkeypatch, identity_changed
+) -> None:
+    runner, client, commands, role = _cleanup_runner(tmp_path, monkeypatch)
+    role_attempts = 0
+
+    def fake_run(argv, **kwargs):
+        nonlocal role_attempts
+        commands.append(list(argv))
+        role_attempts += 1
+        return subprocess.CompletedProcess(argv, 1 if role_attempts == 1 else 0, "", "role busy")
+
+    monkeypatch.setattr(runner, "run", fake_run)
+    runner.cleanup()
+    assert runner.cleanup_complete is False
+    assert not any("apps" in command for command in commands)
+    assert runner._runtime_cleanup_targets[client.app].role_name == role
+    client.get_error = _NAMESPACE["NotFound"]("runtime store already removed")
+    if identity_changed:
+        client.principal = "replacement-app-sp"
+
+    runner.cleanup()
+
+    if identity_changed:
+        assert role_attempts == 1
+        assert runner.cleanup_complete is False
+        assert not any("apps" in command for command in commands)
+    else:
+        assert role_attempts == 2
+        assert sum(command[:2] == ["sdk", "DELETE"] for command in commands) == 1
+        assert ["sdk", "apps", "delete", client.app] in commands
+        assert runner.cleanup_complete is True
 
 
 def test_cleanup_treats_missing_runtime_store_as_deleted(
@@ -245,8 +306,8 @@ def test_cleanup_handles_runtime_store_removed_after_ownership_check(
 
     assert commands == [
         ["sdk", "DELETE", f"/api/2.0/agents/runtime-stores/{client.app}"],
-        ["sdk", "apps", "delete", client.app],
         ["databricks", "postgres", "delete-role", role],
+        ["sdk", "apps", "delete", client.app],
     ]
     assert runner.cleanup_complete is True
 
