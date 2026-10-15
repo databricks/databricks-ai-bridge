@@ -905,6 +905,7 @@ class ChatDatabricks(BaseChatModel):
                 usage_chunk_emitted = True
         else:
             first_chunk_role = None
+            text_block_index = None
             stream: Stream[ChatCompletionChunk] = self.client.chat.completions.create(**data)
             for chunk in stream:
                 # Handle ChatAgent chunks that don't have choices but have delta
@@ -916,8 +917,12 @@ class ChatDatabricks(BaseChatModel):
                     }
                     if hasattr(chunk, "custom_outputs"):
                         chunk_delta_dict["custom_outputs"] = chunk.custom_outputs
+                    if isinstance(content := chunk_delta_dict.get("content"), list):
+                        text_block_index = len(content)
                     chunk_message = _convert_dict_to_message_chunk(
-                        chunk_delta_dict, first_chunk_role
+                        chunk_delta_dict,
+                        first_chunk_role,
+                        text_block_index=text_block_index,
                     )
                     generation_chunk = ChatGenerationChunk(message=chunk_message)
                     if run_manager:
@@ -939,8 +944,13 @@ class ChatDatabricks(BaseChatModel):
                         final_usage = usage  # store for usage chunk at end
                     # Use model_dump instead of manual dict reconstruction
                     chunk_delta_dict = chunk_delta.model_dump(exclude_unset=True)
+                    if isinstance(content := chunk_delta_dict.get("content"), list):
+                        text_block_index = len(content)
                     chunk_message = _convert_dict_to_message_chunk(
-                        chunk_delta_dict, first_chunk_role, usage=usage
+                        chunk_delta_dict,
+                        first_chunk_role,
+                        usage=usage,
+                        text_block_index=text_block_index,
                     )
                     generation_info = {}
                     if choice.finish_reason:
@@ -1013,6 +1023,7 @@ class ChatDatabricks(BaseChatModel):
                 usage_chunk_emitted = True
         else:
             first_chunk_role = None
+            text_block_index = None
             stream = cast(
                 AsyncStream[ChatCompletionChunk],
                 await self.async_client.chat.completions.create(**data),
@@ -1027,8 +1038,12 @@ class ChatDatabricks(BaseChatModel):
                     }
                     if hasattr(chunk, "custom_outputs"):
                         chunk_delta_dict["custom_outputs"] = chunk.custom_outputs
+                    if isinstance(content := chunk_delta_dict.get("content"), list):
+                        text_block_index = len(content)
                     chunk_message = _convert_dict_to_message_chunk(
-                        chunk_delta_dict, first_chunk_role
+                        chunk_delta_dict,
+                        first_chunk_role,
+                        text_block_index=text_block_index,
                     )
                     generation_chunk = ChatGenerationChunk(message=chunk_message)
                     if run_manager:
@@ -1050,8 +1065,13 @@ class ChatDatabricks(BaseChatModel):
                         final_usage = usage  # store for usage chunk at end
                     # Use model_dump instead of manual dict reconstruction
                     chunk_delta_dict = chunk_delta.model_dump(exclude_unset=True)
+                    if isinstance(content := chunk_delta_dict.get("content"), list):
+                        text_block_index = len(content)
                     chunk_message = _convert_dict_to_message_chunk(
-                        chunk_delta_dict, first_chunk_role, usage=usage
+                        chunk_delta_dict,
+                        first_chunk_role,
+                        usage=usage,
+                        text_block_index=text_block_index,
                     )
                     generation_info = {}
                     if choice.finish_reason:
@@ -1621,9 +1641,9 @@ def _convert_dict_to_message(
 ) -> HumanMessage | SystemMessage | ToolMessage | AIMessage | ChatMessage:
     role = _dict["role"]
     content = _dict.get("content") or ""
-    if not isinstance(content, str):
-        # for non-string content, serialize it into a string to maintain compatibility with downstream consumers
-        # for example, output parsers expect a string
+    if not isinstance(content, (str, list)):
+        # Preserve structured content blocks while retaining a safe fallback for
+        # unexpected provider content types.
         content = json.dumps(content)
 
     lc_message = None
@@ -1669,13 +1689,17 @@ def _convert_dict_to_message_chunk(
     _dict: Mapping[str, Any],
     default_role: str | None,
     usage: CompletionUsage | dict[str, Any] | None = None,
+    text_block_index: int | None = None,
 ) -> BaseMessageChunk:
     role = _dict.get("role", default_role)
-    content = _dict.get("content") or ""
-    if not isinstance(content, str):
-        # for non-string content, serialize it into a string to maintain compatibility with downstream consumers
-        # for example, output parsers expect a string
+    content: Any = _dict.get("content") or ""
+    if text_block_index is not None and isinstance(content, str) and content:
+        content = [{"type": "text", "text": content, "index": text_block_index}]
+    elif not isinstance(content, (str, list)):
+        # Preserve structured content blocks while retaining a safe fallback for
+        # unexpected provider content types.
         content = json.dumps(content)
+    content = cast(str | list[str | dict[Any, Any]], content)
 
     lc_chunk = None
     if role == "user":
