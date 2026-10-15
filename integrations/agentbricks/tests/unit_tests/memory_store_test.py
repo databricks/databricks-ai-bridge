@@ -458,14 +458,18 @@ def test_list_memories_consumes_pages() -> None:
 def test_get_update_and_delete_memory() -> None:
     client, api = resource_client()
     api.get_memory_store.return_value = mem_store_payload()
-    api.get_memory_entry.return_value = memory_payload()
+    api.get_memory_entry.return_value = {
+        "name": f"{MEMORY_STORE_NAME}/entries/{MEMORY_ID}",
+        "content": "c",
+    }
     api.update_memory_entry.return_value = memory_payload(content="updated")
     store = client.memory_stores.get(STORE_ID)
 
     memory = store.get(MEMORY_ID, read_mask="name,content")
     updated = memory.update(content="updated")
-    updated.delete()
+    memory.delete()
 
+    assert memory.id == MEMORY_ID
     assert updated.content == "updated"
     api.get_memory_entry.assert_called_once_with(
         STORE_ID,
@@ -479,6 +483,64 @@ def test_get_update_and_delete_memory() -> None:
         description=None,
     )
     api.delete_memory_entry.assert_called_once_with(STORE_ID, MEMORY_ID)
+
+
+@pytest.mark.parametrize(
+    ("read_mask", "expected_actor_id", "expected_path"),
+    [
+        ("name,path,content", None, "/m/p.md"),
+        ("name,actor_id,content", "alice", None),
+        ("name,content", None, None),
+    ],
+)
+@pytest.mark.parametrize("operation", ["get", "list", "search", "legacy_search"])
+def test_read_mask_projects_fields_without_crashing(
+    read_mask: str,
+    expected_actor_id: Optional[str],
+    expected_path: Optional[str],
+    operation: str,
+) -> None:
+    client, api = resource_client()
+    api.get_memory_store.return_value = mem_store_payload()
+    payload = {key: value for key, value in memory_payload().items() if key in read_mask.split(",")}
+    store = client.memory_stores.get(STORE_ID)
+
+    if operation == "get":
+        api.get_memory_entry.return_value = payload
+        memories = [store.get(MEMORY_ID, read_mask=read_mask)]
+        assert api.get_memory_entry.call_args.kwargs["read_mask"] == read_mask
+    elif operation == "list":
+        api.list_memory_entries.side_effect = [
+            {"managed_memory_entries": [payload], "next_page_token": "p2"},
+            {"managed_memory_entries": [payload]},
+        ]
+        memories = list(store.list(actor_id="alice", read_mask=read_mask))
+        assert len(memories) == 2
+        assert api.list_memory_entries.call_args_list[1].kwargs["page_token"] == "p2"
+        assert all(
+            call.kwargs["read_mask"] == read_mask for call in api.list_memory_entries.call_args_list
+        )
+    else:
+        api.search_memory_entries.return_value = (
+            {"results": [{"managed_memory_entry": payload, "score": 0.9}]}
+            if operation == "search"
+            else {"managed_memory_entries": [payload]}
+        )
+        results = store.search(actor_id="alice", query="prefs", read_mask=read_mask)
+        assert results[0].score == (0.9 if operation == "search" else None)
+        memories = [result.memory for result in results]
+        assert api.search_memory_entries.call_args.kwargs["read_mask"] == read_mask
+
+    for memory in memories:
+        assert memory.id == MEMORY_ID
+        assert memory.actor_id == expected_actor_id
+        assert memory.path == expected_path
+        assert memory.content == "c"
+        assert memory.session_id is None
+        assert memory.description is None
+        assert memory.source_type is None
+        assert memory.create_time is None
+        assert memory.update_time is None
 
 
 def test_search_preserves_scores_and_translates_limit() -> None:
