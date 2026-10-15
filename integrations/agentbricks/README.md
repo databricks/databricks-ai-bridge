@@ -473,6 +473,10 @@ results = memory_store.search(actor_id="user-123", query="communication preferen
 To browse rather than search, `memory_store.list(actor_id=..., path_prefix=...)` returns entries
 directly, and `memory_store.list(actor_id=..., path=...)` returns the entries at one exact path.
 
+`get`, `list`, and `search` accept `read_mask` to select the returned memory fields. Include `name`
+in the mask to identify the entry, for example `read_mask="name,content"`. Fields omitted by the
+mask, including `actor_id` and `path`, are `None`; the entry can still be updated or deleted by name.
+
 In an agent configured with `server = "agentbricks"`, add the memory tools so the model can read and write memory during a run.
 `memory_tools(actor)` returns four tools bound to one actor's partition:
 
