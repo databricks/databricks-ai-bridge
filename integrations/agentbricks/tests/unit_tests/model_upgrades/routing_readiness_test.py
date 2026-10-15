@@ -216,3 +216,45 @@ def test_stale_attempt_latency_is_excluded(monkeypatch):
     )
     assert score == 1.0
     assert objectives["latency"] == pytest.approx(1 - 1 / 60)
+
+
+def test_previous_predictions_trace_cannot_verify_an_untraced_record(monkeypatch):
+    state = _state()
+    state.expected_backends = {"main.agent.llm_exp_test": "haiku-id"}
+    previous = _trace("haiku-id")
+    previous.info = SimpleNamespace(trace_id="previous-record")
+    monkeypatch.setattr(opt.mlflow, "get_last_active_trace_id", lambda: "previous-record")
+    monkeypatch.setattr(opt, "_get_active_trace", lambda: previous)
+    monkeypatch.setattr(opt, "_extract_trace_summary", lambda: {})
+    with pytest.raises(RuntimeError, match="fresh.*trace"):
+        opt._AgentAdapter(state)._run_one({"model:main.agent.llm": "haiku"}, {}, {})
+    state.scorers[0].assert_not_called()
+
+
+def test_request_model_attribute_and_serialized_span_payloads_are_supported():
+    trace = _trace("haiku-id")
+    span = trace.data.spans[0]
+    span.inputs = "{}"
+    span.outputs = '{"model": "haiku-id"}'
+    span.attributes = {"mlflow.llm.model": "main.agent.llm_exp_test"}
+    assert opt._candidate_route_mismatches(trace, {"main.agent.llm_exp_test": "haiku-id"}) == {}
+
+
+def test_request_model_get_attribute_is_supported():
+    span = SimpleNamespace(
+        inputs={},
+        outputs={"model": "haiku-id"},
+        get_attribute=lambda key: "main.agent.llm_exp_test",
+    )
+    trace = SimpleNamespace(data=SimpleNamespace(spans=[span]))
+    assert opt._candidate_route_mismatches(trace, {"main.agent.llm_exp_test": "haiku-id"}) == {}
+
+
+def test_unrelated_text_and_non_string_models_do_not_hide_candidate_calls():
+    spans = [
+        SimpleNamespace(inputs="plain text", outputs="plain text"),
+        SimpleNamespace(inputs={"model": []}, outputs={}),
+        *_trace("haiku-id").data.spans,
+    ]
+    trace = SimpleNamespace(data=SimpleNamespace(spans=spans))
+    assert opt._candidate_route_mismatches(trace, {"main.agent.llm_exp_test": "haiku-id"}) == {}

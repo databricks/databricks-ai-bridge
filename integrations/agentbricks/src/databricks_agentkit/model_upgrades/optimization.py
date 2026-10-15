@@ -807,15 +807,26 @@ def _candidate_route_mismatches(trace, expected: dict[str, str]) -> dict[str, st
     spans = trace.data.spans if trace and trace.data else []
     for span in spans:
         inputs = span.inputs
-        outputs = span.outputs
         if isinstance(inputs, str):
-            inputs = json.loads(inputs)
-        if isinstance(outputs, str):
-            outputs = json.loads(outputs)
+            try:
+                inputs = json.loads(inputs)
+            except json.JSONDecodeError:
+                inputs = None
         name = inputs.get("model") if isinstance(inputs, dict) else None
-        if name not in expected:
+        if not isinstance(name, str) or not name:
+            attrs = getattr(span, "attributes", None) or {}
+            name = attrs.get(_LLM_MODEL_ATTR_KEY)
+            if not name and hasattr(span, "get_attribute"):
+                name = span.get_attribute(_LLM_MODEL_ATTR_KEY)
+        if not isinstance(name, str) or name not in expected:
             continue
         observed = True
+        outputs = span.outputs
+        if isinstance(outputs, str):
+            try:
+                outputs = json.loads(outputs)
+            except json.JSONDecodeError:
+                outputs = None
         model = outputs.get("model") if isinstance(outputs, dict) else None
         if not isinstance(model, str) or not model:
             raise RuntimeError(
@@ -1082,6 +1093,9 @@ class _AgentAdapter(gepa.GEPAAdapter):
         state = self.state
         deadline = time.monotonic() + _ROUTE_READY_TIMEOUT_S
         while True:
+            previous_trace_id = (
+                mlflow.get_last_active_trace_id() if state.expected_backends else None
+            )
             start = time.perf_counter()
             prediction_failed = False
             try:
@@ -1093,6 +1107,13 @@ class _AgentAdapter(gepa.GEPAAdapter):
             mlflow_trace = _get_active_trace()
             if prediction_failed:
                 break
+            if previous_trace_id and (
+                getattr(getattr(mlflow_trace, "info", None), "trace_id", None) == previous_trace_id
+            ):
+                raise RuntimeError(
+                    "Cannot verify candidate backend without a fresh prediction trace. "
+                    "Trace each predict_fn call separately and enable MLflow autologging."
+                )
             mismatches = _candidate_route_mismatches(mlflow_trace, state.expected_backends)
             if not mismatches:
                 break
@@ -1572,10 +1593,11 @@ def optimize_prompts_and_models(
         the cost component to use real token usage; without it, cost
         degenerates to a per-model constant via the 500/200 fallback and
         the library emits a warn-once.
-      - Model searches require traces containing each request's service name and the response's
-        model ID. Route changes wait for three consecutive inference responses matching a direct
-        model control, with a 120-second polling timeout. Each evaluation checks its own responses
-        too; stale attempts are retried without scoring, and unverifiable routing stops the run.
+      - Model searches require a fresh trace per prediction containing each request's service name
+        and the response's model ID. Route changes wait for three consecutive inference responses
+        matching a direct model control, with a 120-second polling timeout. Each evaluation checks
+        its own responses too; stale attempts are retried without scoring, and unverifiable routing
+        stops the run.
       - At least 10% of evaluations must produce a numeric scorer score;
         below that the call raises at the end so a misconfigured scorer
         doesn't silently report `delta=0`.
