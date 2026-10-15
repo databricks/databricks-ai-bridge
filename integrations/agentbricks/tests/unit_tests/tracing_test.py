@@ -593,10 +593,14 @@ def test_list_explicit_uc_experiment_requires_a_warehouse(tmp_path, monkeypatch)
     mlflow.search_traces.assert_not_called()
 
 
-def test_get_reads_uc_backed_experiment_through_warehouse(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "selection", [[], ["--experiment-id", "eid-uc"], ["--experiment-name", "/Shared/uc"]]
+)
+def test_get_reads_uc_backed_experiment_through_warehouse(tmp_path, monkeypatch, selection):
     # get resolves through the same helper: a UC-backed bound experiment + --warehouse exports the
     # env var before get_trace.
     mlflow = _bound_uc_project(tmp_path)
+    mlflow.get_experiment.return_value = mlflow.get_experiment_by_name.return_value
     monkeypatch.delenv(_WAREHOUSE_ENV, raising=False)
     seen = {}
 
@@ -604,19 +608,23 @@ def test_get_reads_uc_backed_experiment_through_warehouse(tmp_path, monkeypatch)
         seen["warehouse"] = os.environ.get(_WAREHOUSE_ENV)  # captured at fetch time
         return _trace(trace_id)
 
-    mlflow.get_trace.side_effect = _get_trace
+    mlflow.MlflowClient.return_value.get_trace.side_effect = _get_trace
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
         mock.patch.object(tracing_mod, "_set_tracking_uri"),
     ):
         result = CliRunner().invoke(
             tracing_mod.tracing_get,
-            ["tr-uc", "--warehouse", "wh-2", "--source", str(tmp_path)],
+            ["tr-uc", "--warehouse", "wh-2", "--source", str(tmp_path), *selection],
             obj=_Ctx(output="json"),
         )
     assert result.exit_code == 0, result.output
     assert seen["warehouse"] == "wh-2"
-    assert json.loads(result.output)["trace_id"] == "tr-uc"
+    assert json.loads(result.output)["trace_id"] == "trace:/cat.schema.pfx/tr-uc"
+    mlflow.MlflowClient.assert_called_once_with(tracking_uri="databricks")
+    mlflow.MlflowClient.return_value.get_trace.assert_called_once_with(
+        "trace:/cat.schema.pfx/tr-uc", display=False
+    )
 
 
 def test_list_empty_when_no_experiment_exists(tmp_path: pathlib.Path):
@@ -641,7 +649,7 @@ def test_get_reports_missing_trace(tmp_path: pathlib.Path):
     mlflow.get_experiment_by_name.return_value = (
         None  # no project experiment -> reads the workspace
     )
-    mlflow.get_trace.return_value = None
+    mlflow.MlflowClient.return_value.get_trace.return_value = None
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
         mock.patch.object(tracing_mod, "_set_tracking_uri"),
@@ -655,16 +663,22 @@ def test_get_reports_missing_trace(tmp_path: pathlib.Path):
 
 @pytest.mark.parametrize("output", ["text", "json"])
 @pytest.mark.parametrize(
-    ("trace_id", "error_code", "message"),
+    ("trace_id", "error_code", "message", "missing"),
     [
-        ("invalid-id", "INVALID_PARAMETER_VALUE", "Invalid request id"),
-        ("tr-00000000000000000000000000000000", "RESOURCE_DOES_NOT_EXIST", "Trace not found"),
+        ("invalid-id", "INVALID_PARAMETER_VALUE", "Invalid request id", False),
+        ("tr-missing", "RESOURCE_DOES_NOT_EXIST", "Trace not found", True),
+        ("trace:/cat.schema.pfx/tr-missing", "NOT_FOUND", "Trace not found", True),
+        ("tr-denied", "PERMISSION_DENIED", "Trace access denied", False),
+        ("tr-unavailable", "INTERNAL_ERROR", "Trace service unavailable", False),
     ],
 )
-def test_get_missing_trace_has_clean_error(output, trace_id, error_code, message, monkeypatch):
-    # Exercise MLflow's real get_trace error handling: it logs a warning by default before returning
-    # None. A mock get_trace returning None misses that warning and the resulting polluted JSON.
+def test_get_trace_errors_are_clean_and_preserve_failure_details(
+    output, trace_id, error_code, message, missing, monkeypatch
+):
+    # Exercise the public MLflow client through the registered command. The fluent API catches
+    # these errors and returns None, which loses the difference between missing and unreadable.
     from mlflow.exceptions import MlflowException
+    from mlflow.protos.databricks_pb2 import ErrorCode
 
     from databricks_agentbricks import errors
     from databricks_agentbricks.cli.app import agentbricks
@@ -674,24 +688,58 @@ def test_get_missing_trace_has_clean_error(output, trace_id, error_code, message
     target = tracing_mod._TraceReadTarget("http://127.0.0.1:5000", "eid-1")
     with (
         mock.patch.object(tracing_mod, "_with_trace_read_target", return_value=nullcontext(target)),
-        # Newer MLflow resolves UC trace locations before calling TracingClient; older supported
-        # versions do not import get_tracking_uri in this module.
+        mock.patch("mlflow.tracking.client.TracingClient") as client,
+        mock.patch("mlflow.tracing.fluent.TracingClient", client),
         mock.patch(
             "mlflow.tracing.fluent.get_tracking_uri", return_value=target.tracking_uri, create=True
         ),
-        mock.patch("mlflow.tracing.fluent.TracingClient") as client,
     ):
-        client.return_value.get_trace.side_effect = MlflowException(message, error_code=error_code)
+        client.return_value.get_trace.side_effect = MlflowException(
+            message, error_code=ErrorCode.Value(error_code)
+        )
         result = CliRunner().invoke(agentbricks, ["--output", output, "tracing", "get", trace_id])
 
     assert result.exit_code == 1
     assert result.stdout == ""
     assert "Failed to get trace" not in result.stderr
-    expected = f"No trace found with id {trace_id!r}."
+    assert "Traceback" not in result.stderr
+    expected = f"No trace found with id {trace_id!r}." if missing else message
     if output == "json":
-        assert json.loads(result.stderr) == {"error": {"message": expected}}
+        expected_error = {"message": expected}
+        if not missing:
+            expected_error["code"] = error_code
+        assert json.loads(result.stderr) == {"error": expected_error}
     else:
         assert expected in result.stderr
+        if not missing:
+            assert error_code in result.stderr
+    client.return_value.get_trace.assert_called_once_with(trace_id)
+
+
+@pytest.mark.parametrize(
+    ("trace_id", "location", "expected"),
+    [
+        ("tr-legacy", None, "tr-legacy"),
+        ("tr-uc", "cat.schema", "trace:/cat.schema/tr-uc"),
+        ("tr-uc", "cat.schema.pfx", "trace:/cat.schema.pfx/tr-uc"),
+        ("trace:/other.schema.prefix/tr-uc", "cat.schema.pfx", "trace:/other.schema.prefix/tr-uc"),
+        ("trace:/malformed", "cat.schema.pfx", "trace:/malformed"),
+    ],
+)
+def test_get_uses_selected_uc_location_without_rewriting_qualified_ids(
+    trace_id, location, expected
+):
+    import mlflow
+
+    with mock.patch("mlflow.tracking.client.TracingClient") as client:
+        trace = client.return_value.get_trace.return_value
+        assert (
+            tracing_client.fetch_trace(
+                mlflow, trace_id, tracking_uri="http://127.0.0.1:5000", trace_location=location
+            )
+            is trace
+        )
+    client.return_value.get_trace.assert_called_once_with(expected)
 
 
 def test_get_by_explicit_experiment_id(tmp_path: pathlib.Path):
@@ -699,7 +747,7 @@ def test_get_by_explicit_experiment_id(tmp_path: pathlib.Path):
     _project(tmp_path)
     mlflow = mock.Mock()
     mlflow.get_experiment.return_value = mock.Mock(tags={})  # managed experiment
-    mlflow.get_trace.return_value = _trace("tr-9")
+    mlflow.MlflowClient.return_value.get_trace.return_value = _trace("tr-9")
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
         mock.patch.object(tracing_mod, "_set_tracking_uri"),
@@ -776,7 +824,7 @@ def test_get_errors_when_explicit_name_missing():
         )
     assert result.exit_code != 0
     assert "No MLflow experiment named" in result.output
-    mlflow.get_trace.assert_not_called()
+    mlflow.MlflowClient.return_value.get_trace.assert_not_called()
 
 
 def test_list_reads_local_dev_store_when_not_provisioned(tmp_path: pathlib.Path):
@@ -819,7 +867,7 @@ def test_get_reads_local_dev_store_when_not_provisioned(tmp_path: pathlib.Path):
     (tmp_path / ".agentbricks" / "mlflow.db").write_text("")
     mlflow = mock.Mock()
     mlflow.get_experiment_by_name.side_effect = [None, mock.Mock(experiment_id="local-1", tags={})]
-    mlflow.get_trace.return_value = _trace("tr-local")
+    mlflow.MlflowClient.return_value.get_trace.return_value = _trace("tr-local")
     fake_server = mock.Mock()
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
