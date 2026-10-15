@@ -16,6 +16,7 @@ import secrets
 import shlex
 import shutil
 import string
+import sys
 import tempfile
 from dataclasses import dataclass
 from importlib import resources
@@ -75,6 +76,10 @@ def _or_join(items: list[str]) -> str:
     if len(items) == 2:
         return f"{items[0]} or {items[1]}"
     return ", ".join(items[:-1]) + f", or {items[-1]}"
+
+
+def _interactive_terminal() -> bool:
+    return sys.stdin.isatty()
 
 
 # Derived from _FRAMEWORK_LABELS / AgentFramework so user-facing text never drifts from the
@@ -312,6 +317,11 @@ def _prepare_migration(
     help="Agent framework: langgraph (LangGraph, default) or openai (OpenAI Agents SDK).",
 )
 @click.option(
+    "--no-input",
+    is_flag=True,
+    help="Use defaults without prompting, including in an interactive terminal.",
+)
+@click.option(
     "--server",
     type=click.Choice([server.value for server in AgentServer]),
     default=AgentServer.AGENTBRICKS.value,
@@ -355,6 +365,7 @@ def init(
     directory: Optional[str],
     existing: bool,
     framework: Optional[str],
+    no_input: bool,
     server: str,
     profile: Optional[str],
     disable_chat_app: bool,
@@ -386,6 +397,13 @@ def init(
     New projects include project-local workflow skills for coding agents. Local dev is optional
     when your goal is deployment; read the workflow skill for a scoped validation checklist.
     """
+    interactive = not no_input and not existing and obj.output != "json" and _interactive_terminal()
+    if interactive and framework is None:
+        framework = click.prompt(
+            "Agent framework",
+            type=click.Choice([item.value for item in AgentFramework]),
+            default=AgentFramework.LANGGRAPH.value,
+        )
     selected_framework = parse_framework(framework or AgentFramework.LANGGRAPH)
     selected_server = parse_server(server)
     agentbricks_server = selected_server == AgentServer.AGENTBRICKS
@@ -408,6 +426,8 @@ def init(
             session_store=session_store,
         )
         return
+    if interactive and directory is None:
+        directory = click.prompt("Project directory", default=template_name)
     dest = pathlib.Path(directory) if directory else pathlib.Path(template_name)
 
     if dest.exists():

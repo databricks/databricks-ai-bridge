@@ -17,6 +17,7 @@ from click.testing import CliRunner
 
 from databricks_agentbricks.cli import init as init_mod
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.projects.agent_project import AgentProject
 from databricks_agentbricks.projects.types import AgentFramework, AgentServer
 
 
@@ -78,6 +79,26 @@ def test_framework_templates_map_to_names():
         "custom-agent-openai",
         "ui/agent-openai",
     )
+
+
+def test_interactive_init_selects_framework_and_directory(tmp_path, monkeypatch):
+    monkeypatch.setattr(init_mod, "_interactive_terminal", lambda: True)
+    dest = tmp_path / "selected"
+    result = CliRunner().invoke(init_mod.init, input=f"openai\n{dest}\n", obj=_Ctx())
+    assert result.exit_code == 0, result.output
+    assert "Agent framework" in result.output
+    assert "Project directory" in result.output
+    assert AgentProject.load(dest).framework == AgentFramework.OPENAI
+
+
+@pytest.mark.parametrize("output,options", [("text", ["--no-input"]), ("json", [])])
+def test_init_unattended_does_not_prompt(tmp_path, monkeypatch, output, options):
+    monkeypatch.setattr(init_mod, "_interactive_terminal", lambda: True)
+    dest = tmp_path / "unattended"
+    result = CliRunner().invoke(init_mod.init, [str(dest), *options], obj=_Ctx(output))
+    assert result.exit_code == 0, result.output
+    assert "Agent framework" not in result.output
+    assert AgentProject.load(dest).framework == AgentFramework.LANGGRAPH
 
 
 def test_init_scaffolds_default_directory(tmp_path: pathlib.Path):
