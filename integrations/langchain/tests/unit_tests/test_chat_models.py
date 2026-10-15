@@ -218,8 +218,11 @@ def test_chat_model_stream_custom_outputs(mock_client_delta, llm: ChatDatabricks
 
 
 def test_chat_model_stream_with_usage(llm: ChatDatabricks) -> None:
-    def _assert_usage(chunk, expected):
-        usage = chunk.usage_metadata
+    def _assert_usage(chunks, expected):
+        aggregate = chunks[0]
+        for chunk in chunks[1:]:
+            aggregate += chunk
+        usage = aggregate.usage_metadata
         assert usage is not None
         assert usage["input_tokens"] == expected["usage"]["prompt_tokens"]
         assert usage["output_tokens"] == expected["usage"]["completion_tokens"]
@@ -233,9 +236,10 @@ def test_chat_model_stream_with_usage(llm: ChatDatabricks) -> None:
         ],
         stream_usage=True,
     )
-    for chunk, expected in zip(res, _MOCK_STREAM_RESPONSE, strict=False):
+    chunks = list(res)
+    for chunk, expected in zip(chunks, _MOCK_STREAM_RESPONSE, strict=False):
         assert chunk.content == expected["choices"][0]["delta"]["content"]
-        _assert_usage(chunk, expected)
+    _assert_usage(chunks, _MOCK_STREAM_RESPONSE[-1])
 
     # Method 2: Pass stream_usage=True to the constructor
     llm_with_usage = ChatDatabricks(
@@ -248,9 +252,10 @@ def test_chat_model_stream_with_usage(llm: ChatDatabricks) -> None:
             {"role": "user", "content": "36939 * 8922.4"},
         ],
     )
-    for chunk, expected in zip(res, _MOCK_STREAM_RESPONSE, strict=False):
+    chunks = list(res)
+    for chunk, expected in zip(chunks, _MOCK_STREAM_RESPONSE, strict=False):
         assert chunk.content == expected["choices"][0]["delta"]["content"]
-        _assert_usage(chunk, expected)
+    _assert_usage(chunks, _MOCK_STREAM_RESPONSE[-1])
 
 
 def test_chat_model_stream_usage_chunk_emission():
@@ -1772,7 +1777,7 @@ def _create_claude_completion_usage():
         (
             "claude",
             {
-                "input_tokens": 150,  # prompt_tokens + cache_read + cache_creation
+                "input_tokens": 100,  # Gateway prompt_tokens already includes cache tokens.
                 "output_tokens": 50,
                 "total_tokens": 150,
                 "input_token_details": {"cache_read": 30, "cache_creation": 20},
@@ -2028,7 +2033,7 @@ def test_chat_databricks_invoke_returns_usage_metadata(usage_type):
         else:
             mock_response.usage = _create_claude_completion_usage()
             mock_response.model = "databricks-claude-3-7-sonnet"
-            expected_input_tokens = 150  # 100 + 30 + 20
+            expected_input_tokens = 100
             expected_cache_read = 30
 
         mock_client.chat.completions.create.return_value = mock_response
