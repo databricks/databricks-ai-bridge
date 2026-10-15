@@ -100,7 +100,7 @@ def required_user_api_scopes(project: AgentProject | None) -> set[str]:
 def required_user_api_scope_sources(project: AgentProject | None) -> dict[str, list[str]]:
     """Return each required scope and the manifest bindings that require it."""
     sources = {
-        scope: ["[user_auth].additional_api_scopes"]
+        scope: ["[auth.user].additional_api_scopes"]
         for scope in (project.user_auth.additional_api_scopes if project else ())
     }
     for tool in project.tools if project else ():

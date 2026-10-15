@@ -90,7 +90,7 @@ eval "$(_AGENTBRICKS_COMPLETE=zsh_source agentbricks)"
 ## Authentication
 
 Deployment reports the user API scopes being added and the tool binding or
-`[user_auth].additional_api_scopes` entry that requires each scope. When the required grants already
+`[auth.user].additional_api_scopes` entry that requires each scope. When the required grants already
 exist, it reports that scopes are unchanged. Existing grants are preserved when tools change.
 
 Agent Bricks CLI uses [Databricks authentication](https://docs.databricks.com/aws/en/dev-tools/cli/authentication).
