@@ -166,7 +166,10 @@ class ChatDatabricks(BaseChatModel):
         .. code-block:: python
 
             stream = llm.stream(messages, stream_usage=True)
-            next(stream).usage_metadata
+            full = next(stream)
+            for chunk in stream:
+                full += chunk
+            full.usage_metadata
 
         .. code-block:: python
 
@@ -287,11 +290,11 @@ class ChatDatabricks(BaseChatModel):
     max_tokens: Optional[int] = None
     """The maximum number of tokens to generate."""
     extra_params: Optional[Dict[str, Any]] = None
-    """Whether to include usage metadata in streaming output. If True, additional
-    message chunks will be generated during the stream including usage metadata.
-    """
-    stream_usage: bool = True
     """Any extra parameters to pass to the endpoint."""
+    stream_usage: bool = True
+    """Whether to request streaming usage and emit it once in a final message chunk.
+    Explicit stream_options, including include_usage=False, take precedence.
+    """
     use_responses_api: bool = False
     """Whether to use the Responses API to format inputs and outputs."""
     timeout: Optional[float] = None
@@ -644,16 +647,19 @@ class ChatDatabricks(BaseChatModel):
                 audio=usage.prompt_tokens_details.audio_tokens or 0,
                 cache_read=usage.prompt_tokens_details.cached_tokens or 0,
             )
-        if (
-            getattr(usage, "cache_read_input_tokens", None) is not None
-            or getattr(usage, "cache_creation_input_tokens", None) is not None
-        ):
+            # getattr also supports older OpenAI SDKs without cache_write_tokens.
+            cache_write = getattr(usage.prompt_tokens_details, "cache_write_tokens", None)
+            if cache_write is not None:
+                input_token_details["cache_creation"] = cache_write
+        cache_read = getattr(usage, "cache_read_input_tokens", None)
+        cache_creation = getattr(usage, "cache_creation_input_tokens", None)
+        if cache_read is not None or cache_creation is not None:
             if input_token_details is None:
                 input_token_details = InputTokenDetails()
-            input_token_details["cache_read"] = getattr(usage, "cache_read_input_tokens", None) or 0
-            input_token_details["cache_creation"] = (
-                getattr(usage, "cache_creation_input_tokens", None) or 0
-            )
+            if cache_read is not None:
+                input_token_details["cache_read"] = cache_read
+            if cache_creation is not None:
+                input_token_details["cache_creation"] = cache_creation
         if input_token_details is not None:
             result["input_token_details"] = input_token_details
         if usage.completion_tokens_details is not None:
@@ -670,6 +676,9 @@ class ChatDatabricks(BaseChatModel):
             input_token_details = InputTokenDetails(
                 cache_read=usage.input_tokens_details.cached_tokens or 0,
             )
+            cache_write = getattr(usage.input_tokens_details, "cache_write_tokens", None)
+            if cache_write is not None:
+                input_token_details["cache_creation"] = cache_write
 
         output_token_details = None
         if usage.output_tokens_details is not None:
@@ -866,6 +875,8 @@ class ChatDatabricks(BaseChatModel):
         data = self._prepare_inputs(
             messages, stop, stream=True, custom_inputs=custom_inputs, **kwargs
         )
+        if stream_usage and not self.use_responses_api:
+            data["stream_options"] = {"include_usage": True, **(data.get("stream_options") or {})}
 
         usage_chunk_emitted = False
         final_usage: ResponseUsage | CompletionUsage | dict[str, int] | None = None
@@ -973,6 +984,8 @@ class ChatDatabricks(BaseChatModel):
         data = self._prepare_inputs(
             messages, stop, stream=True, custom_inputs=custom_inputs, **kwargs
         )
+        if stream_usage and not self.use_responses_api:
+            data["stream_options"] = {"include_usage": True, **(data.get("stream_options") or {})}
 
         usage_chunk_emitted = False
         final_usage: ResponseUsage | CompletionUsage | dict[str, int] | None = None
