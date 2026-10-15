@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import dataclasses
 import pathlib
-import re
 import shutil
 import uuid
 from collections.abc import Mapping, Sequence
@@ -18,11 +17,7 @@ import tomli
 import tomlkit
 
 from harness.logs import log
-from harness.run import APP_PREFIX, FRAMEWORKS, RunConfig, project_prefix
-
-_DIRECT_HEADER = (
-    'schema_version = 1\n\n[agent]\nframework = "{framework}"\nserver = "agentbricks"\n'
-)
+from harness.run import APP_PREFIX, RunConfig, project_prefix
 
 
 class ToolSpec(Protocol):
@@ -83,16 +78,16 @@ class Project:
             self.write_file(relative_path, content)
 
     def write_manifest(self, tool_specs: Sequence[ToolSpec]) -> None:
-        """Direct authoring: write agent.toml with exactly these tools plus a tracing binding."""
-        sections: list[str] = [_DIRECT_HEADER.format(framework=FRAMEWORKS[0])]
-        sections.extend(spec.toml for spec in tool_specs if spec.toml)
-        # Follows default_experiment_name's shape so direct authoring carries the same tracing
-        # binding `agentbricks init` gives CLI authoring.
-        slug = re.sub(r"[^a-z0-9-]+", "-", self.path.name.lower()).strip("-") or "agent"
-        sections.append(f'[tracing]\nexperiment_name = "/Shared/agentbricks_traces/{slug}"\n')
+        """Direct authoring: append these tools to the agent.toml `agentbricks init` wrote.
+
+        Everything else, such as the stores and the tracing binding, stays as init wrote it, the
+        same as for CLI authoring.
+        """
         target = self.path / "agent.toml"
+        tools = "".join(f"\n{spec.toml}" for spec in tool_specs if spec.toml)
         log(f"# write {target}: direct authoring; no agentbricks tools command")
-        target.write_text("\n".join(sections), encoding="utf-8")
+        with target.open("a", encoding="utf-8") as manifest:
+            manifest.write(tools)
         for spec in tool_specs:
             self.write_files(spec.files)
 
