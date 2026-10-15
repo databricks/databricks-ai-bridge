@@ -36,10 +36,13 @@ State and durability semantics differ by framework; handle the ones that apply:
 - **LangGraph:** checkpointer, thread IDs, checkpoint namespaces, graph state, reducers,
   subgraphs, and pending interrupts. Runtime recovery may resume a checkpoint belonging to the
   current invocation; otherwise original input replays.
-- **OpenAI Agents SDK:** the `Session` transcript is the persistent conversation state. There is
-  no checkpoint continuation; recovery replays the persisted application input against the same
-  session. HITL `RunState` is process-local and does not survive worker loss even with a Session
-  Store bound.
+- **OpenAI Agents SDK:** the `Session` transcript is the persistent conversation state. The reference
+  harness stores paused HITL `RunState` separately; pending approvals survive worker loss with a
+  bound Session Store and stay process-local otherwise. Concurrent workers require shared Runtime
+  Store scheduling. Preserve whole-batch decision validation and the consumed marker written before
+  an accepted approval executes. Accepted approvals cannot be replayed after failure; inspect the
+  invocation and tool side effects before starting a new turn. The SDK has no node-level checkpoint
+  continuation, so recovery of other invocations replays the persisted application input.
 
 - **Persistence and history:** Identify the current checkpointer or session store, memory store,
   thread/session IDs, actor/tenant mapping, and pending interrupts or approvals. Switching stores
