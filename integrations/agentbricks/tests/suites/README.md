@@ -30,8 +30,7 @@ The run id and output directory (logs, generated projects, `apps.jsonl`) are pri
 Every resource a run creates carries its run id, and is deleted at three points:
 
 1. **When each test ends**, by the fixture that made it: `project` deletes the test's App and its
-   stores through the CLI, as a user would (`harness.cleanup.delete_app_resources`);
-   `scratch_schema` deletes the test's schema.
+   stores through the CLI, as a user would; `scratch_schema` deletes the test's schema.
 2. **When the run ends**, `pytest_sessionfinish` deletes what the CLI leaves behind (synced source
    folders, Runtime Stores whose App is gone, Lakebase databases and roles) and whatever a crashed
    test or a failed teardown left (`harness.cleanup.delete_run_leftovers`). A failure there fails

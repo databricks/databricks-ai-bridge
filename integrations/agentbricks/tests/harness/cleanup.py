@@ -1,16 +1,14 @@
 """Deleting what the E2E suites create: per App when a test ends, and per run afterwards.
 
-Two entry points, both safe to repeat (a missing resource counts as deleted):
-
-- ``delete_app_resources``: one App and its stores, deleted the way a user would, through the CLI.
-  The ``project`` fixture calls it when its test ends.
-- ``delete_run_leftovers``: everything else, including whatever the CLI leaves behind (synced
-  source folders, Runtime Stores whose App is gone, Lakebase databases and roles) and whatever a
-  crashed test or a failed teardown left. It runs once after every live run, and on its own with
-  ``pytest tests/suites --cleanup-only --run-id <id>`` after a run that was killed before it could.
-  It finds resources by the run's name prefix (Apps, source folders, schemas) and by the App
-  identities per-test cleanup recorded in ``<output>/apps.jsonl`` (Runtime Stores, Lakebase
-  databases and roles, which outlive their App), so it touches nothing outside the run.
+The ``project`` fixture deletes each test's App and stores through the CLI when the test ends, after
+recording the App's identity with ``record_app_identity``. ``delete_run_leftovers`` deletes the rest:
+what the CLI leaves behind (synced source folders, Runtime Stores whose App is gone, Lakebase
+databases and roles) and whatever a crashed test or a failed teardown left. It is safe to repeat (a
+missing resource counts as deleted), runs once after every live run, and runs on its own with
+``pytest tests/suites --cleanup-only --run-id <id>`` after a run that was killed before it could.
+It finds resources by the run's name prefix (Apps, source folders, schemas) and by the identities
+recorded in ``<output>/apps.jsonl`` (Runtime Stores, Lakebase databases and roles, which outlive
+their App), so it touches nothing outside the run.
 """
 
 from __future__ import annotations
@@ -18,19 +16,16 @@ from __future__ import annotations
 import dataclasses
 import json
 import pathlib
-import re
 from collections.abc import Callable, Collection
-from typing import Any
 
 from databricks.sdk.errors import NotFound
 
 from harness.agentbricks_cli import AgentbricksCli
 from harness.logs import log
-from harness.run import APP_PREFIX, E2EError, project_prefix, scratch_schema_prefix
+from harness.run import APP_PREFIX, project_prefix, scratch_schema_prefix
 from harness.workspace import AppIdentity, Workspace
 
 _APPS_RECORD = "apps.jsonl"
-_MISSING = re.compile(r"NOT_FOUND|RESOURCE_DOES_NOT_EXIST|does not exist|not found", re.IGNORECASE)
 
 
 # Identities recorded by per-test cleanup
@@ -105,49 +100,6 @@ def delete_lakebase_leftovers(
         lambda: workspace.roles_of(branch, principals),
         workspace.delete_role,
     )
-
-
-def delete_app_resources(
-    cli: AgentbricksCli,
-    workspace: Workspace,
-    name: str,
-    identity: AppIdentity,
-    *,
-    memory_store: str | None = None,
-    session_store: str | None = None,
-) -> list[str]:
-    """Delete one project's stores and App through the CLI, and the catalog grant its test made.
-
-    ``identity`` is the App as it was before any delete; record it first, because
-    ``delete_run_leftovers`` needs it for what the CLI leaves behind. Every step runs regardless of
-    earlier failures. Returns a description of each failure; an empty list means all succeeded.
-    """
-    failures: list[str] = []
-
-    def attempt(label: str, action: Callable[..., object], *args: Any) -> None:
-        try:
-            action(*args)
-        except Exception as exc:
-            failures.append(f"{label}: {exc}")
-
-    def run(command: str) -> None:
-        result = cli.run(command, timeout=1200, check=False)
-        output = (result.stderr or result.stdout).strip()
-        # A store the test declared but never deployed was never created.
-        if result.returncode != 0 and not _MISSING.search(output):
-            raise E2EError(output)
-
-    if memory_store:
-        attempt(f"memory store {memory_store}", run, f"memory stores delete {memory_store} --yes")
-    if session_store:
-        attempt(
-            f"session store {session_store}", run, f"sessions stores delete {session_store} --yes"
-        )
-    # Before the App goes: the grant is revoked from the App's principal.
-    attempt(f"catalog grant {name}", workspace.revoke_catalog_grant, name)
-    if identity.service_principal:
-        attempt(f"deployment {name}", run, f"deployments delete {name} --yes")
-    return failures
 
 
 # One run

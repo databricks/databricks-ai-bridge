@@ -27,7 +27,7 @@ from typing import Any
 
 import pytest
 from harness.agentbricks_cli import AgentbricksCli
-from harness.cleanup import delete_app_resources, delete_run_leftovers, record_app_identity
+from harness.cleanup import delete_run_leftovers, record_app_identity
 from harness.logs import log, log_command
 from harness.project import Project
 from harness.run import RUN_ID_PATTERN, E2EError, RunConfig, run_output_dir
@@ -38,7 +38,7 @@ from harness.target import (
     make_target_workspace,
     require_workspace,
 )
-from harness.workspace import AppIdentity, Workspace
+from harness.workspace import Workspace
 
 PACKAGE_DIR = pathlib.Path(__file__).resolve().parents[2]
 _RUN_KEY = pytest.StashKey[RunConfig]()
@@ -262,28 +262,30 @@ def _delete_project(
     # Whatever deploy got as far as creating; read before anything is deleted, because the
     # principal and branch come from the App and its Runtime Store.
     identity = workspace.app_identity(name)
-    deployed = identity != AppIdentity()
-    if deployed:
+    if identity.service_principal or identity.branch:
         # Leftover cleanup deletes what the CLI leaves behind from this record.
         record_app_identity(cli.run_config.output, name, identity)
     if failed and identity.service_principal:
         # The App is deleted next, so a failing test must capture its logs while it exists.
         workspace.app_logs(name, cli.logs_dir / f"deploy-runtime-{name}.log")
     # Deploy creates the stores agent.toml declares; memory stores are addressed by resource name.
-    memory_store = project.declared_store("memory")
+    commands = []
+    if memory_store := project.declared_store("memory"):
+        commands.append(f"memory stores delete memory-stores/{memory_store} --yes")
+    if session_store := project.declared_store("session"):
+        commands.append(f"sessions stores delete {session_store} --yes")
+    if identity.service_principal:
+        commands.append(f"deployments delete {name} --yes")
     try:
-        failures = delete_app_resources(
-            cli,
-            workspace,
-            name,
-            identity,
-            memory_store=f"memory-stores/{memory_store}" if memory_store else None,
-            session_store=project.declared_store("session"),
-        )
+        # The grant the test made, revoked while the App's principal still exists.
+        workspace.revoke_catalog_grant(name)
     except Exception as exc:
-        failures = [str(exc)]
-    for failure in failures:
-        log(f"cleanup warning | {name} | {failure}")
+        log(f"cleanup warning | {name} | catalog grant: {exc}")
+    # Failures only warn: the end-of-run cleanup deletes whatever is left.
+    for command in commands:
+        result = cli.run(command, timeout=1200, check=False)
+        if result.returncode != 0:
+            log(f"cleanup warning | {name} | {(result.stderr or result.stdout).strip()}")
 
 
 # Deleting what the whole run left behind
