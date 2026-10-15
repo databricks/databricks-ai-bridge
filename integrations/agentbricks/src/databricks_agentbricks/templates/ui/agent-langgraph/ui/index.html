@@ -196,7 +196,7 @@
             <label class="sr-only" for="prompt-input">Message the agent</label>
             <textarea id="prompt-input" rows="1" placeholder="Ask your agent anything…"></textarea>
             <div class="composer-footer">
-              <div class="mode-switcher" aria-label="Invocation mode">
+              <div class="mode-switcher" aria-label="Invocation mode" aria-describedby="mode-description">
                 <button class="mode-button active" data-mode="streaming" type="button" title="Show the answer as it is generated">Streaming</button>
                 <button class="mode-button" data-mode="background" type="button" title="Submit a run and wait for its result">Background</button>
                 <button class="mode-button" data-mode="sync" type="button" title="Return the complete response when finished">Foreground</button>
@@ -215,6 +215,7 @@
                 </button>
               </div>
             </div>
+            <p id="mode-description" class="mode-description" aria-live="polite">Streaming shows the answer as it is generated.</p>
           </form>
         </section>
 

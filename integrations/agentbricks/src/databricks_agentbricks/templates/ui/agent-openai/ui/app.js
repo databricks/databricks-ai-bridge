@@ -1386,6 +1386,11 @@ document.querySelectorAll(".mode-button").forEach((button) => {
   button.addEventListener("click", () => {
     state.mode = button.dataset.mode;
     document.querySelectorAll(".mode-button").forEach((item) => item.classList.toggle("active", item === button));
+    document.querySelector("#mode-description").textContent = {
+      streaming: "Streaming shows the answer as it is generated.",
+      background: "Background submits the run immediately; this page polls for the completed answer.",
+      sync: "Foreground waits for the complete answer in one request.",
+    }[state.mode];
   });
 });
 
