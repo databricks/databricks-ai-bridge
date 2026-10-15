@@ -98,6 +98,11 @@ agentbricks logout
 
 ### `agentbricks init`
 
+In an interactive terminal, new projects prompt for a framework and project directory when those
+values were not supplied. Press Enter to accept LangGraph and its template directory. Use
+`--no-input` for unattended scripts; redirected input and JSON output also use defaults without
+prompting. Existing-project migration never prompts.
+
 Scaffold a local agent project from an Agent Bricks CLI template.
 
 DIRECTORY is the target path to create (defaults to the template's own name). The directory must not already exist. Once scaffolded, deploy it with `agentbricks deploy <name> --source <directory>`.
@@ -135,6 +140,7 @@ _Options_
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--framework <langgraph|openai>` | `langgraph` \| `openai` | - | no | Agent framework: langgraph (LangGraph, default) or openai (OpenAI Agents SDK). |
+| `--no-input` | flag | false | no | Use defaults without prompting, including in an interactive terminal. |
 | `--server <agentbricks|custom>` | `agentbricks` \| `custom` | `agentbricks` | no | Use the managed invocation server (`agentbricks` is the existing `agent.toml` value) or a minimal custom FastAPI server. |
 | `--profile <PROFILE>` | string | - | no | Seed a local .env with this DATABRICKS_CONFIG_PROFILE so `agentbricks dev` works immediately (defaults to the profile from -p / `agentbricks login`). |
 | `--disable-chat-app` | flag | - | no | Scaffold the API-only backend, without the browser chat app. |
