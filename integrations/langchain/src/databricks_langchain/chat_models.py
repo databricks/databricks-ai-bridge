@@ -1613,11 +1613,23 @@ def _get_tool_calls_from_ai_message(message: AIMessage) -> List[Dict]:
     ]
 
     if tool_calls or invalid_tool_calls:
-        return tool_calls + invalid_tool_calls
+        # LangChain's parsed tool calls omit provider extensions. Gemini requires the
+        # opaque signature again on the next model turn; keep it with its original
+        # call ID within this assistant message, including after checkpoint recovery.
+        signatures = {
+            tc["id"]: tc["thoughtSignature"]
+            for tc in message.additional_kwargs.get("tool_calls", [])
+            if tc.get("id") is not None and "thoughtSignature" in tc
+        }
+        all_tool_calls = tool_calls + invalid_tool_calls
+        for tc in all_tool_calls:
+            if tc["id"] in signatures:
+                tc["thoughtSignature"] = signatures[tc["id"]]
+        return all_tool_calls
 
     # Get tool calls from additional kwargs if present.
     return [
-        {k: v for k, v in tool_call.items() if k in {"id", "type", "function"}}
+        {k: v for k, v in tool_call.items() if k in {"id", "type", "function", "thoughtSignature"}}
         for tool_call in message.additional_kwargs.get("tool_calls", [])
     ]
 
