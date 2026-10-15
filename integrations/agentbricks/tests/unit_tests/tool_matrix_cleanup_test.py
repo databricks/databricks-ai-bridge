@@ -279,6 +279,95 @@ def test_cleanup_preserves_verified_role_target_for_retry_after_runtime_store_de
         assert runner.cleanup_complete is True
 
 
+@pytest.mark.parametrize("role_state", ["absent", "present", "unreadable"])
+def test_cleanup_retry_after_app_deletion_requires_cached_role_absence(
+    tmp_path: pathlib.Path, monkeypatch, role_state
+) -> None:
+    runner, client, commands, role = _cleanup_runner(tmp_path, monkeypatch)
+    app_deleted = False
+    transient_read_pending = True
+    role_reads = []
+    source_deletions = []
+    original_api = client.api_client.do
+
+    def api(method, path):
+        result = original_api(method, path)
+        if method == "DELETE":
+            client.get_error = _NAMESPACE["NotFound"]("Runtime Store removed")
+        return result
+
+    def get_app(app):
+        nonlocal transient_read_pending
+        assert app == client.app
+        if not app_deleted:
+            return type("App", (), {"service_principal_client_id": client.principal})()
+        if transient_read_pending:
+            transient_read_pending = False
+            raise _NAMESPACE["DatabricksError"]("temporary App read failure")
+        raise _NAMESPACE["NotFound"]("App removed")
+
+    def delete_app(app):
+        nonlocal app_deleted
+        assert app == client.app
+        commands.append(["sdk", "apps", "delete", app])
+        if app_deleted:
+            raise _NAMESPACE["NotFound"]("App removed")
+        app_deleted = True
+
+    def get_role(name):
+        assert name == role
+        role_reads.append(name)
+        if role_state == "absent":
+            raise _NAMESPACE["NotFound"]("role removed")
+        if role_state == "unreadable":
+            raise _NAMESPACE["DatabricksError"]("role read denied")
+        return object()
+
+    monkeypatch.setattr(client.api_client, "do", api)
+    monkeypatch.setattr(client.apps, "get", get_app)
+    monkeypatch.setattr(client.apps, "delete", delete_app)
+    monkeypatch.setattr(client.postgres, "get_role", get_role)
+    monkeypatch.setattr(
+        runner,
+        "_wait_for_app_deleted",
+        lambda app: Runner._wait_for_app_deleted(runner, app),
+    )
+    monkeypatch.setattr(runner, "_delete_deployment_source", source_deletions.append)
+
+    # The first attempt deletes the resources, but its App-absence read fails transiently.
+    runner.cleanup()
+
+    assert app_deleted is True
+    assert runner.cleanup_complete is False
+    assert source_deletions == []
+    assert runner._runtime_cleanup_targets[client.app].role_name == role
+    first_attempt_commands = list(commands)
+    assert first_attempt_commands == [
+        ["sdk", "DELETE", f"/api/2.0/agents/runtime-stores/{client.app}"],
+        ["databricks", "postgres", "delete-role", role],
+        ["sdk", "apps", "delete", client.app],
+    ]
+
+    # Both App and Runtime Store are now absent. Never delete a role without its App identity.
+    runner.cleanup()
+
+    assert role_reads == [role]
+    if role_state == "absent":
+        assert commands == [*first_attempt_commands, ["sdk", "apps", "delete", client.app]]
+        assert source_deletions == [client.app]
+        assert client.app not in runner._runtime_cleanup_targets
+        assert runner.cleanup_complete is True
+        assert any(
+            row["resource"] == f"app:{client.app}" and row.get("confirmed_absent_at")
+            for row in runner.cleanup_results
+        )
+    else:
+        assert commands == first_attempt_commands
+        assert source_deletions == []
+        assert runner._runtime_cleanup_targets[client.app].role_name == role
+        assert runner.cleanup_complete is False
+
+
 def test_cleanup_treats_missing_runtime_store_as_deleted(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:

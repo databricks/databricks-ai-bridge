@@ -1326,7 +1326,22 @@ class Runner:
             previous = self._runtime_cleanup_targets.get(app)
             if previous is None:
                 return None
-            if client.apps.get(app).service_principal_client_id != previous.app_principal:
+            try:
+                principal = client.apps.get(app).service_principal_client_id
+            except NotFound:
+                # App deletion can finish before its absence check fails transiently. Without
+                # that identity, only an already-absent role is safe to finish cleaning up.
+                if previous.role_name is not None:
+                    try:
+                        client.postgres.get_role(previous.role_name)
+                    except NotFound:
+                        pass
+                    else:
+                        raise MatrixError(
+                            f"App {app} is absent but its verified Lakebase role still exists."
+                        ) from None
+                return dataclasses.replace(previous, role_name=None, store_present=False)
+            if principal != previous.app_principal:
                 raise MatrixError(
                     f"App identity changed while cleanup for {app} was pending."
                 ) from None
