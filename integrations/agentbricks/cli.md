@@ -1314,6 +1314,10 @@ _Options_
 
 ### `agentbricks tools`
 
+Adding a tool with `--auth user` reports that request-user mode affects every invocation, including
+the current limitations on worker-failure recovery and human approval. JSON output carries these
+notices in a `warnings` array. Use `--auth app` when the tool should run as the App service principal.
+
 Discover available integrations and manage an agent's tool bindings.
 
 Tools are what let an agent act beyond the language model itself - query governed data, call a service, or run a function - and each one is recorded in agent.toml so `agentbricks dev` / `agentbricks deploy` wire it in. `agentbricks tools add` manages these Databricks-managed tool types:
