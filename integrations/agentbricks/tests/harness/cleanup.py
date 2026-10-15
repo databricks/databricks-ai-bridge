@@ -1,14 +1,12 @@
 """Deleting what the E2E suites create: per App when a test ends, and per run afterwards.
 
 The ``project`` fixture deletes each test's App and stores through the CLI when the test ends, after
-recording the App's identity with ``record_app_identity``. ``delete_run_leftovers`` deletes the rest:
-what the CLI leaves behind (synced source folders, Runtime Stores whose App is gone, Lakebase
-databases and roles) and whatever a crashed test or a failed teardown left. It is safe to repeat (a
-missing resource counts as deleted), runs once after every live run, and runs on its own with
+recording the App's identity with ``record_app_identity``. ``delete_run_leftovers`` deletes whatever
+is left: everything carrying the run's name prefix (stores, Apps, synced source folders, schemas),
+found through the CLI where it can list them, and the Apps' Lakebase roles, found from the recorded
+identities because they outlive their App. It is safe to repeat (a missing resource counts as
+deleted), runs once after every live run, and runs on its own with
 ``pytest tests/suites --cleanup-only --run-id <id>`` after a run that was killed before it could.
-It finds resources by the run's name prefix (Apps, source folders, schemas) and by the identities
-recorded in ``<output>/apps.jsonl`` (Runtime Stores, Lakebase databases and roles, which outlive
-their App), so it touches nothing outside the run.
 """
 
 from __future__ import annotations
@@ -16,9 +14,8 @@ from __future__ import annotations
 import dataclasses
 import json
 import pathlib
-from collections.abc import Callable, Collection
-
-from databricks.sdk.errors import NotFound
+from collections.abc import Iterator
+from typing import Any
 
 from harness.agentbricks_cli import AgentbricksCli
 from harness.logs import log
@@ -50,56 +47,11 @@ def recorded_app_identities(output: pathlib.Path) -> dict[str, AppIdentity]:
     for line in path.read_text(encoding="utf-8").splitlines():
         try:
             data = json.loads(line)
-            identity = AppIdentity(
-                data.get("service_principal"), data.get("branch"), data.get("database_id")
-            )
+            identity = AppIdentity(data.get("service_principal"), data.get("branch"))
             identities[data["app"]] = identities.get(data["app"], AppIdentity()).merged(identity)
         except (ValueError, KeyError, TypeError, AttributeError):
             continue
     return identities
-
-
-# One App
-
-
-def _delete_each(
-    kind: str, find: Callable[[], list[str]], delete: Callable[[str], None]
-) -> list[str]:
-    """Delete everything ``find`` returns, continuing past failures; returns one line per failure."""
-    try:
-        names = find()
-    except Exception as exc:
-        return [f"{kind} lookup: {exc}"]
-    failures = []
-    for name in names:
-        try:
-            delete(name)
-        except Exception as exc:
-            failures.append(f"{kind} {name}: {exc}")
-    return failures
-
-
-def delete_lakebase_leftovers(
-    workspace: Workspace,
-    branch: str,
-    *,
-    principals: Collection[str],
-    database_ids: Collection[str] = (),
-) -> list[str]:
-    """Delete runtime databases and then the principals' roles on one branch.
-
-    A role that owns a database cannot be deleted, so databases go first. Only ``runtime-``
-    databases are touched, and both kinds are matched by principal UUID, never by name pattern.
-    """
-    return _delete_each(
-        "runtime database",
-        lambda: workspace.runtime_databases(branch, principals, database_ids),
-        workspace.delete_database,
-    ) + _delete_each(
-        "Lakebase role",
-        lambda: workspace.roles_of(branch, principals),
-        workspace.delete_role,
-    )
 
 
 # One run
@@ -111,10 +63,10 @@ def delete_run_leftovers(
     """Delete what a whole run left behind; returns a description of each failure."""
     failures: list[str] = []
     steps = (
-        # First: the rest outlives the App, and some of it can't be deleted while the App exists.
+        ("leaked stores", lambda: _delete_leaked_stores(cli, run_id)),
+        # Before the roles: the App's role is only safe to delete once the App is gone.
         ("leaked Apps", lambda: _delete_leaked_apps(cli, workspace, run_id, output)),
-        ("orphaned Runtime Stores", lambda: _delete_orphaned_runtime_stores(workspace, output)),
-        ("leaked Lakebase databases and roles", lambda: _delete_leaked_lakebase(workspace, output)),
+        ("leaked Lakebase roles", lambda: _delete_leaked_roles(workspace, output)),
         ("leaked source folders", lambda: _delete_leaked_deployment_sources(workspace, run_id)),
         ("leaked schemas", lambda: _delete_leaked_schemas(workspace, catalog, run_id)),
     )
@@ -128,6 +80,42 @@ def delete_run_leftovers(
 
 def _app_prefix(run_id: str) -> str:
     return f"{APP_PREFIX}{project_prefix(run_id)}"
+
+
+def _delete_leaked_stores(cli: AgentbricksCli, run_id: str) -> list[str]:
+    """Delete this run's memory and session stores, found by name prefix.
+
+    `agentbricks init` names a project's stores after its folder, which carries the run's prefix.
+    """
+    prefix = project_prefix(run_id)
+    failures: list[str] = []
+    for kind, key, name_field, address_field in (
+        ("memory stores", "managed_memory_stores", "display_name", "name"),
+        ("sessions stores", "session_stores", "session_store_name", "session_store_name"),
+    ):
+        for store in _list_all(cli, kind, key):
+            if not str(store.get(name_field) or "").startswith(prefix):
+                continue
+            address = store[address_field]
+            log(f"deleting leaked store {address}")
+            result = cli.run(f"{kind} delete {address} --yes", timeout=1200, check=False)
+            if result.returncode != 0:
+                failures.append(f"{kind} {address}: {(result.stderr or result.stdout).strip()}")
+    return failures
+
+
+def _list_all(cli: AgentbricksCli, kind: str, key: str) -> Iterator[dict[str, Any]]:
+    token = ""
+    while True:
+        page = json.loads(
+            cli.run(
+                f"--output json {kind} list --page-size 100{token and f' --page-token {token}'}"
+            ).stdout
+        )
+        yield from page.get(key) or []
+        token = page.get("next_page_token") or ""
+        if not token:
+            return
 
 
 def _delete_leaked_apps(
@@ -159,42 +147,28 @@ def _delete_leaked_apps(
     return failures
 
 
-def _delete_orphaned_runtime_stores(workspace: Workspace, output: pathlib.Path) -> list[str]:
-    """Delete the Runtime Stores of this run's Apps that outlived them.
-
-    `deployments delete` refuses once the App is gone, because it checks the store's owner against
-    the App's principal.
-    """
-    failures: list[str] = []
-    for name in recorded_app_identities(output):
-        try:
-            workspace.client.api_client.do("DELETE", f"/api/2.0/agents/runtime-stores/{name}")
-        except NotFound:
-            pass
-        except Exception as exc:
-            failures.append(f"runtime store {name}: {exc}")
-    return failures
-
-
-def _delete_leaked_lakebase(workspace: Workspace, output: pathlib.Path) -> list[str]:
-    """Delete runtime databases and roles of this run's Apps, whether or not the App still exists."""
+def _delete_leaked_roles(workspace: Workspace, output: pathlib.Path) -> list[str]:
+    """Delete the Lakebase roles of this run's Apps, which `deployments delete` leaves behind."""
     recorded = list(recorded_app_identities(output).values())
     failures: list[str] = []
     for branch in sorted({item.branch for item in recorded if item.branch}):
-        failures += delete_lakebase_leftovers(
-            workspace,
-            branch,
-            # A Runtime Store create that fails partway records no branch but can still leave the
-            # App's role behind, so look for branchless identities on every branch this run used.
-            principals=[
-                item.service_principal
-                for item in recorded
-                if item.branch in (branch, None) and item.service_principal
-            ],
-            database_ids=[
-                item.database_id for item in recorded if item.branch == branch and item.database_id
-            ],
-        )
+        # A Runtime Store create that fails partway records no branch but can still leave the App's
+        # role behind, so look for branchless identities on every branch this run used.
+        principals = [
+            item.service_principal
+            for item in recorded
+            if item.branch in (branch, None) and item.service_principal
+        ]
+        try:
+            roles = workspace.roles_of(branch, principals)
+        except Exception as exc:
+            failures.append(f"Lakebase role lookup on {branch}: {exc}")
+            continue
+        for role in roles:
+            try:
+                workspace.delete_role(role)
+            except Exception as exc:
+                failures.append(f"Lakebase role {role}: {exc}")
     return failures
 
 

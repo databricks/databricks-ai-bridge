@@ -30,23 +30,20 @@ from harness.run import E2EError, now
 GrantTuple = tuple[str, str, str, str]
 
 _BRANCH = re.compile(r"projects/[^/]+/branches/[^/]+")
-_RUNTIME_DATABASE_PREFIX = "runtime-"
 
 
 @dataclasses.dataclass(frozen=True)
 class AppIdentity:
-    """What cleanup needs to find an App's Lakebase leftovers once the App and its Runtime Store are gone."""
+    """What cleanup needs to find the App's Lakebase role once the App and its Runtime Store are gone."""
 
     service_principal: str | None = None
     branch: str | None = None
-    database_id: str | None = None
 
     def merged(self, other: AppIdentity) -> AppIdentity:
         """This identity with any missing field taken from ``other``."""
         return AppIdentity(
             self.service_principal or other.service_principal,
             self.branch or other.branch,
-            self.database_id or other.database_id,
         )
 
 
@@ -342,7 +339,6 @@ class Workspace:
         """The App's principal and Lakebase location as far as they still exist; never raises."""
         principal: str | None = None
         branch: str | None = None
-        database_id: str | None = None
         try:
             principal = self.app(app_name).get("service_principal_client_id")
         except NotFound:
@@ -354,40 +350,11 @@ class Workspace:
             candidate = lakebase.get("branch")
             if isinstance(candidate, str) and _BRANCH.fullmatch(candidate):
                 branch = candidate
-                database_id = lakebase.get("database_id")
         except NotFound:
             pass
         except Exception as exc:
             log(f"cleanup warning | Runtime Store lookup for {app_name} | {exc}")
-        return AppIdentity(principal, branch, database_id)
-
-    def runtime_databases(
-        self, branch: str, principals: Collection[str], database_ids: Collection[str]
-    ) -> list[str]:
-        """Resource names of the branch's ``runtime-`` databases owned by these principals.
-
-        Database ids embed a truncated App name plus a UUID, so ownership is read from the owner
-        role instead, which is named after the principal. ``database_ids`` are matched as given.
-        """
-        wanted = [principal for principal in principals if principal]
-        names = []
-        for database in self.client.postgres.list_databases(parent=branch):
-            database_id = (database.name or "").rsplit("/", 1)[-1]
-            owner = (
-                (database.status.role if database.status else None)
-                or (database.spec.role if database.spec else None)
-                or ""
-            )
-            if (
-                database.name
-                and database_id.startswith(_RUNTIME_DATABASE_PREFIX)
-                and (
-                    database_id in database_ids
-                    or any(owner.rsplit("/", 1)[-1].endswith(item) for item in wanted)
-                )
-            ):
-                names.append(database.name)
-        return names
+        return AppIdentity(principal, branch)
 
     def roles_of(self, branch: str, principals: Collection[str]) -> list[str]:
         """Resource names of the branch's roles for these principals.
@@ -400,12 +367,6 @@ class Workspace:
             for role in self.client.postgres.list_roles(parent=branch)
             if role.name and any(role.name.rsplit("/", 1)[-1].endswith(item) for item in wanted)
         ]
-
-    def delete_database(self, name: str) -> None:
-        try:
-            _wait(self.client.postgres.delete_database(name=name))
-        except NotFound:
-            pass
 
     def delete_role(self, name: str) -> None:
         try:

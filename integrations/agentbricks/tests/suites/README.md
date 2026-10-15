@@ -31,10 +31,10 @@ Every resource a run creates carries its run id, and is deleted at three points:
 
 1. **When each test ends**, by the fixture that made it: `project` deletes the test's App and its
    stores through the CLI, as a user would; `scratch_schema` deletes the test's schema.
-2. **When the run ends**, `pytest_sessionfinish` deletes what the CLI leaves behind (synced source
-   folders, Runtime Stores whose App is gone, Lakebase databases and roles) and whatever a crashed
-   test or a failed teardown left (`harness.cleanup.delete_run_leftovers`). A failure there fails
-   the run.
+2. **When the run ends**, `pytest_sessionfinish` deletes everything carrying the run's name prefix
+   that is still there (stores, Apps, synced source folders, schemas) and the Apps' Lakebase roles,
+   which `deployments delete` leaves behind (`harness.cleanup.delete_run_leftovers`). A failure
+   there fails the run.
 3. **After a run that was killed** before step 2, for example by a CI timeout:
 
    ```bash
