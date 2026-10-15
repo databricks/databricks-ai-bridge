@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -104,11 +105,20 @@ class TracingService:
                 help=target.help,
             )
 
-    def get(self, request: TraceReadRequest, trace_id: str) -> TraceGetResult:
+    def get(
+        self,
+        request: TraceReadRequest,
+        trace_id: str,
+        on_warning: Callable[[str, str | None], None] | None = None,
+    ) -> TraceGetResult:
         warehouse_id = self._mlflow.resolve_warehouse_id(request.warehouse_id)
         with self._targets.resolve(
             request.source, request.experiment_name, request.experiment_id, warehouse_id
         ) as target:
+            # Surface a failed local read server before the workspace fallback. The fallback may
+            # raise or find no trace, in which case there is no result to carry the warning.
+            if target.warning and on_warning:
+                on_warning(target.warning, target.help)
             if target.tracking_uri is None:
                 self._mlflow.select_fallback_workspace(warehouse_id)
             trace = self._mlflow.get_trace(trace_id)
@@ -120,4 +130,9 @@ class TracingService:
                 request=_attr(trace, "info.request_preview", "data.request"),
                 response=_attr(trace, "info.response_preview", "data.response"),
             )
-            return TraceGetResult(trace_id, detail, warning=target.warning, help=target.help)
+            return TraceGetResult(
+                trace_id,
+                detail,
+                warning=target.warning if on_warning is None else None,
+                help=target.help if on_warning is None else None,
+            )

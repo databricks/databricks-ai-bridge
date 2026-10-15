@@ -12,6 +12,7 @@ client -> runtime/main.py -> runtime/adapter.py -> agent/agent.py:run_agent
 
 - `agent/agent.py` owns the framework-native agent, sessions, tools, MCP lifetime, HITL state, and
   `run_agent`.
+- `agent/checkpoints.py` persists the example's checkpoints through the Session Store.
 - `runtime/adapter.py` owns the agent-author integration hooks: runtime input/output translation plus
   `invoke` and `recover`.
 - `runtime/main.py` constructs the server and registers those hooks.
@@ -77,25 +78,34 @@ new invocation with the same application session:
   "id": "<new-uuid>",
   "session_id": "<same-session-id>",
   "input": {
-    "resume": {"decisions": [{"type": "approve"}]}
+    "resume": {"decisions": [{"type": "approve", "call_id": "<action-request-call-id>"}]}
   }
 }
 ```
 
-The paused Agents SDK `RunState` is process-local. A managed Session Store preserves transcript
-history, but not a pending approval across restarts or replicas.
+Supply one decision per `action_requests` entry, in order, using its `call_id`. A decision's `type`
+must be `approve` or `reject`; rejections may include a string `message`.
+
+Pending approvals survive restarts when a Session Store is bound. The harness saves the paused SDK
+state separately from conversation history; without a binding, it stays process-local. Invalid
+decisions leave the approval intact. A valid decision consumes it before execution, so submitting
+it again cannot repeat the action. If execution fails after acceptance, check the invocation and
+tool side effects: the outcome may be uncertain, and the approval will not be retried automatically.
+You can start a new conversation turn; any later approval prompt requires its own decisions.
+Concurrent workers require a shared Runtime Store to serialize invocations within a session.
 
 ## Crash recovery
 
 `runtime/main.py` always registers the adapter's `invoke` and `recover` hooks. Both call the same
 `agent.agent.run_agent` function. OpenAI Agents SDK does not currently expose LangGraph-style node
-checkpoints, so `recover` replays the original application input against the same session. The
+checkpoints. An approval already accepted by the harness cannot be recovered by rerunning it. For
+other invocations, `recover` replays the original application input against the same session. The
 adapter prepends a developer instruction telling the agent that this is a recovery attempt and that
 some tool calls or external side effects may already have completed or may still be in progress.
 When deployment attaches a Runtime Store, invocation state and emitted events survive process loss
 and the runtime can call `recover` on a replacement worker. Without a Runtime Store, invocation state
-remains process-local and interrupted work is not automatically recovered. External side effects
-remain at-least-once and must be idempotent.
+remains process-local and interrupted work is not automatically recovered. Replayed turns may repeat
+external side effects; tools must be idempotent.
 
 ## Chat app
 

@@ -10,10 +10,16 @@ import json
 import sys
 from unittest import mock
 
+import pytest
 from click.testing import CliRunner
 from databricks.sdk.errors import Unauthenticated
 
 from databricks_agentbricks.cli import auth
+
+
+@pytest.fixture(autouse=True)
+def _disable_telemetry(monkeypatch):
+    monkeypatch.setenv("AGENTBRICKS_DISABLE_TELEMETRY", "1")
 
 
 class _Ctx:

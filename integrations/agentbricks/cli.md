@@ -106,6 +106,17 @@ Pass --profile (or set a default via `agentbricks login` / -p) to seed a local `
 
 The scaffold is preconfigured to call Databricks model serving through the AI Gateway using that profile, so it can talk to a model with no separate endpoint or API key to set up.
 
+New projects include the `agent-bricks-workflow` skill in `.agents/skills/`, with discovery pointers in
+`.claude/skills/` and `.agent/skills/`. Local `dev` is optional when the goal is deployment.
+JSON results include `workflow_skill` and `skill_pointers`.
+
+With `--existing`, prepare the separate `agent-bricks-migrate` bundle and pointers in all three
+discovery roots without changing existing application source or configuration. Coding agents in
+existing projects can read the bundled workflow skill at the path printed by the CLI's automatic
+stderr hint, enabled by default when a coding-agent environment is detected. Ordinary human
+invocations do not emit this hint. Set `AGENTBRICKS_DISABLE_AGENT_HINT=1` to disable hints without
+disabling skill installation or discovery.
+
 `--server agentbricks` selects the managed server, which supports foreground, streaming, and background invocations through one HTTP contract and Runtime Store. This existing server value is recorded in `agent.toml`. Pass `--server custom` for a minimal foreground-only FastAPI server.
 
 ```
@@ -492,6 +503,9 @@ Manage pipelines that distill session history into long-term memory.
 | [`memory pipeline update`](#agentbricks-memory-pipeline-update) | Update a pipeline's display name, instructions, model, or trigger. |
 | [`memory pipeline delete`](#agentbricks-memory-pipeline-delete) | Delete a Dreamer memory pipeline and its backing job. |
 | [`memory pipeline run`](#agentbricks-memory-pipeline-run) | Manually run a Dreamer memory pipeline. |
+| [`memory pipeline pause`](#agentbricks-memory-pipeline-pause) | Pause scheduled runs; active runs continue and manual runs remain available. |
+| [`memory pipeline resume`](#agentbricks-memory-pipeline-resume) | Enable scheduled runs, automatically about every 24 hours. |
+| [`memory pipeline runs`](#agentbricks-memory-pipeline-runs) | Inspect memory pipeline runs. |
 
 ##### `agentbricks memory pipeline create`
 
@@ -560,9 +574,32 @@ agentbricks memory pipeline update p-123 --instructions @/path/to/instructions.m
 ```
 
 Instructions are sent as `dreamer_policy.instructions` with that leaf field in the update mask.
-`--model` updates the top-level `model` field; `--model ""` clears the override.
+`--model ""` clears the override. Create and update send only `dreamer_policy.model`;
+updates use the `dreamer_policy.model` field mask. There is no legacy top-level model fallback.
+List and detail views accept either model location, preferring the nested value when present.
 `--trigger` updates `dreamer_policy.trigger`: `manual` maps to `MANUAL_ONLY`, and
 `scheduled` maps to `SCHEDULED`. Omit the flag to preserve the current trigger.
+
+##### `agentbricks memory pipeline pause`
+
+```sh
+agentbricks memory pipeline pause NAME
+```
+
+Set `dreamer_policy.trigger` to `MANUAL_ONLY` to stop scheduled runs. Active runs continue;
+manual `run` calls remain available. `NAME` accepts a pipeline id or full resource name.
+Returns an error if the pipeline is already manual-only (paused).
+
+##### `agentbricks memory pipeline resume`
+
+```sh
+agentbricks memory pipeline resume NAME
+```
+
+Set `dreamer_policy.trigger` to `SCHEDULED` to enable automatic runs about every 24 hours.
+This also enables scheduling for a pipeline originally created as manual-only.
+Returns an error if the pipeline is already scheduled (resumed).
+Both commands update only the trigger and support the global `--output json` option.
 
 ##### `agentbricks memory pipeline delete`
 
@@ -573,6 +610,26 @@ agentbricks memory pipeline delete NAME [options]
 | Option | Type | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--yes`, `-y` | flag | false | no | Skip the confirmation prompt. |
+
+##### `agentbricks memory pipeline runs`
+
+| Subcommand | Description |
+| --- | --- |
+| [`memory pipeline runs get`](#agentbricks-memory-pipeline-runs-get) | Get run details through the Databricks CLI. |
+
+###### `agentbricks memory pipeline runs get`
+
+```sh
+agentbricks --profile dogfood memory pipeline runs get \
+  memory-pipelines/2043d0c0-7d15-496e-83af-b6893165038f/runs/418898433707211
+```
+
+`NAME` must be `memory-pipelines/<pipeline-id>/runs/<numeric-run-id>`. This command
+extracts the run ID and calls `databricks jobs get-run <run-id>`, forwarding the selected
+profile. The Databricks CLI must be installed and available on `PATH`. Its stdout, stderr,
+and exit code are passed through unchanged, with terminal streams inherited to preserve native
+coloring; Agent Bricks `--output` does not reformat the result.
+The pipeline ID is not sent to Jobs or checked against the run.
 
 ##### `agentbricks memory pipeline run`
 
@@ -1356,6 +1413,7 @@ _Options_
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--name <TOOL_ID>` | string | - | no | - |
+| `--auth <user|app>` | `user` \| `app` | `user` | no | - |
 | `--source <SOURCE>` | path | `.` | no | Agent project containing agent.toml. |
 
 ##### `agentbricks tools add genie-one`

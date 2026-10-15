@@ -117,9 +117,9 @@ function setStatus(label, type = "ready") {
   elements.runStatus.className = `run-status ${type === "ready" ? "" : type}`.trim();
 }
 
-// The send button is enabled only when there is text to send and no run is in flight.
+// Resolve pending approvals before starting another turn.
 function updateSendState() {
-  elements.sendButton.disabled = state.busy || !elements.promptInput.value.trim();
+  elements.sendButton.disabled = state.busy || Boolean(state.pendingInterrupt) || !elements.promptInput.value.trim();
 }
 
 function setBusy(busy, label = "Working") {
@@ -1134,6 +1134,11 @@ async function dispatch(payload, mode = state.mode) {
 async function sendText(text, mode = state.mode) {
   const content = text.trim();
   if (!content || state.busy) return "";
+  if (state.pendingInterrupt) {
+    const error = new Error("Approve or reject the pending tool call before sending another message.");
+    appendError(error);
+    throw error;
+  }
   appendMessage("user", content, "You");
   setBusy(true, mode === "background" ? "Starting background run" : mode === "streaming" ? "Streaming" : "Running");
   try {
@@ -1152,14 +1157,17 @@ async function sendText(text, mode = state.mode) {
 
 async function resume(decision) {
   if (state.busy) return;
-  if (!state.pendingInterrupt && !state.config?.session.durable) {
+  if (!state.pendingInterrupt) {
     appendError(new Error("No paused run is loaded for the current routing session."));
     return;
   }
-  const payload =
-    decision === "approve"
-      ? { resume: { decisions: [{ type: "approve" }] } }
-      : { resume: { decisions: [{ type: "reject", message: "Rejected from the Agent Bricks demo UI." }] } };
+  const pendingInterrupt = state.pendingInterrupt;
+  const decisions = pendingInterrupt.value.action_requests.map((request) => ({
+    type: decision,
+    call_id: request.call_id,
+    ...(decision === "reject" ? { message: "Rejected from the Agent Bricks demo UI." } : {}),
+  }));
+  const payload = { resume: { decisions } };
   appendMessage("system", decision === "approve" ? "Approved pending tool call." : "Rejected pending tool call.", "Human decision");
   setBusy(true, "Resuming");
   try {
@@ -1167,6 +1175,7 @@ async function resume(decision) {
     // The agent persists the resumed turn to its own Session; refresh the panel (no client write).
     await refreshSessionView();
   } catch (error) {
+    if (!state.pendingInterrupt) handleInterrupt(pendingInterrupt);
     appendError(error);
   } finally {
     setBusy(false);
@@ -1175,6 +1184,7 @@ async function resume(decision) {
 
 function clearChat({ recordEvent = true } = {}) {
   state.pendingInterrupt = null;
+  updateSendState();
   state.draft = null;
   state.draftText = "";
   state.lastAssistantText = "";

@@ -2,6 +2,8 @@
 
 import importlib
 import importlib.util
+import json
+import re
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -44,6 +46,19 @@ class RequestAuth:
         return f"private:{self.owner}:{kind}:{value}"
 
 
+def test_documented_memory_payload_keeps_actor_stable_across_conversations(template):
+    framework, adapter, _agent = template
+    reference = TEMPLATES / f"agent-{framework}" / "AGENTKIT_CONTRACT.md"
+    example = re.search(r"```json\n(.*?)\n```", reference.read_text(), re.DOTALL)
+    assert example is not None
+    invocation = json.loads(example.group(1))
+    payload = adapter._payload(invocation["input"])
+    for session_id in (invocation["session_id"], "memory-recall"):
+        assert adapter._actor(payload, session_id) == invocation["input"]["actor"]
+        shorthand = adapter._payload(invocation["input"]["messages"])
+        assert adapter._actor(shorthand, session_id) == session_id
+
+
 @pytest.mark.asyncio
 async def test_adapter_uses_context_session_and_namespaces_untrusted_actor(template, monkeypatch):
     framework, adapter, _agent = template
@@ -68,6 +83,7 @@ async def test_adapter_uses_context_session_and_namespaces_untrusted_actor(templ
             session_id=f"private:{owner}:session:public",
             invocation_id="run",
             emit=AsyncMock(),
+            attempt=1,
         )
         response = await adapter.invoke(payload, context)
         kwargs = calls[0][1]
@@ -134,6 +150,7 @@ async def test_context_session_and_default_actor_are_already_private(template, m
         session_id="already-private",
         invocation_id="public-run",
         emit=AsyncMock(),
+        attempt=1,
     )
     payload = {"messages": []}
     if actor is not None:

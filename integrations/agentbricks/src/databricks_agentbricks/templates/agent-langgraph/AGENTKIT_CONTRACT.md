@@ -81,6 +81,36 @@ and takes precedence over the legacy `__Host-databricks-app-router` cookie (for 
 The example assumes `messages` state and message/update events. Custom state, outputs, and
 interrupts require explicit mappings and must not be discarded to fit the example.
 
+### Invocation requests
+
+This template uses `/api/invocations`. Framework-specific fields belong under `input`.
+For an authorized cross-conversation memory check, put `actor` inside the `input` object alongside
+`messages`, not at the top level of the invocation:
+
+```json
+{
+  "id": "11111111-1111-4111-8111-111111111111",
+  "session_id": "memory-write",
+  "input": {
+    "messages": [
+      {"role": "user", "content": "Remember this test fact: my test color is teal."}
+    ],
+    "actor": "memory-test-actor"
+  }
+}
+```
+
+Use fresh invocation UUIDs and a distinct test fact. Once the fact is stored, send a recall question
+with a different `session_id`, keeping `input.actor` and the authenticated identity unchanged.
+Two turns in the same session test conversation history, not cross-conversation memory.
+
+A top-level `actor` is rejected by the transport. Message-list shorthand (`"input": [...]`) has no
+actor field; the adapter defaults actor identity to `session_id`, so changing sessions also changes
+the memory partition. Use object-form input for this check. With request-user authentication, the
+adapter namespaces an explicit actor by the authenticated principal. The actor field does not
+establish authentication; preserve the application's trusted identity mapping. Custom or migrated
+adapters may use a different input contract.
+
 ### Recovery and durability
 
 Runtime Store persistence covers invocations and emitted events. Session Store persistence covers

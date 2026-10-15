@@ -92,18 +92,53 @@ more than 128 UTF-8 bytes, used verbatim, and takes precedence over the legacy
 The example assumes `messages` input and message, delta, and interrupt events. Custom inputs,
 outputs, and interruptions require explicit mappings and must not be discarded to fit the example.
 
+### Invocation requests
+
+This template uses `/api/invocations`. Framework-specific fields belong under `input`.
+For an authorized cross-conversation memory check, put `actor` inside the `input` object alongside
+`messages`, not at the top level of the invocation:
+
+```json
+{
+  "id": "11111111-1111-4111-8111-111111111111",
+  "session_id": "memory-write",
+  "input": {
+    "messages": [
+      {"role": "user", "content": "Remember this test fact: my test color is teal."}
+    ],
+    "actor": "memory-test-actor"
+  }
+}
+```
+
+Use fresh invocation UUIDs and a distinct test fact. Once the fact is stored, send a recall question
+with a different `session_id`, keeping `input.actor` and the authenticated identity unchanged.
+Two turns in the same session test conversation history, not cross-conversation memory.
+
+A top-level `actor` is rejected by the transport. Message-list shorthand (`"input": [...]`) has no
+actor field; the adapter defaults actor identity to `session_id`, so changing sessions also changes
+the memory partition. Use object-form input for this check. With request-user authentication, the
+adapter namespaces an explicit actor by the authenticated principal. The actor field does not
+establish authentication; preserve the application's trusted identity mapping. Custom or migrated
+adapters may use a different input contract.
+
 ### Recovery and durability
 
-Runtime Store persistence covers invocations and emitted events. Session Store persistence covers
-the conversation transcript, not in-flight run state. The Agents SDK has no node-level checkpoint
-continuation: OpenAI HITL `RunState` is process-local and does not survive worker loss even with a
-Session Store bound. `dev` uses process-local invocation storage; deployment attaches a
-Lakebase-backed Runtime Store.
+Runtime Store persistence covers invocations and emitted events. The harness saves paused SDK
+`RunState` in a separate Session Store session before emitting interrupts. These checkpoints never
+enter the conversation transcript. With a binding, pending approvals survive worker loss; without
+one they stay process-local. Concurrent workers require shared Runtime Store scheduling.
+
+Validate every decision before changing saved state. Persist a consumed marker before continuing
+an accepted approval; subsequent resume requests must not rerun it, even after failure or recovery.
+If execution was interrupted after acceptance, its outcome may be uncertain; check the invocation
+and tool side effects before starting a new ordinary turn with a new invocation ID. A later pause
+saves new approval state. Completed responses remain the runtime's responsibility.
 
 Register recovery when intended. The recover hook replays the persisted application input against
-the same session and prepends a developer instruction warning that the prior attempt may have
-partially completed. Recovery is at least once, so side effects must be idempotent and tools must
-tolerate replay.
+the same session, except for already accepted approvals, and prepends a developer instruction
+warning that the prior attempt may have partially completed. The Agents SDK has no node-level
+checkpoint continuation; replayed side effects must be idempotent.
 
 ## Optional chat app
 

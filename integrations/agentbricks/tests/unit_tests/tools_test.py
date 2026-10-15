@@ -42,7 +42,12 @@ class _Client:
 
 @pytest.mark.parametrize("auth", [None, "app", "user"])
 @pytest.mark.parametrize(
-    "arguments", [["mcp", "system.ai.web_search"], ["sandbox", "--scope", "volume:main.data.files"]]
+    "arguments",
+    [
+        ["mcp", "system.ai.web_search"],
+        ["sandbox", "--scope", "volume:main.data.files"],
+        ["uc-function", "main.tools.lookup"],
+    ],
 )
 def test_add_managed_tool_writes_explicit_auth(tmp_path, arguments, auth):
     project = _project(tmp_path)
@@ -55,15 +60,22 @@ def test_add_managed_tool_writes_explicit_auth(tmp_path, arguments, auth):
     assert f'auth = "{auth or "user"}"' in (project / "agent.toml").read_text()
 
 
-def test_uc_function_does_not_accept_user_auth(tmp_path):
+def test_add_user_uc_function_preserves_legacy_binding_auth(tmp_path):
     project = _project(tmp_path)
+    manifest = AgentProject.load(project)
+    legacy = ToolSpec.uc_function("legacy", function="main.tools.legacy")
+    manifest.add_tool(legacy)
+    manifest.write()
     result = CliRunner().invoke(
         tools,
         ["add", "uc-function", "main.tools.lookup", "--auth", "user", "--source", str(project)],
         obj=_Ctx(),
     )
-    assert result.exit_code != 0
-    assert AgentProject.load(project).tools == []
+    assert result.exit_code == 0, result.output
+    assert AgentProject.load(project).tools == [
+        legacy,
+        ToolSpec.uc_function("lookup", function="main.tools.lookup", auth="user"),
+    ]
 
 
 def _project(

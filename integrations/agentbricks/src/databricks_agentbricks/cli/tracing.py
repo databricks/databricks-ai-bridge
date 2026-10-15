@@ -276,5 +276,6 @@ def tracing_get(obj, trace_id, experiment_name, experiment_id, warehouse_id, sou
     result = build_tracing_service(obj).get(
         TraceReadRequest(pathlib.Path(source), experiment_name, experiment_id, warehouse_id),
         trace_id,
+        on_warning=lambda warning, help: render.diagnostic("warning", warning, help=help),
     )
     show_trace_detail(result, obj.output)

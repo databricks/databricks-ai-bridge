@@ -3,7 +3,8 @@
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from agent.agent import resume_agent, run_agent
+from agent.agent import run_agent
+from agent.checkpoints import Checkpoints
 from agents import RunResultStreaming
 from agents.items import ToolApprovalItem
 from openai.types.responses import ResponseTextDeltaEvent
@@ -43,14 +44,12 @@ def _actor(payload: dict[str, Any], session_id: str) -> str:
 
 def _agent_input(
     payload: dict[str, Any],
-    session_id: str,
     *,
     recovery: bool = False,
 ) -> list[Any] | Any:
     if (resume := payload.get("resume")) is not None:
         if not isinstance(resume, dict):
             raise ValueError("resume must be an object")
-        return resume_agent(session_id, resume)
     messages = payload.get("messages") or []
     if not isinstance(messages, list):
         raise ValueError("messages must be a list")
@@ -96,27 +95,38 @@ async def _invoke_agent(
     auth_kwargs = {"workspace_client_for": auth.client_for} if user_auth else {}
     model = payload.get("model")
     outputs = []
+    checkpoints = Checkpoints(
+        session_id, actor, context.invocation_id, context.attempt, context.emit
+    )
     async with run_agent(
-        _agent_input(payload, session_id, recovery=recovery),
+        _agent_input(payload, recovery=recovery),
         session_id=session_id,
         actor=actor,
         model=model if isinstance(model, str) else None,
+        resume=payload.get("resume"),
+        load_state=checkpoints.load,
+        save_state=checkpoints.save,
+        invocation_id=context.invocation_id,
         **auth_kwargs,
     ) as result:
         async for event in _serialize_events(result):
-            if user_auth and event.get("type") == "interrupt":
-                raise AuthError(
-                    "MCP_USER_AUTH_HITL_UNSUPPORTED",
-                    "Request-user invocations do not support paused approvals.",
-                    400,
-                )
             await context.emit(event)
-            if event.get("type") in ("message", "interrupt"):
-                outputs.append(event)
+            if event.get("type") == "message":
+                outputs.append(event["message"])
+
+    # run_agent has persisted the pause before the client is told it can resume it.
+    if result.interruptions:
+        event = {
+            "type": "interrupt",
+            "id": result.interruptions[0].call_id,
+            "value": _approval_value(result.interruptions),
+        }
+        await context.emit(event)
+        outputs.append(event)
 
     interrupted = bool(outputs and outputs[-1].get("type") == "interrupt")
     return {
-        "output": [event["message"] if event["type"] == "message" else event for event in outputs],
+        "output": outputs,
         "status": "interrupted" if interrupted else "completed",
     }
 
@@ -130,12 +140,14 @@ async def _serialize_events(result: RunResultStreaming) -> AsyncGenerator[dict, 
             if message := _normalize_item(event.item):
                 yield {"type": "message", "message": message}
 
-    for item in result.interruptions:
-        yield {"type": "interrupt", "id": item.call_id, "value": _approval_value(item)}
 
-
-def _approval_value(item: ToolApprovalItem) -> dict:
-    return {"action_requests": [{"name": item.tool_name, "args": _tool_args(item)}]}
+def _approval_value(items: list[ToolApprovalItem]) -> dict:
+    return {
+        "action_requests": [
+            {"name": item.tool_name, "args": _tool_args(item), "call_id": item.call_id}
+            for item in items
+        ]
+    }
 
 
 def _tool_args(item: ToolApprovalItem) -> Any:

@@ -28,10 +28,6 @@ from databricks_agentkit.runtime.tool_manifest import ToolManifestError, load_to
 def test_auth_round_trip_through_both_manifest_parsers(tmp_path, monkeypatch, kind, auth):
     _write_manifest(tmp_path)
     project = AgentProject.load(tmp_path)
-    if kind == "uc_function" and auth == "user":
-        with pytest.raises(AgentCliError, match="auth"):
-            ToolSpec.uc_function("tool", function="main.tools.lookup", auth=auth)
-        return
     if kind == "sandbox":
         spec = ToolSpec.sandbox("tool", scopes=[Scope.volume("main.data.files")], auth=auth)
     elif kind == "mcp":
@@ -74,7 +70,9 @@ def test_genie_specs_reject_invalid_auth(kind):
         ToolSpec("tool", source, auth=cast(Any, "invalid"))
 
 
-def test_runtime_manifest_rejects_user_uc_function(tmp_path, monkeypatch):
+def test_user_uc_function_requires_request_auth(tmp_path, monkeypatch):
+    from databricks_agentkit.runtime.auth import InvocationAuthPolicy
+
     path = _write_manifest(tmp_path)
     with path.open("a") as output:
         output.write(
@@ -82,8 +80,9 @@ def test_runtime_manifest_rejects_user_uc_function(tmp_path, monkeypatch):
             'source = {kind = "uc_function", function = "main.tools.lookup"}\n'
         )
     monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
-    with pytest.raises(RuntimeError, match="auth"):
-        load_tools(expected_framework="langgraph")
+    policy = InvocationAuthPolicy.from_manifest()
+    assert policy.user_tools == ("lookup",)
+    assert policy.requires_user is True
 
 
 def _write_manifest(root: pathlib.Path, body: str | None = None) -> pathlib.Path:

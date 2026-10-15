@@ -1,4 +1,4 @@
-"""Tests for the Agent Bricks release planner and metadata stamper."""
+"""Tests for the Agent Bricks release planner, metadata stamper, and release notes."""
 
 import importlib.util
 import json
@@ -169,6 +169,106 @@ class StampTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exactly one Agent Bricks dependency"):
             release.stamp_release(self.root, "0.4.0", templates=True)
         self.assertEqual(self.package.read_bytes(), previous)
+
+
+class ReleaseNotesTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(self.scratch.cleanup)
+        self.root = Path(self.scratch.name)
+        self.git("init", "--quiet", "--initial-branch=main")
+        self.git("config", "user.name", "Test")
+        self.git("config", "user.email", "test@example.com")
+        self.git("config", "commit.gpgsign", "false")
+
+    def git(self, *args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=self.root, check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    def commit(self, path: str, subject: str) -> str:
+        target = self.root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(subject)
+        self.git("add", path)
+        self.git("commit", "--quiet", "-m", subject)
+        return self.git("rev-parse", "HEAD")
+
+    def test_previous_tag_is_the_highest_release_below_the_target(self) -> None:
+        tags = [
+            "databricks-agentbricks-v0.4.0", "databricks-agentbricks-v0.4.1",
+            "databricks-agentbricks-v0.5.0", "databricks-agentbricks-v0.6.0",
+            "databricks-agentbricks-vnext", "databricks-langchain-v0.9.0",
+        ]
+        self.assertEqual(release.previous_release_tag("0.5.0", tags), "databricks-agentbricks-v0.4.1")
+        self.assertEqual(release.previous_release_tag("0.5.1", tags), "databricks-agentbricks-v0.5.0")
+        self.assertIsNone(release.previous_release_tag("0.4.0", tags))
+
+    def test_notes_list_package_changes_since_previous_tag(self) -> None:
+        self.commit("integrations/agentbricks/a.py", "Shipped before (#1)")
+        self.git("tag", "databricks-agentbricks-v0.4.0")
+        self.commit("integrations/agentbricks/b.py", "[agentbricks] Add feature (#2)")
+        self.commit("integrations/langchain/c.py", "Unrelated package change (#3)")
+        self.commit("integrations/agentbricks/pyproject.toml", "Release Agent Bricks 0.5.0")
+        head = self.git("rev-parse", "HEAD")
+        notes = release.release_notes(self.root, "0.5.0", head, "owner/repo")
+        self.assertIn("- [agentbricks] Add feature ([#2](https://github.com/owner/repo/pull/2))", notes)
+        self.assertNotIn("Shipped before", notes)
+        self.assertNotIn("Unrelated package change", notes)
+        self.assertNotIn("Release Agent Bricks", notes)
+        self.assertIn(
+            "https://github.com/owner/repo/compare/databricks-agentbricks-v0.4.0...databricks-agentbricks-v0.5.0",
+            notes,
+        )
+
+    def test_notes_skip_fixes_already_cherry_picked_into_the_previous_release(self) -> None:
+        self.commit("integrations/agentbricks/a.py", "Base")
+        self.git("switch", "--quiet", "-c", "release")
+        self.git("switch", "--quiet", "main")
+        fix = self.commit("integrations/agentbricks/fix.py", "Fix crash (#4)")
+        self.commit("integrations/agentbricks/new.py", "New in minor (#5)")
+        self.git("switch", "--quiet", "release")
+        self.git("cherry-pick", fix)
+        self.git("tag", "databricks-agentbricks-v0.4.1")
+        self.git("switch", "--quiet", "main")
+        notes = release.release_notes(self.root, "0.5.0", self.git("rev-parse", "HEAD"), "owner/repo")
+        self.assertIn("New in minor ([#5](https://github.com/owner/repo/pull/5))", notes)
+        self.assertNotIn("Fix crash", notes)
+
+    def test_first_release_lists_history_without_a_compare_link(self) -> None:
+        head = self.commit("integrations/agentbricks/a.py", "Initial package (#1)")
+        notes = release.release_notes(self.root, "0.1.0", head, "owner/repo")
+        self.assertIn("- Initial package ([#1](https://github.com/owner/repo/pull/1))", notes)
+        self.assertNotIn("compare", notes)
+
+    def test_every_pull_request_reference_is_linked(self) -> None:
+        notes = release.render_release_notes(
+            "0.5.0", None, ["Fix kwargs (#426, #429)", "Keep owner/repo#7 and C# as written"], "owner/repo"
+        )
+        self.assertIn(
+            "Fix kwargs ([#426](https://github.com/owner/repo/pull/426), "
+            "[#429](https://github.com/owner/repo/pull/429))",
+            notes,
+        )
+        self.assertIn("Keep owner/repo#7 and C# as written", notes)
+
+    def test_release_without_package_changes_says_so(self) -> None:
+        self.commit("integrations/agentbricks/a.py", "Base")
+        self.git("tag", "databricks-agentbricks-v0.4.0")
+        head = self.commit("integrations/agentbricks/pyproject.toml", "Release Agent Bricks 0.4.1")
+        notes = release.release_notes(self.root, "0.4.1", head, "owner/repo")
+        self.assertIn("No package changes", notes)
+
+    def test_cli_prints_notes(self) -> None:
+        head = self.commit("integrations/agentbricks/a.py", "Initial package (#1)")
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), "notes", "--version", "0.1.0", "--release-sha", head,
+             "--root", str(self.root), "--repository", "owner/repo"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn("## databricks-agentbricks 0.1.0", result.stdout)
 
 
 if __name__ == "__main__":

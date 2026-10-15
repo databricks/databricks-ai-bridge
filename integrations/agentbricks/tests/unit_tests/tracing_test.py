@@ -652,6 +652,35 @@ def test_get_reports_missing_trace(tmp_path: pathlib.Path):
     assert "No trace found" in result.output
 
 
+def test_get_preserves_local_read_warning_when_workspace_fallback_has_no_trace(
+    tmp_path: pathlib.Path,
+):
+    _project(tmp_path)
+    (tmp_path / ".agentbricks").mkdir()
+    (tmp_path / ".agentbricks" / "mlflow.db").write_text("")
+    mlflow = mock.Mock()
+    mlflow.get_trace.return_value = None
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
+        mock.patch.object(
+            local_tracing_client.LocalTracingClient,
+            "start_read",
+            return_value=LocalTracingStart(
+                None, None, warning="local trace store did not come up", help="see local log"
+            ),
+        ),
+    ):
+        result = CliRunner().invoke(
+            tracing_mod.tracing_get, ["tr-x", "--source", str(tmp_path)], obj=_Ctx()
+        )
+
+    assert result.exit_code != 0
+    assert "local trace store did not come up" in result.output
+    assert "see local log" in result.output
+    assert "No trace found" in result.output
+    mlflow.get_trace.assert_called_once_with("tr-x")
+
+
 def test_get_by_explicit_experiment_id(tmp_path: pathlib.Path):
     # --experiment-id points get at that workspace store (no project resolution, no local fallback).
     _project(tmp_path)

@@ -255,12 +255,14 @@ def add_mcp(
 @add.command("uc-function")
 @click.argument("function_name")
 @click.option("--name", "tool_id", default=None)
+@click.option("--auth", type=click.Choice(["user", "app"]), default="user", show_default=True)
 @_source_option
 @click.pass_obj
 def add_uc_function(
     obj: Any,
     function_name: str,
     tool_id: str | None,
+    auth: Literal["user", "app"],
     source: pathlib.Path,
 ) -> None:
     """Add an existing Unity Catalog function (catalog.schema.function) as a tool.
@@ -274,6 +276,7 @@ def add_uc_function(
         ToolSpec.uc_function(
             tool_id or _default_id(function_name),
             function=function_name,
+            auth=auth,
         ),
     )
 

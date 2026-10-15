@@ -145,7 +145,7 @@ class _DeployRunner:
                 return types.SimpleNamespace(
                     returncode=0 if self.exists else 1,
                     stdout="" if self.exists else "",
-                    stderr="" if self.exists else "not found",
+                    stderr="" if self.exists else "Error: app does not exist",
                 )
             return types.SimpleNamespace(
                 returncode=0,

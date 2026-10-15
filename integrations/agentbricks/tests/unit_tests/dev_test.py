@@ -630,3 +630,19 @@ def test_dev_local_tracing_adapter_reports_start_warning(tmp_path: pathlib.Path)
 
     assert server is None and environment == {}
     diagnostic.assert_called_once_with("warning", "uvx not found", help="install uv")
+
+
+def test_dev_hides_active_venv_and_port_from_run_local(tmp_path: pathlib.Path, monkeypatch):
+    # run-local's `uv pip install` targets $VIRTUAL_ENV, so an activated venv would get the app's packages;
+    # an exported PORT would keep run-local from pointing the app at --app-port.
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    monkeypatch.setenv("VIRTUAL_ENV", "/some/other/.venv")
+    monkeypatch.setenv("PORT", "6969")
+    monkeypatch.setenv("AGENTBRICKS_DEV_TEST_MARKER", "kept")
+    with mock.patch.object(dev_mod, "_databricks") as db:
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code == 0, result.output
+    env = db.call_args.kwargs["env"]
+    assert "VIRTUAL_ENV" not in env
+    assert "PORT" not in env
+    assert env["AGENTBRICKS_DEV_TEST_MARKER"] == "kept"
