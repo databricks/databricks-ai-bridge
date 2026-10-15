@@ -28,6 +28,24 @@ def test_constructor_stores_profile_and_injected_runner():
     ]
 
 
+@pytest.mark.parametrize("prepare_environment", [False, True])
+def test_run_local_failure_preserves_details_and_guides_package_downloads(
+    tmp_path, prepare_environment
+):
+    def failing_runner(*args, **kwargs):
+        raise AgentCliError("Local startup failed", error_code="FAILED", hint="original diagnostic")
+
+    client = AppsClient("prof", runner=failing_runner)
+    with pytest.raises(AgentCliError) as raised:
+        client.run_local(
+            tmp_path, "app.yaml", prepare_environment=prepare_environment, app_port=None
+        )
+    assert raised.value.error_code == "FAILED"
+    assert raised.value.hint is not None
+    assert "original diagnostic" in raised.value.hint
+    assert ("UV_DEFAULT_INDEX" in raised.value.hint) == prepare_environment
+
+
 def test_exists_true_on_zero_returncode():
     calls = []
     client = AppsClient("prof", runner=_runner(calls, returncode=0))

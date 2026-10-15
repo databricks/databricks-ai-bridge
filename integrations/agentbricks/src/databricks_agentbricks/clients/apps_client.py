@@ -375,13 +375,27 @@ class AppsClient:
             args += ["--app-port", str(app_port)]
         # run-local resolves this relative to cwd and rejects an absolute alternate-manifest path.
         args += ["--entry-point", entry_point_name]
-        self._run(
-            args,
-            self._profile,
-            cwd=str(source_dir),
-            action="Could not start the agent locally.",
-            env=_get_run_local_env(),
-        )
+        try:
+            self._run(
+                args,
+                self._profile,
+                cwd=str(source_dir),
+                action="Could not start the agent locally.",
+                env=_get_run_local_env(),
+            )
+        except AgentCliError as exc:
+            if not prepare_environment:
+                raise
+            hint = (
+                "Review the installer or server output above. If package downloads failed, "
+                "check your network and configure a reachable package index for this command: "
+                "UV_DEFAULT_INDEX=<approved-index-url> agentbricks dev --prepare-environment. "
+                "Use the index approved for your environment; no global uv configuration "
+                "change is required."
+            )
+            if exc.hint:
+                hint = f"{exc.hint}\n{hint}"
+            raise AgentCliError(exc.message, error_code=exc.error_code, hint=hint) from exc
 
     def get_service_principal(self, app_name: str) -> Optional[str]:
         """The app's service principal client id (its Postgres role identity), or None if unavailable.

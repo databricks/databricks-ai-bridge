@@ -171,6 +171,17 @@ _Arguments_
 
 ### `agentbricks dev`
 
+If the first run fails while downloading dependencies, check the installer output and your network.
+For environments that require a package mirror, use a command-scoped override with your approved
+registry URL:
+
+```sh
+UV_DEFAULT_INDEX=<approved-index-url> agentbricks dev --prepare-environment
+```
+
+This avoids changing global uv configuration. The environment is prepared again so a partial
+installation is not reused. Local startup errors during preparation include this guidance.
+
 Run your agent locally so you can try it before deploying.
 
 Starts the agent on a local server - by default http://localhost:8000 - and prints where to reach it: the chat UI if the project has one, otherwise a sample request against the agent's API.
