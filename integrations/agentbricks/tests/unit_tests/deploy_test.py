@@ -18,6 +18,7 @@ import yaml
 from click.testing import CliRunner
 
 from databricks_agentbricks.cli import deploy as deploy_mod
+from databricks_agentbricks.cli.app import CliContext
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.conversation_store_client import (
@@ -32,6 +33,7 @@ from databricks_agentbricks.clients.tracing_client import (
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.agent_project import AgentProject
 from databricks_agentbricks.projects.app_manifest import AppManifest
+from databricks_agentbricks.projects.profiles import ProfileInfo
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.services.deploy_service import (
     DeployRequest,
@@ -53,13 +55,17 @@ class _FakeApiClient:
     current_user = "me@example.com"
 
 
-class _Ctx:
-    profile = "prof"
-    output = "text"
+class _Ctx(CliContext):
+    def __init__(self, *, output: str = "text", profile: str | None = "prof"):
+        super().__init__(profile, output)
+        self.api_client_provider = types.SimpleNamespace(
+            get=lambda: _FakeApiClient(), use=lambda client: self.announce_workspace(client.host)
+        )
 
-    def __init__(self, *, output: str = "text"):
-        self.output = output
-        self.api_client_provider = types.SimpleNamespace(get=lambda: _FakeApiClient())
+
+@pytest.fixture(autouse=True)
+def _authenticated_profile(validated_profile, monkeypatch: pytest.MonkeyPatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
 
 
 def _result(*, deployment: str = "agent-bricks-demo") -> DeployResult:
@@ -169,11 +175,10 @@ class _DeployRunner:
 
 
 def _real_deploy_context(api: _DeployApi, *, output: str = "text"):
-    return types.SimpleNamespace(
-        profile="prof",
-        output=output,
-        api_client_provider=types.SimpleNamespace(get=lambda: api),
-    )
+    ctx = CliContext("prof", output)
+    # The preflight's validated client is discarded so every call reaches the fake `api`.
+    ctx.api_client_provider = types.SimpleNamespace(get=lambda: api, use=lambda client: None)
+    return ctx
 
 
 def test_manifest_env_scaffolds_when_missing(tmp_path: pathlib.Path):
@@ -329,6 +334,30 @@ def test_deploy_help_exposes_instance_count_and_routing_key():
     assert "X-Routing-Key" in result.output
 
 
+@pytest.mark.parametrize("managed", [True, False], ids=["managed", "cli-only"])
+def test_delete_announces_the_workspace_used_by_its_client(write_databrickscfg, managed):
+    write_databrickscfg("[prof]\nhost = https://profile.example\n")
+    ctx = CliContext("prof", "text")
+    service = mock.Mock()
+    service.deletes_runtime_store_data.return_value = managed
+    if managed:
+        service.delete.side_effect = lambda name: ctx.client()
+    with (
+        mock.patch.object(deploy_mod, "build_deploy_service", return_value=service),
+        mock.patch(
+            "databricks_agentbricks.clients.api_client_provider._AgentBricksApiClient",
+            return_value=_FakeApiClient(),
+        ) as client,
+    ):
+        result = CliRunner().invoke(deploy_mod.deployments, ["delete", "demo", "--yes"], obj=ctx)
+
+    assert result.exit_code == 0, result.output
+    host = "https://workspace.example" if managed else "https://profile.example"
+    assert result.output.count(f"Using profile 'prof' (from --profile) · {host}") == 1
+    assert client.call_count == int(managed)
+    service.delete.assert_called_once_with("demo")
+
+
 def test_deploy_rejects_instance_count_above_platform_limit():
     result = CliRunner().invoke(deploy_mod.deploy, ["demo", "--instances", "6"], obj=_Ctx())
 
@@ -370,6 +399,33 @@ def test_deploy_cli_passes_request_to_service_and_presents_json(tmp_path: pathli
         allow_user_scope_update=True,
     )
     assert json.loads(result.output)["deployment"] == "agent-bricks-demo"
+
+
+@pytest.mark.parametrize(
+    ("flag_profile", "expected", "source"), [(None, "proj", ".env"), ("flag", "flag", "--profile")]
+)
+def test_deploy_resolves_profile_from_flag_then_source_env(
+    tmp_path: pathlib.Path, validated_profile, write_databrickscfg, flag_profile, expected, source
+):
+    write_databrickscfg(
+        "[proj]\nhost = https://proj.example\n[flag]\nhost = https://flag.example\n"
+    )
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / ".env").write_text("DATABRICKS_CONFIG_PROFILE=proj\n")
+    ctx = _Ctx(profile=flag_profile)
+
+    service = mock.Mock()
+    service.deploy.return_value = _result()
+    with mock.patch.object(deploy_mod, "build_deploy_service", return_value=service) as build:
+        result = CliRunner().invoke(deploy_mod.deploy, ["demo", "--source", str(tmp_path)], obj=ctx)
+
+    assert result.exit_code == 0, result.output
+    assert ctx.profile_info == ProfileInfo(expected, source)
+    assert build.call_args.args[0] is ctx
+    validated_profile.assert_called_once_with(expected)
+    out = " ".join(result.output.split())
+    assert f"Using profile '{expected}' (from {source}) · https://ws.example" in out
+    assert f"https://{expected}.example" not in out
 
 
 def test_deploy_json_preserves_additive_tool_access_contract(tmp_path: pathlib.Path):

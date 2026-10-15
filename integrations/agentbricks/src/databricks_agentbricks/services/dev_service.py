@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import pathlib
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from databricks_agentbricks.clients.apps_client import AppsClient
@@ -49,6 +49,8 @@ class DevRequest:
     source: str
     prepare_environment: bool | None
     app_port: int | None
+    # Extra env for the local-only manifest (e.g. the resolved Databricks profile).
+    local_env: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -104,6 +106,16 @@ class DevService:
         self._apps_client = apps_client
         self._local_tracing = local_tracing
 
+    def check_project(self, source: str) -> pathlib.Path:
+        """Fail unless ``source`` has an ``app.yaml`` to run; returns that path. Local only."""
+        app_yaml = pathlib.Path(source) / "app.yaml"
+        if not app_yaml.exists():
+            raise AgentCliError(
+                f"No app.yaml found at {app_yaml}.",
+                hint="Run from a scaffolded project, or pass --source <dir> (see `agentbricks init`).",
+            )
+        return app_yaml
+
     @contextmanager
     def prepare(self, request: DevRequest) -> Iterator[DevPlan]:
         """Prepare a local run and clean up its temporary resources on context exit.
@@ -113,12 +125,7 @@ class DevService:
         is removed along with the local tracing process even when either of those operations fails.
         """
         source_dir = pathlib.Path(request.source)
-        app_yaml = source_dir / "app.yaml"
-        if not app_yaml.exists():
-            raise AgentCliError(
-                f"No app.yaml found at {app_yaml}.",
-                hint="Run from a scaffolded project, or pass --source <dir> (see `agentbricks init`).",
-            )
+        app_yaml = self.check_project(request.source)
 
         project = self._project_resolver.load(source_dir)
         if project is not None and project.tools:
@@ -141,7 +148,8 @@ class DevService:
             if prepare_environment is None:
                 prepare_environment = not (source_dir / ".venv").exists()
 
-            entry_point = _dev_entry_point(app_yaml, tracing_env or None)
+            manifest_env = {**request.local_env, **tracing_env}
+            entry_point = _dev_entry_point(app_yaml, manifest_env or None)
             preview = DevPreview(
                 source_dir=source_dir,
                 # Preserve the CLI's historical display/default behavior while retaining the

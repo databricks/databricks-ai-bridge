@@ -132,6 +132,16 @@ def _client(workspace_client):
     return _AgentBricksApiClient(profile="p"), inst.api_client.do
 
 
+@pytest.fixture
+def sleep(monkeypatch):
+    retry_sleep = mock.Mock(name="agentkit_retry_sleep")
+    # Patching time.sleep would also capture SDK retries on background telemetry threads.
+    monkeypatch.setattr(
+        "databricks_agentkit._api_client.time", types.SimpleNamespace(sleep=retry_sleep)
+    )
+    return retry_sleep
+
+
 @pytest.mark.parametrize(
     "client_class",
     [AgentKitClient],
@@ -772,7 +782,7 @@ def test_auth_error_hint_explains_profile_selection_and_login(_workspace_client)
     hint = exc_info.value.hint
     assert hint is not None
     assert "`agentbricks --profile <name> <command>`" in hint
-    assert "`agentbricks login --profile <name>`" in hint
+    assert "`agentbricks auth login <name>`" in hint
     assert "`databricks auth login --profile <name>`" not in hint
 
 
@@ -842,7 +852,6 @@ class _TransientError(RuntimeError):
     error_code = "CANCELLED"
 
 
-@mock.patch("databricks_agentkit._api_client.time.sleep")
 @mock.patch("databricks.sdk.WorkspaceClient")
 def test_delete_runtime_store_retries_transient_errors(workspace_client, sleep):
     client, do = _client(workspace_client)
@@ -853,7 +862,6 @@ def test_delete_runtime_store_retries_transient_errors(workspace_client, sleep):
     sleep.assert_called_once()
 
 
-@mock.patch("databricks_agentkit._api_client.time.sleep")
 @mock.patch("databricks.sdk.WorkspaceClient")
 def test_do_retries_transient_error_then_succeeds(workspace_client, sleep):
     client, do = _client(workspace_client)
@@ -866,7 +874,6 @@ def test_do_retries_transient_error_then_succeeds(workspace_client, sleep):
     sleep.assert_called_once()
 
 
-@mock.patch("databricks_agentkit._api_client.time.sleep")
 @mock.patch("databricks.sdk.WorkspaceClient")
 @pytest.mark.parametrize(
     ("method_name", "args"),
@@ -888,7 +895,6 @@ def test_create_store_does_not_retry_transient_error_by_default(
     sleep.assert_not_called()
 
 
-@mock.patch("databricks_agentkit._api_client.time.sleep")
 @mock.patch("databricks.sdk.WorkspaceClient")
 def test_do_stops_after_max_attempts(workspace_client, sleep):
     client, do = _client(workspace_client)
@@ -902,7 +908,6 @@ def test_do_stops_after_max_attempts(workspace_client, sleep):
     assert "None" not in exc_info.value.message
 
 
-@mock.patch("databricks_agentkit._api_client.time.sleep")
 @mock.patch("databricks.sdk.WorkspaceClient")
 def test_do_does_not_retry_non_transient_error(workspace_client, sleep):
     client, do = _client(workspace_client)
@@ -919,7 +924,6 @@ def test_do_does_not_retry_non_transient_error(workspace_client, sleep):
     sleep.assert_not_called()
 
 
-@mock.patch("databricks_agentkit._api_client.time.sleep")
 @mock.patch("databricks.sdk.WorkspaceClient")
 def test_do_does_not_retry_transient_error_for_pop(workspace_client, sleep):
     client, do = _client(workspace_client)
@@ -932,7 +936,8 @@ def test_do_does_not_retry_transient_error_for_pop(workspace_client, sleep):
     sleep.assert_not_called()
 
 
-def test_account_routed_profile_uses_configured_host_and_workspace_header():
+@pytest.mark.parametrize("strategy", [None, mock.Mock()], ids=["default-auth", "injected-auth"])
+def test_account_routed_profile_uses_configured_host_and_workspace_header(strategy):
     resolved = mock.Mock()
     resolved.config.host = "https://workspace.example.com"
     resolved.config.workspace_id = "123"
@@ -945,15 +950,21 @@ def test_account_routed_profile_uses_configured_host_and_workspace_header():
             return_value="https://account.example.com",
         ),
     ):
-        client = _workspace_client("p")
+        client = (
+            _workspace_client("p", credentials_strategy=strategy)
+            if strategy is not None
+            else _workspace_client("p")
+        )
 
     assert client is routed
+    auth_kwargs = {"credentials_strategy": strategy} if strategy is not None else {}
     assert wc.call_args_list == [
-        mock.call(profile="p"),
+        mock.call(profile="p", **auth_kwargs),
         mock.call(
             profile="p",
             host="https://account.example.com",
             custom_headers={"X-Databricks-Org-Id": "123"},
+            **auth_kwargs,
         ),
     ]
 

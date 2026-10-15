@@ -555,6 +555,7 @@ def tracing_bind(obj, experiment_name, experiment_id, source) -> None:
     # service principal MODIFY on its UC OTEL tables through TracingClient.
     name = experiment_name
     if experiment_id:
+        obj.announce_workspace()
         mlflow = _mlflow()
         _set_tracking_uri(mlflow, obj.profile)
         experiment = _get_experiment_by_id(mlflow, experiment_id)
@@ -651,6 +652,8 @@ def tracing_list(obj, experiment_name, experiment_id, warehouse_id, limit, sourc
     with _with_trace_read_target(
         source, obj.profile, experiment_name, experiment_id, _resolve_warehouse_id(warehouse_id)
     ) as target:
+        if not target.local and target.tracking_uri:
+            obj.announce_workspace()
         traces = []
         if target.experiment_id:
             traces = mlflow.search_traces(
@@ -709,6 +712,8 @@ def tracing_get(obj, trace_id, experiment_name, experiment_id, warehouse_id, sou
     ) as target:
         # get_trace resolves by id and needs only the tracking URI; when nothing resolved, fall back to
         # the workspace so an id still looks there.
+        if not target.local:
+            obj.announce_workspace()
         if target.tracking_uri is None:
             mlflow.set_tracking_uri(_workspace_uri(obj.profile))
             if warehouse:
