@@ -116,6 +116,9 @@ Direct authoring does not call `agentbricks tools add`: it replaces `agent.toml`
 `fixtures/direct_agent.toml`. CLI authoring invokes four managed `agentbricks tools add ...` commands.
 Both paths then create the same user-owned, framework-native Python tool file with no Python entry
 in `agent.toml`. Every exact command and code-authoring step is captured in `commands.log`.
+Both paths explicitly select App identity for every managed binding, including the UC function,
+so deployed grant snapshots and invocations exercise the App service principal. The CLI's default
+user identity is covered separately by the request-user auth tests.
 
 The CLI path first verifies that an unavailable MCP service is rejected without changing
 `agent.toml`, then checks that removing the absent binding is harmless. The subsequent dev and

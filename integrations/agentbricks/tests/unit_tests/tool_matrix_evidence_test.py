@@ -12,7 +12,13 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from click.testing import CliRunner
 from databricks.sdk.errors import NotFound
+
+from databricks_agentbricks.cli.app import CliContext, agentbricks
+from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.projects.agent_project import AgentProject
+from databricks_agentbricks.services.deployment.tool_access import plan_tool_access
 
 _MATRIX_PATH = pathlib.Path(__file__).parents[1] / "e2e" / "tool_matrix.py"
 _SPEC = importlib.util.spec_from_file_location("agentbricks_tool_matrix", _MATRIX_PATH)
@@ -417,7 +423,7 @@ def test_cleanup_records_failed_when_app_absence_is_not_confirmed(tmp_path):
     ]
 
 
-def test_cli_authoring_records_app_auth_for_managed_deployed_tools(tmp_path):
+def test_cli_authoring_records_app_auth_for_managed_deployed_tools(tmp_path, monkeypatch):
     project = tmp_path / "project"
     project.mkdir()
     manifest = project / "agent.toml"
@@ -428,46 +434,44 @@ def test_cli_authoring_records_app_auth_for_managed_deployed_tools(tmp_path):
     runner.uc_function = "supervisor_agent.mason_agent_tools_e2e.marker"
     runner.uc_volume = "supervisor_agent.mason_agent_tools_e2e.matrix_volume"
     runner.genie_space_id = "0" * 32
-    bindings = []
+    client = Mock()
 
-    def fake_run(argv, **kwargs):
-        if any("missing_service" in str(argument) for argument in argv) and "add" in argv:
-            return type(
-                "Result",
-                (),
-                {
-                    "returncode": 1,
-                    "stdout": "",
-                    "stderr": '{"error":{"code":"NOT_FOUND"}}',
-                },
-            )()
-        if "add" in argv:
-            kind = argv[argv.index("add") + 1]
-            auth = argv[argv.index("--auth") + 1] if "--auth" in argv else "user"
-            tool_id = {
-                "sandbox": "sandbox",
-                "mcp": "web_search",
-                "uc-function": "agentbricks_uc_marker",
-                "genie-agent": "genie",
-            }[kind]
-            bindings.append((tool_id, auth))
-            manifest.write_text(
-                'schema_version = 1\n\n[agent]\nframework = "langgraph"\nserver = "agentbricks"\n'
-                + "".join(
-                    f'\n[[tools]]\nid = "{binding_id}"\nauth = "{binding_auth}"\n'
-                    for binding_id, binding_auth in bindings
-                )
-            )
-        return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+    def get_mcp_service(service):
+        if service == "system.ai.missing_service":
+            raise AgentCliError("MCP service does not exist.", error_code="NOT_FOUND")
+        assert service == "system.ai.web_search"
+        return {"name": f"mcp-services/{service}"}
 
-    runner.run = fake_run
+    client.get_mcp_service.side_effect = get_mcp_service
+    monkeypatch.setattr(CliContext, "client", lambda _self: client)
+    monkeypatch.setenv("AGENTBRICKS_DISABLE_TELEMETRY", "1")
+
+    def run_cli(argv, **kwargs):
+        result = CliRunner().invoke(agentbricks, argv[1:])
+        if kwargs.get("check", True):
+            assert result.exit_code == 0, result.output
+        return subprocess.CompletedProcess(argv, result.exit_code, result.stdout, result.stderr)
+
+    runner.run = run_cli
 
     runner._author_cli(project)
 
-    tools = {tool["id"]: tool for tool in tool_matrix.tomli.loads(manifest.read_text())["tools"]}
-    assert {tools[tool_id]["auth"] for tool_id in ("sandbox", "web_search", "genie")} == {"app"}
-    sandbox_command = next(args for args in bindings if args[0] == "sandbox")
-    assert sandbox_command == ("sandbox", "app")
+    tools = AgentProject.load(project).tools
+    assert {tool.id: tool.auth for tool in tools} == {
+        "sandbox": "app",
+        "web_search": "app",
+        "agentbricks_uc_marker": "app",
+        "genie": "app",
+    }
+    assert any(
+        resource.get("uc_securable")
+        == {
+            "securable_full_name": runner.uc_function,
+            "securable_type": "FUNCTION",
+            "permission": "EXECUTE",
+        }
+        for resource in plan_tool_access(tools).app_resources
+    )
 
 
 def test_cli_authoring_includes_temporary_volume_scope(tmp_path):
@@ -535,6 +539,12 @@ def test_direct_authoring_includes_temporary_volume_scope(tmp_path):
     runner._author_direct(project, "langgraph", "abc123")
 
     manifest = tool_matrix.tomli.loads((project / "agent.toml").read_text())
+    assert {tool["id"]: tool["auth"] for tool in manifest["tools"]} == {
+        "sandbox": "app",
+        "web_search": "app",
+        "agentbricks_uc_marker": "app",
+        "genie": "app",
+    }
     sandbox = next(tool for tool in manifest["tools"] if tool["id"] == "sandbox")
     assert sandbox["policy"]["downscope"] == [
         {

@@ -6,6 +6,7 @@ server = "agentbricks"
 
 [[tools]]
 id = "sandbox"
+auth = "app"
 source = { kind = "sandbox", service = "system.ai.sandbox" }
 policy = { downscope = [
   { resource = "volume:__UC_VOLUME__", permission = "read_only" },
@@ -13,10 +14,12 @@ policy = { downscope = [
 
 [[tools]]
 id = "web_search"
+auth = "app"
 source = { kind = "mcp", service = "system.ai.web_search" }
 
 [[tools]]
 id = "agentbricks_uc_marker"
+auth = "app"
 source = { kind = "uc_function", function = "__UC_FUNCTION__" }
 
 [[tools]]
