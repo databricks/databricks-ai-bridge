@@ -25,7 +25,7 @@ from databricks.sdk.service.catalog import SecurableType, VolumeType
 from databricks.sdk.service.sql import ExecuteStatementRequestOnWaitTimeout, State, StatementState
 
 from harness.logs import log
-from harness.run import E2EError, now
+from harness.run import E2EError
 
 GrantTuple = tuple[str, str, str, str]
 
@@ -161,15 +161,6 @@ class Workspace:
 
     # Apps
 
-    def assert_app_absent(self, name: str) -> None:
-        try:
-            self.client.apps.get(name)
-        except NotFound:
-            return
-        except DatabricksError as exc:
-            raise E2EError(f"Could not verify App {name} is absent: {exc}") from exc
-        raise E2EError(f"App {name} already exists; refusing to deploy over it.")
-
     def app_logs(self, name: str, log_path: pathlib.Path) -> pathlib.Path | None:
         """Write the App's recent logs to ``log_path``; the SDK has no Apps log API."""
         argv = ["databricks", "apps", "logs", name, "--tail-lines", "200"]
@@ -225,26 +216,6 @@ class Workspace:
         return str(experiment.experiment_id)
 
     # Workarounds for the end-of-run cleanup: what `agentbricks deployments delete` leaves behind.
-
-    def wait_until_app_gone(self, name: str, timeout: float = 1200) -> None:
-        """Block until the App is gone; `apps delete` returns while it is still deleting."""
-        started = time.monotonic()
-        next_tick = 0.0
-        while True:
-            try:
-                self.client.apps.get(name)
-            except NotFound:
-                log(f"tick {now():%H:%M} | delete-{name} | absent")
-                return
-            except DatabricksError as exc:
-                raise E2EError(f"Could not verify deletion of App {name!r}: {exc}") from exc
-            elapsed = time.monotonic() - started
-            if elapsed >= timeout:
-                raise E2EError(f"App {name!r} still existed {timeout:.0f}s after delete returned.")
-            if elapsed >= next_tick:
-                log(f"tick {now():%H:%M} | delete-{name} | deleting")
-                next_tick += 60
-            time.sleep(15)
 
     def runtime_store(self, app_name: str) -> dict[str, Any]:
         return cast(

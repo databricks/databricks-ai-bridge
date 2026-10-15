@@ -26,7 +26,13 @@ from typing import Any
 
 import pytest
 from harness.agentbricks_cli import AgentbricksCli
-from harness.cleanup import Cleanup, app_identity, delete_run_leftovers, record_app_identity
+from harness.cleanup import (
+    Cleanup,
+    app_exists,
+    app_identity,
+    delete_run_leftovers,
+    record_app_identity,
+)
 from harness.logs import log, log_command
 from harness.project import Project
 from harness.run import RUN_ID_PATTERN, E2EError, RunConfig, run_output_dir
@@ -243,7 +249,8 @@ def project(
     workspace = target_workspace.client
     if workspace is not None:
         # The test deletes whatever App has this name, so it must not belong to anyone else.
-        workspace.assert_app_absent(project.app_name)
+        if app_exists(agentbricks_cli, project.app_name):
+            raise E2EError(f"App {project.app_name} already exists; refusing to deploy over it.")
     yield project
     failed = request.node.nodeid in _failed_tests
     if workspace is not None:
