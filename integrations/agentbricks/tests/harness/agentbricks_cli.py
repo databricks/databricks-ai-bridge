@@ -1,7 +1,8 @@
-"""The ``agentbricks`` CLI and the agents it produces: the system under test.
+"""The ``agentbricks`` CLI: the system under test.
 
-Every CLI step is a real ``agentbricks`` subprocess, written as the command a developer would type
-(``cli.run("tools add ...")``), so a regression in the CLI fails the test that makes it. Nothing in
+Every test step is a real ``agentbricks`` subprocess, written as the command a developer would type
+(``cli.run("tools add ...")``), so a regression in the CLI fails the test that makes it. That
+includes reaching a running agent: tests call it with ``agentbricks endpoint invoke``. Nothing in
 this module knows about any particular suite or deletes anything: the ``project`` fixture does.
 """
 
@@ -19,14 +20,17 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from collections.abc import Iterator, Mapping
 
-from harness.logs import last_nonempty_line, log, log_command
+from harness.logs import last_lines, last_nonempty_line, log, log_command
 from harness.run import E2EError, RunConfig, now
 from harness.target import TargetWorkspace
 
-# The Apps gateway's answers while an App is not up, e.g. restarting after a redeploy.
-_GATEWAY_UNAVAILABLE = re.compile(r"HTTP 50[234]\b")
+# `endpoint invoke`'s error for a 5xx answer: the App restarting after a redeploy, a new App's
+# session store coming up, or a model call failing on the server.
+_SERVER_ERROR = re.compile(r"HTTP 5\d\d\b")
 
 
 @dataclasses.dataclass
@@ -36,6 +40,35 @@ class BackgroundCommand:
     label: str
     process: subprocess.Popen[str]
     log_path: pathlib.Path
+
+    def wait_until_serving(self, port: int, timeout: float = 1200) -> None:
+        """Block until something answers HTTP on ``port``; fails if the command exits first."""
+        started = time.monotonic()
+        next_tick = 60.0
+        while True:
+            if self.process.poll() is not None:
+                raise E2EError(
+                    f"{self.label} exited {self.process.returncode}: {last_lines(self.log_path, 30)}"
+                )
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5):
+                    return
+            except urllib.error.HTTPError as exc:
+                if exc.code < 500:
+                    return
+            except (urllib.error.URLError, TimeoutError):
+                pass
+            elapsed = time.monotonic() - started
+            if elapsed > timeout:
+                raise E2EError(
+                    f"{self.label} did not become reachable: {last_lines(self.log_path, 30)}"
+                )
+            if elapsed >= next_tick:
+                log(
+                    f"tick {now():%H:%M} | {self.label} | starting | {last_nonempty_line(self.log_path)}"
+                )
+                next_tick += 60
+            time.sleep(5)
 
 
 class AgentbricksCli:
@@ -59,12 +92,12 @@ class AgentbricksCli:
         *,
         timeout: float = 300,
         check: bool = True,
-        retry_unavailable: bool = False,
+        retry_server_errors: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         """Run ``agentbricks <command>`` to completion.
 
-        ``retry_unavailable`` retries only the Apps gateway's "App not up" answers (a staging App
-        can restart under the test); any other failure is the CLI's.
+        ``retry_server_errors`` retries an ``endpoint invoke`` the agent answered with a 5xx; any
+        other failure, including a 4xx, is the CLI's or the agent's and fails at once.
         """
         argv = self._argv(command)
         for attempt in range(1, 4):
@@ -72,12 +105,12 @@ class AgentbricksCli:
             output = result.stderr or result.stdout
             if (
                 result.returncode == 0
-                or not retry_unavailable
+                or not retry_server_errors
                 or attempt == 3
-                or _GATEWAY_UNAVAILABLE.search(output) is None
+                or _SERVER_ERROR.search(output) is None
             ):
                 break
-            log(f"attempt {attempt}/3 | {command.split()[0]} | App unavailable; retrying")
+            log(f"attempt {attempt}/3 | {command.split()[0]} | server error; retrying")
             time.sleep(15)
         if check and result.returncode != 0:
             raise E2EError(f"Command failed ({result.returncode}): {shlex.join(argv)}\n{output}")

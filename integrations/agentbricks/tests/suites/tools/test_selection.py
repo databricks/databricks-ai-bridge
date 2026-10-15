@@ -6,11 +6,19 @@ the tool surface, route to the wrong one, so this is the one test that binds the
 
 from __future__ import annotations
 
-from harness.agent_endpoint import AgentEndpoint
+import json
+
 from harness.agentbricks_cli import AgentbricksCli
 from harness.project import Project
 from harness.workspace import Workspace
-from tool_definitions import PYTHON_MARKER, UC_MARKER, Tool, assert_declared, excerpt
+from tool_definitions import (
+    PYTHON_MARKER,
+    UC_MARKER,
+    Tool,
+    assert_declared,
+    excerpt,
+    invocation_json,
+)
 from uc_objects import UcFunction
 
 # Names the Unity Catalog function without its tool id, and the Python helper only to exclude it.
@@ -40,10 +48,15 @@ def test_selects_uc_function_not_python_marker(
     else:
         project.write_manifest(tools)
     agentbricks_cli.run(f"deploy {app} --source {project.path}", timeout=2400)
-    endpoint = AgentEndpoint.deployed(workspace_client, app)
+    deployment = json.loads(agentbricks_cli.run(f"--output json deployments get {app}").stdout)
     # The nested function is deliberately outside Agent Bricks' grants.
-    workspace_client.grant_transitive(app, uc_function.nested_function)
-    serialized = endpoint.invoke(PROMPT, "deploy-selection")
+    workspace_client.grant_transitive(deployment, uc_function.nested_function)
+    serialized = agentbricks_cli.run(
+        f"--output json endpoint invoke {app} --path /api/invocations "
+        f"--json {invocation_json(PROMPT)}",
+        timeout=360,
+        retry_server_errors=True,
+    ).stdout
 
     assert UC_MARKER in serialized, f"The UC function tool was not called: {excerpt(serialized)}"
     assert PYTHON_MARKER not in serialized, (

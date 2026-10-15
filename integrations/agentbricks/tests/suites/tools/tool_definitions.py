@@ -8,8 +8,8 @@ import shlex
 import uuid
 from collections.abc import Callable, Mapping
 
-from harness.agent_endpoint import AgentEndpoint
 from harness.project import Project
+from harness.run import E2E_MODEL
 from harness.workspace import GrantTuple
 from uc_objects import UcFunction
 
@@ -217,20 +217,13 @@ def assert_declared(project: Project, tool: Tool) -> None:
         )
 
 
-def invoke_and_check(endpoint: AgentEndpoint, tool: Tool) -> None:
-    tool.check(endpoint.invoke(tool.prompt, f"{endpoint.runtime}-{tool.name}"))
-
-
 def invocation_json(prompt: str) -> str:
     """A shell-quoted /api/invocations body for `agentbricks endpoint invoke --json`."""
     invocation_id = str(uuid.uuid4())
     body = {
         "id": invocation_id,
+        # session_id is a top-level invocation field; the adapter rejects it nested in input.
         "session_id": invocation_id,
-        "input": [{"role": "user", "content": prompt}],
+        "input": {"model": E2E_MODEL, "messages": [{"role": "user", "content": prompt}]},
     }
     return shlex.quote(json.dumps(body))
-
-
-def assert_replied_ok(output: str) -> None:
-    assert "ok" in output.lower(), f"endpoint invoke returned no reply: {output[:500]}"

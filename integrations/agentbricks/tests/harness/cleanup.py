@@ -2,8 +2,8 @@
 
 Two entry points, both safe to repeat (a missing resource counts as deleted):
 
-- ``delete_app_resources``: everything one App's deploy created. The ``agentbricks_cli`` fixture
-  calls it for each project when its test ends.
+- ``delete_app_resources``: everything one App's deploy created. The ``project`` fixture calls
+  it when its test ends.
 - ``delete_run_leftovers``: whatever a crashed test or a failed teardown left. It runs once after
   every live run, and on its own with ``pytest tests/suites --cleanup-only --run-id <id>`` after a
   run that was killed before it could. It finds resources by the run's name prefix (Apps, source
@@ -17,18 +17,16 @@ import dataclasses
 import json
 import pathlib
 import re
-import subprocess
 from collections.abc import Callable, Collection
 from typing import Any
 
+from harness.agentbricks_cli import AgentbricksCli
 from harness.logs import log
 from harness.run import APP_PREFIX, E2EError, project_prefix, scratch_schema_prefix
 from harness.workspace import AppIdentity, Workspace
 
 _APPS_RECORD = "apps.jsonl"
-_STORE_MISSING = re.compile(
-    r"NOT_FOUND|RESOURCE_DOES_NOT_EXIST|does not exist|not found", re.IGNORECASE
-)
+_MISSING = re.compile(r"NOT_FOUND|RESOURCE_DOES_NOT_EXIST|does not exist|not found", re.IGNORECASE)
 
 
 # Identities recorded by per-test cleanup
@@ -104,22 +102,21 @@ def delete_lakebase_leftovers(
 
 
 def delete_app_resources(
+    cli: AgentbricksCli,
     workspace: Workspace,
     name: str,
     *,
-    delete_store: Callable[[str, str], subprocess.CompletedProcess[str]] | None = None,
     memory_store: str | None = None,
     session_store: str | None = None,
-    has_app: bool = True,
-    runtime_store: bool = False,
     identity: AppIdentity | None = None,
 ) -> list[str]:
-    """Delete one project's stores and, if it has an App, everything the App's deploy created.
+    """Delete one project's stores and everything its deploy created, as far as any of it exists.
 
-    ``delete_store(kind, store)`` is the agentbricks CLI's store delete, which has no SDK surface.
-    ``identity`` is what was recorded earlier; it fills in whatever the live lookup misses.
-    Every step runs regardless of earlier failures except those that need the App gone. Returns a
-    description of each failure; an empty list means everything was deleted.
+    The App, its Runtime Store and the stores go through the CLI. The rest are workarounds for what
+    no public command deletes yet: the synced source folder, and the Lakebase databases and roles a
+    failed deploy leaves. ``identity`` is what was recorded earlier; it fills in whatever the live
+    lookup misses. Every step runs regardless of earlier failures. Returns a description of each
+    failure; an empty list means everything was deleted.
     """
     failures: list[str] = []
 
@@ -131,29 +128,31 @@ def delete_app_resources(
             return False
         return True
 
-    def delete_cli_store(kind: str, store: str) -> None:
-        assert delete_store is not None
-        result = delete_store(kind, store)
+    def run(command: str) -> None:
+        result = cli.run(command, timeout=1200, check=False)
         output = (result.stderr or result.stdout).strip()
         # A store the test declared but never deployed was never created.
-        if result.returncode != 0 and not _STORE_MISSING.search(output):
+        if result.returncode != 0 and not _MISSING.search(output):
             raise E2EError(output)
 
     # Read before any delete: the principal and branch come from the App and its Runtime Store.
-    known = (identity or AppIdentity()).merged(
-        workspace.app_identity(name) if has_app else AppIdentity()
-    )
-    for kind, store in (("memory", memory_store), ("sessions", session_store)):
-        if store and delete_store:
-            attempt(f"{kind} store {store}", delete_cli_store, kind, store)
-    if not has_app:
+    known = (identity or AppIdentity()).merged(workspace.app_identity(name))
+    if memory_store:
+        attempt(f"memory store {memory_store}", run, f"memory stores delete {memory_store} --yes")
+    if session_store:
+        attempt(
+            f"session store {session_store}", run, f"sessions stores delete {session_store} --yes"
+        )
+    if known == AppIdentity():
         return failures
 
     attempt(f"catalog grant {name}", workspace.revoke_catalog_grant, name)
-    if runtime_store:
+    if known.service_principal:
+        # Deletes the Runtime Store first, while the App's principal still resolves, then the App.
+        attempt(f"deployment {name}", run, f"deployments delete {name} --yes")
+    else:
         attempt(f"runtime store {name}", workspace.delete_runtime_store, name)
-    app_deleted = attempt(f"app {name}", workspace.delete_app, name)
-    if app_deleted:
+    if attempt(f"app {name}", workspace.wait_until_app_gone, name):
         attempt(f"deployment source {name}", workspace.delete_deployment_source, name)
     if known.branch:
         failures += delete_lakebase_leftovers(
@@ -169,12 +168,12 @@ def delete_app_resources(
 
 
 def delete_run_leftovers(
-    workspace: Workspace, run_id: str, output: pathlib.Path, catalog: str
+    cli: AgentbricksCli, workspace: Workspace, run_id: str, output: pathlib.Path, catalog: str
 ) -> list[str]:
     """Delete what a whole run left behind; returns a description of each failure."""
     failures: list[str] = []
     steps = (
-        ("leaked Apps", lambda: _delete_leaked_apps(workspace, run_id, output)),
+        ("leaked Apps", lambda: _delete_leaked_apps(cli, workspace, run_id, output)),
         ("leaked Lakebase databases and roles", lambda: _delete_leaked_lakebase(workspace, output)),
         ("leaked source folders", lambda: _delete_leaked_deployment_sources(workspace, run_id)),
         ("leaked schemas", lambda: _delete_leaked_schemas(workspace, catalog, run_id)),
@@ -191,17 +190,19 @@ def _app_prefix(run_id: str) -> str:
     return f"{APP_PREFIX}{project_prefix(run_id)}"
 
 
-def _delete_leaked_apps(workspace: Workspace, run_id: str, output: pathlib.Path) -> list[str]:
+def _delete_leaked_apps(
+    cli: AgentbricksCli, workspace: Workspace, run_id: str, output: pathlib.Path
+) -> list[str]:
     """Delete Apps whose per-test cleanup failed or never ran, found by the run's name prefix."""
     prefix = _app_prefix(run_id)
     recorded = recorded_app_identities(output)
+    deployments = json.loads(cli.run("--output json deployments list").stdout or "[]")
     failures: list[str] = []
-    for app in list(workspace.client.apps.list()):
-        if app.name and app.name.startswith(prefix):
-            log(f"deleting leaked App {app.name}")
-            failures += delete_app_resources(
-                workspace, app.name, runtime_store=True, identity=recorded.get(app.name)
-            )
+    for deployment in deployments:
+        name = str(deployment.get("name") or "")
+        if name.startswith(prefix):
+            log(f"deleting leaked App {name}")
+            failures += delete_app_resources(cli, workspace, name, identity=recorded.get(name))
     return failures
 
 

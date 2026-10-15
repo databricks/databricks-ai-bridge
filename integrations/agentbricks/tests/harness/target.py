@@ -69,7 +69,6 @@ class LiveWorkspace:
         if self._client is None:
             self._client = Workspace(
                 self.profile,
-                app_auth_profile=self._run_config.app_auth_profile,
                 warehouse_id=self._run_config.warehouse_id,
                 preprovisioned_app_catalog_access=self._run_config.preprovisioned_app_catalog_access,
             )

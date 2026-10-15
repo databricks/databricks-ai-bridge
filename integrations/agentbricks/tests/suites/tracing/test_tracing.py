@@ -5,11 +5,13 @@ Real case still to write: an invocation exports a trace to the experiment.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from harness.agentbricks_cli import AgentbricksCli
 from harness.project import Project
 from harness.run import TOOL_RESOURCE_PREFIX
-from harness.workspace import Workspace
+from harness.workspace import Workspace, non_tool_resources
 
 
 def test_tracing_experiment_bound(
@@ -20,11 +22,12 @@ def test_tracing_experiment_bound(
     experiment_name = project.manifest().get("tracing", {}).get("experiment_name")
     agentbricks_cli.run(f"deploy {project.app_name} --source {project.path}", timeout=2400)
     assert experiment_name, "agent.toml binds no tracing experiment"
+    deployment = json.loads(
+        agentbricks_cli.run(f"--output json deployments get {project.app_name}").stdout
+    )
 
     # Deploy attaches the experiment as an App resource that Agent Bricks does not own.
-    experiments = [
-        r for r in workspace_client.non_tool_resources(project.app_name) if "experiment" in r
-    ]
+    experiments = [r for r in non_tool_resources(deployment) if "experiment" in r]
     assert experiments, "No experiment App resource among the non-tool resources"
     assert not any(r["name"].startswith(TOOL_RESOURCE_PREFIX) for r in experiments)
     expected_id = workspace_client.experiment_id(experiment_name)

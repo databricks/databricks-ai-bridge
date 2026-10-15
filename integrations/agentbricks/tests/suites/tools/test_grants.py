@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
+
 from harness.agentbricks_cli import AgentbricksCli
 from harness.project import Project
 from harness.run import TOOL_RESOURCE_PREFIX
-from harness.workspace import Workspace
+from harness.workspace import Workspace, non_tool_resources
 from tool_definitions import assert_declared, uc_function_tool
 from uc_objects import UcFunction
 
@@ -29,17 +31,18 @@ def test_grants(
     else:
         project.write_manifest([tool])
     agentbricks_cli.run(f"deploy {app} --source {project.path}", timeout=2400)
+    deployment = json.loads(agentbricks_cli.run(f"--output json deployments get {app}").stdout)
 
     with subtests.test(check="transitive-function-not-auto-granted"):
         # Raises if the hidden nested function is already granted or listed as an App resource.
-        workspace_client.transitive_state(app, uc_function.nested_function)
+        workspace_client.transitive_state(deployment, uc_function.nested_function)
 
     with subtests.test(check="manual-grant-is-direct-and-effective"):
-        granted = workspace_client.grant_transitive(app, uc_function.nested_function)
+        granted = workspace_client.grant_transitive(deployment, uc_function.nested_function)
         assert "EXECUTE" in granted["direct_privileges"]
         assert "EXECUTE" in granted["effective_privileges"]
 
     with subtests.test(check="non-tool-resource-preserved"):
-        unrelated = workspace_client.non_tool_resources(app)
+        unrelated = non_tool_resources(deployment)
         assert unrelated, "No non-tool App resource; the tracing experiment should be attached"
         assert not any(r["name"].startswith(TOOL_RESOURCE_PREFIX) for r in unrelated)

@@ -52,7 +52,6 @@ class RunConfig:
 
     run_id: str
     output: pathlib.Path
-    app_auth_profile: str | None
     # Operator override; None lets the workspace pick the first running warehouse.
     warehouse_id: str | None
     preprovisioned_app_catalog_access: bool

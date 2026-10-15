@@ -63,10 +63,6 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="Databricks CLI profile; default is ambient credentials (DATABRICKS_CONFIG_PROFILE).",
     )
     group.addoption(
-        "--app-auth-profile",
-        help="OAuth profile for deployed App /api calls; defaults to --databricks-profile.",
-    )
-    group.addoption(
         "--catalog",
         default="main",
         help="Existing catalog for temporary test schemas (default: main).",
@@ -151,7 +147,6 @@ def _base_run_config(config: pytest.Config) -> RunConfig:
     run = RunConfig(
         run_id=run_id,
         output=output,
-        app_auth_profile=option("app_auth_profile") or option("databricks_profile"),
         warehouse_id=option("warehouse_id"),
         preprovisioned_app_catalog_access=bool(option("preprovisioned_app_catalog_access")),
         bridge_sha=option("bridge_sha"),
@@ -278,16 +273,11 @@ def _delete_project(
     memory_store = project.declared_store("memory")
     try:
         failures = delete_app_resources(
+            cli,
             workspace,
             name,
-            delete_store=lambda kind, store: cli.run(
-                f"{kind} stores delete {store} --yes", timeout=600, check=False
-            ),
             memory_store=f"memory-stores/{memory_store}" if memory_store else None,
             session_store=project.declared_store("session"),
-            has_app=deployed,
-            # Every managed deploy creates a Runtime Store, with or without memory/session stores.
-            runtime_store=deployed,
             identity=identity,
         )
     except Exception as exc:
@@ -317,7 +307,8 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
             log("Resources retained (--keep-resources); skipping leftover cleanup.")
             return
     try:
-        workspace = _build_target_workspace(config).client
+        target_workspace = _build_target_workspace(config)
+        workspace = target_workspace.client
     except TargetWorkspaceUnavailable:
         workspace = None
     if workspace is None:
@@ -326,7 +317,10 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
         return
     if cleanup_only and not (run.output / "apps.jsonl").exists():
         log(f"no apps.jsonl in {run.output}; Lakebase leftovers of deleted Apps can't be found")
-    failures = delete_run_leftovers(workspace, run.run_id, run.output, config.getoption("catalog"))
+    cli = AgentbricksCli(target_workspace, run, "cleanup")
+    failures = delete_run_leftovers(
+        cli, workspace, run.run_id, run.output, config.getoption("catalog")
+    )
     for failure in failures:
         log(f"cleanup warning | {failure}")
     if failures:

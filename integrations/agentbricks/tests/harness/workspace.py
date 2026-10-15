@@ -1,8 +1,10 @@
-"""Databricks SDK helpers for the E2E suites and fixtures: the workspace, which is not under test.
+"""Databricks SDK helpers for what is not under test: the prerequisites the suites need, and checks
+of results the CLI has no command to show.
 
-``Workspace`` holds one operation per method (create, read, delete one thing); deciding what to
-delete and in which order is ``harness.cleanup``. Everything goes through the SDK except
-``app_logs``, since the SDK has no Apps log API.
+Tests drive and inspect the agent through the ``agentbricks`` CLI. This module is for the rest:
+UC objects, the warehouse and Genie space a tool needs, UC privilege checks, and, under
+"Workarounds", the cleanup no public command does yet. ``Workspace`` holds one operation per
+method; deciding what to delete and in which order is ``harness.cleanup``.
 """
 
 from __future__ import annotations
@@ -53,54 +55,17 @@ class Workspace:
         self,
         profile: str | None,
         *,
-        app_auth_profile: str | None = None,
         warehouse_id: str | None = None,
         preprovisioned_app_catalog_access: bool = False,
     ):
         self.profile = profile
-        self.app_auth_profile = app_auth_profile or profile
         self.warehouse_id = warehouse_id
         self.preprovisioned_app_catalog_access = preprovisioned_app_catalog_access
         self.client = WorkspaceClient(profile=profile)
-        self._app_auth_client: WorkspaceClient | None = None
-        self._app_auth_checked = False
         self._warehouse_started = False
         self._user_name: str | None = None
         # App name -> (catalog, principal) of each USE CATALOG this suite granted, for cleanup.
         self._catalog_grants: dict[str, tuple[str, str]] = {}
-
-    # App auth: Databricks Apps /api routes need OAuth, so a PAT is rejected.
-
-    def _app_auth_label(self) -> str:
-        return (
-            f"App auth profile {self.app_auth_profile!r}"
-            if self.app_auth_profile
-            else "ambient environment credentials"
-        )
-
-    def _app_client(self) -> WorkspaceClient:
-        if self._app_auth_client is None:
-            self._app_auth_client = WorkspaceClient(profile=self.app_auth_profile)
-        return self._app_auth_client
-
-    def check_app_auth(self) -> None:
-        if self._app_auth_checked:
-            return
-        if self._app_client().config.auth_type == "pat":
-            raise E2EError(
-                f"{self._app_auth_label()} uses a PAT. "
-                "Databricks Apps /api routes require OAuth; run `databricks auth login` "
-                "for a profile on the same workspace."
-            )
-        self._app_auth_checked = True
-
-    @property
-    def app_headers(self) -> dict[str, str]:
-        # Resolved per call so OAuth tokens refresh during a long run.
-        authorization = self._app_client().config.authenticate().get("Authorization")
-        if not authorization:
-            raise E2EError(f"Could not resolve credentials from {self._app_auth_label()}.")
-        return {"Authorization": authorization}
 
     # Existing resources the suite depends on
 
@@ -215,23 +180,6 @@ class Workspace:
             raise E2EError(f"Could not verify App {name} is absent: {exc}") from exc
         raise E2EError(f"App {name} already exists; refusing to deploy over it.")
 
-    def wait_for_app(self, name: str) -> dict[str, Any]:
-        """The App once it is ACTIVE with a URL."""
-        started = time.monotonic()
-        next_tick = 0.0
-        while time.monotonic() - started < 1200:
-            app = self.app(name)
-            compute = app.get("compute_status", {})
-            state = compute.get("state") if isinstance(compute, dict) else None
-            if state == "ACTIVE" and app.get("url"):
-                return app
-            elapsed = time.monotonic() - started
-            if elapsed >= next_tick:
-                log(f"tick {now():%H:%M} | app-{name} | {state or 'UNKNOWN'}")
-                next_tick += 60
-            time.sleep(15)
-        raise E2EError(f"App {name} did not become ACTIVE.")
-
     def app_logs(self, name: str, log_path: pathlib.Path) -> pathlib.Path | None:
         """Write the App's recent logs to ``log_path``; the SDK has no Apps log API."""
         argv = ["databricks", "apps", "logs", name, "--tail-lines", "200"]
@@ -253,20 +201,19 @@ class Workspace:
 
     # Grants
 
-    def granted(self, app_name: str, grant: GrantTuple) -> bool:
-        """Whether Agent Bricks granted the App ``grant``, as (kind, name, type, permission)."""
-        return grant in app_resource_tuples(tool_resources(self.app(app_name)))
-
-    def wait_until_effective(self, app_name: str, grant: GrantTuple, timeout: float = 120) -> float:
+    def wait_until_effective(
+        self, deployment: dict[str, Any], grant: GrantTuple, timeout: float = 120
+    ) -> float:
         """Wait until a UC ``grant`` deploy added is effective for the App; returns the seconds waited.
 
-        Deploy reconciles the App's UC resources before returning, but the privilege can become
-        effective for its principal a little later; a tool called in between is denied.
+        ``deployment`` is ``agentbricks deployments get --output json``. Deploy reconciles the App's
+        UC resources before returning, but the privilege can become effective for its principal a
+        little later; a tool called in between is denied.
         """
         kind, full_name, securable_type, privilege = grant
         if kind != "uc_securable":
             return 0.0
-        principal = self._principal(self.app(app_name))
+        principal = _principal(deployment)
         started = time.monotonic()
         while True:
             held = effective_privileges(
@@ -276,12 +223,10 @@ class Workspace:
                 return time.monotonic() - started
             if time.monotonic() - started > timeout:
                 raise E2EError(
-                    f"{privilege} on {full_name} not effective for {app_name} after {timeout:.0f}s: {held}"
+                    f"{privilege} on {full_name} not effective for {deployment.get('name')} "
+                    f"after {timeout:.0f}s: {held}"
                 )
             time.sleep(5)
-
-    def granted_tuples(self, app_name: str) -> set[GrantTuple]:
-        return app_resource_tuples(tool_resources(self.app(app_name)))
 
     def experiment_id(self, name: str) -> str:
         experiment = self.client.experiments.get_by_name(name).experiment
@@ -289,13 +234,9 @@ class Workspace:
             raise E2EError(f"Experiment {name!r} does not exist.")
         return str(experiment.experiment_id)
 
-    def non_tool_resources(self, app_name: str) -> list[dict[str, Any]]:
-        return non_tool_resources(self.app(app_name))
-
-    def transitive_state(self, app_name: str, function: str) -> dict[str, Any]:
+    def transitive_state(self, deployment: dict[str, Any], function: str) -> dict[str, Any]:
         """The App principal's privileges on a nested function before any manual grant."""
-        app = self.app(app_name)
-        principal = self._principal(app)
+        principal = _principal(deployment)
         direct = direct_privileges(self.client, SecurableType.FUNCTION, function, principal)
         if "EXECUTE" in direct:
             raise E2EError(
@@ -309,7 +250,7 @@ class Workspace:
             )
         if any(
             resource.get("uc_securable", {}).get("securable_full_name") == function
-            for resource in tool_resources(app)
+            for resource in tool_resources(deployment)
         ):
             raise E2EError("The transitive function appeared in Agent Bricks-owned Apps resources.")
         return {
@@ -330,9 +271,10 @@ class Workspace:
         )
         del self._catalog_grants[app_name]
 
-    def grant_transitive(self, app_name: str, function: str) -> dict[str, Any]:
+    def grant_transitive(self, deployment: dict[str, Any], function: str) -> dict[str, Any]:
         """Grant the App principal EXECUTE on a nested function and confirm it is direct and effective."""
-        principal = self._principal(self.app(app_name))
+        app_name = str(deployment.get("name"))
+        principal = _principal(deployment)
         catalog, schema, function_name = function.split(".")
         quoted_principal = f"`{principal.replace('`', '``')}`"
         statements = []
@@ -368,24 +310,11 @@ class Workspace:
             "effective_privileges": effective,
         }
 
-    @staticmethod
-    def _principal(app: dict[str, Any]) -> str:
-        principal = app.get("service_principal_client_id")
-        if not principal:
-            raise E2EError(f"App response has no service_principal_client_id: {app}")
-        return str(principal)
+    # Workarounds: cleanup that no public command does yet. `agentbricks deployments delete`
+    # removes the App and its Runtime Store; these cover what it leaves behind.
 
-    # Cleanup
-
-    def delete_app(self, name: str) -> None:
-        """Delete the App; a missing App counts as deleted."""
-        try:
-            self.client.apps.delete(name)
-        except NotFound:
-            return
-        self._wait_for_app_deleted(name)
-
-    def _wait_for_app_deleted(self, name: str, timeout: float = 1200) -> None:
+    def wait_until_app_gone(self, name: str, timeout: float = 1200) -> None:
+        """Block until the App is gone; `apps delete` returns while it is still deleting."""
         started = time.monotonic()
         next_tick = 0.0
         while True:
@@ -411,7 +340,10 @@ class Workspace:
         )
 
     def delete_runtime_store(self, app_name: str) -> None:
-        """Delete the deploy-created Runtime Store; a missing store counts as deleted."""
+        """Delete a Runtime Store whose App is gone, which `deployments delete` cannot reach.
+
+        A missing store counts as deleted.
+        """
         try:
             self.client.api_client.do("DELETE", f"/api/2.0/agents/runtime-stores/{app_name}")
         except NotFound:
@@ -535,7 +467,23 @@ def _wait(operation: Any) -> None:
         wait()
 
 
-# Grant helpers
+# Reading `agentbricks deployments get --output json`
+
+
+def _principal(deployment: dict[str, Any]) -> str:
+    principal = deployment.get("service_principal_client_id")
+    if not principal:
+        raise E2EError(f"Deployment has no service_principal_client_id: {deployment}")
+    return str(principal)
+
+
+def granted(deployment: dict[str, Any], grant: GrantTuple) -> bool:
+    """Whether deploy attached ``grant``, as (kind, name, type, permission), to the App."""
+    return grant in granted_tuples(deployment)
+
+
+def granted_tuples(deployment: dict[str, Any]) -> set[GrantTuple]:
+    return app_resource_tuples(tool_resources(deployment))
 
 
 def _split_resources(app: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
