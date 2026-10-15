@@ -22,7 +22,8 @@ pip install databricks-agentbricks
 
 The `databricks-agentbricks` distribution provides the `agentbricks` command and AgentKit SDK.
 
-See [Installation](README.md#installation) for installation details and shell completion.
+See [Installation](README.md#installation) for installation details and
+[Commands](README.md#commands) for shell completion.
 
 ## Authentication
 
@@ -1362,6 +1363,7 @@ Invoke arbitrary HTTP endpoints.
 #### `agentbricks endpoint invoke`
 
 Send one HTTP request to a Databricks App or arbitrary URL.
+Invoking a deployed App requires an OAuth-authenticated profile; PAT profiles are rejected.
 
 ```
 agentbricks endpoint invoke [APP] [options]
