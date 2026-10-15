@@ -572,7 +572,7 @@ def test_configure_routes_openai_client_to_workspace(monkeypatch):
         "workspace_headers",
         lambda: {"X-Databricks-Org-Id": "123"},
     )
-    monkeypatch.setattr(agent_module, "AsyncDatabricksOpenAI", client)
+    monkeypatch.setattr(agent_module, "ClaudeCachingOpenAI", client)
     monkeypatch.setattr(agent_module, "configure_tracing", lambda: None)
     monkeypatch.setattr(agents, "set_default_openai_client", set_client)
     monkeypatch.setattr(agents, "set_default_openai_api", set_api)
@@ -583,6 +583,7 @@ def test_configure_routes_openai_client_to_workspace(monkeypatch):
         workspace_client=workspace,
         default_headers={"X-Databricks-Org-Id": "123"},
         use_ai_gateway=True,
+        cache_policy="auto",
     )
     set_client.assert_called_once_with(created)
     set_api.assert_called_once_with("chat_completions")

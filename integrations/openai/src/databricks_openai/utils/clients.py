@@ -1,5 +1,5 @@
 import os
-from typing import Any, Generator
+from typing import Any, Generator, TypeVar
 
 from databricks.sdk import WorkspaceClient
 from httpx import AsyncClient, Auth, Client, Request, Response
@@ -8,6 +8,10 @@ from openai.resources.chat import AsyncChat, Chat
 from openai.resources.chat.completions import AsyncCompletions, Completions
 from openai.resources.responses import AsyncResponses, Responses
 from typing_extensions import override
+
+from databricks_openai.utils.cache_usage import normalize_cache_usage
+
+_ResponseT = TypeVar("_ResponseT")
 
 # Prefix for routing requests to Databricks Apps
 _APPS_ENDPOINT_PREFIX = "apps/"
@@ -413,6 +417,13 @@ class DatabricksOpenAI(OpenAI):
             **kwargs,
         )
 
+    def _process_response_data(
+        self, *, data: object, cast_to: type[_ResponseT], response: Response
+    ) -> _ResponseT:
+        return super()._process_response_data(
+            data=normalize_cache_usage(data, cast_to), cast_to=cast_to, response=response
+        )
+
     @override
     @property
     def chat(self) -> Chat:
@@ -579,6 +590,13 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
             api_key=_get_openai_api_key(),
             http_client=_get_authorized_async_http_client(workspace_client, follow_redirects),
             **kwargs,
+        )
+
+    def _process_response_data(
+        self, *, data: object, cast_to: type[_ResponseT], response: Response
+    ) -> _ResponseT:
+        return super()._process_response_data(
+            data=normalize_cache_usage(data, cast_to), cast_to=cast_to, response=response
         )
 
     @property

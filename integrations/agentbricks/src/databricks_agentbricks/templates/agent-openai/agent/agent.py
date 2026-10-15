@@ -9,7 +9,8 @@ from uuid import uuid4
 from agents import Agent, Runner, RunResultStreaming, RunState
 from agents.mcp import MCPServerManager
 from databricks.sdk import WorkspaceClient
-from databricks_openai import AsyncDatabricksOpenAI
+
+from databricks_agentkit.claude import ClaudeCachingOpenAI
 
 from agent.mcps import build_mcp_servers
 
@@ -51,7 +52,8 @@ def configure() -> None:
     # use_ai_gateway routes to the Unity Catalog AI Gateway (`<host>/ai-gateway/mlflow/v1`), so
     # `MODEL` is a `system.ai.*` model name rather than a serving-endpoint name.
     set_default_openai_client(
-        AsyncDatabricksOpenAI(
+        ClaudeCachingOpenAI(
+            cache_policy=os.getenv("DATABRICKS_CLAUDE_PROMPT_CACHING", "auto"),
             workspace_client=workspace_client(),
             default_headers=workspace_headers() or None,
             use_ai_gateway=True,

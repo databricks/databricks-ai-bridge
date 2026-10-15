@@ -631,54 +631,37 @@ class ChatDatabricks(BaseChatModel):
 
     @staticmethod
     def _convert_completion_usage_to_usage_metadata(usage: CompletionUsage) -> UsageMetadata:
+        # Databricks prompt_tokens already includes cache reads and writes. Some GPT responses
+        # include native cache counters too, so merge details without identifying the provider.
+        result: UsageMetadata = {
+            "input_tokens": usage.prompt_tokens or 0,
+            "output_tokens": usage.completion_tokens or 0,
+            "total_tokens": usage.total_tokens or 0,
+        }
+        input_token_details = None
         if usage.prompt_tokens_details is not None:
-            # Most likely an OpenAI Model
-            input_token_details = None
-            if usage.prompt_tokens_details:
-                input_token_details = InputTokenDetails(
-                    audio=usage.prompt_tokens_details.audio_tokens or 0,
-                    cache_read=usage.prompt_tokens_details.cached_tokens or 0,
-                )
-
-            output_token_details = None
-            if usage.completion_tokens_details is not None:
-                output_token_details = OutputTokenDetails(
-                    reasoning=usage.completion_tokens_details.reasoning_tokens or 0,
-                    audio=usage.completion_tokens_details.audio_tokens or 0,
-                )
-
-            result: UsageMetadata = {
-                "input_tokens": usage.prompt_tokens or 0,
-                "output_tokens": usage.completion_tokens or 0,
-                "total_tokens": usage.total_tokens or 0,
-            }
-            if input_token_details is not None:
-                result["input_token_details"] = input_token_details
-            if output_token_details is not None:
-                result["output_token_details"] = output_token_details
-            return result
-        elif getattr(usage, "cache_read_input_tokens", None) is not None:
-            # Most likely Claude Model
-            cache_read_input_tokens = getattr(usage, "cache_read_input_tokens", None) or 0
-            cache_creation_input_tokens = getattr(usage, "cache_creation_input_tokens", None) or 0
-
-            usage_metadata = UsageMetadata(
-                input_tokens=(usage.prompt_tokens or 0)
-                + cache_read_input_tokens
-                + cache_creation_input_tokens,
-                output_tokens=usage.completion_tokens or 0,
-                total_tokens=usage.total_tokens or 0,
-                input_token_details=InputTokenDetails(
-                    cache_read=cache_read_input_tokens, cache_creation=cache_creation_input_tokens
-                ),
+            input_token_details = InputTokenDetails(
+                audio=usage.prompt_tokens_details.audio_tokens or 0,
+                cache_read=usage.prompt_tokens_details.cached_tokens or 0,
             )
-            return usage_metadata
-        else:
-            return UsageMetadata(
-                input_tokens=usage.prompt_tokens or 0,
-                output_tokens=usage.completion_tokens or 0,
-                total_tokens=usage.total_tokens or 0,
+        if (
+            getattr(usage, "cache_read_input_tokens", None) is not None
+            or getattr(usage, "cache_creation_input_tokens", None) is not None
+        ):
+            if input_token_details is None:
+                input_token_details = InputTokenDetails()
+            input_token_details["cache_read"] = getattr(usage, "cache_read_input_tokens", None) or 0
+            input_token_details["cache_creation"] = (
+                getattr(usage, "cache_creation_input_tokens", None) or 0
             )
+        if input_token_details is not None:
+            result["input_token_details"] = input_token_details
+        if usage.completion_tokens_details is not None:
+            result["output_token_details"] = OutputTokenDetails(
+                reasoning=usage.completion_tokens_details.reasoning_tokens or 0,
+                audio=usage.completion_tokens_details.audio_tokens or 0,
+            )
+        return result
 
     @staticmethod
     def _convert_responses_usage_to_usage_metadata(usage: ResponseUsage) -> UsageMetadata:
@@ -939,8 +922,10 @@ class ChatDatabricks(BaseChatModel):
                         final_usage = usage  # store for usage chunk at end
                     # Use model_dump instead of manual dict reconstruction
                     chunk_delta_dict = chunk_delta.model_dump(exclude_unset=True)
+                    # Databricks streams cumulative usage on content chunks. Emit it only in
+                    # the final usage chunk so LangChain aggregation does not count it twice.
                     chunk_message = _convert_dict_to_message_chunk(
-                        chunk_delta_dict, first_chunk_role, usage=usage
+                        chunk_delta_dict, first_chunk_role
                     )
                     generation_info = {}
                     if choice.finish_reason:
@@ -1050,8 +1035,9 @@ class ChatDatabricks(BaseChatModel):
                         final_usage = usage  # store for usage chunk at end
                     # Use model_dump instead of manual dict reconstruction
                     chunk_delta_dict = chunk_delta.model_dump(exclude_unset=True)
+                    # Keep cumulative provider usage out of additive content chunks.
                     chunk_message = _convert_dict_to_message_chunk(
-                        chunk_delta_dict, first_chunk_role, usage=usage
+                        chunk_delta_dict, first_chunk_role
                     )
                     generation_info = {}
                     if choice.finish_reason:
@@ -1438,7 +1424,15 @@ def _convert_message_to_dict(message: BaseMessage) -> dict:
         content = message.content
         if isinstance(content, list):
             content = [
-                {"type": "text", "text": block["text"]}
+                {
+                    "type": "text",
+                    "text": block["text"],
+                    **(
+                        {"cache_control": block["cache_control"]}
+                        if "cache_control" in block
+                        else {}
+                    ),
+                }
                 if isinstance(block, dict)
                 and block.get("type") == "text"
                 and isinstance(block.get("text"), str)

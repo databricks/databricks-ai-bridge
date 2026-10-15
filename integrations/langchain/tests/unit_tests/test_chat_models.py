@@ -4,7 +4,7 @@ import json
 import time
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import mlflow  # noqa: F401
 import pytest
@@ -218,9 +218,17 @@ def test_chat_model_stream_custom_outputs(mock_client_delta, llm: ChatDatabricks
 
 
 def test_chat_model_stream_with_usage(llm: ChatDatabricks) -> None:
-    def _assert_usage(chunk, expected):
-        usage = chunk.usage_metadata
+    def _assert_stream(stream):
+        chunks = list(stream)
+        for chunk, expected in zip(chunks, _MOCK_STREAM_RESPONSE, strict=False):
+            assert chunk.content == expected["choices"][0]["delta"]["content"]
+            assert chunk.usage_metadata is None
+        usage_chunks = [chunk for chunk in chunks if chunk.usage_metadata is not None]
+        assert len(usage_chunks) == 1
+        assert usage_chunks[0].content == ""
+        usage = usage_chunks[0].usage_metadata
         assert usage is not None
+        expected = cast(dict[str, Any], _MOCK_STREAM_RESPONSE[-1])
         assert usage["input_tokens"] == expected["usage"]["prompt_tokens"]
         assert usage["output_tokens"] == expected["usage"]["completion_tokens"]
         assert usage["total_tokens"] == usage["input_tokens"] + usage["output_tokens"]
@@ -233,9 +241,7 @@ def test_chat_model_stream_with_usage(llm: ChatDatabricks) -> None:
         ],
         stream_usage=True,
     )
-    for chunk, expected in zip(res, _MOCK_STREAM_RESPONSE, strict=False):
-        assert chunk.content == expected["choices"][0]["delta"]["content"]
-        _assert_usage(chunk, expected)
+    _assert_stream(res)
 
     # Method 2: Pass stream_usage=True to the constructor
     llm_with_usage = ChatDatabricks(
@@ -248,9 +254,7 @@ def test_chat_model_stream_with_usage(llm: ChatDatabricks) -> None:
             {"role": "user", "content": "36939 * 8922.4"},
         ],
     )
-    for chunk, expected in zip(res, _MOCK_STREAM_RESPONSE, strict=False):
-        assert chunk.content == expected["choices"][0]["delta"]["content"]
-        _assert_usage(chunk, expected)
+    _assert_stream(res)
 
 
 def test_chat_model_stream_usage_chunk_emission():
@@ -779,6 +783,26 @@ def test_convert_tool_message_strips_text_block_metadata() -> None:
         "tool_call_id": "call_123",
     }
     assert tool_message.content == content
+
+
+def test_convert_tool_message_preserves_cache_control() -> None:
+    content = cast(
+        list[str | dict[Any, Any]],
+        [
+            {
+                "type": "text",
+                "text": "Result",
+                "id": "block-id",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+    )
+    message = ToolMessage(content=content, tool_call_id="call_1")
+    converted = _convert_message_to_dict(message)
+    assert converted["content"] == [
+        {"type": "text", "text": "Result", "cache_control": {"type": "ephemeral"}}
+    ]
+    assert message.content == content
 
 
 @pytest.mark.parametrize(
@@ -1756,6 +1780,91 @@ def _create_claude_completion_usage():
     return usage
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_mode", [False, True])
+async def test_stream_cumulative_cache_usage_is_counted_once(async_mode):
+    from openai.types.chat import ChatCompletionChunk
+    from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
+    from openai.types.chat.chat_completion_chunk import ChoiceDelta
+
+    usage = _create_claude_completion_usage()
+    chunks = [
+        ChatCompletionChunk(
+            id="test",
+            created=0,
+            model="claude",
+            object="chat.completion.chunk",
+            choices=[
+                ChunkChoice(
+                    index=0,
+                    delta=ChoiceDelta(role="assistant", content="Hello"),
+                    finish_reason=None,
+                )
+            ],
+            usage=usage,
+        ),
+        ChatCompletionChunk(
+            id="test",
+            created=0,
+            model="claude",
+            object="chat.completion.chunk",
+            choices=[ChunkChoice(index=0, delta=ChoiceDelta(content="!"), finish_reason="stop")],
+            usage=usage,
+        ),
+    ]
+    model = ChatDatabricks(model="claude")
+    client = Mock()
+    if async_mode:
+
+        async def stream():
+            for chunk in chunks:
+                yield chunk
+
+        client.chat.completions.create = AsyncMock(return_value=stream())
+        model.__dict__["async_client"] = client
+        result = [chunk async for chunk in model.astream("Hi")]
+    else:
+        client.chat.completions.create.return_value = iter(chunks)
+        model.__dict__["client"] = client
+        result = list(model.stream("Hi"))
+    usage_chunks = [chunk for chunk in result if chunk.usage_metadata is not None]
+    assert len(usage_chunks) == 1
+    combined = result[0]
+    for chunk in result[1:]:
+        combined += chunk
+    assert combined.usage_metadata == {
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "total_tokens": 150,
+        "input_token_details": {"cache_read": 30, "cache_creation": 20},
+    }
+
+
+def test_claude_usage_with_openai_details_preserves_writes_and_totals():
+    from openai.types.completion_usage import PromptTokensDetails
+
+    usage = _create_claude_completion_usage()
+    usage.prompt_tokens_details = PromptTokensDetails(cached_tokens=30)
+    converted = ChatDatabricks._convert_completion_usage_to_usage_metadata(usage)
+    assert converted["input_tokens"] == 100
+    assert converted["total_tokens"] == converted["input_tokens"] + converted["output_tokens"]
+    assert converted["input_token_details"] == {"audio": 0, "cache_read": 30, "cache_creation": 20}
+
+
+@pytest.mark.parametrize("cache_creation", [0, 7])
+def test_usage_with_both_counter_formats_preserves_audio_and_reasoning(cache_creation):
+    usage = _create_openai_completion_usage().model_copy(
+        update={"cache_read_input_tokens": 20, "cache_creation_input_tokens": cache_creation}
+    )
+    assert ChatDatabricks._convert_completion_usage_to_usage_metadata(usage) == {
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "total_tokens": 150,
+        "input_token_details": {"audio": 10, "cache_read": 20, "cache_creation": cache_creation},
+        "output_token_details": {"reasoning": 5, "audio": 3},
+    }
+
+
 @pytest.mark.parametrize(
     ("usage_type", "expected"),
     [
@@ -1772,7 +1881,7 @@ def _create_claude_completion_usage():
         (
             "claude",
             {
-                "input_tokens": 150,  # prompt_tokens + cache_read + cache_creation
+                "input_tokens": 100,  # Databricks prompt_tokens already includes cache tokens.
                 "output_tokens": 50,
                 "total_tokens": 150,
                 "input_token_details": {"cache_read": 30, "cache_creation": 20},
@@ -2028,7 +2137,7 @@ def test_chat_databricks_invoke_returns_usage_metadata(usage_type):
         else:
             mock_response.usage = _create_claude_completion_usage()
             mock_response.model = "databricks-claude-3-7-sonnet"
-            expected_input_tokens = 150  # 100 + 30 + 20
+            expected_input_tokens = 100  # Cache tokens are already included.
             expected_cache_read = 30
 
         mock_client.chat.completions.create.return_value = mock_response
@@ -2166,3 +2275,18 @@ def test_chat_databricks_with_timeout_and_retries():
         assert chat.max_retries == 3
         assert chat.client == mock_openai_client
         mock_get_client.assert_called_once_with(workspace_client=None, timeout=45.0, max_retries=3)
+
+
+@pytest.mark.parametrize("async_client", [False, True])
+def test_native_cache_control_uses_existing_extra_body_passthrough(async_client):
+    target = "get_async_openai_client" if async_client else "get_openai_client"
+    control = {"cache_control": {"type": "ephemeral", "ttl": "1h"}}
+    with patch(f"databricks_langchain.chat_models.{target}") as get_client:
+        model = ChatDatabricks(
+            model="databricks-claude-sonnet-4-6", extra_params={"extra_body": control}
+        )
+        _ = model.async_client if async_client else model.client
+    get_client.assert_called_once_with(workspace_client=None)
+    inputs = model._prepare_inputs([HumanMessage(content="Hello")])
+    assert inputs["extra_body"] == control
+    assert inputs["messages"] == [{"role": "user", "content": "Hello"}]

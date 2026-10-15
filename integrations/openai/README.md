@@ -58,6 +58,29 @@ second_response = client.chat.completions.create(
 
 ---
 
+## Claude prompt caching
+
+The connector forwards caller-supplied `cache_control` through `extra_body` and content blocks.
+For a Claude endpoint supporting native automatic placement (for example Sonnet 4.6):
+
+```python
+client = AsyncDatabricksOpenAI(use_ai_gateway=True)
+response = await client.chat.completions.create(
+    model="system.ai.claude-sonnet-4-6",
+    messages=[{"role": "user", "content": "Your prompt"}],
+    extra_body={"cache_control": {"type": "ephemeral"}},
+)
+```
+
+The generic connector does not infer a caching policy. Agent Bricks templates use the separate
+Claude adapter in `databricks_agentkit.claude`; see the [template caching guide](../../docs/claude-prompt-caching.md)
+for configuration, older endpoints, and manual controls.
+
+Cache reads appear in `response.usage.prompt_tokens_details.cached_tokens`, and writes in
+`response.usage.prompt_tokens_details.cache_write_tokens`, including streaming chunks. Native
+Claude counters are retained. Databricks `prompt_tokens` already includes cached tokens; do not
+add them again. Cache eligibility and pricing depend on the endpoint and repeated prefix.
+
 ## Contribution Guide
 We welcome contributions! Please see our [contribution guidelines](https://github.com/databricks/databricks-ai-bridge/tree/main/integrations/langchain) for details.
 

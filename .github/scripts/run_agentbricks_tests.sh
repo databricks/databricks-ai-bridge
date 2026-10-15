@@ -18,12 +18,16 @@ case "${1:-}" in
     ;;
   functional)
     uv build --wheel --out-dir dist ../..
+    uv build --wheel --out-dir dist ../openai
+    uv build --wheel --out-dir dist ../langchain
     uv build --wheel --out-dir dist
     uv venv .venv-functional
     uv pip install --python .venv-functional/bin/python --no-sources \
       "$(ls dist/databricks_ai_bridge-*.whl)" \
       "$(ls dist/databricks_agentbricks-*.whl)" --group tests
     AI_BRIDGE_WHEEL="$(ls "$PWD"/dist/databricks_ai_bridge-*.whl)" \
+    OPENAI_WHEEL="$(ls "$PWD"/dist/databricks_openai-*.whl)" \
+    LANGCHAIN_WHEEL="$(ls "$PWD"/dist/databricks_langchain-*.whl)" \
     AGENTBRICKS_WHEEL="$(ls "$PWD"/dist/databricks_agentbricks-*.whl)" \
       .venv-functional/bin/pytest tests/functional/
     ;;
