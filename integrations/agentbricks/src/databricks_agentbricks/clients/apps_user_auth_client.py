@@ -94,31 +94,40 @@ class AppAuthPlan:
 
 def required_user_api_scopes(project: AgentProject | None) -> set[str]:
     """Union explicit additions with scopes inferred from request-user managed tools."""
-    scopes = set(project.user_auth.additional_api_scopes) if project else set()
-    # TODO: Extend this least-privilege mapping for each supported request-user tool kind/service.
+    return set(required_user_api_scope_sources(project))
+
+
+def required_user_api_scope_sources(project: AgentProject | None) -> dict[str, list[str]]:
+    """Return each required scope and the manifest bindings that require it."""
+    sources = {
+        scope: ["[user_auth].additional_api_scopes"]
+        for scope in (project.user_auth.additional_api_scopes if project else ())
+    }
     for tool in project.tools if project else ():
         if tool.auth != "user":
             continue
+        scopes: set[str] = set()
         if tool.source.kind == "uc_function":
             scopes.add("mcp.functions")
-            continue
-        if tool.source.kind in ("genie_one", "genie_agent"):
+        elif tool.source.kind in ("genie_one", "genie_agent"):
             scopes.add("genie")
-            continue
-        if tool.source.kind not in ("mcp", "sandbox"):
-            continue
-        scopes.add("ai-gateway")
-        if tool.source.service == "system.ai.dbsql":
-            scopes.add("sql")
-        if tool.source.service == "system.ai.genie_one_mcp":
-            scopes.add("genie")
-        if tool.source.kind == "sandbox" and any(
-            scope.kind == "volume" for scope in tool.policy.downscope
-        ):
-            scopes.add("files")
-        if tool.source.kind == "sandbox" and tool.policy.databricks_access_token_included:
-            scopes.add("workspace.workspace")
-    return scopes
+        elif tool.source.kind in ("mcp", "sandbox"):
+            scopes.add("ai-gateway")
+            if tool.source.service == "system.ai.dbsql":
+                scopes.add("sql")
+            if tool.source.service == "system.ai.genie_one_mcp":
+                scopes.add("genie")
+            if tool.source.kind == "sandbox" and any(
+                scope.kind == "volume" for scope in tool.policy.downscope
+            ):
+                scopes.add("files")
+            if tool.source.kind == "sandbox" and tool.policy.databricks_access_token_included:
+                scopes.add("workspace.workspace")
+        resource = tool.source.service or tool.source.function or tool.source.space_id
+        label = f"tool {tool.id!r} ({resource or tool.source.kind}, auth=user)"
+        for scope in sorted(scopes):
+            sources.setdefault(scope, []).append(label)
+    return sources
 
 
 def plan_app_user_scope_update(
