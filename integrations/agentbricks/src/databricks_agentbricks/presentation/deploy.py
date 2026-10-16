@@ -109,6 +109,8 @@ def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> Non
                 "url": result.url,
                 "workspace_path": result.workspace_path,
                 "env": result.env,
+                "memory_store": result.memory_store,
+                "session_store": result.session_store,
                 "trace_experiment_id": result.trace_experiment_id,
                 "uc_trace_tables": result.uc_trace_tables,
                 "trace_setup_error": result.trace_setup_error,
