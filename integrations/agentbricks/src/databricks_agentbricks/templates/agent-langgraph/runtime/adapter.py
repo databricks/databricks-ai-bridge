@@ -47,13 +47,11 @@ def _agent_input(payload: dict[str, Any]) -> Any:
 
 async def invoke(value: Any, context: InvocationContext) -> dict:
     payload = _payload(value)
-    _check_user_input(payload, context)
     return await _invoke_agent(_agent_input(payload), payload, context)
 
 
 async def recover(value: Any, context: InvocationContext) -> dict:
     payload = _payload(value)
-    _check_user_input(payload, context)
     if getattr(context, "request_auth", None) is not None:
         raise AuthError(
             "MCP_USER_AUTH_BACKGROUND_UNSUPPORTED",
@@ -69,18 +67,6 @@ async def recover(value: Any, context: InvocationContext) -> dict:
         invocation_id=context.invocation_id,
     )
     return await _invoke_agent(agent_input, payload, context)
-
-
-def _check_user_input(payload: dict[str, Any], context: InvocationContext) -> None:
-    auth = getattr(context, "request_auth", None)
-    if auth is not None and any(
-        payload.get(key) is not None for key in ("resume", "approval", "approvals")
-    ):
-        raise AuthError(
-            "MCP_USER_AUTH_HITL_UNSUPPORTED",
-            "Request-user invocations do not support approval or resume input.",
-            400,
-        )
 
 
 async def _invoke_agent(
@@ -117,12 +103,6 @@ async def _invoke_agent(
             **run_kwargs,
         )
     ):
-        if user_auth and event.get("type") == "interrupt":
-            raise AuthError(
-                "MCP_USER_AUTH_HITL_UNSUPPORTED",
-                "Request-user invocations do not support paused approvals.",
-                400,
-            )
         await context.emit(event)
         if event.get("type") in ("message", "interrupt"):
             outputs.append(event)

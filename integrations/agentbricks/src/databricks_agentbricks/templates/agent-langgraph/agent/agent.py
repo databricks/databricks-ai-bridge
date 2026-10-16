@@ -25,7 +25,6 @@ from databricks_agentkit.langgraph.session_store import (
     invocation_id_from_metadata,
     invocation_metadata,
 )
-from databricks_agentkit.runtime.auth import AuthError
 from databricks_agentkit.runtime.tool_manifest import resolve_model_service
 
 # A Unity Catalog AI Gateway model service, served from the `system.ai` schema and queried through
@@ -155,6 +154,8 @@ async def run_agent(
     This is the framework-native entrypoint. It has no dependency on Agent Bricks request or context types,
     so it can be called from another server, a notebook, or a test harness.
     """
+    # Each interactive resume builds tools from this request's credentials. Only graph state,
+    # never the graph or its credential-bound clients, survives the approval pause.
     actor = actor or session_id
     if graph is None:
         graph = await create_agent_graph(actor, model, workspace_client_for=workspace_client_for)
@@ -172,12 +173,6 @@ async def run_agent(
         ):
             if event[0] == "updates":
                 last_update = event[1]
-                if workspace_client_for is not None and last_update.get("__interrupt__"):
-                    raise AuthError(
-                        "MCP_USER_AUTH_HITL_UNSUPPORTED",
-                        "Request-user invocations do not support paused approvals.",
-                        400,
-                    )
             yield event
         if span is not None and last_update is not None:
             span.set_outputs(last_update)

@@ -97,8 +97,11 @@ async def test_adapter_uses_context_session_and_namespaces_untrusted_actor(templ
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("template", ["openai"], indirect=True)
 @pytest.mark.parametrize("key", ["resume", "approval", "approvals"])
-async def test_user_hitl_input_rejected_before_framework_execution(template, monkeypatch, key):
+async def test_openai_user_hitl_input_rejected_before_framework_execution(
+    template, monkeypatch, key
+):
     _framework, adapter, _agent = template
     from databricks_agentkit.runtime.auth import AuthError
 
@@ -262,3 +265,198 @@ async def test_openai_request_exit_cancels_native_run(template, monkeypatch):
         async with agent.run_agent([], session_id="private", workspace_client_for=Mock()):
             raise RuntimeError("disconnected")
     result.cancel.assert_called_once_with()
+
+
+@pytest.fixture
+def hitl_app(template, monkeypatch):
+    """Real HTTP runtime, graph and middleware; only model/tool I/O is local."""
+    from contextlib import nullcontext
+
+    from langchain.agents import create_agent
+    from langchain.agents.middleware import HumanInTheLoopMiddleware
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+    from langchain_core.messages import AIMessage
+    from langchain_core.tools import tool
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    from databricks_agentkit import DurableAgentServer
+    from databricks_agentkit.runtime.auth import InvocationAuthPolicy
+    from databricks_agentkit.runtime.store import InMemoryRuntimeStore
+
+    _framework, adapter, agent = template
+    monkeypatch.setenv("DATABRICKS_APP_NAME", "hitl-test")
+    monkeypatch.setenv("DATABRICKS_HOST", "https://workspace.example")
+    monkeypatch.delenv("DATABRICKS_AGENTBRICKS_RUNTIME_STORE_LOCAL", raising=False)
+    # Keep SDK discovery offline while exercising the real request-bound credential resolver.
+    monkeypatch.setattr(
+        "databricks.sdk.WorkspaceClient",
+        lambda **kwargs: SimpleNamespace(config=SimpleNamespace(token=kwargs["token"])),
+    )
+    saver = InMemorySaver()
+    writes = []
+    credentials = []
+
+    class Model(FakeMessagesListChatModel):
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+        async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+            self.i = int(any(message.type == "tool" for message in messages))
+            return self._generate(messages, stop, run_manager, **kwargs)
+
+    async def create_graph(actor, model=None, *, workspace_client_for=None):
+        credentials.append(workspace_client_for.__self__)
+
+        @tool
+        async def record_action(text: str) -> str:
+            """Record the approved action locally."""
+            client = workspace_client_for("user")
+            writes.append((text, client.config.token))
+            return "Action recorded"
+
+        return create_agent(
+            Model(
+                responses=[
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "record_action",
+                                "args": {"text": "original"},
+                                "id": "action-call",
+                                "type": "tool_call",
+                            }
+                        ],
+                    ),
+                    AIMessage(content="Review handled"),
+                ]
+            ),
+            [record_action],
+            middleware=[HumanInTheLoopMiddleware(interrupt_on={"record_action": True})],
+            checkpointer=saver,
+        )
+
+    monkeypatch.setattr(agent, "create_agent_graph", create_graph)
+    monkeypatch.setattr(agent, "start_trace", lambda **kwargs: nullcontext())
+    store = InMemoryRuntimeStore()
+    app = DurableAgentServer(
+        runtime_store=store, auth_policy=InvocationAuthPolicy(user_required=True)
+    )
+    app.invoke(adapter.invoke)
+    app.recover(adapter.recover)
+    return SimpleNamespace(
+        app=app, store=store, saver=saver, writes=writes, credentials=credentials
+    )
+
+
+@asynccontextmanager
+async def hitl_client(app):
+    import httpx
+
+    await app._runtime.start()
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app), base_url="https://test"
+        ) as client:
+            yield client
+    finally:
+        await app._runtime.stop()
+
+
+def hitl_headers(token, user="alice"):
+    return {"x-forwarded-user": user, "x-forwarded-access-token": token}
+
+
+def hitl_request(value, *, stream=False):
+    from uuid import uuid4
+
+    return {"id": str(uuid4()), "session_id": "review-session", "input": value, "stream": stream}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("template", ["langgraph"], indirect=True)
+@pytest.mark.parametrize("decision", ["approve", "edit", "reject"])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_langgraph_user_hitl_resumes_with_current_request_credentials(
+    hitl_app, decision, stream
+):
+    from databricks_agentkit.runtime.auth import AuthError
+
+    state = hitl_app
+    async with hitl_client(state.app) as client:
+        pause = await client.post(
+            "/api/invocations",
+            json=hitl_request({"messages": [{"role": "user", "content": "Record an action"}]}),
+            headers=hitl_headers("before-approval-token"),
+        )
+        assert pause.status_code == 200
+        assert pause.json()["output"]["status"] == "interrupted"
+        assert state.writes == []
+        with pytest.raises(AuthError, match="no longer active"):
+            state.credentials[0].client_for("user")
+
+        approval = {"type": decision}
+        if decision == "edit":
+            approval["edited_action"] = {"name": "record_action", "args": {"text": "edited"}}
+        body = hitl_request({"resume": {"decisions": [approval]}}, stream=stream)
+        resume = await client.post(
+            "/api/invocations", json=body, headers=hitl_headers("after-approval-token")
+        )
+        assert resume.status_code == 200
+        if stream:
+            assert "event: run.completed" in resume.text
+            assert "event: run.failed" not in resume.text
+        else:
+            assert resume.json()["output"]["status"] == "completed"
+        replay = await client.post(
+            "/api/invocations", json=body, headers=hitl_headers("replay-token")
+        )
+        assert replay.status_code == 200
+        assert replay.text == resume.text
+
+    expected = (
+        []
+        if decision == "reject"
+        else [("edited" if decision == "edit" else "original", "after-approval-token")]
+    )
+    assert state.writes == expected
+    assert len(state.credentials) == 2
+    for auth in state.credentials:
+        with pytest.raises(AuthError, match="no longer active"):
+            auth.client_for("user")
+    persisted = repr(
+        (state.store.states, state.store.persisted_events, state.saver.storage, state.saver.writes)
+    )
+    for token in ("before-approval-token", "after-approval-token", "replay-token"):
+        assert token not in persisted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("template", ["langgraph"], indirect=True)
+async def test_langgraph_user_hitl_requires_authenticated_session_owner(hitl_app):
+    state = hitl_app
+    async with hitl_client(state.app) as client:
+        pause = await client.post(
+            "/api/invocations",
+            json=hitl_request({"messages": [{"role": "user", "content": "Record an action"}]}),
+            headers=hitl_headers("owner-token"),
+        )
+        assert pause.json()["output"]["status"] == "interrupted"
+        approval = {"resume": {"decisions": [{"type": "approve"}]}}
+        missing = await client.post("/api/invocations", json=hitl_request(approval))
+        assert missing.status_code == 401
+        assert missing.json()["error"]["code"] == "MCP_USER_AUTH_REQUIRED"
+        other = await client.post(
+            "/api/invocations",
+            json=hitl_request(approval),
+            headers=hitl_headers("other-token", "bob"),
+        )
+        assert state.writes == []
+        assert "Action recorded" not in other.text
+        owner = await client.post(
+            "/api/invocations",
+            json=hitl_request(approval),
+            headers=hitl_headers("owner-resume-token"),
+        )
+        assert owner.status_code == 200
+        assert state.writes == [("original", "owner-resume-token")]
