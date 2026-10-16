@@ -79,11 +79,11 @@ class DurableInvocationExecutor(InvocationExecutor):
         self._schedule(state.invocation_id, recovery=False)
 
     def ensure_recovery_scheduled(self, invocation_id: str) -> None:
-        """Schedule stale active work discovered by the recovery scanner."""
+        """Schedule stale active or abandoned queued work discovered by recovery."""
         self._schedule(invocation_id, recovery=True)
 
     async def _scan_queued_loop(self) -> None:
-        """Continuously schedule persisted first attempts, including after process restart."""
+        """Continuously schedule persisted first attempts eligible for this worker."""
         while True:
             try:
                 for invocation_id in await self._runtime_store.queued_invocation_ids():
