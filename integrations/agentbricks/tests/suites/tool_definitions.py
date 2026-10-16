@@ -21,21 +21,34 @@ UC_MARKER = "AGENTBRICKS_UC_OK:matrix"
 PYTHON_MARKER = "AGENTBRICKS_PYTHON_OK"
 
 
-Check = Callable[[str], None]
+# Whether one tool step of an `endpoint invoke` response is this tool returning its result.
+Called = Callable[[dict[str, Any]], bool]
 
 
 @dataclasses.dataclass(frozen=True)
 class Tool:
     name: str
     prompt: str
-    # Asserts the `endpoint invoke --output json` output shows the tool ran and returned its result.
-    check: Check
+    called: Called
     # What follows `agentbricks tools add`; None when the tool is a user-owned file instead.
     add_command: str | None
     # User-owned files the tool needs.
     files: Mapping[str, str]
     # The id `tools add` binds it under, which `tools remove` takes.
     tool_id: str | None
+
+    def check(self, serialized: str) -> None:
+        """Assert the `endpoint invoke --output json` output shows the tool ran and returned its result."""
+        assert self._calls(serialized), f"No successful {self.name} result: {excerpt(serialized)}"
+
+    def check_not_called(self, serialized: str) -> None:
+        """Assert the agent answered without the tool returning its result."""
+        assert not self._calls(serialized), f"{self.name} still ran: {excerpt(serialized)}"
+
+    def _calls(self, serialized: str) -> list[dict[str, Any]]:
+        return [
+            r for r in tool_results(serialized) if r.get("status") == "success" and self.called(r)
+        ]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -47,36 +60,17 @@ class ToolDefinition:
     build: Callable[..., Tool]
 
 
-def _successful(serialized: str, matches: Callable[[dict[str, Any]], bool], what: str) -> None:
-    results = tool_results(serialized)
-    assert any(r.get("status") == "success" and matches(r) for r in results), (
-        f"No successful tool result {what}: {excerpt(serialized)}"
-    )
+def returned(marker: str) -> Called:
+    """The step returned ``marker``, which only the tool can produce."""
+    return lambda r: marker in str(r.get("content"))
 
 
-def returned(marker: str) -> Check:
-    """A tool returned ``marker``, which only the tool can produce."""
-
-    def check(serialized: str) -> None:
-        _successful(serialized, lambda r: marker in str(r.get("content")), f"containing {marker!r}")
-
-    return check
+def web_search_called(r: dict[str, Any]) -> bool:
+    return r.get("name") == "web_search" and "https://" in str(r.get("content"))
 
 
-def check_web_search(serialized: str) -> None:
-    _successful(
-        serialized,
-        lambda r: r.get("name") == "web_search" and "https://" in str(r.get("content")),
-        "from web_search with an https result",
-    )
-
-
-def check_genie(serialized: str) -> None:
-    _successful(
-        serialized,
-        lambda r: "genie" in str(r.get("name")) and bool(r.get("content")),
-        "from the Genie tool",
-    )
+def genie_called(r: dict[str, Any]) -> bool:
+    return "genie" in str(r.get("name")) and bool(r.get("content"))
 
 
 def sandbox_tool(uc_function: UcFunction) -> Tool:
@@ -87,7 +81,7 @@ def sandbox_tool(uc_function: UcFunction) -> Tool:
             f"entire text file at {uc_function.volume_file_path}. Return only its exact contents; "
             "do not fabricate them."
         ),
-        check=returned(uc_function.volume_marker),
+        called=returned(uc_function.volume_marker),
         add_command=f"sandbox --scope volume:{uc_function.volume}",
         files={},
         tool_id="sandbox",
@@ -102,7 +96,7 @@ def web_search_tool(**_resources: object) -> Tool:
             "Search official Databricks documentation for Model Context Protocol, then "
             "return the title and https URL of one result. Do not answer from memory."
         ),
-        check=check_web_search,
+        called=web_search_called,
         add_command="mcp system.ai.web_search --auth app",
         files={},
         tool_id="web_search",
@@ -116,7 +110,7 @@ def python_tool() -> Tool:
             "You must call the matrix_marker Python tool with value 'matrix'. "
             "Return its exact result."
         ),
-        check=returned(PYTHON_MARKER),
+        called=returned(PYTHON_MARKER),
         add_command=None,
         files={PYTHON_MARKER_FILE: PYTHON_MARKER_SOURCE},
         tool_id=None,
@@ -130,7 +124,7 @@ def uc_function_tool(uc_function: UcFunction) -> Tool:
             "You must call the Unity Catalog function tool that computes the Agent Bricks marker, "
             "with value 'matrix'. Return the called tool's exact result."
         ),
-        check=returned(UC_MARKER),
+        called=returned(UC_MARKER),
         add_command=f"uc-function {uc_function.function} --name agentbricks_uc_marker",
         files={},
         tool_id="agentbricks_uc_marker",
@@ -145,7 +139,7 @@ def genie_tool(genie_space: str) -> Tool:
             "configured Genie space. Return a one-sentence summary based only on the tool "
             "response."
         ),
-        check=check_genie,
+        called=genie_called,
         add_command=f"genie-agent {genie_space} --name genie --auth app",
         files={},
         tool_id="genie",

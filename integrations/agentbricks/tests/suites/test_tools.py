@@ -35,6 +35,4 @@ def test_tools_remove(
                 output = agentbricks_cli.invoke(
                     f"--url http://127.0.0.1:{port} --no-auth", tool.prompt
                 )
-                # The tool's own check passes only when the tool ran and returned its result.
-                with pytest.raises(AssertionError):
-                    tool.check(output)
+                tool.check_not_called(output)
