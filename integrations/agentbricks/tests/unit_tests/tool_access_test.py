@@ -148,6 +148,7 @@ def test_plan_ignores_user_auth_and_genie_one_without_an_explicit_resource():
     plan = plan_tool_access(
         [
             ToolSpec.mcp("search", service="system.ai.web_search", auth="user"),
+            ToolSpec.uc_function("lookup", function="main.tools.lookup", auth="user"),
             ToolSpec.sandbox(
                 "sandbox",
                 scopes=[Scope.volume("main.data.files")],

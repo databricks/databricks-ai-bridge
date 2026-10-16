@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from unittest import mock
 
@@ -9,6 +10,8 @@ import pytest
 from click.testing import CliRunner
 
 import databricks_agentbricks.cli.app as cli
+from databricks_agentbricks.errors import AgentCliError
+from databricks_agentkit._api_client import _AgentBricksApiClient
 
 PIPELINE = {
     "name": "memory-pipelines/p-123",
@@ -121,6 +124,73 @@ def test_get_run_reports_missing_databricks_cli(run):
     )
     assert result.exit_code == 1
     assert "Databricks CLI not found" in result.output
+
+
+@pytest.mark.parametrize("command", [["get", "p-123"], ["list"]])
+def test_pipeline_renders_nested_model(command, monkeypatch):
+    policy = PIPELINE["dreamer_policy"]
+    assert isinstance(policy, dict)
+    monkeypatch.setitem(PIPELINE, "dreamer_policy", {**policy, "model": "nested-model"})
+    result = CliRunner().invoke(_pipeline(), command, obj=_Ctx(_Client()))
+    assert result.exit_code == 0, result.output
+    assert "nested-model" in result.output
+    assert "system.ai.gpt-5-6-sol" not in result.output
+
+
+@pytest.mark.parametrize("command,trigger", [("pause", "MANUAL_ONLY"), ("resume", "SCHEDULED")])
+@pytest.mark.parametrize("output", ["text", "json"])
+@pytest.mark.parametrize("name", ["p-123", "memory-pipelines/p-123"])
+def test_pause_resume_update_only_trigger(command, trigger, output, name):
+    workspace = mock.Mock()
+    policy = PIPELINE["dreamer_policy"]
+    assert isinstance(policy, dict)
+    response = {
+        **PIPELINE,
+        "dreamer_policy": {**policy, "trigger": trigger},
+    }
+    previous_trigger = "SCHEDULED" if command == "pause" else "MANUAL_ONLY"
+    workspace.api_client.do.side_effect = [
+        {**PIPELINE, "dreamer_policy": {**policy, "trigger": previous_trigger}},
+        response,
+    ]
+    ctx = _Ctx(_AgentBricksApiClient(workspace_client=workspace))
+    ctx.output = output
+    result = CliRunner().invoke(_pipeline(), [command, name], obj=ctx)
+    assert result.exit_code == 0, result.output
+    assert workspace.api_client.do.call_args_list == [
+        mock.call("GET", "/api/2.0/agents/memory-pipelines/p-123", query=None, body=None),
+        mock.call(
+            "PATCH",
+            "/api/2.0/agents/memory-pipelines/p-123",
+            query={"update_mask": "dreamer_policy.trigger"},
+            body={"name": "memory-pipelines/p-123", "dreamer_policy": {"trigger": trigger}},
+        ),
+    ]
+    if output == "json":
+        assert json.loads(result.stdout) == response
+    else:
+        assert trigger in result.stdout
+
+
+@pytest.mark.parametrize(
+    "command,policy,state",
+    [
+        ("pause", {"trigger": "MANUAL_ONLY"}, "paused"),
+        ("pause", {"trigger": "TRIGGER_UNSPECIFIED"}, "paused"),
+        ("pause", {}, "paused"),
+        ("resume", {"trigger": "SCHEDULED"}, "resumed"),
+    ],
+)
+def test_pause_resume_rejects_existing_state(command, policy, state):
+    workspace = mock.Mock()
+    workspace.api_client.do.return_value = {"dreamer_policy": policy}
+    ctx = _Ctx(_AgentBricksApiClient(workspace_client=workspace))
+    result = CliRunner().invoke(_pipeline(), [command, "p-123"], obj=ctx)
+    assert result.exit_code != 0
+    assert f"already {state}" in result.output
+    workspace.api_client.do.assert_called_once_with(
+        "GET", "/api/2.0/agents/memory-pipelines/p-123", query=None, body=None
+    )
 
 
 def test_create_accepts_store_names_and_model():
@@ -277,6 +347,29 @@ def test_run_triggers_pipeline_and_renders_returned_run():
     assert client.calls == [("run", "p-123")]
     assert "memory-pipelines/p-123/runs/run-456" in result.output
     assert "PIPELINE_RUN_STATE_PENDING" in result.output
+
+
+def test_run_conflict_points_at_in_progress_run():
+    active = "memory-pipelines/p-123/runs/501787146174076"
+
+    class ConflictClient(_Client):
+        def run_memory_pipeline(self, name):
+            raise AgentCliError(
+                f"memory-pipelines/{name} already has a run in progress: {active}. "
+                "Wait for it to finish before starting another.",
+                error_code="ABORTED",
+            )
+
+    result = CliRunner().invoke(
+        _pipeline(), ["run", "p-123"], obj=_Ctx(ConflictClient()), standalone_mode=False
+    )
+
+    assert isinstance(result.exception, AgentCliError)
+    assert result.exception.error_code == "ABORTED"
+    # The user can't fix a conflict by re-running; tell them how to inspect the blocking run.
+    assert result.exception.hint == (
+        f"Check its progress with `agentbricks memory pipeline runs get {active}`."
+    )
 
 
 @pytest.mark.parametrize("command", ["create", "update"])

@@ -45,7 +45,7 @@ def requires_user_auth(project: AgentProject | None) -> bool:
     managed = [
         tool
         for tool in project.tools
-        if tool.source.kind in ("mcp", "sandbox", "genie_one", "genie_agent")
+        if tool.source.kind in ("mcp", "sandbox", "uc_function", "genie_one", "genie_agent")
     ]
     managed_user_auth = any(tool.auth == "user" for tool in managed)
     user_auth = project.user_auth.required or managed_user_auth
@@ -98,6 +98,9 @@ def required_user_api_scopes(project: AgentProject | None) -> set[str]:
     # TODO: Extend this least-privilege mapping for each supported request-user tool kind/service.
     for tool in project.tools if project else ():
         if tool.auth != "user":
+            continue
+        if tool.source.kind == "uc_function":
+            scopes.add("mcp.functions")
             continue
         if tool.source.kind in ("genie_one", "genie_agent"):
             scopes.add("genie")

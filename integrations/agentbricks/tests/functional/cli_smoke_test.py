@@ -14,8 +14,13 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import queue
 import subprocess
 import sys
+import threading
+import time
+import uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.metadata import requires
 
 import pytest
@@ -36,6 +41,7 @@ _COMMANDS = (
     "deployments",
     "endpoint",
     "tools",
+    "experimental",
 )
 
 
@@ -60,11 +66,13 @@ def run_agentbricks(tmp_path: pathlib.Path):
         "DATABRICKS_CONFIG_FILE": str(empty_cfg),
     }
 
-    def run(*args: str, check: bool = True) -> subprocess.CompletedProcess:
+    def run(
+        *args: str, check: bool = True, env_override: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess:
         result = subprocess.run(
             [str(agentbricks), *args],
             cwd=tmp_path,
-            env=env,
+            env={**env, **(env_override or {})},
             capture_output=True,
             text=True,
             timeout=60,
@@ -79,10 +87,211 @@ def run_agentbricks(tmp_path: pathlib.Path):
     return run
 
 
+@pytest.mark.parametrize("profile_source", ["saved", "sdk"])
+@pytest.mark.parametrize("command", ["memory-list", "slow-init", "default-init"])
+def test_cli_posts_telemetry_to_local_receiver(
+    run_agentbricks, tmp_path, profile_source, command
+) -> None:
+    uploads: queue.Queue[tuple[str, dict, str | None]] = queue.Queue()
+    reads: queue.Queue[str] = queue.Queue()
+
+    class _TelemetryReceiver(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+        def _respond_json(self, value: dict) -> None:
+            body = json.dumps(value).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self) -> None:
+            if self.path.startswith("/api/2.0/agents/memory-stores"):
+                reads.put(self.path)
+                self._respond_json({"managed_memory_stores": []})
+            else:
+                self._respond_json({})
+
+        def do_POST(self) -> None:
+            length = int(self.headers["Content-Length"])
+            body = json.loads(self.rfile.read(length))
+            if command == "slow-init":
+                time.sleep(0.1)
+            self._respond_json({})
+            uploads.put((self.path, body, self.headers.get("Authorization")))
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), _TelemetryReceiver) as server:
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            profile_name = "telemetry-smoke"
+            config_file = tmp_path / ".databrickscfg"
+            config_file.write_text(
+                f"[{profile_name}]\nhost = http://127.0.0.1:{server.server_port}\n"
+                "token = local-test-token\n"
+            )
+            agentbricks_home = tmp_path / "agentbricks-home"
+            agentbricks_home.mkdir()
+            env_override = {
+                "DATABRICKS_CONFIG_FILE": str(config_file),
+                "AGENTBRICKS_CONFIG_HOME": str(agentbricks_home),
+            }
+            if profile_source == "saved":
+                (agentbricks_home / "config.json").write_text(json.dumps({"profile": profile_name}))
+            else:
+                env_override["DATABRICKS_CONFIG_PROFILE"] = profile_name
+
+            if command == "slow-init":
+                instrumentation = tmp_path / "slow-client"
+                instrumentation.mkdir()
+                (instrumentation / "sitecustomize.py").write_text(
+                    "import time\n"
+                    "from databricks_agentkit import _api_client\n"
+                    "original = _api_client._workspace_client\n"
+                    "def delayed_client(profile):\n"
+                    "    time.sleep(1.15)\n"
+                    "    return original(profile)\n"
+                    "_api_client._workspace_client = delayed_client\n"
+                )
+                env_override["PYTHONPATH"] = str(instrumentation)
+                arguments = [
+                    "init",
+                    str(tmp_path / "agent"),
+                    "--framework",
+                    "openai",
+                    "--server",
+                    "custom",
+                ]
+            elif command == "default-init":
+                arguments = ["init", str(tmp_path / "agent")]
+            else:
+                arguments = ["memory", "stores", "list", "--page-size", "7"]
+            result = run_agentbricks("-o", "json", *arguments, env_override=env_override)
+            assert result.stdout
+            if command == "memory-list":
+                assert reads.get(timeout=5).startswith("/api/2.0/agents/memory-stores")
+            path, body, authorization = uploads.get(timeout=5)
+        finally:
+            server.shutdown()
+            worker.join(timeout=5)
+
+    assert path == "/telemetry-ext"
+    assert authorization == "Bearer local-test-token"
+    assert isinstance(body["uploadTime"], int)
+    assert body["items"] == []
+    assert len(body["protoLogs"]) == 1
+    frontend_log = json.loads(body["protoLogs"][0])
+    assert uuid.UUID(frontend_log["frontend_log_event_id"])
+    log = frontend_log["entry"]["agentbricks_cli_log"]
+    assert log["command_path"] == (
+        "agentbricks memory stores list" if command == "memory-list" else "agentbricks init"
+    )
+    assert log["exit_code"] == 0
+    expected_parameters: dict[str, dict[str, str | bool | int]] = {
+        "agentbricks.output": {
+            "name": "agentbricks.output",
+            "choice_value": "AGENTBRICKS_CLI_JSON",
+        },
+    }
+    if command != "memory-list":
+        expected_parameters.update(
+            {
+                "agentbricks init.framework": {
+                    "name": "agentbricks init.framework",
+                    "choice_value": (
+                        "AGENTBRICKS_CLI_OPENAI"
+                        if command == "slow-init"
+                        else "AGENTBRICKS_CLI_LANGGRAPH"
+                    ),
+                },
+                "agentbricks init.server": {
+                    "name": "agentbricks init.server",
+                    "choice_value": (
+                        "AGENTBRICKS_CLI_CUSTOM"
+                        if command == "slow-init"
+                        else "AGENTBRICKS_CLI_AGENTBRICKS"
+                    ),
+                },
+                "agentbricks init.existing": {
+                    "name": "agentbricks init.existing",
+                    "bool_value": False,
+                },
+                "agentbricks init.disable_chat_app": {
+                    "name": "agentbricks init.disable_chat_app",
+                    "bool_value": False,
+                },
+                "agentbricks init.enable_chat_app": {
+                    "name": "agentbricks init.enable_chat_app",
+                    "bool_value": False,
+                },
+            }
+        )
+    else:
+        expected_parameters["agentbricks memory stores list.page_size"] = {
+            "name": "agentbricks memory stores list.page_size",
+            "int_value": 7,
+        }
+    assert {parameter["name"]: parameter for parameter in log["parameters"]} == expected_parameters
+
+
 def test_cli_and_every_command_help_load(run_agentbricks) -> None:
     assert "Usage" in run_agentbricks("--help").stdout
     for command in _COMMANDS:
         run_agentbricks(command, "--help")
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+def test_model_and_prompt_bindings_from_installed_cli(run_agentbricks, tmp_path, framework):
+    """Exercise local binding commands through the shipped console script without auth."""
+    project = tmp_path / "bound-agent"
+    run_agentbricks("init", "--framework", framework, str(project))
+    for role in ("router", "writer"):
+        result = run_agentbricks(
+            "-o",
+            "json",
+            "experimental",
+            "models",
+            "bind",
+            f"main.test.{role}",
+            "--role",
+            role,
+            "--default",
+            "system.ai.claude-sonnet-4-5",
+            "--source",
+            str(project),
+        )
+        assert json.loads(result.stdout)["role"] == role
+    run_agentbricks(
+        "-o",
+        "json",
+        "experimental",
+        "prompts",
+        "bind",
+        "main.test.writer_prompt",
+        "--key",
+        "writer",
+        "--source",
+        str(project),
+    )
+    manifest = tomli.loads((project / "agent.toml").read_text())
+    assert set(manifest["experimental"]["model_services"]) == {"router", "writer"}
+    assert manifest["experimental"]["prompts"] == {"writer": "main.test.writer_prompt"}
+    for role in ("router", "writer"):
+        run_agentbricks(
+            "experimental",
+            "models",
+            "unbind",
+            "--role",
+            role,
+            "--source",
+            str(project),
+        )
+    run_agentbricks("experimental", "prompts", "unbind", "writer", "--source", str(project))
+    manifest = tomli.loads((project / "agent.toml").read_text())
+    assert "experimental" not in manifest
+    assert manifest["agent"]["framework"] == framework
 
 
 def test_installed_wheel_exposes_agentkit_sdk() -> None:
@@ -147,6 +356,8 @@ def test_existing_init_includes_migration_skill_from_wheel(
     [
         ["sandbox", "--scope", "volume:catalog.schema.volume"],
         ["uc-function", "catalog.schema.function"],
+        ["uc-function", "catalog.schema.function", "--auth", "user"],
+        ["uc-function", "catalog.schema.function", "--auth", "app"],
         ["genie-one"],
         ["genie-agent", "0" * 32],
     ],
@@ -177,6 +388,8 @@ def test_tools_offline_add_review_manifest_remove(
             if not changed:
                 assert "already configured" in added.stdout
         assert [tool["id"] for tool in tomli.loads(manifest.read_text())["tools"]] == ["tested"]
+        expected_auth = args[args.index("--auth") + 1] if "--auth" in args else "user"
+        assert tomli.loads(manifest.read_text())["tools"][0]["auth"] == expected_auth
     run_agentbricks("tools", "remove", "tested", "--source", str(project))
     assert tomli.loads(manifest.read_text()).get("tools", []) == []
     assert {

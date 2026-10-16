@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Plan an Agent Bricks release and stamp its package metadata."""
+"""Plan an Agent Bricks release, stamp its package metadata, and draft its release notes."""
 
 import argparse
 import json
 import re
+import subprocess
 from pathlib import Path
 
 
@@ -24,6 +25,12 @@ TEMPLATE_DEPENDENCY_PATTERN = re.compile(
 )
 PACKAGE_PATH = Path("integrations/agentbricks/pyproject.toml")
 TEMPLATE_BASE_PATH = Path("integrations/agentbricks/src/databricks_agentbricks/templates")
+PACKAGE_ROOT = Path("integrations/agentbricks")
+TAG_PREFIX = "databricks-agentbricks-v"
+# Commits the release automation itself makes on release branches and main.
+AUTOMATION_SUBJECT_PATTERN = re.compile(r"(Release Agent Bricks|Set Agent Bricks development version to) ")
+# Run summaries do not autolink bare issue references the way release pages do.
+PULL_REQUEST_REFERENCE_PATTERN = re.compile(r"(?<![\w/\[])#(?P<number>[1-9][0-9]*)\b")
 
 
 def parse_version(value: str, *, allow_dev: bool = False) -> tuple[int, int, int, int, int]:
@@ -102,6 +109,61 @@ def stamp_release(root: Path, version: str, *, templates: bool = False) -> None:
             path.write_text(updated)
 
 
+def previous_release_tag(version: str, tags: list[str]) -> str | None:
+    target = parse_version(version)
+    released = []
+    for tag in tags:
+        if not tag.startswith(TAG_PREFIX):
+            continue
+        try:
+            parsed = parse_version(tag[len(TAG_PREFIX) :])
+        except ValueError:
+            continue
+        if parsed < target:
+            released.append((parsed, tag))
+    return max(released)[1] if released else None
+
+
+def render_release_notes(
+    version: str, previous_tag: str | None, commits: list[str], repository: str
+) -> str:
+    lines = [f"## databricks-agentbricks {version}", ""]
+    changes = [subject for subject in commits if not AUTOMATION_SUBJECT_PATTERN.match(subject)]
+    if changes:
+        pull_url = f"https://github.com/{repository}/pull"
+        linked = [
+            PULL_REQUEST_REFERENCE_PATTERN.sub(
+                lambda match: f"[#{match['number']}]({pull_url}/{match['number']})", subject
+            )
+            for subject in changes
+        ]
+        lines += ["### Changes", "", *(f"- {subject}" for subject in linked), ""]
+    else:
+        lines += ["No package changes since the previous release.", ""]
+    if previous_tag:
+        compare = f"https://github.com/{repository}/compare/{previous_tag}...{TAG_PREFIX}{version}"
+        lines.append(f"**Full changelog:** {compare}")
+    else:
+        lines.append("First tagged release of databricks-agentbricks.")
+    return "\n".join(lines) + "\n"
+
+
+def release_notes(root: Path, version: str, release_sha: str, repository: str) -> str:
+    def git(*args: str) -> str:
+        return subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, text=True).stdout
+
+    head = parse_sha(release_sha)
+    previous_tag = previous_release_tag(version, git("tag", "--list", f"{TAG_PREFIX}*").split())
+    log_args = ["log", "--no-merges", "--format=%s"]
+    if previous_tag:
+        # Release branches carry cherry-picked fixes; skip ones the previous release already shipped.
+        log_args += ["--cherry-pick", "--right-only", f"{previous_tag}...{head}"]
+    else:
+        log_args.append(head)
+    commits = git(*log_args, "--", str(PACKAGE_ROOT)).splitlines()
+    return render_release_notes(version, previous_tag, commits, repository)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -114,13 +176,20 @@ def main() -> None:
     stamp.add_argument("--target-version", required=True)
     stamp.add_argument("--root", type=Path, required=True)
     stamp.add_argument("--templates", action="store_true")
+    notes = commands.add_parser("notes", help="print Markdown release notes for a release commit")
+    notes.add_argument("--version", required=True)
+    notes.add_argument("--release-sha", required=True, help="commit the release tag points to")
+    notes.add_argument("--root", type=Path, required=True, help="repository checkout with release tags")
+    notes.add_argument("--repository", required=True, help="GitHub owner/name for the changelog link")
     args = parser.parse_args()
     try:
         if args.command == "plan":
             print(json.dumps(plan_release(args.version, args.base_sha, args.base_version, args.release_sha)))
+        elif args.command == "notes":
+            print(release_notes(args.root, args.version, args.release_sha, args.repository), end="")
         else:
             stamp_release(args.root, args.target_version, templates=args.templates)
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, subprocess.CalledProcessError) as exc:
         parser.error(str(exc))
 
 

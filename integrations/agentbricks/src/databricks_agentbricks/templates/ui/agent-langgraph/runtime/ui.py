@@ -303,28 +303,9 @@ def _require_session() -> None:
 
 
 async def _checkpoint_history(session_id: str, actor: str) -> dict[str, Any]:
-    from agent.agent import create_agent_graph
+    from databricks_agentkit.langgraph import read_history
 
-    from databricks_agentkit.langgraph.session_store import thread_config
-
-    graph = await create_agent_graph(actor)
-    snapshot = await graph.aget_state(thread_config(session_id, actor))
-    values = snapshot.values if isinstance(snapshot.values, dict) else {}
-    items = []
-    for index, message in enumerate(values.get("messages", [])):
-        data = message.model_dump() if hasattr(message, "model_dump") else message
-        items.append(
-            {
-                "item_id": str(getattr(message, "id", None) or index),
-                "data": data if isinstance(data, dict) else {"content": str(data)},
-            }
-        )
-    interrupts = [
-        {"id": interrupt.id, "value": interrupt.value}
-        for task in getattr(snapshot, "tasks", ())
-        for interrupt in getattr(task, "interrupts", ())
-    ]
-    return {"session_id": session_id, "session_items": items, "interrupts": interrupts}
+    return await read_history(session_id, actor)
 
 
 def _chat_sessions(result: dict[str, Any]) -> list[dict[str, Any]]:
@@ -513,5 +494,17 @@ def install_ui(app: FastAPI) -> None:
     @app.get("/api/demo/session/items", include_in_schema=False)
     async def list_session_items(request: Request) -> dict:
         session_id = _request_session_id(request)
-        # Managed session items contain checkpoints; the graph applies pending writes and reducers.
-        return await _checkpoint_history(session_id, _request_actor(request))
+        actor = _request_actor(request)
+        if not app.auth_policy.requires_user:
+            return await _checkpoint_history(session_id, actor)
+
+        from databricks_agentkit.runtime.auth import RequestAuthContext
+
+        auth = RequestAuthContext.from_headers(request.headers)
+        try:
+            result = await _checkpoint_history(
+                auth.namespace("session", session_id), auth.namespace("actor", actor)
+            )
+            return {**result, "session_id": session_id}
+        finally:
+            auth.close()
