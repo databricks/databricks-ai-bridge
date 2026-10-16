@@ -87,8 +87,14 @@ class AgentbricksCli:
             run_config.output / "logs" / re.sub(r"[^A-Za-z0-9_.-]+", "-", test_name).strip("-")
         )
         # The CLI prints a hint when it detects a coding agent; the suite must behave the same
-        # whoever launches it, and the hint would corrupt --output json errors on stderr.
-        self._env = {**os.environ, **target_workspace.env, "AGENTBRICKS_DISABLE_AGENT_HINT": "1"}
+        # whoever launches it, and the hint would corrupt --output json errors on stderr. Test runs
+        # are not product usage, so they send no CLI telemetry.
+        self._env = {
+            **os.environ,
+            **target_workspace.env,
+            "AGENTBRICKS_DISABLE_AGENT_HINT": "1",
+            "AGENTBRICKS_DISABLE_TELEMETRY": "1",
+        }
         self._sequence = 0
 
     def run(
