@@ -7,7 +7,7 @@ $PORT, so an inherited PORT would override --app-port.
 from __future__ import annotations
 
 import pytest
-from harness.agentbricks_cli import AgentbricksCli, free_port, invocation_json
+from harness.agentbricks_cli import AgentbricksCli, free_port
 from harness.project import Project
 from tool_definitions import Tool
 
@@ -34,7 +34,7 @@ def test_dev(
             with subtests.test(tool=tool.name):
                 output = agentbricks_cli.run(
                     f"--output json endpoint invoke --url http://127.0.0.1:{port} --no-auth "
-                    f"--path /api/invocations --json {invocation_json(tool.prompt)}",
+                    f"--path /api/invocations --json {agentbricks_cli.invocation_json(tool.prompt)}",
                     timeout=360,
                     retry_server_errors=True,
                 ).stdout

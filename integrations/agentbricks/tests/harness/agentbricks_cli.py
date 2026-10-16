@@ -28,7 +28,7 @@ from collections.abc import Iterator, Mapping
 from typing import Any
 
 from harness.logs import last_lines, last_nonempty_line, log, log_command
-from harness.run import E2E_MODEL, E2EError, RunConfig, now
+from harness.run import E2EError, RunConfig, now
 from harness.target import TargetWorkspace
 
 # `endpoint invoke`'s error for a 5xx answer: the App restarting after a redeploy, a new App's
@@ -127,6 +127,29 @@ class AgentbricksCli:
         if check and result.returncode != 0:
             raise E2EError(f"Command failed ({result.returncode}): {shlex.join(argv)}\n{output}")
         return result
+
+    def invocation_json(
+        self, prompt: str, *, session_id: str | None = None, actor: str | None = None
+    ) -> str:
+        """A shell-quoted /api/invocations body for `agentbricks endpoint invoke --json`.
+
+        Each call is a new session unless ``session_id`` is given. The agent keys long-term memory by
+        ``actor``, which defaults to the session.
+        """
+        invocation_id = str(uuid.uuid4())
+        agent_input: dict[str, Any] = {
+            "model": self.run_config.model,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if actor:
+            agent_input["actor"] = actor
+        body = {
+            "id": invocation_id,
+            # session_id is a top-level invocation field; the adapter rejects it nested in input.
+            "session_id": session_id or invocation_id,
+            "input": agent_input,
+        }
+        return shlex.quote(json.dumps(body))
 
     @contextlib.contextmanager
     def start(
@@ -236,28 +259,6 @@ def terminate_process_group(process: subprocess.Popen[str], *, grace: float = 20
 def not_found(result: subprocess.CompletedProcess[str]) -> bool:
     """Whether a command failed because what it names doesn't exist, e.g. an App already deleted."""
     return result.returncode != 0 and bool(_NOT_FOUND.search(result.stderr or result.stdout))
-
-
-def invocation_json(prompt: str, *, session_id: str | None = None, actor: str | None = None) -> str:
-    """A shell-quoted /api/invocations body for `agentbricks endpoint invoke --json`.
-
-    Each call is a new session unless ``session_id`` is given. The agent keys long-term memory by
-    ``actor``, which defaults to the session.
-    """
-    invocation_id = str(uuid.uuid4())
-    agent_input: dict[str, Any] = {
-        "model": E2E_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    if actor:
-        agent_input["actor"] = actor
-    body = {
-        "id": invocation_id,
-        # session_id is a top-level invocation field; the adapter rejects it nested in input.
-        "session_id": session_id or invocation_id,
-        "input": agent_input,
-    }
-    return shlex.quote(json.dumps(body))
 
 
 # Reading `endpoint invoke --output json`: the LangGraph agent lists every step in

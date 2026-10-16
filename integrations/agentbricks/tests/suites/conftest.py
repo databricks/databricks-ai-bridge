@@ -36,6 +36,7 @@ from harness.cleanup import (
 from harness.logs import log, log_command
 from harness.project import Project
 from harness.run import (
+    E2E_MODEL,
     RUN_ID_PATTERN,
     E2EError,
     RunConfig,
@@ -80,6 +81,11 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--catalog",
         default="main",
         help="Existing catalog for temporary test schemas (default: main).",
+    )
+    group.addoption(
+        "--model",
+        default=E2E_MODEL,
+        help=f"Model every invocation asks for (default: {E2E_MODEL}).",
     )
     group.addoption(
         "--wheel",
@@ -153,6 +159,7 @@ def _base_run_config(config: pytest.Config) -> RunConfig:
         run_id=run_id,
         output=output,
         warehouse_id=option("warehouse_id"),
+        model=option("model"),
         wheel=option("wheel"),
     )
     config.stash[_RUN_KEY] = run

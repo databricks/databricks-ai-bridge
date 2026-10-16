@@ -9,7 +9,7 @@ import json
 import uuid
 
 import pytest
-from harness.agentbricks_cli import AgentbricksCli, excerpt, invocation_json, reply
+from harness.agentbricks_cli import AgentbricksCli, excerpt, reply
 from harness.cleanup import Cleanup
 from harness.project import Project
 
@@ -38,7 +38,7 @@ def test_sessions(agentbricks_cli: AgentbricksCli, project: Project, cleanup: Cl
     def invoke(prompt: str, session_id: str) -> str:
         return agentbricks_cli.run(
             f"--output json endpoint invoke {app} --path /api/invocations "
-            f"--json {invocation_json(prompt, session_id=session_id)}",
+            f"--json {agentbricks_cli.invocation_json(prompt, session_id=session_id)}",
             timeout=360,
             retry_server_errors=True,
         ).stdout

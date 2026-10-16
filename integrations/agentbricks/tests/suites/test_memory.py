@@ -10,7 +10,7 @@ import json
 import uuid
 
 import pytest
-from harness.agentbricks_cli import AgentbricksCli, excerpt, invocation_json, tool_results
+from harness.agentbricks_cli import AgentbricksCli, excerpt, tool_results
 from harness.cleanup import Cleanup
 from harness.project import Project
 
@@ -38,7 +38,7 @@ def test_memory(agentbricks_cli: AgentbricksCli, project: Project, cleanup: Clea
         # Each invocation is a new session; only the actor carries over.
         return agentbricks_cli.run(
             f"--output json endpoint invoke {app} --path /api/invocations "
-            f"--json {invocation_json(prompt, actor=actor)}",
+            f"--json {agentbricks_cli.invocation_json(prompt, actor=actor)}",
             timeout=360,
             retry_server_errors=True,
         ).stdout

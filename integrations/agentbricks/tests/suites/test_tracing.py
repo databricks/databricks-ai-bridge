@@ -9,7 +9,7 @@ import json
 import time
 
 import pytest
-from harness.agentbricks_cli import AgentbricksCli, invocation_json
+from harness.agentbricks_cli import AgentbricksCli
 from harness.cleanup import Cleanup
 from harness.project import Project
 
@@ -31,7 +31,7 @@ def test_tracing(agentbricks_cli: AgentbricksCli, project: Project, cleanup: Cle
     cleanup(f"sessions stores delete {deployed['session_store']} --yes")
     agentbricks_cli.run(
         f"--output json endpoint invoke {app} --path /api/invocations "
-        f"--json {invocation_json('Reply with one word: hello.')}",
+        f"--json {agentbricks_cli.invocation_json('Reply with one word: hello.')}",
         timeout=360,
         retry_server_errors=True,
     )

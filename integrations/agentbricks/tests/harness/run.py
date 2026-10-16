@@ -13,6 +13,8 @@ import re
 import tempfile
 
 E2E_MODEL = "system.ai.gpt-5-2"
+
+
 APP_PREFIX = "agent-bricks-"
 
 
@@ -51,4 +53,6 @@ class RunConfig:
     output: pathlib.Path
     # Operator override; None lets the workspace pick the first running warehouse.
     warehouse_id: str | None
+    # What every invocation asks for; workspaces name their models differently.
+    model: str
     wheel: pathlib.Path | None

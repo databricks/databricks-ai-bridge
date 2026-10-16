@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 
-from harness.agentbricks_cli import AgentbricksCli, invocation_json, not_found
+from harness.agentbricks_cli import AgentbricksCli, not_found
 from harness.cleanup import Cleanup, wait_until_app_gone
 from harness.logs import log
 from harness.project import Project
@@ -50,7 +50,7 @@ def test_deploy(
                 log(f"{tool.name}: {tool.grant[3]} effective for {app} after {waited:.0f}s")
             output = agentbricks_cli.run(
                 f"--output json endpoint invoke {app} --path /api/invocations "
-                f"--json {invocation_json(tool.prompt)}",
+                f"--json {agentbricks_cli.invocation_json(tool.prompt)}",
                 timeout=360,
                 retry_server_errors=True,
             ).stdout
