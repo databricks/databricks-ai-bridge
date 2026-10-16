@@ -25,6 +25,13 @@ from databricks_agentbricks.errors import AgentCliError
 
 DatabricksRunner = Callable[..., subprocess.CompletedProcess]
 
+# Apps rejects a change while another operation (a create, an update, a deployment) is still running
+# on the App, and asks the caller to retry. Only that error is retried, and only for calls that
+# re-send the same idempotent request: a deploy, a scale update, and masked resource updates.
+_APP_BUSY_MARKER = "another operation is in progress"
+# Seconds to wait before each retry: about two minutes in total before giving up.
+_APP_BUSY_BACKOFF_S = (5, 10, 15, 20, 30, 30)
+
 _TOOL_RESOURCE_PREFIX = "agentbricks-tool-"
 _TOOL_PERMISSION_STRENGTH = {
     ("FUNCTION", "EXECUTE"): 1,
@@ -94,6 +101,25 @@ def _instance_args(instance_count: Optional[int]) -> list[str]:
     ]
 
 
+def _is_app_busy(result: subprocess.CompletedProcess) -> bool:
+    """Whether a failed Apps call failed only because another operation is running on the App."""
+    if result.returncode == 0:
+        return False
+    return _APP_BUSY_MARKER in f"{result.stdout or ''}\n{result.stderr or ''}".lower()
+
+
+def _app_busy_hint(name: str) -> str:
+    """The next step once the busy-App retries are spent."""
+    return (
+        f"another operation is still running on {name}; run `agentbricks deployments wait {name}`, "
+        "then re-run `agentbricks deploy`"
+    )
+
+
+def _failure_detail(result: subprocess.CompletedProcess) -> str:
+    return (result.stderr or result.stdout or "").strip()
+
+
 def _field(payload: dict, name: str):
     """Read an Apps JSON field across snake_case and camelCase CLI versions."""
     if name in payload:
@@ -112,10 +138,58 @@ class AppsClient:
     supply a fake instead of monkeypatching a module-level function.
     """
 
-    def __init__(self, profile: Optional[str], *, runner: DatabricksRunner = _databricks) -> None:
+    def __init__(
+        self,
+        profile: Optional[str],
+        *,
+        runner: DatabricksRunner = _databricks,
+        on_busy: Optional[Callable[[str], None]] = None,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
         self._profile = profile
         self._run = runner
+        self._on_busy = on_busy
+        self._sleep = sleep
         self._sp_cache: dict[str, Optional[str]] = {}
+
+    def _run_app_change(self, args: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        """Run one App-modifying call, retrying while Apps reports another operation in progress.
+
+        Never raises for a failed exit: the caller inspects the final result. When the retries run
+        out, the last (busy) result is returned unchanged; :func:`_is_app_busy` still identifies it.
+        """
+        kwargs["check"] = False
+        result = self._run(args, self._profile, **kwargs)
+        for delay in _APP_BUSY_BACKOFF_S:
+            if not _is_app_busy(result):
+                return result
+            if self._on_busy is not None:
+                self._on_busy(f"App is busy (another operation in progress); retrying in {delay}s…")
+            self._sleep(delay)
+            result = self._run(args, self._profile, **kwargs)
+        return result
+
+    def _tool_resource_runner(
+        self, args: list[str], profile: Optional[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess:
+        """The runner handed to the tool-resource helpers: their masked updates retry when busy."""
+        if args[:2] == ["apps", "create-update"]:
+            return self._run_app_change(args, **kwargs)
+        return self._run(args, profile, **kwargs)
+
+    def _raise_app_change_failed(
+        self, name: str, action: str, result: subprocess.CompletedProcess, *, relayed: bool = False
+    ) -> None:
+        """Raise ``action`` for a failed App change, pointing a busy App at `deployments wait`.
+
+        ``relayed`` output was already shown live, so it isn't repeated in the hint.
+        """
+        if _is_app_busy(result):
+            detail = (
+                _failure_detail(result).splitlines()[-1:] if relayed else [_failure_detail(result)]
+            )
+            raise AgentCliError(action, hint="\n".join([*detail, _app_busy_hint(name)]))
+        raise AgentCliError(action, hint=None if relayed else (_failure_detail(result) or None))
 
     def _get_json(self, name: str) -> Optional[dict]:
         result = self._run(
@@ -138,13 +212,34 @@ class AppsClient:
         result = self._run(["apps", "get", name], self._profile, capture=True, check=False)
         if result.returncode == 0:
             return True
+        self._raise_unless_missing(name, result)
+        return False
+
+    def find(self, name: str) -> Optional[dict]:
+        """The app's `apps get` payload, or None on a definitive not-found (other failures raise)."""
+        result = self._run(
+            ["apps", "get", name, "-o", "json"], self._profile, capture=True, check=False
+        )
+        if result.returncode != 0:
+            self._raise_unless_missing(name, result)
+            return None
+        try:
+            data = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            raise AgentCliError(f"Could not parse deployment '{name}'.") from exc
+        if not isinstance(data, dict):
+            raise AgentCliError(f"Could not parse deployment '{name}'.")
+        return data
+
+    def _raise_unless_missing(self, name: str, result: subprocess.CompletedProcess) -> None:
+        """Return quietly when a failed `apps get` means the app is missing; raise otherwise."""
         detail = (result.stderr or result.stdout or "").strip()
         # Only a definitive not-found counts; a generic "not found" would let an unrelated 404
         # masquerade as "the app is missing" and steer the caller into a create.
         if any(
             marker in detail.lower() for marker in ("resource_does_not_exist", "does not exist")
         ):
-            return False
+            return
         login = f"agentbricks login --profile {self._profile or '<profile>'}"
         raise AgentCliError(
             f"Could not check whether deployment '{name}' exists.",
@@ -254,7 +349,7 @@ class AppsClient:
         result = self._update_resources(name, [*preserved, *desired_resources])
         if result.returncode == 0:
             return None
-        return (result.stderr or result.stdout or "").strip() or "unknown error"
+        return _resource_update_error(name, result)
 
     def attach_postgres_backends(
         self, name: str, backends: Sequence[LakebaseBackend]
@@ -274,13 +369,17 @@ class AppsClient:
 
     def apply_tool_resources(self, name: str, resources: Sequence[dict[str, Any]]) -> Optional[str]:
         """Replace Agent Bricks-owned tool resources after a successful rollout."""
-        return _apply_tool_resources(name, resources, self._profile, runner=self._run)
+        return _apply_tool_resources(
+            name, resources, self._profile, runner=self._tool_resource_runner
+        )
 
     def add_tool_resources_for_rollout(
         self, name: str, resources: Sequence[dict[str, Any]]
     ) -> Optional[str]:
         """Add or upgrade tool resources before rollout without pruning or downgrading grants."""
-        return _add_tool_resources_for_rollout(name, resources, self._profile, runner=self._run)
+        return _add_tool_resources_for_rollout(
+            name, resources, self._profile, runner=self._tool_resource_runner
+        )
 
     def _read_resources(self, name: str) -> list[dict]:
         """Read an App's resources array without treating malformed data as empty."""
@@ -315,11 +414,8 @@ class AppsClient:
     ) -> subprocess.CompletedProcess:
         """Replace only an App's resources field with a masked Apps update."""
         payload = {"app": {"resources": list(resources)}, "update_mask": "resources"}
-        return self._run(
-            ["apps", "create-update", name, "--json", json.dumps(payload)],
-            self._profile,
-            capture=True,
-            check=False,
+        return self._run_app_change(
+            ["apps", "create-update", name, "--json", json.dumps(payload)], capture=True
         )
 
     def create(self, name: str, instance_count: Optional[int]) -> str:
@@ -341,12 +437,11 @@ class AppsClient:
             },
             "update_mask": "compute_min_instances,compute_max_instances",
         }
-        result = self._run(
-            ["apps", "create-update", name, "--json", json.dumps(update)],
-            self._profile,
-            capture=True,
-            action=f"Could not update deployment '{name}'.",
+        result = self._run_app_change(
+            ["apps", "create-update", name, "--json", json.dumps(update)], capture=True
         )
+        if result.returncode != 0:
+            self._raise_app_change_failed(name, f"Could not update deployment '{name}'.", result)
         return result.stdout or ""
 
     def sync_source(self, name: str, source_dir, ws_path: str) -> None:
@@ -354,21 +449,23 @@ class AppsClient:
         # Don't ship uv.lock: it pins exact package URLs from whatever index the developer's machine
         # resolved against (often an internal proxy). The Apps build must resolve against its own
         # configured index, so let it lock fresh in-sandbox instead of inheriting the local lock.
+        # `.agentbricks/` holds local state (the deploy log and state file among it), never source.
+        # Output is relayed to stderr so `-o json` stdout stays a single document.
         self._run(
-            ["sync", str(source_dir), ws_path, "--exclude", "uv.lock"],
+            ["sync", str(source_dir), ws_path, "--exclude", "uv.lock", "--exclude", ".agentbricks"],
             self._profile,
             to_stderr=True,
             action=f"Could not upload the agent source for '{name}'.",
+            tee=True,
         )
 
     def deploy(self, name: str, ws_path: str) -> None:
         """Roll out the uploaded source as the app's active deployment."""
-        self._run(
-            ["apps", "deploy", name, "--source-code-path", ws_path],
-            self._profile,
-            to_stderr=True,
-            action=f"Could not deploy '{name}'.",
+        result = self._run_app_change(
+            ["apps", "deploy", name, "--source-code-path", ws_path], to_stderr=True, tee=True
         )
+        if result.returncode != 0:
+            self._raise_app_change_failed(name, f"Could not deploy '{name}'.", result, relayed=True)
 
     def run_local(
         self,
@@ -479,6 +576,12 @@ def _update_app_resources(
     )
 
 
+def _resource_update_error(app: str, result: subprocess.CompletedProcess) -> str:
+    """The error text for a failed masked resource update, with the busy-App hint when it applies."""
+    detail = _failure_detail(result) or "unknown error"
+    return f"{detail}\n{_app_busy_hint(app)}" if _is_app_busy(result) else detail
+
+
 def _tool_resource_permission_strength(resource: dict[str, Any]) -> int | None:
     """Return the relative strength of an Apps tool resource's permission."""
     uc_resource = resource.get("uc_securable")
@@ -541,7 +644,7 @@ def _apply_tool_resources(
     reconciled = [*preserved, *owned]
     update = _update_app_resources(app, reconciled, profile, runner=runner)
     if update.returncode != 0:
-        return (update.stderr or update.stdout or "").strip() or "unknown error"
+        return _resource_update_error(app, update)
 
     persisted, verify_error = _read_app_resources_strict(
         app,
@@ -638,7 +741,7 @@ def _add_tool_resources_for_rollout(
     reconciled = [*preserved, *owned]
     update = _update_app_resources(app, reconciled, profile, runner=runner)
     if update.returncode != 0:
-        return (update.stderr or update.stdout or "").strip() or "unknown error"
+        return _resource_update_error(app, update)
 
     persisted, verify_error = _read_app_resources_strict(
         app,

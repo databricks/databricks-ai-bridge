@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import pathlib
 from contextlib import nullcontext
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -34,11 +36,13 @@ from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.reporting import Reporter
 from databricks_agentbricks.services.deploy_service import DeployRequest, DeployService
 from databricks_agentbricks.services.deployment import app_provisioner as app_provisioner_mod
+from databricks_agentbricks.services.deployment import deploy_state
 from databricks_agentbricks.services.deployment.app_provisioner import (
     AppDeleteWaitResult,
     AppProvisioner,
     recorded_source_code_path,
 )
+from databricks_agentbricks.services.deployment.deploy_state import DeployStateTracker
 from databricks_agentbricks.services.deployment.model_binding_provisioner import (
     ModelBindingProvisioner,
 )
@@ -358,8 +362,7 @@ def test_resolve_prefixes_name_and_persists_it_before_auth(
     deployment_fixture, tmp_path: pathlib.Path
 ):
     deployment_fixture.resolver.resolve_deployment_name.return_value = "first-run"
-    prepared = deployment_fixture.service._prepare_deployment(
-        tmp_path,
+    prepared = deployment_fixture.service.prepare(
         _request(tmp_path, name="first-run", instance_count=2, allow_user_scope_update=True),
     )
 
@@ -410,9 +413,7 @@ def test_omitted_name_reuses_recorded_existing_app(deployment_fixture, tmp_path:
     deployment_fixture.project.set_deployment_name("demo")
     deployment_fixture.apps.exists.return_value = True
 
-    prepared = deployment_fixture.service._prepare_deployment(
-        tmp_path, _request(tmp_path, name=None)
-    )
+    prepared = deployment_fixture.service.prepare(_request(tmp_path, name=None))
 
     assert prepared.name == DeploymentName("agent-bricks-demo")
     assert prepared.deployment_exists is True
@@ -426,8 +427,8 @@ def test_required_auth_reports_note_and_uses_auth_app_state(
         existing_scopes=("ai-gateway",)
     )
 
-    prepared = deployment_fixture.service._prepare_deployment(
-        tmp_path, _request(tmp_path, allow_user_scope_update=True, instance_count=3)
+    prepared = deployment_fixture.service.prepare(
+        _request(tmp_path, allow_user_scope_update=True, instance_count=3)
     )
 
     assert prepared.auth_plan.required is True
@@ -1243,3 +1244,201 @@ def test_delete_source_failure_carries_the_reason():
 
     with pytest.raises(AgentCliError, match="User cannot delete"):
         _app_provisioner(w).delete_source("/Workspace/x")
+
+
+# --- state file and wait -------------------------------------------------------------------
+
+
+class _Clock:
+    """Wall-clock stand-in: ``sleep`` advances time and runs an optional per-sleep hook."""
+
+    def __init__(self, start: float = 1_800_000_000.0, on_sleep=None) -> None:
+        self.now = start
+        self.sleeps: list[float] = []
+        self.on_sleep = on_sleep
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+        if self.on_sleep is not None:
+            self.on_sleep(self)
+
+
+def _service_with(fixture, clock: _Clock, **extra) -> DeployService:
+    """The fixture's service, rebuilt with a fake clock (and any extra collaborators)."""
+    return DeployService(
+        project_resolver=fixture.resolver,
+        apps_client=fixture.apps,
+        api_client_provider=fixture.provider,
+        app_provisioner=fixture.app,
+        memory_store_provisioner=fixture.memory,
+        session_store_provisioner=fixture.session,
+        tracing_provisioner=fixture.tracing,
+        runtime_store_provisioner=fixture.runtime,
+        tool_access_provisioner=fixture.tool_access,
+        model_binding_provisioner=ModelBindingProvisioner(fixture.provider, fixture.reporter),
+        reporter=fixture.reporter,
+        clock=clock,
+        sleep=clock.sleep,
+        **extra,
+    )
+
+
+def _notes(fixture) -> list[str]:
+    return [call.args[0] for call in fixture.reporter.note.call_args_list]
+
+
+def test_deploy_records_success_through_the_state_tracker(
+    deployment_fixture, tmp_path: pathlib.Path
+):
+    tracker = DeployStateTracker(result_payload=lambda result: {"url": result.url})
+    service = _service_with(deployment_fixture, _Clock(), state_tracker=tracker)
+
+    service.deploy(_request(tmp_path))
+
+    state = deploy_state.read_state(deploy_state.state_path(tmp_path, "agent-bricks-demo"))
+    assert state is not None
+    assert state["status"] == "succeeded"
+    assert state["result"] == {"url": "https://demo.example"}
+
+
+def test_deploy_records_failure_and_reraises(deployment_fixture, tmp_path: pathlib.Path):
+    deployment_fixture.app.deploy_source.side_effect = AgentCliError(
+        "Could not deploy 'agent-bricks-demo'.", hint="app crashed"
+    )
+    tracker = DeployStateTracker(result_payload=lambda result: {})
+    service = _service_with(deployment_fixture, _Clock(), state_tracker=tracker)
+
+    with pytest.raises(AgentCliError):
+        service.deploy(_request(tmp_path))
+
+    state = deploy_state.read_state(deploy_state.state_path(tmp_path, "agent-bricks-demo"))
+    assert state is not None
+    assert state["status"] == "failed"
+    assert state["error"] == "Could not deploy 'agent-bricks-demo'.\napp crashed"
+
+
+def test_prepare_refuses_a_running_deploy_before_any_change(
+    deployment_fixture, tmp_path: pathlib.Path
+):
+    clock = _Clock()
+    deploy_state.write_state(
+        deploy_state.state_path(tmp_path, "agent-bricks-demo"),
+        {
+            "pid": os.getppid(),
+            "status": "running",
+            "phase_started_at": deploy_state.timestamp(clock.now),
+        },
+    )
+
+    with pytest.raises(AgentCliError, match="already running") as raised:
+        _service_with(deployment_fixture, clock).prepare(_request(tmp_path))
+
+    assert raised.value.hint == "run `agentbricks deployments wait agent-bricks-demo`"
+    deployment_fixture.app.prepare_app_auth.assert_not_called()
+    assert deployment_fixture.project.deployment_name is None
+
+
+def test_wait_follows_the_local_record_until_it_succeeds(deployment_fixture, tmp_path):
+    path = deploy_state.state_path(tmp_path, "agent-bricks-demo")
+    start = 1_800_000_000.0
+
+    def advance(clock: _Clock) -> None:
+        elapsed = clock.now - start
+        state: dict[str, Any] = {
+            "pid": os.getpid(),
+            "started_at": deploy_state.timestamp(start),
+            "status": "running",
+            "phase": "Waiting for agent compute to start",
+            "phase_started_at": deploy_state.timestamp(start),
+        }
+        if elapsed >= 20:
+            state.update(phase="Deploying the agent source")
+            state["phase_started_at"] = deploy_state.timestamp(start + 20)
+        if elapsed >= 40:
+            state.update(status="succeeded", result={"url": "https://demo.example"})
+        deploy_state.write_state(path, state)
+
+    clock = _Clock(start, on_sleep=advance)
+    advance(clock)
+
+    result = _service_with(deployment_fixture, clock).wait(None, tmp_path, timeout_s=100)
+
+    assert result.status == "succeeded"
+    assert result.url == "https://demo.example"
+    assert result.deployment == "agent-bricks-demo"
+    assert result.elapsed_s == 40
+    assert result.uses_runtime_api is True
+    assert set(clock.sleeps) == {2.0}  # the local record is re-read every 2 s
+    assert _notes(deployment_fixture) == [
+        "• Waiting for agent compute to start…",
+        "• Waiting for agent compute to start… 0:16",
+        "• Deploying the agent source…",
+        "• Deploying the agent source… 0:16",
+    ]
+
+
+def test_wait_returns_running_at_the_timeout(deployment_fixture, tmp_path):
+    clock = _Clock()
+    deploy_state.write_state(
+        deploy_state.state_path(tmp_path, "agent-bricks-demo"),
+        {
+            "pid": os.getpid(),
+            "started_at": deploy_state.timestamp(clock.now - 60),
+            "status": "running",
+            "phase": "Waiting for agent compute to start",
+            "phase_started_at": deploy_state.timestamp(clock.now - 30),
+        },
+    )
+
+    result = _service_with(deployment_fixture, clock).wait("demo", tmp_path, timeout_s=10)
+
+    assert result.status == "running"
+    assert result.phase == "Waiting for agent compute to start"
+    assert result.elapsed_s == 70
+    assert sum(clock.sleeps) == 10
+    # Joined 30 s into the phase, so the next heartbeat (0:45) falls after the 10 s timeout.
+    assert _notes(deployment_fixture) == ["• Waiting for agent compute to start…"]
+
+
+def test_wait_follows_the_app_from_starting_to_active(deployment_fixture, tmp_path):
+    payloads = [
+        {"compute_status": {"state": "STARTING"}},
+        {"compute_status": {"state": "STARTING"}},
+        {"compute_status": {"state": "ACTIVE"}, "pending_deployment": {"status": {}}},
+        {
+            "url": "https://demo.example",
+            "compute_status": {"state": "ACTIVE"},
+            "active_deployment": {"status": {"state": "SUCCEEDED"}},
+        },
+    ]
+    deployment_fixture.apps.find.side_effect = payloads
+    clock = _Clock()
+
+    result = _service_with(deployment_fixture, clock).wait("demo", tmp_path, timeout_s=100)
+
+    assert result.status == "succeeded"
+    assert result.url == "https://demo.example"
+    assert result.elapsed_s == 15
+    assert clock.sleeps == [5.0, 5.0, 5.0]
+    deployment_fixture.apps.find.assert_called_with(DeploymentName("agent-bricks-demo"))
+    assert _notes(deployment_fixture) == [
+        "• Waiting for agent compute to start…",
+        "• Deploying the agent source…",
+    ]
+
+
+def test_wait_reports_the_apps_failure_message(deployment_fixture, tmp_path):
+    deployment_fixture.apps.find.return_value = {
+        "compute_status": {"state": "ACTIVE"},
+        "active_deployment": {"status": {"state": "FAILED", "message": "build failed"}},
+    }
+
+    result = _service_with(deployment_fixture, _Clock()).wait("demo", tmp_path, timeout_s=100)
+
+    assert result.status == "failed"
+    assert result.error == "Could not deploy 'agent-bricks-demo'."
+    assert result.log_tail == ["build failed"]
