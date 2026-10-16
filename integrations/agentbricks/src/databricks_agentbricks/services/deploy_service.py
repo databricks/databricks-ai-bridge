@@ -339,9 +339,11 @@ class DeployService:
         created_app = False
         if early_compute:
             with timer("app_start"):
+                # Reuse preflight's read only when it settled the question; an App known to exist
+                # but without a state read is read here, so it is never mistaken for a missing one.
                 app_state = (
                     prepared.app_state
-                    if prepared.deployment_exists is not None
+                    if prepared.app_state is not None or prepared.deployment_exists is False
                     else self._apps_client.app_state(name)
                 )
                 # An App that exists but never rolled out (a first deploy that stopped partway) is
@@ -441,7 +443,7 @@ class DeployService:
         prepared: _PreparedDeployment,
         ctx: ResourceContext,
         client: Any,
-        timer: "_PhaseTimer",
+        timer: _PhaseTimer,
         *,
         early_compute: bool,
     ) -> _RolledOut:

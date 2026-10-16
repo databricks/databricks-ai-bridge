@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import pathlib
 from contextlib import nullcontext
 from types import SimpleNamespace
@@ -471,6 +472,28 @@ def test_deploy_starts_compute_early_from_one_app_read(
     deployment_fixture.app.ensure_app_ready.assert_not_called()
     deployment_fixture.app.wait_for_compute.assert_called_once_with(context)
     assert result.instance_count == instances
+
+
+def test_deploy_reads_state_of_an_app_preflight_only_knew_exists(
+    deployment_fixture, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """An App known to exist but without a state read is read, never mistaken for a missing one."""
+    f = deployment_fixture
+    prepare = f.service._prepare_deployment
+
+    def known_to_exist(*args: object, **kwargs: object):
+        prepared = prepare(*args, **kwargs)
+        return dataclasses.replace(prepared, deployment_exists=True, app_state=None)
+
+    monkeypatch.setattr(f.service, "_prepare_deployment", known_to_exist)
+    existing = AppState("ACTIVE", True, "sp-123")
+    f.apps.app_state.return_value = existing
+    f.app.start_compute.return_value = False
+
+    f.service.deploy(_request(tmp_path))
+
+    f.apps.app_state.assert_called_once_with(DeploymentName("agent-bricks-demo"))
+    assert f.app.start_compute.call_args.args[1] is existing
 
 
 def test_deploy_scoped_app_keeps_original_order(deployment_fixture, tmp_path: pathlib.Path):
