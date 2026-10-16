@@ -39,8 +39,8 @@ MODEL = resolve_model_service() or "system.ai.claude-sonnet-4-5"
 
 # Tools that require human approval before they run. Add a tool's name here and the agent pauses when
 # the model calls it, emitting an `interrupt` event; the client resumes by sending `resume` with the
-# same session id. The tools declare `needs_approval=True` themselves (see agent/tools/); this set is
-# how the runtime knows which pending calls to surface. Empty it to disable approval gating.
+# same session id. Local tools also declare `needs_approval=True` (see agent/tools/). For CLI-declared
+# MCP tools, this set configures the SDK approval policy using their exposed tool names.
 REQUIRE_APPROVAL = {"send_message"}
 
 # Native callers keep pauses local; the example adapter supplies Session Store checkpoints.
@@ -180,7 +180,9 @@ async def run_agent(
             _pending_runs[session_id] = value
 
     auth_kwargs = {"workspace_client_for": workspace_client_for} if workspace_client_for else {}
-    servers = await mcp_servers(build_mcp_servers(), **auth_kwargs)
+    servers = await mcp_servers(
+        build_mcp_servers(), require_approval=dict.fromkeys(REQUIRE_APPROVAL, True), **auth_kwargs
+    )
     async with MCPServerManager(servers) as manager:
         for server, error in manager.errors.items():
             if getattr(server, "_agentbricks_request_user", False) is True or isinstance(

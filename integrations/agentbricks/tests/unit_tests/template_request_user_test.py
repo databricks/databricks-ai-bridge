@@ -551,8 +551,8 @@ def openai_hitl_app(template, request, monkeypatch):
         cache_tools_list = True
         _agentbricks_request_user = True
 
-        def __init__(self, resolver):
-            super().__init__(require_approval="always")
+        def __init__(self, resolver, require_approval):
+            super().__init__(require_approval=require_approval)
             self.resolver = resolver
             self.closed = False
 
@@ -591,10 +591,11 @@ def openai_hitl_app(template, request, monkeypatch):
         async def get_prompt(self, name, arguments=None):
             raise NotImplementedError
 
-    async def mcp_servers(_configured, *, workspace_client_for):
+    async def mcp_servers(_configured, *, workspace_client_for, require_approval):
+        assert require_approval == {"record_action": True}
         if tool_kind == "function":
             return []
-        server = UserMCP(workspace_client_for)
+        server = UserMCP(workspace_client_for, require_approval)
         servers.append(server)
         return [server]
 
@@ -616,6 +617,7 @@ def openai_hitl_app(template, request, monkeypatch):
 
     monkeypatch.setattr(agent, "create_agent", create_agent)
     monkeypatch.setattr(agent, "mcp_servers", mcp_servers)
+    monkeypatch.setattr(agent, "REQUIRE_APPROVAL", {"record_action"})
     monkeypatch.setattr(agent, "start_trace", lambda **_kwargs: nullcontext())
     run_streamed = agent.Runner.run_streamed
     monkeypatch.setattr(

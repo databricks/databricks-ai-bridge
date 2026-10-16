@@ -123,7 +123,8 @@ async def test_agent_events_omit_unavailable_mcp_servers(monkeypatch):
     all_servers = [healthy, *unavailable]
     tool_filters = [server.tool_filter for server in all_servers]
 
-    async def mcp_servers(_extra):
+    async def mcp_servers(_extra, *, require_approval):
+        assert require_approval == {"send_message": True}
         return [healthy, *unavailable]
 
     create_agent = MagicMock(return_value=object())
@@ -161,7 +162,8 @@ async def test_agent_events_propagate_request_user_mcp_failure(monkeypatch):
     server.connect = AsyncMock(side_effect=PermissionError("request-user denied"))
     server.cleanup = AsyncMock()
 
-    async def mcp_servers(_extra):
+    async def mcp_servers(_extra, *, require_approval):
+        assert require_approval == {"send_message": True}
         return [server]
 
     monkeypatch.setattr(agent_module, "mcp_servers", mcp_servers)

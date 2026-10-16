@@ -47,10 +47,13 @@ them with agent-owned servers without duplicates. It applies sandbox downscoping
 bindings arrive as tools from `genie_tools()`. Local Python tools belong in source; the template
 discovers `@function_tool` functions through [agent/tools/__init__.py](agent/tools/__init__.py).
 
-Feed selected tools into the agent's tool list while preserving approval policy. Tools that gate on
-approval declare `needs_approval=True` and appear in the template's `REQUIRE_APPROVAL` set so
-pending calls surface as interrupts. New bindings must become effective on the next agent
-construction or restart without another source edit.
+Feed selected tools into the agent's tool list while preserving approval policy. Local tools that
+gate on approval declare `needs_approval=True`. For CLI-declared MCP tools, add their exposed tool
+names to the template's `REQUIRE_APPROVAL` set, for example `{"send_message", "web_search"}`.
+The template passes that policy to `mcp_servers(require_approval=...)` on every invocation,
+including resumes. These are callable tool names, not manifest binding IDs or service names.
+Agent-owned extra servers retain their own SDK approval policy. New bindings must become effective
+on the next agent construction or restart without another source edit.
 
 ### Sessions and memory
 

@@ -81,4 +81,5 @@ effects and tools must be idempotent.
 
 `agent/tools/all_tools()` auto-imports tool modules. Add a decorated tool file rather than manually
 editing a registry. Approval tools must declare `needs_approval=True` and appear in
-`REQUIRE_APPROVAL`.
+`REQUIRE_APPROVAL`. For CLI-declared MCP tools, add the exposed tool names to `REQUIRE_APPROVAL`;
+the template forwards that policy to the MCP servers. Extra servers keep their own SDK policy.
