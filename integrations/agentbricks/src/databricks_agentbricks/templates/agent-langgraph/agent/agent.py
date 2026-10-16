@@ -6,6 +6,9 @@ from databricks.sdk import WorkspaceClient
 from databricks_langchain import ChatDatabricks
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langchain.agents.middleware.human_in_the_loop import HITLResponse
+from langgraph.types import Command
+from pydantic import TypeAdapter, ValidationError
 
 from agent.mcps import build_mcp_servers
 
@@ -25,6 +28,7 @@ from databricks_agentkit.langgraph.session_store import (
     invocation_id_from_metadata,
     invocation_metadata,
 )
+from databricks_agentkit.runtime.auth import AuthError
 from databricks_agentkit.runtime.tool_manifest import resolve_model_service
 
 # A Unity Catalog AI Gateway model service, served from the `system.ai` schema and queried through
@@ -139,6 +143,36 @@ async def recovery_input(
     return None if current_invocation_checkpointed else agent_input
 
 
+async def _validate_approval_resume(graph: Any, config: dict, agent_input: Any) -> None:
+    """Reject malformed middleware decisions before LangGraph checkpoints the resume value."""
+    if not isinstance(agent_input, Command) or agent_input.resume is None:
+        return
+    state = await graph.aget_state(config)
+    pending = [item for task in state.tasks for item in task.interrupts]
+    resume = agent_input.resume
+    keyed = isinstance(resume, dict) and any(item.id in resume for item in pending)
+    for item in pending:
+        if not isinstance(item.value, dict) or "review_configs" not in item.value:
+            continue  # Application-defined interrupts keep their native resume contract.
+        if keyed and item.id not in resume:
+            continue
+        response = resume[item.id] if keyed else resume
+        try:
+            decisions = TypeAdapter(HITLResponse).validate_python(response)["decisions"]
+        except ValidationError as error:
+            raise AuthError(
+                "INVALID_APPROVAL", "Invalid approval decision payload.", 400
+            ) from error
+        reviews = item.value["review_configs"]
+        if len(decisions) != len(reviews) or any(
+            decision["type"] not in review["allowed_decisions"]
+            for decision, review in zip(decisions, reviews, strict=True)
+        ):
+            raise AuthError(
+                "INVALID_APPROVAL", "Provide one allowed decision per pending tool call.", 400
+            )
+
+
 async def run_agent(
     agent_input: Any,
     *,
@@ -162,6 +196,8 @@ async def run_agent(
     config = thread_config(session_id, actor)
     if invocation_id:
         config["metadata"] = invocation_metadata(invocation_id)
+
+    await _validate_approval_resume(graph, config, agent_input)
 
     last_update: Any = None
     with start_trace(name="invoke", inputs=agent_input, session_id=session_id) as span:

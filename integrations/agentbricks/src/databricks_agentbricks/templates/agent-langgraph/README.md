@@ -89,6 +89,9 @@ its own user credentials; the paused invocation's credentials are discarded. The
 uses its existing authenticated session, so approval does not require a page refresh or another
 login unless that session has expired. Automatic crash recovery still cannot recover OBO work.
 
+Malformed middleware decisions return `INVALID_APPROVAL` before the resume value is checkpointed,
+so the user can correct the decision and submit it with a new invocation ID.
+
 The default checkpointer is process-local. Bind a managed Session Store to preserve multi-turn and
 paused LangGraph state across restarts:
 

@@ -305,6 +305,7 @@ def hitl_app(template, monkeypatch):
             return self._generate(messages, stop, run_manager, **kwargs)
 
     async def create_graph(actor, model=None, *, workspace_client_for=None):
+        assert workspace_client_for is not None
         credentials.append(workspace_client_for.__self__)
 
         @tool
@@ -386,11 +387,17 @@ async def test_langgraph_user_hitl_resumes_with_current_request_credentials(
     async with hitl_client(state.app) as client:
         pause = await client.post(
             "/api/invocations",
-            json=hitl_request({"messages": [{"role": "user", "content": "Record an action"}]}),
+            json=hitl_request(
+                {"messages": [{"role": "user", "content": "Record an action"}]}, stream=stream
+            ),
             headers=hitl_headers("before-approval-token"),
         )
         assert pause.status_code == 200
-        assert pause.json()["output"]["status"] == "interrupted"
+        if stream:
+            assert "event: interrupt" in pause.text
+            assert "event: run.failed" not in pause.text
+        else:
+            assert pause.json()["output"]["status"] == "interrupted"
         assert state.writes == []
         with pytest.raises(AuthError, match="no longer active"):
             state.credentials[0].client_for("user")
@@ -460,3 +467,43 @@ async def test_langgraph_user_hitl_requires_authenticated_session_owner(hitl_app
         )
         assert owner.status_code == 200
         assert state.writes == [("original", "owner-resume-token")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("template", ["langgraph"], indirect=True)
+@pytest.mark.parametrize(
+    "decisions",
+    [
+        [],
+        [{"type": "invalid"}],
+        [{"type": "edit"}],
+        [{"type": "respond"}],
+        [{"type": "approve"}, {"type": "approve"}],
+    ],
+)
+async def test_langgraph_user_hitl_invalid_decision_does_not_execute_or_consume_approval(
+    hitl_app, decisions
+):
+    state = hitl_app
+    async with hitl_client(state.app) as client:
+        pause = await client.post(
+            "/api/invocations",
+            json=hitl_request({"messages": [{"role": "user", "content": "Record an action"}]}),
+            headers=hitl_headers("pause-token"),
+        )
+        assert pause.json()["output"]["status"] == "interrupted"
+        invalid = await client.post(
+            "/api/invocations",
+            json=hitl_request({"resume": {"decisions": decisions}}),
+            headers=hitl_headers("invalid-decision-token"),
+        )
+        assert invalid.status_code == 400
+        assert invalid.json()["error"]["code"] == "INVALID_APPROVAL"
+        assert state.writes == []
+        valid = await client.post(
+            "/api/invocations",
+            json=hitl_request({"resume": {"decisions": [{"type": "approve"}]}}),
+            headers=hitl_headers("approved-token"),
+        )
+        assert valid.status_code == 200
+        assert state.writes == [("original", "approved-token")]
