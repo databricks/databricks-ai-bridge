@@ -9,10 +9,9 @@ import json
 import time
 
 import pytest
-from harness.agentbricks_cli import AgentbricksCli
+from harness.agentbricks_cli import AgentbricksCli, invocation_json
 from harness.cleanup import Cleanup
 from harness.project import Project
-from tool_definitions import invocation_json
 
 
 # Deploy needs a live workspace.

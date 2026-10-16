@@ -4,13 +4,10 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import shlex
-import uuid
 from collections.abc import Callable, Mapping
 from typing import Any
 
 from harness.project import Project
-from harness.run import E2E_MODEL
 from harness.workspace import GrantTuple
 from uc_objects import UcFunction
 
@@ -213,15 +210,3 @@ def assert_declared(project: Project, tool: Tool) -> None:
         assert declared[tool.tool_id].get("auth") == "app", (
             f"CLI-authored {tool.tool_id} binding is not App-auth."
         )
-
-
-def invocation_json(prompt: str) -> str:
-    """A shell-quoted /api/invocations body for `agentbricks endpoint invoke --json`."""
-    invocation_id = str(uuid.uuid4())
-    body = {
-        "id": invocation_id,
-        # session_id is a top-level invocation field; the adapter rejects it nested in input.
-        "session_id": invocation_id,
-        "input": {"model": E2E_MODEL, "messages": [{"role": "user", "content": prompt}]},
-    }
-    return shlex.quote(json.dumps(body))

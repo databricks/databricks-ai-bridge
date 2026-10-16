@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import json
 import os
 import pathlib
 import re
@@ -22,10 +23,11 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import uuid
 from collections.abc import Iterator, Mapping
 
 from harness.logs import last_lines, last_nonempty_line, log, log_command
-from harness.run import E2EError, RunConfig, now
+from harness.run import E2E_MODEL, E2EError, RunConfig, now
 from harness.target import TargetWorkspace
 
 # `endpoint invoke`'s error for a 5xx answer: the App restarting after a redeploy, a new App's
@@ -227,6 +229,18 @@ def terminate_process_group(process: subprocess.Popen[str], *, grace: float = 20
 def not_found(result: subprocess.CompletedProcess[str]) -> bool:
     """Whether a command failed because what it names doesn't exist, e.g. an App already deleted."""
     return result.returncode != 0 and bool(_NOT_FOUND.search(result.stderr or result.stdout))
+
+
+def invocation_json(prompt: str) -> str:
+    """A shell-quoted /api/invocations body for `agentbricks endpoint invoke --json`."""
+    invocation_id = str(uuid.uuid4())
+    body = {
+        "id": invocation_id,
+        # session_id is a top-level invocation field; the adapter rejects it nested in input.
+        "session_id": invocation_id,
+        "input": {"model": E2E_MODEL, "messages": [{"role": "user", "content": prompt}]},
+    }
+    return shlex.quote(json.dumps(body))
 
 
 def free_port() -> int:

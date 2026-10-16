@@ -7,9 +7,9 @@ $PORT, so an inherited PORT would override --app-port.
 from __future__ import annotations
 
 import pytest
-from harness.agentbricks_cli import AgentbricksCli, free_port
+from harness.agentbricks_cli import AgentbricksCli, free_port, invocation_json
 from harness.project import Project
-from tool_definitions import Tool, assert_declared, invocation_json
+from tool_definitions import Tool, assert_declared
 
 # Local dev servers share run-local's proxy port, so all dev runs stay on one worker, in order.
 pytestmark = pytest.mark.xdist_group("dev")

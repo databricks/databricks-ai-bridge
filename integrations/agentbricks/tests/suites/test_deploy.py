@@ -7,12 +7,12 @@ from __future__ import annotations
 
 import json
 
-from harness.agentbricks_cli import AgentbricksCli, not_found
+from harness.agentbricks_cli import AgentbricksCli, invocation_json, not_found
 from harness.cleanup import Cleanup, wait_until_app_gone
 from harness.logs import log
 from harness.project import Project
 from harness.workspace import Workspace
-from tool_definitions import Tool, assert_declared, invocation_json
+from tool_definitions import Tool, assert_declared
 
 
 def test_deploy(
