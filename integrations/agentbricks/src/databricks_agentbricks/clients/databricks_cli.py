@@ -21,6 +21,7 @@ def _databricks(
     profile: Optional[str],
     *,
     capture: bool = False,
+    to_stderr: bool = False,
     check: bool = True,
     cwd: Optional[str] = None,
     action: Optional[str] = None,
@@ -29,7 +30,10 @@ def _databricks(
     cmd = ["databricks", *args]
     if profile:
         cmd += ["--profile", profile]
-    result = subprocess.run(cmd, text=True, capture_output=capture, cwd=cwd, env=env)
+    # `to_stderr` shows an uncaptured command's output as progress while keeping stdout for Agent
+    # Bricks' own `--output json` payload. Fd 2, not sys.stderr: a replaced sys.stderr has no fileno.
+    stdout = 2 if to_stderr and not capture else None
+    result = subprocess.run(cmd, text=True, capture_output=capture, stdout=stdout, cwd=cwd, env=env)
     if check and result.returncode != 0:
         # Agent Bricks drives the `databricks apps` CLI as an implementation detail; surface a failure in
         # Agent Bricks' own terms (`action`) rather than echoing the raw subcommand and --profile, which

@@ -720,6 +720,22 @@ def _app_provisioner_for_test() -> SimpleNamespace:
     )
 
 
+@pytest.mark.parametrize(("deployment_exists", "instances"), [(False, None), (True, 2)])
+def test_app_provisioner_reports_cli_output_on_stderr(deployment_exists, instances):
+    # The App the CLI prints is progress; stdout carries only the `--output json` payload.
+    harness = _app_provisioner_for_test()
+    harness.apps.create_update_instances.return_value = "App compute"
+
+    harness.provisioner.ensure_app_ready(
+        _app_context(deployment_exists=deployment_exists),
+        auth_plan=_no_auth_plan(),
+        instance_count=instances,
+    )
+
+    harness.reporter.note.assert_called_once_with("Agent compute")
+    harness.reporter.echo.assert_not_called()
+
+
 def test_app_provisioner_new_auth_uses_scoped_sdk_create():
     harness = _app_provisioner_for_test()
     sdk_apps = Mock()

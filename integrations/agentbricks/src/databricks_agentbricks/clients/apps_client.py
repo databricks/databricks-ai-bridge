@@ -196,19 +196,28 @@ class AppsClient:
     def start(self, name: str) -> None:
         """Start the app's compute, raising if the command fails."""
         self._run(
-            ["apps", "start", name], self._profile, action=f"Could not start deployment '{name}'."
+            ["apps", "start", name],
+            self._profile,
+            to_stderr=True,
+            action=f"Could not start deployment '{name}'.",
         )
 
     def stop(self, name: str) -> None:
         """Stop the app's compute, raising if the command fails. Its deployed source is kept."""
         self._run(
-            ["apps", "stop", name], self._profile, action=f"Could not stop deployment '{name}'."
+            ["apps", "stop", name],
+            self._profile,
+            to_stderr=True,
+            action=f"Could not stop deployment '{name}'.",
         )
 
     def delete(self, name: str) -> None:
         """Delete the app, raising if the command fails. Unconfirmed here - the caller owns that."""
         self._run(
-            ["apps", "delete", name], self._profile, action=f"Could not delete deployment '{name}'."
+            ["apps", "delete", name],
+            self._profile,
+            to_stderr=True,
+            action=f"Could not delete deployment '{name}'.",
         )
 
     def reconcile_resources(
@@ -348,6 +357,7 @@ class AppsClient:
         self._run(
             ["sync", str(source_dir), ws_path, "--exclude", "uv.lock"],
             self._profile,
+            to_stderr=True,
             action=f"Could not upload the agent source for '{name}'.",
         )
 
@@ -356,6 +366,7 @@ class AppsClient:
         self._run(
             ["apps", "deploy", name, "--source-code-path", ws_path],
             self._profile,
+            to_stderr=True,
             action=f"Could not deploy '{name}'.",
         )
 
