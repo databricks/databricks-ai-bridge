@@ -1007,6 +1007,8 @@ def test_real_cli_json_deploy_keeps_payload_and_omits_text_summary(
         "url",
         "workspace_path",
         "env",
+        "memory_store",
+        "session_store",
         "trace_experiment_id",
         "uc_trace_tables",
         "trace_setup_error",

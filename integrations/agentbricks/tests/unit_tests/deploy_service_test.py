@@ -932,7 +932,7 @@ def test_app_provisioner_start_compute_starts_only_a_stopped_app(
     harness.apps.create.assert_not_called()
     harness.apps.wait_for_active.assert_not_called()
     if instance_count is not None:
-        harness.reporter.echo.assert_called_once_with("Agent compute scaled\n", add_newline=False)
+        harness.reporter.note.assert_called_once_with("Agent compute scaled")
 
 
 def test_app_provisioner_wait_for_compute_shows_elapsed_progress():
