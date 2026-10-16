@@ -54,13 +54,17 @@ env:
         },
     )
 
+    port_in_use = Mock(return_value=False)
+
     service = DevService(
         project_resolver=resolver,
         apps_client=apps,
         local_tracing=tracing,
+        port_in_use=port_in_use,
     )
     return SimpleNamespace(
         apps=apps,
+        port_in_use=port_in_use,
         project=project,
         resolver=resolver,
         service=service,
@@ -273,3 +277,41 @@ def test_prepare_and_run_remain_safe_when_tracing_does_not_start(
         prepare_environment=False,
         app_port=8123,
     )
+
+
+@pytest.mark.parametrize(("app_port", "expected_port"), [(None, 8000), (9100, 9100)])
+def test_busy_port_fails_before_tracing_or_local_manifest(
+    service_fixture: SimpleNamespace, tmp_path: pathlib.Path, app_port, expected_port
+) -> None:
+    service_fixture.port_in_use.return_value = True
+
+    with pytest.raises(AgentCliError) as raised:
+        with service_fixture.service.prepare(
+            DevRequest(source=str(tmp_path), prepare_environment=None, app_port=app_port)
+        ):
+            pytest.fail("a busy port must not yield a plan")
+
+    assert raised.value.message == (
+        f"Port {expected_port} is already in use (possibly a previous agentbricks dev run)."
+    )
+    assert raised.value.hint == (
+        "Stop that process, or run `agentbricks dev --app-port <port>` with a free port."
+    )
+    service_fixture.port_in_use.assert_called_once_with(expected_port)
+    service_fixture.tracing.start.assert_not_called()
+    service_fixture.tracing.stop.assert_not_called()
+    service_fixture.apps.run_local.assert_not_called()
+    assert not (tmp_path / "app.agentbricksdev.yaml").exists()
+
+
+def test_free_port_is_checked_and_run_proceeds(
+    service_fixture: SimpleNamespace, tmp_path: pathlib.Path
+) -> None:
+    with service_fixture.service.prepare(
+        DevRequest(source=str(tmp_path), prepare_environment=None, app_port=9100)
+    ) as plan:
+        service_fixture.service.run(plan)
+
+    service_fixture.port_in_use.assert_called_once_with(9100)
+    service_fixture.tracing.start.assert_called_once_with(tmp_path)
+    service_fixture.apps.run_local.assert_called_once()

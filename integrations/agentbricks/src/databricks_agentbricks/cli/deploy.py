@@ -48,6 +48,9 @@ from databricks_agentbricks.services.deployment.config import (
     MlflowTracingConfig,  # noqa: F401 - compatibility re-export
     mlflow_tracing_config,  # noqa: F401 - compatibility re-export
 )
+from databricks_agentbricks.services.deployment.model_binding_provisioner import (
+    ModelBindingProvisioner,
+)
 from databricks_agentbricks.services.deployment.names import (
     DeploymentName,
     _prefixed_name,  # noqa: F401 - compatibility re-export
@@ -88,6 +91,7 @@ def build_deploy_service(obj) -> DeployService:
             api_client_provider, apps_client, obj.profile, _USE_MANAGED_RUNTIME_STORE, reporter
         ),
         tool_access_provisioner=ToolAccessProvisioner(apps_client, obj.profile, reporter),
+        model_binding_provisioner=ModelBindingProvisioner(api_client_provider, reporter),
         reporter=reporter,
     )
 

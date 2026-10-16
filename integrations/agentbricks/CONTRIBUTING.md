@@ -109,9 +109,16 @@ The `agentbricks` console entry point runs `databricks_agentbricks.cli:main`. In
 fails. New leaves registered before `configure_help` use the same hook without adding telemetry
 calls. Click parsing failures and help exit before leaf invocation, so they are not logged.
 
-The emitter derives command paths and option names from static Click definitions. It emits values
-for declared Click choices and typed boolean and numeric options; free-form values remain
-presence-only. Choice values use the `AGENTBRICKS_CLI_` prefix required by their data shape. New
+The emitter derives command paths and option names from static Click definitions and reads resolved
+values from `ctx.params` for the command and its parent groups. Click handles default resolution and
+type conversion, including callable defaults; the emitter does not re-evaluate defaults or need
+per-command parameter lists. Declare defaults in `@click.option(default=...)` rather than only as
+fallbacks inside command callbacks so telemetry can capture them automatically for new options.
+
+The emitter includes explicit values and defaults for declared Click choices and typed boolean and
+numeric options. Explicit free-form options remain presence-only; omitted free-form options and
+unresolved `None` defaults are excluded. Choice values use the `AGENTBRICKS_CLI_` prefix required by
+their data shape. New
 Click choices must use non-sensitive labels. Repeated options produce one parameter entry per
 supplied value, up to 64 entries; hidden and deprecated options follow the same value policy. The
 emitter wraps each event in a FrontendLog payload and sends it to `/telemetry-ext` on a daemon

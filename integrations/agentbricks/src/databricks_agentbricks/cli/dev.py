@@ -17,6 +17,7 @@ import click
 
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.databricks_cli import _databricks
+from databricks_agentbricks.clients.local_ports import port_in_use
 from databricks_agentbricks.clients.local_tracing_client import LocalTracingClient
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.dev import (
@@ -63,6 +64,7 @@ def build_dev_service(obj) -> DevService:
         project_resolver=ProjectResolver(),
         apps_client=AppsClient(obj.profile, runner=_databricks),
         local_tracing=_CliLocalTracing(),
+        port_in_use=port_in_use,
     )
 
 

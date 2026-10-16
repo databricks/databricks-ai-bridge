@@ -127,3 +127,20 @@ def test_wait_for_running_times_out(monkeypatch):
     monkeypatch.setattr(apps_client_mod.time, "sleep", lambda s: None)  # don't actually wait
     with pytest.raises(AgentCliError):
         client.wait_for_active("app", timeout_s=0)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda client: client.sync_source("app", "src", "/Workspace/dst"),
+        lambda client: client.deploy("app", "/Workspace/dst"),
+        lambda client: client.start("app"),
+        lambda client: client.stop("app"),
+        lambda client: client.delete("app"),
+    ],
+)
+def test_lifecycle_commands_print_to_stderr(call):
+    # Their output is progress; stdout is reserved for the command's `--output json` payload.
+    calls = []
+    call(AppsClient("prof", runner=_runner(calls)))
+    assert [kwargs.get("to_stderr") for _, _, kwargs in calls] == [True]

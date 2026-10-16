@@ -17,6 +17,7 @@ from databricks_agentbricks.presentation.render import field
 from databricks_agentbricks.presentation.tracing import TRACING_BIND_COMMAND, experiment_url
 from databricks_agentbricks.services.deploy_service import DeployResult
 from databricks_agentkit import timefmt
+from databricks_agentkit.runtime import prompt_registry
 
 
 def _deployment_status(a: dict) -> Optional[str]:
@@ -109,6 +110,8 @@ def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> Non
                 "url": result.url,
                 "workspace_path": result.workspace_path,
                 "env": result.env,
+                "memory_store": result.memory_store,
+                "session_store": result.session_store,
                 "trace_experiment_id": result.trace_experiment_id,
                 "uc_trace_tables": result.uc_trace_tables,
                 "trace_setup_error": result.trace_setup_error,
@@ -122,6 +125,16 @@ def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> Non
                 if not store_grant_attempted
                 else ("granted" if store_grant_error is None else "failed"),
                 "store_grant_error": store_grant_error,
+                "model_services": result.model_services,
+                "model_service_grant": None
+                if not result.model_services
+                else ("granted" if result.model_service_grant_error is None else "failed"),
+                "model_service_grant_error": result.model_service_grant_error,
+                "prompts": result.prompts,
+                "prompt_grant": None
+                if not result.prompts
+                else ("granted" if result.prompt_grant_error is None else "failed"),
+                "prompt_grant_error": result.prompt_grant_error,
                 "tool_access": None
                 if result.tool_access is None
                 else {
@@ -142,6 +155,17 @@ def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> Non
         provisioned["Memory store"] = result.memory_store
     if result.session_store:
         provisioned["Session store"] = result.session_store
+    if result.model_services:
+        provisioned["Model services"] = ", ".join(
+            f"{role}: {service}" for role, service in result.model_services.items()
+        )
+        if result.model_service_grant_error is None:
+            provisioned["Model access"] = "granted to app service principal"
+    prompt_schemas = sorted({prompt_registry.schema_of(p) for p in result.prompts.values()})
+    if prompt_schemas and result.prompt_grant_error is None:
+        provisioned["Prompt access"] = (
+            f"granted to app service principal on {', '.join(prompt_schemas)}"
+        )
     if result.trace_experiment_id:
         provisioned["Traces"] = (
             experiment_url(result.client_host, result.trace_experiment_id)
@@ -179,6 +203,22 @@ def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> Non
             0,
             f"Set a real `command:` in {pathlib.Path(result.source) / 'app.yaml'} "
             "(a placeholder was written)",
+        )
+    if result.model_services and result.model_service_grant_error is not None:
+        steps.insert(
+            0,
+            "The app's service principal needs EXECUTE on its model services "
+            f"({', '.join(result.model_services.values())}) plus USE CATALOG / USE SCHEMA; "
+            "that grant couldn't be applied automatically. "
+            f"Cause: {result.model_service_grant_error}",
+        )
+    if prompt_schemas and result.prompt_grant_error is not None:
+        steps.insert(
+            0,
+            "The app's service principal needs USE SCHEMA, EXECUTE, CREATE FUNCTION, and MANAGE "
+            f"on its prompt schemas ({', '.join(prompt_schemas)}) to load its prompts; "
+            "that grant couldn't be applied automatically. "
+            f"Cause: {result.prompt_grant_error}",
         )
     # Per-store failure next steps. Inserted session-then-memory so memory lands above session (each
     # insert(0) pushes to the front), matching the reconcile/grant order.

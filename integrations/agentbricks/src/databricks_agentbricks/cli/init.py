@@ -311,7 +311,7 @@ def _prepare_migration(
 @click.option(
     "--framework",
     type=click.Choice([framework.value for framework in AgentFramework]),
-    default=None,
+    default=AgentFramework.LANGGRAPH.value,
     help="Agent framework: langgraph (LangGraph, default) or openai (OpenAI Agents SDK).",
 )
 @click.option(
