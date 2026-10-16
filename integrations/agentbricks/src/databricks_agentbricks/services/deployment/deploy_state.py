@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import sys
 import tempfile
 import time
 from collections import deque
@@ -97,6 +98,8 @@ def pid_alive(pid: Any) -> bool:
     """Whether a process with this pid exists (one we may not signal still counts as alive)."""
     if not isinstance(pid, int) or pid <= 0:
         return False
+    if os.name == "nt":
+        return _windows_pid_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -106,6 +109,32 @@ def pid_alive(pid: Any) -> bool:
     except OSError:
         return False
     return True
+
+
+# Win32 constants: the process-query access right, the exit code GetExitCodeProcess reports for a
+# live process, and the OpenProcess error for a process that exists but can't be opened.
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_STILL_ACTIVE = 259
+_ERROR_ACCESS_DENIED = 5
+
+
+def _windows_pid_alive(pid: int) -> bool:
+    """:func:`pid_alive` on Windows, where ``os.kill(pid, 0)`` sends CTRL_C_EVENT instead of probing."""
+    if sys.platform != "win32":
+        return False
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return ctypes.get_last_error() == _ERROR_ACCESS_DENIED
+    try:
+        code = ctypes.c_ulong()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return False
+        return code.value == _STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def resolve_state(
