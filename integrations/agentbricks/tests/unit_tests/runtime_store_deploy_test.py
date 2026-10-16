@@ -32,6 +32,7 @@ def _runtime_store_response(app_name="agent-bricks-myapp", sp="sp-123"):
 
 
 def _ctx(client, *, output="text"):
+    client.current_user = "user@example.com"
     return types.SimpleNamespace(
         profile="prof",
         output=output,
@@ -39,11 +40,26 @@ def _ctx(client, *, output="text"):
     )
 
 
+_DEFAULT_SOURCE = "/Workspace/Users/user@example.com/agentbricks_deployments/agent-bricks-myapp"
+
+
 def _cli_runner(*, identity=True):
+    """A `databricks` CLI whose app exists until `apps delete`; ``identity=False`` hides its details."""
+    exists = True
+
     def run(args, profile, **kwargs):
+        nonlocal exists
+        if args[:2] == ["apps", "delete"]:
+            exists = False
         if args[:2] == ["apps", "get"]:
-            if not identity:
-                return types.SimpleNamespace(returncode=1, stdout="", stderr="not found")
+            if not exists:
+                return types.SimpleNamespace(
+                    returncode=1,
+                    stdout="",
+                    stderr=f"Error: App with name {args[2]} does not exist or is deleted.",
+                )
+            if not identity and "json" in args:
+                return types.SimpleNamespace(returncode=1, stdout="", stderr="permission denied")
             return types.SimpleNamespace(
                 returncode=0,
                 stdout=json.dumps({"service_principal_client_id": "sp-123"}),
@@ -139,14 +155,25 @@ def test_managed_delete_finishes_before_deleting_app(monkeypatch):
     )
 
     assert result.exit_code == 0, result.output
-    assert json.loads(result.output) == {"deleted": "agent-bricks-myapp"}
+    assert json.loads(result.output) == {
+        "deleted": "agent-bricks-myapp",
+        "source_path": _DEFAULT_SOURCE,
+        "source_path_deleted": True,
+        "source_path_error": None,
+    }
+    app_get = mock.call.cli(
+        ["apps", "get", "agent-bricks-myapp"], "prof", capture=True, check=False
+    )
+    app_get_json = mock.call.cli(
+        ["apps", "get", "agent-bricks-myapp", "-o", "json"],
+        "prof",
+        capture=True,
+        check=False,
+    )
     assert calls.mock_calls == [
-        mock.call.cli(
-            ["apps", "get", "agent-bricks-myapp", "-o", "json"],
-            "prof",
-            capture=True,
-            check=False,
-        ),
+        app_get,
+        app_get_json,
+        app_get_json,
         mock.call.runtime.get_runtime_store("agent-bricks-myapp"),
         mock.call.runtime.delete_runtime_store("agent-bricks-myapp"),
         mock.call.cli(
@@ -154,6 +181,14 @@ def test_managed_delete_finishes_before_deleting_app(monkeypatch):
             "prof",
             to_stderr=True,
             action="Could not delete deployment 'agent-bricks-myapp'.",
+        ),
+        # `apps delete` returns while the app is still deleting.
+        app_get,
+        mock.call.cli(
+            ["workspace", "delete", _DEFAULT_SOURCE, "--recursive"],
+            "prof",
+            capture=True,
+            check=False,
         ),
     ]
 
@@ -246,9 +281,8 @@ def test_managed_delete_cannot_skip_cleanup_when_identity_lookup_fails(monkeypat
 
     assert result.exit_code != 0
     assert "deployment was retained" in result.output
-    client.assert_not_called()
-    assert cli.call_count == 1
-    assert cli.call_args.args[0][:2] == ["apps", "get"]
+    client.get_runtime_store.assert_not_called()
+    assert all(call.args[0][:2] == ["apps", "get"] for call in cli.call_args_list)
 
 
 def test_legacy_delete_preserves_existing_behavior(monkeypatch):
@@ -263,10 +297,28 @@ def test_legacy_delete_preserves_existing_behavior(monkeypatch):
     )
 
     assert result.exit_code == 0, result.output
-    client.assert_not_called()
-    cli.assert_called_once_with(
+    client.get_runtime_store.assert_not_called()
+    client.delete_runtime_store.assert_not_called()
+    cli.assert_any_call(
         ["apps", "delete", "agent-bricks-myapp"],
         "prof",
         to_stderr=True,
         action="Could not delete deployment 'agent-bricks-myapp'.",
     )
+
+
+def test_delete_of_a_missing_deployment_says_so_and_deletes_nothing(monkeypatch):
+    cli = mock.Mock(side_effect=_cli_runner())
+    monkeypatch.setattr(deploy_mod, "_databricks", cli)
+    cli.side_effect(["apps", "delete", "agent-bricks-myapp"], "prof")  # already gone
+    cli.reset_mock()
+    client = mock.Mock()
+
+    result = CliRunner().invoke(
+        deploy_mod.deployments_delete, ["agent-bricks-myapp", "--yes"], obj=_ctx(client)
+    )
+
+    assert result.exit_code != 0
+    assert "Deployment 'agent-bricks-myapp' does not exist." in result.output
+    client.get_runtime_store.assert_not_called()
+    assert [call.args[0][:2] for call in cli.call_args_list] == [["apps", "get"]]

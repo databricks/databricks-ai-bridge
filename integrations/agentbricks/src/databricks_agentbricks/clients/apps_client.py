@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import subprocess
 import time
 from collections.abc import Collection, Sequence
@@ -33,6 +34,7 @@ _TOOL_PERMISSION_STRENGTH = {
     ("VOLUME", "READ_VOLUME"): 1,
     ("VOLUME", "WRITE_VOLUME"): 2,
 }
+_WORKSPACE_PATH_MISSING = re.compile(r"RESOURCE_DOES_NOT_EXIST|doesn't exist|does not exist")
 
 
 class _AppResourcesReadError(RuntimeError):
@@ -218,6 +220,46 @@ class AppsClient:
             self._profile,
             to_stderr=True,
             action=f"Could not delete deployment '{name}'.",
+        )
+
+    def wait_until_deleted(self, name: str, timeout_s: int = 1200) -> None:
+        """Block until the app no longer exists (or raise on timeout)."""
+        deadline = time.monotonic() + timeout_s
+        while self.exists(name):
+            if time.monotonic() >= deadline:
+                raise AgentCliError(
+                    f"Deployment '{name}' was still being deleted after {timeout_s}s.",
+                    hint=f"Check `agentbricks deployments get {name}`; it may finish on its own.",
+                )
+            time.sleep(10)
+
+    def source_code_path(self, name: str) -> Optional[str]:
+        """The workspace folder the app's latest deployment came from, or None if it has none."""
+        data = self._get_json(name)
+        if not data:
+            return None
+        for key in ("active_deployment", "pending_deployment"):
+            deployment = _field(data, key)
+            path = _field(deployment, "source_code_path") if isinstance(deployment, dict) else None
+            if isinstance(path, str) and path:
+                return path
+        return None
+
+    def delete_source(self, ws_path: str) -> bool:
+        """Delete an uploaded source folder; False when it was already gone."""
+        result = self._run(
+            ["workspace", "delete", ws_path, "--recursive"],
+            self._profile,
+            capture=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return True
+        detail = (result.stderr or result.stdout or "").strip()
+        if _WORKSPACE_PATH_MISSING.search(detail):
+            return False
+        raise AgentCliError(
+            f"Could not delete the uploaded source folder '{ws_path}'.", hint=detail or None
         )
 
     def reconcile_resources(

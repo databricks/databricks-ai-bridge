@@ -237,11 +237,15 @@ def deployments_stop(obj, name, yes) -> None:
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
 @click.pass_obj
 def deployments_delete(obj, name, yes) -> None:
-    """Delete a deployment and, when managed provisioning is enabled, its Runtime Store."""
+    """Delete a deployment, its Runtime Store when managed provisioning is enabled, and the source
+    folder deploy uploaded it to by default."""
     service = build_deploy_service(obj)
-    target = f"deployment '{name}'"
+    folder = service.source_folder(name)
+    parts = [f"deployment '{name}'"]
     if not yes and service.deletes_runtime_store_data():
-        target += " and its Runtime Store data"
+        parts.append("its Runtime Store data")
+    if folder.managed:
+        parts.append(f"its uploaded source folder {folder.path}")
+    target = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
     render.confirm_destroy(target, assume_yes=yes)
-    service.delete(name)
-    present_deleted(name, output=obj.output)
+    present_deleted(service.delete(name, folder), output=obj.output)

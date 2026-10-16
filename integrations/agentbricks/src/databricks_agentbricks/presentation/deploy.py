@@ -15,7 +15,7 @@ from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.endpoint import print_agent_invoke_command
 from databricks_agentbricks.presentation.render import field
 from databricks_agentbricks.presentation.tracing import TRACING_BIND_COMMAND, experiment_url
-from databricks_agentbricks.services.deploy_service import DeployResult
+from databricks_agentbricks.services.deploy_service import DeleteResult, DeployResult
 from databricks_agentkit import timefmt
 from databricks_agentkit.runtime import prompt_registry
 
@@ -91,12 +91,24 @@ def present_stopped(name: str, *, output: Optional[str]) -> None:
     render.success(f"Stopped deployment '{name}'")
 
 
-def present_deleted(name: str, *, output: Optional[str]) -> None:
+def present_deleted(result: DeleteResult, *, output: Optional[str]) -> None:
     """Confirm a delete: the machine payload for `--output json`, else a success line."""
+    folder = result.source_folder
     if output == "json":
-        render.emit_json({"deleted": name})
+        render.emit_json(
+            {
+                "deleted": result.deployment,
+                "source_path": folder.path,
+                "source_path_deleted": result.source_folder_deleted,
+                "source_path_error": result.source_folder_error,
+            }
+        )
         return
-    render.success(f"Deleted deployment '{name}'")
+    render.success(f"Deleted deployment '{result.deployment}'")
+    if result.source_folder_error:
+        render.warning(f"{result.source_folder_error} Delete it yourself if you no longer need it.")
+    elif not folder.managed:
+        render.warning(f"Kept the source folder {folder.path}: it was not created by deploy.")
 
 
 def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> None:

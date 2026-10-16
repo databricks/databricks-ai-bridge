@@ -18,7 +18,9 @@ from databricks_agentbricks.services.deployment.names import DeploymentName, _pr
 class _Ctx:
     profile = "prof"
     output = "text"
-    api_client_provider = types.SimpleNamespace(get=lambda: types.SimpleNamespace())
+    api_client_provider = types.SimpleNamespace(
+        get=lambda: types.SimpleNamespace(current_user="user@example.com")
+    )
 
 
 # --- ML-69259 / 69247: deployment-name validation ---------------------------
@@ -93,27 +95,40 @@ def test_deployments_get_rejects_empty_name_without_calling_cli(monkeypatch):
 # --- ML-69246: confirmation on destructive deployment ops --------------------
 
 
+def _apps_cli(called: list):
+    """A `databricks` CLI whose app exists until `apps delete`, recording each command."""
+    exists = True
+
+    def run(args, profile, **kwargs):
+        nonlocal exists
+        called.append(args)
+        if args[:2] == ["apps", "delete"]:
+            exists = False
+        if args[:2] == ["apps", "get"] and not exists:
+            return types.SimpleNamespace(
+                returncode=1, stdout="", stderr="Error: App does not exist or is deleted."
+            )
+        return types.SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+    return run
+
+
 def test_delete_aborts_without_confirmation(monkeypatch):
     called = []
-    monkeypatch.setattr(deploy_mod, "_databricks", lambda *a, **k: called.append(a))
+    monkeypatch.setattr(deploy_mod, "_databricks", _apps_cli(called))
     result = CliRunner().invoke(deploy_mod.deployments_delete, ["myapp"], obj=_Ctx(), input="n\n")
     assert result.exit_code != 0  # aborted
-    assert called == []
+    # Only reads before the prompt: whether the app exists, and where its source is.
+    assert [args[:2] for args in called] == [["apps", "get"], ["apps", "get"]]
 
 
 def test_delete_proceeds_with_yes(monkeypatch):
     called = []
     monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", False)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **k: (
-            called.append(args) or types.SimpleNamespace(returncode=0, stdout="", stderr="")
-        ),
-    )
+    monkeypatch.setattr(deploy_mod, "_databricks", _apps_cli(called))
     result = CliRunner().invoke(deploy_mod.deployments_delete, ["myapp", "--yes"], obj=_Ctx())
     assert result.exit_code == 0, result.output
-    assert called and called[0][:3] == ["apps", "delete", "myapp"]
+    assert ["apps", "delete", "myapp"] in called
 
 
 # --- ML-69245: postgres resources are MERGED, not replaced -------------------
