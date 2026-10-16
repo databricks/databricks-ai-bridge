@@ -111,6 +111,19 @@ adapter namespaces an explicit actor by the authenticated principal. The actor f
 establish authentication; preserve the application's trusted identity mapping. Custom or migrated
 adapters may use a different input contract.
 
+### Interactive approval with user authentication
+
+A LangGraph interrupt ends the current invocation and checkpoints the pending action. Resume with
+`input.resume` in a new authenticated invocation (new UUID, same `session_id` and `input.actor`, if
+set). The runtime namespaces the session by the authenticated user; approval does not transfer a
+pending action to another user. Build a new graph and tool clients from the resume request's
+`workspace_client_for` resolver. Never persist the resolver, user credentials, or a graph holding
+those clients in checkpoint state. Browser approvals use the existing login session; obtain new
+authentication when it expires.
+
+This is a first attempt for a new invocation, not `@app.recover`. OBO automatic recovery remains
+unsupported because no new authenticated user request supplies credentials.
+
 ### Recovery and durability
 
 Runtime Store persistence covers invocations and emitted events. Session Store persistence covers

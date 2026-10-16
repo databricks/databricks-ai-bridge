@@ -106,6 +106,7 @@ def _server_from_tool(
     tool: ToolRecord,
     *,
     workspace_client_for: mcp_auth.WorkspaceClientResolver | None = None,
+    require_approval: dict[str, bool] | None = None,
 ) -> McpServer | None:
     if tool.kind not in {"sandbox", "mcp", "uc_function", "genie_one"}:
         return None
@@ -114,6 +115,9 @@ def _server_from_tool(
         mode, tool.id, workspace_client_for, workspace_client
     )
     host = client.config.host.rstrip("/")
+    approval_kwargs: dict[str, Any] = (
+        {"require_approval": require_approval} if require_approval is not None else {}
+    )
     if tool.kind in {"sandbox", "mcp", "genie_one"}:
         url = (
             f"{host}/api/2.0/mcp/genie"
@@ -128,6 +132,7 @@ def _server_from_tool(
                 timeout=120.0,
                 protected_meta=sandbox_meta(tool),
                 request_user=mode == "user",
+                **approval_kwargs,
             )
         if tool.kind == "genie_one":
             return _ConfiguredMcpServer(
@@ -136,6 +141,7 @@ def _server_from_tool(
                 timeout=120.0,
                 params={"url": url, "headers": workspace_headers()},
                 request_user=mode == "user",
+                **approval_kwargs,
             )
         return _ConfiguredMcpServer(
             url=url,
@@ -143,6 +149,7 @@ def _server_from_tool(
             workspace_client=client,
             timeout=120.0,
             request_user=mode == "user",
+            **approval_kwargs,
         )
     if tool.kind == "uc_function":
         catalog, schema, function_name = (tool.function or "").split(".")
@@ -154,6 +161,7 @@ def _server_from_tool(
             workspace_client=client,
             timeout=120.0,
             request_user=mode == "user",
+            **approval_kwargs,
         )
     return None
 
@@ -161,13 +169,18 @@ def _server_from_tool(
 def _declared_servers(
     *,
     workspace_client_for: mcp_auth.WorkspaceClientResolver | None = None,
+    require_approval: dict[str, bool] | None = None,
 ) -> list[McpServer]:
     """The MCP servers declared in the agent's ``agent.toml`` (may be empty)."""
     tools = load_tools(expected_framework=_FRAMEWORK)
     return [
         server
         for tool in tools
-        if (server := _server_from_tool(tool, workspace_client_for=workspace_client_for))
+        if (
+            server := _server_from_tool(
+                tool, workspace_client_for=workspace_client_for, require_approval=require_approval
+            )
+        )
         is not None
     ]
 
@@ -176,14 +189,19 @@ async def mcp_servers(
     extra_servers: list[McpServer] | None = None,
     *,
     workspace_client_for: mcp_auth.WorkspaceClientResolver | None = None,
+    require_approval: dict[str, bool] | None = None,
 ) -> list[McpServer]:
     """Build the agent's configured servers with request identity and sandbox downscoping.
 
     Includes the MCP servers declared in ``agent.toml``; pass ``extra_servers`` to add servers the
-    agent builds itself. Request-user failures propagate. App and extra servers retain the SDK's
+    agent builds itself. ``require_approval`` maps exposed tool names to approval requirements for
+    declared servers; unlisted tools do not require approval. Extra servers retain their own policy.
+    Request-user failures propagate. App and extra servers retain the SDK's
     best-effort behavior; the request resolver is never forwarded to extra servers.
     """
     return [
-        *_declared_servers(workspace_client_for=workspace_client_for),
+        *_declared_servers(
+            workspace_client_for=workspace_client_for, require_approval=require_approval
+        ),
         *(extra_servers or []),
     ]

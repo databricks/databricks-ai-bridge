@@ -47,10 +47,13 @@ them with agent-owned servers without duplicates. It applies sandbox downscoping
 bindings arrive as tools from `genie_tools()`. Local Python tools belong in source; the template
 discovers `@function_tool` functions through [agent/tools/__init__.py](agent/tools/__init__.py).
 
-Feed selected tools into the agent's tool list while preserving approval policy. Tools that gate on
-approval declare `needs_approval=True` and appear in the template's `REQUIRE_APPROVAL` set so
-pending calls surface as interrupts. New bindings must become effective on the next agent
-construction or restart without another source edit.
+Feed selected tools into the agent's tool list while preserving approval policy. Local tools that
+gate on approval declare `needs_approval=True`. For CLI-declared MCP tools, add their exposed tool
+names to the template's `REQUIRE_APPROVAL` set, for example `{"send_message", "web_search"}`.
+The template passes that policy to `mcp_servers(require_approval=...)` on every invocation,
+including resumes. These are callable tool names, not manifest binding IDs or service names.
+Agent-owned extra servers retain their own SDK approval policy. New bindings must become effective
+on the next agent construction or restart without another source edit.
 
 ### Sessions and memory
 
@@ -121,6 +124,22 @@ the memory partition. Use object-form input for this check. With request-user au
 adapter namespaces an explicit actor by the authenticated principal. The actor field does not
 establish authentication; preserve the application's trusted identity mapping. Custom or migrated
 adapters may use a different input contract.
+
+### Interactive approval with user authentication
+
+Resume a pending approval with a new authenticated invocation (new UUID, same `session_id` and
+`input.actor`, if set). The runtime namespaces the session by the authenticated user. Build new
+tool clients and MCP connections from that request's `workspace_client_for` resolver before
+restoring the saved JSON through `RunState.from_json(new_agent, snapshot)`. Persist JSON execution
+state only; never retain the live `RunState`, agent, resolver, or credential-bound clients, and
+never put request credentials into the Runner's serializable context.
+
+Supply one approve/reject decision per pending call, including its `call_id`. Invalid decisions
+return `INVALID_APPROVAL` before consuming state. Approval uses the browser's existing login when
+valid; it does not require an additional login merely because the previous invocation paused.
+
+This is a first attempt for a new invocation, not `@app.recover`. Automatic OBO recovery remains
+unsupported because no new authenticated request supplies credentials.
 
 ### Recovery and durability
 

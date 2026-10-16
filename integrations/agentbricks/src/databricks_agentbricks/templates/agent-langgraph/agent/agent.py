@@ -6,6 +6,9 @@ from databricks.sdk import WorkspaceClient
 from databricks_langchain import ChatDatabricks
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langchain.agents.middleware.human_in_the_loop import HITLResponse
+from langgraph.types import Command
+from pydantic import TypeAdapter, ValidationError
 
 from agent.mcps import build_mcp_servers
 
@@ -140,6 +143,36 @@ async def recovery_input(
     return None if current_invocation_checkpointed else agent_input
 
 
+async def _validate_approval_resume(graph: Any, config: dict, agent_input: Any) -> None:
+    """Reject malformed middleware decisions before LangGraph checkpoints the resume value."""
+    if not isinstance(agent_input, Command) or agent_input.resume is None:
+        return
+    state = await graph.aget_state(config)
+    pending = [item for task in state.tasks for item in task.interrupts]
+    resume = agent_input.resume
+    keyed = isinstance(resume, dict) and any(item.id in resume for item in pending)
+    for item in pending:
+        if not isinstance(item.value, dict) or "review_configs" not in item.value:
+            continue  # Application-defined interrupts keep their native resume contract.
+        if keyed and item.id not in resume:
+            continue
+        response = resume[item.id] if keyed else resume
+        try:
+            decisions = TypeAdapter(HITLResponse).validate_python(response)["decisions"]
+        except ValidationError as error:
+            raise AuthError(
+                "INVALID_APPROVAL", "Invalid approval decision payload.", 400
+            ) from error
+        reviews = item.value["review_configs"]
+        if len(decisions) != len(reviews) or any(
+            decision["type"] not in review["allowed_decisions"]
+            for decision, review in zip(decisions, reviews, strict=True)
+        ):
+            raise AuthError(
+                "INVALID_APPROVAL", "Provide one allowed decision per pending tool call.", 400
+            )
+
+
 async def run_agent(
     agent_input: Any,
     *,
@@ -155,12 +188,16 @@ async def run_agent(
     This is the framework-native entrypoint. It has no dependency on Agent Bricks request or context types,
     so it can be called from another server, a notebook, or a test harness.
     """
+    # Each interactive resume builds tools from this request's credentials. Only graph state,
+    # never the graph or its credential-bound clients, survives the approval pause.
     actor = actor or session_id
     if graph is None:
         graph = await create_agent_graph(actor, model, workspace_client_for=workspace_client_for)
     config = thread_config(session_id, actor)
     if invocation_id:
         config["metadata"] = invocation_metadata(invocation_id)
+
+    await _validate_approval_resume(graph, config, agent_input)
 
     last_update: Any = None
     with start_trace(name="invoke", inputs=agent_input, session_id=session_id) as span:
@@ -172,12 +209,6 @@ async def run_agent(
         ):
             if event[0] == "updates":
                 last_update = event[1]
-                if workspace_client_for is not None and last_update.get("__interrupt__"):
-                    raise AuthError(
-                        "MCP_USER_AUTH_HITL_UNSUPPORTED",
-                        "Request-user invocations do not support paused approvals.",
-                        400,
-                    )
             yield event
         if span is not None and last_update is not None:
             span.set_outputs(last_update)

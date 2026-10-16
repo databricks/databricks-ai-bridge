@@ -54,6 +54,19 @@ The two ways to run an agent:
   server with no `DurableAgentServer`: you define your own endpoints, request/response shapes, and protocol.
   `agentbricks dev` and `agentbricks deploy` run and ship it the same way.
 
+Both managed framework templates support human approval with request-user (OBO) tools. A new
+invocation from the same authenticated user resumes the saved state with that request's tool
+credentials; the browser can use its existing valid login session.
+
+| Framework | Interactive OBO approval decisions |
+| --- | --- |
+| LangGraph | Approve, edit, or reject according to the middleware policy |
+| OpenAI Agents SDK | Approve or reject, with the pending tool call's `call_id` |
+
+Automatic OBO failure recovery remains unsupported. Existing generated apps need the corresponding
+template source updates; upgrading the installed package does not rewrite their agent or adapter.
+Custom servers own their authentication and approval protocol.
+
 ## Prerequisites
 
 - **Python ≥3.10** — the `agentbricks` CLI installs and runs on any Python 3.10+. The
