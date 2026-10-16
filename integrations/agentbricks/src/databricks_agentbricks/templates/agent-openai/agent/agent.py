@@ -217,9 +217,14 @@ async def run_agent(
             workspace_client_for=workspace_client_for,
         )
         if snapshot is not None:
+            # Restore references into this request's new agent and tool clients. The saved JSON
+            # contains execution state, not the previous agent or its credential-bound clients.
             agent_input = await RunState.from_json(agent, snapshot["run_state"])
             if resume is not None and snapshot["invocation_id"] != invocation_id:
-                agent_input = resume_agent(agent_input, resume)
+                try:
+                    agent_input = resume_agent(agent_input, resume)
+                except ValueError as error:
+                    raise AuthError("INVALID_APPROVAL", str(error), 400) from error
                 # Consume before executing. Interrupted continuations must not replay tools.
                 await persist(
                     {
@@ -245,12 +250,8 @@ async def run_agent(
                             pass
 
             if result.interruptions:
-                if workspace_client_for is not None:
-                    raise AuthError(
-                        "MCP_USER_AUTH_HITL_UNSUPPORTED",
-                        "Request-user invocations do not support paused approvals.",
-                        400,
-                    )
+                # Do not retain the live RunState: its agent holds request-bound tool clients.
+                # Runner receives no request credentials in its serializable context.
                 await persist(
                     {
                         "run_state": result.to_state().to_json(),

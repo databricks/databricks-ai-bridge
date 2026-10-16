@@ -122,6 +122,22 @@ adapter namespaces an explicit actor by the authenticated principal. The actor f
 establish authentication; preserve the application's trusted identity mapping. Custom or migrated
 adapters may use a different input contract.
 
+### Interactive approval with user authentication
+
+Resume a pending approval with a new authenticated invocation (new UUID, same `session_id` and
+`input.actor`, if set). The runtime namespaces the session by the authenticated user. Build new
+tool clients and MCP connections from that request's `workspace_client_for` resolver before
+restoring the saved JSON through `RunState.from_json(new_agent, snapshot)`. Persist JSON execution
+state only; never retain the live `RunState`, agent, resolver, or credential-bound clients, and
+never put request credentials into the Runner's serializable context.
+
+Supply one approve/reject decision per pending call, including its `call_id`. Invalid decisions
+return `INVALID_APPROVAL` before consuming state. Approval uses the browser's existing login when
+valid; it does not require an additional login merely because the previous invocation paused.
+
+This is a first attempt for a new invocation, not `@app.recover`. Automatic OBO recovery remains
+unsupported because no new authenticated request supplies credentials.
+
 ### Recovery and durability
 
 Runtime Store persistence covers invocations and emitted events. The harness saves paused SDK

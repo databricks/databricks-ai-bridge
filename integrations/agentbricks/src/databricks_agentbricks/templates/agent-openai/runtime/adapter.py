@@ -76,14 +76,6 @@ async def _invoke_agent(
     actor = _actor(payload, session_id)
     auth = getattr(context, "request_auth", None)
     user_auth = auth is not None
-    if user_auth and any(
-        payload.get(key) is not None for key in ("resume", "approval", "approvals")
-    ):
-        raise AuthError(
-            "MCP_USER_AUTH_HITL_UNSUPPORTED",
-            "Request-user invocations do not support approval or resume input.",
-            400,
-        )
     if user_auth and recovery:
         raise AuthError(
             "MCP_USER_AUTH_BACKGROUND_UNSUPPORTED",
