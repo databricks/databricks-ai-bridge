@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -70,7 +71,19 @@ def web_search_called(r: dict[str, Any]) -> bool:
 
 
 def genie_called(r: dict[str, Any]) -> bool:
-    return "genie" in str(r.get("name")) and bool(r.get("content"))
+    # Genie reports a failed or timed-out answer inside a successful tool step, as its status.
+    if r.get("name") not in ("genie_ask", "genie_poll"):
+        return False
+    content = r.get("content")
+    try:
+        message = json.loads(content) if isinstance(content, str) else content
+    except ValueError:
+        return False
+    return (
+        isinstance(message, dict)
+        and message.get("status") == "COMPLETED"
+        and bool(message.get("attachments"))
+    )
 
 
 def sandbox_tool(uc_function: UcFunction) -> Tool:

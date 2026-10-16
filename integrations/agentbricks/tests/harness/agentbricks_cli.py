@@ -222,7 +222,7 @@ class AgentbricksCli:
             while process.poll() is None:
                 elapsed = time.monotonic() - started
                 if elapsed >= timeout:
-                    terminate_process_group(process, grace=0)
+                    terminate_process_group(process)
                     raise E2EError(f"{label} timed out after {timeout:.0f}s; log: {stderr_path}")
                 if elapsed >= next_tick:
                     progress = last_nonempty_line(stderr_path) or last_nonempty_line(stdout_path)
@@ -247,12 +247,14 @@ def _agentbricks_bin() -> str:
 
 
 def terminate_process_group(process: subprocess.Popen[str], *, grace: float = 20) -> None:
+    """Stop the command and what it started, returning only once it has exited.
+
+    A command still running during teardown could create what the cleanup has already deleted.
+    """
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
-        return
-    if grace <= 0:
-        return
+        pass
     try:
         process.wait(timeout=grace)
     except subprocess.TimeoutExpired:
@@ -260,6 +262,7 @@ def terminate_process_group(process: subprocess.Popen[str], *, grace: float = 20
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+        process.wait()
 
 
 def not_found(result: subprocess.CompletedProcess[str]) -> bool:
