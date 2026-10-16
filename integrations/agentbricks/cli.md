@@ -616,7 +616,26 @@ agentbricks memory pipeline delete NAME [options]
 
 | Subcommand | Description |
 | --- | --- |
-| [`memory pipeline runs get`](#agentbricks-memory-pipeline-runs-get) | Get run details through the Databricks CLI. |
+| [`memory pipeline runs get`](#agentbricks-memory-pipeline-runs-get) | Get run details through the memory pipeline API. |
+| [`memory pipeline runs list`](#agentbricks-memory-pipeline-runs-list) | List recorded pipeline runs, most recently started first. |
+
+###### `agentbricks memory pipeline runs list`
+
+```sh
+agentbricks --profile dogfood memory pipeline runs list memory-pipelines/<id> --page-size 50
+```
+
+`NAME` accepts a pipeline id or full `memory-pipelines/<id>` resource name.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--page-size` | nonnegative integer | 50 | Maximum results; zero uses the server default of 50, values above 1000 are capped by the server. |
+| `--page-token` | string | - | Continuation token from the previous page for this pipeline. |
+
+Lists persisted history from the memory-pipeline runs API, ordered by descending start time
+and then run ID. Text output shows resource name, state, start time, and a next-page hint.
+Global `--output json` returns the API response, including `pipeline_runs` and `next_page_token`.
+History may be missing or stale after bookkeeping failures; use `runs get` for current Jobs status.
 
 ###### `agentbricks memory pipeline runs get`
 
@@ -625,12 +644,10 @@ agentbricks --profile dogfood memory pipeline runs get \
   memory-pipelines/2043d0c0-7d15-496e-83af-b6893165038f/runs/418898433707211
 ```
 
-`NAME` must be `memory-pipelines/<pipeline-id>/runs/<numeric-run-id>`. This command
-extracts the run ID and calls `databricks jobs get-run <run-id>`, forwarding the selected
-profile. The Databricks CLI must be installed and available on `PATH`. Its stdout, stderr,
-and exit code are passed through unchanged, with terminal streams inherited to preserve native
-coloring; Agent Bricks `--output` does not reformat the result.
-The pipeline ID is not sent to Jobs or checked against the run.
+`NAME` must be `memory-pipelines/<pipeline-id>/runs/<numeric-run-id>`. This command calls
+`GET /api/2.0/agents/{NAME}` using the selected profile and the complete run resource name.
+Text output renders pipeline run details; global `--output json` returns the native
+`PipelineRun` response. It no longer invokes `databricks jobs get-run` or returns the Jobs JSON schema.
 
 ##### `agentbricks memory pipeline run`
 

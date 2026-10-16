@@ -648,6 +648,18 @@ class _AgentBricksApiClient:
     def run_memory_pipeline(self, name: str) -> dict:
         return self._do("POST", f"{_BASE}/{memory_pipeline_path(name)}/run", body={})
 
+    def list_memory_pipeline_runs(
+        self, name: str, page_size: Optional[int] = None, page_token: Optional[str] = None
+    ) -> dict:
+        return self._do(
+            "GET",
+            f"{_BASE}/{memory_pipeline_path(name)}/runs",
+            query=_query(page_size=page_size, page_token=page_token),
+        )
+
+    def get_memory_pipeline_run(self, name: str) -> dict:
+        return self._do("GET", f"{_BASE}/{quote(name, safe='/')}")
+
     # --- store permission grants --------------------------------------------
 
     def grant_session_store_permission(

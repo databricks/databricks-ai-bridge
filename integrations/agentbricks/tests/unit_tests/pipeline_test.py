@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from unittest import mock
 
 import pytest
@@ -80,50 +79,52 @@ def _pipeline():
     return cli.memory.commands["pipeline"]
 
 
-@pytest.mark.parametrize("profile", [None, "dogfood"])
 @pytest.mark.parametrize("output", ["text", "json"])
-@mock.patch("databricks_agentbricks.cli.pipeline.subprocess.run")
-def test_get_run_inherits_terminal_streams(run, profile, output):
-    run.return_value = subprocess.CompletedProcess([], 0)
-    ctx = _Ctx(_Client())
-    ctx.profile = profile
+def test_get_run_uses_pipeline_api(output):
+    workspace = mock.Mock()
+    response = {
+        "name": "memory-pipelines/p-123/runs/418898433707211",
+        "state": "SUCCEEDED",
+        "create_time": "2026-10-16T01:00:00Z",
+    }
+    workspace.api_client.do.return_value = response
+    ctx = _Ctx(_AgentBricksApiClient(workspace_client=workspace))
     ctx.output = output
     result = CliRunner().invoke(
         _pipeline(), ["runs", "get", "memory-pipelines/p-123/runs/418898433707211"], obj=ctx
     )
     assert result.exit_code == 0, result.output
-    command = ["databricks", "jobs", "get-run", "418898433707211"]
-    if profile:
-        command.extend(["--profile", profile])
-    run.assert_called_once_with(command, check=False)
-
-
-@mock.patch("databricks_agentbricks.cli.pipeline.subprocess.run")
-def test_get_run_preserves_failure_exit_code(run):
-    run.return_value = subprocess.CompletedProcess([], 7)
-    result = CliRunner().invoke(
-        _pipeline(), ["runs", "get", "memory-pipelines/p-123/runs/123"], obj=_Ctx(_Client())
+    workspace.api_client.do.assert_called_once_with(
+        "GET",
+        "/api/2.0/agents/memory-pipelines/p-123/runs/418898433707211",
+        query=None,
+        body=None,
     )
-    assert result.exit_code == 7
+    if output == "json":
+        assert json.loads(result.stdout) == response
+    else:
+        assert response["name"] in result.stdout
+        assert "SUCCEEDED" in result.stdout
+
+
+def test_get_run_surfaces_api_error():
+    workspace = mock.Mock()
+    workspace.api_client.do.side_effect = AgentCliError("Run not found", error_code="NOT_FOUND")
+    result = CliRunner().invoke(
+        _pipeline(),
+        ["runs", "get", "memory-pipelines/p-123/runs/123"],
+        obj=_Ctx(_AgentBricksApiClient(workspace_client=workspace)),
+    )
+    assert result.exit_code == 1
+    assert "Run not found" in result.output
 
 
 @pytest.mark.parametrize(
     "name", ["123", "memory-pipelines/p/runs/abc", "memory-pipelines/p/runs/123/extra"]
 )
-@mock.patch("databricks_agentbricks.cli.pipeline.subprocess.run")
-def test_get_run_rejects_invalid_resource_name(run, name):
+def test_get_run_rejects_invalid_resource_name(name):
     result = CliRunner().invoke(_pipeline(), ["runs", "get", name], obj=_Ctx(_Client()))
     assert result.exit_code == 2
-    run.assert_not_called()
-
-
-@mock.patch("databricks_agentbricks.cli.pipeline.subprocess.run", side_effect=FileNotFoundError)
-def test_get_run_reports_missing_databricks_cli(run):
-    result = CliRunner().invoke(
-        _pipeline(), ["runs", "get", "memory-pipelines/p-123/runs/123"], obj=_Ctx(_Client())
-    )
-    assert result.exit_code == 1
-    assert "Databricks CLI not found" in result.output
 
 
 @pytest.mark.parametrize("command", [["get", "p-123"], ["list"]])
@@ -191,6 +192,70 @@ def test_pause_resume_rejects_existing_state(command, policy, state):
     workspace.api_client.do.assert_called_once_with(
         "GET", "/api/2.0/agents/memory-pipelines/p-123", query=None, body=None
     )
+
+
+@pytest.mark.parametrize("name", ["p-123", "memory-pipelines/p-123"])
+@pytest.mark.parametrize("output", ["text", "json"])
+def test_list_runs_calls_api_and_preserves_pagination(name, output):
+    workspace = mock.Mock()
+    response = {
+        "pipeline_runs": [
+            {
+                "name": "memory-pipelines/p-123/runs/456",
+                "state": "SUCCEEDED",
+                "create_time": "2026-10-15T01:00:00Z",
+            }
+        ],
+        "next_page_token": "next-page",
+    }
+    workspace.api_client.do.return_value = response
+    ctx = _Ctx(_AgentBricksApiClient(workspace_client=workspace))
+    ctx.output = output
+    result = CliRunner().invoke(
+        _pipeline(),
+        ["runs", "list", name, "--page-size", "10", "--page-token", "previous-page"],
+        obj=ctx,
+    )
+    assert result.exit_code == 0, result.output
+    workspace.api_client.do.assert_called_once_with(
+        "GET",
+        "/api/2.0/agents/memory-pipelines/p-123/runs",
+        query={"page_size": 10, "page_token": "previous-page"},
+        body=None,
+    )
+    if output == "json":
+        assert json.loads(result.stdout) == response
+    else:
+        assert "memory-pipelines/p-123/runs/456" in result.stdout
+        assert "SUCCEEDED" in result.stdout
+        assert "--page-token next-page" in result.stdout
+
+
+@pytest.mark.parametrize("response", [{}, {"pipeline_runs": []}])
+def test_list_runs_empty_response_and_default_page_size(response):
+    workspace = mock.Mock()
+    workspace.api_client.do.return_value = response
+    result = CliRunner().invoke(
+        _pipeline(),
+        ["runs", "list", "p-123"],
+        obj=_Ctx(_AgentBricksApiClient(workspace_client=workspace)),
+    )
+    assert result.exit_code == 0, result.output
+    workspace.api_client.do.assert_called_once_with(
+        "GET", "/api/2.0/agents/memory-pipelines/p-123/runs", query={"page_size": 50}, body=None
+    )
+    assert "Next page" not in result.stdout
+
+
+def test_list_runs_rejects_negative_page_size():
+    workspace = mock.Mock()
+    result = CliRunner().invoke(
+        _pipeline(),
+        ["runs", "list", "p-123", "--page-size", "-1"],
+        obj=_Ctx(_AgentBricksApiClient(workspace_client=workspace)),
+    )
+    assert result.exit_code == 2
+    workspace.api_client.do.assert_not_called()
 
 
 def test_create_accepts_store_names_and_model():
