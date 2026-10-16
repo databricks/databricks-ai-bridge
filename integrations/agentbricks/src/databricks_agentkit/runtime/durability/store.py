@@ -17,7 +17,7 @@ class DurableRuntimeStore(RuntimeStore, Protocol):
         ...
 
     async def stale_invocation_ids(self, stale_seconds: float) -> list[str]:
-        """List active invocations whose heartbeat is stale."""
+        """List stale active work and abandoned, runnable worker-owned queued work."""
         ...
 
     async def claim_recoverable(
@@ -25,7 +25,11 @@ class DurableRuntimeStore(RuntimeStore, Protocol):
         invocation_id: str,
         stale_seconds: float,
     ) -> Invocation | None:
-        """Replace a stale active attempt and return the new active attempt."""
+        """Recover stale work and return an active replacement attempt.
+
+        Recovering abandoned queued work must also identify the attempt as recovery,
+        so handlers cannot mistake ownership transfer for a local first attempt.
+        """
         ...
 
     async def heartbeat(self, invocation_id: str, attempt: int) -> bool:
