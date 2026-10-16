@@ -20,11 +20,15 @@ def test_tracing(agentbricks_cli: AgentbricksCli, project: Project, cleanup: Cle
     agentbricks_cli.run(f"init --framework langgraph {project.path}", timeout=600)
     project.pin_runtime()
     app = project.app_name
-    # Registered before deploy: a deploy that fails partway can still leave them behind.
-    cleanup(f"memory stores delete memory-stores/{project.declared_store('memory')} --yes")
-    cleanup(f"sessions stores delete {project.declared_store('session')} --yes")
+    # Before deploy: a deploy that fails partway can still leave the App behind.
     cleanup(f"deployments delete {app} --yes")
-    agentbricks_cli.run(f"deploy {app} --source {project.path}", timeout=2400)
+    deployed = json.loads(
+        agentbricks_cli.run(
+            f"--output json deploy {app} --source {project.path}", timeout=2400
+        ).stdout
+    )
+    cleanup(f"memory stores delete memory-stores/{deployed['memory_store']} --yes")
+    cleanup(f"sessions stores delete {deployed['session_store']} --yes")
     agentbricks_cli.run(
         f"--output json endpoint invoke {app} --path /api/invocations "
         f"--json {invocation_json('Reply with one word: hello.')}",

@@ -12,7 +12,7 @@ from harness.cleanup import Cleanup, wait_until_app_gone
 from harness.logs import log
 from harness.project import Project
 from harness.workspace import Workspace
-from tool_definitions import Tool, assert_declared
+from tool_definitions import Tool
 
 
 def test_deploy(
@@ -26,17 +26,20 @@ def test_deploy(
     agentbricks_cli.run(f"init --framework langgraph {project.path}", timeout=600)
     project.pin_runtime()
     app = project.app_name
-    # Registered before deploy: a deploy that fails partway can still leave them behind.
-    cleanup(f"memory stores delete memory-stores/{project.declared_store('memory')} --yes")
-    cleanup(f"sessions stores delete {project.declared_store('session')} --yes")
+    # Before deploy: a deploy that fails partway can still leave the App behind.
     cleanup(f"deployments delete {app} --yes")
     for tool in tools:
         if tool.add_command:
             agentbricks_cli.run(f"tools add {tool.add_command} --source {project.path}")
         project.write_files(tool.files)
-        assert_declared(project, tool)
 
-    agentbricks_cli.run(f"deploy {app} --source {project.path}", timeout=2400)
+    deployed = json.loads(
+        agentbricks_cli.run(
+            f"--output json deploy {app} --source {project.path}", timeout=2400
+        ).stdout
+    )
+    cleanup(f"memory stores delete memory-stores/{deployed['memory_store']} --yes")
+    cleanup(f"sessions stores delete {deployed['session_store']} --yes")
     deployment = json.loads(agentbricks_cli.run(f"--output json deployments get {app}").stdout)
     for tool in tools:
         with subtests.test(tool=tool.name):

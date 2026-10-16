@@ -11,7 +11,6 @@ import pathlib
 import shutil
 import uuid
 from collections.abc import Mapping
-from typing import Any
 
 import tomli
 import tomlkit
@@ -47,15 +46,6 @@ class Project:
         document = tomli.loads(pyproject.read_text(encoding="utf-8"))
         sources = document.get("tool", {}).get("uv", {}).get("sources", {})
         return "databricks-agentbricks" in sources
-
-    def manifest(self) -> dict[str, Any]:
-        return tomli.loads((self.path / "agent.toml").read_text(encoding="utf-8"))
-
-    def declared_store(self, kind: str) -> str | None:
-        """The name agent.toml gives the ``memory`` or ``session`` store, if it declares one."""
-        if not (self.path / "agent.toml").exists():
-            return None
-        return self.manifest().get(f"{kind}_store", {}).get("name")
 
     def write_file(self, relative_path: str, content: str) -> None:
         """Write a user-owned file in the project, as a developer would."""

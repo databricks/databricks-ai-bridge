@@ -25,6 +25,7 @@ import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Iterator, Mapping
+from typing import Any
 
 from harness.logs import last_lines, last_nonempty_line, log, log_command
 from harness.run import E2E_MODEL, E2EError, RunConfig, now
@@ -237,16 +238,58 @@ def not_found(result: subprocess.CompletedProcess[str]) -> bool:
     return result.returncode != 0 and bool(_NOT_FOUND.search(result.stderr or result.stdout))
 
 
-def invocation_json(prompt: str) -> str:
-    """A shell-quoted /api/invocations body for `agentbricks endpoint invoke --json`."""
+def invocation_json(prompt: str, *, session_id: str | None = None, actor: str | None = None) -> str:
+    """A shell-quoted /api/invocations body for `agentbricks endpoint invoke --json`.
+
+    Each call is a new session unless ``session_id`` is given. The agent keys long-term memory by
+    ``actor``, which defaults to the session.
+    """
     invocation_id = str(uuid.uuid4())
+    agent_input: dict[str, Any] = {
+        "model": E2E_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if actor:
+        agent_input["actor"] = actor
     body = {
         "id": invocation_id,
         # session_id is a top-level invocation field; the adapter rejects it nested in input.
-        "session_id": invocation_id,
-        "input": {"model": E2E_MODEL, "messages": [{"role": "user", "content": prompt}]},
+        "session_id": session_id or invocation_id,
+        "input": agent_input,
     }
     return shlex.quote(json.dumps(body))
+
+
+# Reading `endpoint invoke --output json`: the LangGraph agent lists every step in
+# ``body.output.output``, the model's messages (``type == "ai"``) and each tool's own result
+# (``type == "tool"``).
+
+
+def excerpt(serialized: str, head: int = 1000, tail: int = 3000) -> str:
+    """The response for a failure message: tool results come last, so keep the end, not just the start."""
+    if len(serialized) <= head + tail:
+        return serialized
+    omitted = len(serialized) - head - tail
+    return f"{serialized[:head]} ...[{omitted} chars omitted]... {serialized[-tail:]}"
+
+
+def _steps(serialized: str) -> list[dict[str, Any]]:
+    try:
+        steps = json.loads(serialized)["body"]["output"]["output"]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise AssertionError(f"Unexpected endpoint invoke output: {excerpt(serialized)}") from exc
+    return [step for step in steps if isinstance(step, dict)]
+
+
+def tool_results(serialized: str) -> list[dict[str, Any]]:
+    """Each tool's own result, separate from what the model says about it."""
+    return [step for step in _steps(serialized) if step.get("type") == "tool"]
+
+
+def reply(serialized: str) -> str:
+    """The model's last message."""
+    messages = [step for step in _steps(serialized) if step.get("type") == "ai"]
+    return str(messages[-1].get("content")) if messages else ""
 
 
 def free_port() -> int:

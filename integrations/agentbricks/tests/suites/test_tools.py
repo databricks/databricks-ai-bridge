@@ -1,23 +1,43 @@
-"""`agentbricks tools`: `tools add` declares each tool in agent.toml, and `tools remove` takes it out."""
+"""`agentbricks tools`: after `tools remove`, the agent no longer has the tool.
+
+`tools add` is covered by `test_dev` and `test_deploy`, which invoke every added tool.
+"""
 
 from __future__ import annotations
 
-from harness.agentbricks_cli import AgentbricksCli
+import pytest
+from harness.agentbricks_cli import AgentbricksCli, free_port, invocation_json
 from harness.project import Project
-from tool_definitions import Tool, assert_declared
+from tool_definitions import Tool
+
+# Local dev servers share run-local's proxy port, so all dev runs stay on one worker, in order.
+pytestmark = pytest.mark.xdist_group("dev")
 
 
-def test_tools_add_and_remove(
-    agentbricks_cli: AgentbricksCli, project: Project, tools: tuple[Tool, ...]
+def test_tools_remove(
+    agentbricks_cli: AgentbricksCli, project: Project, tools: tuple[Tool, ...], subtests
 ) -> None:
     agentbricks_cli.run(f"init --framework langgraph {project.path}", timeout=600)
     project.pin_runtime()
-    added = [tool for tool in tools if tool.add_command and tool.tool_id]
-    for tool in added:
+    removed = [tool for tool in tools if tool.add_command and tool.tool_id]
+    for tool in removed:
         agentbricks_cli.run(f"tools add {tool.add_command} --source {project.path}")
-        assert_declared(project, tool)
-
-    for tool in added:
+    for tool in removed:
         agentbricks_cli.run(f"tools remove {tool.tool_id} --source {project.path}")
-    declared = [t["id"] for t in project.manifest().get("tools", [])]
-    assert not declared, f"tools remove left {declared} in agent.toml"
+
+    port = free_port()
+    with agentbricks_cli.start(
+        f"dev --source {project.path} --app-port {port}", env={"PORT": str(port)}
+    ) as server:
+        server.wait_until_serving(port)
+        for tool in removed:
+            with subtests.test(tool=tool.name):
+                output = agentbricks_cli.run(
+                    f"--output json endpoint invoke --url http://127.0.0.1:{port} --no-auth "
+                    f"--path /api/invocations --json {invocation_json(tool.prompt)}",
+                    timeout=360,
+                    retry_server_errors=True,
+                ).stdout
+                # The tool's own check passes only when the tool ran and returned its result.
+                with pytest.raises(AssertionError):
+                    tool.check(output)

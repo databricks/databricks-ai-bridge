@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import dataclasses
-import json
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from harness.project import Project
+from harness.agentbricks_cli import excerpt, tool_results
 from harness.workspace import GrantTuple
 from uc_objects import UcFunction
 
@@ -36,9 +35,8 @@ class Tool:
     add_command: str | None
     # User-owned files the tool needs.
     files: Mapping[str, str]
-    # The id agent.toml declares it under, and whether it must be App-authed.
+    # The id `tools add` binds it under, which `tools remove` takes.
     tool_id: str | None
-    app_auth: bool
     # The App resource a deploy grants for it; None when it needs no UC grant.
     grant: GrantTuple | None = None
 
@@ -50,27 +48,6 @@ class ToolDefinition:
     name: str
     requires: tuple[str, ...]
     build: Callable[..., Tool]
-
-
-def excerpt(serialized: str, head: int = 1000, tail: int = 3000) -> str:
-    """The response for a failure message: tool results come last, so keep the end, not just the start."""
-    if len(serialized) <= head + tail:
-        return serialized
-    omitted = len(serialized) - head - tail
-    return f"{serialized[:head]} ...[{omitted} chars omitted]... {serialized[-tail:]}"
-
-
-def tool_results(serialized: str) -> list[dict[str, Any]]:
-    """The tool steps of an `endpoint invoke --output json` response, as the agent reports them.
-
-    The LangGraph agent lists every step in ``body.output.output``; a tool's own result is the item
-    with ``type == "tool"``, separate from the model's reply.
-    """
-    try:
-        steps = json.loads(serialized)["body"]["output"]["output"]
-    except (ValueError, KeyError, TypeError) as exc:
-        raise AssertionError(f"Unexpected endpoint invoke output: {excerpt(serialized)}") from exc
-    return [step for step in steps if isinstance(step, dict) and step.get("type") == "tool"]
 
 
 def _successful(serialized: str, matches: Callable[[dict[str, Any]], bool], what: str) -> None:
@@ -119,7 +96,6 @@ def sandbox_tool(uc_function: UcFunction) -> Tool:
         add_command=f"sandbox --scope volume:{uc_function.volume}",
         files={},
         tool_id="sandbox",
-        app_auth=False,
         grant=None,
     )
 
@@ -136,7 +112,6 @@ def web_search_tool(**_resources: object) -> Tool:
         add_command="mcp system.ai.web_search --auth app",
         files={},
         tool_id="web_search",
-        app_auth=True,
     )
 
 
@@ -151,7 +126,6 @@ def python_tool() -> Tool:
         add_command=None,
         files={PYTHON_MARKER_FILE: PYTHON_MARKER_SOURCE},
         tool_id=None,
-        app_auth=False,
     )
 
 
@@ -166,7 +140,6 @@ def uc_function_tool(uc_function: UcFunction) -> Tool:
         add_command=f"uc-function {uc_function.function} --name agentbricks_uc_marker",
         files={},
         tool_id="agentbricks_uc_marker",
-        app_auth=False,
         grant=("uc_securable", uc_function.function, "FUNCTION", "EXECUTE"),
     )
 
@@ -183,7 +156,6 @@ def genie_tool(genie_space: str) -> Tool:
         add_command=f"genie-agent {genie_space} --name genie --auth app",
         files={},
         tool_id="genie",
-        app_auth=True,
         grant=("genie_space", genie_space, "GENIE_SPACE", "CAN_RUN"),
     )
 
@@ -196,17 +168,3 @@ TOOL_DEFINITIONS = (
     ToolDefinition("uc_function", ("uc_function",), uc_function_tool),
     ToolDefinition("genie", ("genie_space",), genie_tool),
 )
-
-
-def assert_declared(project: Project, tool: Tool) -> None:
-    """After `tools add`, agent.toml declares the tool under its id, App-authed if it must be."""
-    if tool.tool_id is None:
-        return
-    declared = {t["id"]: t for t in project.manifest().get("tools", [])}
-    assert tool.tool_id in declared, (
-        f"tools add did not declare {tool.tool_id!r}: {sorted(declared)}"
-    )
-    if tool.app_auth:
-        assert declared[tool.tool_id].get("auth") == "app", (
-            f"CLI-authored {tool.tool_id} binding is not App-auth."
-        )
