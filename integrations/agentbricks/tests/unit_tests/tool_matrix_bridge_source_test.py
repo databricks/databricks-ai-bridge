@@ -44,6 +44,12 @@ def test_generated_project_pins_app_packages_to_bridge_sha(
     pyproject = tomli.loads((cases[0].path / "pyproject.toml").read_text())
     assert "databricks-langchain>=0.17.0" in pyproject["project"]["dependencies"]
     assert pyproject["project"]["dependencies"].count("databricks-langchain>=0.17.0") == 1
+    assert "databricks-openai>=0.18.0" in pyproject["project"]["dependencies"]
+    assert pyproject["tool"]["uv"]["sources"]["databricks-openai"] == {
+        "git": "https://github.com/databricks/databricks-ai-bridge.git",
+        "rev": BRIDGE_SHA,
+        "subdirectory": "integrations/openai",
+    }
     assert pyproject["tool"]["uv"]["sources"]["databricks-langchain"] == {
         "git": "https://github.com/databricks/databricks-ai-bridge.git",
         "rev": BRIDGE_SHA,

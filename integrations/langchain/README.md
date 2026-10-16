@@ -44,6 +44,27 @@ genie_agent = GenieAgent(
 
 ---
 
+## Claude prompt caching
+
+`ChatDatabricks` forwards caller-supplied controls through `extra_body` and content blocks.
+For a Claude endpoint supporting native automatic placement (for example Sonnet 4.6):
+
+```python
+llm = ChatDatabricks(
+    model="system.ai.claude-sonnet-4-6",
+    use_ai_gateway=True,
+    extra_params={"extra_body": {"cache_control": {"type": "ephemeral"}}},
+)
+```
+
+The generic connector does not infer a caching policy. Agent Bricks templates use the separate
+Claude adapter in `databricks_agentkit.claude`; see the [template caching guide](../../docs/claude-prompt-caching.md)
+for configuration, older endpoints, and manual controls.
+
+Inspect `message.usage_metadata["input_token_details"]` for `cache_read` and `cache_creation`,
+including streaming results. Both are already included in `input_tokens`. Cache eligibility and
+pricing depend on the endpoint and repeated prefix.
+
 ## Contribution Guide
 We welcome contributions! Please see our [contribution guidelines](https://github.com/databricks/databricks-ai-bridge/tree/main/integrations/langchain) for details.
 
@@ -51,4 +72,3 @@ We welcome contributions! Please see our [contribution guidelines](https://githu
 This project is licensed under the [MIT License](LICENSE).
 
 Thank you for using Databricks LangChain!
-

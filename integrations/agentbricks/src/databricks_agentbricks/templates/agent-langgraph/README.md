@@ -20,6 +20,19 @@ project and follow the generated prompt in your coding agent. The migration skil
 [AGENTKIT_CONTRACT.md](AGENTKIT_CONTRACT.md), which owns integration requirements. This README owns
 configuration and client examples; [AGENTS.md](AGENTS.md) provides the development map.
 
+## Claude prompt caching
+
+Claude Chat Completions use prompt caching by default. System instructions, tool
+definitions in the system prefix, and recent user/tool-result boundaries can be reused across
+model calls. Set `DATABRICKS_CLAUDE_PROMPT_CACHING=off` to opt out. Other providers keep their request
+format. Cache hits require a sufficiently long, unchanged prefix within the cache lifetime;
+cache writes carry an additional charge.
+
+Claude caching is configured by the AgentKit provider adapter. Sonnet 4.6's verified endpoint
+names use native automatic conversation placement plus a fixed system point; older Claude
+names use explicit points. Caller-supplied controls take precedence. Unknown aliases need
+manual controls. The setting does not affect caching managed by other providers.
+
 ## Run locally
 
 ```bash

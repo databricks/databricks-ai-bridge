@@ -60,6 +60,99 @@ def test_documented_memory_payload_keeps_actor_stable_across_conversations(templ
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("policy", [None, "off"])
+async def test_template_prompt_caching_default_and_opt_out(template, monkeypatch, policy):
+    framework, _adapter, agent = template
+    if policy is None:
+        monkeypatch.delenv("DATABRICKS_CLAUDE_PROMPT_CACHING", raising=False)
+    else:
+        monkeypatch.setenv("DATABRICKS_CLAUDE_PROMPT_CACHING", policy)
+    monkeypatch.setattr(agent, "workspace_client", Mock())
+    if framework == "langgraph":
+        model = Mock()
+        monkeypatch.setattr(agent, "_RoutedChatDatabricks", model)
+        monkeypatch.setattr(agent, "mcp_tools", AsyncMock(return_value=[]))
+        monkeypatch.setattr(agent, "memory_tools", lambda *_args: [])
+        monkeypatch.setattr(agent, "genie_tools", lambda **_kwargs: [])
+        monkeypatch.setattr(agent, "checkpointer", Mock())
+        monkeypatch.setattr(agent, "create_agent", Mock())
+        await agent.create_agent_graph("actor")
+    else:
+        import agents
+
+        model = Mock()
+        monkeypatch.setattr(agent, "ClaudeCachingOpenAI", model)
+        monkeypatch.setattr(agent, "_check_databricks_auth", Mock())
+        monkeypatch.setattr(agent, "configure_tracing", Mock())
+        monkeypatch.setattr(agents, "set_default_openai_client", Mock())
+        monkeypatch.setattr(agents, "set_default_openai_api", Mock())
+        agent.configure()
+    assert "prompt_caching" not in model.call_args.kwargs
+    assert model.call_args.kwargs["use_ai_gateway"] is True
+    if framework == "openai":
+        assert model.call_args.kwargs["cache_policy"] == (policy or "auto")
+
+
+def _load_custom_agent(framework, monkeypatch):
+    dependency = "databricks_langchain" if framework == "langgraph" else "databricks_openai"
+    pytest.importorskip(dependency, reason=f"Requires databricks-agentbricks[{framework}]")
+    path = TEMPLATES / f"custom-agent-{framework}" / "agent/agent.py"
+    spec = importlib.util.spec_from_file_location(f"custom_agent_{framework}", path)
+    assert spec is not None and spec.loader is not None
+    agent = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, agent)
+    spec.loader.exec_module(agent)
+    return agent
+
+
+@pytest.mark.parametrize("policy", [None, "off"])
+@pytest.mark.parametrize("headers", [{}, {"X-Test-Routing": "request"}])
+def test_custom_openai_prompt_caching_with_and_without_headers(monkeypatch, policy, headers):
+    agent = _load_custom_agent("openai", monkeypatch)
+    if policy is None:
+        monkeypatch.delenv("DATABRICKS_CLAUDE_PROMPT_CACHING", raising=False)
+    else:
+        monkeypatch.setenv("DATABRICKS_CLAUDE_PROMPT_CACHING", policy)
+    workspace = Mock()
+    monkeypatch.setattr(agent, "workspace_client", Mock(return_value=workspace))
+    monkeypatch.setattr(agent, "workspace_headers", Mock(return_value=headers))
+    client = Mock()
+    monkeypatch.setattr(agent, "ClaudeCachingOpenAI", client)
+    configure = Mock()
+    monkeypatch.setattr(agent, "set_default_openai_client", configure)
+    monkeypatch.setattr(agent, "set_default_openai_api", Mock())
+    agent._configure_client()
+    assert "prompt_caching" not in client.call_args.kwargs
+    assert client.call_args.kwargs["workspace_client"] is workspace
+    assert client.call_args.kwargs.get("default_headers", {}) == headers
+    configure.assert_called_once_with(client.return_value)
+    assert client.call_args.kwargs["cache_policy"] == (policy or "auto")
+    agent.set_default_openai_api.assert_called_once_with("chat_completions")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", [None, "off"])
+async def test_custom_langgraph_prompt_caching_default_and_opt_out(monkeypatch, policy):
+    agent = _load_custom_agent("langgraph", monkeypatch)
+    if policy is None:
+        monkeypatch.delenv("DATABRICKS_CLAUDE_PROMPT_CACHING", raising=False)
+    else:
+        monkeypatch.setenv("DATABRICKS_CLAUDE_PROMPT_CACHING", policy)
+    workspace = Mock()
+    monkeypatch.setattr(agent, "workspace_client", Mock(return_value=workspace))
+    model = Mock()
+    monkeypatch.setattr(agent, "_RoutedChatDatabricks", model)
+    output = {"role": "assistant", "content": "OK"}
+    graph = Mock(ainvoke=AsyncMock(return_value={"messages": [output]}))
+    monkeypatch.setattr(agent, "create_agent", Mock(return_value=graph))
+    messages = [{"role": "user", "content": "Hello"}]
+    assert await agent.invoke(messages) == {"output": [output]}
+    assert "prompt_caching" not in model.call_args.kwargs
+    assert model.call_args.kwargs["workspace_client"] is workspace
+    graph.ainvoke.assert_awaited_once_with({"messages": messages})
+
+
+@pytest.mark.asyncio
 async def test_adapter_uses_context_session_and_namespaces_untrusted_actor(template, monkeypatch):
     framework, adapter, _agent = template
     calls = []
@@ -262,3 +355,32 @@ async def test_openai_request_exit_cancels_native_run(template, monkeypatch):
         async with agent.run_agent([], session_id="private", workspace_client_for=Mock()):
             raise RuntimeError("disconnected")
     result.cancel.assert_called_once_with()
+
+
+@pytest.mark.parametrize("policy", ["auto", "off"])
+@pytest.mark.parametrize(
+    "model", ["system.ai.claude-sonnet-4-6", "system.ai.claude-sonnet-4-5", "system.ai.gpt-5-2"]
+)
+@pytest.mark.parametrize("custom", [False, True])
+def test_generated_langgraph_prepares_claude_controls(template, monkeypatch, policy, model, custom):
+    framework, _, agent = template
+    if framework != "langgraph":
+        pytest.skip("LangGraph preparation only")
+    if custom:
+        agent = _load_custom_agent("langgraph", monkeypatch)
+    from unittest.mock import MagicMock
+
+    from databricks.sdk import WorkspaceClient
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    workspace = MagicMock(spec=WorkspaceClient)
+    workspace.config.host = "https://test.databricks.com"
+    monkeypatch.setenv("DATABRICKS_CLAUDE_PROMPT_CACHING", policy)
+    llm = agent._RoutedChatDatabricks(model=model, workspace_client=workspace, use_ai_gateway=True)
+    request = llm._prepare_inputs([SystemMessage(content="Stable"), HumanMessage(content="Hello")])
+    if policy == "auto" and "claude" in model:
+        assert request["messages"][0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+        assert ("cache_control" in request.get("extra_body", {})) == model.endswith("4-6")
+    else:
+        assert request["messages"][0]["content"] == "Stable"
+        assert "cache_control" not in request.get("extra_body", {})

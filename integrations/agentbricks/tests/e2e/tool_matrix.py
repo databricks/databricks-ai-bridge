@@ -550,6 +550,8 @@ class Runner:
             str(dependency).startswith("databricks-langchain") for dependency in dependencies
         ):
             dependencies.append("databricks-langchain>=0.17.0")
+        if not any(str(dependency).startswith("databricks-openai") for dependency in dependencies):
+            dependencies.append("databricks-openai>=0.18.0")
         if "tool" not in document:
             document["tool"] = tomlkit.table()
         if "uv" not in document["tool"]:
@@ -559,6 +561,7 @@ class Runner:
         for package, subdirectory in (
             ("databricks-agentbricks", "integrations/agentbricks"),
             ("databricks-langchain", "integrations/langchain"),
+            ("databricks-openai", "integrations/openai"),
         ):
             source = tomlkit.inline_table()
             source.update(
@@ -569,7 +572,9 @@ class Runner:
                 }
             )
             document["tool"]["uv"]["sources"][package] = source
-        self.transcript.file_step(pyproject, f"pin Agent Bricks and LangChain to {self.bridge_sha}")
+        self.transcript.file_step(
+            pyproject, f"pin Agent Bricks, LangChain, and OpenAI to {self.bridge_sha}"
+        )
         pyproject.write_text(tomlkit.dumps(document), encoding="utf-8")
 
     def _author_cli(self, project: pathlib.Path) -> None:

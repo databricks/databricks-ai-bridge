@@ -1,6 +1,6 @@
 [project]
 name = "databricks-langchain"
-version = "0.21.0"
+version = "0.22.0"
 description = "Support for Databricks AI support in LangChain"
 authors = [
     { name="Databricks", email="agent-feedback@databricks.com" },
@@ -17,7 +17,7 @@ dependencies = [
     "unitycatalog-langchain[databricks]>=0.3.0",
     "databricks-sdk>=0.65.0",
     "openai>=1.99.9",
-    "databricks-openai>=0.14.0",
+    "databricks-openai>=0.18.0",
     "langchain-mcp-adapters>=0.1.13",
     "databricks_mcp>=0.5.1",
 ]
