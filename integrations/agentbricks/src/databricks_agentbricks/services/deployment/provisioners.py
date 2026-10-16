@@ -560,17 +560,19 @@ class AppProvisioner:
                 "Creating the agent and starting its compute (this can take a few minutes)…"
             ):
                 out = self._apps_client.create(name, instance_count)
-            old, new = _AGENT_COMPUTE_OUTPUT
-            self._reporter.echo(out.replace(old, new), add_newline=False)
+            self._note_cli_output(out)
         elif instance_count is not None:
-            out = self._apps_client.create_update_instances(name, instance_count)
-            old, new = _AGENT_COMPUTE_OUTPUT
-            self._reporter.echo(out.replace(old, new), add_newline=False)
+            self._note_cli_output(self._apps_client.create_update_instances(name, instance_count))
         # `apps deploy` requires ACTIVE compute, whether the App is new or was previously stopped.
         with self._reporter.progress(
             "Waiting for agent compute to start (this can take a few minutes)…"
         ):
             self._apps_client.wait_for_active(name)
+
+    def _note_cli_output(self, out: str) -> None:
+        # stderr, so `--output json` stdout stays parseable.
+        old, new = _AGENT_COMPUTE_OUTPUT
+        self._reporter.note(out.replace(old, new).rstrip("\n"))
 
     def resolve_workspace_path(self, ctx: ResourceContext, requested_path: Optional[str]) -> str:
         """Return the explicit destination for source upload, deriving the default lazily."""
