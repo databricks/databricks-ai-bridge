@@ -230,7 +230,7 @@ needs it, using the same profile and identifier used to inspect it.
 
 | Clean up | Command | Details |
 | --- | --- | --- |
-| Deployment | `agentbricks -p <profile> deployments delete agent-bricks-<name>` | Managed Runtime Store cleanup checks the app identity and runs before app deletion; a cleanup failure retains the app for retry. Memory/session stores, tracing experiments, tools, and source files are retained. |
+| Deployment | `agentbricks -p <profile> deployments delete agent-bricks-<name>` | Managed Runtime Store cleanup checks the app identity and runs before app deletion; a cleanup failure retains the app for retry. Returns once the app is gone, then deletes the source folder deploy uploaded to by default (`/Workspace/Users/<user>/agentbricks_deployments/<name>`); a folder given with `--workspace-path` is kept. Memory/session stores, tracing experiments and tools are retained. |
 | [Memory store](cli.md#agentbricks-memory-stores-delete) | `agentbricks -p <profile> memory stores delete <resource-name>` | Soft-deletes the store after confirmation. |
 | [Session store](cli.md#agentbricks-sessions-stores-delete) | `agentbricks -p <profile> sessions stores delete <name>` | Deletes the store after confirmation. |
 

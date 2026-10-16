@@ -144,3 +144,53 @@ def test_lifecycle_commands_print_to_stderr(call):
     calls = []
     call(AppsClient("prof", runner=_runner(calls)))
     assert [kwargs.get("to_stderr") for _, _, kwargs in calls] == [True]
+
+
+def test_wait_until_deleted_returns_once_the_app_is_gone(monkeypatch):
+    answers = iter([0, 0, 1])
+
+    def run(args, profile, **kwargs):
+        code = next(answers)
+        return types.SimpleNamespace(
+            returncode=code,
+            stdout="",
+            stderr="" if code == 0 else "App does not exist or is deleted.",
+        )
+
+    monkeypatch.setattr(apps_client_mod.time, "sleep", lambda s: None)
+    AppsClient("prof", runner=run).wait_until_deleted("app")
+
+
+def test_wait_until_deleted_times_out(monkeypatch):
+    monkeypatch.setattr(apps_client_mod.time, "sleep", lambda s: None)
+    with pytest.raises(AgentCliError, match="still being deleted"):
+        AppsClient("prof", runner=_runner([])).wait_until_deleted("app", timeout_s=0)
+
+
+@pytest.mark.parametrize("key", ["active_deployment", "pending_deployment"])
+def test_source_code_path_reads_the_latest_deployment(key):
+    payload = '{"%s": {"source_code_path": "/Workspace/Users/u/agentbricks_deployments/app"}}' % key
+    client = AppsClient("prof", runner=_runner([], stdout=payload))
+    assert client.source_code_path("app") == "/Workspace/Users/u/agentbricks_deployments/app"
+
+
+def test_source_code_path_is_none_without_a_deployment():
+    assert AppsClient("prof", runner=_runner([], stdout="{}")).source_code_path("app") is None
+
+
+def test_delete_source_deletes_the_folder_recursively():
+    calls = []
+    assert AppsClient("prof", runner=_runner(calls)).delete_source("/Workspace/x") is True
+    assert calls[0][0] == ["workspace", "delete", "/Workspace/x", "--recursive"]
+
+
+def test_delete_source_of_a_missing_folder_is_not_an_error():
+    stderr = "Error: Path (/Workspace/x) doesn't exist."
+    client = AppsClient("prof", runner=_runner([], returncode=1, stderr=stderr))
+    assert client.delete_source("/Workspace/x") is False
+
+
+def test_delete_source_raises_on_other_failures():
+    client = AppsClient("prof", runner=_runner([], returncode=1, stderr="PERMISSION_DENIED"))
+    with pytest.raises(AgentCliError, match="Could not delete the uploaded source folder"):
+        client.delete_source("/Workspace/x")

@@ -17,6 +17,7 @@ separate from the typed resource provisioners.
 from __future__ import annotations
 
 import pathlib
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
@@ -61,6 +62,18 @@ from databricks_agentkit.runtime.store import (
     RUNTIME_STORE_USERNAME_ENV,
 )
 from databricks_agentkit.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
+
+_DEPLOYMENTS_DIR = "agentbricks_deployments"
+
+
+def is_default_workspace_path(path: str, name: DeploymentName) -> bool:
+    """Whether ``path`` is the folder deploy creates by default, in any deployer's home.
+
+    Only that folder belongs to the deployment; one passed with ``--workspace-path`` may hold the
+    user's own files.
+    """
+    pattern = rf"/Workspace/Users/[^/]+/{_DEPLOYMENTS_DIR}/{re.escape(str(name))}"
+    return re.fullmatch(pattern, path) is not None
 
 
 @dataclass(frozen=True)
@@ -578,8 +591,12 @@ class AppProvisioner:
         """Return the explicit destination for source upload, deriving the default lazily."""
         if requested_path:
             return requested_path
+        return self.default_workspace_path(ctx.project.name)
+
+    def default_workspace_path(self, name: DeploymentName) -> str:
+        """Where deploy uploads the source when no ``--workspace-path`` is given."""
         current_user = self._api_client_provider.get().current_user
-        return f"/Workspace/Users/{current_user}/agentbricks_deployments/{ctx.project.name}"
+        return f"/Workspace/Users/{current_user}/{_DEPLOYMENTS_DIR}/{name}"
 
     def deploy_source(self, ctx: ResourceContext, workspace_path: str) -> None:
         """Sync source to an already-resolved workspace destination and activate it.

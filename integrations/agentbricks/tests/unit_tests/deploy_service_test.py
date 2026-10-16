@@ -883,36 +883,56 @@ def test_deletes_runtime_store_data_reflects_provisioner(deployment_fixture, man
     deployment_fixture.runtime.manages_persistent_data.assert_called_once_with()
 
 
+_DEFAULT_SOURCE = "/Workspace/Users/user@example.com/agentbricks_deployments/agent-bricks-demo"
+
+
+def _existing_app(deployment_fixture, *, source: str | None = None) -> None:
+    deployment_fixture.apps.exists.return_value = True
+    deployment_fixture.apps.source_code_path.return_value = source
+    deployment_fixture.app.default_workspace_path.return_value = _DEFAULT_SOURCE
+    deployment_fixture.apps.delete_source.return_value = True
+
+
 def test_delete_unmanaged_runtime_store_deletes_app_only(deployment_fixture):
     name = DeploymentName("agent-bricks-demo")
+    _existing_app(deployment_fixture)
     deployment_fixture.runtime.manages_persistent_data.return_value = False
 
     deployment_fixture.service.delete(name)
 
     deployment_fixture.runtime.delete_managed.assert_not_called()
-    deployment_fixture.reporter.status.assert_not_called()
+    deployment_fixture.reporter.status.assert_called_once_with(
+        "Waiting for the deployment to be deleted…"
+    )
     deployment_fixture.apps.delete.assert_called_once_with(name)
 
 
 def test_delete_managed_runtime_store_before_app(deployment_fixture):
     name = DeploymentName("agent-bricks-demo")
+    _existing_app(deployment_fixture)
     events: list[str] = []
     deployment_fixture.runtime.manages_persistent_data.return_value = True
     deployment_fixture.runtime.delete_managed.side_effect = lambda value: events.append(
         f"runtime:{value}"
     )
     deployment_fixture.apps.delete.side_effect = lambda value: events.append(f"app:{value}")
+    deployment_fixture.apps.wait_until_deleted.side_effect = lambda value: events.append(
+        f"gone:{value}"
+    )
+    deployment_fixture.apps.delete_source.side_effect = lambda path: events.append(f"source:{path}")
 
     deployment_fixture.service.delete(name)
 
-    assert events == [f"runtime:{name}", f"app:{name}"]
-    deployment_fixture.reporter.status.assert_called_once_with("Deleting Runtime Store…")
+    # The source folder goes only once the App that uses it is gone.
+    assert events == [f"runtime:{name}", f"app:{name}", f"gone:{name}", f"source:{_DEFAULT_SOURCE}"]
+    assert deployment_fixture.reporter.status.call_args_list[0].args == ("Deleting Runtime Store…",)
     deployment_fixture.runtime.delete_managed.assert_called_once_with(name)
     deployment_fixture.apps.delete.assert_called_once_with(name)
 
 
 def test_delete_keeps_app_when_managed_cleanup_fails(deployment_fixture):
     name = DeploymentName("agent-bricks-demo")
+    _existing_app(deployment_fixture)
     deployment_fixture.runtime.manages_persistent_data.return_value = True
     deployment_fixture.runtime.delete_managed.side_effect = AgentCliError("cleanup failed")
 
@@ -921,3 +941,71 @@ def test_delete_keeps_app_when_managed_cleanup_fails(deployment_fixture):
 
     deployment_fixture.runtime.delete_managed.assert_called_once_with(name)
     deployment_fixture.apps.delete.assert_not_called()
+
+
+def test_delete_of_a_missing_deployment_deletes_nothing(deployment_fixture):
+    deployment_fixture.apps.exists.return_value = False
+
+    with pytest.raises(AgentCliError, match="does not exist"):
+        deployment_fixture.service.delete(DeploymentName("agent-bricks-demo"))
+
+    deployment_fixture.runtime.delete_managed.assert_not_called()
+    deployment_fixture.apps.delete.assert_not_called()
+    deployment_fixture.apps.delete_source.assert_not_called()
+
+
+def test_delete_keeps_a_source_folder_deploy_did_not_create(deployment_fixture):
+    name = DeploymentName("agent-bricks-demo")
+    _existing_app(deployment_fixture, source="/Workspace/Shared/my-agent")
+    deployment_fixture.runtime.manages_persistent_data.return_value = False
+
+    result = deployment_fixture.service.delete(name)
+
+    assert result.source_folder.path == "/Workspace/Shared/my-agent"
+    assert result.source_folder.managed is False
+    assert result.source_folder_deleted is False
+    deployment_fixture.apps.delete_source.assert_not_called()
+
+
+def test_delete_deletes_another_users_default_source_folder(deployment_fixture):
+    # The workspace decides whether the caller may; deploy created the folder for this App alone.
+    name = DeploymentName("agent-bricks-demo")
+    other = "/Workspace/Users/alice@example.com/agentbricks_deployments/agent-bricks-demo"
+    _existing_app(deployment_fixture, source=other)
+    deployment_fixture.runtime.manages_persistent_data.return_value = False
+
+    result = deployment_fixture.service.delete(name)
+
+    assert result.source_folder_deleted is True
+    deployment_fixture.apps.delete_source.assert_called_once_with(other)
+
+
+def test_delete_reports_a_source_folder_it_could_not_delete(deployment_fixture):
+    name = DeploymentName("agent-bricks-demo")
+    _existing_app(deployment_fixture)
+    deployment_fixture.runtime.manages_persistent_data.return_value = False
+    deployment_fixture.apps.delete_source.side_effect = AgentCliError("permission denied")
+
+    result = deployment_fixture.service.delete(name)
+
+    # The App is already gone, so the folder's failure is reported, not raised.
+    deployment_fixture.apps.delete.assert_called_once_with(name)
+    assert result.source_folder_deleted is False
+    assert result.source_folder_error == "permission denied"
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("/Workspace/Users/a@example.com/agentbricks_deployments/agent-bricks-demo", True),
+        ("/Workspace/Users/b@example.com/agentbricks_deployments/agent-bricks-demo", True),
+        ("/Workspace/Users/a@example.com/agentbricks_deployments/agent-bricks-other", False),
+        ("/Workspace/Users/a@example.com/agentbricks_deployments/agent-bricks-demo/sub", False),
+        ("/Workspace/Users/a@example.com/agentbricks_deployments", False),
+        ("/Workspace/Shared/agentbricks_deployments/agent-bricks-demo", False),
+    ],
+)
+def test_is_default_workspace_path_matches_only_deploys_own_folder(path: str, expected: bool):
+    from databricks_agentbricks.services.deployment.provisioners import is_default_workspace_path
+
+    assert is_default_workspace_path(path, DeploymentName("agent-bricks-demo")) is expected
