@@ -29,7 +29,7 @@ from databricks.sdk.service.apps import App
 import databricks_agentbricks.clients.legacy_runtime_store as legacy_runtime_store
 import databricks_agentbricks.clients.managed_runtime_store as managed_runtime_store
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
-from databricks_agentbricks.clients.apps_client import AppsClient
+from databricks_agentbricks.clients.apps_client import AppsClient, AppState
 from databricks_agentbricks.clients.apps_user_auth_client import (
     AppAuthPlan,
     AppsUserAuthClient,
@@ -409,27 +409,18 @@ class RuntimeStoreProvisioner:
                 ),
             )
 
-    def after_app_ready(self, ctx: ResourceContext, state: RuntimeStoreState) -> ManifestPatch:
-        """Attach the legacy backend to the app, or provision the managed store the app now owns.
+    def after_app_created(self, ctx: ResourceContext, state: RuntimeStoreState) -> ManifestPatch:
+        """Provision the managed store the app owns, as soon as the app exists.
 
-        The managed branch contributes late env after the app exists. The deploy service owns the
-        corresponding second manifest write.
+        Needs only the app's service principal, not ACTIVE compute, so deploy runs it while the
+        compute boots; the SP can lag a `--no-wait` create, so it is polled briefly. The managed
+        branch contributes late env; the deploy service owns the corresponding second manifest
+        write. The legacy backend has nothing to do here - see :meth:`attach_to_app`.
         """
-        if not state.enabled:
+        if not state.enabled or state.legacy_backend is not None:
             return ManifestPatch(env={})
         with self._reporter.status("Reconciling Runtime Store…"):
-            if state.legacy_backend is not None:
-                resource_error = self._apps.attach_postgres_backends(
-                    ctx.project.name, [state.legacy_backend]
-                )
-                if resource_error:
-                    raise AgentCliError(
-                        "Could not attach the Lakebase resource required for the Runtime Store.",
-                        hint=resource_error,
-                    )
-                return ManifestPatch(env={})
-
-            sp = self._apps.get_service_principal(ctx.project.name)
+            sp = self._apps.wait_for_service_principal(ctx.project.name)
             backend = managed_runtime_store.get_or_create_backend(
                 self._api_client_provider.get(), ctx.project.name, sp
             )
@@ -441,6 +432,24 @@ class RuntimeStoreProvisioner:
             if not ctx.deployment_exists and ctx.project.name.startswith(_DEPLOYMENT_PREFIX):
                 env[RUNTIME_STORE_SCHEMA_ENV] = _AGENTKIT_RUNTIME_STORE_SCHEMA
             return ManifestPatch(env=env)
+
+    def attach_to_app(self, ctx: ResourceContext, state: RuntimeStoreState) -> None:
+        """Attach the legacy backend to the app as a resource; a no-op for the managed store.
+
+        This updates the App, which fails while its compute is starting, so deploy runs it only
+        after the compute is ACTIVE.
+        """
+        if not state.enabled or state.legacy_backend is None:
+            return
+        with self._reporter.status("Reconciling Runtime Store…"):
+            resource_error = self._apps.attach_postgres_backends(
+                ctx.project.name, [state.legacy_backend]
+            )
+        if resource_error:
+            raise AgentCliError(
+                "Could not attach the Lakebase resource required for the Runtime Store.",
+                hint=resource_error,
+            )
 
     def manages_persistent_data(self) -> bool:
         """Whether the Runtime Store is service-managed, so a delete must tear it down first."""
@@ -458,7 +467,7 @@ class RuntimeStoreProvisioner:
 
 
 class AppProvisioner:
-    """Create-or-scale the deployed App, wait for its compute, then sync and roll out the source.
+    """Start the deployed App's compute, sync the source, wait for ACTIVE, then roll out.
 
     Owns the Databricks App that a deploy creates and rolls source out to. Its operations cover App
     creation, compute readiness, and source rollout; bound stores and tracing have their own
@@ -540,29 +549,20 @@ class AppProvisioner:
         auth_plan: AppAuthPlan,
         instance_count: Optional[int],
     ) -> None:
-        """Own App creation, optional scale and scope updates, and ACTIVE-compute readiness.
+        """Create or update a request-user App through the SDK, then wait for ACTIVE compute.
 
-        A request-user App takes the SDK path for scoped creation or masked update; other Apps use
-        the CLI. An omitted instance count preserves an existing App's scale on either path.
+        Only the request-user path uses this; every other App starts early through
+        :meth:`start_compute` and joins in :meth:`wait_for_compute`. An omitted instance count
+        preserves an existing App's scale.
         """
         name = ctx.project.name
-        deployment_exists = ctx.deployment_exists
-        # `apps create` blocks for minutes, so show progress while captured output is unavailable.
-        if auth_plan.scope_update is not None:
-            if auth_plan.scope_update.name != name:
-                raise AgentCliError("App auth plan does not match the deployment being prepared.")
-            with self._reporter.progress(
-                "Configuring the agent's request-user access (this can take a few minutes)…"
-            ):
-                self._reconcile_scoped_app(auth_plan.scope_update, instance_count)
-        elif not deployment_exists:
-            with self._reporter.progress(
-                "Creating the agent and starting its compute (this can take a few minutes)…"
-            ):
-                out = self._apps_client.create(name, instance_count)
-            self._note_cli_output(out)
-        elif instance_count is not None:
-            self._note_cli_output(self._apps_client.create_update_instances(name, instance_count))
+        scope_update = auth_plan.scope_update
+        if scope_update is None or scope_update.name != name:
+            raise AgentCliError("App auth plan does not match the deployment being prepared.")
+        with self._reporter.progress(
+            "Configuring the agent's request-user access (this can take a few minutes)…"
+        ):
+            self._reconcile_scoped_app(scope_update, instance_count)
         # `apps deploy` requires ACTIVE compute, whether the App is new or was previously stopped.
         with self._reporter.progress(
             "Waiting for agent compute to start (this can take a few minutes)…"
@@ -574,6 +574,38 @@ class AppProvisioner:
         old, new = _AGENT_COMPUTE_OUTPUT
         self._reporter.note(out.replace(old, new).rstrip("\n"))
 
+    def start_compute(
+        self, ctx: ResourceContext, state: Optional[AppState], instance_count: Optional[int]
+    ) -> bool:
+        """Get the App's compute booting server-side without waiting for it; True if this created it.
+
+        A missing App is created with `--no-wait`. An existing App is scaled first when an instance
+        count is given (blocking, as before, so the update can't collide with a starting compute),
+        then a STOPPED App is started with `--no-wait`. Any other state needs no call here; the
+        deploy service joins on ACTIVE later through :meth:`wait_for_compute`.
+        """
+        name = ctx.project.name
+        if state is None:
+            with self._reporter.progress(
+                "Creating the agent; its compute starts in the background…"
+            ):
+                out = self._apps_client.create(name, instance_count, no_wait=True)
+            self._note_cli_output(out)
+            return True
+        if instance_count is not None:
+            self._note_cli_output(self._apps_client.create_update_instances(name, instance_count))
+        if state.compute_state == "STOPPED":
+            with self._reporter.progress("Starting the agent's compute in the background…"):
+                self._apps_client.start_no_wait(name)
+        return False
+
+    def wait_for_compute(self, ctx: ResourceContext) -> None:
+        """Block until the App's compute is ACTIVE, which App updates and `apps deploy` require."""
+        with self._reporter.progress(
+            "Waiting for agent compute to start…", done_message="Agent compute is running"
+        ):
+            self._apps_client.wait_for_active(ctx.project.name)
+
     def resolve_workspace_path(self, ctx: ResourceContext, requested_path: Optional[str]) -> str:
         """Return the explicit destination for source upload, deriving the default lazily."""
         if requested_path:
@@ -581,11 +613,14 @@ class AppProvisioner:
         current_user = self._api_client_provider.get().current_user
         return f"/Workspace/Users/{current_user}/agentbricks_deployments/{ctx.project.name}"
 
-    def deploy_source(self, ctx: ResourceContext, workspace_path: str) -> None:
-        """Sync source to an already-resolved workspace destination and activate it.
+    def sync_source(self, ctx: ResourceContext, workspace_path: str) -> None:
+        """Upload source to an already-resolved workspace destination.
 
-        Distinct from :meth:`AppsClient.deploy`, which is the single ``databricks apps deploy``
-        call this drives once the source is synced.
+        A plain workspace upload: it neither touches the App nor needs ACTIVE compute, so deploy
+        runs it while the compute boots, once app.yaml is final.
         """
         self._apps_client.sync_source(ctx.project.name, ctx.project.source_dir, workspace_path)
+
+    def roll_out(self, ctx: ResourceContext, workspace_path: str) -> None:
+        """Activate the synced source as the App's deployment; requires ACTIVE compute."""
         self._apps_client.deploy(ctx.project.name, workspace_path)

@@ -99,8 +99,14 @@ def present_deleted(name: str, *, output: Optional[str]) -> None:
     render.success(f"Deleted deployment '{name}'")
 
 
-def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> None:
-    """Report a finished deploy: the machine payload for `--output json`, else the success panel."""
+def present_deploy_result(
+    result: DeployResult, *, output: Optional[str], elapsed_s: Optional[float] = None
+) -> None:
+    """Report a finished deploy: the machine payload for `--output json`, else the success panel.
+
+    Text output ends with the deploy's wall time when ``elapsed_s`` is given; the JSON payload is
+    unchanged so scripts keep their established contract.
+    """
     if output == "json":
         store_grant_attempted = result.memory_grant_attempted or result.session_grant_attempted
         store_grant_error = result.session_grant_error or result.memory_grant_error
@@ -276,3 +282,5 @@ def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> Non
         next_steps=steps,
     )
     print_agent_invoke_command(result.deployment, uses_runtime_api=result.uses_runtime_api)
+    if elapsed_s is not None:
+        render.console().print(f"Deployed in {render.format_duration(elapsed_s)}")

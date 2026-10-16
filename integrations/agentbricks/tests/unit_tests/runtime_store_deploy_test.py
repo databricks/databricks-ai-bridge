@@ -1,15 +1,160 @@
 """Runtime Store ownership, reuse, and deployment cleanup."""
 
 import json
+import pathlib
 import types
+from contextlib import nullcontext
 from unittest import mock
 
 import pytest
 from click.testing import CliRunner
+from deploy_service_test import _request, deployment_fixture  # noqa: F401
 
 from databricks_agentbricks.cli import deploy as deploy_mod
 from databricks_agentbricks.clients import managed_runtime_store
+from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
+from databricks_agentbricks.clients.apps_client import AppsClient
+from databricks_agentbricks.clients.legacy_runtime_store import LakebaseBackend
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.projects.agent_project import AgentProject
+from databricks_agentbricks.reporting import Reporter
+from databricks_agentbricks.services.deployment.names import DeploymentName
+from databricks_agentbricks.services.deployment.provisioners import (
+    ManifestPatch,
+    ProjectContext,
+    ResourceContext,
+    RuntimeStoreProvisioner,
+    RuntimeStoreState,
+)
+
+_LEGACY_BACKEND = LakebaseBackend(
+    project="p",
+    branch="production",
+    endpoint_id="primary",
+    database="db",
+    schema="public",
+    tables=(),
+    resource_name="postgres",
+)
+
+
+def _runtime_provisioner(*, use_managed: bool, apps: mock.Mock, client=None):
+    reporter = mock.Mock(spec=Reporter)
+    reporter.status.return_value = nullcontext()
+    provider = mock.Mock(spec=ApiClientProvider)
+    provider.get.return_value = client or mock.Mock()
+    return RuntimeStoreProvisioner(provider, apps, "prof", use_managed, reporter)
+
+
+def _runtime_ctx(tmp_path: pathlib.Path, *, deployment_exists: bool) -> ResourceContext:
+    project = AgentProject.create(tmp_path, framework="langgraph", server="agentbricks")
+    return ResourceContext(
+        project=ProjectContext(tmp_path, DeploymentName("agent-bricks-myapp"), project),
+        memory_store=None,
+        session_store=None,
+        experiment_name=None,
+        deployment_exists=deployment_exists,
+    )
+
+
+def test_managed_after_app_created_waits_for_the_principal_not_the_compute(tmp_path):
+    apps = mock.Mock(spec=AppsClient)
+    apps.wait_for_service_principal.return_value = "sp-123"
+    client = mock.Mock()
+    client.create_runtime_store.return_value = _runtime_store_response()
+    provisioner = _runtime_provisioner(use_managed=True, apps=apps, client=client)
+    ctx = _runtime_ctx(tmp_path, deployment_exists=False)
+    state = RuntimeStoreState(True, None, ManifestPatch({}))
+
+    patch = provisioner.after_app_created(ctx, state)
+    provisioner.attach_to_app(ctx, state)
+
+    apps.wait_for_service_principal.assert_called_once_with("agent-bricks-myapp")
+    apps.get_service_principal.assert_not_called()
+    apps.wait_for_active.assert_not_called()
+    apps.attach_postgres_backends.assert_not_called()
+    assert patch.env["DATABRICKS_AGENTBRICKS_RUNTIME_STORE_USERNAME"] == "sp-123"
+    assert patch.env["DATABRICKS_AGENTBRICKS_RUNTIME_STORE_SCHEMA"] == "databricks_agentkit_runtime"
+
+
+def test_managed_after_app_created_fails_clearly_when_the_principal_never_appears(tmp_path):
+    apps = mock.Mock(spec=AppsClient)
+    apps.wait_for_service_principal.return_value = None
+    provisioner = _runtime_provisioner(use_managed=True, apps=apps)
+
+    with pytest.raises(AgentCliError, match="service principal"):
+        provisioner.after_app_created(
+            _runtime_ctx(tmp_path, deployment_exists=False),
+            RuntimeStoreState(True, None, ManifestPatch({})),
+        )
+
+
+def test_legacy_backend_attaches_only_in_attach_to_app(tmp_path):
+    apps = mock.Mock(spec=AppsClient)
+    apps.attach_postgres_backends.return_value = None
+    provisioner = _runtime_provisioner(use_managed=False, apps=apps)
+    ctx = _runtime_ctx(tmp_path, deployment_exists=False)
+    state = RuntimeStoreState(True, _LEGACY_BACKEND, ManifestPatch({}))
+
+    assert provisioner.after_app_created(ctx, state) == ManifestPatch({})
+    apps.attach_postgres_backends.assert_not_called()
+    provisioner.attach_to_app(ctx, state)
+
+    apps.attach_postgres_backends.assert_called_once_with("agent-bricks-myapp", [_LEGACY_BACKEND])
+    apps.wait_for_service_principal.assert_not_called()
+
+
+def test_legacy_attach_failure_raises_with_the_resource_error(tmp_path):
+    apps = mock.Mock(spec=AppsClient)
+    apps.attach_postgres_backends.return_value = "another operation in progress"
+    provisioner = _runtime_provisioner(use_managed=False, apps=apps)
+
+    with pytest.raises(AgentCliError, match="Lakebase resource") as exc:
+        provisioner.attach_to_app(
+            _runtime_ctx(tmp_path, deployment_exists=False),
+            RuntimeStoreState(True, _LEGACY_BACKEND, ManifestPatch({})),
+        )
+    assert exc.value.hint == "another operation in progress"
+
+
+def test_resume_of_a_never_deployed_app_still_gets_the_schema_env(tmp_path):
+    """An App kept by a failed first deploy has no deployment, so it still counts as new."""
+    apps = mock.Mock(spec=AppsClient)
+    apps.wait_for_service_principal.return_value = "sp-123"
+    client = mock.Mock()
+    client.create_runtime_store.return_value = _runtime_store_response()
+    provisioner = _runtime_provisioner(use_managed=True, apps=apps, client=client)
+    state = RuntimeStoreState(True, None, ManifestPatch({}))
+
+    first = provisioner.after_app_created(_runtime_ctx(tmp_path, deployment_exists=False), state)
+    redeploy = provisioner.after_app_created(_runtime_ctx(tmp_path, deployment_exists=True), state)
+
+    assert "DATABRICKS_AGENTBRICKS_RUNTIME_STORE_SCHEMA" in first.env
+    assert "DATABRICKS_AGENTBRICKS_RUNTIME_STORE_SCHEMA" not in redeploy.env
+
+
+def test_deploy_runs_managed_store_before_the_join_and_legacy_attach_after(
+    deployment_fixture,  # noqa: F811
+    tmp_path,
+):
+    f = deployment_fixture
+    f.runtime.reconcile.return_value = RuntimeStoreState(True, None, ManifestPatch({}))
+    phases = mock.Mock()
+    phases.attach_mock(f.runtime.after_app_created, "after_app_created")
+    phases.attach_mock(f.app.sync_source, "sync_source")
+    phases.attach_mock(f.app.wait_for_compute, "wait_for_compute")
+    phases.attach_mock(f.runtime.attach_to_app, "attach_to_app")
+    phases.attach_mock(f.app.roll_out, "roll_out")
+
+    f.service.deploy(_request(tmp_path))
+
+    assert [call[0] for call in phases.mock_calls] == [
+        "after_app_created",
+        "sync_source",
+        "wait_for_compute",
+        "attach_to_app",
+        "roll_out",
+    ]
 
 
 @pytest.fixture(autouse=True)

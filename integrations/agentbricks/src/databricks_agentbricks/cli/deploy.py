@@ -18,6 +18,8 @@ that is not part of the Agent Bricks CLI surface).
 
 from __future__ import annotations
 
+import time
+
 import click
 
 from databricks_agentbricks.clients.apps_client import AppsClient
@@ -153,6 +155,9 @@ def deploy(
     directory can omit it (passing NAME again updates the recorded name). New apps are named
     `agent-bricks-<name>`. Use the full app name with the `agentbricks deployments` commands.
 
+    If a first deploy stops partway, the app it created is kept: re-run `agentbricks deploy` to
+    resume, or remove it with `agentbricks deployments delete <app-name>`.
+
     Any memory/session store declared in agent.toml (for example, by `agentbricks memory/sessions bind`)
     is created if it doesn't exist yet; agent.toml itself is never modified for stores.
 
@@ -174,8 +179,9 @@ def deploy(
         instance_count=instance_count,
         allow_user_scope_update=allow_user_scope_update,
     )
+    started = time.monotonic()
     result = build_deploy_service(obj).deploy(request)
-    present_deploy_result(result, output=obj.output)
+    present_deploy_result(result, output=obj.output, elapsed_s=time.monotonic() - started)
 
 
 # --- agentbricks deployments <lifecycle> ------------------------------------------

@@ -130,42 +130,79 @@ class _DeployApi:
 
 
 class _DeployRunner:
-    """Fake `databricks` runner that records argv and serves an Apps JSON payload."""
+    """Fake `databricks` runner that records argv and serves an Apps JSON payload.
 
-    def __init__(self, events: list[tuple], *, exists: bool = False):
+    A missing App starts to exist on `apps create`. Its compute reports ``compute_state`` until the
+    source is synced and ACTIVE after, so a wait that ran before the sync would never see ACTIVE.
+    A just-created App's payload omits its service principal on the first read, as Apps can right
+    after `apps create --no-wait`.
+    """
+
+    def __init__(
+        self, events: list[tuple], *, exists: bool = False, compute_state: str = "STARTING"
+    ):
         self.events = events
         self.exists = exists
+        self.deployed = exists
+        self.compute_state = "ACTIVE" if exists else compute_state
+        self.synced = False
+        self.sp_reads_until_visible = 0
+        self.unsynced_polls = 0
         self.resources: list[dict] = []
+
+    def _payload(self) -> dict:
+        state = "ACTIVE" if self.synced else self.compute_state
+        if state != "ACTIVE":
+            self.unsynced_polls += 1
+            assert self.unsynced_polls < 20, "deploy waited for ACTIVE compute before the sync"
+        payload: dict = {
+            "compute_status": {"state": state},
+            "url": "https://agent.example",
+            "resources": self.resources,
+        }
+        if self.sp_reads_until_visible:
+            self.sp_reads_until_visible -= 1
+        else:
+            payload["service_principal_client_id"] = "sp-123"
+        if self.deployed:
+            payload["active_deployment"] = {"deployment_id": "d-1"}
+        self.events.append(("apps.state", state))
+        return payload
 
     def __call__(self, args, profile, **kwargs):
         args = list(args)
         self.events.append(("apps", tuple(args)))
         if args[:2] == ["apps", "get"]:
-            if len(args) == 3:
+            if not self.exists:
                 return types.SimpleNamespace(
-                    returncode=0 if self.exists else 1,
-                    stdout="" if self.exists else "",
-                    stderr="" if self.exists else "Error: app does not exist",
+                    returncode=1, stdout="", stderr="Error: app does not exist"
                 )
+            if len(args) == 3:
+                return types.SimpleNamespace(returncode=0, stdout="", stderr="")
             return types.SimpleNamespace(
-                returncode=0,
-                stdout=json.dumps(
-                    {
-                        "compute_status": {"state": "ACTIVE"},
-                        "service_principal_client_id": "sp-123",
-                        "url": "https://agent.example",
-                        "resources": self.resources,
-                    }
-                ),
-                stderr="",
+                returncode=0, stdout=json.dumps(self._payload()), stderr=""
             )
         if args[:2] == ["apps", "create-update"]:
             payload = json.loads(args[args.index("--json") + 1])
             if "resources" in payload.get("app", {}):
                 self.resources = payload["app"]["resources"]
         if args[:2] == ["apps", "create"]:
+            self.exists = True
+            self.sp_reads_until_visible = 1
             return types.SimpleNamespace(returncode=0, stdout="App compute", stderr="")
+        if args[:2] == ["apps", "start"]:
+            self.compute_state = "STARTING"
+        if args[0] == "sync":
+            self.synced = True
+        if args[:2] == ["apps", "deploy"]:
+            assert self._payload()["compute_status"]["state"] == "ACTIVE"
+            self.deployed = True
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("databricks_agentbricks.clients.apps_client.time.sleep", lambda _: None)
 
 
 def _real_deploy_context(api: _DeployApi, *, output: str = "text"):
@@ -612,6 +649,7 @@ def test_real_cli_deploy_reconciles_resources_and_rolls_out_in_order(
         "2",
         "--compute-max-instances",
         "2",
+        "--no-wait",
     ]
     assert next(call for call in app_calls if call[0] == "sync") == [
         "sync",
@@ -643,7 +681,24 @@ def test_real_cli_deploy_reconciles_resources_and_rolls_out_in_order(
         lambda event: event[0] == "apps" and event[1][:2] == ("apps", "create-update")
     )
     memory_grant_index = event_index(lambda event: event[0] == "memory.grant")
-    assert create_index < sync_index < deploy_index < trace_update_index
+    app_create_index = event_index(
+        lambda event: event[0] == "apps" and event[1][:2] == ("apps", "create")
+    )
+    memory_create_index = event_index(lambda event: event[0] == "memory.create")
+    first_active_index = event_index(lambda event: event == ("apps.state", "ACTIVE"))
+    # The compute boots from the very start; everything up to the sync overlaps it.
+    assert app_create_index < memory_create_index < create_index < sync_index
+    assert sync_index < first_active_index < deploy_index < trace_update_index
+    # The service principal was missing on the first read after the create, and was re-read.
+    sp_reads_before_runtime = [
+        event
+        for event in events[app_create_index:create_index]
+        if event[0] == "apps" and event[1][:2] == ("apps", "get")
+    ]
+    assert len(sp_reads_before_runtime) == 2
+    assert "Waiting for agent compute to start…" in result.output
+    assert "Agent compute is running (waited" in result.output
+    assert result.output.rstrip().splitlines()[-1].startswith("Deployed in ")
     assert deploy_index < memory_grant_index
     assert ("memory.create", "memory", True) in events
     assert ("session.create", "sessions", True) in events
@@ -868,3 +923,167 @@ def test_real_cli_missing_name_fails_before_external_mutation(
     assert result.exit_code != 0
     assert "No deployment name given" in result.output
     assert events == []
+
+
+def _custom_server_project(tmp_path: pathlib.Path) -> None:
+    project = AgentProject.create(tmp_path, framework="langgraph", server="custom")
+    project.set_deployment_name("demo")
+    project.write()
+
+
+@pytest.mark.parametrize("instances", [None, "3"])
+def test_real_cli_redeploy_starts_a_stopped_app_without_waiting(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, instances: str | None
+):
+    _custom_server_project(tmp_path)
+    events: list[tuple] = []
+    runner = _DeployRunner(events, exists=True)
+    runner.compute_state = "STOPPED"
+    monkeypatch.setattr(deploy_mod, "_databricks", runner)
+    args = ["--source", str(tmp_path), "--pip-index-url", ""]
+    if instances:
+        args += ["--instances", instances]
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy, args, obj=_real_deploy_context(_DeployApi(events))
+    )
+
+    assert result.exit_code == 0, result.output
+    app_calls = [list(event[1]) for event in events if event[0] == "apps"]
+    assert not any(call[:2] == ["apps", "create"] for call in app_calls)
+    start_index = app_calls.index(["apps", "start", "agent-bricks-demo", "--no-wait"])
+    sync_index = next(index for index, call in enumerate(app_calls) if call[0] == "sync")
+    assert start_index < sync_index
+    if instances:
+        scale_index = next(
+            index for index, call in enumerate(app_calls) if call[:2] == ["apps", "create-update"]
+        )
+        assert scale_index < start_index
+
+
+def test_real_cli_redeploy_of_an_active_app_adds_no_calls(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    _custom_server_project(tmp_path)
+    events: list[tuple] = []
+    runner = _DeployRunner(events, exists=True)
+    monkeypatch.setattr(deploy_mod, "_databricks", runner)
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["--source", str(tmp_path), "--pip-index-url", ""],
+        obj=_real_deploy_context(_DeployApi(events)),
+    )
+
+    assert result.exit_code == 0, result.output
+    app_calls = [list(event[1]) for event in events if event[0] == "apps"]
+    assert not any(call[:2] in (["apps", "create"], ["apps", "start"]) for call in app_calls)
+    # The JSON state read replaces the bare `apps get` existence check: one read before the sync,
+    # and every state served was ACTIVE, so the wait returned on its first poll.
+    sync_index = next(index for index, call in enumerate(app_calls) if call[0] == "sync")
+    assert ["apps", "get", "agent-bricks-demo"] not in app_calls
+    assert app_calls[:sync_index] == [["apps", "get", "agent-bricks-demo", "-o", "json"]]
+    assert {event[1] for event in events if event[0] == "apps.state"} == {"ACTIVE"}
+
+
+def test_real_cli_json_deploy_keeps_payload_and_omits_text_summary(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    _custom_server_project(tmp_path)
+    events: list[tuple] = []
+    monkeypatch.setattr(deploy_mod, "_databricks", _DeployRunner(events))
+    monkeypatch.setattr("databricks_agentbricks.errors._OUTPUT_MODE", "json")
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["--source", str(tmp_path), "--pip-index-url", ""],
+        obj=_real_deploy_context(_DeployApi(events), output="json"),
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert set(payload) == {
+        "deployment",
+        "url",
+        "workspace_path",
+        "env",
+        "trace_experiment_id",
+        "uc_trace_tables",
+        "trace_setup_error",
+        "trace_grant",
+        "trace_grant_error",
+        "store_grant",
+        "store_grant_error",
+        "model_services",
+        "model_service_grant",
+        "model_service_grant_error",
+        "prompts",
+        "prompt_grant",
+        "prompt_grant_error",
+        "tool_access",
+    }
+    assert "Deployed in" not in result.output
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_debug_timings_go_to_stderr_only_when_enabled(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, enabled: bool
+):
+    _custom_server_project(tmp_path)
+    events: list[tuple] = []
+    monkeypatch.setattr(deploy_mod, "_databricks", _DeployRunner(events))
+    if enabled:
+        monkeypatch.setenv("AGENTBRICKS_DEBUG_TIMINGS", "1")
+    else:
+        monkeypatch.delenv("AGENTBRICKS_DEBUG_TIMINGS", raising=False)
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["--source", str(tmp_path), "--pip-index-url", ""],
+        obj=_real_deploy_context(_DeployApi(events)),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "timing:" not in result.stdout
+    timing_lines = [line for line in result.stderr.splitlines() if line.startswith("timing: ")]
+    if enabled:
+        assert [line.split()[1] for line in timing_lines] == [
+            "preflight",
+            "app_start",
+            "reconcile",
+            "runtime_store",
+            "app_yaml",
+            "sync",
+            "compute_wait",
+            "app_update",
+            "rollout",
+            "grants",
+            "total",
+        ]
+        assert all(line.endswith("s") for line in timing_lines)
+    else:
+        assert timing_lines == []
+    assert result.stdout.rstrip().splitlines()[-1].startswith("Deployed in ")
+
+
+def test_real_cli_failure_after_early_create_names_the_kept_app(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    _custom_server_project(tmp_path)
+    events: list[tuple] = []
+    monkeypatch.setattr(deploy_mod, "_databricks", _DeployRunner(events))
+
+    def fail_sync(*args, **kwargs):
+        raise AgentCliError("Could not upload the agent source for 'agent-bricks-demo'.")
+
+    monkeypatch.setattr(AppsClient, "sync_source", fail_sync)
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["--source", str(tmp_path), "--pip-index-url", ""],
+        obj=_real_deploy_context(_DeployApi(events)),
+    )
+
+    assert result.exit_code == 1
+    assert "App 'agent-bricks-demo' was created but has no deployment yet" in result.stderr
+    assert "agentbricks deployments delete agent-bricks-demo" in result.stderr

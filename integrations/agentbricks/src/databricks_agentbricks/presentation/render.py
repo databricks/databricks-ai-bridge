@@ -7,6 +7,7 @@ Functions accept an optional `console` for testability; default is stdout.
 from __future__ import annotations
 
 import json
+import time
 from contextlib import contextmanager
 from typing import Any, Iterable, Iterator, Literal, Optional, Sequence
 
@@ -67,13 +68,38 @@ def status(message: str, con: Optional[Console] = None) -> Iterator[None]:
         yield
 
 
+def format_duration(seconds: float) -> str:
+    """Render a wall-clock duration compactly: ``45s``, ``1m12s``, ``2m05s``."""
+    total = int(seconds)
+    if total < 60:
+        return f"{total}s"
+    return f"{total // 60}m{total % 60:02d}s"
+
+
+class _Elapsed:
+    """Spinner text re-rendered on every refresh, so it ticks without the caller pushing updates."""
+
+    def __init__(self) -> None:
+        self._start = time.monotonic()
+
+    def seconds(self) -> float:
+        return time.monotonic() - self._start
+
+    def __rich__(self) -> Text:
+        return Text(format_duration(self.seconds()), style=DIM)
+
+
 @contextmanager
-def progress(message: str, con: Optional[Console] = None) -> Iterator[None]:
+def progress(
+    message: str, con: Optional[Console] = None, *, done_message: Optional[str] = None
+) -> Iterator[None]:
     """Like ``status``, but first prints a persistent line so feedback survives the spinner.
 
     ``status`` clears itself on exit and only animates on a TTY, so a long, silent wait (e.g. waiting
     for app compute) can look like a hang in terminals where the spinner doesn't render. This prints
     a durable "• message" line up front, then runs a bare spinner (no repeated text) beneath it.
+    With ``done_message`` the spinner shows the elapsed time instead, and a successful exit prints
+    "done_message (waited 1m04s)" so the wait survives in scrollback and non-TTY logs.
     Skipped under ``-o json`` so machine output stays clean.
     """
     from databricks_agentbricks import errors  # local import avoids a cycle at module load
@@ -83,10 +109,13 @@ def progress(message: str, con: Optional[Console] = None) -> Iterator[None]:
         yield
         return
     con.print(f"[{DIM}]•[/] {message}")
-    # Empty status text: the persistent line above already carries the message, so the spinner
-    # underneath is just the animated glyph — no duplicated sentence.
-    with con.status("", spinner="dots"):
+    # The persistent line above already carries the message, so the spinner underneath is just the
+    # animated glyph (plus the elapsed time when asked for) — no duplicated sentence.
+    elapsed = _Elapsed() if done_message is not None else None
+    with con.status(elapsed or "", spinner="dots"):
         yield
+    if elapsed is not None:
+        con.print(f"  {done_message} [{DIM}](waited {format_duration(elapsed.seconds())})[/]")
 
 
 # --- small helpers -----------------------------------------------------------
