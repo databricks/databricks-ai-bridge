@@ -160,6 +160,18 @@ def test_pid_alive():
         assert deploy_state.pid_alive(12345) is True
 
 
+def test_pid_alive_on_windows_queries_the_process_instead_of_signaling_it():
+    # On Windows, signal 0 is CTRL_C_EVENT, so os.kill must never be used as the probe.
+    with (
+        mock.patch.object(deploy_state.os, "name", "nt"),
+        mock.patch.object(deploy_state.os, "kill") as kill,
+        mock.patch.object(deploy_state, "_windows_pid_alive", return_value=True) as query,
+    ):
+        assert deploy_state.pid_alive(12345) is True
+    kill.assert_not_called()
+    query.assert_called_once_with(12345)
+
+
 def _running(**overrides):
     state = {
         "pid": 99,
