@@ -389,11 +389,16 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("deploy",): (
         ("agentbricks deploy my-agent", "deploy the agent"),
         ("agentbricks deploy my-agent --instances 2", "deploy with two instances"),
+        ("agentbricks deploy my-agent --no-wait", "start in the background, then wait"),
     ),
     ("deployments",): (("agentbricks deployments list", "list agent deployments"),),
     ("deployments", "list"): (("agentbricks deployments list", "list agent deployments"),),
     ("deployments", "get"): (
         ("agentbricks deployments get agent-bricks-my-agent", "show one deployment"),
+    ),
+    ("deployments", "wait"): (
+        ("agentbricks deployments wait", "wait for this project's deployment"),
+        ("agentbricks deployments wait agent-bricks-my-agent", "wait for a named deployment"),
     ),
     ("deployments", "logs"): (
         ("agentbricks deployments logs agent-bricks-my-agent", "stream a deployment's logs"),

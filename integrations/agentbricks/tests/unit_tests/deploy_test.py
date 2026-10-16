@@ -619,6 +619,8 @@ def test_real_cli_deploy_reconciles_resources_and_rolls_out_in_order(
         "/Workspace/Users/me@example.com/agentbricks_deployments/agent-bricks-demo",
         "--exclude",
         "uv.lock",
+        "--exclude",
+        ".agentbricks",
     ]
     assert next(call for call in app_calls if call[:2] == ["apps", "deploy"]) == [
         "apps",

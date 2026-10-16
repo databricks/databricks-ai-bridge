@@ -39,6 +39,29 @@ def test_bundled_skill_has_portable_metadata_and_valid_references():
         assert (manifest.parent / relative).is_file()
 
 
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "agent-langgraph/AGENTS.md",
+        "agent-openai/AGENTS.md",
+        "agent-bricks-workflow/references/deployment.md",
+    ],
+)
+def test_agent_guidance_explains_how_to_wait_on_a_deploy(relative):
+    templates = skill_mod.bundled_workflow_skill().parent.parent
+    text = (templates / relative).read_text()
+    section = text.split("### Deploying from a coding agent", 1)[1]
+    for phrase in (
+        "~3 min",
+        "timeout: 600000",
+        "--no-wait",
+        "agentbricks deployments wait",
+        "Exit 75",
+        "Don't poll with `sleep`",
+    ):
+        assert phrase in section, (relative, phrase)
+
+
 @pytest.mark.parametrize("actor_location", ["input", "top_level"])
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
 def test_documented_memory_payload_obeys_runtime_actor_placement(actor_location, framework):
