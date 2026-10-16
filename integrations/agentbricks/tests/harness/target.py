@@ -43,7 +43,7 @@ class TargetWorkspace(Protocol):
 
     @property
     def client(self) -> Workspace | None:
-        """SDK access for grants, cleanup and UC setup; None for the fake workspace."""
+        """SDK access for cleanup and UC setup; None for the fake workspace."""
         ...
 
 

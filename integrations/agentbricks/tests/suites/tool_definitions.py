@@ -1,4 +1,4 @@
-"""The tools under test: how each is added, prompted, verified, and what a deploy grants for it."""
+"""The tools under test: how each is added, prompted and verified."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from harness.agentbricks_cli import excerpt, tool_results
-from harness.workspace import GrantTuple
 from uc_objects import UcFunction
 
 PYTHON_MARKER_FILE = "agent/tools/matrix_marker.py"
@@ -37,8 +36,6 @@ class Tool:
     files: Mapping[str, str]
     # The id `tools add` binds it under, which `tools remove` takes.
     tool_id: str | None
-    # The App resource a deploy grants for it; None when it needs no UC grant.
-    grant: GrantTuple | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -91,12 +88,9 @@ def sandbox_tool(uc_function: UcFunction) -> Tool:
             "do not fabricate them."
         ),
         check=returned(uc_function.volume_marker),
-        # The CLI's default auth: the sandbox reads the volume as the user invoking the agent, so
-        # deploy adds no App grant.
         add_command=f"sandbox --scope volume:{uc_function.volume}",
         files={},
         tool_id="sandbox",
-        grant=None,
     )
 
 
@@ -140,7 +134,6 @@ def uc_function_tool(uc_function: UcFunction) -> Tool:
         add_command=f"uc-function {uc_function.function} --name agentbricks_uc_marker",
         files={},
         tool_id="agentbricks_uc_marker",
-        grant=("uc_securable", uc_function.function, "FUNCTION", "EXECUTE"),
     )
 
 
@@ -156,7 +149,6 @@ def genie_tool(genie_space: str) -> Tool:
         add_command=f"genie-agent {genie_space} --name genie --auth app",
         files={},
         tool_id="genie",
-        grant=("genie_space", genie_space, "GENIE_SPACE", "CAN_RUN"),
     )
 
 

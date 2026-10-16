@@ -57,10 +57,10 @@ Every resource a run creates carries its run id, and is deleted at three points:
 | `tests/harness/target.py` | The `--workspace live\|fake` seam the CLI and fixtures talk to |
 | `tests/harness/agentbricks_cli.py` | Runs `agentbricks` commands: `cli.run("tools add ...")`, and `cli.start("dev ...")` in the background; `cli.invocation_json(...)` builds the `endpoint invoke --json` body, with the `--model` the run asks for |
 | `tests/harness/project.py` | A test's project: run-scoped path and App name, its files, and `pin_runtime()` |
-| `tests/harness/workspace.py` | Databricks SDK helpers for what is not under test: prerequisites (UC objects, warehouse, Genie), UC privilege checks, and cleanup no CLI command does yet |
+| `tests/harness/workspace.py` | Databricks SDK helpers for what is not under test: prerequisites (UC objects, warehouse, Genie) and cleanup no CLI command does yet |
 | `tests/harness/cleanup.py` | Deleting what the suites create: per test through the CLI, and per run for the rest |
 | `tests/harness/logs.py` | Test-log output; every command is echoed so a run's log replays it |
-| `tests/suites/test_<group>.py` | One file per CLI command group: `test_tools`, `test_dev`, `test_deploy` (with `deployments`), `test_memory`, `test_sessions`, `test_tracing` |
+| `tests/suites/test_<group>.py` | One file per CLI command group: `test_tools`, `test_dev`, `test_deploy`, `test_memory`, `test_sessions`, `test_tracing` |
 | `tests/suites/tool_definitions.py`, `uc_objects.py` | The tools `test_tools`, `test_dev` and `test_deploy` add, and the UC objects they use |
 
 `conftest.py` files are the only code pytest calls by name. `tests/harness/` sits next to `tests/suites/`

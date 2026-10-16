@@ -1,10 +1,9 @@
-"""Databricks SDK helpers for what is not under test: the prerequisites the suites need, and checks
-of results the CLI has no command to show.
+"""Databricks SDK helpers for what is not under test: the prerequisites the suites need, and cleanup.
 
 Tests drive and inspect the agent through the ``agentbricks`` CLI. This module is for the rest:
-UC objects, the warehouse and Genie space a tool needs, UC privilege checks, and, under
-"Workarounds", the cleanup no public command does yet. ``Workspace`` holds one operation per
-method; deciding what to delete and in which order is ``harness.cleanup``.
+UC objects, the warehouse and Genie space a tool needs, and, under "Workarounds", the cleanup no
+public command does yet. ``Workspace`` holds one operation per method; deciding what to delete and
+in which order is ``harness.cleanup``.
 """
 
 from __future__ import annotations
@@ -21,13 +20,11 @@ from typing import Any, cast
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import DatabricksError, NotFound
-from databricks.sdk.service.catalog import SecurableType, VolumeType
+from databricks.sdk.service.catalog import VolumeType
 from databricks.sdk.service.sql import ExecuteStatementRequestOnWaitTimeout, State, StatementState
 
 from harness.logs import log
 from harness.run import E2EError
-
-GrantTuple = tuple[str, str, str, str]
 
 _BRANCH = re.compile(r"projects/[^/]+/branches/[^/]+")
 
@@ -180,41 +177,6 @@ class Workspace:
         log(f"App runtime logs captured: {log_path}")
         return log_path
 
-    # Grants
-
-    def wait_until_effective(
-        self, deployment: dict[str, Any], grant: GrantTuple, timeout: float = 120
-    ) -> float:
-        """Wait until a UC ``grant`` deploy added is effective for the App; returns the seconds waited.
-
-        ``deployment`` is ``agentbricks deployments get --output json``. Deploy reconciles the App's
-        UC resources before returning, but the privilege can become effective for its principal a
-        little later; a tool called in between is denied.
-        """
-        kind, full_name, securable_type, privilege = grant
-        if kind != "uc_securable":
-            return 0.0
-        principal = _principal(deployment)
-        started = time.monotonic()
-        while True:
-            held = effective_privileges(
-                self.client, SecurableType(securable_type), full_name, principal
-            )
-            if privilege in held or "ALL_PRIVILEGES" in held:
-                return time.monotonic() - started
-            if time.monotonic() - started > timeout:
-                raise E2EError(
-                    f"{privilege} on {full_name} not effective for {deployment.get('name')} "
-                    f"after {timeout:.0f}s: {held}"
-                )
-            time.sleep(5)
-
-    def experiment_id(self, name: str) -> str:
-        experiment = self.client.experiments.get_by_name(name).experiment
-        if experiment is None or not experiment.experiment_id:
-            raise E2EError(f"Experiment {name!r} does not exist.")
-        return str(experiment.experiment_id)
-
     # Workarounds for the end-of-run cleanup: what `agentbricks deployments delete` leaves behind.
 
     def runtime_store(self, app_name: str) -> dict[str, Any]:
@@ -306,46 +268,3 @@ def _wait(operation: Any) -> None:
     wait = getattr(operation, "wait", None)
     if callable(wait):
         wait()
-
-
-# Reading `agentbricks deployments get --output json`
-
-
-def _principal(deployment: dict[str, Any]) -> str:
-    principal = deployment.get("service_principal_client_id")
-    if not principal:
-        raise E2EError(f"Deployment has no service_principal_client_id: {deployment}")
-    return str(principal)
-
-
-def app_resources(deployment: dict[str, Any]) -> list[dict[str, Any]]:
-    resources = deployment.get("resources") or []
-    if not isinstance(resources, list):
-        raise E2EError(f"App resources are not a list: {resources}")
-    return resources
-
-
-def effective_privileges(
-    client: WorkspaceClient, securable_type: SecurableType, full_name: str, principal: str
-) -> list[str]:
-    privileges: set[str] = set()
-    page_token: str | None = None
-    while True:
-        response = client.grants.get_effective(
-            securable_type.value,
-            full_name,
-            max_results=0,
-            principal=principal,
-            **({"page_token": page_token} if page_token else {}),
-        )
-        for assignment in response.privilege_assignments or ():
-            if assignment.principal != principal:
-                continue
-            privileges.update(
-                privilege.privilege.value
-                for privilege in assignment.privileges or ()
-                if privilege.privilege is not None
-            )
-        page_token = response.next_page_token
-        if not page_token:
-            return sorted(privileges)
