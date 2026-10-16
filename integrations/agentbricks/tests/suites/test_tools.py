@@ -32,12 +32,9 @@ def test_tools_remove(
         server.wait_until_serving(port)
         for tool in removed:
             with subtests.test(tool=tool.name):
-                output = agentbricks_cli.run(
-                    f"--output json endpoint invoke --url http://127.0.0.1:{port} --no-auth "
-                    f"--path /api/invocations --json {agentbricks_cli.invocation_json(tool.prompt)}",
-                    timeout=360,
-                    retry_server_errors=True,
-                ).stdout
+                output = agentbricks_cli.invoke(
+                    f"--url http://127.0.0.1:{port} --no-auth", tool.prompt
+                )
                 # The tool's own check passes only when the tool ran and returned its result.
                 with pytest.raises(AssertionError):
                     tool.check(output)

@@ -39,10 +39,5 @@ def test_deploy(
     cleanup(f"sessions stores delete {deployed['session_store']} --yes")
     for tool in tools:
         with subtests.test(tool=tool.name):
-            output = agentbricks_cli.run(
-                f"--output json endpoint invoke {app} --path /api/invocations "
-                f"--json {agentbricks_cli.invocation_json(tool.prompt)}",
-                timeout=360,
-                retry_server_errors=True,
-            ).stdout
+            output = agentbricks_cli.invoke(app, tool.prompt)
             tool.check(output)

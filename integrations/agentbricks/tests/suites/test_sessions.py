@@ -35,16 +35,12 @@ def test_sessions(agentbricks_cli: AgentbricksCli, project: Project, cleanup: Cl
     session = str(uuid.uuid4())
     word = f"AGENTBRICKS_SESSION_{uuid.uuid4().hex[:12]}"
 
-    def invoke(prompt: str, session_id: str) -> str:
-        return agentbricks_cli.run(
-            f"--output json endpoint invoke {app} --path /api/invocations "
-            f"--json {agentbricks_cli.invocation_json(prompt, session_id=session_id)}",
-            timeout=360,
-            retry_server_errors=True,
-        ).stdout
-
-    invoke(f"The secret word for this conversation is {word}. Reply with just: noted.", session)
-    same = invoke(QUESTION, session)
+    agentbricks_cli.invoke(
+        app,
+        f"The secret word for this conversation is {word}. Reply with just: noted.",
+        session_id=session,
+    )
+    same = agentbricks_cli.invoke(app, QUESTION, session_id=session)
     assert word in reply(same), f"The session lost its history: {excerpt(same)}"
-    other = invoke(QUESTION, str(uuid.uuid4()))
+    other = agentbricks_cli.invoke(app, QUESTION)
     assert word not in reply(other), f"Another session saw this one's history: {excerpt(other)}"

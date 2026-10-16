@@ -128,13 +128,14 @@ class AgentbricksCli:
             raise E2EError(f"Command failed ({result.returncode}): {shlex.join(argv)}\n{output}")
         return result
 
-    def invocation_json(
-        self, prompt: str, *, session_id: str | None = None, actor: str | None = None
+    def invoke(
+        self, target: str, prompt: str, *, session_id: str | None = None, actor: str | None = None
     ) -> str:
-        """A shell-quoted /api/invocations body for `agentbricks endpoint invoke --json`.
+        """``agentbricks --output json endpoint invoke <target>`` with ``prompt``; returns its output.
 
-        Each call is a new session unless ``session_id`` is given. The agent keys long-term memory by
-        ``actor``, which defaults to the session.
+        ``target`` is an App name, or ``--url <url> --no-auth`` for `agentbricks dev`. Each call is
+        a new session unless ``session_id`` is given. The agent keys long-term memory by ``actor``,
+        which defaults to the session.
         """
         invocation_id = str(uuid.uuid4())
         agent_input: dict[str, Any] = {
@@ -149,7 +150,12 @@ class AgentbricksCli:
             "session_id": session_id or invocation_id,
             "input": agent_input,
         }
-        return shlex.quote(json.dumps(body))
+        return self.run(
+            f"--output json endpoint invoke {target} --path /api/invocations "
+            f"--json {shlex.quote(json.dumps(body))}",
+            timeout=360,
+            retry_server_errors=True,
+        ).stdout
 
     @contextlib.contextmanager
     def start(

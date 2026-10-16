@@ -29,12 +29,7 @@ def test_tracing(agentbricks_cli: AgentbricksCli, project: Project, cleanup: Cle
     )
     cleanup(f"memory stores delete memory-stores/{deployed['memory_store']} --yes")
     cleanup(f"sessions stores delete {deployed['session_store']} --yes")
-    agentbricks_cli.run(
-        f"--output json endpoint invoke {app} --path /api/invocations "
-        f"--json {agentbricks_cli.invocation_json('Reply with one word: hello.')}",
-        timeout=360,
-        retry_server_errors=True,
-    )
+    agentbricks_cli.invoke(app, "Reply with one word: hello.")
 
     # Traces are exported asynchronously, so a new one can take a little while to show up.
     deadline = time.monotonic() + 180

@@ -34,24 +34,20 @@ def test_memory(agentbricks_cli: AgentbricksCli, project: Project, cleanup: Clea
     actor = f"e2e-{uuid.uuid4().hex[:8]}"
     codename = f"AGENTBRICKS_MEMORY_{uuid.uuid4().hex[:12]}"
 
-    def invoke(prompt: str) -> str:
-        # Each invocation is a new session; only the actor carries over.
-        return agentbricks_cli.run(
-            f"--output json endpoint invoke {app} --path /api/invocations "
-            f"--json {agentbricks_cli.invocation_json(prompt, actor=actor)}",
-            timeout=360,
-            retry_server_errors=True,
-        ).stdout
-
-    remembered = invoke(
-        f"Remember this fact about me in long-term memory: my codename is {codename}."
+    # Each invocation is a new session; only the actor carries over.
+    remembered = agentbricks_cli.invoke(
+        app,
+        f"Remember this fact about me in long-term memory: my codename is {codename}.",
+        actor=actor,
     )
     assert any(
         r.get("name") == "remember" and r.get("status") == "success"
         for r in tool_results(remembered)
     ), f"The agent did not remember the fact: {excerpt(remembered)}"
 
-    recalled = invoke("What is my codename? Look it up in your long-term memory.")
+    recalled = agentbricks_cli.invoke(
+        app, "What is my codename? Look it up in your long-term memory.", actor=actor
+    )
     assert any(
         r.get("name") == "recall" and codename in str(r.get("content"))
         for r in tool_results(recalled)
