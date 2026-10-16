@@ -117,6 +117,7 @@ def delete_run_leftovers(
         ("leaked Apps", lambda: _delete_leaked_apps(cli, workspace, run_id, output)),
         ("leaked Lakebase roles", lambda: _delete_leaked_roles(workspace, output)),
         ("leaked source folders", lambda: _delete_leaked_deployment_sources(workspace, run_id)),
+        ("leaked experiments", lambda: _delete_leaked_experiments(workspace, run_id)),
         ("leaked schemas", lambda: _delete_leaked_schemas(workspace, catalog, run_id)),
     )
     for label, action in steps:
@@ -192,13 +193,13 @@ def _delete_leaked_apps(
     failures: list[str] = []
     for name in sorted(set(leaked) | set(recorded_app_identities(output))):
         try:
-            _wait_until_app_gone(cli, name)
+            wait_until_app_gone(cli, name)
         except Exception as exc:
             failures.append(f"App {name}: {exc}")
     return failures
 
 
-def _wait_until_app_gone(cli: AgentbricksCli, name: str, timeout: float = 1200) -> None:
+def wait_until_app_gone(cli: AgentbricksCli, name: str, timeout: float = 1200) -> None:
     """Block until the App is gone; `deployments delete` returns while it is still deleting."""
     started = time.monotonic()
     next_tick = 0.0
@@ -246,6 +247,23 @@ def _delete_leaked_deployment_sources(workspace: Workspace, run_id: str) -> list
             workspace.delete_workspace_path(path)
         except Exception as exc:
             failures.append(f"deployment source {path}: {exc}")
+    return failures
+
+
+def _delete_leaked_experiments(workspace: Workspace, run_id: str) -> list[str]:
+    """Delete this run's tracing experiments, which deploy creates and nothing deletes.
+
+    `agentbricks init` names a project's experiment after its folder, under this shared path.
+    """
+    failures: list[str] = []
+    for experiment_id in workspace.experiments_with_prefix(
+        f"/Shared/agentbricks_traces/{project_prefix(run_id)}"
+    ):
+        log(f"deleting leaked experiment {experiment_id}")
+        try:
+            workspace.delete_experiment(experiment_id)
+        except Exception as exc:
+            failures.append(f"experiment {experiment_id}: {exc}")
     return failures
 
 

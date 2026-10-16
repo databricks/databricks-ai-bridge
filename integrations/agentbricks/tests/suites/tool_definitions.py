@@ -7,6 +7,7 @@ import json
 import shlex
 import uuid
 from collections.abc import Callable, Mapping
+from typing import Any
 
 from harness.project import Project
 from harness.run import E2E_MODEL
@@ -32,12 +33,11 @@ Check = Callable[[str], None]
 class Tool:
     name: str
     prompt: str
-    # Asserts the serialized response proves the tool ran.
+    # Asserts the `endpoint invoke --output json` output shows the tool ran and returned its result.
     check: Check
     # What follows `agentbricks tools add`; None when the tool is a user-owned file instead.
     add_command: str | None
-    # The [[tools]] entry for direct authoring, and any user-owned files the tool needs.
-    toml: str
+    # User-owned files the tool needs.
     files: Mapping[str, str]
     # The id agent.toml declares it under, and whether it must be App-authed.
     tool_id: str | None
@@ -63,27 +63,49 @@ def excerpt(serialized: str, head: int = 1000, tail: int = 3000) -> str:
     return f"{serialized[:head]} ...[{omitted} chars omitted]... {serialized[-tail:]}"
 
 
-def contains(marker: str) -> Check:
+def tool_results(serialized: str) -> list[dict[str, Any]]:
+    """The tool steps of an `endpoint invoke --output json` response, as the agent reports them.
+
+    The LangGraph agent lists every step in ``body.output.output``; a tool's own result is the item
+    with ``type == "tool"``, separate from the model's reply.
+    """
+    try:
+        steps = json.loads(serialized)["body"]["output"]["output"]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise AssertionError(f"Unexpected endpoint invoke output: {excerpt(serialized)}") from exc
+    return [step for step in steps if isinstance(step, dict) and step.get("type") == "tool"]
+
+
+def _successful(serialized: str, matches: Callable[[dict[str, Any]], bool], what: str) -> None:
+    results = tool_results(serialized)
+    assert any(r.get("status") == "success" and matches(r) for r in results), (
+        f"No successful tool result {what}: {excerpt(serialized)}"
+    )
+
+
+def returned(marker: str) -> Check:
+    """A tool returned ``marker``, which only the tool can produce."""
+
     def check(serialized: str) -> None:
-        assert marker in serialized, f"Missing exact marker {marker!r}: {excerpt(serialized)}"
+        _successful(serialized, lambda r: marker in str(r.get("content")), f"containing {marker!r}")
 
     return check
 
 
 def check_web_search(serialized: str) -> None:
-    lowered = serialized.lower()
-    tool_evidence = any(v in lowered for v in ("web_search", "web search", "search"))
-    assert tool_evidence and "https" in lowered and len(serialized) >= 80, (
-        f"Missing web-search execution/result evidence: {excerpt(serialized)}"
+    _successful(
+        serialized,
+        lambda r: r.get("name") == "web_search" and "https://" in str(r.get("content")),
+        "from web_search with an https result",
     )
 
 
 def check_genie(serialized: str) -> None:
-    lowered = serialized.lower()
-    assert (
-        any(v in lowered for v in ("genie_ask", "genie", "conversation_id"))
-        and len(serialized) >= 80
-    ), f"Missing Genie execution/result evidence: {excerpt(serialized)}"
+    _successful(
+        serialized,
+        lambda r: "genie" in str(r.get("name")) and bool(r.get("content")),
+        "from the Genie tool",
+    )
 
 
 def sandbox_tool(uc_function: UcFunction) -> Tool:
@@ -94,17 +116,10 @@ def sandbox_tool(uc_function: UcFunction) -> Tool:
             f"entire text file at {uc_function.volume_file_path}. Return only its exact contents; "
             "do not fabricate them."
         ),
-        check=contains(uc_function.volume_marker),
+        check=returned(uc_function.volume_marker),
         # The CLI's default auth: the sandbox reads the volume as the user invoking the agent, so
-        # deploy adds no App grant. A manifest entry without `auth` would run as the App instead.
+        # deploy adds no App grant.
         add_command=f"sandbox --scope volume:{uc_function.volume}",
-        toml=(
-            '[[tools]]\nid = "sandbox"\nauth = "user"\n'
-            'source = { kind = "sandbox", service = "system.ai.sandbox" }\n'
-            "policy = { downscope = [\n"
-            f'  {{ resource = "volume:{uc_function.volume}", permission = "read_only" }},\n'
-            "] }\n"
-        ),
         files={},
         tool_id="sandbox",
         app_auth=False,
@@ -122,10 +137,6 @@ def web_search_tool(**_resources: object) -> Tool:
         ),
         check=check_web_search,
         add_command="mcp system.ai.web_search --auth app",
-        toml=(
-            '[[tools]]\nid = "web_search"\nauth = "app"\n'
-            'source = { kind = "mcp", service = "system.ai.web_search" }\n'
-        ),
         files={},
         tool_id="web_search",
         app_auth=True,
@@ -139,9 +150,8 @@ def python_tool() -> Tool:
             "You must call the matrix_marker Python tool with value 'matrix'. "
             "Return its exact result."
         ),
-        check=contains(PYTHON_MARKER),
+        check=returned(PYTHON_MARKER),
         add_command=None,
-        toml="",
         files={PYTHON_MARKER_FILE: PYTHON_MARKER_SOURCE},
         tool_id=None,
         app_auth=False,
@@ -155,12 +165,8 @@ def uc_function_tool(uc_function: UcFunction) -> Tool:
             "You must call the Unity Catalog function tool that computes the Agent Bricks marker, "
             "with value 'matrix'. Return the called tool's exact result."
         ),
-        check=contains(UC_MARKER),
+        check=returned(UC_MARKER),
         add_command=f"uc-function {uc_function.function} --name agentbricks_uc_marker",
-        toml=(
-            '[[tools]]\nid = "agentbricks_uc_marker"\n'
-            f'source = {{ kind = "uc_function", function = "{uc_function.function}" }}\n'
-        ),
         files={},
         tool_id="agentbricks_uc_marker",
         app_auth=False,
@@ -178,10 +184,6 @@ def genie_tool(genie_space: str) -> Tool:
         ),
         check=check_genie,
         add_command=f"genie-agent {genie_space} --name genie --auth app",
-        toml=(
-            '[[tools]]\nid = "genie"\nauth = "app"\n'
-            f'source = {{ kind = "genie_agent", space_id = "{genie_space}" }}\n'
-        ),
         files={},
         tool_id="genie",
         app_auth=True,
@@ -200,7 +202,7 @@ TOOL_DEFINITIONS = (
 
 
 def assert_declared(project: Project, tool: Tool) -> None:
-    """After CLI authoring, agent.toml declares the tool under its id, App-authed if it must be."""
+    """After `tools add`, agent.toml declares the tool under its id, App-authed if it must be."""
     if tool.tool_id is None:
         return
     declared = {t["id"]: t for t in project.manifest().get("tools", [])}

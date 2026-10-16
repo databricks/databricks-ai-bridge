@@ -268,6 +268,22 @@ class Workspace:
     def _deployments_dir(self) -> str:
         return f"/Workspace/Users/{self.user_name}/agentbricks_deployments"
 
+    def experiments_with_prefix(self, prefix: str) -> list[str]:
+        """Ids of the experiments whose full path starts with ``prefix``."""
+        return [
+            str(experiment.experiment_id)
+            for experiment in self.client.experiments.search_experiments(
+                filter=f"name LIKE '{prefix}%'"
+            )
+            if experiment.experiment_id
+        ]
+
+    def delete_experiment(self, experiment_id: str) -> None:
+        try:
+            self.client.experiments.delete_experiment(experiment_id)
+        except NotFound:
+            pass
+
     def deployment_sources_with_prefix(self, prefix: str) -> list[str]:
         try:
             entries = list(self.client.workspace.list(self._deployments_dir()))

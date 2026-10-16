@@ -1,7 +1,8 @@
 # Agent Bricks E2E suites
 
-Black-box tests of the `agentbricks` CLI: each test runs the real CLI (`init`, `tools add`, `dev`,
-`deploy`, `endpoint invoke`) and checks the agent it produces.
+Black-box tests of the `agentbricks` CLI, at the top of the test pyramid: one happy-path scenario
+per command group, each running the real CLI and checking the agent it produces. Error cases and
+edge cases belong in the unit tests.
 
 ## Running
 
@@ -12,7 +13,7 @@ uv run pytest tests/suites -n 6 --dist loadgroup \
     --databricks-profile <profile> --catalog <catalog>
 ```
 
-- Narrow it to a suite (`tests/suites/tools`), a file, or a test (`"...test_deploy.py::test_deploy[cli]"`).
+- Narrow it to a file (`tests/suites/test_deploy.py`) or a test.
 - `-n 6 --dist loadgroup` runs tests in parallel; `loadgroup` keeps the dev tests on one worker,
   because local dev servers share a proxy port.
 - Workspace resources the suite borrows but never creates are flags: `--catalog`,
@@ -34,8 +35,8 @@ Every resource a run creates carries its run id, and is deleted at three points:
    `cleanup(f"deployments delete {app} --yes")`; registered commands run newest first, pass or fail.
    Fixtures delete what they create, such as `scratch_schema` and its schema.
 2. **When the run ends**, `pytest_sessionfinish` deletes everything carrying the run's name prefix
-   that is still there (stores, Apps, synced source folders, schemas) and the Apps' Lakebase roles,
-   which `deployments delete` leaves behind (`harness.cleanup.delete_run_leftovers`). A failure
+   that is still there (stores, Apps, synced source folders, tracing experiments, schemas) and the
+   Apps' Lakebase roles; `deployments delete` leaves the folders, experiments and roles behind (`harness.cleanup.delete_run_leftovers`). A failure
    there fails the run.
 3. **After a run that was killed** before step 2, for example by a CI timeout:
 
@@ -57,7 +58,8 @@ Every resource a run creates carries its run id, and is deleted at three points:
 | `tests/harness/workspace.py` | Databricks SDK helpers for what is not under test: prerequisites (UC objects, warehouse, Genie), UC privilege checks, and cleanup no CLI command does yet |
 | `tests/harness/cleanup.py` | Deleting what the suites create: per test through the CLI, and per run for the rest |
 | `tests/harness/logs.py` | Test-log output; every command is echoed so a run's log replays it |
-| `tests/suites/<suite>/` | One folder per feature: `tools`, `memory_store`, `session_store`, `tracing` |
+| `tests/suites/test_<group>.py` | One file per CLI command group: `test_tools`, `test_dev`, `test_deploy` (with `deployments`), `test_memory`, `test_sessions`, `test_tracing` |
+| `tests/suites/tool_definitions.py`, `uc_objects.py` | The tools `test_tools`, `test_dev` and `test_deploy` add, and the UC objects they use |
 
 `conftest.py` files are the only code pytest calls by name. `tests/harness/` sits next to `tests/suites/`
 rather than inside it: it is plain Python the suites import as `harness` (via `pythonpath` in
@@ -65,11 +67,11 @@ rather than inside it: it is plain Python the suites import as `harness` (via `p
 
 ## Adding things
 
-- **A tool:** add one `ToolDefinition(name, requires, build)` in `tools/tool_definitions.py`.
+- **A tool:** add one `ToolDefinition(name, requires, build)` in `tool_definitions.py`.
   `requires` names the fixtures it needs; tools whose fixtures skip are left out and logged.
-- **A suite:** add a folder with `test_*.py` files. A test takes the `project` fixture, runs
+- **A command group:** add `test_<group>.py` with its one happy path. A test takes the `project` fixture, runs
   `agentbricks_cli.run(f"init ... {project.path}")`, then `project.pin_runtime()` so the project
   runs the checkout's runtime; teardown fails a test that skips the pin. Register a `cleanup(...)`
   delete command for everything the test creates, before the step that creates it if a failed step
-  can leave it behind. Add a `conftest.py` only for resources the CLI under test does not create
-  itself; create them per test and delete them in the fixture's teardown.
+  can leave it behind. Resources the CLI under test does not create itself are fixtures in
+  `conftest.py`, created per test and deleted in the fixture's teardown.

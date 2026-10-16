@@ -12,7 +12,6 @@ import pathlib
 import re
 import tempfile
 
-AUTHORING_PATHS = ("cli", "direct")
 E2E_MODEL = "system.ai.gpt-5-2"
 APP_PREFIX = "agent-bricks-"
 

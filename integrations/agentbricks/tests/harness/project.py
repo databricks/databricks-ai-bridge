@@ -10,21 +10,14 @@ import dataclasses
 import pathlib
 import shutil
 import uuid
-from collections.abc import Mapping, Sequence
-from typing import Any, Protocol
+from collections.abc import Mapping
+from typing import Any
 
 import tomli
 import tomlkit
 
 from harness.logs import log
 from harness.run import APP_PREFIX, E2EError, RunConfig, project_prefix
-
-
-class ToolSpec(Protocol):
-    """What ``write_manifest`` needs from a tool: its [[tools]] TOML and any user-owned files."""
-
-    toml: str
-    files: Mapping[str, str]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -74,20 +67,6 @@ class Project:
     def write_files(self, files: Mapping[str, str]) -> None:
         for relative_path, content in files.items():
             self.write_file(relative_path, content)
-
-    def write_manifest(self, tool_specs: Sequence[ToolSpec]) -> None:
-        """Direct authoring: append these tools to the agent.toml `agentbricks init` wrote.
-
-        Everything else, such as the stores and the tracing binding, stays as init wrote it, the
-        same as for CLI authoring.
-        """
-        target = self.path / "agent.toml"
-        tools = "".join(f"\n{spec.toml}" for spec in tool_specs if spec.toml)
-        log(f"# write {target}: direct authoring; no agentbricks tools command")
-        with target.open("a", encoding="utf-8") as manifest:
-            manifest.write(tools)
-        for spec in tool_specs:
-            self.write_files(spec.files)
 
 
 def _pin_project_wheel(project: pathlib.Path, wheel: pathlib.Path) -> None:
