@@ -94,31 +94,40 @@ class AppAuthPlan:
 
 def required_user_api_scopes(project: AgentProject | None) -> set[str]:
     """Union explicit additions with scopes inferred from request-user managed tools."""
-    scopes = set(project.user_auth.additional_api_scopes) if project else set()
-    # TODO: Extend this least-privilege mapping for each supported request-user tool kind/service.
+    return set(required_user_api_scope_sources(project))
+
+
+def required_user_api_scope_sources(project: AgentProject | None) -> dict[str, list[str]]:
+    """Return each required scope and the manifest bindings that require it."""
+    sources = {
+        scope: ["[auth.user].additional_api_scopes"]
+        for scope in (project.user_auth.additional_api_scopes if project else ())
+    }
     for tool in project.tools if project else ():
         if tool.auth != "user":
             continue
+        scopes: set[str] = set()
         if tool.source.kind == "uc_function":
             scopes.add("mcp.functions")
-            continue
-        if tool.source.kind in ("genie_one", "genie_agent"):
+        elif tool.source.kind in ("genie_one", "genie_agent"):
             scopes.add("genie")
-            continue
-        if tool.source.kind not in ("mcp", "sandbox"):
-            continue
-        scopes.add("ai-gateway")
-        if tool.source.service == "system.ai.dbsql":
-            scopes.add("sql")
-        if tool.source.service == "system.ai.genie_one_mcp":
-            scopes.add("genie")
-        if tool.source.kind == "sandbox" and any(
-            scope.kind == "volume" for scope in tool.policy.downscope
-        ):
-            scopes.add("files")
-        if tool.source.kind == "sandbox" and tool.policy.databricks_access_token_included:
-            scopes.add("workspace.workspace")
-    return scopes
+        elif tool.source.kind in ("mcp", "sandbox"):
+            scopes.add("ai-gateway")
+            if tool.source.service == "system.ai.dbsql":
+                scopes.add("sql")
+            if tool.source.service == "system.ai.genie_one_mcp":
+                scopes.add("genie")
+            if tool.source.kind == "sandbox" and any(
+                scope.kind == "volume" for scope in tool.policy.downscope
+            ):
+                scopes.add("files")
+            if tool.source.kind == "sandbox" and tool.policy.databricks_access_token_included:
+                scopes.add("workspace.workspace")
+        resource = tool.source.service or tool.source.function or tool.source.space_id
+        label = f"tool {tool.id!r} ({resource or tool.source.kind}, auth=user)"
+        for scope in sorted(scopes):
+            sources.setdefault(scope, []).append(label)
+    return sources
 
 
 def plan_app_user_scope_update(
@@ -127,12 +136,14 @@ def plan_app_user_scope_update(
     *,
     allow_existing_app_update: bool,
     required_scopes: set[str] | None = None,
+    required_scope_sources: dict[str, list[str]] | None = None,
 ) -> AppUserScopeUpdatePlan:
     """Plan user-scope creation or addition without changing the Databricks App.
 
     A new App can be created with the requested user API scopes automatically. An existing App is
     left unchanged unless all requested scopes are already present or the caller explicitly allows
     Agent Bricks to add the missing scopes.
+    Optional scope-source labels explain the required bindings before asking for that permission.
     """
     try:
         apps = WorkspaceClient(profile=profile).apps
@@ -150,12 +161,24 @@ def plan_app_user_scope_update(
     requested = {"ai-gateway"} if required_scopes is None else required_scopes
     scopes = tuple(sorted({*(configured or ()), *requested}))
     if existing is not None and scopes != configured and not allow_existing_app_update:
+        missing = sorted(set(scopes) - set(configured or ()))
+        sources = required_scope_sources or {}
+        dependencies = [
+            f"{scope} is required by {', '.join(sources[scope])}."
+            for scope in missing
+            if sources.get(scope)
+        ]
         raise AgentCliError(
-            f"App '{name}' is missing required user API scopes; re-run with "
+            f"App '{name}' is missing required user API scopes: {', '.join(missing)}; re-run with "
             "--allow-user-scope-update to add them.",
-            hint="Review the existing App scopes and coordinate with other owners first. Agent Bricks "
-            "preserves unrelated scopes; later deploys do not need the flag once all required "
-            "scopes are present.",
+            hint=" ".join(
+                [
+                    *dependencies,
+                    "Review the existing App scopes and coordinate with other owners first. "
+                    "Agent Bricks preserves unrelated scopes; later deploys do not need the flag "
+                    "once all required scopes are present.",
+                ]
+            ),
         )
     return AppUserScopeUpdatePlan(apps=apps, name=name, existing_scopes=configured, scopes=scopes)
 
@@ -245,5 +268,6 @@ class AppsUserAuthClient:
             self._profile,
             allow_existing_app_update=allow_existing_app_update,
             required_scopes=self.required_user_api_scopes(project),
+            required_scope_sources=required_user_api_scope_sources(project),
         )
         return AppAuthPlan(scope_update=plan)

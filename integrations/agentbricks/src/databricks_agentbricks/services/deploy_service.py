@@ -30,7 +30,10 @@ from typing import Any, Optional
 
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
 from databricks_agentbricks.clients.apps_client import AppsClient
-from databricks_agentbricks.clients.apps_user_auth_client import AppAuthPlan
+from databricks_agentbricks.clients.apps_user_auth_client import (
+    AppAuthPlan,
+    required_user_api_scope_sources,
+)
 from databricks_agentbricks.projects.agent_project import AgentProject
 from databricks_agentbricks.projects.app_manifest import AppManifest
 from databricks_agentbricks.projects.config import require_managed_tool_support
@@ -427,11 +430,24 @@ class DeployService:
             allow_existing_app_update=request.allow_user_scope_update,
         )
         if auth.required:
-            self._reporter.note(
-                "User auth: scope updates are not atomic; coordinate with other App owners. "
-                "Users may need to sign out and re-consent after scope changes. "
-                "Scopes are never removed automatically when tools change."
+            scope_plan = auth.scope_update
+            assert scope_plan is not None
+            added = sorted(set(scope_plan.scopes) - set(scope_plan.existing_scopes or ()))
+            sources = required_user_api_scope_sources(agent_project)
+            message = (
+                f"User auth: adding API scopes: {', '.join(added)}."
+                if added
+                else "User auth: API scopes unchanged."
             )
+            for scope, bindings in sorted(sources.items()):
+                message += f" {scope} is required by {', '.join(bindings)}."
+            if added:
+                message += (
+                    " Scope updates are not atomic; coordinate with other App owners. "
+                    "Users may need to sign out and re-consent after scope changes."
+                )
+            message += " Scopes are never removed automatically when tools change."
+            self._reporter.note(message)
 
         deployment_exists = auth.app_existed
         # A project can store the unprefixed base name in agent.toml. When NAME is omitted, reuse the
