@@ -1142,6 +1142,13 @@ h2 {
   background: var(--surface-muted);
 }
 
+.mode-description {
+  margin: 8px 3px 0;
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
 .mode-button {
   padding: 6px 12px;
   border: 1px solid transparent;

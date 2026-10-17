@@ -1116,9 +1116,12 @@ another dataset and `AGENTBRICKS_GENIE_EXPECTED_VALUE` to assert a known result 
 
 ## Initialize the chat app demo
 
-The chat app is a LangGraph-specific init overlay, not a command that mutates an existing project.
-It is included by default for `--framework langgraph`; pass `--disable-chat-app` to scaffold the
-API-only backend instead.
+The composer explains the selected invocation mode. Streaming displays the answer as it arrives,
+Background submits a run and polls for its result, and Foreground waits for a complete answer in one
+request. All three modes run the same agent instructions and tools.
+
+The chat app is an init overlay for both LangGraph and OpenAI projects, included by default.
+Pass `--disable-chat-app` to scaffold the API-only backend instead.
 
 ```sh
 agentbricks init --framework langgraph \
