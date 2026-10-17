@@ -101,7 +101,9 @@ agentbricks logout
 
 Scaffold a local agent project from an Agent Bricks CLI template.
 
-DIRECTORY is the target path to create (defaults to the template's own name). The directory must not already exist. Once scaffolded, deploy it with `agentbricks deploy <name> --source <directory>`.
+DIRECTORY is the target path to create (defaults to the template's own name). The directory must not already exist. init records a deployment name that fits the Databricks Apps limit (--name, or the directory name shortened to 17 characters), so `agentbricks deploy` from the project directory needs no NAME.
+
+Databricks App names cap at 30 characters and deploy adds the `agent-bricks-` prefix, so a deployment name can be up to 17 lowercase letters, digits, and hyphens. init records `[agent].deployment_name` in `agent.toml` and shows it as `Deploy name`. A directory name that is valid and fits is recorded unchanged. Otherwise init sanitizes it and, if it is still over 17 characters, keeps its first 10 characters plus `-<token>`, the same 6-letter token as the default stores (`caj-langgraph-agent` becomes `caj-langgr-<token>`). `--name` is validated before any file is written; an invalid name fails with a suggestion. JSON results include `deployment_name` and `deployment_name_adjusted` (true when init changed the directory name to fit).
 
 Pass --profile (or set a default via `agentbricks login` / -p) to seed a local `.env` so the scaffolded project runs with `agentbricks dev` right away.
 
@@ -140,8 +142,9 @@ _Options_
 | `--profile <PROFILE>` | string | - | no | Seed a local .env with this DATABRICKS_CONFIG_PROFILE so `agentbricks dev` works immediately (defaults to the profile from -p / `agentbricks login`). |
 | `--disable-chat-app` | flag | - | no | Scaffold the API-only backend, without the browser chat app. |
 | `--enable-chat-app` | flag | - | no | Deprecated: the chat app is included by default; this flag is a no-op. |
-| `--memory-store <MEMORY_STORE>` | string | - | no | Name for the declared memory store (default: derived from the directory, <dir>-memory). Only --server agentbricks declares stores by default. |
-| `--session-store <SESSION_STORE>` | string | - | no | Name for the declared session store (default: derived from the directory, <dir>-session). |
+| `--memory-store <MEMORY_STORE>` | string | - | no | Name for the declared memory store (default: a unique name derived from --name or the directory, <name>-<token>-memory). Only --server agentbricks declares stores by default. |
+| `--session-store <SESSION_STORE>` | string | - | no | Name for the declared session store (default: a unique name derived from --name or the directory, <name>-<token>-sessions). |
+| `--name <NAME>` | string | - | no | Deployment name, recorded in agent.toml as [agent].deployment_name. Deploys as agent-bricks-<name>, so it can be up to 17 lowercase letters, digits, and hyphens. Also names the default stores and tracing experiment (default: derived from the directory, shortened to fit). |
 | `--existing` | flag | - | no | Prepare a coding-agent migration bundle for an existing LangGraph or OpenAI Agents SDK project (defaults to `.`). Requires `--server agentbricks`. |
 
 ### `agentbricks doctor`
@@ -155,7 +158,11 @@ change files. It checks `agent.toml`, `.agentbricks/project.toml`, the framework
 `DurableAgentServer` instance with an `invoke` hook plus a recognized framework adapter call; test,
 example, and old/stale directories are excluded. A bounded source scan that exceeds a limit is
 reported while the evidence it already found still counts. These checks are static repository
-evidence, not proof that the configured startup command executes the files found. Doctor exits 0
+evidence, not proof that the configured startup command executes the files found. The
+`deployment_name` check confirms that `[agent].deployment_name` (or the directory name when none is
+recorded) fits the Databricks Apps limit: up to 17 lowercase letters, digits, and hyphens after the
+`agent-bricks-` prefix. On failure its detail gives `agentbricks deploy <name>` with a name that fits;
+when it is the only failing check, that is also the report's `next_step`. Doctor exits 0
 only when every check passes, and exits 1 after printing a normal report otherwise. If the framework
 is unknown, the remediation requires an explicit `--framework <framework_name>`. Use global
 `-o json` for a structured report.
@@ -1336,7 +1343,7 @@ Deploy your agent to Databricks Apps and get back a hosted URL to try it.
 
 Rolls the agent out to Databricks Apps and prints the URL where you (or anyone you share it with) can use it. The deployed agent reaches Databricks model serving through the AI Gateway using the app's own identity - no model keys to configure - and `deploy` also reconciles the stores declared in agent.toml and wires in any tracing.
 
-NAME is recorded in agent.toml on the first deploy, so a later `agentbricks deploy` from the project directory can omit it (passing NAME again updates the recorded name). Deployed apps are named `agent-bricks-<name>`. A project with a recorded base name reuses that app when NAME is omitted; you can also pass the full app name to update it. Use the full app name with the `agentbricks deployments` commands.
+NAME is recorded in agent.toml on the first deploy, so a later `agentbricks deploy` from the project directory can omit it (passing NAME again updates the recorded name). Deployed apps are named `agent-bricks-<name>`. Apps names cap at 30 characters, so NAME can be up to 17 (`agentbricks init` records one that fits). A longer name fails before anything is provisioned, with a suggested name that fits. A project with a recorded base name reuses that app when NAME is omitted; you can also pass the full app name to update it. Use the full app name with the `agentbricks deployments` commands.
 
 Any memory/session store declared in agent.toml (for example, by `agentbricks memory/sessions bind`) is created if it doesn't exist yet; agent.toml itself is never modified for stores.
 

@@ -159,16 +159,21 @@ agentbricks login --profile <profile>
 agentbricks init my-agent       # Defaults to LangGraph; add --framework=openai for OpenAI Agents SDK
 cd my-agent
 agentbricks dev                 # optional: develop and test locally
-agentbricks deploy my-agent     # deploy to Databricks
+agentbricks deploy              # deploy to Databricks as agent-bricks-my-agent
 ```
 
 `agentbricks dev` runs the agent locally on `http://localhost:8000`, wrapping the Databricks Apps
 local runtime so local behavior matches a deployment.
 
-`agentbricks deploy my-agent` deploys a Databricks App named `agent-bricks-my-agent`, provisions the
+`agentbricks init` records the deployment name in `agent.toml`, so `agentbricks deploy` from the
+project directory deploys a Databricks App named `agent-bricks-my-agent`, provisions the
 stores declared in `agent.toml`, and grants the app's service principal access to the stores and
 direct App-auth tool resources declared there. Use `agentbricks deployments list` to find deployed
 apps, and `agentbricks deployments get agent-bricks-my-agent` to print an app's URL and status.
+Databricks App names cap at 30 characters, so a deployment name can be up to 17 characters after
+the `agent-bricks-` prefix. `init` shortens a longer directory name to fit (for example
+`caj-langgraph-agent` becomes `caj-langgr-<token>`); pass `agentbricks init --name <name>` to choose
+it yourself, or `agentbricks deploy <name>` to change it later.
 
 `agentbricks init` declares default memory and session stores in `agent.toml`, so the deployed agent has
 long-term memory and durable conversation history. It creates `<name>-<6-letter-token>-memory` and
