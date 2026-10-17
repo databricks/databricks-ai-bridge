@@ -1031,6 +1031,13 @@ removed from `agent.toml` before using `agentbricks dev` or `agentbricks deploy`
 The table implementation is retained behind a disabled code-level gate so it can be enabled when
 Databricks Connect supports table downscoping. There is no CLI option to bypass that gate.
 
+Sandbox tools and their argument schemas come from the workspace's MCP server. On the Sandbox API
+backend, agents can call `create_sandbox`, `run_code`, and `delete_sandbox`; creation options such as
+`home_volume_persisted` and `replace_existing_if_inactive` are passed through as tool arguments when
+the server supports them. These options do not change the Volume downscope. For older OpenAI
+projects configured through `agentbricks add-sandbox`, re-run that command with the same scopes to
+update the generated tool filter to include the lifecycle tools.
+
 With `databricks_access_token_included = true`, the sandbox receives `DATABRICKS_HOST`, a short-lived
 `DATABRICKS_TOKEN`, and `DATABRICKS_AUTH_TYPE`, so code such as
 `WorkspaceClient().current_user.me()` can call workspace APIs. This policy does not choose the
