@@ -7,18 +7,22 @@ Functions accept an optional `console` for testability; default is stdout.
 from __future__ import annotations
 
 import json
+import threading
+import time
 from contextlib import contextmanager
-from typing import Any, Iterable, Iterator, Literal, Optional, Sequence
+from typing import Any, Callable, Iterable, Iterator, Literal, Optional, Sequence
 
 import click
 from rich import box
 from rich.console import Console, Group, RenderableType
 from rich.panel import Panel
+from rich.status import Status
 from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
 from databricks_agentbricks.presentation import theme
+from databricks_agentbricks.reporting import HEARTBEAT_INTERVAL_S, Heartbeat, format_elapsed
 
 # Semantic styles from the facelift palette (see `theme.py`). Color carries meaning, never
 # decoration: LINK (blue) for URLs, COMMAND (cyan) for the actionable next step, SUCCESS (green)
@@ -43,50 +47,132 @@ _SEVERITY_STYLE = {
 }
 
 _stdout = Console(theme=theme.AGENTBRICKS_THEME)
+# Progress, heartbeats, and relayed command output when stdout must stay clean (`-o json`, logs).
+_stderr = Console(theme=theme.AGENTBRICKS_THEME, stderr=True)
+# How often the heartbeat thread wakes to refresh a spinner or check whether a heartbeat is due.
+_HEARTBEAT_POLL_S = 1.0
 
 
 def console() -> Console:
     return _stdout
 
 
-@contextmanager
-def status(message: str, con: Optional[Console] = None) -> Iterator[None]:
-    """Show an animated spinner with ``message`` while a slow call runs, then clear it.
+def stderr_console() -> Console:
+    return _stderr
 
-    Wraps ``rich``'s console status; a no-op spinner (no TTY) still runs the body. Use around
-    network work like store provisioning so the CLI doesn't look hung. Under ``-o json`` the spinner
-    is skipped so no control characters leak into machine-readable output.
-    """
+
+def _plain_progress(con: Console) -> bool:
+    """Whether progress must be plain lines: under ``-o json`` or when ``con`` isn't a terminal."""
     from databricks_agentbricks import errors  # local import avoids a cycle at module load
 
-    con = con or _stdout
-    if errors._OUTPUT_MODE == "json":
+    return errors._OUTPUT_MODE == "json" or not con.is_terminal
+
+
+@contextmanager
+def _every(poll_s: float, on_tick: Callable[[], None]) -> Iterator[None]:
+    """Call ``on_tick`` every ``poll_s`` seconds on a daemon thread while the body runs."""
+    stop = threading.Event()
+
+    def run() -> None:
+        while not stop.wait(poll_s):
+            on_tick()
+
+    thread = threading.Thread(target=run, name="agentbricks-heartbeat", daemon=True)
+    thread.start()
+    try:
         yield
-        return
-    with con.status(message, spinner="dots"):
+    finally:
+        stop.set()
+        thread.join(timeout=1)
+
+
+@contextmanager
+def _plain_heartbeats(
+    message: str, err: Console, clock: Callable[[], float], interval: float
+) -> Iterator[None]:
+    """Print ``• <phase>… M:SS`` to ``err`` every ``interval`` seconds while the body runs."""
+    beat = Heartbeat(message, start=clock(), interval=interval)
+
+    def tick() -> None:
+        line = beat.tick(clock())
+        if line:
+            err.print(Text(line), soft_wrap=True)
+
+    with _every(min(_HEARTBEAT_POLL_S, interval), tick):
         yield
 
 
 @contextmanager
-def progress(message: str, con: Optional[Console] = None) -> Iterator[None]:
+def _spinner_elapsed(spinner: Status, label: str, clock: Callable[[], float]) -> Iterator[None]:
+    """Keep a TTY spinner's text at ``label`` plus the elapsed ``M:SS`` while the body runs."""
+    start = clock()
+
+    def tick() -> None:
+        elapsed = format_elapsed(clock() - start)
+        spinner.update(Text(f"{label} {elapsed}" if label else elapsed, style=DIM))
+
+    with _every(_HEARTBEAT_POLL_S, tick):
+        yield
+
+
+@contextmanager
+def status(
+    message: str,
+    con: Optional[Console] = None,
+    *,
+    err: Optional[Console] = None,
+    clock: Callable[[], float] = time.monotonic,
+    interval: float = HEARTBEAT_INTERVAL_S,
+) -> Iterator[None]:
+    """Show an animated spinner with ``message`` while a slow call runs, then clear it.
+
+    Use around network work like store provisioning so the CLI doesn't look hung. On a TTY the
+    spinner text carries the elapsed time. Without a TTY, or under ``-o json``, there is no spinner
+    (so no control characters leak into captured or machine-readable output); instead a step that
+    runs past ``interval`` prints a plain ``• <phase>… M:SS`` heartbeat line to stderr each
+    interval, so a log or a coding agent can tell the CLI is still working.
+    """
+    con = con or _stdout
+    if _plain_progress(con):
+        with _plain_heartbeats(message, err or _stderr, clock, interval):
+            yield
+        return
+    with con.status(message, spinner="dots") as spinner:
+        with _spinner_elapsed(spinner, message, clock):
+            yield
+
+
+@contextmanager
+def progress(
+    message: str,
+    con: Optional[Console] = None,
+    *,
+    err: Optional[Console] = None,
+    clock: Callable[[], float] = time.monotonic,
+    interval: float = HEARTBEAT_INTERVAL_S,
+) -> Iterator[None]:
     """Like ``status``, but first prints a persistent line so feedback survives the spinner.
 
     ``status`` clears itself on exit and only animates on a TTY, so a long, silent wait (e.g. waiting
     for app compute) can look like a hang in terminals where the spinner doesn't render. This prints
-    a durable "• message" line up front, then runs a bare spinner (no repeated text) beneath it.
-    Skipped under ``-o json`` so machine output stays clean.
+    a durable "• message" line up front, then runs a bare elapsed-time spinner beneath it on a TTY,
+    or ``status``'s plain stderr heartbeats otherwise. Under ``-o json`` the up-front line goes to
+    stderr too, so stdout stays a single JSON document.
     """
     from databricks_agentbricks import errors  # local import avoids a cycle at module load
 
     con = con or _stdout
-    if errors._OUTPUT_MODE == "json":
-        yield
+    err = err or _stderr
+    (err if errors._OUTPUT_MODE == "json" else con).print(f"[{DIM}]•[/] {message}")
+    if _plain_progress(con):
+        with _plain_heartbeats(message, err, clock, interval):
+            yield
         return
-    con.print(f"[{DIM}]•[/] {message}")
-    # Empty status text: the persistent line above already carries the message, so the spinner
-    # underneath is just the animated glyph — no duplicated sentence.
-    with con.status("", spinner="dots"):
-        yield
+    # Empty label: the persistent line above already carries the message, so the spinner
+    # underneath is just the animated glyph and the elapsed time — no duplicated sentence.
+    with con.status("", spinner="dots") as spinner:
+        with _spinner_elapsed(spinner, "", clock):
+            yield
 
 
 # --- small helpers -----------------------------------------------------------

@@ -6,6 +6,7 @@ from contextlib import AbstractContextManager
 
 import click
 
+from databricks_agentbricks import errors
 from databricks_agentbricks.presentation import render
 
 
@@ -25,5 +26,9 @@ class ClickReporter:
         click.echo(message, err=True)
 
     def echo(self, message: str, *, add_newline: bool = True) -> None:
-        """The :class:`Reporter` primary output, as a ``click.echo`` to stdout (``nl=add_newline``)."""
-        click.echo(message, nl=add_newline)
+        """The :class:`Reporter` primary output, as a ``click.echo`` (``nl=add_newline``).
+
+        Goes to stdout, except under ``-o json``, where stdout carries only the command's JSON
+        document and relayed command output moves to stderr.
+        """
+        click.echo(message, nl=add_newline, err=errors._OUTPUT_MODE == "json")
