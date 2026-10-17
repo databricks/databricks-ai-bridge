@@ -355,6 +355,11 @@ from the invocation `id` and from the `X-Routing-Key` sticky-routing header.
 | `GET /api/invocations/{id}` | Returns the invocation status and, when completed, its output. |
 | `GET /api/invocations/{id}/events?after={cursor}` | Streams events after the last received event ID, allowing clients to reconnect. |
 
+Invocation status also returns `attempt` and `is_recovery`. An unclaimed queued invocation has
+attempt `0`; the first worker attempt is `1`. A replacement worker increments the attempt, and
+`is_recovery` is true when it is greater than `1`, including when recovery fails. These fields show
+that recovery was attempted; they do not prove that a tool side effect ran twice.
+
 The UUID also acts as an idempotency key: repeating the same request reuses the existing invocation
 while its record is retained; using the ID for a different request returns `409`.
 
