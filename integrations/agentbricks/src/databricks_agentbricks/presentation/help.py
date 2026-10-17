@@ -168,16 +168,20 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("agentbricks memory pipeline run <pipeline>", "start a Dreamer run"),
     ),
     ("memory", "pipeline", "runs"): (
+        ("agentbricks memory pipeline runs list <pipeline> --page-size 50", "list recorded runs"),
         (
             "agentbricks memory pipeline runs get memory-pipelines/<pipeline>/runs/<run-id>",
-            "get run details through the Databricks CLI",
+            "get run details through the memory pipeline API",
         ),
     ),
     ("memory", "pipeline", "runs", "get"): (
         (
             "agentbricks memory pipeline runs get memory-pipelines/<pipeline>/runs/<run-id>",
-            "get run details through the Databricks CLI",
+            "get run details through the memory pipeline API",
         ),
+    ),
+    ("memory", "pipeline", "runs", "list"): (
+        ("agentbricks memory pipeline runs list <pipeline> --page-size 50", "list recorded runs"),
     ),
     ("sessions",): (
         ("agentbricks sessions stores create --name agent-sessions", "create a session store"),
