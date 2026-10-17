@@ -569,7 +569,10 @@ def test_init_short_directory_records_it_as_the_deployment_name(tmp_path: pathli
     assert "would exceed" not in result.output
     # The last next step is a bare deploy: the recorded name makes NAME unnecessary.
     output = _flat(result.output)
-    assert "agentbricks deploy Deploy it to Databricks as agent-bricks-my-agent" in output
+    assert (
+        "Deploy it to Databricks as agent-bricks-my-agent (from the project dir) "
+        "agentbricks deploy ╰"
+    ) in output
     assert "agentbricks deploy my-agent" not in output
 
 

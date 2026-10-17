@@ -393,6 +393,8 @@ def test_wait_reports_a_finished_deploy_with_its_url(project: pathlib.Path):
     assert "Deployed agent 'agent-bricks-demo'" in result.stdout
     assert "https://agent.example" in result.stdout
     assert f"agentbricks endpoint invoke {_APP}" in result.stdout
+    # The invoke step is the panel's last row: nothing prints after the bottom border.
+    assert result.stdout.rstrip().endswith("╯")
 
 
 def test_wait_reports_a_failed_background_deploy_with_its_log_tail(project: pathlib.Path):

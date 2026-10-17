@@ -69,9 +69,9 @@ def agent_invoke_command(target: str, *, uses_runtime_api: bool) -> str:
     return f"agentbricks endpoint invoke {target} --path {path} --json {json_arg}"
 
 
-def agent_invoke_example(target: str, *, uses_runtime_api: bool) -> tuple[str, str]:
-    """Label and command for the invocation example shown last in a success panel."""
+def agent_invoke_step(target: str, *, uses_runtime_api: bool) -> tuple[str, str]:
+    """The ``(command, description)`` next step shown last in the dev and deploy success panels."""
     return (
-        "Invoke with Agent Bricks",
         agent_invoke_command(target, uses_runtime_api=uses_runtime_api),
+        "Invoke with Agent Bricks",
     )

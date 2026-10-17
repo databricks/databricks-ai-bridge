@@ -16,7 +16,7 @@ import click
 from rich.text import Text
 
 from databricks_agentbricks.presentation import render
-from databricks_agentbricks.presentation.endpoint import agent_invoke_example
+from databricks_agentbricks.presentation.endpoint import agent_invoke_step
 from databricks_agentbricks.presentation.render import field
 from databricks_agentbricks.presentation.tracing import TRACING_BIND_COMMAND, experiment_url
 from databricks_agentbricks.reporting import format_elapsed
@@ -346,8 +346,10 @@ def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> Non
     render.success(
         f"Deployed agent '{result.deployment}'",
         fields=fields,
-        next_steps=steps,
-        example=agent_invoke_example(result.deployment, uses_runtime_api=result.uses_runtime_api),
+        next_steps=[
+            *steps,
+            agent_invoke_step(result.deployment, uses_runtime_api=result.uses_runtime_api),
+        ],
     )
 
 
@@ -389,10 +391,10 @@ def present_wait_result(result: WaitResult, *, output: Optional[str]) -> None:
         render.success(
             f"Deployed agent '{result.deployment}'",
             fields={"URL": result.url} if result.url else None,
-            next_steps=[(f"agentbricks deployments logs {result.deployment}", "Tail its logs")],
-            example=agent_invoke_example(
-                result.deployment, uses_runtime_api=result.uses_runtime_api
-            ),
+            next_steps=[
+                (f"agentbricks deployments logs {result.deployment}", "Tail its logs"),
+                agent_invoke_step(result.deployment, uses_runtime_api=result.uses_runtime_api),
+            ],
         )
         return
     if result.status == "failed":

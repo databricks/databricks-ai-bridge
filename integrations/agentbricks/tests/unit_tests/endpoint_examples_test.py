@@ -15,10 +15,11 @@ from rich.console import Console
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.endpoint import (
     agent_invoke_command,
-    agent_invoke_example,
+    agent_invoke_step,
 )
 
 _TARGETS = ["--url http://localhost:8000", "agent-bricks-myapp"]
+_STEPS = [("agentbricks dev", "Run locally"), ("agentbricks deploy my-agent", "Deploy it")]
 
 
 def _panel_rows(output: str) -> list[str]:
@@ -35,8 +36,7 @@ def _render(width: int, target: str, *, uses_runtime_api: bool, terminal: bool =
     con = Console(file=buf, width=width, no_color=True, force_terminal=terminal)
     render.success(
         "Started",
-        next_steps=[("agentbricks dev", "Run locally")],
-        example=agent_invoke_example(target, uses_runtime_api=uses_runtime_api),
+        next_steps=[*_STEPS, agent_invoke_step(target, uses_runtime_api=uses_runtime_api)],
         con=con,
     )
     return buf.getvalue()
@@ -101,23 +101,28 @@ def test_invoke_command_is_shell_copyable_from_wide_panel(shell, target, uses_ru
 
 @pytest.mark.parametrize("width", [40, 80, 200])
 @pytest.mark.parametrize("terminal", [False, True])
-def test_invoke_example_is_last_and_preserves_next_steps(width, terminal):
+def test_invoke_step_is_last_and_preserves_next_steps(width, terminal):
     buf = io.StringIO()
     con = Console(file=buf, width=width, no_color=True, force_terminal=terminal)
-    render.success("Started", next_steps=[("agentbricks dev", "Run locally")], con=con)
-    without_example = _panel_rows(buf.getvalue())
+    render.success("Started", next_steps=_STEPS, con=con)
+    without_invoke = _panel_rows(buf.getvalue())
 
     output = _render(width, "--url http://localhost:8000", uses_runtime_api=True, terminal=terminal)
     rows = _panel_rows(output)
-    # The existing rows are untouched; the example rows follow them, then the bottom border.
-    assert rows[: len(without_example)] == without_example
-    assert rows[len(without_example)] == "Invoke with Agent Bricks"
-    assert any("agentbricks dev" in row and "Run locally" in row for row in without_example)
+    # The existing rows are untouched; the invoke rows follow them, then the bottom border.
+    assert rows[: len(without_invoke)] == without_invoke
+    assert rows[len(without_invoke)] == "Invoke with Agent Bricks"
+    assert without_invoke[-4:] == [
+        "Run locally",
+        "agentbricks dev",
+        "Deploy it",
+        "agentbricks deploy my-agent",
+    ]
     assert output.splitlines()[-1].startswith("╰")
 
 
-def test_success_without_example_has_no_invoke_rows():
+def test_success_without_invoke_step_has_no_invoke_rows():
     buf = io.StringIO()
     con = Console(file=buf, width=80, no_color=True)
-    render.success("Started", next_steps=[("agentbricks dev", "Run locally")], con=con)
+    render.success("Started", next_steps=_STEPS, con=con)
     assert "Invoke with Agent Bricks" not in buf.getvalue()
