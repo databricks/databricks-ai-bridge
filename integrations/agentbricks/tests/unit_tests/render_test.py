@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from rich.console import Console
 
 from databricks_agentbricks.presentation import render
@@ -250,3 +251,47 @@ def test_progress_skips_output_in_json_mode(monkeypatch):
     with render.progress("Waiting for app compute…", con=con):
         pass
     assert buf.getvalue() == ""  # nothing emitted in json mode
+
+
+@pytest.mark.parametrize(
+    ("seconds", "expected"),
+    [(0, "0s"), (45.9, "45s"), (60, "1m00s"), (72, "1m12s"), (125, "2m05s")],
+)
+def test_format_duration(seconds, expected):
+    assert render.format_duration(seconds) == expected
+
+
+def test_progress_with_done_message_prints_the_total_wait(monkeypatch):
+    from databricks_agentbricks import errors
+
+    monkeypatch.setattr(errors, "_OUTPUT_MODE", "text")
+    clock = iter([100.0, 164.0])
+    monkeypatch.setattr(render.time, "monotonic", lambda: next(clock))
+    con, buf = _console()
+    with render.progress(
+        "Waiting for agent compute to start…", con=con, done_message="Agent compute is running"
+    ):
+        pass
+    lines = buf.getvalue().splitlines()
+    assert lines[0].endswith("Waiting for agent compute to start…")
+    assert lines[-1] == "  Agent compute is running (waited 1m04s)"
+
+
+def test_progress_with_done_message_prints_nothing_more_on_failure(monkeypatch):
+    from databricks_agentbricks import errors
+
+    monkeypatch.setattr(errors, "_OUTPUT_MODE", "text")
+    con, buf = _console()
+    with pytest.raises(RuntimeError):
+        with render.progress("Waiting…", con=con, done_message="Agent compute is running"):
+            raise RuntimeError("timed out")
+    assert "Agent compute is running" not in buf.getvalue()
+
+
+def test_elapsed_spinner_text_ticks_on_each_render(monkeypatch):
+    clock = iter([0.0, 5.0, 72.0])
+    monkeypatch.setattr(render.time, "monotonic", lambda: next(clock))
+    elapsed = render._Elapsed()
+
+    assert elapsed.__rich__().plain == "5s"
+    assert elapsed.__rich__().plain == "1m12s"

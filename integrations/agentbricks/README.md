@@ -169,6 +169,9 @@ local runtime so local behavior matches a deployment.
 stores declared in `agent.toml`, and grants the app's service principal access to the stores and
 direct App-auth tool resources declared there. Use `agentbricks deployments list` to find deployed
 apps, and `agentbricks deployments get agent-bricks-my-agent` to print an app's URL and status.
+The app's compute starts first and boots while the other resources are provisioned. If a first
+deploy stops partway, the app it created is kept: re-run `agentbricks deploy` to resume, or remove
+it with `agentbricks deployments delete agent-bricks-my-agent`.
 
 `agentbricks init` declares default memory and session stores in `agent.toml`, so the deployed agent has
 long-term memory and durable conversation history. It creates `<name>-<6-letter-token>-memory` and

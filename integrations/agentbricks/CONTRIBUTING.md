@@ -98,6 +98,21 @@ cat /tmp/scratch-agent/.venv/lib/python*/site-packages/databricks_agentkit-*.dis
 agentbricks deployments logs agent-bricks-<name>
 ```
 
+## Deploy phase timings
+
+`agentbricks deploy` ends its text output with the total wall time (`Deployed in 2m05s`). To see
+where that time went, set `AGENTBRICKS_DEBUG_TIMINGS=1`; deploy then prints one
+`timing: <phase> <seconds>s` line per phase, plus `timing: total`, to stderr:
+
+```sh
+AGENTBRICKS_DEBUG_TIMINGS=1 agentbricks -p <profile> deploy my-agent
+```
+
+The phases are `preflight`, `app_start` (the `--no-wait` create or start), `reconcile`,
+`runtime_store`, `app_yaml`, `sync`, `compute_wait` (the join on ACTIVE compute), `app_update`,
+`rollout`, and `grants`; a request-user App reports `app_ready` instead of `app_start` and
+`compute_wait`. The switch is a debugging aid and is deliberately not shown in `--help`.
+
 ## CLI telemetry
 
 The `agentbricks` console entry point runs `databricks_agentbricks.cli:main`. In `cli/app.py`,

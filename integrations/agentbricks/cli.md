@@ -1338,6 +1338,8 @@ Rolls the agent out to Databricks Apps and prints the URL where you (or anyone y
 
 NAME is recorded in agent.toml on the first deploy, so a later `agentbricks deploy` from the project directory can omit it (passing NAME again updates the recorded name). Deployed apps are named `agent-bricks-<name>`. A project with a recorded base name reuses that app when NAME is omitted; you can also pass the full app name to update it. Use the full app name with the `agentbricks deployments` commands.
 
+If a first deploy stops partway, the app it created is kept: re-run `agentbricks deploy` to resume, or remove it with `agentbricks deployments delete <app-name>`.
+
 Any memory/session store declared in agent.toml (for example, by `agentbricks memory/sessions bind`) is created if it doesn't exist yet; agent.toml itself is never modified for stores.
 
 Scaling to multiple instances (--instances) uses best-effort sticky routing, so a browser session automatically stays on one instance.
