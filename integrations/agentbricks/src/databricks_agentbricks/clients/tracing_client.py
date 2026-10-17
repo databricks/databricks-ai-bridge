@@ -131,6 +131,25 @@ def _set_tracking_uri(mlflow, profile: Optional[str]) -> None:
     mlflow.set_tracking_uri(_workspace_uri(profile))
 
 
+def fetch_trace(
+    mlflow: Any,
+    trace_id: str,
+    *,
+    tracking_uri: Optional[str] = None,
+    trace_location: Optional[str] = None,
+) -> Any:
+    """Fetch through the public client so retrieval failures remain distinguishable.
+
+    Unlike the fluent ``mlflow.get_trace``, ``MlflowClient.get_trace`` propagates errors.
+    Qualify plain IDs with the selected experiment's UC destination explicitly: newer fluent
+    clients do this using the active experiment, which need not be the CLI's selected one.
+    The public client and the ``trace:/<location>/<id>`` format exist at our MLflow 3.10.1 floor.
+    """
+    if trace_location and not trace_id.startswith("trace:/"):
+        trace_id = f"trace:/{trace_location}/{trace_id}"
+    return mlflow.MlflowClient(tracking_uri=tracking_uri).get_trace(trace_id, display=False)
+
+
 @dataclass(frozen=True)
 class ResolvedTraceExperiment:
     """A workspace experiment id and any UC OTEL base tables backing its traces."""
