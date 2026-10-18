@@ -192,7 +192,8 @@ class WaitResult:
 
     ``status`` is ``running`` (still deploying at the timeout), ``succeeded``, or ``failed``.
     ``log_tail`` holds the end of a failed background deploy's log, or the App's own status message
-    when the outcome came from the workspace rather than a local deploy record.
+    when the outcome came from the workspace rather than a local deploy record; ``log`` is that
+    log's path in the first case.
     """
 
     deployment: str
@@ -203,6 +204,7 @@ class WaitResult:
     error: Optional[str]
     log_tail: list[str]
     uses_runtime_api: bool
+    log: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -216,6 +218,7 @@ class _WaitSnapshot:
     url: Optional[str] = None
     error: Optional[str] = None
     log_tail: tuple[str, ...] = ()
+    log: Optional[str] = None
 
 
 # How often `deployments wait` re-reads a local deploy record, and the App when there is none.
@@ -433,6 +436,7 @@ class DeployService:
                     error=snap.error,
                     log_tail=list(snap.log_tail),
                     uses_runtime_api=uses_runtime_api,
+                    log=snap.log,
                 )
             poll = _LOCAL_POLL_S if local else _SERVER_POLL_S
             self._sleep(max(0.0, min(poll, deadline - now)))
@@ -457,6 +461,7 @@ class DeployService:
             log_tail=tuple(deploy_state.log_tail(pathlib.Path(log)))
             if status == deploy_state.FAILED and log
             else (),
+            log=str(log) if log else None,
         )
 
     def _server_snapshot(

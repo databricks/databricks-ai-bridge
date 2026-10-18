@@ -387,8 +387,11 @@ def present_wait_result(result: WaitResult, *, output: Optional[str]) -> None:
             help=detail or "fix the cause, then re-run `agentbricks deploy`",
             con=err,
         )
+        if result.log_tail:
+            source = f"Last lines of {result.log}" if result.log else "App status"
+            err.print(Text(f"{source}:", style="dim"), soft_wrap=True)
         for line in result.log_tail:
-            err.print(Text(line), soft_wrap=True)
+            err.print(Text(f"  {line}"), soft_wrap=True)
         return
     click.echo(
         f"still deploying: {result.phase}, {format_elapsed(result.elapsed_s)} elapsed — "

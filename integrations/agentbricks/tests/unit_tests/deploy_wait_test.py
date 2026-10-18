@@ -411,6 +411,7 @@ def test_wait_reports_a_failed_background_deploy_with_its_log_tail(project: path
 
     assert result.exit_code == 1
     assert f"error: Could not deploy '{_APP}'." in result.stderr
+    assert f"Last lines of {log}:" in result.stderr
     assert "log line 29" in result.stderr
     assert "log line 10" in result.stderr
     assert "log line 9\n" not in result.stderr
