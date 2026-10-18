@@ -208,7 +208,8 @@ def record_background_start(
 
     Written by the parent so `deployments wait` finds a ``running`` record the moment
     `deploy --no-wait` returns. Skipped if the child already recorded itself (it started first).
-    Returns the state file's path.
+    The log is recorded as an absolute path, so a `deployments wait` run from another directory
+    still finds it. Returns the state file's path.
     """
     path = state_path(source_dir, app)
     previous = read_state(path) or {}
@@ -217,7 +218,7 @@ def record_background_start(
         write_state(
             path,
             _running_state(
-                app, pid=pid, started_at=stamp, now=stamp, log=log_path(source_dir, app)
+                app, pid=pid, started_at=stamp, now=stamp, log=log_path(source_dir.absolute(), app)
             ),
         )
     return path

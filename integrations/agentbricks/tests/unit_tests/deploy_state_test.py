@@ -103,6 +103,21 @@ def test_background_child_inherits_the_parents_record(tmp_path: pathlib.Path):
     assert state["log"] == str(deploy_state.log_path(tmp_path, "agent-bricks-x"))
 
 
+def test_record_background_start_records_an_absolute_log_path(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "proj").mkdir()
+
+    deploy_state.record_background_start(pathlib.Path("proj"), "agent-bricks-x", pid=4242, now=_T0)
+
+    state = deploy_state.read_state(
+        tmp_path / "proj" / ".agentbricks" / "deploy-agent-bricks-x.json"
+    )
+    assert state is not None
+    assert state["log"] == str(tmp_path / "proj" / ".agentbricks" / "deploy-agent-bricks-x.log")
+
+
 def test_record_background_start_does_not_overwrite_a_child_that_already_started(
     tmp_path: pathlib.Path,
 ):
