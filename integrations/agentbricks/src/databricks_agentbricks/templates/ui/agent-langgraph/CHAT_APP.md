@@ -7,7 +7,7 @@ intentionally not a post-generation mutation command.
 ## Installed files
 
 - `ui/` contains the zero-build chat client.
-- `runtime/ui.py` serves the assets and exposes demo APIs for memory and sessions.
+- `runtime/ui.py` serves the assets and exposes demo APIs for tools, memory, and sessions.
 - `runtime/main.py` installs the chat routes on the base FastAPI runtime.
 - `tests/test_demo_ui.py` verifies the browser-facing routes.
 
@@ -19,6 +19,15 @@ tracing config (destination + experiment). Selecting Memory opens a pane for bro
 entries (searchable, filterable by actor, with a modal for each entry); the other indicators expand
 in place, and Traces links out to the MLflow experiment. The transport selector is the only manual
 capability choice.
+
+Tools reads `GET /api/demo/tools`, which re-reads `agent.toml` on every request. The row shows how
+many managed `[[tools]]` bindings are connected and how many Python tools `agent.tools.all_tools()`
+collects; its orb is green once at least one managed tool is bound. Selecting Tools opens a pane
+listing each binding (type, id, and service, function, space ID, or sandbox scopes), the tools
+defined in code, and the `agentbricks tools add …` commands to copy. A binding added or removed with
+`agentbricks tools add`/`remove` appears after a refresh, without restarting the app. An invalid
+`agent.toml` or a failing `agent.tools` import shows as an error in the pane; the rest of the UI keeps
+working. MCP servers wired in `agent/mcps.py` and the memory tools are not listed.
 
 The composer's model picker lists the workspace's Unity Catalog AI Gateway chat model services — the
 `system.ai.*` model services from `GET /api/2.1/unity-catalog/model-services?parent=schemas/system.ai`
