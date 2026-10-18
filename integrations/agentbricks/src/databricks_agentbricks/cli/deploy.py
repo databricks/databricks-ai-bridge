@@ -151,7 +151,7 @@ def deploy(
 
     NAME is recorded in agent.toml on the first deploy, so a later `agentbricks deploy` from the project
     directory can omit it (passing NAME again updates the recorded name). New apps are named
-    `agent-bricks-<name>`. Apps names cap at 30 characters, so NAME can be up to 17
+    `agent-bricks-<name>`. App names cap at 30 characters, so NAME can be up to 17
     (`agentbricks init` records one that fits). Use the full app name with the
     `agentbricks deployments` commands.
 
