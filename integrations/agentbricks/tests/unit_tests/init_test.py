@@ -427,7 +427,7 @@ def test_existing_prepares_migration_without_changing_application(
     assert len(deployment_name) <= 17
     assert settings["deployment_name"] == deployment_name
     assert payload["deployment_name"] == deployment_name
-    assert payload["deployment_name_adjusted"] is (deployment_name != tmp_path.name)
+    assert payload["deployment_name_truncated"] is (deployment_name != tmp_path.name)
     assert manifest["agent"]["framework"] == framework
     assert manifest["agent"]["server"] == "agentbricks"
 
@@ -672,7 +672,7 @@ def test_init_name_records_and_names_the_stores_and_experiment(tmp_path: pathlib
     payload = json.loads(result.output)
     assert payload["deployment_name"] == "billing-bot"
     # The user chose the name, so init didn't adjust it.
-    assert payload["deployment_name_adjusted"] is False
+    assert payload["deployment_name_truncated"] is False
 
 
 def test_init_explicit_stores_win_over_name(tmp_path: pathlib.Path):
@@ -688,11 +688,11 @@ def test_init_explicit_stores_win_over_name(tmp_path: pathlib.Path):
 
 
 @pytest.mark.parametrize(
-    ("directory", "adjusted"),
+    ("directory", "truncated"),
     [("my-agent", False), ("caj-langgraph-agent", True), ("My_Agent", True)],
 )
 def test_init_json_reports_the_deployment_name(
-    tmp_path: pathlib.Path, directory: str, adjusted: bool
+    tmp_path: pathlib.Path, directory: str, truncated: bool
 ):
     dest = tmp_path / directory
     result = CliRunner().invoke(init_mod.init, [str(dest)], obj=_Ctx(output="json"))
@@ -700,7 +700,7 @@ def test_init_json_reports_the_deployment_name(
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["deployment_name"] == _manifest(dest)["agent"]["deployment_name"]
-    assert payload["deployment_name_adjusted"] is adjusted
+    assert payload["deployment_name_truncated"] is truncated
 
 
 def test_existing_with_name_records_it(tmp_path: pathlib.Path):

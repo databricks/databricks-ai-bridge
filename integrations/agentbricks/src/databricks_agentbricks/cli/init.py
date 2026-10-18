@@ -174,9 +174,9 @@ def _validate_name(name: Optional[str], directory: Optional[str], existing: bool
     )
 
 
-def _deployment_name_note(project_name: str, deployment_name: str, adjusted: bool) -> str:
+def _deployment_name_note(project_name: str, deployment_name: str, truncated: bool) -> str:
     """The `Deploy name` field: the recorded name, plus why init changed the directory name."""
-    if not adjusted:
+    if not truncated:
         return deployment_name
     if len(_prefixed_name(project_name)) > _MAX_DEPLOYMENT_NAME_LEN:
         reason = (
@@ -278,7 +278,7 @@ def _prepare_migration(
         project_name = dest.resolve().name
         token = _scaffold_token()
         deployment_name = name or fit_base_name(project_name, token)
-        adjusted = name is None and deployment_name != project_name
+        truncated = name is None and deployment_name != project_name
         resource_name = name or project_name
         reference_project = AgentProject.create(
             reference,
@@ -338,7 +338,7 @@ def _prepare_migration(
                 "template_ref": template_ref,
                 "chat_app_enabled": chat_app_enabled,
                 "deployment_name": deployment_name,
-                "deployment_name_adjusted": adjusted,
+                "deployment_name_truncated": truncated,
             }
         )
         return
@@ -347,7 +347,7 @@ def _prepare_migration(
         fields={
             "Directory": str(dest),
             "Skill": str(bundle / "SKILL.md"),
-            "Deploy name": _deployment_name_note(project_name, deployment_name, adjusted),
+            "Deploy name": _deployment_name_note(project_name, deployment_name, truncated),
         },
         next_steps=[
             (f"cd {shlex.quote(str(dest))}", "Enter the existing project"),
@@ -508,7 +508,7 @@ def init(
         # --memory/session-store wins.
         token = _scaffold_token()
         deployment_name = name or fit_base_name(dest.name, token)
-        adjusted = name is None and deployment_name != dest.name
+        truncated = name is None and deployment_name != dest.name
         resource_name = name or dest.name
         if agentbricks_server:
             memory_store = memory_store or default_store_name(resource_name, "memory", token)
@@ -546,7 +546,7 @@ def init(
                 "session_store": session_store,
                 "experiment_name": experiment_name,
                 "deployment_name": deployment_name,
-                "deployment_name_adjusted": adjusted,
+                "deployment_name_truncated": truncated,
                 "workflow_skill": str(workflow_skills[0]),
                 "skill_pointers": [str(path) for path in workflow_skills[1:]],
             }
@@ -569,7 +569,7 @@ def init(
         fields["Session store"] = session_store
     if experiment_name:
         fields["Traces experiment"] = experiment_name
-    fields["Deploy name"] = _deployment_name_note(dest.name, deployment_name, adjusted)
+    fields["Deploy name"] = _deployment_name_note(dest.name, deployment_name, truncated)
     steps: list[str | tuple[str, str]] = [(f"cd {dest}", "Enter the project directory")]
     if wrote_env:
         fields["Profile (.env)"] = env_profile
