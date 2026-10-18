@@ -1160,6 +1160,60 @@ h2 {
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.1);
 }
 
+/* Mode tooltips: shown above each mode button on hover or keyboard focus. */
+
+.mode-option {
+  position: relative;
+  display: inline-flex;
+}
+
+.mode-tip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 10;
+  padding: 5px 9px;
+  border-radius: 6px;
+  background: var(--ink);
+  color: var(--surface-raised);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.18);
+  visibility: hidden;
+}
+
+/* Bridges the gap to the button so the pointer can move onto the tip. */
+.mode-tip::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  right: 0;
+  left: 0;
+  height: 8px;
+}
+
+.mode-option:last-child .mode-tip {
+  right: 0;
+  left: auto;
+}
+
+.mode-option:hover > .mode-tip,
+.mode-button:focus-visible + .mode-tip {
+  visibility: visible;
+}
+
+@media (hover: none) {
+  .mode-button:focus + .mode-tip {
+    visibility: visible;
+  }
+}
+
+.mode-button.tip-dismissed + .mode-tip {
+  visibility: hidden;
+}
+
 .composer-model {
   position: relative;
   display: inline-flex;
@@ -1617,8 +1671,26 @@ h2 {
   }
 
   .mode-switcher {
+    position: relative;
     display: grid;
     grid-template-columns: repeat(3, 1fr);
+  }
+
+  /* Tips span the whole switcher so they fit narrow screens. */
+  .mode-option {
+    position: static;
+  }
+
+  .mode-option .mode-button {
+    flex: 1;
+  }
+
+  .mode-option .mode-tip,
+  .mode-option:last-child .mode-tip {
+    right: 0;
+    left: 0;
+    white-space: normal;
+    text-align: center;
   }
 }
 

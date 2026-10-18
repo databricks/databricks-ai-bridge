@@ -1387,6 +1387,13 @@ document.querySelectorAll(".mode-button").forEach((button) => {
     state.mode = button.dataset.mode;
     document.querySelectorAll(".mode-button").forEach((item) => item.classList.toggle("active", item === button));
   });
+  // Escape hides the mode tooltip until focus or the pointer leaves the button.
+  button.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") button.classList.add("tip-dismissed");
+  });
+  for (const type of ["blur", "mouseleave"]) {
+    button.addEventListener(type, () => button.classList.remove("tip-dismissed"));
+  }
 });
 
 elements.modelSelect.addEventListener("change", () => {
