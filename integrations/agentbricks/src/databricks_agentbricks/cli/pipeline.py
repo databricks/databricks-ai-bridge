@@ -150,7 +150,7 @@ def list_(obj, page_size, page_token) -> None:
             if field(data, "next_page_token")
             else None
         ),
-        no_wrap=[0],
+        no_wrap=[0, 1, 2],  # the pipeline and both store identifiers
     )
 
 

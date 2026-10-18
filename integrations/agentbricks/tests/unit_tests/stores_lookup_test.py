@@ -412,6 +412,27 @@ def test_terminal_table_folds_long_identifiers_instead_of_ellipsis():
     assert name in "".join(line.split("   ")[0].strip() for line in out.splitlines())
 
 
+def test_terminal_table_keeps_each_row_on_one_line_when_identifiers_fill_it():
+    # Two 36-character ids on a 100-column terminal leave the other columns a few characters.
+    rows = [
+        [f"store-{i}-" + "n" * 30, f"{i}" + "r" * 35, "2 months ago", "CRUD test store created"]
+        for i in range(3)
+    ]
+    buffer = io.StringIO()
+    con = Console(file=buffer, width=100, force_terminal=True, color_system=None)
+    render.resource_table(
+        "Stores",
+        [("Name", "left"), ("Resource name", "left"), ("Created", "left"), ("Description", "left")],
+        rows,
+        con=con,
+        no_wrap=[0, 1],
+    )
+    lines = [line for line in buffer.getvalue().splitlines() if line.strip()]
+    assert len(lines) == 1 + 2 + len(rows) + 1  # title, header + rule, one per row, item count
+    for name, resource, *_ in rows:
+        assert any(name in line and resource in line for line in lines)
+
+
 # --- help ----------------------------------------------------------------------
 
 

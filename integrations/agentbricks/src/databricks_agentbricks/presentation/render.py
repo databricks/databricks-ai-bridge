@@ -198,7 +198,8 @@ def resource_table(
     `columns` is a sequence of (header, justify) where justify is left/right/center.
     `no_wrap` marks identifier columns, which are never cut off: piped output renders the table at
     its full width so each row stays on one line (and greps cleanly), and a terminal wraps a
-    too-long identifier instead of ending it in an ellipsis. The other columns narrow to fit.
+    too-long identifier instead of ending it in an ellipsis. The other columns narrow to fit, on one
+    line.
     `footer` replaces the trailing item count.
     """
     con = con or _stdout
@@ -224,6 +225,9 @@ def resource_table(
             justify=justify,
             header_style=f"bold {DIM}",
             overflow="fold" if i in no_wrap_cols else "ellipsis",
+            # Next to identifier columns the others shorten on one line: wrapping a column narrowed
+            # to a few characters would spread each row over blank-looking lines.
+            no_wrap=bool(no_wrap_cols) and i not in no_wrap_cols,
             min_width=reserved.get(i) if reserve else None,
         )
     for row in rows:
