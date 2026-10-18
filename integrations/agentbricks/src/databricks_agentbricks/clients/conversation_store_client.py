@@ -7,12 +7,12 @@ Deployment-specific Runtime Store coordination lives in ``services.deployment.pr
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Callable, Iterator, Optional
 
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
 from databricks_agentbricks.errors import AgentCliError
 
-_MEMORY_STORE_PAGE_SIZE = 100  # the memory-stores list API caps page_size at 100
+_STORE_PAGE_SIZE = 100  # the memory- and session-stores list APIs cap page_size at 100
 
 _LAKEBASE_PERMISSION_DOCS = (
     "https://docs.databricks.com/aws/en/oltp/projects/manage-project-permissions"
@@ -27,6 +27,21 @@ def _field(payload: Any, name: str) -> Any:
         parts = name.split("_")
         return payload.get(parts[0] + "".join(part.title() for part in parts[1:]))
     return getattr(payload, name, None)
+
+
+def _iter_stores(list_page: Callable[..., Any], key: str) -> Iterator[Any]:
+    """Yield every store from a paged list API, following `next_page_token` at the maximum size.
+
+    The stores APIs have no server-side filter, so finding a store by name means reading pages
+    until it turns up (or the pages run out).
+    """
+    page_token: Optional[str] = None
+    while True:
+        listing = list_page(page_size=_STORE_PAGE_SIZE, page_token=page_token)
+        yield from _field(listing, key) or []
+        page_token = _field(listing, "next_page_token")
+        if not page_token:
+            return
 
 
 @dataclass(frozen=True)
@@ -81,24 +96,30 @@ class MemoryStoreClient:
     def __init__(self, api_client_provider: ApiClientProvider) -> None:
         self._api_client_provider = api_client_provider
 
+    def list_all(self) -> list[dict]:
+        """Every memory store visible to the caller, read across all pages."""
+        return list(self._iter())
+
+    def find_by_display_name(self, display_name: str) -> list[dict]:
+        """Every memory store whose display name is exactly `display_name` (names aren't unique)."""
+        return [store for store in self._iter() if _field(store, "display_name") == display_name]
+
     def resolve(self, display_name: str) -> Optional[dict]:
         """Find the memory store by display name, paging through the list, or None if none matches.
 
         `get_memory_store` looks up by resource id (`memory-stores/<uuid>`), not the display name users
-        pass, so resolving a name means listing and matching on `display_name`. The list API caps
-        `page_size` at 100, so page through with the `next_page_token` rather than requesting all at once.
+        pass, so resolving a name means listing and matching on `display_name`. Stops at the first
+        match rather than reading the remaining pages.
         """
-        page_token: Optional[str] = None
-        while True:
-            listing = self._api_client_provider.get().list_memory_stores(
-                page_size=_MEMORY_STORE_PAGE_SIZE, page_token=page_token
-            )
-            for store in _field(listing, "managed_memory_stores") or []:
-                if _field(store, "display_name") == display_name:
-                    return store
-            page_token = _field(listing, "next_page_token")
-            if not page_token:
-                return None
+        return next(
+            (store for store in self._iter() if _field(store, "display_name") == display_name),
+            None,
+        )
+
+    def _iter(self) -> Iterator[Any]:
+        return _iter_stores(
+            self._api_client_provider.get().list_memory_stores, "managed_memory_stores"
+        )
 
     def ensure(self, display_name: str) -> tuple[dict, bool]:
         """Create the memory store, or resolve it if it already exists. Returns (store, created)."""
@@ -158,6 +179,12 @@ class SessionStoreClient:
 
     def __init__(self, api_client_provider: ApiClientProvider) -> None:
         self._api_client_provider = api_client_provider
+
+    def list_all(self) -> list[dict]:
+        """Every session store visible to the caller, read across all pages."""
+        return list(
+            _iter_stores(self._api_client_provider.get().list_session_stores, "session_stores")
+        )
 
     def ensure(self, name: str) -> tuple[dict, bool]:
         """Create the session store, or resolve it if it already exists. Returns (store, created)."""

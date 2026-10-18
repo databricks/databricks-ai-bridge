@@ -218,8 +218,8 @@ Workspace-scoped managed memory stores.
 | Subcommand | Description |
 | --- | --- |
 | [`memory stores create`](#agentbricks-memory-stores-create) | Create a memory store. |
-| [`memory stores list`](#agentbricks-memory-stores-list) | List memory stores in the workspace (25 per page; paginates interactively on a terminal). |
-| [`memory stores get`](#agentbricks-memory-stores-get) | Get a memory store by id or resource name. |
+| [`memory stores list`](#agentbricks-memory-stores-list) | List memory stores in the workspace. |
+| [`memory stores get`](#agentbricks-memory-stores-get) | Get a memory store by id, resource name (memory-stores/<id>), or display name. |
 | [`memory stores update`](#agentbricks-memory-stores-update) | Update a store's display name and/or description. |
 | [`memory stores delete`](#agentbricks-memory-stores-delete) | Delete (soft-delete) a memory store. |
 
@@ -241,7 +241,11 @@ _Options_
 
 ##### `agentbricks memory stores list`
 
-List memory stores in the workspace (25 per page; paginates interactively on a terminal).
+List memory stores in the workspace.
+
+Without --name or --all, shows 25 per page: it paginates interactively on a terminal and otherwise
+prints the --page-token for the next page. --name and --all page through every store and print one
+complete list. The API has no server-side filter, so --name reads every page.
 
 ```
 agentbricks memory stores list [options]
@@ -252,12 +256,17 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
-| `--page-size <PAGE_SIZE>` | integer | `25` | no | - |
-| `--page-token <PAGE_TOKEN>` | string | - | no | - |
+| `--name <NAME>` | string | - | no | Only stores whose display name contains TEXT (case-insensitive). Reads every page. |
+| `--all` | flag | - | no | Page through every store. |
+| `--page-size <PAGE_SIZE>` | integer | `25` | no | Stores per page without --name or --all. |
+| `--page-token <PAGE_TOKEN>` | string | - | no | Resume from a previous page's token (not with --name or --all). |
 
 ##### `agentbricks memory stores get`
 
-Get a memory store by id or resource name.
+Get a memory store by id, resource name (memory-stores/<id>), or display name.
+
+A display name is resolved by listing every store; if several stores share it, the command fails and
+lists their resource names.
 
 ```
 agentbricks memory stores get NAME
@@ -710,8 +719,8 @@ Workspace-scoped session stores.
 | Subcommand | Description |
 | --- | --- |
 | [`sessions stores create`](#agentbricks-sessions-stores-create) | Create a session store. |
-| [`sessions stores list`](#agentbricks-sessions-stores-list) | List session stores in the workspace (25 per page; paginates interactively on a terminal). |
-| [`sessions stores get`](#agentbricks-sessions-stores-get) | Get a session store by name. |
+| [`sessions stores list`](#agentbricks-sessions-stores-list) | List session stores in the workspace. |
+| [`sessions stores get`](#agentbricks-sessions-stores-get) | Get a session store by name (the name in agent.toml) or resource name (session-stores/<name>). |
 | [`sessions stores update`](#agentbricks-sessions-stores-update) | Update a store's description and/or metadata. |
 | [`sessions stores delete`](#agentbricks-sessions-stores-delete) | Delete a session store. |
 
@@ -734,7 +743,11 @@ _Options_
 
 ##### `agentbricks sessions stores list`
 
-List session stores in the workspace (25 per page; paginates interactively on a terminal).
+List session stores in the workspace.
+
+Without --name or --all, shows 25 per page: it paginates interactively on a terminal and otherwise
+prints the --page-token for the next page. --name and --all page through every store and print one
+complete list. The API has no server-side filter, so --name reads every page.
 
 ```
 agentbricks sessions stores list [options]
@@ -745,12 +758,14 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
-| `--page-size <PAGE_SIZE>` | integer | `25` | no | - |
-| `--page-token <PAGE_TOKEN>` | string | - | no | - |
+| `--name <NAME>` | string | - | no | Only stores whose name contains TEXT (case-insensitive). Reads every page. |
+| `--all` | flag | - | no | Page through every store. |
+| `--page-size <PAGE_SIZE>` | integer | `25` | no | Stores per page without --name or --all. |
+| `--page-token <PAGE_TOKEN>` | string | - | no | Resume from a previous page's token (not with --name or --all). |
 
 ##### `agentbricks sessions stores get`
 
-Get a session store by name.
+Get a session store by name (the name in agent.toml) or resource name (session-stores/<name>).
 
 ```
 agentbricks sessions stores get NAME

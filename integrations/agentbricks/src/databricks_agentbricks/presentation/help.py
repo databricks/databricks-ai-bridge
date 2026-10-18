@@ -73,9 +73,11 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("memory", "stores", "list"): (
         ("agentbricks memory stores list", "list managed memory stores"),
+        ("agentbricks memory stores list --name agent-memory", "find stores by part of the name"),
     ),
     ("memory", "stores", "get"): (
         ("agentbricks memory stores get <store>", "show one store's details"),
+        ("agentbricks memory stores get agent-memory", "look up by the name in agent.toml"),
     ),
     ("memory", "stores", "update"): (
         ('agentbricks memory stores update <store> --description "Agent memory"', "edit a store"),
@@ -221,6 +223,10 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("sessions", "stores", "list"): (
         ("agentbricks sessions stores list", "list managed session stores"),
+        (
+            "agentbricks sessions stores list --name agent-sessions",
+            "find stores by part of the name",
+        ),
     ),
     ("sessions", "stores", "get"): (
         ("agentbricks sessions stores get agent-sessions", "show one store's details"),
