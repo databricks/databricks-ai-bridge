@@ -378,3 +378,19 @@ def test_tty_progress_shows_elapsed_in_spinner_without_extra_lines(monkeypatch):
     assert "0:15" in updates
     assert err_buf.getvalue() == ""  # no heartbeat lines on a TTY
     assert buf.getvalue().count("• Waiting for agent compute to start…") == 1
+
+
+def test_reporter_note_prints_through_a_live_tty_spinner(monkeypatch):
+    # A busy-App retry notice arrives while the deploy's spinner is live; rich only keeps a line
+    # clear of the spinner's redraw when it goes through the sys.stderr proxy the spinner installs.
+    from databricks_agentbricks import errors
+    from databricks_agentbricks.presentation.reporter import ClickReporter
+
+    monkeypatch.setattr(errors, "_OUTPUT_MODE", "text")
+    buf = io.StringIO()
+    con = Console(file=buf, width=200, force_terminal=True, no_color=True)
+    notice = "App is busy (another operation in progress); retrying in 5s…"
+    with render.progress("Deploying the agent source…", con=con):
+        ClickReporter().note(notice)
+
+    assert notice in buf.getvalue()
