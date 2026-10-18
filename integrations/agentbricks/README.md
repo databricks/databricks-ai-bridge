@@ -759,9 +759,8 @@ agentbricks tools remove mcp system.ai.web_search
 agentbricks tools list
 ```
 
-`agentbricks tools list` shows integrations you can add, not the ones already bound. To see an agent's
-bindings and its Python tools from `agent/tools/`, open the chat app's **Tools** row (under
-Capabilities in the Workbench that `agentbricks dev` serves); it also lists these add commands to copy.
+`agentbricks tools list` shows integrations you can add. To see the tools an agent already has, open
+**Tools** under Capabilities in the chat app.
 
 ### Managed tool identity and migration
 

@@ -20,14 +20,10 @@ entries (searchable, filterable by actor, with a modal for each entry); the othe
 in place, and Traces links out to the MLflow experiment. The transport selector is the only manual
 capability choice.
 
-Tools reads `GET /api/demo/tools`, which re-reads `agent.toml` on every request. The row shows how
-many managed `[[tools]]` bindings are connected and how many Python tools `agent.tools.all_tools()`
-collects; its orb is green once at least one managed tool is bound. Selecting Tools opens a pane
-listing each binding (type, id, and service, function, space ID, or sandbox scopes), the tools
-defined in code, and the `agentbricks tools add …` commands to copy. A binding added or removed with
-`agentbricks tools add`/`remove` appears after a refresh, without restarting the app. An invalid
-`agent.toml` or a failing `agent.tools` import shows as an error in the pane; the rest of the UI keeps
-working. MCP servers wired in `agent/mcps.py` and the memory tools are not listed.
+Tools opens a pane listing the `agent.toml` bindings, the Python tools from `agent.tools.all_tools()`,
+and the `agentbricks tools add …` commands to copy. It reads `GET /api/demo/tools`, which re-reads
+`agent.toml` on each request, so `tools add`/`remove` show up after a refresh. A bad `agent.toml` or
+`agent.tools` import shows as an error in the pane. MCP servers from `agent/mcps.py` are not listed.
 
 The composer's model picker lists the workspace's Unity Catalog AI Gateway chat model services — the
 `system.ai.*` model services from `GET /api/2.1/unity-catalog/model-services?parent=schemas/system.ai`
