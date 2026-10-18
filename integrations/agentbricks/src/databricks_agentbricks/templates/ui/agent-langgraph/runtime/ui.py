@@ -175,11 +175,12 @@ _TOOL_LABELS = {
     "mcp": "MCP service",
     "uc_function": "UC function",
     "genie_one": "Genie One",
-    "genie_agent": "Genie space",
-    "sandbox": "Data sandbox",
+    "genie_agent": "Genie Agent",
+    "sandbox": "Sandbox",
 }
-# The `agentbricks tools add` recipes the Tools pane offers to copy (the same ones
-# `agentbricks tools list` prints), plus the command that discovers more MCP services.
+# The `agentbricks tools add` recipes the Tools pane offers to copy (the ones
+# `agentbricks tools list` prints; `tools add sandbox` then asks for the volumes to
+# allow with --scope), plus the command that discovers more MCP services.
 _ADD_COMMANDS = (
     {
         "kind": "mcp",
@@ -194,14 +195,10 @@ _ADD_COMMANDS = (
     {"kind": "genie-one", "label": "Genie One", "command": "agentbricks tools add genie-one"},
     {
         "kind": "genie-agent",
-        "label": "Genie space",
+        "label": "Genie Agent",
         "command": "agentbricks tools add genie-agent SPACE_ID",
     },
-    {
-        "kind": "sandbox",
-        "label": "Data sandbox",
-        "command": "agentbricks tools add sandbox --scope volume:catalog.schema.volume",
-    },
+    {"kind": "sandbox", "label": "Sandbox", "command": "agentbricks tools add sandbox"},
     {
         "kind": "discover",
         "label": "Find more MCP services",

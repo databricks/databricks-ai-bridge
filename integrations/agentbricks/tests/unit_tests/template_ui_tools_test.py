@@ -39,14 +39,10 @@ EXPECTED_ADD_COMMANDS = [
     {"kind": "genie-one", "label": "Genie One", "command": "agentbricks tools add genie-one"},
     {
         "kind": "genie-agent",
-        "label": "Genie space",
+        "label": "Genie Agent",
         "command": "agentbricks tools add genie-agent SPACE_ID",
     },
-    {
-        "kind": "sandbox",
-        "label": "Data sandbox",
-        "command": "agentbricks tools add sandbox --scope volume:catalog.schema.volume",
-    },
+    {"kind": "sandbox", "label": "Sandbox", "command": "agentbricks tools add sandbox"},
     {
         "kind": "discover",
         "label": "Find more MCP services",
@@ -169,14 +165,14 @@ def test_connected_lists_every_binding_kind_in_manifest_order(overlay):
         {
             "id": "sales",
             "kind": "genie_agent",
-            "label": "Genie space",
+            "label": "Genie Agent",
             "source": SPACE_ID,
             "auth": "app",
         },
         {
             "id": "sandbox",
             "kind": "sandbox",
-            "label": "Data sandbox",
+            "label": "Sandbox",
             "source": "volume:main.data.files, volume:main.data.more",
             "auth": "user",
         },
@@ -228,6 +224,12 @@ def _parse(args: list[str]) -> click.Context:
 def test_every_add_command_parses_with_the_cli(entry):
     argv = shlex.split(entry["command"])
     assert argv[:2] == ["agentbricks", "tools"]
+    if entry["kind"] == "sandbox":
+        # The pane shows the bare sandbox command; the CLI then asks for the volumes to allow.
+        with pytest.raises(click.MissingParameter) as missing:
+            _parse(argv[2:])
+        assert missing.value.param and missing.value.param.opts == ["--scope"]
+        return
     ctx = _parse(argv[2:])
     assert ctx.command.name == ("list" if entry["kind"] == "discover" else entry["kind"])
 
@@ -243,14 +245,17 @@ def test_add_kinds_cover_the_cli_recipes():
     class _Obj:
         output = "json"
 
-    # The local recipes `tools list` prints are the exact commands the pane offers.
+    # The local recipes `tools list` prints are the commands the pane offers, except that
+    # the pane leaves off the sandbox's example --scope.
+    commands = {entry["kind"]: entry["command"] for entry in EXPECTED_ADD_COMMANDS}
     for kind in ("sandbox", "uc-function", "genie-one", "genie-agent"):
         result = CliRunner().invoke(tools_group, ["list", "--kind", kind], obj=_Obj())
         assert result.exit_code == 0, result.output
         [recipe] = json.loads(result.output)["available_tools"]
-        assert {"kind": kind, "command": recipe["add_command"]} in [
-            {"kind": entry["kind"], "command": entry["command"]} for entry in EXPECTED_ADD_COMMANDS
-        ]
+        if kind == "sandbox":
+            assert recipe["add_command"].startswith(commands[kind] + " --scope ")
+        else:
+            assert recipe["add_command"] == commands[kind]
 
 
 def test_invalid_manifest_reports_an_error_and_keeps_other_sections(overlay):
