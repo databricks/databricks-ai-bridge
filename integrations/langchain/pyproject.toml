@@ -28,7 +28,9 @@ memory = [
   "databricks-ai-bridge[memory]>=0.17.0",
 ]
 deepagents = [
-  "deepagents>=0.7.0,<0.8.0",
+  # deepagents requires Python >=3.11; databricks-langchain supports >=3.10, so
+  # the extra simply omits it on 3.10 (DatabricksSandbox raises a clear ImportError there).
+  "deepagents>=0.7.0,<0.8.0; python_version >= '3.11'",
   "databricks-sdk[sandbox]>=0.153.0",
 ]
 
