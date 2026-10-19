@@ -306,6 +306,10 @@ class DatabricksSandboxSession(BaseSandboxSession):
                 self._client.sandbox.stop_sandbox(self._name)
 
         await asyncio.to_thread(_stop)
+        # The sandbox is stopped; drop the provisioned flag so a later exec or
+        # start re-runs _ensure_sandbox (restarting it) instead of issuing
+        # commands against a stopped sandbox.
+        self._provisioned = False
 
     # -- command execution ---------------------------------------------------
 
@@ -391,8 +395,13 @@ class DatabricksSandboxSession(BaseSandboxSession):
         offset = 0
         while True:
             # tail -c is 1-based; read a raw byte range and base64 it so each response
-            # stays under the unary cap regardless of file size.
-            script = 'tail -c +$((DBX_OFF + 1)) "$DBX_PATH" | head -c "$DBX_LEN" | base64'
+            # stays under the unary cap regardless of file size. pipefail makes a
+            # failing tail (e.g. the file vanished) fail the command instead of
+            # silently base64-ing empty input into a zero-byte "success".
+            script = (
+                "set -o pipefail; "
+                'tail -c +$((DBX_OFF + 1)) "$DBX_PATH" | head -c "$DBX_LEN" | base64'
+            )
             response = await self._exec_sync(
                 _SHELL,
                 ["-lc", script],
@@ -425,12 +434,20 @@ class DatabricksSandboxSession(BaseSandboxSession):
             "else echo OK; fi"
         )
         response = await self._exec_sync(_SHELL, ["-lc", script], envs={"DBX_PATH": path})
+        if not _completed(response):
+            # The classify probe itself failed; do not fall through to "OK" and
+            # read garbage. read() turns any non-OK/non-file_not_found kind into
+            # a WorkspaceArchiveReadError.
+            return "classify_failed"
         token = (response.stdout or "").strip()
+        # Only an explicit OK proceeds to download; unexpected output (login-shell
+        # noise, a truncated response) is treated as an error, not a readable file.
         return {
             "MISSING": "file_not_found",
             "ISDIR": "is_directory",
             "NOREAD": "permission_denied",
-        }.get(token, "OK")
+            "OK": "OK",
+        }.get(token, "unexpected_classify_output")
 
     def _reject_user_arg(self, op: Literal["exec", "read", "write"], user: str | User) -> None:
         name = user.name if isinstance(user, User) else user
@@ -576,6 +593,9 @@ class DatabricksSandboxClient(_SandboxClientBase):  # type: ignore[valid-type,mi
         resolved_manifest = _resolve_manifest_root(manifest)
         self._validate_manifest_for_create(resolved_manifest)
         session_id = uuid.uuid4()
+        # Track whether this call mints the sandbox id: on a provisioning failure we
+        # clean up a sandbox we created, but never one the caller supplied by id.
+        created_here = resolved_options.sandbox_id is None
         sandbox_id = resolved_options.sandbox_id or f"oai-agents-{session_id.hex[:12]}"
         state = DatabricksSandboxSessionState(
             session_id=session_id,
@@ -586,8 +606,23 @@ class DatabricksSandboxClient(_SandboxClientBase):  # type: ignore[valid-type,mi
             wait_for_running_timeout_s=resolved_options.wait_for_running_timeout_s,
         )
         inner = DatabricksSandboxSession.from_state(state, client=self._client)
-        await inner._ensure_sandbox()
+        try:
+            await inner._ensure_sandbox()
+        except Exception:
+            # Provisioning failed after the sandbox may already have been created;
+            # the caller gets no session handle, so best-effort delete a sandbox we
+            # created to avoid leaking it (and its billing) until inactivity timeout.
+            if created_here:
+                await self._delete_sandbox_quietly(inner._name)
+            raise
         return self._wrap_session(inner, instrumentation=self._instrumentation)
+
+    async def _delete_sandbox_quietly(self, name: str) -> None:
+        def _delete() -> None:
+            with contextlib.suppress(NotFound):
+                self._client.sandbox.delete_sandbox(name)
+
+        await asyncio.to_thread(_delete)
 
     async def delete(self, session: SandboxSession) -> SandboxSession:
         """Delete the backing Databricks sandbox."""
@@ -595,12 +630,7 @@ class DatabricksSandboxClient(_SandboxClientBase):  # type: ignore[valid-type,mi
         if not isinstance(inner, DatabricksSandboxSession):
             msg = "DatabricksSandboxClient.delete expects a DatabricksSandboxSession"
             raise TypeError(msg)
-
-        def _delete() -> None:
-            with contextlib.suppress(NotFound):
-                self._client.sandbox.delete_sandbox(inner._name)
-
-        await asyncio.to_thread(_delete)
+        await self._delete_sandbox_quietly(inner._name)
         return session
 
     async def resume(self, state: SandboxSessionState) -> SandboxSession:

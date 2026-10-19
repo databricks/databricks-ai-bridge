@@ -26,8 +26,10 @@ pytest.importorskip("agents.sandbox.session.sandbox_client")
 
 from agents.sandbox.errors import (  # noqa: E402
     ExecTimeoutError,
+    WorkspaceArchiveReadError,
     WorkspaceArchiveWriteError,
     WorkspaceReadNotFoundError,
+    WorkspaceStartError,
 )
 from agents.sandbox.manifest import Manifest  # noqa: E402
 from agents.sandbox.snapshot import resolve_snapshot  # noqa: E402
@@ -73,6 +75,14 @@ class _Placeholder:
         self._kwargs = kwargs
 
 
+def _fake_module(name: str, **attrs: Any) -> Any:
+    """Build a stand-in module and populate it with the given attributes."""
+    module = types.ModuleType(name)
+    for key, value in attrs.items():
+        setattr(module, key, value)
+    return module
+
+
 COMPLETED = _ExecuteCommandStatus.EXECUTE_COMMAND_STATUS_COMPLETED
 TIMED_OUT = _ExecuteCommandStatus.EXECUTE_COMMAND_STATUS_TIMED_OUT
 
@@ -98,19 +108,19 @@ def mod(monkeypatch: pytest.MonkeyPatch) -> Any:
     # ``databricks_openai`` package __init__ under the fake SDK.
     import databricks_openai  # noqa: F401
 
-    fake_databricks: Any = types.ModuleType("databricks")
-    fake_sdk: Any = types.ModuleType("databricks.sdk")
-    fake_sdk.WorkspaceClient = _Placeholder
-    fake_errors: Any = types.ModuleType("databricks.sdk.errors")
-    fake_errors.NotFound = _NotFound
-    fake_service: Any = types.ModuleType("databricks.sdk.service")
-    fake_sandbox: Any = types.ModuleType("databricks.sdk.service.sandbox")
-    fake_sandbox.ComputeSpec = _Placeholder
-    fake_sandbox.ExecuteCommandStatus = _ExecuteCommandStatus
-    fake_sandbox.ExecuteCommandSyncResponse = _ExecuteCommandSyncResponse
-    fake_sandbox.Sandbox = _Placeholder
-    fake_sandbox.SandboxSpec = _Placeholder
-    fake_sandbox.SandboxState = _SandboxState
+    fake_databricks = _fake_module("databricks")
+    fake_sdk = _fake_module("databricks.sdk", WorkspaceClient=_Placeholder)
+    fake_errors = _fake_module("databricks.sdk.errors", NotFound=_NotFound)
+    fake_service = _fake_module("databricks.sdk.service")
+    fake_sandbox = _fake_module(
+        "databricks.sdk.service.sandbox",
+        ComputeSpec=_Placeholder,
+        ExecuteCommandStatus=_ExecuteCommandStatus,
+        ExecuteCommandSyncResponse=_ExecuteCommandSyncResponse,
+        Sandbox=_Placeholder,
+        SandboxSpec=_Placeholder,
+        SandboxState=_SandboxState,
+    )
 
     monkeypatch.setitem(sys.modules, "databricks", fake_databricks)
     monkeypatch.setitem(sys.modules, "databricks.sdk", fake_sdk)
@@ -140,7 +150,7 @@ def _session(mod: Any, responses: list[_ExecuteCommandSyncResponse]) -> tuple[An
         calls.append({"program": program, "args": args, "envs": envs, "timeout": timeout})
         return responses[min(len(calls) - 1, len(responses) - 1)]
 
-    session._exec_sync = fake_exec_sync  # type: ignore[method-assign]
+    session._exec_sync = fake_exec_sync
     return session, calls
 
 
@@ -300,3 +310,357 @@ def test_session_state_round_trips_through_client(mod: Any) -> None:
     assert isinstance(restored, mod.DatabricksSandboxSessionState)
     assert restored.sandbox_id == "sb-42"
     assert restored.manifest.root == ROOT
+
+
+def test_missing_extra_raises_import_error(mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mod, "_sandbox_imports_available", False)
+    for construct in (
+        lambda: mod.DatabricksSandboxClientOptions(),
+        lambda: mod.DatabricksSandboxClient(),
+        lambda: mod.DatabricksSandboxSession(state=None, client=None),
+    ):
+        with pytest.raises(ImportError, match=r"databricks-openai\[sandbox\]"):
+            construct()
+
+
+def test_resolve_manifest_root_defaults_to_persistent_volume(mod: Any) -> None:
+    assert mod._resolve_manifest_root(None).root == mod.DEFAULT_DATABRICKS_WORKSPACE_ROOT
+    # The SDK default root is rewritten to the writable, restart-surviving volume.
+    assert mod._resolve_manifest_root(Manifest()).root == mod.DEFAULT_DATABRICKS_WORKSPACE_ROOT
+    # An explicit custom root is preserved untouched.
+    assert (
+        mod._resolve_manifest_root(Manifest(root="/custom/workspace")).root == "/custom/workspace"
+    )
+
+
+# -- lifecycle fakes (provisioning / resume / shutdown branches) -------------
+
+_RAISE_NOTFOUND = object()
+
+
+def _async_return(value: Any) -> Any:
+    async def _f(*args: Any, **kwargs: Any) -> Any:
+        return value
+
+    return _f
+
+
+class _Status:
+    def __init__(self, state: str) -> None:
+        self.state = state
+
+
+class _SandboxObj:
+    def __init__(self, state: str | None) -> None:
+        self.status = _Status(state) if state is not None else None
+
+
+class _FakeLifecycleApi:
+    """Recording fake of ``client.sandbox`` for CRUD/provisioning branches.
+
+    ``get_results`` drives successive ``get_sandbox`` calls; each item is a state
+    string or ``_RAISE_NOTFOUND`` (raise _NotFound), and the last item repeats.
+    ``create_state`` is the state of the sandbox returned by ``create_sandbox``;
+    ``stop_raises`` makes ``stop_sandbox`` raise _NotFound.
+    """
+
+    def __init__(
+        self,
+        *,
+        get_results: list[object] | None = None,
+        create_state: str = _SandboxState.SANDBOX_STATE_RUNNING,
+        stop_raises: bool = False,
+    ) -> None:
+        self._get_results = list(get_results or [_SandboxState.SANDBOX_STATE_RUNNING])
+        self._get_i = 0
+        self._create_state = create_state
+        self._stop_raises = stop_raises
+        self.calls: list[tuple[str, object]] = []
+
+    def _next_get(self) -> object:
+        result = self._get_results[min(self._get_i, len(self._get_results) - 1)]
+        self._get_i += 1
+        return result
+
+    def get_sandbox(self, name: str) -> _SandboxObj:
+        self.calls.append(("get", name))
+        result = self._next_get()
+        if result is _RAISE_NOTFOUND:
+            raise _NotFound
+        return _SandboxObj(result)  # type: ignore[arg-type]
+
+    def create_sandbox(self, sandbox: object, sandbox_id: str | None = None) -> _SandboxObj:
+        self.calls.append(("create", sandbox_id))
+        return _SandboxObj(self._create_state)
+
+    def start_sandbox(self, name: str) -> None:
+        self.calls.append(("start", name))
+
+    def stop_sandbox(self, name: str) -> None:
+        self.calls.append(("stop", name))
+        if self._stop_raises:
+            raise _NotFound
+
+    def delete_sandbox(self, name: str) -> None:
+        self.calls.append(("delete", name))
+
+
+class _FakeLifecycleClient:
+    def __init__(self, api: _FakeLifecycleApi) -> None:
+        self.sandbox = api
+
+
+def _lifecycle_session(mod: Any, api: _FakeLifecycleApi, **state_kwargs: Any) -> Any:
+    kwargs = {
+        "session_id": uuid.uuid4(),
+        "manifest": Manifest(root=ROOT),
+        "snapshot": resolve_snapshot(None, "sid"),
+        "sandbox_id": "sb1",
+        **state_kwargs,
+    }
+    state = mod.DatabricksSandboxSessionState(**kwargs)
+    return mod.DatabricksSandboxSession.from_state(state, client=_FakeLifecycleClient(api))
+
+
+def _kinds(api: _FakeLifecycleApi) -> list[str]:
+    return [call[0] for call in api.calls]
+
+
+RUNNING = _SandboxState.SANDBOX_STATE_RUNNING
+STOPPED = _SandboxState.SANDBOX_STATE_STOPPED
+
+
+@pytest.mark.asyncio
+async def test_provision_creates_new_sandbox_when_absent(
+    mod: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(mod, "_WAIT_POLL_INTERVAL_S", 0)
+    api = _FakeLifecycleApi(get_results=[_RAISE_NOTFOUND, RUNNING])
+    session = _lifecycle_session(mod, api)
+    await session._ensure_sandbox()
+    assert ("create", "sb1") in api.calls
+    assert "start" not in _kinds(api)
+    assert session._provisioned is True
+
+
+@pytest.mark.asyncio
+async def test_provision_starts_stopped_sandbox(mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mod, "_WAIT_POLL_INTERVAL_S", 0)
+    api = _FakeLifecycleApi(get_results=[STOPPED, RUNNING])
+    session = _lifecycle_session(mod, api)
+    await session._ensure_sandbox()
+    assert "create" not in _kinds(api)
+    assert ("start", "sandboxes/sb1") in api.calls
+
+
+@pytest.mark.asyncio
+async def test_provision_running_sandbox_is_noop(mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mod, "_WAIT_POLL_INTERVAL_S", 0)
+    api = _FakeLifecycleApi(get_results=[RUNNING])
+    session = _lifecycle_session(mod, api)
+    await session._ensure_sandbox()
+    assert "create" not in _kinds(api)
+    assert "start" not in _kinds(api)
+    assert session._provisioned is True
+
+
+def test_wait_for_running_timeout_raises(mod: Any) -> None:
+    session = _lifecycle_session(mod, _FakeLifecycleApi(get_results=[STOPPED]))
+    session.state.wait_for_running_timeout_s = 0
+    with pytest.raises(WorkspaceStartError) as exc:
+        session._wait_for_running()
+    assert exc.value.context["reason"] == "sandbox_did_not_reach_running"
+
+
+@pytest.mark.asyncio
+async def test_reconnect_if_running_true_sets_provisioned(mod: Any) -> None:
+    session = _lifecycle_session(mod, _FakeLifecycleApi(get_results=[RUNNING]))
+    assert await session._reconnect_if_running() is True
+    assert session._provisioned is True
+
+
+@pytest.mark.asyncio
+async def test_reconnect_if_running_false_when_absent(mod: Any) -> None:
+    session = _lifecycle_session(mod, _FakeLifecycleApi(get_results=[_RAISE_NOTFOUND]))
+    assert await session._reconnect_if_running() is False
+    assert session._provisioned is False
+
+
+@pytest.mark.asyncio
+async def test_resume_rejects_non_databricks_state(mod: Any) -> None:
+    client = mod.DatabricksSandboxClient(client=object())
+    with pytest.raises(TypeError):
+        await client.resume(object())
+
+
+@pytest.mark.asyncio
+async def test_create_rewrites_root_and_generates_sandbox_id(
+    mod: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _noop(self: Any) -> None:
+        self._provisioned = True
+
+    monkeypatch.setattr(mod.DatabricksSandboxSession, "_ensure_sandbox", _noop)
+    client = mod.DatabricksSandboxClient(client=object())
+    session = await client.create()
+    inner = session._inner
+    assert inner.state.manifest.root == mod.DEFAULT_DATABRICKS_WORKSPACE_ROOT
+    assert inner.state.sandbox_id.startswith("oai-agents-")
+
+
+@pytest.mark.asyncio
+async def test_shutdown_stops_and_clears_provisioned(mod: Any) -> None:
+    api = _FakeLifecycleApi()
+    session = _lifecycle_session(mod, api)
+    session._provisioned = True
+    await session._shutdown_backend()
+    assert ("stop", "sandboxes/sb1") in api.calls
+    assert session._provisioned is False
+
+
+@pytest.mark.asyncio
+async def test_shutdown_noop_when_not_provisioned(mod: Any) -> None:
+    api = _FakeLifecycleApi()
+    session = _lifecycle_session(mod, api)
+    session._provisioned = False
+    await session._shutdown_backend()
+    assert "stop" not in _kinds(api)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_suppresses_not_found(mod: Any) -> None:
+    api = _FakeLifecycleApi(stop_raises=True)
+    session = _lifecycle_session(mod, api)
+    session._provisioned = True
+    await session._shutdown_backend()  # must not raise
+    assert session._provisioned is False
+
+
+@pytest.mark.asyncio
+async def test_create_deletes_self_created_sandbox_on_provision_failure(
+    mod: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _boom(self: Any) -> None:
+        raise RuntimeError("provision failed")
+
+    monkeypatch.setattr(mod.DatabricksSandboxSession, "_ensure_sandbox", _boom)
+    api = _FakeLifecycleApi()
+    client = mod.DatabricksSandboxClient(client=_FakeLifecycleClient(api))
+    with pytest.raises(RuntimeError):
+        await client.create()
+    assert "delete" in _kinds(api)
+
+
+@pytest.mark.asyncio
+async def test_create_keeps_user_supplied_sandbox_on_failure(
+    mod: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _boom(self: Any) -> None:
+        raise RuntimeError("provision failed")
+
+    monkeypatch.setattr(mod.DatabricksSandboxSession, "_ensure_sandbox", _boom)
+    api = _FakeLifecycleApi()
+    client = mod.DatabricksSandboxClient(client=_FakeLifecycleClient(api))
+    with pytest.raises(RuntimeError):
+        await client.create(options=mod.DatabricksSandboxClientOptions(sandbox_id="user-sb"))
+    assert "delete" not in _kinds(api)
+
+
+@pytest.mark.asyncio
+async def test_classify_failed_response_maps_to_error(mod: Any) -> None:
+    session, _ = _session(mod, [_response(exit_code=1, status=COMPLETED)])
+    assert await session._classify_path("/w/x") == "classify_failed"
+
+
+@pytest.mark.asyncio
+async def test_classify_unexpected_output_maps_to_error(mod: Any) -> None:
+    session, _ = _session(mod, [_response(stdout="login banner noise\n")])
+    assert await session._classify_path("/w/x") == "unexpected_classify_output"
+
+
+@pytest.mark.asyncio
+async def test_read_unexpected_classify_raises_archive_error(mod: Any) -> None:
+    session, _ = _session(mod, [_response(stdout="garbage\n")])
+    with pytest.raises(WorkspaceArchiveReadError):
+        await session.read(Path(f"{ROOT}/f.txt"))
+
+
+@pytest.mark.asyncio
+async def test_download_script_uses_pipefail(mod: Any) -> None:
+    session, calls = _session(mod, [_response(stdout=base64.b64encode(b"x").decode("ascii"))])
+    await session._download_bytes("/w/f.bin")
+    assert "set -o pipefail" in calls[0]["args"][1]
+
+
+@pytest.mark.asyncio
+async def test_persist_workspace_builds_excludes_and_cleans_up(
+    mod: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = _lifecycle_session(mod, _FakeLifecycleApi())
+    session._provisioned = True
+    exec_calls: list[tuple[Any, ...]] = []
+
+    async def fake_exec(*command: Any, **kwargs: Any) -> Any:
+        exec_calls.append(command)
+        return mod.ExecResult(stdout=b"", stderr=b"", exit_code=0)
+
+    removed: list[str] = []
+
+    async def fake_remove(archive: str) -> None:
+        removed.append(archive)
+
+    monkeypatch.setattr(session, "exec", fake_exec)
+    monkeypatch.setattr(session, "_download_bytes", _async_return(b"archive-bytes"))
+    monkeypatch.setattr(session, "_remove_archive", fake_remove)
+    monkeypatch.setattr(
+        session, "_persist_workspace_skip_relpaths", lambda: {Path("a"), Path("b/c")}
+    )
+    stream = await session.persist_workspace()
+    assert stream.read() == b"archive-bytes"
+    tar = exec_calls[0]
+    assert "--no-wildcards" in tar
+    assert "--exclude=./a" in tar
+    assert "--exclude=./b/c" in tar
+    assert removed  # archive cleaned up
+
+
+@pytest.mark.asyncio
+async def test_persist_workspace_raises_on_tar_failure(
+    mod: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = _lifecycle_session(mod, _FakeLifecycleApi())
+    session._provisioned = True
+
+    async def fake_exec(*command: Any, **kwargs: Any) -> Any:
+        return mod.ExecResult(stdout=b"", stderr=b"boom", exit_code=1)
+
+    monkeypatch.setattr(session, "exec", fake_exec)
+    monkeypatch.setattr(session, "_persist_workspace_skip_relpaths", set)
+    with pytest.raises(WorkspaceArchiveReadError):
+        await session.persist_workspace()
+
+
+@pytest.mark.asyncio
+async def test_persist_workspace_cleans_up_on_download_failure(
+    mod: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = _lifecycle_session(mod, _FakeLifecycleApi())
+    session._provisioned = True
+    removed: list[str] = []
+
+    async def fake_exec(*command: Any, **kwargs: Any) -> Any:
+        return mod.ExecResult(stdout=b"", stderr=b"", exit_code=0)
+
+    async def failing_download(archive: str) -> bytes:
+        raise RuntimeError("network down")
+
+    async def fake_remove(archive: str) -> None:
+        removed.append(archive)
+
+    monkeypatch.setattr(session, "exec", fake_exec)
+    monkeypatch.setattr(session, "_download_bytes", failing_download)
+    monkeypatch.setattr(session, "_remove_archive", fake_remove)
+    monkeypatch.setattr(session, "_persist_workspace_skip_relpaths", set)
+    with pytest.raises(RuntimeError):
+        await session.persist_workspace()
+    assert removed  # finally-block cleanup still ran

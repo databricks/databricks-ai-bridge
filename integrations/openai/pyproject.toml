@@ -35,7 +35,10 @@ sandbox = [
 [dependency-groups]
 dev = [
     "typing_extensions==4.15.0",
-    "databricks-sdk==0.77.0",
+    # Floor, not an exact pin, so the optional `sandbox` extra
+    # (databricks-sdk[sandbox]>=0.153.0) can be installed alongside the dev group
+    # (e.g. uv sync --all-extras) without a resolution conflict.
+    "databricks-sdk>=0.77.0",
     "ruff==0.14.10",
     "ty==0.0.23",
     { include-group = "tests" },
