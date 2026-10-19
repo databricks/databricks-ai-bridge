@@ -100,40 +100,54 @@ def test_mode_tooltip_shows_on_hover_and_focus(template):
 
 
 @pytest.mark.parametrize("template", TEMPLATES)
-def test_escape_dismisses_mode_tooltip_until_blur(template):
+def test_escape_dismisses_mode_tooltip_until_focus_or_pointer_leaves(template):
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node.js is required to exercise the shipped JavaScript")
     source = (UI_ROOT / template / "ui/app.js").read_text()
     match = re.search(
-        r'^document\.querySelectorAll\("\.mode-button"\)\.forEach\(.*?^\}\);', source, re.M | re.S
+        r'^document\.querySelectorAll\("\.mode-button"\)\.forEach\(.*?'
+        r"^// Escape hides the mode tip.*?^\}\);",
+        source,
+        re.M | re.S,
     )
     assert match, "Missing mode-button wiring in app.js"
     program = (
         r"""
 import assert from 'node:assert/strict';
-const button = { dataset: { mode: 'background' }, listeners: {}, classes: new Set(),
+const target = () => ({ listeners: {},
   addEventListener(type, handler) { (this.listeners[type] ??= []).push(handler); },
-  fire(type, event = {}) { for (const handler of this.listeners[type] ?? []) handler(event); } };
+  fire(type, event = {}) { for (const handler of this.listeners[type] ?? []) handler(event); } });
+const button = Object.assign(target(), { dataset: { mode: 'background' }, classes: new Set(),
+  parentElement: target(), hovered: false, focused: false });
 button.classList = {
   add: name => button.classes.add(name),
   remove: name => button.classes.delete(name),
   toggle: (name, on) => on ? button.classes.add(name) : button.classes.delete(name),
 };
-const document = { querySelectorAll: () => [button] };
+// Only the Escape handler's hover/focus query depends on the button's state.
+const document = Object.assign(target(), { querySelectorAll: selector =>
+  selector === '.mode-button' || button.hovered || button.focused ? [button] : [] });
 const state = {};
 """
         + match.group()
         + r"""
-button.fire('keydown', { key: 'Enter' });
-assert.equal(button.classes.has('tip-dismissed'), false);
-button.fire('keydown', { key: 'Escape' });
-assert.equal(button.classes.has('tip-dismissed'), true);
+const dismissed = () => button.classes.has('tip-dismissed');
+document.fire('keydown', { key: 'Escape' });
+assert.equal(dismissed(), false, 'Escape ignores tips that are not shown');
+button.focused = true;
+document.fire('keydown', { key: 'Enter' });
+assert.equal(dismissed(), false);
+document.fire('keydown', { key: 'Escape' });
+assert.equal(dismissed(), true, 'Escape hides the focused tip');
+button.focused = false;
 button.fire('blur');
-assert.equal(button.classes.has('tip-dismissed'), false);
-button.fire('keydown', { key: 'Escape' });
-button.fire('mouseleave');
-assert.equal(button.classes.has('tip-dismissed'), false);
+assert.equal(dismissed(), false);
+button.hovered = true;
+document.fire('keydown', { key: 'Escape' });
+assert.equal(dismissed(), true, 'Escape hides the hovered tip');
+button.parentElement.fire('mouseleave');
+assert.equal(dismissed(), false);
 button.fire('click');
 assert.equal(state.mode, 'background', 'clicking still selects the mode');
 """
