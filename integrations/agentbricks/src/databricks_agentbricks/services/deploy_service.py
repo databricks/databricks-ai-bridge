@@ -24,6 +24,7 @@ failure never opens a workspace client.
 from __future__ import annotations
 
 import dataclasses
+import json
 import pathlib
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -31,6 +32,7 @@ from typing import Any, Optional
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.apps_user_auth_client import AppAuthPlan
+from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.agent_project import AgentProject
 from databricks_agentbricks.projects.app_manifest import AppManifest
 from databricks_agentbricks.projects.config import require_managed_tool_support
@@ -56,6 +58,7 @@ from databricks_agentbricks.services.deployment.provisioners import (
     TracingProvisioner,
 )
 from databricks_agentbricks.services.deployment.tool_access_provisioner import ToolAccessProvisioner
+from databricks_agentkit.runtime.cors import CORS_ALLOWED_ORIGINS_ENV
 from databricks_agentkit.runtime.tool_manifest import MODEL_SERVICE_ENV_PREFIX
 
 
@@ -84,6 +87,7 @@ class DeployRequest:
     # None preserves an existing App's scale; an explicit count pins min and max alike.
     instance_count: Optional[int]
     allow_user_scope_update: bool
+    allowed_origins: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -292,6 +296,12 @@ class DeployService:
             for key in _PIP_INDEX_ENVS:
                 env[key] = request.pip_index_url
         env_removals = [key for patch in manifest_patches for key in patch.env_removals]
+        if prepared.agent_project is not None:
+            origins = prepared.agent_project.allowed_origins
+            if origins:
+                env[CORS_ALLOWED_ORIGINS_ENV] = json.dumps(origins)
+            else:
+                env_removals.append(CORS_ALLOWED_ORIGINS_ENV)
 
         # 2. Patch app.yaml before creating the app. The managed Runtime Store fields are added after
         #    app creation because that API requires the app's service principal.
@@ -418,6 +428,11 @@ class DeployService:
         """Validate the project and plan request-user auth before resource provisioning."""
         resolved = self._resolve_deployment(source_dir, request.name)
         agent_project = resolved.agent_project
+        origins_changed = False
+        if request.allowed_origins is not None:
+            if agent_project is None:
+                raise AgentCliError("CORS options require an agent.toml Agent Bricks project.")
+            origins_changed = agent_project.set_allowed_origins(request.allowed_origins)
         if agent_project is not None and agent_project.tools:
             require_managed_tool_support(source_dir)
 
@@ -445,8 +460,10 @@ class DeployService:
         ):
             deployment_exists = self._apps_client.exists(resolved.name)
         # Persist the base name so a later `agentbricks deploy` (no NAME) resolves to the same app.
-        if agent_project is not None and agent_project.set_deployment_name(resolved.base_name):
-            agent_project.write()
+        if agent_project is not None:
+            name_changed = agent_project.set_deployment_name(resolved.base_name)
+            if name_changed or origins_changed:
+                agent_project.write()
         return _PreparedDeployment(
             agent_project=agent_project,
             name=resolved.name,

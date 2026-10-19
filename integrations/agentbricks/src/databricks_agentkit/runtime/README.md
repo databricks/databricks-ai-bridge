@@ -136,6 +136,46 @@ output, and application event payloads are defined by your agent or framework ad
 | `GET /api/invocations/550e8400-e29b-41d4-a716-446655440000` | — | `200`<br>`{"id":"550e8400-e29b-41d4-a716-446655440000","status":"completed","output":{"answer":"Hello"}}` |
 | `GET /api/invocations/550e8400-e29b-41d4-a716-446655440000/events?after=1` | — | `200 text/event-stream`<br>`id: 2`<br>`event: delta`<br>`data: {"type":"delta","content":"Hello"}`<br><br>`id: 3`<br>`event: run.completed`<br>`data: {"type":"run.completed"}` |
 
+### External browser clients
+
+`DurableAgentServer` supports opt-in CORS for exact HTTP(S) origins. Configure `[cors].allowed_origins`
+in `agent.toml`, or record it with `agentbricks deploy --allowed-origin https://chat.example.com`.
+Both deploy and dev translate the manifest into the JSON array in `AGENTBRICKS_CORS_ALLOWED_ORIGINS`;
+the server reads it at startup. An empty allowlist disables CORS. Redeploy after changes.
+See the [browser integration journey](../../../README.md#call-an-agent-from-an-external-browser-cors)
+for authentication, streaming, replacing/clearing origins, and Apps ingress limitations.
+
+When embedding the server without the CLI, pass an explicit allowlist. This overrides the environment:
+
+```python
+app = DurableAgentServer(allowed_origins=["https://chat.example.com"])
+```
+
+The server handles CORS preflight before invocation validation/auth and wraps its error middleware
+so uncaught HTTP errors carry CORS headers. It allows `GET`/`POST`, including SSE and replay,
+and `Authorization`, `Content-Type`, `X-Routing-Key`, and `Last-Event-ID` request headers.
+Only approved origins receive access to responses. Cross-origin cookie credentials are disabled;
+send a Databricks OAuth bearer token using `fetch` with `credentials: "omit"`.
+Apps ingress continues to authenticate requests; runtime CORS cannot modify ingress-generated errors.
+
+For an older SDK runtime, a middleware workaround can be applied in the project's `runtime/main.py`
+after registering all handlers and any UI routes:
+
+```python
+from fastapi.middleware.cors import CORSMiddleware
+
+# `server` is the DurableAgentServer with invoke/recover handlers already registered.
+app = CORSMiddleware(
+    server,
+    allow_origins=["https://chat.example.com"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type", "X-Routing-Key", "Last-Event-ID"],
+    allow_credentials=False,
+)
+```
+
+Expose this wrapped `app` through the existing Uvicorn entry point. The same ingress limitations apply.
+
 ## Execution state and agent state
 
 The state diagram below applies to both authorization policies. Request-user authentication is a

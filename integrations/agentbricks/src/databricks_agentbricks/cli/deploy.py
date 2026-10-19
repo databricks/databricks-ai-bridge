@@ -127,6 +127,18 @@ def build_deploy_service(obj) -> DeployService:
     help="Number of deployment instances.",
 )
 @click.option(
+    "--allowed-origin",
+    multiple=True,
+    metavar="ORIGIN",
+    help="Allow this browser origin to call the Agent Bricks server. Repeat for multiple origins; "
+    "replaces and records the allowlist in agent.toml. Omit to reuse the recorded origins.",
+)
+@click.option(
+    "--clear-allowed-origins",
+    is_flag=True,
+    help="Clear the recorded browser origin allowlist and disable runtime CORS on this deploy.",
+)
+@click.option(
     "--allow-user-scope-update",
     is_flag=True,
     help="Allow Agent Bricks to add missing user API scopes to an existing App from managed-tool "
@@ -141,6 +153,8 @@ def deploy(
     workspace_path,
     instance_count,
     allow_user_scope_update,
+    allowed_origin,
+    clear_allowed_origins,
 ) -> None:
     """Deploy your agent to Databricks Apps and get back a hosted URL to try it.
 
@@ -166,6 +180,8 @@ def deploy(
     not authentication and not the session id itself (send the session id in the request body):
       X-Routing-Key: <uuid>
     """
+    if allowed_origin and clear_allowed_origins:
+        raise click.UsageError("Use --allowed-origin or --clear-allowed-origins, not both.")
     request = DeployRequest(
         name=name,
         source=source,
@@ -173,6 +189,7 @@ def deploy(
         workspace_path=workspace_path,
         instance_count=instance_count,
         allow_user_scope_update=allow_user_scope_update,
+        allowed_origins=() if clear_allowed_origins else (allowed_origin or None),
     )
     result = build_deploy_service(obj).deploy(request)
     present_deploy_result(result, output=obj.output)
