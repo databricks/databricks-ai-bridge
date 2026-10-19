@@ -392,11 +392,23 @@ def _existing_policy(
     block_end = source.index(_END_MARKER) + len(_END_MARKER)
     try:
         actual_tree = ast.parse(source[block_start:block_end] + "\n")
-        expected_tree = ast.parse(_generated_block(policy, template_name=template_name))
+        expected_block = _generated_block(policy, template_name=template_name)
+        expected_blocks = [expected_block]
+        if template_name == _OPENAI_TEMPLATE_NAME:
+            # Accept the previously generated wrapper so add-sandbox can upgrade it.
+            expected_blocks.append(
+                expected_block.replace(
+                    '["sandbox", "run_code", "create_sandbox", "delete_sandbox"]',
+                    '["sandbox", "run_code"]',
+                )
+            )
+        expected_trees = [ast.parse(block) for block in expected_blocks]
     except SyntaxError as exc:
         raise AgentCliError("The existing agentbricks add-sandbox block is incomplete.") from exc
-    if ast.dump(actual_tree, include_attributes=False) != ast.dump(
-        expected_tree, include_attributes=False
+    if not any(
+        ast.dump(actual_tree, include_attributes=False)
+        == ast.dump(expected_tree, include_attributes=False)
+        for expected_tree in expected_trees
     ):
         raise AgentCliError(
             "The existing agentbricks add-sandbox block does not match the generated security wrapper.",
@@ -652,17 +664,27 @@ class _OpenAISandboxAdapter:
         current = _read_source(target)
         existing_policy = _existing_policy(current, template_name=_OPENAI_TEMPLATE_NAME)
         effective_policy = _effective_policy(existing_policy, policy)
-        if existing_policy is None:
-            _write_text_atomic(
-                target,
-                _add_sandbox_to_source(
-                    current,
-                    policy,
-                    template_name=_OPENAI_TEMPLATE_NAME,
-                    required_import=("agents.mcp", "MCPServer"),
-                ),
+        if existing_policy is not None:
+            block_start = current.index(_BEGIN_MARKER)
+            block_end = current.index(_END_MARKER) + len(_END_MARKER)
+            updated = (
+                current[:block_start]
+                + _generated_block(effective_policy).rstrip("\n")
+                + current[block_end:]
             )
-        return target, effective_policy, existing_policy is None
+            if updated != current:
+                _write_text_atomic(target, updated)
+            return target, effective_policy, updated != current
+        _write_text_atomic(
+            target,
+            _add_sandbox_to_source(
+                current,
+                policy,
+                template_name=_OPENAI_TEMPLATE_NAME,
+                required_import=("agents.mcp", "MCPServer"),
+            ),
+        )
+        return target, effective_policy, True
 
 
 class _LangGraphSandboxAdapter:
