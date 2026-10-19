@@ -8,6 +8,7 @@ without a live sandbox.
 from __future__ import annotations
 
 import base64
+from typing import Any
 
 import pytest
 
@@ -19,7 +20,7 @@ from deepagents.backends.protocol import (  # noqa: E402
     FileDownloadResponse,
     FileUploadResponse,
 )
-from google.protobuf.duration_pb2 import Duration  # noqa: E402
+from google.protobuf.duration_pb2 import Duration  # noqa: E402  # ty: ignore[unresolved-import]
 
 from databricks_langchain import DatabricksSandbox  # noqa: E402
 
@@ -50,7 +51,7 @@ class _SandboxApi:
 
     def __init__(self, response: _Response) -> None:
         self._response = response
-        self.calls: list[dict[str, object]] = []
+        self.calls: list[dict[str, Any]] = []
 
     def execute_command_sync(
         self,
@@ -80,7 +81,7 @@ class _Client:
 
 def _backend(response: _Response) -> tuple[DatabricksSandbox, _SandboxApi]:
     client = _Client(response)
-    return DatabricksSandbox(client, "sandboxes/sb_1"), client.sandbox
+    return DatabricksSandbox(client, "sandboxes/sb_1"), client.sandbox  # ty: ignore[invalid-argument-type]
 
 
 def test_id_returns_resource_name() -> None:
