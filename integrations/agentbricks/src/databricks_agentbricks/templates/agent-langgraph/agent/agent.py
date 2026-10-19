@@ -1,5 +1,6 @@
 import os
 from collections.abc import AsyncGenerator, Callable
+from functools import lru_cache
 from typing import Any
 
 from databricks.sdk import WorkspaceClient
@@ -56,6 +57,17 @@ class _RoutedChatDatabricks(ChatDatabricks):
         return kwargs
 
 
+@lru_cache(maxsize=1)
+def _app_workspace_client() -> WorkspaceClient:
+    """The App's own client, shared across turns.
+
+    Constructing a WorkspaceClient resolves auth with blocking network calls (and, locally, a
+    `databricks auth token` subprocess). Doing that per turn inside the async graph builder stalls
+    every request on the event loop; the SDK refreshes tokens itself, so one client suffices.
+    """
+    return workspace_client()
+
+
 def configure() -> None:
     """Wire up global state; call once at server startup (not at import)."""
     _check_databricks_auth()
@@ -70,7 +82,7 @@ def _check_databricks_auth() -> None:
     the model client uses, so the failure is immediate and actionable.
     """
     try:
-        workspace_client()
+        _app_workspace_client()
     except Exception as e:
         profile = os.getenv("DATABRICKS_CONFIG_PROFILE")
         target = (
@@ -116,7 +128,7 @@ async def create_agent_graph(
         # use_ai_gateway routes to the Unity Catalog AI Gateway (`<host>/ai-gateway/mlflow/v1`), so
         # `endpoint` is a `system.ai.*` model name rather than a serving-endpoint name.
         model=_RoutedChatDatabricks(
-            endpoint=endpoint, workspace_client=workspace_client(), use_ai_gateway=True
+            endpoint=endpoint, workspace_client=_app_workspace_client(), use_ai_gateway=True
         ),
         tools=tools,
         middleware=middleware,
