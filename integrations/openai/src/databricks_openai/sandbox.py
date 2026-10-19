@@ -1,34 +1,16 @@
 """A Databricks sandbox backend for the OpenAI Agents SDK.
 
 ``DatabricksSandboxClient`` / ``DatabricksSandboxSession`` implement the Agents
-SDK sandbox-provider contract (``agents.sandbox.session.sandbox_client`` and
-``agents.sandbox.session.base_sandbox_session``) on top of the released
-``databricks-sdk`` ``w.sandbox`` surface, so an OpenAI ``Runner`` can execute an
-agent's shell and filesystem tools inside a Databricks sandbox::
+SDK sandbox-provider contract (``BaseSandboxClient`` / ``BaseSandboxSession``) on
+top of the released ``databricks-sdk`` ``w.sandbox`` API, so a ``Runner`` can run
+a ``SandboxAgent``'s shell and filesystem tools inside a Databricks sandbox. The
+client owns the sandbox lifecycle: create, shutdown, resume, and delete.
 
-    from agents.run import RunConfig
-    from agents.run_config import SandboxRunConfig
-    from databricks_openai import DatabricksSandboxClient
-
-    RunConfig(sandbox=SandboxRunConfig(client=DatabricksSandboxClient(profile=...)))
-
-Unlike LangChain Deep Agents (where the application owns the sandbox lifecycle),
-the Agents SDK client owns it: ``create`` provisions a sandbox and waits for it
-to reach RUNNING, ``delete`` removes it, and the session ``shutdown`` stops it so
-``resume`` can reattach. This mirrors the first-party remote backends under
-``agents.extensions.sandbox`` (Vercel, E2B, ...).
-
-Every session primitive rides the single unary ``execute_command_sync`` RPC.
-Commands run through a login shell so bare programs resolve on ``PATH``; file
-read/write and workspace persist/hydrate move bytes as chunked base64 over that
-same call, because the SDK exposes no native file-transfer API. The daemon caps a
-unary response near 512 KiB and a single command arg/env near 128 KiB, so
-transfers are chunked to round-trip files far larger than one response.
-
-Requires the ``sandbox`` extra (``openai-agents>=0.20,<0.21``,
-``databricks-sdk[sandbox]>=0.153.0``)::
+Requires the ``sandbox`` extra::
 
     pip install 'databricks-openai[sandbox]'
+
+See the ``databricks-openai`` README for usage.
 """
 
 from __future__ import annotations

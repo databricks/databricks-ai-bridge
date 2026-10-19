@@ -57,6 +57,32 @@ second_response = client.chat.completions.create(
 )
 ```
 
+### Run an agent in a Databricks sandbox
+
+Install the extra:
+
+```sh
+pip install databricks-openai[sandbox]
+```
+
+Register `DatabricksSandboxClient` as the sandbox backend on a `RunConfig`. The client provisions a Databricks sandbox when the run starts and tears it down when it finishes, so the agent's shell and filesystem tools execute inside the sandbox:
+
+```python
+from agents.run_config import RunConfig, SandboxRunConfig
+from databricks_openai import DatabricksSandboxClient, DatabricksSandboxClientOptions
+
+run_config = RunConfig(
+    sandbox=SandboxRunConfig(
+        client=DatabricksSandboxClient(profile="DEFAULT"),
+        options=DatabricksSandboxClientOptions(),
+    )
+)
+
+# Pass run_config to your Runner, e.g. Runner.run(agent, input, run_config=run_config)
+```
+
+`DatabricksSandboxClient(profile=...)` builds a `WorkspaceClient` from the named Databricks CLI profile; to reuse an existing client, pass `DatabricksSandboxClient(client=...)` instead.
+
 ---
 
 ## Contribution Guide
