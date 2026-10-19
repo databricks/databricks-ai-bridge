@@ -27,6 +27,10 @@ dependencies = [
 memory = [
     "databricks-ai-bridge[memory]>=0.17.0",
 ]
+sandbox = [
+    "openai-agents>=0.20,<0.21",
+    "databricks-sdk[sandbox]>=0.153.0",
+]
 
 [dependency-groups]
 dev = [

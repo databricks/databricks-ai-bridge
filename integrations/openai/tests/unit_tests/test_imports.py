@@ -2,6 +2,10 @@ from databricks_openai import (
     AsyncDatabricksOpenAI,
     DatabricksFunctionClient,
     DatabricksOpenAI,
+    DatabricksSandboxClient,
+    DatabricksSandboxClientOptions,
+    DatabricksSandboxSession,
+    DatabricksSandboxSessionState,
     McpServerToolkit,
     ToolInfo,
     UCFunctionToolkit,
@@ -19,3 +23,7 @@ assert AsyncDatabricksOpenAI
 assert McpServerToolkit
 assert ToolInfo
 assert McpServer
+assert DatabricksSandboxClient
+assert DatabricksSandboxClientOptions
+assert DatabricksSandboxSession
+assert DatabricksSandboxSessionState

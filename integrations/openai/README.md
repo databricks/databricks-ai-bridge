@@ -17,6 +17,7 @@ pip install git+https://git@github.com/databricks/databricks-ai-bridge.git#subdi
 ## Key Features
 
 - **Vector Search:** Store and query vector representations using `VectorSearchRetrieverTool`.
+- **Sandbox:** Run an [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) agent's shell and filesystem tools inside a [Databricks sandbox](https://docs.databricks.com/aws/en/compute/serverless/sandbox) with `DatabricksSandboxClient` (install `databricks-openai[sandbox]`).
 
 ## Getting Started
 
