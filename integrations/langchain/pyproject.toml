@@ -29,7 +29,7 @@ memory = [
 ]
 deepagents = [
   "deepagents>=0.7.0,<0.8.0",
-  "databricks-sdk[sandbox]>=0.152.0",
+  "databricks-sdk[sandbox]>=0.153.0",
 ]
 
 [dependency-groups]

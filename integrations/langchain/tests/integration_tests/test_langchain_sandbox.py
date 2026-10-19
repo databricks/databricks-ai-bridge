@@ -33,7 +33,7 @@ from databricks.sdk import WorkspaceClient  # noqa: E402
 from langchain_tests.integration_tests import SandboxIntegrationTests  # noqa: E402
 
 from databricks_langchain import DatabricksSandbox  # noqa: E402
-from tests.integration_tests._sandbox_provisioning import (  # noqa: E402
+from integration_tests._sandbox_provisioning import (  # noqa: E402
     delete_sandbox,
     provision_sandbox,
 )

@@ -6,13 +6,10 @@ sandbox. ``BaseSandbox`` derives ``ls``/``read``/``write``/``edit``/``grep``/
 ``glob``/``delete`` on top of three primitives the subclass supplies: ``execute``,
 ``upload_files`` and ``download_files`` (plus an ``id``).
 
-All three primitives are built from a single ``databricks-sdk`` unary call,
-``w.sandbox.execute_command_sync`` -- the backend needs no streaming RPC. The SDK
-exposes no file-transfer API, so ``upload_files``/``download_files`` move bytes as
-base64 over that exec call. Because the sandbox daemon caps a unary response at
-512 KiB and a gRPC request near 4 MiB, large files are transferred in chunks
-(base64 piped in for upload, byte ranges read out for download), so the backend
-round-trips files far larger than a single response.
+All three primitives run through one ``databricks-sdk`` unary call,
+``w.sandbox.execute_command_sync``. The SDK has no file-transfer API, so
+``upload_files``/``download_files`` move bytes as base64 over that call, split
+into chunks that each fit a single response so large files still round-trip.
 
 Requires the ``deepagents`` extra::
 
