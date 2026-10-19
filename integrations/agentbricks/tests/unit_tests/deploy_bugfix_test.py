@@ -7,6 +7,7 @@ import types
 
 import pytest
 from click.testing import CliRunner
+from delete_test_fixtures import fake_workspace_client
 
 from databricks_agentbricks.cli import deploy as deploy_mod
 from databricks_agentbricks.clients.apps_client import AppsClient
@@ -18,9 +19,7 @@ from databricks_agentbricks.services.deployment.names import DeploymentName, _pr
 class _Ctx:
     profile = "prof"
     output = "text"
-    api_client_provider = types.SimpleNamespace(
-        get=lambda: types.SimpleNamespace(current_user="user@example.com")
-    )
+    api_client_provider = types.SimpleNamespace(get=lambda: types.SimpleNamespace())
 
 
 # --- ML-69259 / 69247: deployment-name validation ---------------------------
@@ -95,40 +94,48 @@ def test_deployments_get_rejects_empty_name_without_calling_cli(monkeypatch):
 # --- ML-69246: confirmation on destructive deployment ops --------------------
 
 
-def _apps_cli(called: list):
-    """A `databricks` CLI whose app exists until `apps delete`, recording each command."""
-    exists = True
+def _delete_ctx(workspace_client):
+    ctx = _Ctx()
+    ctx.api_client_provider = types.SimpleNamespace(
+        get=lambda: types.SimpleNamespace(workspace_client=workspace_client)
+    )
+    return ctx
+
+
+def _apps_cli(called: list, workspace_client):
+    """A `databricks` CLI recording each command; `apps delete` removes the fake SDK's App."""
 
     def run(args, profile, **kwargs):
-        nonlocal exists
         called.append(args)
         if args[:2] == ["apps", "delete"]:
-            exists = False
-        if args[:2] == ["apps", "get"] and not exists:
-            return types.SimpleNamespace(
-                returncode=1, stdout="", stderr="Error: App does not exist or is deleted."
-            )
-        return types.SimpleNamespace(returncode=0, stdout="{}", stderr="")
+            workspace_client.remove_app()
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     return run
 
 
 def test_delete_aborts_without_confirmation(monkeypatch):
     called = []
-    monkeypatch.setattr(deploy_mod, "_databricks", _apps_cli(called))
-    result = CliRunner().invoke(deploy_mod.deployments_delete, ["myapp"], obj=_Ctx(), input="n\n")
+    w = fake_workspace_client()
+    monkeypatch.setattr(deploy_mod, "_databricks", _apps_cli(called, w))
+    result = CliRunner().invoke(
+        deploy_mod.deployments_delete, ["myapp"], obj=_delete_ctx(w), input="n\n"
+    )
     assert result.exit_code != 0  # aborted
-    # Only one read before the prompt: the app, for whether it exists and where its source is.
-    assert [args[:2] for args in called] == [["apps", "get"]]
+    assert called == []
+    w.workspace.delete.assert_not_called()
 
 
 def test_delete_proceeds_with_yes(monkeypatch):
     called = []
+    w = fake_workspace_client()
     monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", False)
-    monkeypatch.setattr(deploy_mod, "_databricks", _apps_cli(called))
-    result = CliRunner().invoke(deploy_mod.deployments_delete, ["myapp", "--yes"], obj=_Ctx())
+    monkeypatch.setattr(deploy_mod, "_databricks", _apps_cli(called, w))
+    result = CliRunner().invoke(
+        deploy_mod.deployments_delete, ["myapp", "--yes"], obj=_delete_ctx(w)
+    )
     assert result.exit_code == 0, result.output
-    assert ["apps", "delete", "myapp"] in called
+    assert called and called[0][:3] == ["apps", "delete", "myapp"]
 
 
 # --- ML-69245: postgres resources are MERGED, not replaced -------------------

@@ -16,6 +16,7 @@ from databricks_agentbricks.presentation.endpoint import print_agent_invoke_comm
 from databricks_agentbricks.presentation.render import field
 from databricks_agentbricks.presentation.tracing import TRACING_BIND_COMMAND, experiment_url
 from databricks_agentbricks.services.deploy_service import DeleteResult, DeployResult
+from databricks_agentbricks.services.deployment.provisioners import APP_DELETE_TIMEOUT_S
 from databricks_agentkit import timefmt
 from databricks_agentkit.runtime import prompt_registry
 
@@ -98,16 +99,24 @@ def present_deleted(result: DeleteResult, *, output: Optional[str]) -> None:
         render.emit_json(
             {
                 "deleted": result.deployment,
-                "source_path": folder.path,
+                "still_deleting": result.still_deleting,
+                "source_path": folder.path if folder else None,
                 "source_path_status": result.source_folder_status,
                 "source_path_error": result.source_folder_error,
             }
         )
         return
-    render.success(f"Deleted deployment '{result.deployment}'")
+    if result.still_deleting:
+        render.warning(
+            f"Deployment '{result.deployment}' is still being deleted after "
+            f"{APP_DELETE_TIMEOUT_S // 60} minutes. "
+            f"Check `agentbricks deployments get {result.deployment}`; it may finish on its own."
+        )
+    else:
+        render.success(f"Deleted deployment '{result.deployment}'")
     if result.source_folder_status == "failed":
         render.warning(f"{result.source_folder_error} Delete it yourself if you no longer need it.")
-    elif result.source_folder_status == "kept":
+    elif result.source_folder_status == "kept" and folder is not None:
         render.warning(f"Kept the source folder {folder.path}: it was not created by deploy.")
 
 

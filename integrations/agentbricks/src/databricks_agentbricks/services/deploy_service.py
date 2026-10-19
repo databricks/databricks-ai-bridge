@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
-from databricks_agentbricks.clients.apps_client import AppsClient, recorded_source_code_path
+from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.apps_user_auth_client import AppAuthPlan
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.agent_project import AgentProject
@@ -56,6 +56,7 @@ from databricks_agentbricks.services.deployment.provisioners import (
     SessionStoreProvisioner,
     TracingProvisioner,
     is_default_workspace_path,
+    recorded_source_code_path,
 )
 from databricks_agentbricks.services.deployment.tool_access_provisioner import ToolAccessProvisioner
 from databricks_agentkit.runtime.tool_manifest import MODEL_SERVICE_ENV_PREFIX
@@ -143,18 +144,28 @@ class SourceFolder:
 
 
 # What happened to the source folder: deleted, already gone, kept because deploy didn't create
-# it, or failed to delete.
-SourceFolderStatus = Literal["deleted", "already_gone", "kept", "failed"]
+# it, failed to delete, or none recorded because the App was never rolled out.
+SourceFolderStatus = Literal["deleted", "already_gone", "kept", "failed", "not_recorded"]
+
+
+@dataclass(frozen=True)
+class DeleteTarget:
+    """A deployment confirmed to exist, and the folder its newest deployment came from."""
+
+    deployment: DeploymentName
+    source_folder: Optional[SourceFolder]
 
 
 @dataclass(frozen=True)
 class DeleteResult:
-    """What a delete did. The deployment is gone either way; the folder is reported, not raised."""
+    """What a delete did. The App delete was accepted; the folder is reported, not raised."""
 
     deployment: str
-    source_folder: SourceFolder
+    source_folder: Optional[SourceFolder]
     source_folder_status: SourceFolderStatus
     source_folder_error: Optional[str]
+    # The App was still deleting when the wait ran out.
+    still_deleting: bool
 
 
 @dataclass(frozen=True)
@@ -243,59 +254,62 @@ class DeployService:
         """Whether deleting a deployment also removes managed Runtime Store data."""
         return self._runtime_store_provisioner.manages_persistent_data()
 
-    def source_folder(self, name: DeploymentName) -> SourceFolder:
-        """Where the deployment's source was uploaded; read it before the app, which records it, goes.
+    def delete_target(self, name: DeploymentName) -> DeleteTarget:
+        """Find what deleting ``name`` would delete, before the App - which records it - goes.
 
-        Raises if the deployment doesn't exist, before anything is deleted. An app with no
-        deployment recorded may still have had its source uploaded to the default folder by a
-        deploy that failed before rollout.
+        Raises if the deployment doesn't exist, before anything is deleted.
         """
-        app = self._apps_client.find(name)
+        app = self._app_provisioner.find(name)
         if app is None:
             raise AgentCliError(
                 f"Deployment '{name}' does not exist.",
                 hint="Run `agentbricks deployments list` to see the deployments in this workspace.",
             )
-        path = recorded_source_code_path(app) or self._app_provisioner.default_workspace_path(name)
-        return SourceFolder(path=path, managed=is_default_workspace_path(path, name))
+        path = recorded_source_code_path(app)
+        folder = (
+            SourceFolder(path=path, managed=is_default_workspace_path(path, name)) if path else None
+        )
+        return DeleteTarget(deployment=name, source_folder=folder)
 
-    def delete(
-        self, name: DeploymentName, source_folder: Optional[SourceFolder] = None
-    ) -> DeleteResult:
+    def delete(self, target: DeleteTarget) -> DeleteResult:
         """Delete a deployment: its Runtime Store first, then the app and its uploaded source.
 
-        Returns once the app is gone; `apps delete` returns while it is still deleting.
+        Returns once the app is gone, or reports it still deleting when the wait runs out;
+        `apps delete` returns while it is still deleting.
 
         The Runtime Store goes first because dropping it needs the app's service principal, which
         stops resolving once the app is gone. If that identity can't be read we refuse outright
         rather than delete the app and orphan its data. The source folder goes as soon as the app
-        delete is accepted, before the wait, so a wait that fails can't leave it behind; only a
+        delete is accepted, before the wait, so a wait that runs out can't leave it behind; only a
         folder deploy created by default is deleted. The app is already being deleted by then, so a
         failure to delete the folder is returned rather than raised. The caller owns any
         confirmation policy.
         """
-        folder = source_folder or self.source_folder(name)
+        name = target.deployment
         if self.deletes_runtime_store_data():
             with self._reporter.status("Deleting Runtime Store…"):
                 self._runtime_store_provisioner.delete_managed(name)
         self._apps_client.delete(name)
-        status, error = self._delete_source_folder(folder)
+        status, error = self._delete_source_folder(target.source_folder)
         with self._reporter.status("Waiting for the deployment to be deleted…"):
-            self._apps_client.wait_until_deleted(name)
+            gone = self._app_provisioner.wait_until_deleted(name)
         return DeleteResult(
             deployment=name,
-            source_folder=folder,
+            source_folder=target.source_folder,
             source_folder_status=status,
             source_folder_error=error,
+            still_deleting=not gone,
         )
 
     def _delete_source_folder(
-        self, folder: SourceFolder
+        self, folder: Optional[SourceFolder]
     ) -> tuple[SourceFolderStatus, Optional[str]]:
+        if folder is None:
+            return "not_recorded", None
         if not folder.managed:
             return "kept", None
         try:
-            deleted = self._apps_client.delete_source(folder.path)
+            deleted = self._app_provisioner.delete_source(folder.path)
         except AgentCliError as exc:
             return "failed", exc.message
         return ("deleted" if deleted else "already_gone"), None

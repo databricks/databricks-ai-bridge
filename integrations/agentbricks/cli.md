@@ -1359,7 +1359,7 @@ Inspect and manage deployed agents: list, get, stream logs, start, stop, or dele
 | [`deployments logs`](#agentbricks-deployments-logs) | Stream a deployment's logs. |
 | [`deployments start`](#agentbricks-deployments-start) | Start a deployment. |
 | [`deployments stop`](#agentbricks-deployments-stop) | Stop a deployment. |
-| [`deployments delete`](#agentbricks-deployments-delete) | Delete a deployment. |
+| [`deployments delete`](#agentbricks-deployments-delete) | Delete a deployment, its Runtime Store when managed provisioning is enabled, and the source folder deploy uploaded it to by default. |
 
 #### `agentbricks deployments list`
 
@@ -1437,7 +1437,7 @@ _Options_
 
 #### `agentbricks deployments delete`
 
-Delete a deployment.
+Delete a deployment, its Runtime Store when managed provisioning is enabled, and the source folder deploy uploaded it to by default.
 
 ```
 agentbricks deployments delete NAME [options]

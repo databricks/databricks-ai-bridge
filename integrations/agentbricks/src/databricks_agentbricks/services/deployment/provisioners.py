@@ -18,13 +18,14 @@ from __future__ import annotations
 
 import pathlib
 import re
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from types import MappingProxyType
 from typing import Optional
 
-from databricks.sdk.errors import DatabricksError
+from databricks.sdk.errors import DatabricksError, NotFound, PermissionDenied, Unauthenticated
 from databricks.sdk.service.apps import App
 
 import databricks_agentbricks.clients.legacy_runtime_store as legacy_runtime_store
@@ -64,6 +65,7 @@ from databricks_agentkit.runtime.store import (
 from databricks_agentkit.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
 
 _DEPLOYMENTS_DIR = "agentbricks_deployments"
+APP_DELETE_TIMEOUT_S = 20 * 60
 
 
 def is_default_workspace_path(path: str, name: DeploymentName) -> bool:
@@ -72,9 +74,27 @@ def is_default_workspace_path(path: str, name: DeploymentName) -> bool:
     Only that folder belongs to the deployment; one passed with ``--workspace-path`` may hold the
     user's own files.
     """
-    # `/Users/...` is the same workspace object as `/Workspace/Users/...`.
+    # `/Users/...` is the same workspace object as `/Workspace/Users/...`. Paths are
+    # case-sensitive, so only a trailing slash is normalized.
     pattern = rf"(/Workspace)?/Users/[^/]+/{_DEPLOYMENTS_DIR}/{re.escape(str(name))}"
-    return re.fullmatch(pattern, path) is not None
+    return re.fullmatch(pattern, path.rstrip("/")) is not None
+
+
+def recorded_source_code_path(app: App) -> Optional[str]:
+    """The folder the App's newest deployment came from; a pending rollout is newer than the active."""
+    for deployment in (app.pending_deployment, app.active_deployment):
+        if deployment is not None and deployment.source_code_path:
+            return deployment.source_code_path
+    return None
+
+
+def _app_lookup_error(name: DeploymentName, exc: DatabricksError) -> AgentCliError:
+    return AgentCliError(
+        f"Could not check whether deployment '{name}' exists.",
+        error_code=exc.error_code,
+        hint=f"{exc}\nIf the profile isn't signed in, run `agentbricks login`; otherwise check the "
+        "network and the profile's host, then rerun the command.",
+    )
 
 
 @dataclass(frozen=True)
@@ -598,6 +618,52 @@ class AppProvisioner:
         """Where deploy uploads the source when no ``--workspace-path`` is given."""
         current_user = self._api_client_provider.get().current_user
         return f"/Workspace/Users/{current_user}/{_DEPLOYMENTS_DIR}/{name}"
+
+    def find(self, name: DeploymentName) -> Optional[App]:
+        """The App, or None only when it definitively doesn't exist; any other failure raises."""
+        try:
+            return self._api_client_provider.get().workspace_client.apps.get(name)
+        except NotFound:
+            return None
+        except DatabricksError as exc:
+            raise _app_lookup_error(name, exc) from exc
+
+    def wait_until_deleted(
+        self, name: DeploymentName, timeout_s: int = APP_DELETE_TIMEOUT_S
+    ) -> bool:
+        """Wait for the App to stop existing; False if it still exists at the deadline.
+
+        A failed check is retried - the delete is already under way, and a network blip shouldn't
+        fail it - except a refused login or permission, which won't fix itself.
+        """
+        apps = self._api_client_provider.get().workspace_client.apps
+        deadline = time.monotonic() + timeout_s
+        while True:
+            try:
+                apps.get(name)
+            except NotFound:
+                return True
+            except (Unauthenticated, PermissionDenied) as exc:
+                raise _app_lookup_error(name, exc) from exc
+            except DatabricksError:
+                pass
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(10)
+
+    def delete_source(self, path: str) -> bool:
+        """Delete an uploaded source folder; False when it was already gone."""
+        workspace = self._api_client_provider.get().workspace_client.workspace
+        try:
+            workspace.delete(path, recursive=True)
+        except NotFound:
+            return False
+        except DatabricksError as exc:
+            raise AgentCliError(
+                f"Could not delete the uploaded source folder '{path}': {exc}",
+                error_code=exc.error_code,
+            ) from exc
+        return True
 
     def deploy_source(self, ctx: ResourceContext, workspace_path: str) -> None:
         """Sync source to an already-resolved workspace destination and activate it.

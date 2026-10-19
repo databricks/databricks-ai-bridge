@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import os
 import pathlib
-import re
 import subprocess
 import time
 from collections.abc import Collection, Sequence
@@ -34,27 +33,6 @@ _TOOL_PERMISSION_STRENGTH = {
     ("VOLUME", "READ_VOLUME"): 1,
     ("VOLUME", "WRITE_VOLUME"): 2,
 }
-_WORKSPACE_PATH_MISSING = re.compile(
-    r"RESOURCE_DOES_NOT_EXIST|Path \(.*\) doesn't exist", re.IGNORECASE
-)
-
-
-def _app_missing(detail: str) -> bool:
-    """Whether an `apps get` failure says the app doesn't exist, rather than failing to answer.
-
-    A generic "not found" would let an unrelated 404 masquerade as "the app is missing".
-    """
-    return any(marker in detail.lower() for marker in ("resource_does_not_exist", "does not exist"))
-
-
-def recorded_source_code_path(app: dict) -> Optional[str]:
-    """The workspace folder the app's latest deployment came from, or None if it has none."""
-    for key in ("active_deployment", "pending_deployment"):
-        deployment = _field(app, key)
-        path = _field(deployment, "source_code_path") if isinstance(deployment, dict) else None
-        if isinstance(path, str) and path:
-            return path
-    return None
 
 
 class _AppResourcesReadError(RuntimeError):
@@ -160,33 +138,13 @@ class AppsClient:
         result = self._run(["apps", "get", name], self._profile, capture=True, check=False)
         if result.returncode == 0:
             return True
-        self._raise_unless_missing(name, result)
-        return False
-
-    def find(self, name: str) -> Optional[dict]:
-        """The app's `apps get` payload, or None only when the app definitively doesn't exist.
-
-        Any other failure (bad auth, network, a 5xx) is raised, so it can't read as "missing".
-        """
-        result = self._run(
-            ["apps", "get", name, "-o", "json"], self._profile, capture=True, check=False
-        )
-        if result.returncode != 0:
-            self._raise_unless_missing(name, result)
-            return None
-        try:
-            data = json.loads(result.stdout or "{}")
-        except json.JSONDecodeError:
-            data = None
-        if not isinstance(data, dict):
-            raise AgentCliError(f"Could not parse deployment '{name}'.")
-        return data
-
-    def _raise_unless_missing(self, name: str, result: subprocess.CompletedProcess) -> None:
-        """Return only when a failed `apps get` says the app doesn't exist; raise otherwise."""
         detail = (result.stderr or result.stdout or "").strip()
-        if _app_missing(detail):
-            return
+        # Only a definitive not-found counts; a generic "not found" would let an unrelated 404
+        # masquerade as "the app is missing" and steer the caller into a create.
+        if any(
+            marker in detail.lower() for marker in ("resource_does_not_exist", "does not exist")
+        ):
+            return False
         login = f"agentbricks login --profile {self._profile or '<profile>'}"
         raise AgentCliError(
             f"Could not check whether deployment '{name}' exists.",
@@ -260,49 +218,6 @@ class AppsClient:
             self._profile,
             to_stderr=True,
             action=f"Could not delete deployment '{name}'.",
-        )
-
-    def wait_until_deleted(self, name: str, timeout_s: int = 1200) -> None:
-        """Block until the app no longer exists (or raise on timeout).
-
-        A check that fails to answer is retried until the deadline: the delete is already under
-        way, and one network blip shouldn't turn it into an error.
-        """
-        deadline = time.monotonic() + timeout_s
-        last_error: Optional[AgentCliError] = None
-        while True:
-            try:
-                if not self.exists(name):
-                    return
-                last_error = None
-            except AgentCliError as exc:
-                last_error = exc
-            if time.monotonic() >= deadline:
-                hint = (
-                    last_error.hint
-                    if last_error is not None
-                    else f"Check `agentbricks deployments get {name}`; it may finish on its own."
-                )
-                raise AgentCliError(
-                    f"Deployment '{name}' was still being deleted after {timeout_s}s.", hint=hint
-                )
-            time.sleep(10)
-
-    def delete_source(self, ws_path: str) -> bool:
-        """Delete an uploaded source folder; False when it was already gone."""
-        result = self._run(
-            ["workspace", "delete", ws_path, "--recursive"],
-            self._profile,
-            capture=True,
-            check=False,
-        )
-        if result.returncode == 0:
-            return True
-        detail = (result.stderr or result.stdout or "").strip()
-        if _WORKSPACE_PATH_MISSING.search(detail):
-            return False
-        raise AgentCliError(
-            f"Could not delete the uploaded source folder '{ws_path}'.", hint=detail or None
         )
 
     def reconcile_resources(

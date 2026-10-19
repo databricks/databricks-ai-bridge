@@ -240,12 +240,16 @@ def deployments_delete(obj, name, yes) -> None:
     """Delete a deployment, its Runtime Store when managed provisioning is enabled, and the source
     folder deploy uploaded it to by default."""
     service = build_deploy_service(obj)
-    folder = service.source_folder(name)
+    target = service.delete_target(name)
+    folder = target.source_folder
     parts = [f"deployment '{name}'"]
     if not yes and service.deletes_runtime_store_data():
         parts.append("its Runtime Store data")
-    if folder.managed:
+    if folder is not None and folder.managed:
         parts.append(f"its uploaded source folder {folder.path}")
-    target = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
-    render.confirm_destroy(target, assume_yes=yes)
-    present_deleted(service.delete(name, folder), output=obj.output)
+    described = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+    render.confirm_destroy(described, assume_yes=yes)
+    result = service.delete(target)
+    present_deleted(result, output=obj.output)
+    if result.still_deleting:
+        raise click.exceptions.Exit(1)
