@@ -480,15 +480,17 @@ class RuntimeStoreProvisioner:
         """Whether the Runtime Store is service-managed, so a delete must tear it down first."""
         return self._use_managed
 
-    def delete_managed(self, name: DeploymentName) -> None:
-        """Drop the deployment's service-managed Runtime Store and its data."""
-        sp = self._apps.get_service_principal(name)
-        if not sp:
+    def delete_managed(self, name: DeploymentName, service_principal: Optional[str]) -> None:
+        """Drop the deployment's service-managed Runtime Store and its data.
+
+        ``service_principal`` is the App's, read by the caller while the App still exists.
+        """
+        if not service_principal:
             raise AgentCliError(
                 "Could not resolve the app's service principal for Runtime Store cleanup.",
                 hint="The deployment was retained. Check access to the app and retry deletion.",
             )
-        managed_runtime_store.delete(self._api_client_provider.get(), name, sp)
+        managed_runtime_store.delete(self._api_client_provider.get(), name, service_principal)
 
 
 class AppProvisioner:

@@ -901,7 +901,7 @@ _DEFAULT_SOURCE = "/Workspace/Users/user@example.com/agentbricks_deployments/age
 def _existing_app(deployment_fixture, *, source: str | None = _DEFAULT_SOURCE) -> None:
     deployment = AppDeployment(source_code_path=source) if source else None
     deployment_fixture.app.find.return_value = App(
-        name="agent-bricks-demo", active_deployment=deployment
+        name="agent-bricks-demo", active_deployment=deployment, service_principal_client_id="sp-1"
     )
     deployment_fixture.app.delete_source.return_value = True
     deployment_fixture.app.wait_until_deleted.return_value = True
@@ -932,8 +932,8 @@ def test_delete_managed_runtime_store_before_app(deployment_fixture):
     _existing_app(deployment_fixture)
     events: list[str] = []
     deployment_fixture.runtime.manages_persistent_data.return_value = True
-    deployment_fixture.runtime.delete_managed.side_effect = lambda value: events.append(
-        f"runtime:{value}"
+    deployment_fixture.runtime.delete_managed.side_effect = lambda value, sp: events.append(
+        f"runtime:{value}:{sp}"
     )
     deployment_fixture.apps.delete.side_effect = lambda value: events.append(f"app:{value}")
     deployment_fixture.app.wait_until_deleted.side_effect = lambda value: (
@@ -946,7 +946,12 @@ def test_delete_managed_runtime_store_before_app(deployment_fixture):
     _delete(deployment_fixture)
 
     # The folder goes before the wait, so a wait that runs out can't leave it behind.
-    assert events == [f"runtime:{name}", f"app:{name}", f"source:{_DEFAULT_SOURCE}", f"gone:{name}"]
+    assert events == [
+        f"runtime:{name}:sp-1",
+        f"app:{name}",
+        f"source:{_DEFAULT_SOURCE}",
+        f"gone:{name}",
+    ]
     assert deployment_fixture.reporter.status.call_args_list[0].args == ("Deleting Runtime Store…",)
 
 
@@ -959,7 +964,7 @@ def test_delete_keeps_app_when_managed_cleanup_fails(deployment_fixture):
     with pytest.raises(AgentCliError, match="cleanup failed"):
         _delete(deployment_fixture)
 
-    deployment_fixture.runtime.delete_managed.assert_called_once_with(name)
+    deployment_fixture.runtime.delete_managed.assert_called_once_with(name, "sp-1")
     deployment_fixture.apps.delete.assert_not_called()
 
 

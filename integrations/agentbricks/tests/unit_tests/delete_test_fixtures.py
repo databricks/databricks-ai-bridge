@@ -7,7 +7,9 @@ from databricks.sdk.errors import NotFound
 from databricks.sdk.service.apps import App, AppDeployment
 
 
-def fake_workspace_client(*, source_code_path: Optional[str] = None) -> mock.Mock:
+def fake_workspace_client(
+    *, source_code_path: Optional[str] = None, service_principal: Optional[str] = "sp-123"
+) -> mock.Mock:
     """An SDK client whose App exists until ``remove_app()``; its folder deletes succeed.
 
     A mock, so tests can assert the order of `apps.get` and `workspace.delete` calls.
@@ -19,7 +21,11 @@ def fake_workspace_client(*, source_code_path: Optional[str] = None) -> mock.Moc
         if not exists:
             raise NotFound(f"App with name {name} does not exist or is deleted.")
         deployment = AppDeployment(source_code_path=source_code_path) if source_code_path else None
-        return App(name=name, active_deployment=deployment)
+        return App(
+            name=name,
+            active_deployment=deployment,
+            service_principal_client_id=service_principal,
+        )
 
     def remove_app() -> None:
         nonlocal exists

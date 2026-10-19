@@ -150,10 +150,12 @@ SourceFolderStatus = Literal["deleted", "already_gone", "kept", "failed", "not_r
 
 @dataclass(frozen=True)
 class DeleteTarget:
-    """A deployment confirmed to exist, and the folder its newest deployment came from."""
+    """A deployment confirmed to exist, as read once before anything is deleted."""
 
     deployment: DeploymentName
     source_folder: Optional[SourceFolder]
+    # The App's service principal client id, which owns its Runtime Store.
+    service_principal: Optional[str]
 
 
 @dataclass(frozen=True)
@@ -269,7 +271,11 @@ class DeployService:
         folder = (
             SourceFolder(path=path, managed=is_default_workspace_path(path, name)) if path else None
         )
-        return DeleteTarget(deployment=name, source_folder=folder)
+        return DeleteTarget(
+            deployment=name,
+            source_folder=folder,
+            service_principal=app.service_principal_client_id,
+        )
 
     def delete(self, target: DeleteTarget) -> DeleteResult:
         """Delete a deployment: its Runtime Store first, then the app and its uploaded source.
@@ -288,7 +294,7 @@ class DeployService:
         name = target.deployment
         if self.deletes_runtime_store_data():
             with self._reporter.status("Deleting Runtime Store…"):
-                self._runtime_store_provisioner.delete_managed(name)
+                self._runtime_store_provisioner.delete_managed(name, target.service_principal)
         self._apps_client.delete(name)
         status, error = self._delete_source_folder(target.source_folder)
         with self._reporter.status("Waiting for the deployment to be deleted…"):

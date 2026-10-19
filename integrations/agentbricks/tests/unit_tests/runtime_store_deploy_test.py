@@ -45,20 +45,12 @@ def _ctx(client, workspace_client, *, output="text"):
     )
 
 
-def _cli_runner(workspace_client, *, identity=True):
+def _cli_runner(workspace_client):
     """A `databricks` CLI whose `apps delete` removes the fake SDK's App."""
 
     def run(args, profile, **kwargs):
         if args[:2] == ["apps", "delete"]:
             workspace_client.remove_app()
-        if args[:2] == ["apps", "get"]:
-            if not identity:
-                return types.SimpleNamespace(returncode=1, stdout="", stderr="not found")
-            return types.SimpleNamespace(
-                returncode=0,
-                stdout=json.dumps({"service_principal_client_id": "sp-123"}),
-                stderr="",
-            )
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     return run
@@ -160,12 +152,6 @@ def test_managed_delete_finishes_before_deleting_app(monkeypatch):
     }
     assert calls.mock_calls == [
         mock.call.w.apps.get("agent-bricks-myapp"),
-        mock.call.cli(
-            ["apps", "get", "agent-bricks-myapp", "-o", "json"],
-            "prof",
-            capture=True,
-            check=False,
-        ),
         mock.call.runtime.get_runtime_store("agent-bricks-myapp"),
         mock.call.runtime.delete_runtime_store("agent-bricks-myapp"),
         mock.call.cli(
@@ -259,9 +245,9 @@ def test_managed_delete_rejects_an_unexpected_resource_name(monkeypatch):
     )
 
 
-def test_managed_delete_cannot_skip_cleanup_when_identity_lookup_fails(monkeypatch):
-    w = fake_workspace_client(source_code_path=_DEFAULT_SOURCE)
-    cli = mock.Mock(side_effect=_cli_runner(w, identity=False))
+def test_managed_delete_cannot_skip_cleanup_without_the_app_identity(monkeypatch):
+    w = fake_workspace_client(source_code_path=_DEFAULT_SOURCE, service_principal=None)
+    cli = mock.Mock(side_effect=_cli_runner(w))
     monkeypatch.setattr(deploy_mod, "_databricks", cli)
     client = mock.Mock()
     ctx = _ctx(client, w)
@@ -273,8 +259,7 @@ def test_managed_delete_cannot_skip_cleanup_when_identity_lookup_fails(monkeypat
     assert result.exit_code != 0
     assert "deployment was retained" in result.output
     client.assert_not_called()
-    assert cli.call_count == 1
-    assert cli.call_args.args[0][:2] == ["apps", "get"]
+    cli.assert_not_called()
 
 
 def test_legacy_delete_preserves_existing_behavior(monkeypatch):
