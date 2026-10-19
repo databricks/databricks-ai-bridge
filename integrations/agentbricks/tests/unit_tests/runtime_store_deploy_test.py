@@ -44,7 +44,7 @@ _DEFAULT_SOURCE = "/Workspace/Users/user@example.com/agentbricks_deployments/age
 
 
 def _cli_runner(*, identity=True):
-    """A `databricks` CLI whose app exists until `apps delete`; ``identity=False`` hides its details."""
+    """A `databricks` CLI whose app exists until `apps delete`; ``identity=False`` hides its principal."""
     exists = True
 
     def run(args, profile, **kwargs):
@@ -58,13 +58,8 @@ def _cli_runner(*, identity=True):
                     stdout="",
                     stderr=f"Error: App with name {args[2]} does not exist or is deleted.",
                 )
-            if not identity and "json" in args:
-                return types.SimpleNamespace(returncode=1, stdout="", stderr="permission denied")
-            return types.SimpleNamespace(
-                returncode=0,
-                stdout=json.dumps({"service_principal_client_id": "sp-123"}),
-                stderr="",
-            )
+            app = {"service_principal_client_id": "sp-123"} if identity else {}
+            return types.SimpleNamespace(returncode=0, stdout=json.dumps(app), stderr="")
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     return run
@@ -158,7 +153,7 @@ def test_managed_delete_finishes_before_deleting_app(monkeypatch):
     assert json.loads(result.output) == {
         "deleted": "agent-bricks-myapp",
         "source_path": _DEFAULT_SOURCE,
-        "source_path_deleted": True,
+        "source_path_status": "deleted",
         "source_path_error": None,
     }
     app_get = mock.call.cli(
@@ -171,7 +166,6 @@ def test_managed_delete_finishes_before_deleting_app(monkeypatch):
         check=False,
     )
     assert calls.mock_calls == [
-        app_get,
         app_get_json,
         app_get_json,
         mock.call.runtime.get_runtime_store("agent-bricks-myapp"),
@@ -182,14 +176,14 @@ def test_managed_delete_finishes_before_deleting_app(monkeypatch):
             to_stderr=True,
             action="Could not delete deployment 'agent-bricks-myapp'.",
         ),
-        # `apps delete` returns while the app is still deleting.
-        app_get,
         mock.call.cli(
             ["workspace", "delete", _DEFAULT_SOURCE, "--recursive"],
             "prof",
             capture=True,
             check=False,
         ),
+        # `apps delete` returns while the app is still deleting.
+        app_get,
     ]
 
 

@@ -99,15 +99,15 @@ def present_deleted(result: DeleteResult, *, output: Optional[str]) -> None:
             {
                 "deleted": result.deployment,
                 "source_path": folder.path,
-                "source_path_deleted": result.source_folder_deleted,
+                "source_path_status": result.source_folder_status,
                 "source_path_error": result.source_folder_error,
             }
         )
         return
     render.success(f"Deleted deployment '{result.deployment}'")
-    if result.source_folder_error:
+    if result.source_folder_status == "failed":
         render.warning(f"{result.source_folder_error} Delete it yourself if you no longer need it.")
-    elif not folder.managed:
+    elif result.source_folder_status == "kept":
         render.warning(f"Kept the source folder {folder.path}: it was not created by deploy.")
 
 

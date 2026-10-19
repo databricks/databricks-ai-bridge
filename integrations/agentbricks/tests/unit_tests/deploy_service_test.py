@@ -887,8 +887,9 @@ _DEFAULT_SOURCE = "/Workspace/Users/user@example.com/agentbricks_deployments/age
 
 
 def _existing_app(deployment_fixture, *, source: str | None = None) -> None:
-    deployment_fixture.apps.exists.return_value = True
-    deployment_fixture.apps.source_code_path.return_value = source
+    deployment_fixture.apps.find.return_value = (
+        {"active_deployment": {"source_code_path": source}} if source else {}
+    )
     deployment_fixture.app.default_workspace_path.return_value = _DEFAULT_SOURCE
     deployment_fixture.apps.delete_source.return_value = True
 
@@ -923,8 +924,8 @@ def test_delete_managed_runtime_store_before_app(deployment_fixture):
 
     deployment_fixture.service.delete(name)
 
-    # The source folder goes only once the App that uses it is gone.
-    assert events == [f"runtime:{name}", f"app:{name}", f"gone:{name}", f"source:{_DEFAULT_SOURCE}"]
+    # The folder goes before the wait, so a wait that fails can't leave it behind.
+    assert events == [f"runtime:{name}", f"app:{name}", f"source:{_DEFAULT_SOURCE}", f"gone:{name}"]
     assert deployment_fixture.reporter.status.call_args_list[0].args == ("Deleting Runtime Store…",)
     deployment_fixture.runtime.delete_managed.assert_called_once_with(name)
     deployment_fixture.apps.delete.assert_called_once_with(name)
@@ -944,7 +945,7 @@ def test_delete_keeps_app_when_managed_cleanup_fails(deployment_fixture):
 
 
 def test_delete_of_a_missing_deployment_deletes_nothing(deployment_fixture):
-    deployment_fixture.apps.exists.return_value = False
+    deployment_fixture.apps.find.return_value = None
 
     with pytest.raises(AgentCliError, match="does not exist"):
         deployment_fixture.service.delete(DeploymentName("agent-bricks-demo"))
@@ -963,7 +964,7 @@ def test_delete_keeps_a_source_folder_deploy_did_not_create(deployment_fixture):
 
     assert result.source_folder.path == "/Workspace/Shared/my-agent"
     assert result.source_folder.managed is False
-    assert result.source_folder_deleted is False
+    assert result.source_folder_status == "kept"
     deployment_fixture.apps.delete_source.assert_not_called()
 
 
@@ -976,7 +977,7 @@ def test_delete_deletes_another_users_default_source_folder(deployment_fixture):
 
     result = deployment_fixture.service.delete(name)
 
-    assert result.source_folder_deleted is True
+    assert result.source_folder_status == "deleted"
     deployment_fixture.apps.delete_source.assert_called_once_with(other)
 
 
@@ -988,10 +989,43 @@ def test_delete_reports_a_source_folder_it_could_not_delete(deployment_fixture):
 
     result = deployment_fixture.service.delete(name)
 
-    # The App is already gone, so the folder's failure is reported, not raised.
+    # The App is already being deleted, so the folder's failure is reported, not raised.
     deployment_fixture.apps.delete.assert_called_once_with(name)
-    assert result.source_folder_deleted is False
+    assert result.source_folder_status == "failed"
     assert result.source_folder_error == "permission denied"
+
+
+def test_delete_reports_a_source_folder_that_was_already_gone(deployment_fixture):
+    _existing_app(deployment_fixture)
+    deployment_fixture.runtime.manages_persistent_data.return_value = False
+    deployment_fixture.apps.delete_source.return_value = False
+
+    result = deployment_fixture.service.delete(DeploymentName("agent-bricks-demo"))
+
+    assert result.source_folder_status == "already_gone"
+    assert result.source_folder_error is None
+
+
+def test_delete_removes_the_folder_even_when_the_wait_fails(deployment_fixture):
+    _existing_app(deployment_fixture)
+    deployment_fixture.runtime.manages_persistent_data.return_value = False
+    deployment_fixture.apps.wait_until_deleted.side_effect = AgentCliError("still deleting")
+
+    with pytest.raises(AgentCliError, match="still deleting"):
+        deployment_fixture.service.delete(DeploymentName("agent-bricks-demo"))
+
+    deployment_fixture.apps.delete_source.assert_called_once_with(_DEFAULT_SOURCE)
+
+
+def test_delete_fails_when_the_app_cannot_be_read(deployment_fixture):
+    # A failed lookup must not read as "no folder recorded" and fall back to the default folder.
+    deployment_fixture.apps.find.side_effect = AgentCliError("Could not check whether ...")
+
+    with pytest.raises(AgentCliError, match="Could not check"):
+        deployment_fixture.service.delete(DeploymentName("agent-bricks-demo"))
+
+    deployment_fixture.apps.delete.assert_not_called()
+    deployment_fixture.apps.delete_source.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -999,6 +1033,8 @@ def test_delete_reports_a_source_folder_it_could_not_delete(deployment_fixture):
     [
         ("/Workspace/Users/a@example.com/agentbricks_deployments/agent-bricks-demo", True),
         ("/Workspace/Users/b@example.com/agentbricks_deployments/agent-bricks-demo", True),
+        ("/Users/a@example.com/agentbricks_deployments/agent-bricks-demo", True),
+        ("/Shared/Users/a@example.com/agentbricks_deployments/agent-bricks-demo", False),
         ("/Workspace/Users/a@example.com/agentbricks_deployments/agent-bricks-other", False),
         ("/Workspace/Users/a@example.com/agentbricks_deployments/agent-bricks-demo/sub", False),
         ("/Workspace/Users/a@example.com/agentbricks_deployments", False),

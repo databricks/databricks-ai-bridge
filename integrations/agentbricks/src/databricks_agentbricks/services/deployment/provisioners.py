@@ -72,7 +72,8 @@ def is_default_workspace_path(path: str, name: DeploymentName) -> bool:
     Only that folder belongs to the deployment; one passed with ``--workspace-path`` may hold the
     user's own files.
     """
-    pattern = rf"/Workspace/Users/[^/]+/{_DEPLOYMENTS_DIR}/{re.escape(str(name))}"
+    # `/Users/...` is the same workspace object as `/Workspace/Users/...`.
+    pattern = rf"(/Workspace)?/Users/[^/]+/{_DEPLOYMENTS_DIR}/{re.escape(str(name))}"
     return re.fullmatch(pattern, path) is not None
 
 

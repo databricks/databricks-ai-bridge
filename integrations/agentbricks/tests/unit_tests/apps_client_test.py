@@ -168,14 +168,42 @@ def test_wait_until_deleted_times_out(monkeypatch):
 
 
 @pytest.mark.parametrize("key", ["active_deployment", "pending_deployment"])
-def test_source_code_path_reads_the_latest_deployment(key):
-    payload = '{"%s": {"source_code_path": "/Workspace/Users/u/agentbricks_deployments/app"}}' % key
-    client = AppsClient("prof", runner=_runner([], stdout=payload))
-    assert client.source_code_path("app") == "/Workspace/Users/u/agentbricks_deployments/app"
+def test_recorded_source_code_path_reads_the_latest_deployment(key):
+    app = {key: {"source_code_path": "/Workspace/Users/u/agentbricks_deployments/app"}}
+    path = apps_client_mod.recorded_source_code_path(app)
+    assert path == "/Workspace/Users/u/agentbricks_deployments/app"
 
 
-def test_source_code_path_is_none_without_a_deployment():
-    assert AppsClient("prof", runner=_runner([], stdout="{}")).source_code_path("app") is None
+def test_recorded_source_code_path_is_none_without_a_deployment():
+    assert apps_client_mod.recorded_source_code_path({}) is None
+
+
+def test_find_returns_the_app():
+    client = AppsClient("prof", runner=_runner([], stdout='{"name": "app"}'))
+    assert client.find("app") == {"name": "app"}
+
+
+def test_find_returns_none_only_when_the_app_does_not_exist():
+    stderr = "Error: App with name app does not exist or is deleted."
+    assert AppsClient("prof", runner=_runner([], returncode=1, stderr=stderr)).find("app") is None
+
+
+@pytest.mark.parametrize("stderr", ["Error: 401 Unauthorized", "HTTP 503", ""])
+def test_find_raises_when_it_cannot_tell(stderr):
+    client = AppsClient("prof", runner=_runner([], returncode=1, stderr=stderr))
+    with pytest.raises(AgentCliError, match="Could not check whether deployment"):
+        client.find("app")
+
+
+def test_wait_until_deleted_retries_a_check_that_fails(monkeypatch):
+    answers = iter([(1, "HTTP 503"), (0, ""), (1, "App does not exist or is deleted.")])
+
+    def run(args, profile, **kwargs):
+        code, stderr = next(answers)
+        return types.SimpleNamespace(returncode=code, stdout="", stderr=stderr)
+
+    monkeypatch.setattr(apps_client_mod.time, "sleep", lambda s: None)
+    AppsClient("prof", runner=run).wait_until_deleted("app")
 
 
 def test_delete_source_deletes_the_folder_recursively():
@@ -184,10 +212,19 @@ def test_delete_source_deletes_the_folder_recursively():
     assert calls[0][0] == ["workspace", "delete", "/Workspace/x", "--recursive"]
 
 
-def test_delete_source_of_a_missing_folder_is_not_an_error():
-    stderr = "Error: Path (/Workspace/x) doesn't exist."
+@pytest.mark.parametrize(
+    "stderr", ["Error: Path (/Workspace/x) doesn't exist.", "error: resource_does_not_exist"]
+)
+def test_delete_source_of_a_missing_folder_is_not_an_error(stderr):
     client = AppsClient("prof", runner=_runner([], returncode=1, stderr=stderr))
     assert client.delete_source("/Workspace/x") is False
+
+
+def test_delete_source_does_not_read_other_missing_things_as_the_folder():
+    stderr = "Error: principal does not exist"
+    client = AppsClient("prof", runner=_runner([], returncode=1, stderr=stderr))
+    with pytest.raises(AgentCliError, match="Could not delete the uploaded source folder"):
+        client.delete_source("/Workspace/x")
 
 
 def test_delete_source_raises_on_other_failures():

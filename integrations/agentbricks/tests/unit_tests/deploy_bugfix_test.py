@@ -118,8 +118,8 @@ def test_delete_aborts_without_confirmation(monkeypatch):
     monkeypatch.setattr(deploy_mod, "_databricks", _apps_cli(called))
     result = CliRunner().invoke(deploy_mod.deployments_delete, ["myapp"], obj=_Ctx(), input="n\n")
     assert result.exit_code != 0  # aborted
-    # Only reads before the prompt: whether the app exists, and where its source is.
-    assert [args[:2] for args in called] == [["apps", "get"], ["apps", "get"]]
+    # Only one read before the prompt: the app, for whether it exists and where its source is.
+    assert [args[:2] for args in called] == [["apps", "get"]]
 
 
 def test_delete_proceeds_with_yes(monkeypatch):
