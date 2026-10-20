@@ -106,9 +106,13 @@ class FakeMemoryApi:
         raise AssertionError("memory tools must not fetch the store")
 
 
-@pytest.fixture(params=["langgraph", "openai"])
+@pytest.fixture(params=["langgraph", "openai", "maf"])
 def framework(request):
-    pytest.importorskip("langchain_core.tools" if request.param == "langgraph" else "agents")
+    pytest.importorskip(
+        {"langgraph": "langchain_core.tools", "openai": "agents", "maf": "agent_framework"}[
+            request.param
+        ]
+    )
     return request.param
 
 
@@ -139,12 +143,16 @@ def _tools(framework, actor="alice", store: Optional[str] = STORE):
 def _schema(native_tool, framework):
     if framework == "langgraph":
         return native_tool.args_schema.model_json_schema()
+    if framework == "maf":
+        return native_tool.input_model.model_json_schema()
     return native_tool.params_json_schema
 
 
 async def _invoke(native_tool, arguments, framework) -> str:
     if framework == "langgraph":
         return await native_tool.ainvoke(arguments)
+    if framework == "maf":
+        return await native_tool.invoke(arguments=arguments, skip_parsing=True)
     from agents.tool_context import ToolContext
 
     payload = json.dumps(arguments)
@@ -180,7 +188,7 @@ def test_configured_store_returns_four_tools_with_stable_parameters(framework, a
 def test_remember_describes_topic_as_a_short_category(framework, api):
     remember = _tools(framework)["remember"]
 
-    if framework == "langgraph":
+    if framework in {"langgraph", "maf"}:
         assert "category" in remember.description
     else:
         topic = _schema(remember, framework)["properties"]["topic"]
