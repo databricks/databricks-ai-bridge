@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import io
 import os
 import pathlib
 import re
 import tempfile
 
-# Same shape the reader accepts, so a line the CLI honors is a line it can rewrite.
-_PROFILE_LINE = re.compile(r"\s*(export\s+)?DATABRICKS_CONFIG_PROFILE\s*=")
+from dotenv import dotenv_values
+
+# Every line form dotenv reads as this key (optional `export`, optionally single-quoted key), so a
+# rewrite can't leave an older value that dotenv would still pick up.
+_PROFILE_LINE = re.compile(
+    r"\s*(export\s+)?(DATABRICKS_CONFIG_PROFILE|'DATABRICKS_CONFIG_PROFILE')\s*="
+)
 
 
 _BOM = "\ufeff"
@@ -40,7 +46,7 @@ def _write_text_atomically(path: pathlib.Path, text: str) -> None:
 
 
 def read_env(path: pathlib.Path) -> dict[str, str]:
-    """Minimal KEY=VALUE reader for a project `.env` (python-dotenv is not a CLI dependency)."""
+    """Read a project `.env` the way the generated agent's `load_dotenv` does."""
     try:
         text = _read_text(path)
     except OSError:
@@ -49,29 +55,9 @@ def read_env(path: pathlib.Path) -> dict[str, str]:
 
 
 def _parse_env(text: str) -> dict[str, str]:
-    values: dict[str, str] = {}
-    for line in _lines(text):
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        if line.startswith("export "):
-            line = line[len("export ") :].strip()
-        key, _, value = line.partition("=")
-        key, value = key.strip(), value.strip()
-        if value[:1] in ("'", '"'):
-            end = value.find(value[0], 1)
-            if end != -1:
-                # A quoted value ends at its matching close quote: a `#` inside is literal, and
-                # anything after (an inline comment) is dropped.
-                value = value[1:end]
-            else:
-                value = re.split(r"\s+#", value, maxsplit=1)[0].rstrip()
-        else:
-            # Match dotenv for unquoted values: a `#` that follows whitespace starts a comment.
-            value = re.split(r"\s+#", value, maxsplit=1)[0].rstrip()
-        if key:
-            values[key] = value
-    return values
+    # Same parser and default interpolation as the agent's `load_dotenv`, so both resolve one value.
+    values = dotenv_values(stream=io.StringIO(text.removeprefix(_BOM)))
+    return {key: value for key, value in values.items() if value is not None}
 
 
 def _with_profile_line(lines: list[str], profile: str) -> list[str]:

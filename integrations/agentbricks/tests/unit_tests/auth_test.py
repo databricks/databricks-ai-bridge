@@ -60,7 +60,9 @@ def fake_api_client(monkeypatch: pytest.MonkeyPatch) -> mock.Mock:
 
 
 def _ctx(profile=None, output="text") -> CliContext:
-    return CliContext(profile, output)
+    ctx = CliContext(profile, output)
+    ctx.select_profile()
+    return ctx
 
 
 def _invoke_profile(args, **ctx_kwargs):
@@ -82,8 +84,8 @@ def test_context_precedence_is_flag_then_env_file_then_env_var(tmp_path, monkeyp
     _write_env(tmp_path, "proj")
     ambient, project, flagged = _ctx(), _ctx(), _ctx("from-flag")
 
-    project.use_project_profile(tmp_path)
-    flagged.use_project_profile(tmp_path)
+    project.select_profile(tmp_path)
+    flagged.select_profile(tmp_path)
 
     assert ambient.profile_info == ProfileInfo("from-env-var", "DATABRICKS_CONFIG_PROFILE")
     assert project.profile_info == ProfileInfo("proj", ".env")

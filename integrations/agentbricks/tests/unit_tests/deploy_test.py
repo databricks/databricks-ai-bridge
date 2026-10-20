@@ -456,6 +456,7 @@ def test_deploy_json_preserves_additive_tool_access_contract(tmp_path: pathlib.P
 
 def test_build_deploy_service_composes_current_clients_without_opening_api_client():
     ctx = _Ctx()
+    ctx.select_profile()
 
     service = deploy_mod.build_deploy_service(ctx)
 

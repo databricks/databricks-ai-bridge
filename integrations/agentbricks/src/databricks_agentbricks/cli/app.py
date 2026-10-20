@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import functools
 import pathlib
-from typing import Optional
+from typing import Any, Optional
 
 import click
 
@@ -32,7 +32,6 @@ from databricks_agentbricks.presentation.profile import (
 from databricks_agentbricks.projects.config import is_agentbricks_project
 from databricks_agentbricks.projects.env_file import read_env
 from databricks_agentbricks.projects.profiles import (
-    SOURCE_FLAG,
     SOURCE_SDK_DEFAULT,
     ProfileInfo,
     auth_login_command,
@@ -44,50 +43,64 @@ from databricks_agentkit._api_client import _AgentBricksApiClient
 
 
 class CliContext:
-    """Shared per-invocation state: selected profile, output mode, lazily-built client."""
+    """Shared per-invocation state: selected profile, output mode, lazily-built client.
+
+    The profile is decided once per command, by `select_profile`, before the command body runs.
+    """
 
     def __init__(self, profile: Optional[str], output: str):
-        self.profile_info = resolve_profile(profile)
         self.output = output
+        self.global_profile = profile
+        # A `-p/--profile` given after the subcommand; recorded by its option callback.
+        self.subcommand_profile: Optional[str] = None
+        # The current directory, when it's an Agent Bricks project; recorded by the root group.
+        self.cwd_project: Optional[pathlib.Path] = None
+        # Unset until `select_profile` runs, so reading it earlier fails instead of going stale.
+        self.profile_info: ProfileInfo
+        self._provider: Optional[ApiClientProvider] = None
         self._workspace_announced = False
         self._project_dir: Optional[pathlib.Path] = None
         self._project_env: dict[str, str] = {}
-        self.api_client_provider = self._client_provider(self.profile)
 
     @property
     def profile(self) -> Optional[str]:
         return self.profile_info.name
 
-    def use_project_profile(self, project_dir: pathlib.Path) -> None:
-        """Fold in the project's `.env` profile (see `resolve_profile`) unless `-p` was given.
+    def select_profile(self, source_project: Optional[pathlib.Path] = None) -> None:
+        """Resolve the command's profile once (see `resolve_profile`); the client provider follows it.
 
-        The root group calls this for the current directory when it's an Agent Bricks project, and
-        commands with `--source` call it again for that project, whose `.env` then replaces the
-        current directory's. Only an explicit `-p` outranks the `.env`.
+        The project whose `.env` applies is `source_project` (a `--source` project) if given, else
+        the current directory's project; `-p` (global or after the subcommand) outranks it.
         """
-        directory = project_dir.resolve()
-        if directory != self._project_dir:
-            self._project_dir = directory
-            self._project_env = read_env(directory / ".env")
-        if self.profile_info.source == SOURCE_FLAG:
-            return
-        resolved = resolve_profile(None, directory, self._project_env)
-        if resolved.name != self.profile_info.name:
-            self.api_client_provider = self._client_provider(resolved.name)
-        self.profile_info = resolved
+        flag = self.subcommand_profile or self.global_profile
+        project_dir = source_project or self.cwd_project
+        env_values = None
+        if project_dir is not None:
+            directory = project_dir.resolve()
+            if directory != self._project_dir:
+                self._project_dir = directory
+                self._project_env = read_env(directory / ".env")
+            project_dir, env_values = directory, self._project_env
+        self.profile_info = resolve_profile(flag, project_dir, env_values)
+
+    @property
+    def api_client_provider(self) -> ApiClientProvider:
+        """Built on first use, so it always reflects the profile `select_profile` settled on."""
+        if self._provider is None:
+            self._provider = ApiClientProvider(self.profile, on_first_use=self.announce_workspace)
+        return self._provider
+
+    @api_client_provider.setter
+    def api_client_provider(self, provider: Any) -> None:
+        """Lets tests inject a fake provider."""
+        self._provider = provider
 
     def project_env(self, project_dir: pathlib.Path) -> dict[str, str]:
-        """`project_dir`'s parsed `.env`, reusing the one `use_project_profile` already read."""
+        """`project_dir`'s parsed `.env`, reusing the one `select_profile` already read."""
         directory = project_dir.resolve()
         if directory == self._project_dir:
             return self._project_env
         return read_env(directory / ".env")
-
-    def use_flag_profile(self, profile: str) -> None:
-        """Apply a `-p/--profile` given after the subcommand; like the global one, it beats `.env`."""
-        if profile != self.profile:
-            self.api_client_provider = self._client_provider(profile)
-        self.profile_info = ProfileInfo(profile, SOURCE_FLAG)
 
     def announce_workspace(self, resolved_host: Optional[str] = None) -> None:
         """Name the profile and workspace once, when the command first reaches the workspace."""
@@ -103,9 +116,6 @@ class CliContext:
             legacy_profile = legacy_default_profile()
             if legacy_profile and self.profile_info.source == SOURCE_SDK_DEFAULT:
                 warn_legacy_default_profile(legacy_profile, self.output)
-
-    def _client_provider(self, profile: Optional[str]) -> ApiClientProvider:
-        return ApiClientProvider(profile, on_first_use=self.announce_workspace)
 
     def client(self) -> _AgentBricksApiClient:
         """Compatibility accessor for commands not yet migrated to ``api_client_provider``."""
@@ -164,7 +174,7 @@ def agentbricks(ctx: click.Context, profile: Optional[str], output: str) -> None
     if is_agentbricks_project(cwd):
         # Every command run inside a project uses its `.env` profile, so e.g. `endpoint invoke`
         # targets the same workspace that `deploy` just used.
-        ctx.obj.use_project_profile(cwd)
+        ctx.obj.cwd_project = cwd
 
 
 _REMOVED_COMMANDS = {
@@ -192,7 +202,7 @@ def _apply_subcommand_profile(
 ) -> None:
     obj = ctx.find_object(CliContext)
     if value and obj is not None:
-        obj.use_flag_profile(value)
+        obj.subcommand_profile = value
 
 
 def _accept_profile_anywhere(command: click.Command, *, source_profile: bool = True) -> None:
@@ -204,8 +214,10 @@ def _accept_profile_anywhere(command: click.Command, *, source_profile: bool = T
         for subcommand in command.commands.values():
             _accept_profile_anywhere(subcommand, source_profile=source_profile)
         return
-    if source_profile and any(param.name == "source" for param in command.params):
-        _use_source_project_profile(command)
+    _select_profile_before_running(
+        command,
+        use_source=source_profile and any(param.name == "source" for param in command.params),
+    )
     if any("--profile" in param.opts for param in command.params):
         return
     command.params.append(
@@ -219,22 +231,28 @@ def _accept_profile_anywhere(command: click.Command, *, source_profile: bool = T
     )
 
 
-def _use_source_project_profile(command: click.Command) -> None:
-    """Resolve the profile from `--source`'s project, so e.g. `tracing bind --source proj` reads
-    the same workspace that `deploy --source proj` writes to (only `-p` outranks it)."""
+def _select_profile_before_running(command: click.Command, *, use_source: bool) -> None:
+    """Decide the profile once, just before `command` runs, from `-p`, `--source`'s project (so e.g.
+    `tracing bind --source proj` reads the workspace `deploy --source proj` writes to), the
+    current directory's project, then the environment."""
     callback = command.callback
     if callback is None:
         return
 
     @functools.wraps(callback)
-    def with_source_profile(*args, **kwargs):
+    def with_selected_profile(*args, **kwargs):
         obj = click.get_current_context().find_object(CliContext)
-        source = kwargs.get("source")
-        if obj is not None and source and is_agentbricks_project(pathlib.Path(source)):
-            obj.use_project_profile(pathlib.Path(source))
+        if obj is not None:
+            source = kwargs.get("source") if use_source else None
+            source_project = (
+                pathlib.Path(source)
+                if source and is_agentbricks_project(pathlib.Path(source))
+                else None
+            )
+            obj.select_profile(source_project)
         return callback(*args, **kwargs)
 
-    command.callback = with_source_profile
+    command.callback = with_selected_profile
 
 
 agentbricks.add_command(init)
