@@ -38,6 +38,7 @@ from databricks_agentbricks.services.deployment.model_binding_provisioner import
 )
 from databricks_agentbricks.services.deployment.names import DeploymentName
 from databricks_agentbricks.services.deployment.provisioners import (
+    AppDeleteWait,
     AppProvisioner,
     GrantOutcome,
     ManifestPatch,
@@ -905,7 +906,7 @@ def _existing_app(deployment_fixture, *, source: str | None = _DEFAULT_SOURCE) -
         name="agent-bricks-demo", active_deployment=deployment, service_principal_client_id="sp-1"
     )
     deployment_fixture.app.delete_source.return_value = True
-    deployment_fixture.app.wait_until_deleted.return_value = None
+    deployment_fixture.app.wait_until_deleted.return_value = AppDeleteWait()
 
 
 def _delete(deployment_fixture, name: str = "agent-bricks-demo"):
@@ -938,7 +939,7 @@ def test_delete_managed_runtime_store_before_app(deployment_fixture):
     )
     deployment_fixture.apps.delete.side_effect = lambda value: events.append(f"app:{value}")
     deployment_fixture.app.wait_until_deleted.side_effect = lambda value: (
-        events.append(f"gone:{value}")
+        events.append(f"gone:{value}") or AppDeleteWait()
     )
     deployment_fixture.app.delete_source.side_effect = lambda path: (
         events.append(f"source:{path}") or True
@@ -946,12 +947,12 @@ def test_delete_managed_runtime_store_before_app(deployment_fixture):
 
     _delete(deployment_fixture)
 
-    # The folder goes after the wait, so the App keeps its source while it is deleting.
+    # The folder goes before the wait, so an interrupted wait can't leave it behind.
     assert events == [
         f"runtime:{name}:sp-1",
         f"app:{name}",
-        f"gone:{name}",
         f"source:{_DEFAULT_SOURCE}",
+        f"gone:{name}",
     ]
     assert deployment_fixture.reporter.status.call_args_list[0].args == ("Deleting Runtime Store…",)
 
@@ -1050,15 +1051,22 @@ def test_delete_reports_a_source_folder_that_was_already_gone(deployment_fixture
     assert result.source_folder_error is None
 
 
-def test_delete_reports_an_unconfirmed_wait_and_still_deletes_the_folder(deployment_fixture):
+@pytest.mark.parametrize(
+    ("wait", "still_deleting"),
+    [(AppDeleteWait(timed_out=True), True), (AppDeleteWait(error="expired"), False)],
+)
+def test_delete_reports_an_unconfirmed_wait_and_still_deletes_the_folder(
+    deployment_fixture, wait, still_deleting
+):
     _existing_app(deployment_fixture)
     deployment_fixture.runtime.manages_persistent_data.return_value = False
-    deployment_fixture.app.wait_until_deleted.return_value = "still deleting"
+    deployment_fixture.app.wait_until_deleted.return_value = wait
 
     result = _delete(deployment_fixture)
 
-    assert result.still_deleting is True
-    assert result.wait_error == "still deleting"
+    assert result.still_deleting is still_deleting
+    assert result.wait_error == wait.error
+    assert result.confirmed is False
     assert result.source_folder_status == "deleted"
 
 
@@ -1135,39 +1143,51 @@ def test_wait_until_deleted_retries_a_check_that_fails(monkeypatch):
         NotFound("gone"),
     ]
 
-    assert _app_provisioner(w).wait_until_deleted(DeploymentName("app")) is None
+    assert _app_provisioner(w).wait_until_deleted(DeploymentName("app")) == AppDeleteWait()
     assert w.apps.get.call_count == 5
 
 
+_TOKEN_REFRESH_FAILED = ValueError("oauth2: token expired and refresh token is not set")
+
+
 @pytest.mark.parametrize(
-    "error", [Unauthenticated("expired"), PermissionDenied("no"), BadRequest("bad")]
+    "error",
+    [Unauthenticated("expired"), PermissionDenied("no"), BadRequest("bad"), _TOKEN_REFRESH_FAILED],
 )
 def test_wait_until_deleted_stops_at_once_on_an_error_that_wont_clear(monkeypatch, error):
     monkeypatch.setattr(provisioners_mod.time, "sleep", lambda _s: None)
     w = Mock()
     w.apps.get.side_effect = error
 
-    reason = _app_provisioner(w).wait_until_deleted(DeploymentName("app"))
+    wait = _app_provisioner(w).wait_until_deleted(DeploymentName("app"))
 
-    assert reason == f"Could not check whether deployment 'app' was deleted: {error}"
+    assert wait == AppDeleteWait(error=str(error))
     assert w.apps.get.call_count == 1
 
 
 def test_wait_until_deleted_reports_running_out():
     w = fake_workspace_client()
 
-    reason = _app_provisioner(w).wait_until_deleted(DeploymentName("app"), timeout_s=0)
+    wait = _app_provisioner(w).wait_until_deleted(DeploymentName("app"), timeout_s=0)
 
-    assert reason == "Deployment 'app' was still being deleted after 0 minutes."
+    assert wait == AppDeleteWait(timed_out=True)
 
 
-def test_wait_until_deleted_running_out_shows_the_last_failed_check():
+def test_wait_until_deleted_running_out_keeps_the_last_failed_check():
     w = Mock()
     w.apps.get.side_effect = InternalError("boom")
 
-    reason = _app_provisioner(w).wait_until_deleted(DeploymentName("app"), timeout_s=0)
+    wait = _app_provisioner(w).wait_until_deleted(DeploymentName("app"), timeout_s=0)
 
-    assert reason.endswith("the last check failed: boom")
+    assert wait == AppDeleteWait(timed_out=True, error="boom")
+
+
+def test_find_reports_a_failed_token_refresh():
+    w = Mock()
+    w.apps.get.side_effect = _TOKEN_REFRESH_FAILED
+
+    with pytest.raises(AgentCliError, match="Could not check whether deployment"):
+        _app_provisioner(w).find(DeploymentName("agent-bricks-demo"))
 
 
 def test_delete_source_deletes_the_folder_recursively():
@@ -1185,9 +1205,14 @@ def test_delete_source_of_a_missing_folder_is_not_an_error():
 
 
 @pytest.mark.parametrize(
-    "error", [TimeoutError("Timed out after 0:01:00"), ConnectionError("connection reset")]
+    "error",
+    [
+        TimeoutError("Timed out after 0:01:00"),
+        ConnectionError("connection reset"),
+        ValueError("oauth2: token expired and refresh token is not set"),
+    ],
 )
-def test_delete_source_network_failure_is_reported_not_a_traceback(error):
+def test_delete_source_network_or_login_failure_is_reported_not_a_traceback(error):
     w = Mock()
     w.workspace.delete.side_effect = error
 

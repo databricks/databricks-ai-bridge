@@ -16,6 +16,7 @@ from databricks_agentbricks.presentation.endpoint import print_agent_invoke_comm
 from databricks_agentbricks.presentation.render import field
 from databricks_agentbricks.presentation.tracing import TRACING_BIND_COMMAND, experiment_url
 from databricks_agentbricks.services.deploy_service import DeleteResult, DeployResult
+from databricks_agentbricks.services.deployment.provisioners import APP_DELETE_TIMEOUT_S
 from databricks_agentkit import timefmt
 from databricks_agentkit.runtime import prompt_registry
 
@@ -106,10 +107,17 @@ def present_deleted(result: DeleteResult, *, output: Optional[str]) -> None:
             }
         )
         return
+    check = f"`agentbricks deployments get {result.deployment}`"
     if result.still_deleting:
+        last = f" The last check failed: {result.wait_error}" if result.wait_error else ""
         render.warning(
-            f"{result.wait_error} Check `agentbricks deployments get {result.deployment}`; "
-            "it may finish on its own."
+            f"Deployment '{result.deployment}' was still being deleted after "
+            f"{APP_DELETE_TIMEOUT_S // 60} minutes.{last} Check {check}; it may finish on its own."
+        )
+    elif result.wait_error:
+        render.warning(
+            f"Could not confirm deployment '{result.deployment}' was deleted: {result.wait_error} "
+            f"Check {check}; if the profile isn't signed in, run `agentbricks login` first."
         )
     else:
         render.success(f"Deleted deployment '{result.deployment}'")

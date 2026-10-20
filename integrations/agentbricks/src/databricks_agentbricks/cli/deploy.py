@@ -251,5 +251,5 @@ def deployments_delete(obj, name, yes) -> None:
     render.confirm_destroy(described, assume_yes=yes)
     result = service.delete(target)
     present_deleted(result, output=obj.output)
-    if result.still_deleting:
+    if not result.confirmed:
         raise click.exceptions.Exit(1)

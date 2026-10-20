@@ -11,7 +11,7 @@ from delete_test_fixtures import fake_workspace_client
 from databricks_agentbricks.cli import deploy as deploy_mod
 from databricks_agentbricks.clients import managed_runtime_store
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.services.deployment.provisioners import AppProvisioner
+from databricks_agentbricks.services.deployment.provisioners import AppDeleteWait, AppProvisioner
 
 
 @pytest.fixture(autouse=True)
@@ -161,8 +161,8 @@ def test_managed_delete_finishes_before_deleting_app(monkeypatch):
             to_stderr=True,
             action="Could not delete deployment 'agent-bricks-myapp'.",
         ),
-        mock.call.w.apps.get("agent-bricks-myapp"),
         mock.call.w.workspace.delete(_DEFAULT_SOURCE, recursive=True),
+        mock.call.w.apps.get("agent-bricks-myapp"),
     ]
 
 
@@ -303,14 +303,16 @@ def test_delete_of_a_missing_deployment_says_so_and_deletes_nothing(monkeypatch)
     w.workspace.delete.assert_not_called()
 
 
-def test_delete_still_deleting_reports_the_result_and_fails(monkeypatch):
+@pytest.mark.parametrize(
+    ("wait", "still_deleting"),
+    [(AppDeleteWait(timed_out=True), True), (AppDeleteWait(error="expired"), False)],
+)
+def test_unconfirmed_delete_reports_the_result_and_fails(monkeypatch, wait, still_deleting):
     w = fake_workspace_client(source_code_path=_DEFAULT_SOURCE)
     monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", False)
     monkeypatch.setattr(deploy_mod, "_databricks", mock.Mock(side_effect=_cli_runner(w)))
-    # The wait itself is covered in provisioner tests; here it runs out at once.
-    monkeypatch.setattr(
-        AppProvisioner, "wait_until_deleted", lambda self, name: "still being deleted"
-    )
+    # The wait itself is covered in provisioner tests; here it ends unconfirmed at once.
+    monkeypatch.setattr(AppProvisioner, "wait_until_deleted", lambda self, name: wait)
 
     result = CliRunner().invoke(
         deploy_mod.deployments_delete,
@@ -320,6 +322,27 @@ def test_delete_still_deleting_reports_the_result_and_fails(monkeypatch):
 
     assert result.exit_code == 1
     payload = json.loads(result.output)
-    assert payload["still_deleting"] is True
-    assert payload["wait_error"] == "still being deleted"
+    assert payload["still_deleting"] is still_deleting
+    assert payload["wait_error"] == wait.error
     assert payload["source_path_status"] == "deleted"
+
+
+@pytest.mark.parametrize(
+    ("wait", "expected"),
+    [
+        (AppDeleteWait(timed_out=True), "it may finish on its own"),
+        (AppDeleteWait(error="expired"), "agentbricks login"),
+    ],
+)
+def test_unconfirmed_delete_text_says_what_to_do(monkeypatch, wait, expected):
+    w = fake_workspace_client(source_code_path=_DEFAULT_SOURCE)
+    monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", False)
+    monkeypatch.setattr(deploy_mod, "_databricks", mock.Mock(side_effect=_cli_runner(w)))
+    monkeypatch.setattr(AppProvisioner, "wait_until_deleted", lambda self, name: wait)
+
+    result = CliRunner().invoke(
+        deploy_mod.deployments_delete, ["agent-bricks-myapp", "--yes"], obj=_ctx(mock.Mock(), w)
+    )
+
+    assert result.exit_code == 1
+    assert expected in " ".join(result.output.split())

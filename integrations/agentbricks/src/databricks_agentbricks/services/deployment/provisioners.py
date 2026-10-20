@@ -87,6 +87,16 @@ def is_default_workspace_path(path: str, name: DeploymentName) -> bool:
     return re.fullmatch(pattern, path.rstrip("/")) is not None
 
 
+@dataclass(frozen=True)
+class AppDeleteWait:
+    """How waiting for an App delete ended; neither field set means the App is gone."""
+
+    # The App still existed at the deadline.
+    timed_out: bool = False
+    # Why the wait stopped early or, after a timeout, the last failed check.
+    error: Optional[str] = None
+
+
 def recorded_source_code_path(app: App) -> Optional[str]:
     """The folder the App's newest deployment came from; a pending rollout is newer than the active."""
     for deployment in (app.pending_deployment, app.active_deployment):
@@ -95,9 +105,11 @@ def recorded_source_code_path(app: App) -> Optional[str]:
     return None
 
 
-# What a workspace call can fail with besides a typed API error: the SDK raises TimeoutError once
-# its retries run out, and connection errors from `requests` are OSErrors. DatabricksError is an
-# OSError too, so catch it first wherever the two are handled differently.
+# What a workspace call can fail with besides a typed API error: the SDK raises ValueError when a
+# token refresh fails (as `apps_user_auth_client` also handles), TimeoutError once its retries run
+# out, and connection errors from `requests` are OSErrors. DatabricksError is an OSError too, so
+# catch it first wherever the two are handled differently.
+_AUTH_ERRORS = (ValueError,)
 _NETWORK_ERRORS = (TimeoutError, OSError)
 # API errors that can clear on their own, so a wait retries them.
 _TRANSIENT_API_ERRORS = (InternalError, TemporarilyUnavailable, DeadlineExceeded, TooManyRequests)
@@ -642,17 +654,17 @@ class AppProvisioner:
             return self._api_client_provider.get().workspace_client.apps.get(name)
         except NotFound:
             return None
-        except (DatabricksError, *_NETWORK_ERRORS) as exc:
+        except (DatabricksError, *_AUTH_ERRORS, *_NETWORK_ERRORS) as exc:
             raise _app_lookup_error(name, exc) from exc
 
     def wait_until_deleted(
         self, name: DeploymentName, timeout_s: int = APP_DELETE_TIMEOUT_S
-    ) -> Optional[str]:
-        """Wait for the App to stop existing; None once it has, else why that wasn't confirmed.
+    ) -> AppDeleteWait:
+        """Wait for the App to stop existing, reporting a timeout or the error that stopped it.
 
         Never raises: the delete is already accepted, so a failure here is reported with the rest of
         the result. Failures that can clear (5xx, throttling, network) are retried until the
-        deadline; any other stops the wait at once.
+        deadline; any other, including a failed login, stops the wait at once.
         """
         deadline = time.monotonic() + timeout_s
         last_error: Optional[Exception] = None
@@ -661,20 +673,15 @@ class AppProvisioner:
                 self._api_client_provider.get().workspace_client.apps.get(name)
                 last_error = None
             except NotFound:
-                return None
+                return AppDeleteWait()
             except _TRANSIENT_API_ERRORS as exc:
                 last_error = exc
-            except (DatabricksError, AgentCliError) as exc:
-                return f"Could not check whether deployment '{name}' was deleted: {exc}"
+            except (DatabricksError, AgentCliError, *_AUTH_ERRORS) as exc:
+                return AppDeleteWait(error=str(exc))
             except _NETWORK_ERRORS as exc:
                 last_error = exc
             if time.monotonic() >= deadline:
-                still = (
-                    f"Deployment '{name}' was still being deleted after {timeout_s // 60} minutes"
-                )
-                return (
-                    f"{still}; the last check failed: {last_error}" if last_error else f"{still}."
-                )
+                return AppDeleteWait(timed_out=True, error=str(last_error) if last_error else None)
             time.sleep(10)
 
     def delete_source(self, path: str) -> bool:
@@ -683,7 +690,7 @@ class AppProvisioner:
             self._api_client_provider.get().workspace_client.workspace.delete(path, recursive=True)
         except NotFound:
             return False
-        except (DatabricksError, *_NETWORK_ERRORS) as exc:
+        except (DatabricksError, *_AUTH_ERRORS, *_NETWORK_ERRORS) as exc:
             raise AgentCliError(
                 f"Could not delete the uploaded source folder '{path}': {exc}",
                 error_code=getattr(exc, "error_code", None),

@@ -166,12 +166,15 @@ class DeleteResult:
     source_folder: Optional[SourceFolder]
     source_folder_status: SourceFolderStatus
     source_folder_error: Optional[str]
-    # Why the App wasn't confirmed gone: still deleting when the wait ran out, or the wait failed.
+    # The App was still deleting when the wait ran out.
+    still_deleting: bool
+    # Why the wait stopped early or, after it ran out, the last failed check.
     wait_error: Optional[str]
 
     @property
-    def still_deleting(self) -> bool:
-        return self.wait_error is not None
+    def confirmed(self) -> bool:
+        """Whether the App was seen gone."""
+        return not self.still_deleting and self.wait_error is None
 
 
 @dataclass(frozen=True)
@@ -290,24 +293,26 @@ class DeployService:
         The Runtime Store goes first because dropping it needs the app's service principal, which
         stops resolving once the app is gone. If that identity can't be read we refuse outright
         rather than delete the app and orphan its data. Once the app delete is accepted nothing
-        raises: the wait and the folder delete report their failures in the result. The folder goes
-        after the wait, so the app keeps its source while it is deleting; only a folder deploy
-        created by default is deleted. The caller owns any confirmation policy.
+        raises: the folder delete and the wait report their failures in the result. The folder goes
+        before the wait, so an interrupted or failed wait can't leave it behind (a rerun refuses once
+        the app is gone); only a folder deploy created by default is deleted. The caller owns any
+        confirmation policy.
         """
         name = target.deployment
         if self.deletes_runtime_store_data():
             with self._reporter.status("Deleting Runtime Store…"):
                 self._runtime_store_provisioner.delete_managed(name, target.service_principal)
         self._apps_client.delete(name)
-        with self._reporter.status("Waiting for the deployment to be deleted…"):
-            wait_error = self._app_provisioner.wait_until_deleted(name)
         status, error = self._delete_source_folder(target.source_folder)
+        with self._reporter.status("Waiting for the deployment to be deleted…"):
+            wait = self._app_provisioner.wait_until_deleted(name)
         return DeleteResult(
             deployment=name,
             source_folder=target.source_folder,
             source_folder_status=status,
             source_folder_error=error,
-            wait_error=wait_error,
+            still_deleting=wait.timed_out,
+            wait_error=wait.error,
         )
 
     def _delete_source_folder(
