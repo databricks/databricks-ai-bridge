@@ -6,7 +6,7 @@ distribution is `databricks-agentbricks`; installing it provides the `agentbrick
 
 ## Architecture and placement
 
-Use the deploy, dev, and invoke decomposition as the reference for new work. A simple command can
+Use the deploy, dev, invoke, and tracing decomposition as the reference for new work. A simple command can
 call an existing client or project helper; multi-step operations belong in an injectable service.
 Place code by its primary responsibility:
 
@@ -22,10 +22,13 @@ Place code by its primary responsibility:
 Keep shared utilities at the top of `src/databricks_agentbricks/`: external adapters in `clients/`,
 local configuration in `projects/`, output rendering in `presentation/`, and the framework-neutral
 `Reporter` protocol in `reporting.py`. Keep Click command entry points in `cli/`. Workflow entry
-points belong directly in `services/` as `deploy_service.py`, `dev_service.py`, and
-`invoke_service.py`; put helpers used only by one workflow in `services/deployment/` or
-`services/invoke/`, not in new top-level feature packages. Services should not import Click or
-CLI presentation code.
+points belong directly in `services/` as `deploy_service.py`, `dev_service.py`,
+`invoke_service.py`, and `tracing_service.py`; tracing bind/unbind persist the project directly from
+the CLI, while `TracingService` coordinates list/get. Put helpers used only by one workflow in
+`services/deployment/`, `services/invoke/`, or `services/tracing/`, not in new top-level feature
+packages. Tracing's workspace MLflow reads and local server lifecycle live in `clients/`; its
+experiment naming rule is shared from `projects/`. Services should not import Click or CLI
+presentation code.
 
 ## Three kinds of change, and how each is sourced
 

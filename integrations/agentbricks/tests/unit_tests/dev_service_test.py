@@ -3,22 +3,24 @@
 from __future__ import annotations
 
 import pathlib
+import subprocess
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import Mock
 
 import pytest
 import yaml
 
 from databricks_agentbricks.clients.apps_client import AppsClient
+from databricks_agentbricks.clients.local_tracing_client import (
+    LocalTracingClient,
+    LocalTracingStart,
+)
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.projects.types import AgentServer
 from databricks_agentbricks.services import dev_service as dev_service_module
-from databricks_agentbricks.services.dev_service import (
-    DevRequest,
-    DevService,
-    LocalTracing,
-)
+from databricks_agentbricks.services.dev_service import DevRequest, DevService
 
 
 @pytest.fixture
@@ -44,11 +46,12 @@ env:
     resolver.resource_bindings.return_value = ("memory", "sessions", "/Shared/traces")
 
     apps = Mock(spec=AppsClient)
-    tracing = Mock(spec=LocalTracing)
-    tracing_server = object()
-    tracing.start.return_value = (
+    tracing = Mock(spec=LocalTracingClient)
+    tracing_server = cast(subprocess.Popen, Mock(spec=subprocess.Popen))
+    tracing.start_dev.return_value = LocalTracingStart(
         tracing_server,
-        {
+        "http://127.0.0.1:5599",
+        environment={
             "MLFLOW_TRACKING_URI": "http://127.0.0.1:5599",
             "MLFLOW_EXPERIMENT_NAME": "local-agent",
         },
@@ -92,6 +95,8 @@ def test_prepare_builds_local_plan_and_run_uses_injected_apps_client(
         assert plan.preview.server is AgentServer.AGENTBRICKS
         assert plan.preview.tracing_uri == "http://127.0.0.1:5599"
         assert plan.preview.local_experiment_name == "local-agent"
+        assert plan.preview.tracing_warning is None
+        assert plan.preview.tracing_help is None
         assert plan.preview.memory_store == "memory"
         assert plan.preview.session_store == "sessions"
         assert plan.preview.trace_experiment == "/Shared/traces"
@@ -113,7 +118,7 @@ def test_prepare_builds_local_plan_and_run_uses_injected_apps_client(
     assert app_yaml.read_text() == original_app_yaml
     service_fixture.resolver.load.assert_called_once_with(tmp_path)
     service_fixture.resolver.resource_bindings.assert_called_once_with(tmp_path)
-    service_fixture.tracing.start.assert_called_once_with(tmp_path)
+    service_fixture.tracing.start_dev.assert_called_once_with(tmp_path)
     service_fixture.tracing.stop.assert_called_once_with(service_fixture.tracing_server)
     service_fixture.apps.run_local.assert_called_once_with(
         tmp_path,
@@ -175,7 +180,7 @@ def test_missing_app_yaml_fails_before_loading_project_or_starting_tracing(
 
     service_fixture.resolver.load.assert_not_called()
     service_fixture.resolver.resource_bindings.assert_not_called()
-    service_fixture.tracing.start.assert_not_called()
+    service_fixture.tracing.start_dev.assert_not_called()
     service_fixture.apps.run_local.assert_not_called()
 
 
@@ -196,7 +201,7 @@ def test_managed_tool_preflight_fails_before_local_resources(
 
     require_support.assert_called_once_with(tmp_path)
     service_fixture.resolver.resource_bindings.assert_not_called()
-    service_fixture.tracing.start.assert_not_called()
+    service_fixture.tracing.start_dev.assert_not_called()
     service_fixture.apps.run_local.assert_not_called()
 
 
@@ -277,13 +282,17 @@ def test_manifest_write_failure_removes_partial_manifest_and_stops_tracing(
 def test_prepare_and_run_remain_safe_when_tracing_does_not_start(
     service_fixture: SimpleNamespace, tmp_path: pathlib.Path
 ) -> None:
-    service_fixture.tracing.start.return_value = (None, {})
+    service_fixture.tracing.start_dev.return_value = LocalTracingStart(
+        None, None, warning="local tracing unavailable", help="install uv"
+    )
 
     with service_fixture.service.prepare(
         DevRequest(source=str(tmp_path), prepare_environment=False, app_port=8123)
     ) as plan:
         assert plan.preview.tracing_uri is None
         assert plan.preview.local_experiment_name is None
+        assert plan.preview.tracing_warning == "local tracing unavailable"
+        assert plan.preview.tracing_help == "install uv"
         assert plan.entry_point.exists()
         service_fixture.service.run(plan)
 
@@ -316,7 +325,7 @@ def test_busy_port_fails_before_tracing_or_local_manifest(
         "Stop that process, or run `agentbricks dev --app-port <port>` with a free port."
     )
     service_fixture.port_in_use.assert_called_once_with(expected_port)
-    service_fixture.tracing.start.assert_not_called()
+    service_fixture.tracing.start_dev.assert_not_called()
     service_fixture.tracing.stop.assert_not_called()
     service_fixture.apps.run_local.assert_not_called()
     assert not (tmp_path / "app.agentbricksdev.yaml").exists()
@@ -331,5 +340,5 @@ def test_free_port_is_checked_and_run_proceeds(
         service_fixture.service.run(plan)
 
     service_fixture.port_in_use.assert_called_once_with(9100)
-    service_fixture.tracing.start.assert_called_once_with(tmp_path)
+    service_fixture.tracing.start_dev.assert_called_once_with(tmp_path)
     service_fixture.apps.run_local.assert_called_once()

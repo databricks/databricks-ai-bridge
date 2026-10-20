@@ -27,11 +27,14 @@ from typing import Optional
 import click
 
 from databricks_agentbricks.cli.auth import sign_in_chosen_profile
-from databricks_agentbricks.cli.tracing import default_experiment_name
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.profile import note_choose_profile
-from databricks_agentbricks.projects.agent_project import AgentProject, default_store_name
+from databricks_agentbricks.projects.agent_project import (
+    AgentProject,
+    default_experiment_name,
+    default_store_name,
+)
 from databricks_agentbricks.projects.config import (
     _load_persisted_metadata,
     write_project_metadata,
