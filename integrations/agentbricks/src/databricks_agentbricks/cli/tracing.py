@@ -8,15 +8,10 @@ import click
 
 from databricks_agentbricks.clients.local_tracing_client import (
     LocalTracingClient,
-    _start_read_server,
-    _wait_for_server,
     start_local_tracing_server,
     stop_local_tracing_server,
 )
-from databricks_agentbricks.clients.mlflow_trace_client import (
-    MLflowTraceClient,
-    _get_experiment_by_id,
-)
+from databricks_agentbricks.clients.mlflow_trace_client import MLflowTraceClient
 from databricks_agentbricks.clients.tracing_client import (
     MLflowTraceTables,
     ResolvedTraceExperiment,
@@ -50,12 +45,9 @@ __all__ = [
     "TRACES_TRACKING_URI_ENV",
     "TraceTable",
     "TraceTableKind",
-    "_get_experiment_by_id",
     "_mlflow",
     "_set_tracking_uri",
-    "_start_read_server",
     "_status_str",
-    "_wait_for_server",
     "build_tracing_service",
     "create_experiment_idempotent",
     "default_experiment_name",
@@ -83,7 +75,6 @@ def _build_mlflow_trace_client(obj) -> MLflowTraceClient:
     return MLflowTraceClient(
         obj.profile,
         mlflow_loader=_mlflow,
-        tracking_uri_setter=_set_tracking_uri,
     )
 
 

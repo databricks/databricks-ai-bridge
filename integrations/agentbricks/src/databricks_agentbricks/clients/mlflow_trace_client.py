@@ -6,7 +6,7 @@ import os
 from collections.abc import Callable
 from typing import Any, Optional
 
-from databricks_agentbricks.clients.tracing_client import _mlflow, _set_tracking_uri, _workspace_uri
+from databricks_agentbricks.clients.tracing_client import _mlflow, _workspace_uri
 from databricks_agentbricks.errors import AgentCliError
 
 _UC_TRACE_TAG = "mlflow.experiment.databricksTraceDestinationPath"
@@ -32,11 +32,9 @@ class MLflowTraceClient:
         profile: Optional[str],
         *,
         mlflow_loader: Callable[[], Any] = _mlflow,
-        tracking_uri_setter: Callable[[Any, Optional[str]], None] = _set_tracking_uri,
     ) -> None:
         self._profile = profile
         self._mlflow_loader = mlflow_loader
-        self._tracking_uri_setter = tracking_uri_setter
         self._module: Any | None = None
 
     @property
@@ -50,7 +48,7 @@ class MLflowTraceClient:
         return _workspace_uri(self._profile)
 
     def select_workspace(self) -> None:
-        self._tracking_uri_setter(self.module, self._profile)
+        self.module.set_tracking_uri(self.workspace_uri)
 
     def select_local(self, base_url: str) -> None:
         self.module.set_tracking_uri(base_url)
@@ -89,6 +87,6 @@ class MLflowTraceClient:
         os.environ[_SQL_WAREHOUSE_ENV] = warehouse_id
 
     def select_fallback_workspace(self, warehouse_id: Optional[str]) -> None:
-        self.module.set_tracking_uri(self.workspace_uri)
+        self.select_workspace()
         if warehouse_id:
             os.environ[_SQL_WAREHOUSE_ENV] = warehouse_id

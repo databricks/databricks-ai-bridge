@@ -18,7 +18,12 @@ import click
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.databricks_cli import _databricks
 from databricks_agentbricks.clients.local_ports import port_in_use
-from databricks_agentbricks.clients.local_tracing_client import LocalTracingClient
+from databricks_agentbricks.clients.local_tracing_client import (
+    LocalTracingClient,
+)
+from databricks_agentbricks.clients.local_tracing_client import (
+    start_local_tracing_server as _start_local_tracing_server,
+)
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.dev import (
     announce_bound_resources,
@@ -48,10 +53,10 @@ class _CliLocalTracing:
 def start_local_tracing_server(
     source_dir: pathlib.Path,
 ) -> tuple[subprocess.Popen | None, dict[str, str]]:
-    result = LocalTracingClient().start_dev(source_dir)
-    if result.warning is not None:
-        render.diagnostic("warning", result.warning, help=result.help)
-    return result.server, result.environment
+    return _start_local_tracing_server(
+        source_dir,
+        on_warning=lambda warning, hint: render.diagnostic("warning", warning, help=hint),
+    )
 
 
 def stop_local_tracing_server(server: subprocess.Popen) -> None:
