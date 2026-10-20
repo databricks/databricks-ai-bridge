@@ -1118,7 +1118,8 @@ def _app_provisioner(workspace_client) -> AppProvisioner:
 def test_find_returns_none_only_when_the_app_does_not_exist():
     w = fake_workspace_client()
     provisioner = _app_provisioner(w)
-    assert provisioner.find(DeploymentName("agent-bricks-demo")).name == "agent-bricks-demo"
+    app = provisioner.find(DeploymentName("agent-bricks-demo"))
+    assert app is not None and app.name == "agent-bricks-demo"
 
     w.remove_app()
     assert provisioner.find(DeploymentName("agent-bricks-demo")) is None
