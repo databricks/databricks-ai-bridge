@@ -11,6 +11,7 @@ import yaml
 from click.testing import CliRunner
 
 from databricks_agentbricks.cli import dev as dev_mod
+from databricks_agentbricks.clients.local_tracing_client import LocalTracingStart
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.agent_project import AgentProject, ToolSpec
 from databricks_agentbricks.projects.config import write_project_metadata
@@ -50,10 +51,14 @@ class _Ctx:
 
 @pytest.fixture(autouse=True)
 def _stub_local_tracing(monkeypatch):
-    """`agentbricks dev` starts a local MLflow tracking server (via cli.tracing) for Agent Bricks projects;
-    stub the name dev.py imported so ordinary dev tests neither spawn one nor need uv. Tracing tests
-    override this. The server helper's own behavior is tested in tracing_test.py."""
-    monkeypatch.setattr(dev_mod, "start_local_tracing_server", lambda source_dir: (None, {}))
+    """`agentbricks dev` starts a local MLflow tracking server for Agent Bricks projects;
+    stub the client so ordinary dev tests neither spawn one nor need uv. Tracing tests override
+    this. The client's own behavior is tested in tracing_test.py."""
+    monkeypatch.setattr(
+        dev_mod.LocalTracingClient,
+        "start_dev",
+        lambda _self, source_dir: LocalTracingStart(None, None),
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -256,11 +261,12 @@ def test_dev_starts_local_tracing_and_wires_dev_manifest(tmp_path: pathlib.Path,
     (tmp_path / ".venv").mkdir()
     fake_server = mock.Mock()
     monkeypatch.setattr(
-        dev_mod,
-        "start_local_tracing_server",
-        lambda source_dir: (
+        dev_mod.LocalTracingClient,
+        "start_dev",
+        lambda _self, source_dir: LocalTracingStart(
             fake_server,
-            {
+            "http://127.0.0.1:5599",
+            environment={
                 "MLFLOW_TRACKING_URI": "http://127.0.0.1:5599",
                 "MLFLOW_EXPERIMENT_NAME": source_dir.resolve().name,
             },
@@ -299,9 +305,13 @@ def test_dev_stops_local_tracing_server_when_setup_fails(tmp_path: pathlib.Path,
     (tmp_path / ".venv").mkdir()
     fake_server = mock.Mock()
     monkeypatch.setattr(
-        dev_mod,
-        "start_local_tracing_server",
-        lambda source_dir: (fake_server, {"MLFLOW_TRACKING_URI": "http://127.0.0.1:5599"}),
+        dev_mod.LocalTracingClient,
+        "start_dev",
+        lambda _self, source_dir: LocalTracingStart(
+            fake_server,
+            "http://127.0.0.1:5599",
+            environment={"MLFLOW_TRACKING_URI": "http://127.0.0.1:5599"},
+        ),
     )
     with mock.patch.object(dev_mod, "_databricks") as db:
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
@@ -317,11 +327,15 @@ def test_dev_shows_local_traces_url_when_tracing_on(tmp_path: pathlib.Path, monk
     _write_agent_manifest(tmp_path, server="agentbricks")
     (tmp_path / ".venv").mkdir()
     monkeypatch.setattr(
-        dev_mod,
-        "start_local_tracing_server",
-        lambda source_dir: (
+        dev_mod.LocalTracingClient,
+        "start_dev",
+        lambda _self, source_dir: LocalTracingStart(
             mock.Mock(),
-            {"MLFLOW_TRACKING_URI": "http://127.0.0.1:5599", "MLFLOW_EXPERIMENT_NAME": "my-agent"},
+            "http://127.0.0.1:5599",
+            environment={
+                "MLFLOW_TRACKING_URI": "http://127.0.0.1:5599",
+                "MLFLOW_EXPERIMENT_NAME": "my-agent",
+            },
         ),
     )
     with mock.patch.object(dev_mod, "_databricks"):
@@ -332,12 +346,11 @@ def test_dev_shows_local_traces_url_when_tracing_on(tmp_path: pathlib.Path, monk
     assert "experiment name: my-agent" in output
 
 
-def test_dev_omits_traces_line_when_local_tracing_unavailable(tmp_path: pathlib.Path, monkeypatch):
-    # Local tracing couldn't start (start_local_tracing_server returns none) -> no Traces line in the panel.
+def test_dev_omits_traces_line_when_local_tracing_unavailable(tmp_path: pathlib.Path):
+    # Local tracing couldn't start, so there is no Traces line in the panel.
     (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     _write_agent_manifest(tmp_path, server="agentbricks")
     (tmp_path / ".venv").mkdir()
-    monkeypatch.setattr(dev_mod, "start_local_tracing_server", lambda source_dir: (None, {}))
     with mock.patch.object(dev_mod, "_databricks"):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
@@ -371,12 +384,11 @@ def test_dev_runs_offline_when_client_unavailable(tmp_path: pathlib.Path):
 def test_dev_runs_without_traces_when_local_tracing_unavailable(
     tmp_path: pathlib.Path, monkeypatch
 ):
-    # Local tracing is best-effort: if the server can't start (start_local_tracing_server returns none),
+    # Local tracing is best-effort: if the server can't start,
     # dev still runs the agent and injects no MLflow env.
     (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"], "env": []}))
     _write_agent_manifest(tmp_path, server="agentbricks")
     (tmp_path / ".venv").mkdir()
-    monkeypatch.setattr(dev_mod, "start_local_tracing_server", lambda source_dir: (None, {}))
     captured: dict = {}
 
     def _fake_databricks(args, *a, **kw):
@@ -620,6 +632,21 @@ def test_dev_notes_bound_tracing_experiment(tmp_path: pathlib.Path):
     out = " ".join(result.output.split())  # collapse rich line-wrapping
     assert "Tracing experiment '/Shared/agentbricks_traces/mine' is bound" in out
     assert "Run `agentbricks deploy` to trace to the bound experiment" in out
+
+
+def test_dev_reports_local_tracing_start_warning(tmp_path: pathlib.Path):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    failure = LocalTracingStart(None, None, warning="uvx not found", help="install uv")
+    with (
+        mock.patch.object(dev_mod.LocalTracingClient, "start_dev", return_value=failure),
+        mock.patch.object(dev_mod.render, "diagnostic") as diagnostic,
+        mock.patch.object(dev_mod, "_databricks") as db,
+    ):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    diagnostic.assert_called_once_with("warning", "uvx not found", help="install uv")
+    db.assert_called_once()
 
 
 def test_dev_hides_active_venv_and_port_from_run_local(tmp_path: pathlib.Path, monkeypatch):
