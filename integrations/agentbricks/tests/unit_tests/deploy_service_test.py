@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+import requests
 from databricks.sdk.errors import (
     BadRequest,
     InternalError,
@@ -1138,7 +1139,7 @@ def test_wait_until_deleted_retries_a_check_that_fails(monkeypatch):
     w.apps.get.side_effect = [
         InternalError("blip"),
         TimeoutError("Timed out after 0:01:00"),
-        ConnectionError("connection reset"),
+        requests.ConnectionError("connection reset"),
         App(name="app"),
         NotFound("gone"),
     ]
@@ -1148,11 +1149,22 @@ def test_wait_until_deleted_retries_a_check_that_fails(monkeypatch):
 
 
 _TOKEN_REFRESH_FAILED = ValueError("oauth2: token expired and refresh token is not set")
+# What a `databricks auth login` profile's credential provider raises when its refresh fails.
+_CLI_LOGIN_EXPIRED = OSError("cannot get access token: refresh token is invalid")
+# What the OIDC and Model Serving credential providers raise.
+_OTHER_LOGIN_FAILURES = [Exception("Cannot get oidc token"), RuntimeError("no invokers token")]
 
 
 @pytest.mark.parametrize(
     "error",
-    [Unauthenticated("expired"), PermissionDenied("no"), BadRequest("bad"), _TOKEN_REFRESH_FAILED],
+    [
+        Unauthenticated("expired"),
+        PermissionDenied("no"),
+        BadRequest("bad"),
+        _TOKEN_REFRESH_FAILED,
+        _CLI_LOGIN_EXPIRED,
+        *_OTHER_LOGIN_FAILURES,
+    ],
 )
 def test_wait_until_deleted_stops_at_once_on_an_error_that_wont_clear(monkeypatch, error):
     monkeypatch.setattr(provisioners_mod.time, "sleep", lambda _s: None)
@@ -1182,9 +1194,10 @@ def test_wait_until_deleted_running_out_keeps_the_last_failed_check():
     assert wait == AppDeleteWait(timed_out=True, error="boom")
 
 
-def test_find_reports_a_failed_token_refresh():
+@pytest.mark.parametrize("error", [_TOKEN_REFRESH_FAILED, _CLI_LOGIN_EXPIRED, RuntimeError("x")])
+def test_find_reports_a_failed_login(error):
     w = Mock()
-    w.apps.get.side_effect = _TOKEN_REFRESH_FAILED
+    w.apps.get.side_effect = error
 
     with pytest.raises(AgentCliError, match="Could not check whether deployment"):
         _app_provisioner(w).find(DeploymentName("agent-bricks-demo"))
@@ -1208,8 +1221,10 @@ def test_delete_source_of_a_missing_folder_is_not_an_error():
     "error",
     [
         TimeoutError("Timed out after 0:01:00"),
-        ConnectionError("connection reset"),
-        ValueError("oauth2: token expired and refresh token is not set"),
+        requests.ConnectionError("connection reset"),
+        _TOKEN_REFRESH_FAILED,
+        _CLI_LOGIN_EXPIRED,
+        *_OTHER_LOGIN_FAILURES,
     ],
 )
 def test_delete_source_network_or_login_failure_is_reported_not_a_traceback(error):

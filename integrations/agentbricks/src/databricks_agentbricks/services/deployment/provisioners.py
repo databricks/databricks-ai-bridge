@@ -25,6 +25,7 @@ from datetime import timedelta
 from types import MappingProxyType
 from typing import Optional
 
+import requests
 from databricks.sdk.errors import (
     DatabricksError,
     DeadlineExceeded,
@@ -105,12 +106,13 @@ def recorded_source_code_path(app: App) -> Optional[str]:
     return None
 
 
-# What a workspace call can fail with besides a typed API error: the SDK raises ValueError when a
-# token refresh fails (as `apps_user_auth_client` also handles), TimeoutError once its retries run
-# out, and connection errors from `requests` are OSErrors. DatabricksError is an OSError too, so
-# catch it first wherever the two are handled differently.
-_AUTH_ERRORS = (ValueError,)
-_NETWORK_ERRORS = (TimeoutError, OSError)
+# What a workspace call can fail with besides a typed API error. Connection failures surface as
+# `requests` errors, or TimeoutError once the SDK's retries run out. A failed login or token
+# refresh surfaces as whatever the auth type's credential provider raises: OSError for
+# `databricks auth login` profiles ("cannot get access token"), ValueError, RuntimeError, or a bare
+# Exception. `requests` errors and DatabricksError are OSErrors too, so order the handlers.
+_NETWORK_ERRORS = (requests.RequestException, TimeoutError)
+_LOOKUP_ERRORS = (DatabricksError, OSError, ValueError, RuntimeError)
 # API errors that can clear on their own, so a wait retries them.
 _TRANSIENT_API_ERRORS = (InternalError, TemporarilyUnavailable, DeadlineExceeded, TooManyRequests)
 
@@ -654,7 +656,7 @@ class AppProvisioner:
             return self._api_client_provider.get().workspace_client.apps.get(name)
         except NotFound:
             return None
-        except (DatabricksError, *_AUTH_ERRORS, *_NETWORK_ERRORS) as exc:
+        except _LOOKUP_ERRORS as exc:
             raise _app_lookup_error(name, exc) from exc
 
     def wait_until_deleted(
@@ -674,12 +676,10 @@ class AppProvisioner:
                 last_error = None
             except NotFound:
                 return AppDeleteWait()
-            except _TRANSIENT_API_ERRORS as exc:
+            except (*_TRANSIENT_API_ERRORS, *_NETWORK_ERRORS) as exc:
                 last_error = exc
-            except (DatabricksError, AgentCliError, *_AUTH_ERRORS) as exc:
+            except Exception as exc:  # noqa: BLE001 - the delete is accepted; report, don't raise
                 return AppDeleteWait(error=str(exc))
-            except _NETWORK_ERRORS as exc:
-                last_error = exc
             if time.monotonic() >= deadline:
                 return AppDeleteWait(timed_out=True, error=str(last_error) if last_error else None)
             time.sleep(10)
@@ -690,7 +690,7 @@ class AppProvisioner:
             self._api_client_provider.get().workspace_client.workspace.delete(path, recursive=True)
         except NotFound:
             return False
-        except (DatabricksError, *_AUTH_ERRORS, *_NETWORK_ERRORS) as exc:
+        except Exception as exc:  # noqa: BLE001 - the App delete is accepted; report as a warning
             raise AgentCliError(
                 f"Could not delete the uploaded source folder '{path}': {exc}",
                 error_code=getattr(exc, "error_code", None),

@@ -38,8 +38,9 @@ Every resource a run creates carries its run id, and is deleted at three points:
    Fixtures delete what they create, such as `scratch_schema` and its schema.
 2. **When the run ends**, `pytest_sessionfinish` deletes everything carrying the run's name prefix
    that is still there (stores, Apps, synced source folders, tracing experiments, schemas) and the
-   Apps' Lakebase roles; `deployments delete` leaves the folders, experiments and roles behind (`harness.cleanup.delete_run_leftovers`). A failure
-   there fails the run.
+   Apps' Lakebase roles (`harness.cleanup.delete_run_leftovers`). `deployments delete` leaves the
+   experiments and roles behind; the sweep catches a source folder only when its delete never ran.
+   A failure there fails the run.
 3. **After a run that was killed** before step 2, for example by a CI timeout:
 
    ```bash
