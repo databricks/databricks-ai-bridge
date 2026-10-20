@@ -1,0 +1,11 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+dist/
+*.egg-info/
+
+# Agent Bricks local dev artifacts (`agentbricks dev`)
+.agentbricks/
+app.agentbricksdev.yaml

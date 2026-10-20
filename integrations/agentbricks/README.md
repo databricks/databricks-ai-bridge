@@ -27,7 +27,7 @@ invocation protocol to design yourself. Bring your own agent, or start from a te
 ![Deployment: from a blank directory to a running service](docs/deployment.svg)
 
 - **Agent project** - `agentbricks init` scaffolds a deployable project from a framework template
-  (LangGraph or OpenAI Agents) with the runtime, tests, and an optional chat UI wired up; you edit
+  (LangGraph, OpenAI Agents, or Microsoft Agent Framework) with the runtime, tests, and an optional chat UI wired up; you edit
   the application code (model, tools, prompts).
 - **`agent.toml`** - the declarative source of truth for the Databricks-managed infrastructure your
   agent depends on: tool bindings (data sandbox, managed MCP services, Unity Catalog functions),
@@ -54,7 +54,7 @@ The two ways to run an agent:
   server with no `DurableAgentServer`: you define your own endpoints, request/response shapes, and protocol.
   `agentbricks dev` and `agentbricks deploy` run and ship it the same way.
 
-Both managed framework templates support human approval with request-user (OBO) tools. A new
+The LangGraph and OpenAI managed templates support human approval with request-user (OBO) tools. A new
 invocation from the same authenticated user resumes the saved state with that request's tool
 credentials; the browser can use its existing valid login session.
 
@@ -62,6 +62,7 @@ credentials; the browser can use its existing valid login session.
 | --- | --- |
 | LangGraph | Approve, edit, or reject according to the middleware policy |
 | OpenAI Agents SDK | Approve or reject, with the pending tool call's `call_id` |
+| Microsoft Agent Framework | Approval continuation and request-user tool bindings are unsupported |
 
 Automatic OBO failure recovery remains unsupported. Existing generated apps need the corresponding
 template source updates; upgrading the installed package does not rewrite their agent or adapter.
@@ -588,7 +589,7 @@ see [`cli.md`](cli.md). The tree below is a quick overview.
 agentbricks [-p <profile>] [-o text|json]
   login        [--profile P]
   logout
-  init         [--framework openai|langgraph] [--server agentbricks|custom]
+  init         [--framework openai|langgraph|maf] [--server agentbricks|custom]
                [--disable-chat-app]
                [--memory-store NAME] [--session-store NAME]
                [--existing] [--profile P] [directory]
@@ -684,7 +685,7 @@ decision.
 
 The reference honors `--disable-chat-app`, `--memory-store`, `--session-store`, and the selected
 profile. These are migration intent; init does not provision resources or change the existing
-application. Migration supports LangGraph and the OpenAI Agents SDK with the managed server (`server = "agentbricks"`);
+application. Migration supports LangGraph, the OpenAI Agents SDK, and Microsoft Agent Framework with the managed server (`server = "agentbricks"`);
 `--server custom` is not supported for `--existing`.
 
 ## Invoke HTTP endpoints
@@ -1162,3 +1163,17 @@ sync/streaming/background transport selector is manual.
 Developing Agent Bricks CLI (`agentbricks`), AgentKit, the runtime, and templates - plus the local dev loop and how to
 test unreleased changes on `agentbricks dev` and `agentbricks deploy`, is covered in
 [CONTRIBUTING.md](CONTRIBUTING.md).
+
+### Microsoft Agent Framework
+
+`agentbricks init --framework maf my-agent` creates a native Microsoft Agent Framework Agent with
+managed Session Store history, actor-scoped Memory Store tools, the durable invocation runtime,
+Databricks AI Gateway model calls, App-authenticated MCP/UC/Genie tools, and the browser UI.
+Use `databricks-agentbricks[maf]` for the adapter API under `databricks_agentkit.maf`.
+
+The native `HistoryProvider` preserves complete tool-call/result messages. Local history is process-local;
+binding a managed Session Store enables history across restarts and replicas. Recovery replays a turn
+and can duplicate transcript turns or side effects if history committed before a worker stopped.
+The recovery instruction does not enforce idempotence; tools need application-owned idempotency.
+This initial adapter rejects approval
+continuation and request-user tool bindings; LangGraph/OpenAI remain the options for those features.

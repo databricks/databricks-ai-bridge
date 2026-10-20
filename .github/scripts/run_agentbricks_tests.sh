@@ -15,6 +15,8 @@ case "${1:-}" in
     uv run --resolution highest --exact --group tests --extra langgraph --extra openai --extra maf pytest tests/unit_tests
     PYTHONPATH=src/databricks_agentbricks/templates/agent-openai \
       uv run --no-sync pytest src/databricks_agentbricks/templates/agent-openai/tests
+    PYTHONPATH=src/databricks_agentbricks/templates/agent-maf \
+      uv run --no-sync pytest src/databricks_agentbricks/templates/agent-maf/tests
     ;;
   functional)
     uv build --wheel --out-dir dist ../..

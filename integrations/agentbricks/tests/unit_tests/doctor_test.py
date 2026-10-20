@@ -70,7 +70,7 @@ def _write_onboarded_project(root: pathlib.Path, framework: str) -> None:
     )
 
 
-@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("framework", ["langgraph", "openai", "maf"])
 def test_fully_onboarded_framework_reports_success(tmp_path: pathlib.Path, framework: str):
     project = tmp_path / framework
     _write_onboarded_project(project, framework)
@@ -83,7 +83,7 @@ def test_fully_onboarded_framework_reports_success(tmp_path: pathlib.Path, frame
     assert "[fail]" not in result.output
 
 
-@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("framework", ["langgraph", "openai", "maf"])
 def test_fresh_generated_project_reports_success(tmp_path: pathlib.Path, framework: str):
     project = tmp_path / framework
     init_result = CliRunner().invoke(
@@ -105,7 +105,10 @@ def test_plain_repository_is_a_normal_failed_report(tmp_path: pathlib.Path):
     assert "Framework: unknown" in result.output
     assert "[fail] agent_manifest:" in result.output
     assert "not onboarded" in result.output
-    assert "agentbricks init --framework <langgraph|openai> --existing <directory>" in result.output
+    assert (
+        "agentbricks init --framework <langgraph|openai|maf> --existing <directory>"
+        in result.output
+    )
     assert "Traceback" not in result.output
 
 
@@ -164,7 +167,7 @@ def test_json_report_has_stable_shape_and_failure_exit_code(tmp_path: pathlib.Pa
         "onboarded": False,
         "checks": report["checks"],
         "summary": {"total": 7, "passed": 0, "failed": 7},
-        "next_step": "agentbricks init --framework <langgraph|openai> --existing <directory>",
+        "next_step": "agentbricks init --framework <langgraph|openai|maf> --existing <directory>",
     }
     assert [check["id"] for check in report["checks"]] == [
         "agent_manifest",
@@ -735,7 +738,7 @@ def test_unknown_framework_next_step_requires_explicit_choice(tmp_path: pathlib.
     text_result = CliRunner().invoke(agentbricks, ["doctor", str(tmp_path)])
     json_result = CliRunner().invoke(agentbricks, ["--output", "json", "doctor", str(tmp_path)])
 
-    expected = "agentbricks init --framework <langgraph|openai> --existing <directory>"
+    expected = "agentbricks init --framework <langgraph|openai|maf> --existing <directory>"
     assert text_result.exit_code == 1
     assert expected in text_result.output
     assert json_result.exit_code == 1
