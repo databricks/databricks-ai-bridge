@@ -1,7 +1,7 @@
 # Bring your own framework or harness
 
 This runnable, model-free echo example hosts your code on `DurableAgentServer`. It demonstrates
-managed conversation history, long-term memory, and tracing without
+managed conversation history, long-term memory, tracing, and whole-turn crash recovery without
 requiring LangGraph or the OpenAI Agents SDK. Replace `run_agent` in `agent/agent.py` with your
 framework's entrypoint and add its dependencies to `pyproject.toml`. Adjust `runtime/adapter.py`
 when your framework needs different inputs, outputs, tools, or checkpoints.
@@ -22,7 +22,7 @@ curl -sS http://localhost:8000/api/invocations \
 
 The final invocation response contains an assistant message with `Echo: Hello`. The managed API
 also supports background invocation, polling, and event replay. See [AGENTKIT_CONTRACT.md](AGENTKIT_CONTRACT.md)
-for state, authentication, and customization requirements.
+for state, authentication, recovery, and customization requirements.
 
 ## Managed sessions and memory
 
@@ -35,7 +35,7 @@ agentbricks memory bind --help
 
 `agentbricks dev` keeps sessions in process memory and disables managed memory. During deployment,
 bindings resolve to `AGENT_SESSION_STORE` and `AGENT_MEMORY_STORE`, and the same adapter persists
-conversation turns and enables actor-scoped memory search. For direct SDK testing,
+turns and completed responses and enables actor-scoped memory search. For direct SDK testing,
 run `uv run start-server` with those variables and workspace credentials set explicitly.
 On a server with managed memory configured, use `remember` to save a fact:
 
@@ -63,7 +63,8 @@ uv run pytest
 agentbricks --profile <profile> deploy <name> --source .
 ```
 
-Tests run without workspace credentials or model calls. Bind a Session Store to persist completed
-conversation turns. This initial scaffold does not register an application recovery hook;
-add recovery and native checkpoints before relying on crash continuation. `agentbricks tools add` does not support custom-framework projects; wire your
+Tests run without workspace credentials or model calls. Deployment attaches persistent Runtime
+Store storage; bind a Session Store as well to retain the sample's checkpoints across failures.
+Recovery reruns unfinished agent execution at least once, so protect side effects with
+idempotency keys. `agentbricks tools add` does not support custom-framework projects; wire your
 framework's own tools and MCP clients directly. Approval flows require explicit adapter support.

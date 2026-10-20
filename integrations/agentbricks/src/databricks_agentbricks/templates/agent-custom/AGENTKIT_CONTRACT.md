@@ -18,8 +18,8 @@ access. `dev` runs with process-local sessions and memory disabled; it does not 
 stores. For explicit SDK store testing, run the server directly with those environment variables
 and workspace credentials. The adapter uses public, framework-neutral
 `AgentKitClient.session_stores` and `.memory_stores` resource APIs directly. A bound Session Store
-holds completed conversation turns. Without one, the sample keeps the same records in process
-memory and loses them at restart. There is no silent fallback if a bound
+holds invocation-tagged input and completion records. Without one, the sample keeps the same
+records in process memory and loses them at restart. There is no silent fallback if a bound
 store fails.
 
 Memory is opt-in: the adapter retrieves up to five relevant facts before calling the native
@@ -31,12 +31,25 @@ the mapping with your application's trusted tenant/user identity before serving 
 When request-user authentication is enabled, the runtime namespaces sessions and the adapter
 namespaces explicit actors by the authenticated principal. Store access uses application credentials.
 
-## Runtime persistence
+## Recovery
 
-Runtime Store persistence covers invocation status and emitted events. Session Store persistence
-covers the sample's completed conversation turns. This initial scaffold registers an invoke hook;
-application recovery and framework-native checkpoints are separate additions. Concurrent session
-writes require coordination. Local development storage is process-local.
+`runtime/main.py` registers both invoke and recover hooks on `DurableAgentServer`. Runtime Store
+persistence covers invocation status and emitted events. Session Store persistence covers this
+sample's transcript and whole-turn checkpoints. A durable Runtime Store alone does not make
+framework state durable. Local `dev` invocation storage is process-local.
+
+Recovery returns a matching completed invocation's saved response without appending the input
+again, rerunning the agent, or emitting duplicate messages. An incomplete turn runs again from
+its saved input and the committed transcript. Persist framework checkpoints separately if your
+agent needs step-level recovery. Execution is **at least once**: agent/model calls and external
+side effects can repeat after failure. Use `context.invocation_id` as an idempotency key in custom
+integrations, or your framework's native durable execution primitive. Request-user invocations
+cannot recover automatically because user credentials are not persisted.
+
+Completion records are written before message events. Session Store and Runtime Store writes
+are not atomic: a crash between them may leave a response present without a corresponding message
+event. Read the final invocation response as the authoritative result. Concurrent writes require
+additional coordination; the sample is not an exactly-once side-effect system.
 
 ## Other capabilities
 

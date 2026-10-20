@@ -1,6 +1,7 @@
 """Map the managed invocation protocol to plain messages and public AgentKit store APIs.
 
-The native function receives session history and actor-scoped recalled memories.
+This example checkpoints whole turns, rather than framework-specific internal steps.
+Recovery can run unfinished agent code again: external side effects need idempotency keys.
 """
 
 import asyncio
@@ -18,6 +19,7 @@ from databricks_agentkit import (
     start_trace,
     workspace_client,
 )
+from databricks_agentkit.runtime.auth import AuthError
 
 # Credential-free development fallback. Bind a Session Store for persistence across restarts.
 _local_sessions: dict[str, tuple[str, list[dict[str, Any]]]] = {}
@@ -120,8 +122,33 @@ async def invoke(value: Any, context: InvocationContext) -> dict[str, Any]:
     if context.request_auth is not None and "actor" in payload:
         actor = context.request_auth.namespace("actor", actor)
     records, session = await asyncio.to_thread(_load, session_id, actor)
-    history = [message for record in records for message in record["messages"]]
-    history.extend(payload["messages"])
+    turns: dict[str, dict[str, Any]] = {}
+    for record in records:
+        turns[record["invocation_id"]] = record
+    existing = turns.get(context.invocation_id)
+    if existing is not None:
+        if existing["input"] != payload:
+            raise ValueError("invocation ID has already been used with different input")
+        if "response" in existing:
+            # Return the committed output without emitting a second message event.
+            return copy.deepcopy(existing["response"])
+    else:
+        existing = {
+            "type": _RECORD_TYPE,
+            "invocation_id": context.invocation_id,
+            "input": payload,
+        }
+        await asyncio.to_thread(_append, session, session_id, existing)
+        turns[context.invocation_id] = existing
+
+    history = []
+    for turn in turns.values():
+        history.extend(turn["input"]["messages"])
+        if "response" in turn:
+            history.extend(
+                {"role": message["role"], "content": message["content"]}
+                for message in turn["response"]["output"]
+            )
     with start_trace(name="custom_agent", inputs=payload, session_id=session_id):
         memories = await asyncio.to_thread(_memories, payload, actor, context.invocation_id)
         message = await run_agent(copy.deepcopy(history), memories=memories)
@@ -133,17 +160,18 @@ async def invoke(value: Any, context: InvocationContext) -> dict[str, Any]:
         raise ValueError("run_agent must return an assistant message with string content")
     output = {**message, "type": "ai", "id": context.invocation_id}
     response = {"output": [output], "status": "completed"}
-    await asyncio.to_thread(
-        _append,
-        session,
-        session_id,
-        {
-            "type": _RECORD_TYPE,
-            "messages": [
-                *payload["messages"],
-                {"role": message["role"], "content": message["content"]},
-            ],
-        },
-    )
+    await asyncio.to_thread(_append, session, session_id, {**existing, "response": response})
+    # Session checkpoints and Runtime Store events are separate writes. A crash here may
+    # leave output available only in the final response; recovery does not duplicate events.
     await context.emit(copy.deepcopy({"type": "message", "message": output}))
     return response
+
+
+async def recover(value: Any, context: InvocationContext) -> dict[str, Any]:
+    if context.request_auth is not None:
+        raise AuthError(
+            "MCP_USER_AUTH_RECOVERY_UNSUPPORTED",
+            "Request-user invocations cannot be recovered in the background.",
+            400,
+        )
+    return await invoke(value, context)

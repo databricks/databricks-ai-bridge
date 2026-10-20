@@ -1,8 +1,8 @@
 from fastapi.testclient import TestClient
-from runtime.adapter import _local_sessions, invoke
 
 from databricks_agentkit import DurableAgentServer
 from databricks_agentkit.runtime.store import InMemoryRuntimeStore
+from runtime.adapter import _local_sessions, invoke, recover
 
 
 def test_managed_http_invocation_and_replay(monkeypatch):
@@ -11,6 +11,7 @@ def test_managed_http_invocation_and_replay(monkeypatch):
     _local_sessions.clear()
     app = DurableAgentServer(runtime_store=InMemoryRuntimeStore())
     app.invoke(invoke)
+    app.recover(recover)
     body = {
         "id": "11111111-1111-4111-8111-111111111111",
         "session_id": "demo",
@@ -21,4 +22,4 @@ def test_managed_http_invocation_and_replay(monkeypatch):
         assert response.status_code == 200
         assert response.json()["output"]["output"][0]["content"] == "Echo: Hello"
         assert client.post("/api/invocations", json=body).json() == response.json()
-    assert len(_local_sessions["demo"][1]) == 1
+    assert len(_local_sessions["demo"][1]) == 2

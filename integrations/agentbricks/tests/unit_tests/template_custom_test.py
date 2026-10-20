@@ -29,6 +29,8 @@ class RemoteStores:
         self.entries = {}
         self.searches = []
         self.workspace_requests = []
+        self.fail_append = None
+        self.fail_completion = None
 
     def get_session_store(self, name):
         return {"session_store_name": name}
@@ -48,7 +50,7 @@ class RemoteStores:
 
     def list_session_items(self, store, session_id, *, order_by, page_token, **_kwargs):
         assert store == "sessions" and order_by == "create_time asc"
-        # Exercise the SDK's actual pagination while restoring session history.
+        # Exercise the SDK's actual pagination while restoring checkpoint records.
         offset = int(page_token or 0)
         records = self.items[session_id]
         result = {"session_items": records[offset : offset + 1]}
@@ -58,8 +60,17 @@ class RemoteStores:
 
     def append_session_items(self, store, session_id, items):
         assert store == "sessions"
+        fail = self.fail_append
+        self.fail_append = None
+        if "response" in items[0] and self.fail_completion:
+            fail = self.fail_completion
+            self.fail_completion = None
+        if fail == "before":
+            raise OSError("append failed before commit")
         saved = [{"item_id": str(uuid4()), "data": copy.deepcopy(item)} for item in items]
         self.items[session_id].extend(saved)
+        if fail == "after":
+            raise OSError("append response lost after commit")
         return {"session_items": saved}
 
     def get_memory_store(self, store):
@@ -184,18 +195,41 @@ async def test_generated_agent_is_framework_neutral_and_emits_managed_message(te
 
 
 @pytest.mark.asyncio
-async def test_sessions_retain_separate_transcripts(template):
+async def test_sessions_retain_separate_transcripts_and_restore_completed_turns(template):
     for session in ("alice-session", "bob-session"):
         for index in range(2):
             ctx, _events = context(f"{session}-{index}", session)
             await template.adapter.invoke(message(f"{session}-{index}"), ctx)
     for session in ("alice-session", "bob-session"):
         records, _handle = template.adapter._load(session, session)
-        assert len(records) == 2
-        assert [record["messages"][0]["content"] for record in records] == [
-            f"{session}-0",
-            f"{session}-1",
-        ]
+        assert {record["invocation_id"] for record in records} == {f"{session}-0", f"{session}-1"}
+        ctx, events = context(f"{session}-0", session)
+        recovered = await template.adapter.recover(message(f"{session}-0"), ctx)
+        assert recovered["output"][0]["content"] == f"Echo: {session}-0"
+        assert events == []
+        assert len(template.adapter._load(session, session)[0]) == 4
+
+
+@pytest.mark.asyncio
+async def test_recovery_reuses_committed_response_without_duplicate_messages(template):
+    ctx, events = context()
+    payload = message("once")
+    original = await template.adapter.invoke(payload, ctx)
+    for _attempt in range(2):
+        recovered_ctx, recovered_events = context()
+        assert await template.adapter.recover(payload, recovered_ctx) == original
+        assert recovered_events == []
+    assert len(template.adapter._load("conversation", "conversation")[0]) == 2
+    assert len(events) == 1
+    assert payload == message("once")
+
+
+@pytest.mark.asyncio
+async def test_recovery_without_checkpoint_runs_original_input(template):
+    ctx, events = context()
+    response = await template.adapter.recover(message("first attempt was lost"), ctx)
+    assert response["output"][0]["content"] == "Echo: first attempt was lost"
+    assert len(events) == 1
 
 
 @pytest.mark.asyncio
@@ -215,7 +249,64 @@ async def test_native_framework_can_mutate_its_messages_without_changing_saved_i
     assert "framework changed" in response["output"][0]["content"]
     assert payload == message("original")
     records, _session = template.adapter._load("conversation", "conversation")
-    assert records[0]["messages"][0] == payload["messages"][0]
+    assert all(record["input"] == payload for record in records)
+    recovered_ctx, recovered_events = context()
+    assert await template.adapter.recover(payload, recovered_ctx) == response
+    assert recovered_events == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["before", "after"])
+async def test_recovery_after_session_write_failure_does_not_duplicate_input(template, failure):
+    if template.mode != "managed":
+        return
+    template.remote.fail_append = failure
+    ctx, _events = context()
+    with pytest.raises(OSError, match="append"):
+        await template.adapter.invoke(message("recovered"), ctx)
+    recovered = await template.adapter.recover(message("recovered"), ctx)
+    assert recovered["output"][0]["content"] == "Echo: recovered"
+    records = template.remote.items["conversation"]
+    assert len(records) == 2
+    assert "response" not in records[0]["data"] and "response" in records[1]["data"]
+
+
+@pytest.mark.asyncio
+async def test_recovery_after_event_write_failure_returns_committed_response(template):
+    ctx, _events = context()
+
+    async def failed_emit(_event):
+        raise OSError("event store unavailable")
+
+    failed_attempt = InvocationAttemptContext("turn", 1, failed_emit, session_id="conversation")
+    failed_ctx = InvocationContext("turn", "conversation", 1, failed_attempt)
+    with pytest.raises(OSError, match="event store unavailable"):
+        await template.adapter.invoke(message("saved"), failed_ctx)
+    response = await template.adapter.recover(message("saved"), ctx)
+    assert response["output"][0]["content"] == "Echo: saved"
+    assert len(template.adapter._load("conversation", "conversation")[0]) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["before", "after"])
+async def test_completion_failure_recovers_without_duplicate_history_or_memory(
+    template, monkeypatch, failure
+):
+    if template.mode != "managed":
+        return
+    monkeypatch.setenv("AGENT_MEMORY_STORE", "memories")
+    template.remote.fail_completion = failure
+    ctx, events = context()
+    payload = message("save", actor="alice", remember="Likes teal")
+    with pytest.raises(OSError, match="append"):
+        await template.adapter.invoke(payload, ctx)
+    assert events == []
+    response = await template.adapter.recover(payload, ctx)
+    assert response["output"][0]["content"] == "Echo: save\nRelevant memories:\nLikes teal"
+    assert len(template.remote.items["conversation"]) == 2
+    assert list(template.remote.entries) == [("alice", "/invocations/turn.md")]
+    assert len(template.remote.searches) == (2 if failure == "before" else 1)
+    assert len(events) == (1 if failure == "before" else 0)
 
 
 @pytest.mark.asyncio
@@ -242,11 +333,13 @@ async def test_bound_memory_writes_and_recalls_across_sessions_with_actor_isolat
 
 
 @pytest.mark.asyncio
-async def test_session_actor_cannot_change(template):
+async def test_session_actor_cannot_change_and_invocation_cannot_change_input(template):
     ctx, _events = context()
     await template.adapter.invoke(message("Hello", actor="alice"), ctx)
     with pytest.raises(ValueError, match="another actor"):
         await template.adapter.invoke(message("Hello", actor="bob"), ctx)
+    with pytest.raises(ValueError, match="different input"):
+        await template.adapter.recover(message("Changed", actor="alice"), ctx)
 
 
 @pytest.mark.asyncio
@@ -303,12 +396,16 @@ async def test_unbound_memory_request_fails_before_writing_transcript(template):
 
 
 @pytest.mark.asyncio
-async def test_request_user_actor_is_namespaced(template, monkeypatch):
+async def test_request_user_actor_is_namespaced_and_background_recovery_rejected(
+    template, monkeypatch
+):
     monkeypatch.setenv("AGENT_MEMORY_STORE", "memories")
     auth = RequestAuthContext(token=None, principal="alice", local=True)
     ctx, _events = context(request_auth=auth)
     await template.adapter.invoke(message("save", actor="demo", remember="private"), ctx)
     assert (auth.namespace("actor", "demo"), "/invocations/turn.md") in template.remote.entries
+    with pytest.raises(RuntimeError, match="cannot be recovered"):
+        await template.adapter.recover(message("save"), ctx)
 
 
 def test_managed_transport_executes_real_generated_hooks_and_replays(template):
@@ -316,13 +413,14 @@ def test_managed_transport_executes_real_generated_hooks_and_replays(template):
         runtime_store=InMemoryRuntimeStore(), auth_policy=InvocationAuthPolicy()
     )
     app.invoke(template.adapter.invoke)
+    app.recover(template.adapter.recover)
     body = {"id": str(uuid4()), "session_id": "http-session", "input": message("HTTP")}
     with TestClient(app) as client:
         response = client.post("/api/invocations", json=body)
         assert response.status_code == 200
         assert response.json()["output"]["output"][0]["content"] == "Echo: HTTP"
         assert client.post("/api/invocations", json=body).json() == response.json()
-    assert len(template.adapter._load("http-session", "http-session")[0]) == 1
+    assert len(template.adapter._load("http-session", "http-session")[0]) == 2
 
 
 def test_custom_fastapi_server_runs_without_managed_runtime(scaffold):
