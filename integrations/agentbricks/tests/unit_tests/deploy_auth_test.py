@@ -33,11 +33,11 @@ from databricks_agentbricks.projects.agent_project import AgentProject, Scope, T
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.reporting import Reporter
 from databricks_agentbricks.services.deploy_service import DeployRequest, DeployService
+from databricks_agentbricks.services.deployment.app_provisioner import AppProvisioner
 from databricks_agentbricks.services.deployment.model_binding_provisioner import (
     ModelBindingProvisioner,
 )
 from databricks_agentbricks.services.deployment.provisioners import (
-    AppProvisioner,
     GrantOutcome,
     ManifestPatch,
     MemoryStoreProvisioner,

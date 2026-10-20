@@ -11,7 +11,10 @@ from delete_test_fixtures import fake_workspace_client
 from databricks_agentbricks.cli import deploy as deploy_mod
 from databricks_agentbricks.clients import managed_runtime_store
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.services.deployment.provisioners import AppDeleteWait, AppProvisioner
+from databricks_agentbricks.services.deployment.app_provisioner import (
+    AppDeleteWaitResult,
+    AppProvisioner,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -305,7 +308,7 @@ def test_delete_of_a_missing_deployment_says_so_and_deletes_nothing(monkeypatch)
 
 @pytest.mark.parametrize(
     ("wait", "still_deleting"),
-    [(AppDeleteWait(timed_out=True), True), (AppDeleteWait(error="expired"), False)],
+    [(AppDeleteWaitResult(timed_out=True), True), (AppDeleteWaitResult(error="expired"), False)],
 )
 def test_unconfirmed_delete_reports_the_result_and_fails(monkeypatch, wait, still_deleting):
     w = fake_workspace_client(source_code_path=_DEFAULT_SOURCE)
@@ -330,8 +333,8 @@ def test_unconfirmed_delete_reports_the_result_and_fails(monkeypatch, wait, stil
 @pytest.mark.parametrize(
     ("wait", "expected"),
     [
-        (AppDeleteWait(timed_out=True), "it may finish on its own"),
-        (AppDeleteWait(error="expired"), "agentbricks login"),
+        (AppDeleteWaitResult(timed_out=True), "it may finish on its own"),
+        (AppDeleteWaitResult(error="expired"), "agentbricks login"),
     ],
 )
 def test_unconfirmed_delete_text_says_what_to_do(monkeypatch, wait, expected):

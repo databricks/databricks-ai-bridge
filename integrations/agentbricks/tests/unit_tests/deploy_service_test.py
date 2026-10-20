@@ -33,14 +33,18 @@ from databricks_agentbricks.projects.app_manifest import AppManifest
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.reporting import Reporter
 from databricks_agentbricks.services.deploy_service import DeployRequest, DeployService
-from databricks_agentbricks.services.deployment import provisioners as provisioners_mod
+from databricks_agentbricks.services.deployment import app_provisioner as app_provisioner_mod
+from databricks_agentbricks.services.deployment.app_provisioner import (
+    AppDeleteWaitResult,
+    AppProvisioner,
+    is_default_workspace_path,
+    recorded_source_code_path,
+)
 from databricks_agentbricks.services.deployment.model_binding_provisioner import (
     ModelBindingProvisioner,
 )
 from databricks_agentbricks.services.deployment.names import DeploymentName
 from databricks_agentbricks.services.deployment.provisioners import (
-    AppDeleteWait,
-    AppProvisioner,
     GrantOutcome,
     ManifestPatch,
     MemoryStoreProvisioner,
@@ -53,8 +57,6 @@ from databricks_agentbricks.services.deployment.provisioners import (
     SessionStoreState,
     TracingProvisioner,
     TracingState,
-    is_default_workspace_path,
-    recorded_source_code_path,
 )
 from databricks_agentbricks.services.deployment.tool_access import ToolAccessPlan
 from databricks_agentbricks.services.deployment.tool_access_provisioner import ToolAccessProvisioner
@@ -907,7 +909,7 @@ def _existing_app(deployment_fixture, *, source: str | None = _DEFAULT_SOURCE) -
         name="agent-bricks-demo", active_deployment=deployment, service_principal_client_id="sp-1"
     )
     deployment_fixture.app.delete_source.return_value = True
-    deployment_fixture.app.wait_until_deleted.return_value = AppDeleteWait()
+    deployment_fixture.app.wait_until_deleted.return_value = AppDeleteWaitResult()
 
 
 def _delete(deployment_fixture, name: str = "agent-bricks-demo"):
@@ -940,7 +942,7 @@ def test_delete_managed_runtime_store_before_app(deployment_fixture):
     )
     deployment_fixture.apps.delete.side_effect = lambda value: events.append(f"app:{value}")
     deployment_fixture.app.wait_until_deleted.side_effect = lambda value: (
-        events.append(f"gone:{value}") or AppDeleteWait()
+        events.append(f"gone:{value}") or AppDeleteWaitResult()
     )
     deployment_fixture.app.delete_source.side_effect = lambda path: (
         events.append(f"source:{path}") or True
@@ -1054,7 +1056,7 @@ def test_delete_reports_a_source_folder_that_was_already_gone(deployment_fixture
 
 @pytest.mark.parametrize(
     ("wait", "still_deleting"),
-    [(AppDeleteWait(timed_out=True), True), (AppDeleteWait(error="expired"), False)],
+    [(AppDeleteWaitResult(timed_out=True), True), (AppDeleteWaitResult(error="expired"), False)],
 )
 def test_delete_reports_an_unconfirmed_wait_and_still_deletes_the_folder(
     deployment_fixture, wait, still_deleting
@@ -1135,7 +1137,7 @@ def test_find_raises_when_it_cannot_tell(error):
 
 
 def test_wait_until_deleted_retries_a_check_that_fails(monkeypatch):
-    monkeypatch.setattr(provisioners_mod.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(app_provisioner_mod.time, "sleep", lambda _s: None)
     w = Mock()
     w.apps.get.side_effect = [
         InternalError("blip"),
@@ -1145,7 +1147,7 @@ def test_wait_until_deleted_retries_a_check_that_fails(monkeypatch):
         NotFound("gone"),
     ]
 
-    assert _app_provisioner(w).wait_until_deleted(DeploymentName("app")) == AppDeleteWait()
+    assert _app_provisioner(w).wait_until_deleted(DeploymentName("app")) == AppDeleteWaitResult()
     assert w.apps.get.call_count == 5
 
 
@@ -1168,13 +1170,13 @@ _OTHER_LOGIN_FAILURES = [Exception("Cannot get oidc token"), RuntimeError("no in
     ],
 )
 def test_wait_until_deleted_stops_at_once_on_an_error_that_wont_clear(monkeypatch, error):
-    monkeypatch.setattr(provisioners_mod.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(app_provisioner_mod.time, "sleep", lambda _s: None)
     w = Mock()
     w.apps.get.side_effect = error
 
     wait = _app_provisioner(w).wait_until_deleted(DeploymentName("app"))
 
-    assert wait == AppDeleteWait(error=str(error))
+    assert wait == AppDeleteWaitResult(error=str(error))
     assert w.apps.get.call_count == 1
 
 
@@ -1183,7 +1185,7 @@ def test_wait_until_deleted_reports_running_out():
 
     wait = _app_provisioner(w).wait_until_deleted(DeploymentName("app"), timeout_s=0)
 
-    assert wait == AppDeleteWait(timed_out=True)
+    assert wait == AppDeleteWaitResult(timed_out=True)
 
 
 def test_wait_until_deleted_running_out_keeps_the_last_failed_check():
@@ -1192,7 +1194,7 @@ def test_wait_until_deleted_running_out_keeps_the_last_failed_check():
 
     wait = _app_provisioner(w).wait_until_deleted(DeploymentName("app"), timeout_s=0)
 
-    assert wait == AppDeleteWait(timed_out=True, error="boom")
+    assert wait == AppDeleteWaitResult(timed_out=True, error="boom")
 
 
 @pytest.mark.parametrize("error", [_TOKEN_REFRESH_FAILED, _CLI_LOGIN_EXPIRED, RuntimeError("x")])

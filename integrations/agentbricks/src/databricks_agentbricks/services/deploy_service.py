@@ -38,6 +38,11 @@ from databricks_agentbricks.projects.config import require_managed_tool_support
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.projects.types import AgentServer
 from databricks_agentbricks.reporting import Reporter
+from databricks_agentbricks.services.deployment.app_provisioner import (
+    AppProvisioner,
+    is_default_workspace_path,
+    recorded_source_code_path,
+)
 from databricks_agentbricks.services.deployment.config import _PIP_INDEX_ENVS
 from databricks_agentbricks.services.deployment.model_binding_provisioner import (
     ModelBindingProvisioner,
@@ -48,15 +53,12 @@ from databricks_agentbricks.services.deployment.names import (
     _prefixed_name,
 )
 from databricks_agentbricks.services.deployment.provisioners import (
-    AppProvisioner,
     MemoryStoreProvisioner,
     ProjectContext,
     ResourceContext,
     RuntimeStoreProvisioner,
     SessionStoreProvisioner,
     TracingProvisioner,
-    is_default_workspace_path,
-    recorded_source_code_path,
 )
 from databricks_agentbricks.services.deployment.tool_access_provisioner import ToolAccessProvisioner
 from databricks_agentkit.runtime.tool_manifest import MODEL_SERVICE_ENV_PREFIX

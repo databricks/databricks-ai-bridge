@@ -16,7 +16,7 @@ from databricks_agentbricks.presentation.endpoint import print_agent_invoke_comm
 from databricks_agentbricks.presentation.render import field
 from databricks_agentbricks.presentation.tracing import TRACING_BIND_COMMAND, experiment_url
 from databricks_agentbricks.services.deploy_service import DeleteResult, DeployResult
-from databricks_agentbricks.services.deployment.provisioners import APP_DELETE_TIMEOUT_S
+from databricks_agentbricks.services.deployment.app_provisioner import APP_DELETE_TIMEOUT_S
 from databricks_agentkit import timefmt
 from databricks_agentkit.runtime import prompt_registry
 

@@ -40,6 +40,7 @@ from databricks_agentbricks.presentation.deploy import (
 from databricks_agentbricks.presentation.reporter import ClickReporter
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.services.deploy_service import DeployRequest, DeployService
+from databricks_agentbricks.services.deployment.app_provisioner import AppProvisioner
 from databricks_agentbricks.services.deployment.config import (
     _DEFAULT_PIP_INDEX_URL,
     _USE_MANAGED_RUNTIME_STORE,
@@ -56,7 +57,6 @@ from databricks_agentbricks.services.deployment.names import (
     _prefixed_name,  # noqa: F401 - compatibility re-export
 )
 from databricks_agentbricks.services.deployment.provisioners import (
-    AppProvisioner,
     MemoryStoreProvisioner,
     RuntimeStoreProvisioner,
     SessionStoreProvisioner,
