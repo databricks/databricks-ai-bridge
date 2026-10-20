@@ -142,6 +142,9 @@ output, and application event payloads are defined by your agent or framework ad
 in `agent.toml`, or record it with `agentbricks deploy --allowed-origin https://chat.example.com`.
 Both deploy and dev translate the manifest into the JSON array in `AGENTBRICKS_CORS_ALLOWED_ORIGINS`;
 the server reads it at startup. An empty allowlist disables CORS. Redeploy after changes.
+Origins must use ASCII/punycode hostnames; Unicode input is rejected. Copy `window.location.origin`
+from the frontend's browser console for its serialized origin. IPv6 addresses are compressed before
+matching browser requests.
 See the [browser integration journey](../../../README.md#call-an-agent-from-an-external-browser-cors)
 for authentication, streaming, replacing/clearing origins, and Apps ingress limitations.
 

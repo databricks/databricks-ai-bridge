@@ -406,8 +406,11 @@ Later `agentbricks deploy` calls reuse the recorded origins. Direct edits to thi
 apply to `agentbricks dev` and the next deployment. To revoke browser access, use
 `agentbricks deploy --clear-allowed-origins` or set `allowed_origins = []` and redeploy.
 CORS is off by default. Origins include scheme, hostname, and optional port; paths, wildcards,
-and `null` origins are rejected. List every intended origin when replacing the allowlist and
-remove development origins before production deployment.
+and `null` origins are rejected. For internationalized hostnames, supply the browser's ASCII/punycode
+origin (for example, `https://xn--fa-hia.example` for `https://faß.example`); Unicode input is rejected
+to avoid changing the allowed hostname. You can copy `window.location.origin` from the frontend's
+browser console. IPv6 addresses are compressed to match browser origins. List every intended origin
+when replacing the allowlist and remove development origins before production deployment.
 
 The customer journey is:
 

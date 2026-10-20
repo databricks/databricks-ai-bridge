@@ -58,7 +58,37 @@ def test_origins_are_normalized_and_deduplicated():
     ) == (ORIGIN, "http://localhost:3000", "https://[::1]:8443")
 
 
-@pytest.mark.parametrize("raw", ["not-json", '"*"', '["*"]', '["https://host/path"]'])
+@pytest.mark.parametrize(
+    "origin",
+    ["https://faß.example", "https://bücher.example", "https://K.example", "https://chat。example"],
+)
+def test_unicode_origins_are_rejected_without_changing_manifest(tmp_path, origin):
+    project = AgentProject.create(tmp_path, framework="langgraph", server="agentbricks")
+    project.set_allowed_origins((ORIGIN,))
+    project.write()
+
+    with pytest.raises(AgentCliError, match="ASCII/punycode"):
+        project.set_allowed_origins((origin,))
+
+    project.write()
+    assert AgentProject.load(tmp_path).allowed_origins == (ORIGIN,)
+
+
+def test_ipv6_origins_are_compressed_and_deduplicated():
+    assert validate_allowed_origins(
+        [
+            "https://[2001:0DB8:0000:0000:0000:0000:0000:0001]:443",
+            "https://[2001:db8::1]",
+            "http://[0000:0000:0000:0000:0000:0000:0000:0001]:3000",
+            "https://[::ffff:192.0.2.128]",
+        ]
+    ) == ("https://[2001:db8::1]", "http://[::1]:3000", "https://[::ffff:c000:280]")
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["not-json", '"*"', '["*"]', '["https://host/path"]', json.dumps(["https://faß.example"])],
+)
 def test_invalid_runtime_environment_is_rejected(monkeypatch, raw):
     monkeypatch.setenv(CORS_ALLOWED_ORIGINS_ENV, raw)
     with pytest.raises(ValueError, match=CORS_ALLOWED_ORIGINS_ENV):
@@ -112,6 +142,50 @@ def make_server(**kwargs):
         raise RuntimeError("test error")
 
     return server
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "configured,allowed,denied",
+    [
+        ("https://XN--FA-HIA.example:443", "https://xn--fa-hia.example", "https://fass.example"),
+        (
+            "https://[2001:0DB8:0000:0000:0000:0000:0000:0001]:443",
+            "https://[2001:db8::1]",
+            "https://[2001:db8::2]",
+        ),
+        (
+            "http://[0000:0000:0000:0000:0000:0000:0000:0001]:3000",
+            "http://[::1]:3000",
+            "http://[::1]:3001",
+        ),
+        (
+            "https://[::ffff:192.0.2.128]",
+            "https://[::ffff:c000:280]",
+            "https://[::ffff:c000:281]",
+        ),
+    ],
+)
+async def test_preflight_matches_browser_serialized_origin(configured, allowed, denied):
+    server = make_server(allowed_origins=[configured])
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=server),
+        base_url="https://agent.example.com",
+    ) as client:
+        for origin, expected_status in [(allowed, 200), (denied, 400)]:
+            response = await client.options(
+                "/api/invocations",
+                headers={
+                    "Origin": origin,
+                    "Access-Control-Request-Method": "POST",
+                    "Access-Control-Request-Headers": "authorization,content-type",
+                },
+            )
+            assert response.status_code == expected_status
+            if expected_status == 200:
+                assert response.headers["access-control-allow-origin"] == allowed
+            else:
+                assert "access-control-allow-origin" not in response.headers
 
 
 @pytest.mark.asyncio

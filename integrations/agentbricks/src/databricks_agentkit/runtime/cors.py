@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Mapping
+from ipaddress import IPv6Address
 from typing import cast
 from urllib.parse import urlsplit
 
@@ -19,6 +20,7 @@ def validate_allowed_origins(value: object) -> tuple[str, ...]:
         try:
             if (
                 not isinstance(origin, str)
+                or not origin.isascii()
                 or any(character.isspace() or ord(character) < 32 for character in origin)
                 or any(character in origin for character in "*\\%?#")
             ):
@@ -32,17 +34,24 @@ def validate_allowed_origins(value: object) -> tuple[str, ...]:
                 or parsed.password is not None
             ):
                 raise ValueError
-            host = parsed.hostname.encode("idna").decode("ascii").lower()
+            host = parsed.hostname.lower()
             if ":" in host:
+                address = IPv6Address(host)
+                host = address.compressed
+                if address.ipv4_mapped is not None:
+                    # Browsers serialize mapped IPv4 addresses as hexadecimal IPv6 pieces.
+                    mapped = int(address.ipv4_mapped)
+                    host = f"::ffff:{mapped >> 16:x}:{mapped & 0xFFFF:x}"
                 host = f"[{host}]"
             port = parsed.port
             default_port = 80 if parsed.scheme == "http" else 443
             authority = f"{host}:{port}" if port is not None and port != default_port else host
             origins.append(f"{parsed.scheme}://{authority}")
-        except (ValueError, UnicodeError) as exc:
+        except ValueError as exc:
             raise ValueError(
                 "Invalid CORS origin. Use an exact HTTP(S) origin such as "
-                "https://chat.example.com or http://localhost:3000, without a path or wildcard."
+                "https://chat.example.com or http://localhost:3000, without a path or wildcard. "
+                "Use ASCII/punycode hostnames for internationalized domains."
             ) from exc
     return tuple(dict.fromkeys(origins))
 
