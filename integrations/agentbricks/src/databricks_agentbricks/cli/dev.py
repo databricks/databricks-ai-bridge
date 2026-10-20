@@ -9,8 +9,6 @@ rather than re-implementing it.
 
 from __future__ import annotations
 
-import pathlib
-import subprocess
 from typing import Optional
 
 import click
@@ -18,12 +16,7 @@ import click
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.databricks_cli import _databricks
 from databricks_agentbricks.clients.local_ports import port_in_use
-from databricks_agentbricks.clients.local_tracing_client import (
-    LocalTracingClient,
-)
-from databricks_agentbricks.clients.local_tracing_client import (
-    start_local_tracing_server as _start_local_tracing_server,
-)
+from databricks_agentbricks.clients.local_tracing_client import LocalTracingClient
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.dev import (
     announce_bound_resources,
@@ -40,35 +33,12 @@ from databricks_agentbricks.services.dev_service import (
 )
 
 
-class _CliLocalTracing:
-    """Adapt the existing local tracing process helpers to the service port."""
-
-    def start(self, source_dir: pathlib.Path) -> tuple[subprocess.Popen | None, dict[str, str]]:
-        return start_local_tracing_server(source_dir)
-
-    def stop(self, server: subprocess.Popen) -> None:
-        stop_local_tracing_server(server)
-
-
-def start_local_tracing_server(
-    source_dir: pathlib.Path,
-) -> tuple[subprocess.Popen | None, dict[str, str]]:
-    return _start_local_tracing_server(
-        source_dir,
-        on_warning=lambda warning, hint: render.diagnostic("warning", warning, help=hint),
-    )
-
-
-def stop_local_tracing_server(server: subprocess.Popen) -> None:
-    LocalTracingClient().stop(server)
-
-
 def build_dev_service(obj) -> DevService:
     """Compose the local workflow without opening a workspace API client."""
     return DevService(
         project_resolver=ProjectResolver(),
         apps_client=AppsClient(obj.profile, runner=_databricks),
-        local_tracing=_CliLocalTracing(),
+        local_tracing=LocalTracingClient(),
         port_in_use=port_in_use,
     )
 
@@ -121,6 +91,10 @@ def dev(
     with service.prepare(
         DevRequest(source=source, prepare_environment=prepare_environment, app_port=app_port)
     ) as plan:
+        if plan.preview.tracing_warning is not None:
+            render.diagnostic(
+                "warning", plan.preview.tracing_warning, help=plan.preview.tracing_help
+            )
         announce_bound_resources(plan.preview)
         _announce_local_url(
             plan.preview.source_dir,

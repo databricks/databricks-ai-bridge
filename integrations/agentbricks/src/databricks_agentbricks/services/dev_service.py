@@ -2,20 +2,19 @@
 
 ``DevService`` prepares a temporary, local-only Apps manifest and hands the resulting plan to
 the CLI for presentation and execution.  The service deliberately has no Click or presentation
-dependencies: local tracing and the Apps command are ports supplied by the command composition.
+dependencies: local tracing and the Apps command are clients supplied by the command composition.
 In particular, preparing a project never resolves a workspace client or provisions a resource.
 """
 
 from __future__ import annotations
 
 import pathlib
-import subprocess
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Protocol
 
 from databricks_agentbricks.clients.apps_client import AppsClient
+from databricks_agentbricks.clients.local_tracing_client import LocalTracingClient
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.app_manifest import AppManifest
 from databricks_agentbricks.projects.config import require_managed_tool_support
@@ -60,6 +59,8 @@ class DevPreview:
     server: AgentServer | None
     tracing_uri: str | None
     local_experiment_name: str | None
+    tracing_warning: str | None
+    tracing_help: str | None
     memory_store: str | None
     session_store: str | None
     trace_experiment: str | None
@@ -76,22 +77,12 @@ class DevPlan:
     requested_port: int | None
 
 
-class LocalTracing(Protocol):
-    """Port for the best-effort local tracing process used by a dev run."""
-
-    def start(self, source_dir: pathlib.Path) -> tuple[subprocess.Popen | None, dict[str, str]]:
-        """Start tracing for ``source_dir`` and return its process and manifest env."""
-
-    def stop(self, server: subprocess.Popen) -> None:
-        """Stop a process returned by :meth:`start`."""
-
-
 class DevService:
     """Prepare and run an Agent Bricks project locally.
 
     The service owns validation, project metadata, the local-only manifest, and lifecycle cleanup.
     It does not own output or a workspace client; those concerns are supplied by the CLI through
-    ``LocalTracing`` and ``AppsClient``. ``port_in_use`` reports whether a local port is taken, so
+    ``LocalTracingClient`` and ``AppsClient``. ``port_in_use`` reports whether a local port is taken, so
     tests can simulate a busy port without binding a real socket.
     """
 
@@ -99,7 +90,7 @@ class DevService:
         self,
         project_resolver: ProjectResolver,
         apps_client: AppsClient,
-        local_tracing: LocalTracing,
+        local_tracing: LocalTracingClient,
         port_in_use: Callable[[int], bool],
     ) -> None:
         self._project_resolver = project_resolver
@@ -142,9 +133,8 @@ class DevService:
             source_dir
         )
 
-        # The adapter owns best-effort launch behavior (the CLI adapter delegates to the existing
-        # helper, which degrades to ``(None, {})`` when local tracing cannot start).
-        tracing_server, tracing_env = self._local_tracing.start(source_dir)
+        tracing = self._local_tracing.start_dev(source_dir)
+        tracing_server, tracing_env = tracing.server, tracing.environment
         entry_point: pathlib.Path | None = None
         try:
             # Repeat runs reuse an existing environment; an explicit request overrides that
@@ -162,6 +152,8 @@ class DevService:
                 server=project.server if project else None,
                 tracing_uri=tracing_env.get("MLFLOW_TRACKING_URI"),
                 local_experiment_name=tracing_env.get("MLFLOW_EXPERIMENT_NAME"),
+                tracing_warning=tracing.warning,
+                tracing_help=tracing.help,
                 memory_store=memory_store,
                 session_store=session_store,
                 trace_experiment=trace_experiment,

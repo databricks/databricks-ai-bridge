@@ -6,7 +6,6 @@ import pathlib
 import socket
 import subprocess
 import time
-from collections.abc import Callable
 from dataclasses import dataclass, field
 
 _AGENTBRICKS_LOCAL_DIR = ".agentbricks"
@@ -137,12 +136,8 @@ class LocalTracingClient:
 
 def start_local_tracing_server(
     source_dir: pathlib.Path,
-    *,
-    on_warning: Callable[[str, str | None], None] | None = None,
 ) -> tuple[subprocess.Popen | None, dict[str, str]]:
     result = LocalTracingClient().start_dev(source_dir)
-    if result.warning is not None and on_warning is not None:
-        on_warning(result.warning, result.help)
     return result.server, result.environment
 
 
