@@ -150,16 +150,13 @@ def test_validate_bounded_gives_up_after_the_timeout(monkeypatch):
     assert isinstance(error, TimeoutError)
 
 
-def test_preflight_external_browser_validates_cached_credentials(
-    write_databrickscfg, validated_profile
-):
+def test_preflight_external_browser_fails_fast(write_databrickscfg, validated_profile, monkeypatch):
     write_databrickscfg("[prof]\nhost = https://ws.example\nauth_type = external-browser\n")
 
-    assert (
-        workspace_auth.preflight_auth("prof", "--profile") is validated_profile.return_value[0][0]
-    )
+    with pytest.raises(AgentCliError):
+        workspace_auth.preflight_auth("prof", "--profile")
 
-    validated_profile.assert_called_once_with("prof")
+    validated_profile.assert_not_called()
 
 
 # --- authenticate_profile --------------------------------------------------------------------

@@ -44,8 +44,7 @@ global default profile. The profile is resolved in this order, most to least spe
 
 Selecting a profile preserves the SDK's precedence for exported credential fields such as
 `DATABRICKS_HOST` and `DATABRICKS_TOKEN`; the workspace notice reports an overriding environment
-host. Authentication preflight reuses a valid or refreshable external-browser Python SDK token
-cache without opening a browser; a missing or unusable cache requires `agentbricks auth login`.
+host. An `auth_type = external-browser` profile must sign in with `agentbricks auth login <profile>`.
 
 `dev` also passes the resolved profile to the agent (unless `.env` sets
 `DATABRICKS_TOKEN` or `DATABRICKS_CLIENT_ID`/`DATABRICKS_CLIENT_SECRET`, in which case the agent

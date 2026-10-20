@@ -186,9 +186,6 @@ is different: it prepares a migration for a project Agent Bricks didn't generate
 `dev` and `deploy` validate the resolved profile's authentication up front and fail fast with the
 `agentbricks auth login` command to run — an unauthenticated external-browser profile would
 otherwise hang on a browser login that never completes.
-An external-browser profile's valid or refreshable Python SDK token cache is reused without
-opening a browser. If that cache is missing or unusable, run the suggested `auth login` command
-in an interactive terminal.
 
 `agentbricks dev` runs the agent locally on `http://localhost:8000`, wrapping the Databricks Apps
 local runtime so local behavior matches a deployment.

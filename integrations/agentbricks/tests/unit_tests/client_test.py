@@ -936,8 +936,7 @@ def test_do_does_not_retry_transient_error_for_pop(workspace_client, sleep):
     sleep.assert_not_called()
 
 
-@pytest.mark.parametrize("strategy", [None, mock.Mock()], ids=["default-auth", "injected-auth"])
-def test_account_routed_profile_uses_configured_host_and_workspace_header(strategy):
+def test_account_routed_profile_uses_configured_host_and_workspace_header():
     resolved = mock.Mock()
     resolved.config.host = "https://workspace.example.com"
     resolved.config.workspace_id = "123"
@@ -950,21 +949,15 @@ def test_account_routed_profile_uses_configured_host_and_workspace_header(strate
             return_value="https://account.example.com",
         ),
     ):
-        client = (
-            _workspace_client("p", credentials_strategy=strategy)
-            if strategy is not None
-            else _workspace_client("p")
-        )
+        client = _workspace_client("p")
 
     assert client is routed
-    auth_kwargs = {"credentials_strategy": strategy} if strategy is not None else {}
     assert wc.call_args_list == [
-        mock.call(profile="p", **auth_kwargs),
+        mock.call(profile="p"),
         mock.call(
             profile="p",
             host="https://account.example.com",
             custom_headers={"X-Databricks-Org-Id": "123"},
-            **auth_kwargs,
         ),
     ]
 
