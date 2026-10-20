@@ -146,6 +146,7 @@ def test_managed_delete_finishes_before_deleting_app(monkeypatch):
     assert json.loads(result.output) == {
         "deleted": "agent-bricks-myapp",
         "still_deleting": False,
+        "wait_error": None,
         "source_path": _DEFAULT_SOURCE,
         "source_path_status": "deleted",
         "source_path_error": None,
@@ -160,8 +161,8 @@ def test_managed_delete_finishes_before_deleting_app(monkeypatch):
             to_stderr=True,
             action="Could not delete deployment 'agent-bricks-myapp'.",
         ),
-        mock.call.w.workspace.delete(_DEFAULT_SOURCE, recursive=True),
         mock.call.w.apps.get("agent-bricks-myapp"),
+        mock.call.w.workspace.delete(_DEFAULT_SOURCE, recursive=True),
     ]
 
 
@@ -307,7 +308,9 @@ def test_delete_still_deleting_reports_the_result_and_fails(monkeypatch):
     monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", False)
     monkeypatch.setattr(deploy_mod, "_databricks", mock.Mock(side_effect=_cli_runner(w)))
     # The wait itself is covered in provisioner tests; here it runs out at once.
-    monkeypatch.setattr(AppProvisioner, "wait_until_deleted", lambda self, name: False)
+    monkeypatch.setattr(
+        AppProvisioner, "wait_until_deleted", lambda self, name: "still being deleted"
+    )
 
     result = CliRunner().invoke(
         deploy_mod.deployments_delete,
@@ -318,4 +321,5 @@ def test_delete_still_deleting_reports_the_result_and_fails(monkeypatch):
     assert result.exit_code == 1
     payload = json.loads(result.output)
     assert payload["still_deleting"] is True
+    assert payload["wait_error"] == "still being deleted"
     assert payload["source_path_status"] == "deleted"

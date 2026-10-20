@@ -166,8 +166,12 @@ class DeleteResult:
     source_folder: Optional[SourceFolder]
     source_folder_status: SourceFolderStatus
     source_folder_error: Optional[str]
-    # The App was still deleting when the wait ran out.
-    still_deleting: bool
+    # Why the App wasn't confirmed gone: still deleting when the wait ran out, or the wait failed.
+    wait_error: Optional[str]
+
+    @property
+    def still_deleting(self) -> bool:
+        return self.wait_error is not None
 
 
 @dataclass(frozen=True)
@@ -280,31 +284,30 @@ class DeployService:
     def delete(self, target: DeleteTarget) -> DeleteResult:
         """Delete a deployment: its Runtime Store first, then the app and its uploaded source.
 
-        Returns once the app is gone, or reports it still deleting when the wait runs out;
+        Returns once the app is gone, or reports it unconfirmed if the wait runs out or fails;
         `apps delete` returns while it is still deleting.
 
         The Runtime Store goes first because dropping it needs the app's service principal, which
         stops resolving once the app is gone. If that identity can't be read we refuse outright
-        rather than delete the app and orphan its data. The source folder goes as soon as the app
-        delete is accepted, before the wait, so a wait that runs out can't leave it behind; only a
-        folder deploy created by default is deleted. The app is already being deleted by then, so a
-        failure to delete the folder is returned rather than raised. The caller owns any
-        confirmation policy.
+        rather than delete the app and orphan its data. Once the app delete is accepted nothing
+        raises: the wait and the folder delete report their failures in the result. The folder goes
+        after the wait, so the app keeps its source while it is deleting; only a folder deploy
+        created by default is deleted. The caller owns any confirmation policy.
         """
         name = target.deployment
         if self.deletes_runtime_store_data():
             with self._reporter.status("Deleting Runtime Store…"):
                 self._runtime_store_provisioner.delete_managed(name, target.service_principal)
         self._apps_client.delete(name)
-        status, error = self._delete_source_folder(target.source_folder)
         with self._reporter.status("Waiting for the deployment to be deleted…"):
-            gone = self._app_provisioner.wait_until_deleted(name)
+            wait_error = self._app_provisioner.wait_until_deleted(name)
+        status, error = self._delete_source_folder(target.source_folder)
         return DeleteResult(
             deployment=name,
             source_folder=target.source_folder,
             source_folder_status=status,
             source_folder_error=error,
-            still_deleting=not gone,
+            wait_error=wait_error,
         )
 
     def _delete_source_folder(
