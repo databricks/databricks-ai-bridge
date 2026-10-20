@@ -105,7 +105,7 @@ DIRECTORY is the target path to create (defaults to the template's own name). Th
 
 Pass --profile (or set a default via `agentbricks login` / -p) to seed a local `.env` so the scaffolded project runs with `agentbricks dev` right away.
 
-The scaffold is preconfigured to call Databricks model serving through the AI Gateway using that profile, so it can talk to a model with no separate endpoint or API key to set up.
+The LangGraph and OpenAI scaffolds call Databricks model serving through the AI Gateway using that profile. The API-only custom framework scaffold shows managed sessions, memory, and invocation recovery around a replaceable echo function; connect your own harness and model.
 
 New projects include the `agent-bricks-workflow` skill in `.agents/skills/`, with discovery pointers in
 `.claude/skills/` and `.agent/skills/`. Local `dev` is optional when the goal is deployment.
@@ -117,6 +117,13 @@ existing projects can read the bundled workflow skill at the path printed by the
 stderr hint, enabled by default when a coding-agent environment is detected. Ordinary human
 invocations do not emit this hint. Set `AGENTBRICKS_DISABLE_AGENT_HINT=1` to disable hints without
 disabling skill installation or discovery.
+
+`--framework custom` keeps the managed server and generates an API-only integration example for
+any Python harness, with direct session and memory SDK calls. It has no framework dependency. Replace
+`agent/agent.py` with your harness and map its native state and events explicitly. Automatic managed
+tool bindings, browser chat UI, and approval continuation require a framework adapter and are not
+included. `--framework custom --existing` prepares the same reference without changing application
+files. Framework choice is independent of `--server custom`, which selects a minimal FastAPI server.
 
 `--server agentbricks` selects the managed server, which supports foreground, streaming, and background invocations through one HTTP contract and Runtime Store. This existing server value is recorded in `agent.toml`. Pass `--server custom` for a minimal foreground-only FastAPI server.
 
@@ -135,14 +142,14 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
-| `--framework <langgraph|openai>` | `langgraph` \| `openai` | `langgraph` | no | Agent framework: langgraph (LangGraph, default) or openai (OpenAI Agents SDK). |
+| `--framework <langgraph|openai|custom>` | `langgraph` \| `openai` \| `custom` | `langgraph` | no | Agent framework: langgraph (LangGraph, default), openai (OpenAI Agents SDK), or custom (bring your own framework). |
 | `--server <agentbricks|custom>` | `agentbricks` \| `custom` | `agentbricks` | no | Use the managed invocation server (`agentbricks` is the existing `agent.toml` value) or a minimal custom FastAPI server. |
 | `--profile <PROFILE>` | string | - | no | Seed a local .env with this DATABRICKS_CONFIG_PROFILE so `agentbricks dev` works immediately (defaults to the profile from -p / `agentbricks login`). |
-| `--disable-chat-app` | flag | - | no | Scaffold the API-only backend, without the browser chat app. |
+| `--disable-chat-app` | flag | - | no | Scaffold the API-only backend, without the browser chat app. Custom frameworks are API-only. |
 | `--enable-chat-app` | flag | - | no | Deprecated: the chat app is included by default; this flag is a no-op. |
 | `--memory-store <MEMORY_STORE>` | string | - | no | Name for the declared memory store (default: derived from the directory, <dir>-memory). Only --server agentbricks declares stores by default. |
 | `--session-store <SESSION_STORE>` | string | - | no | Name for the declared session store (default: derived from the directory, <dir>-session). |
-| `--existing` | flag | - | no | Prepare a coding-agent migration bundle for an existing LangGraph or OpenAI Agents SDK project (defaults to `.`). Requires `--server agentbricks`. |
+| `--existing` | flag | - | no | Prepare a coding-agent migration bundle for an existing LangGraph, OpenAI Agents SDK, or custom framework project (defaults to `.`). Requires `--server agentbricks`. |
 
 ### `agentbricks doctor`
 
@@ -151,8 +158,9 @@ current directory.
 
 Doctor is read-only and offline: it does not import application source, contact Databricks, or
 change files. It checks `agent.toml`, `.agentbricks/project.toml`, the framework-specific
-`databricks-agentbricks` dependency extra, `app.yaml`, and production Python source for a
-`DurableAgentServer` instance with an `invoke` hook plus a recognized framework adapter call; test,
+`databricks-agentbricks` dependency (with the framework extra for LangGraph/OpenAI), `app.yaml`, and production Python source for a
+`DurableAgentServer` instance with an `invoke` hook plus a recognized framework adapter call
+(or `AgentKitClient` construction for custom frameworks); test,
 example, and old/stale directories are excluded. A bounded source scan that exceeds a limit is
 reported while the evidence it already found still counts. These checks are static repository
 evidence, not proof that the configured startup command executes the files found. Doctor exits 0

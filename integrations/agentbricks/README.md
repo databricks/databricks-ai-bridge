@@ -27,7 +27,7 @@ invocation protocol to design yourself. Bring your own agent, or start from a te
 ![Deployment: from a blank directory to a running service](docs/deployment.svg)
 
 - **Agent project** - `agentbricks init` scaffolds a deployable project from a framework template
-  (LangGraph or OpenAI Agents) with the runtime, tests, and an optional chat UI wired up; you edit
+  (LangGraph, OpenAI Agents, or a custom framework) with the runtime, tests, and an optional chat UI wired up; you edit
   the application code (model, tools, prompts).
 - **`agent.toml`** - the declarative source of truth for the Databricks-managed infrastructure your
   agent depends on: tool bindings (data sandbox, managed MCP services, Unity Catalog functions),
@@ -54,7 +54,7 @@ The two ways to run an agent:
   server with no `DurableAgentServer`: you define your own endpoints, request/response shapes, and protocol.
   `agentbricks dev` and `agentbricks deploy` run and ship it the same way.
 
-Both managed framework templates support human approval with request-user (OBO) tools. A new
+The LangGraph and OpenAI managed templates support human approval with request-user (OBO) tools. A new
 invocation from the same authenticated user resumes the saved state with that request's tool
 credentials; the browser can use its existing valid login session.
 
@@ -62,6 +62,7 @@ credentials; the browser can use its existing valid login session.
 | --- | --- |
 | LangGraph | Approve, edit, or reject according to the middleware policy |
 | OpenAI Agents SDK | Approve or reject, with the pending tool call's `call_id` |
+| Custom framework | Requires an application-specific approval adapter |
 
 Automatic OBO failure recovery remains unsupported. Existing generated apps need the corresponding
 template source updates; upgrading the installed package does not rewrite their agent or adapter.
@@ -588,7 +589,7 @@ see [`cli.md`](cli.md). The tree below is a quick overview.
 agentbricks [-p <profile>] [-o text|json]
   login        [--profile P]
   logout
-  init         [--framework openai|langgraph] [--server agentbricks|custom]
+  init         [--framework openai|langgraph|custom] [--server agentbricks|custom]
                [--disable-chat-app]
                [--memory-store NAME] [--session-store NAME]
                [--existing] [--profile P] [directory]
@@ -632,6 +633,29 @@ agentbricks [-p <profile>] [-o text|json]
     invoke      [APP] --path PATH [--url URL] [--json JSON] [--sse]
 ```
 
+## Bring your own framework
+
+```sh
+agentbricks init my-agent --framework custom
+agentbricks init --framework custom --existing ./existing-agent
+```
+
+`--framework custom` generates an API-only `DurableAgentServer` integration example with direct
+`AgentKitClient` calls for managed session history and actor-scoped memory. Replace the deterministic
+echo function in `agent/agent.py` with your harness and model. No LangGraph or OpenAI Agents SDK is
+installed. The reference documents input/output mapping, invocation recovery, and the boundaries
+between session state, long-term memory, and the Runtime Store.
+
+The custom scaffold leaves framework-native tool conversion, approval continuation, and browser UI
+integration to your application. Automatic `agent.toml` tool bindings are rejected because this
+scaffold has no tool adapter. Recovery may rerun incomplete work; make side effects idempotent or
+implement your harness's checkpoint/resume protocol. Run the scaffold's tests and `agentbricks doctor`
+after adapting it; static doctor checks do not validate your harness's behavior.
+
+Framework and server selection are independent. `--server custom` selects a minimal foreground-only
+FastAPI server and does not provide managed invocation recovery. Keep the default
+`--server agentbricks` to use `DurableAgentServer` with your own framework.
+
 ## Bring an existing agent
 
 From the existing project, prepare a migration for your coding agent:
@@ -639,6 +663,7 @@ From the existing project, prepare a migration for your coding agent:
 ```sh
 agentbricks init --framework langgraph --existing .
 agentbricks init --framework openai --existing .
+agentbricks init --framework custom --existing .  # Keep your existing harness
 ```
 
 Before or after the conversion, inspect its progress without changing the repository or contacting
@@ -651,8 +676,9 @@ agentbricks -o json doctor .
 
 Doctor exits 0 only when the project has a valid Agent Bricks manifest and matching project
 metadata, uses the Agent Bricks server, declares the framework-appropriate `databricks-agentbricks`
-extra and a non-empty `app.yaml` command, constructs `DurableAgentServer` with an `invoke` hook, and
-calls a recognized adapter for the selected framework in production Python source. Test, example, and
+dependency (no framework extra for custom) and a non-empty `app.yaml` command, constructs `DurableAgentServer` with an `invoke` hook, and
+calls a recognized adapter for the selected framework (or constructs `AgentKitClient` for custom)
+in production Python source. Test, example, and
 old/stale directories do not count as source evidence. A failed report is the normal result for a
 project that still needs migration; run
 `agentbricks init --framework <framework_name> --existing <directory>` with the appropriate framework
@@ -675,8 +701,9 @@ and the two pointer skills once the conversion is done, and keep them out of com
 
 The skill follows the shared managed-runtime contract for the selected framework, included in new projects and
 migration references:
-[LangGraph](src/databricks_agentbricks/templates/agent-langgraph/AGENTKIT_CONTRACT.md) or
-[OpenAI Agents SDK](src/databricks_agentbricks/templates/agent-openai/AGENTKIT_CONTRACT.md). It explicitly
+[LangGraph](src/databricks_agentbricks/templates/agent-langgraph/AGENTKIT_CONTRACT.md),
+[OpenAI Agents SDK](src/databricks_agentbricks/templates/agent-openai/AGENTKIT_CONTRACT.md), or
+[custom framework](src/databricks_agentbricks/templates/agent-custom/AGENTKIT_CONTRACT.md). It explicitly
 handles existing history, custom state and output, recovery, and client/session contracts. For
 LangGraph, switching checkpointers does not migrate old conversations (likewise, the OpenAI Agents
 SDK keeps prior Session transcripts and RunState behind); unresolved transitions require a user
@@ -684,7 +711,7 @@ decision.
 
 The reference honors `--disable-chat-app`, `--memory-store`, `--session-store`, and the selected
 profile. These are migration intent; init does not provision resources or change the existing
-application. Migration supports LangGraph and the OpenAI Agents SDK with the managed server (`server = "agentbricks"`);
+application. Migration supports LangGraph, the OpenAI Agents SDK, and custom Python frameworks with the managed server (`server = "agentbricks"`);
 `--server custom` is not supported for `--existing`.
 
 ## Invoke HTTP endpoints

@@ -26,7 +26,7 @@ from packaging.utils import canonicalize_name
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.agent_project import AgentProject
 
-_SUPPORTED_FRAMEWORKS = ("langgraph", "openai")
+_SUPPORTED_FRAMEWORKS = ("langgraph", "openai", "custom")
 _MAX_CONFIG_BYTES = 512 * 1024
 _MAX_SOURCE_BYTES = 256 * 1024
 _MAX_SOURCE_FILES = 1_000
@@ -74,6 +74,12 @@ _FRAMEWORK_ADAPTER_CALLS = {
             "databricks_agentkit.openai.memory_tools",
             "databricks_agentkit.openai.session_store",
             "databricks_agentkit.openai.start_trace",
+        }
+    ),
+    "custom": frozenset(
+        {
+            "databricks_agentkit.AgentKitClient",
+            "databricks_agentkit.client.AgentKitClient",
         }
     ),
 }
@@ -224,7 +230,7 @@ def _agent_manifest(
         )
     framework = _framework(agent.get("framework"))
     if framework is None:
-        detail = f"{path} must declare agent.framework as langgraph or openai."
+        detail = f"{path} must declare agent.framework as {', '.join(_SUPPORTED_FRAMEWORKS)}."
         return (
             _check("agent_manifest", False, detail),
             _check(
@@ -290,7 +296,9 @@ def _project_metadata(
         ), framework
     if framework is None:
         return _check(
-            "project_metadata", False, f"{path} must declare framework as langgraph or openai."
+            "project_metadata",
+            False,
+            f"{path} must declare framework as {', '.join(_SUPPORTED_FRAMEWORKS)}.",
         ), None
     template = result.data.get("template")
     if not isinstance(template, str) or not template.strip():
@@ -363,6 +371,9 @@ def _dependency_check(
             "Could not determine the framework needed for the databricks-agentbricks extra.",
         )
     assert dependencies is not None
+    required_package = "databricks-agentbricks"
+    if framework != "custom":
+        required_package += f"[{framework}]"
     agentbricks_requirements: list[tuple[Requirement, set[str]]] = []
     for requirement in dependencies:
         if canonicalize_name(requirement.name) != "databricks-agentbricks":
@@ -373,18 +384,18 @@ def _dependency_check(
         return _check(
             "agentbricks_dependency",
             False,
-            f"pyproject.toml needs a databricks-agentbricks[{framework}] project dependency.",
+            f"pyproject.toml needs a {required_package} project dependency.",
         )
-    if not any(framework in extras for _, extras in agentbricks_requirements):
+    if framework != "custom" and not any(
+        framework in extras for _, extras in agentbricks_requirements
+    ):
         found = ", ".join(str(requirement) for requirement, _ in agentbricks_requirements)
         return _check(
             "agentbricks_dependency",
             False,
             f"Agent Bricks dependency lacks the {framework!r} extra (found: {found}).",
         )
-    return _check(
-        "agentbricks_dependency", True, f"Project depends on databricks-agentbricks[{framework}]."
-    )
+    return _check("agentbricks_dependency", True, f"Project depends on {required_package}.")
 
 
 def _app_command(root: pathlib.Path) -> DoctorCheck:
@@ -983,6 +994,13 @@ def _source_checks(
             False,
             f"Cannot select an Agent Bricks framework adapter because the framework is unknown.{suffix}",
         )
+    elif framework == "custom" and framework in evidence.adapters:
+        adapter = _check(
+            "framework_adapter",
+            True,
+            "Framework-neutral AgentKitClient is constructed in "
+            f"{evidence.adapters[framework]}.{suffix}",
+        )
     elif framework in evidence.adapters:
         adapter = _check(
             "framework_adapter",
@@ -994,7 +1012,12 @@ def _source_checks(
         adapter = _check(
             "framework_adapter",
             False,
-            f"No Python source calls a databricks_agentkit.{framework} adapter.{suffix}",
+            (
+                "No Python source constructs a framework-neutral AgentKitClient."
+                if framework == "custom"
+                else f"No Python source calls a databricks_agentkit.{framework} adapter."
+            )
+            + suffix,
         )
     return agent_app, adapter
 
@@ -1033,7 +1056,7 @@ def inspect_project(directory: pathlib.Path) -> dict[str, Any]:
     onboarded = failed == 0
     next_step = None
     if not onboarded:
-        framework_option = framework or "<langgraph|openai>"
+        framework_option = framework or f"<{'|'.join(_SUPPORTED_FRAMEWORKS)}>"
         next_step = f"agentbricks init --framework {framework_option} --existing <directory>"
     return {
         "directory": str(root),

@@ -767,7 +767,12 @@ def add_sandbox(
         )
 
     metadata = load_project_metadata(project, framework_override=framework)
-    adapter = _SANDBOX_ADAPTERS[metadata.framework]
+    adapter = _SANDBOX_ADAPTERS.get(metadata.framework)
+    if adapter is None:
+        raise AgentCliError(
+            f"Source rewriting is not supported for the {metadata.framework.value!r} framework.",
+            hint="Wire the sandbox tool using your framework's native API in agent/agent.py.",
+        )
     target, effective_policy, changed = adapter.apply(project, policy)
     effective_scopes, effective_permission = _policy_cli_values(effective_policy)
 

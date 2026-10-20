@@ -15,7 +15,9 @@ from databricks_agentbricks.projects.types import AgentFramework, parse_framewor
 
 _CONFIG_PATH = pathlib.Path(".agentbricks/project.toml")
 _SCHEMA_VERSION = 1
-_CUSTOM_SERVER_TEMPLATES = frozenset({"custom-agent-langgraph", "custom-agent-openai"})
+_CUSTOM_SERVER_TEMPLATES = frozenset(
+    {"custom-agent-langgraph", "custom-agent-openai", "custom-agent-custom"}
+)
 
 
 @dataclass(frozen=True)
@@ -148,6 +150,16 @@ def uses_custom_server(project: pathlib.Path) -> bool:
 
 def require_managed_tool_support(project: pathlib.Path) -> None:
     """Reject managed tool bindings for known templates that do not consume them."""
+    manifest_path = project / "agent.toml"
+    if manifest_path.is_file():
+        manifest = _read_toml(manifest_path, "agent manifest")
+        agent = manifest.get("agent")
+        if isinstance(agent, dict) and agent.get("framework") == AgentFramework.CUSTOM:
+            raise AgentCliError(
+                "The custom framework scaffold does not consume managed tool bindings.",
+                hint="Wire tools using your framework's native API in agent/agent.py. "
+                "Use a supported framework adapter for automatic agent.toml tool bindings.",
+            )
     if not uses_custom_server(project):
         return
     raise AgentCliError(

@@ -12,6 +12,7 @@ class AgentFramework(str, Enum):
 
     LANGGRAPH = "langgraph"
     OPENAI = "openai"
+    CUSTOM = "custom"
 
     def __str__(self) -> str:
         return self.value

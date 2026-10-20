@@ -102,5 +102,6 @@ def dev(
             plan.preview.server,
             local_trace_label(plan.preview),
             has_chat_ui=plan.preview.has_chat_ui,
+            framework=plan.preview.framework,
         )
         service.run(plan)

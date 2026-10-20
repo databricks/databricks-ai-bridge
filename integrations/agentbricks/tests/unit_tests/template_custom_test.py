@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import pytest
 import tomli
+from click.testing import CliRunner
 from fastapi.testclient import TestClient
 
 from databricks_agentbricks.cli import init as init_mod
@@ -128,9 +129,12 @@ def _clear_template_modules(monkeypatch):
 def scaffold(tmp_path, monkeypatch):
     def create(server="agentbricks"):
         root = tmp_path / server
-        # Exercise bundled templates before the CLI exposes the new framework.
-        name = "agent-custom" if server == "agentbricks" else "custom-agent-custom"
-        init_mod._copy_packaged_template(name, root)
+        result = CliRunner().invoke(
+            init_mod.init,
+            ["--framework", "custom", "--server", server, str(root)],
+            obj=SimpleNamespace(output="text", profile=None),
+        )
+        assert result.exit_code == 0, result.output
         monkeypatch.syspath_prepend(str(root))
         _clear_template_modules(monkeypatch)
         return root
