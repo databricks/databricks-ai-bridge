@@ -141,6 +141,10 @@ it an HTTP request. MLflow tracing is on by default (`agentbricks init` binds a 
 `.agentbricks/` and `agentbricks deploy` to the bound workspace experiment; `agentbricks tracing list` shows the
 available traces.
 
+LangGraph and OpenAI Agents templates enable Claude prompt caching by default. See the
+[Claude caching guide](docs/claude-prompt-caching.md) for supported endpoints, configuration,
+and updates to existing generated projects.
+
 ## Inspect and clean up a project
 
 Read `agent.toml` for the recorded agent name, declared memory/session stores, tracing, and tool

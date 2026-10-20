@@ -73,7 +73,7 @@ response = await client.chat.completions.create(
 ```
 
 The generic connector does not infer a caching policy. Agent Bricks templates use the separate
-Claude adapter in `databricks_agentkit.claude`; see the [template caching guide](../../docs/claude-prompt-caching.md)
+Claude adapter in `databricks_agentkit.claude`; see the [template caching guide](../agentbricks/docs/claude-prompt-caching.md)
 for configuration, older endpoints, and manual controls.
 
 Cache reads appear in `response.usage.prompt_tokens_details.cached_tokens`, and writes in

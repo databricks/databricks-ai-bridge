@@ -70,7 +70,7 @@ class TemplateChatDatabricks(ChatDatabricks):
 Preserve your existing workspace routing methods when adopting this change. Rebuild with
 `agentbricks dev --prepare-environment`. Release OpenAI, LangChain, then Agent Bricks; release
 stamping updates template dependency minimums. To test an unreleased checkout, use the local
-source overrides in the [contribution guide](../integrations/agentbricks/CONTRIBUTING.md).
+source overrides in the [contribution guide](../CONTRIBUTING.md).
 
 ## Verification
 
@@ -80,7 +80,7 @@ and `cache_creation` in `usage_metadata["input_token_details"]`. They are alread
 input totals. Streaming keeps the response usage rather than adding overlapping snapshots.
 
 Unit tests cover placement, manual controls, aliases, off, transcript preservation, client
-copies, serialization, streaming, and template wiring. Gated live tests verify actual reads:
+copies, serialization, streaming, and template wiring. Gated live tests verify actual reads. Run these commands from the repository root:
 
 ```bash
 cd integrations/openai

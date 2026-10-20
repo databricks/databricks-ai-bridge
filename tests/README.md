@@ -32,7 +32,7 @@ This lets integration test files coexist in the public repo without running duri
 Claude prompt-cache regression tests use `RUN_CLAUDE_PROMPT_CACHING_TESTS=1`. They verify cache
 reads through AI Gateway and Foundation Model APIs, including OpenAI Agents and LangGraph tool
 loops, session history, and streaming. Agent Bricks adapter tests additionally cover native
-Sonnet 4.6 and explicit Sonnet 4.5 placement through both frameworks. See [the caching guide](../docs/claude-prompt-caching.md)
+Sonnet 4.6 and explicit Sonnet 4.5 placement through both frameworks. See [the caching guide](../integrations/agentbricks/docs/claude-prompt-caching.md)
 for commands and model overrides. Enable this gate in the private runner to include them in nightly
 coverage; it is independent of `RUN_FMAPI_TOOL_CALLING_TESTS`.
 
