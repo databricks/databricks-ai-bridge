@@ -406,6 +406,10 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("deployments", "delete"): (
         ("agentbricks deployments delete agent-bricks-my-agent", "delete a deployment"),
+        (
+            "agentbricks deployments delete agent-bricks-my-agent --delete-source",
+            "delete a deployment and its uploaded source folder",
+        ),
     ),
     ("endpoint",): (
         (

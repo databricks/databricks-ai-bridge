@@ -142,7 +142,7 @@ def test_managed_delete_finishes_before_deleting_app(monkeypatch):
     ctx = _ctx(client, w, output="json")
 
     result = CliRunner().invoke(
-        deploy_mod.deployments_delete, ["agent-bricks-myapp", "--yes"], obj=ctx
+        deploy_mod.deployments_delete, ["agent-bricks-myapp", "--delete-source", "--yes"], obj=ctx
     )
 
     assert result.exit_code == 0, result.output
@@ -164,8 +164,8 @@ def test_managed_delete_finishes_before_deleting_app(monkeypatch):
             to_stderr=True,
             action="Could not delete deployment 'agent-bricks-myapp'.",
         ),
-        mock.call.w.workspace.delete(_DEFAULT_SOURCE, recursive=True),
         mock.call.w.apps.get("agent-bricks-myapp"),
+        mock.call.w.workspace.delete(_DEFAULT_SOURCE, recursive=True),
     ]
 
 
@@ -319,7 +319,7 @@ def test_unconfirmed_delete_reports_the_result_and_fails(monkeypatch, wait, stil
 
     result = CliRunner().invoke(
         deploy_mod.deployments_delete,
-        ["agent-bricks-myapp", "--yes"],
+        ["agent-bricks-myapp", "--delete-source", "--yes"],
         obj=_ctx(mock.Mock(), w, output="json"),
     )
 
@@ -327,7 +327,8 @@ def test_unconfirmed_delete_reports_the_result_and_fails(monkeypatch, wait, stil
     payload = json.loads(result.output)
     assert payload["still_deleting"] is still_deleting
     assert payload["wait_error"] == wait.error
-    assert payload["source_path_status"] == "deleted"
+    assert payload["source_path_status"] == "kept_app_not_confirmed"
+    w.workspace.delete.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -349,3 +350,37 @@ def test_unconfirmed_delete_text_says_what_to_do(monkeypatch, wait, expected):
 
     assert result.exit_code == 1
     assert expected in " ".join(result.output.split())
+
+
+def test_delete_without_delete_source_keeps_the_folder_and_says_how_to_delete_it(monkeypatch):
+    w = fake_workspace_client(source_code_path=_DEFAULT_SOURCE)
+    monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", False)
+    monkeypatch.setattr(deploy_mod, "_databricks", mock.Mock(side_effect=_cli_runner(w)))
+
+    result = CliRunner().invoke(
+        deploy_mod.deployments_delete, ["agent-bricks-myapp", "--yes"], obj=_ctx(mock.Mock(), w)
+    )
+
+    assert result.exit_code == 0, result.output
+    w.workspace.delete.assert_not_called()
+    assert f"databricks workspace delete {_DEFAULT_SOURCE} --recursive" in " ".join(
+        result.output.split()
+    )
+
+
+@pytest.mark.parametrize(("flags", "named"), [(["--delete-source"], True), ([], False)])
+def test_delete_prompt_names_the_folder_only_with_delete_source(monkeypatch, flags, named):
+    w = fake_workspace_client(source_code_path=_DEFAULT_SOURCE)
+    monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", False)
+    monkeypatch.setattr(deploy_mod, "_databricks", mock.Mock(side_effect=_cli_runner(w)))
+
+    result = CliRunner().invoke(
+        deploy_mod.deployments_delete,
+        ["agent-bricks-myapp", *flags],
+        obj=_ctx(mock.Mock(), w),
+        input="n\n",
+    )
+
+    assert result.exit_code != 0  # declined
+    assert (_DEFAULT_SOURCE in " ".join(result.output.split())) is named
+    w.workspace.delete.assert_not_called()

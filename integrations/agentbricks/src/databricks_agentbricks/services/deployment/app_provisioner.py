@@ -1,12 +1,11 @@
 """The deployed Databricks App: create or scale it, roll out its source, and delete it.
 
 Deliberately separate from the typed resource provisioners in ``provisioners``: the App is the
-deployment itself, and deleting it also covers the source folder deploy uploaded to by default.
+deployment itself, and deleting it can also cover the source folder deploy uploaded to.
 """
 
 from __future__ import annotations
 
-import re
 import time
 from dataclasses import dataclass
 from datetime import timedelta
@@ -43,18 +42,6 @@ _DEPLOYMENTS_DIR = "agentbricks_deployments"
 APP_DELETE_TIMEOUT_S = 20 * 60
 
 
-def is_default_workspace_path(path: str, name: DeploymentName) -> bool:
-    """Whether ``path`` is the folder deploy creates by default, in any deployer's home.
-
-    Only that folder belongs to the deployment; one passed with ``--workspace-path`` may hold the
-    user's own files.
-    """
-    # `/Users/...` is the same workspace object as `/Workspace/Users/...`. Paths are
-    # case-sensitive, so only a trailing slash is normalized.
-    pattern = rf"(/Workspace)?/Users/[^/]+/{_DEPLOYMENTS_DIR}/{re.escape(str(name))}"
-    return re.fullmatch(pattern, path.rstrip("/")) is not None
-
-
 @dataclass(frozen=True)
 class AppDeleteWaitResult:
     """How waiting for an App delete ended; neither field set means the App is gone."""
@@ -79,7 +66,6 @@ def recorded_source_code_path(app: App) -> Optional[str]:
 # `databricks auth login` profiles ("cannot get access token"), ValueError, RuntimeError, or a bare
 # Exception. `requests` errors and DatabricksError are OSErrors too, so order the handlers.
 _NETWORK_ERRORS = (requests.RequestException, TimeoutError)
-_LOOKUP_ERRORS = (DatabricksError, OSError, ValueError, RuntimeError)
 # API errors that can clear on their own, so a wait retries them.
 _TRANSIENT_API_ERRORS = (InternalError, TemporarilyUnavailable, DeadlineExceeded, TooManyRequests)
 
@@ -227,7 +213,7 @@ class AppProvisioner:
             return self._api_client_provider.get().workspace_client.apps.get(name)
         except NotFound:
             return None
-        except _LOOKUP_ERRORS as exc:
+        except Exception as exc:  # noqa: BLE001 - a credential provider may raise anything
             raise _app_lookup_error(name, exc) from exc
 
     def wait_until_deleted(

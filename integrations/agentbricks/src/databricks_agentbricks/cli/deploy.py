@@ -234,22 +234,26 @@ def deployments_stop(obj, name, yes) -> None:
 
 @deployments.command("delete")
 @click.argument("name", type=DeploymentName)
+@click.option(
+    "--delete-source",
+    is_flag=True,
+    help="Also delete the workspace folder the deployment's source was uploaded to, once the "
+    "deployment is gone.",
+)
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
 @click.pass_obj
-def deployments_delete(obj, name, yes) -> None:
-    """Delete a deployment, its Runtime Store when managed provisioning is enabled, and the source
-    folder deploy uploaded it to by default."""
+def deployments_delete(obj, name, delete_source, yes) -> None:
+    """Delete a deployment, and its Runtime Store when managed provisioning is enabled."""
     service = build_deploy_service(obj)
     target = service.delete_target(name)
-    folder = target.source_folder
     parts = [f"deployment '{name}'"]
     if not yes and service.deletes_runtime_store_data():
         parts.append("its Runtime Store data")
-    if folder is not None and folder.managed:
-        parts.append(f"its uploaded source folder {folder.path}")
+    if delete_source and target.source_path:
+        parts.append(f"its source folder {target.source_path}")
     described = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
     render.confirm_destroy(described, assume_yes=yes)
-    result = service.delete(target)
+    result = service.delete(target, delete_source=delete_source)
     present_deleted(result, output=obj.output)
     if not result.confirmed:
         raise click.exceptions.Exit(1)

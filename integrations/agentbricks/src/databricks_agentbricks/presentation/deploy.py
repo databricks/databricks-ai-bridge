@@ -11,6 +11,8 @@ from __future__ import annotations
 import pathlib
 from typing import Any, Optional
 
+from rich.text import Text
+
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.endpoint import print_agent_invoke_command
 from databricks_agentbricks.presentation.render import field
@@ -94,14 +96,14 @@ def present_stopped(name: str, *, output: Optional[str]) -> None:
 
 def present_deleted(result: DeleteResult, *, output: Optional[str]) -> None:
     """Confirm a delete: the machine payload for `--output json`, else a success line."""
-    folder = result.source_folder
+    path = result.source_path
     if output == "json":
         render.emit_json(
             {
                 "deleted": result.deployment,
                 "still_deleting": result.still_deleting,
                 "wait_error": result.wait_error,
-                "source_path": folder.path if folder else None,
+                "source_path": path,
                 "source_path_status": result.source_folder_status,
                 "source_path_error": result.source_folder_error,
             }
@@ -121,10 +123,30 @@ def present_deleted(result: DeleteResult, *, output: Optional[str]) -> None:
         )
     else:
         render.success(f"Deleted deployment '{result.deployment}'")
-    if result.source_folder_status == "failed":
+    if result.source_folder_status == "kept":
+        _print_source_delete_command(
+            "Kept the source folder; to delete it"
+            if result.confirmed
+            else "Kept the source folder. Once the deployment is gone, delete it",
+            path,
+        )
+    elif result.source_folder_status == "failed":
         render.warning(f"{result.source_folder_error} Delete it yourself if you no longer need it.")
-    elif result.source_folder_status == "kept" and folder is not None:
-        render.warning(f"Kept the source folder {folder.path}: it was not created by deploy.")
+    elif result.source_folder_status == "kept_app_not_confirmed":
+        _print_source_delete_command(
+            "Kept the source folder: the deployment wasn't confirmed gone. Once it is, delete it",
+            path,
+        )
+
+
+def _print_source_delete_command(intro: str, path: Optional[str]) -> None:
+    con = render.console()
+    con.print(Text(intro, style=render.SECONDARY))
+    # A separate, soft-wrapped line avoids copying panel borders or inserted line breaks.
+    con.print(
+        Text(f"databricks workspace delete {path} --recursive", style=render.COMMAND),
+        soft_wrap=True,
+    )
 
 
 def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> None:

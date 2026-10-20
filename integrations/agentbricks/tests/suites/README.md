@@ -34,12 +34,14 @@ Every resource a run creates carries its run id, and is deleted at three points:
 
 1. **When each test ends**, the test's own cleanup runs. Each test registers the delete command
    for everything it creates with the `cleanup` fixture, like Go's `t.Cleanup`, e.g.
-   `cleanup(f"deployments delete {app} --yes")`; registered commands run newest first, pass or fail.
+   `cleanup(f"deployments delete {app} --delete-source --yes")`; registered commands run newest
+   first, pass or fail.
    Fixtures delete what they create, such as `scratch_schema` and its schema.
 2. **When the run ends**, `pytest_sessionfinish` deletes everything carrying the run's name prefix
    that is still there (stores, Apps, synced source folders, tracing experiments, schemas) and the
    Apps' Lakebase roles (`harness.cleanup.delete_run_leftovers`). `deployments delete` leaves the
-   experiments and roles behind; the sweep catches a source folder only when its delete never ran.
+   experiments and roles behind; the sweep catches a source folder only when the App wasn't
+   confirmed gone or its delete never ran.
    A failure there fails the run.
 3. **After a run that was killed** before step 2, for example by a CI timeout:
 
