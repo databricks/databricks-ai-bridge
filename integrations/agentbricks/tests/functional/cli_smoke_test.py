@@ -40,6 +40,7 @@ _COMMANDS = (
     "deployments",
     "endpoint",
     "tools",
+    "experimental",
 )
 
 
@@ -86,7 +87,7 @@ def run_agentbricks(tmp_path: pathlib.Path):
 
 
 @pytest.mark.parametrize("profile_source", ["flag", "sdk"])
-@pytest.mark.parametrize("command", ["memory-list", "slow-init"])
+@pytest.mark.parametrize("command", ["memory-list", "slow-init", "default-init"])
 def test_cli_posts_telemetry_to_local_receiver(
     run_agentbricks, tmp_path, profile_source, command
 ) -> None:
@@ -156,6 +157,8 @@ def test_cli_posts_telemetry_to_local_receiver(
                     "--server",
                     "custom",
                 ]
+            elif command == "default-init":
+                arguments = ["init", str(tmp_path / "agent")]
             else:
                 arguments = ["memory", "stores", "list", "--page-size", "7"]
             result = run_agentbricks(
@@ -178,25 +181,45 @@ def test_cli_posts_telemetry_to_local_receiver(
     assert uuid.UUID(frontend_log["frontend_log_event_id"])
     log = frontend_log["entry"]["agentbricks_cli_log"]
     assert log["command_path"] == (
-        "agentbricks init" if command == "slow-init" else "agentbricks memory stores list"
+        "agentbricks memory stores list" if command == "memory-list" else "agentbricks init"
     )
     assert log["exit_code"] == 0
-    expected_parameters: dict[str, dict[str, str | int]] = {
+    expected_parameters: dict[str, dict[str, str | bool | int]] = {
         "agentbricks.output": {
             "name": "agentbricks.output",
             "choice_value": "AGENTBRICKS_CLI_JSON",
         },
     }
-    if command == "slow-init":
+    if command != "memory-list":
         expected_parameters.update(
             {
                 "agentbricks init.framework": {
                     "name": "agentbricks init.framework",
-                    "choice_value": "AGENTBRICKS_CLI_OPENAI",
+                    "choice_value": (
+                        "AGENTBRICKS_CLI_OPENAI"
+                        if command == "slow-init"
+                        else "AGENTBRICKS_CLI_LANGGRAPH"
+                    ),
                 },
                 "agentbricks init.server": {
                     "name": "agentbricks init.server",
-                    "choice_value": "AGENTBRICKS_CLI_CUSTOM",
+                    "choice_value": (
+                        "AGENTBRICKS_CLI_CUSTOM"
+                        if command == "slow-init"
+                        else "AGENTBRICKS_CLI_AGENTBRICKS"
+                    ),
+                },
+                "agentbricks init.existing": {
+                    "name": "agentbricks init.existing",
+                    "bool_value": False,
+                },
+                "agentbricks init.disable_chat_app": {
+                    "name": "agentbricks init.disable_chat_app",
+                    "bool_value": False,
+                },
+                "agentbricks init.enable_chat_app": {
+                    "name": "agentbricks init.enable_chat_app",
+                    "bool_value": False,
                 },
             }
         )
@@ -215,6 +238,58 @@ def test_cli_and_every_command_help_load(run_agentbricks) -> None:
     assert "Usage" in run_agentbricks("--help").stdout
     for command in _COMMANDS:
         run_agentbricks(command, "--help")
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+def test_model_and_prompt_bindings_from_installed_cli(run_agentbricks, tmp_path, framework):
+    """Exercise local binding commands through the shipped console script without auth."""
+    project = tmp_path / "bound-agent"
+    run_agentbricks("init", "--framework", framework, str(project))
+    for role in ("router", "writer"):
+        result = run_agentbricks(
+            "-o",
+            "json",
+            "experimental",
+            "models",
+            "bind",
+            f"main.test.{role}",
+            "--role",
+            role,
+            "--default",
+            "system.ai.claude-sonnet-4-5",
+            "--source",
+            str(project),
+        )
+        assert json.loads(result.stdout)["role"] == role
+    run_agentbricks(
+        "-o",
+        "json",
+        "experimental",
+        "prompts",
+        "bind",
+        "main.test.writer_prompt",
+        "--key",
+        "writer",
+        "--source",
+        str(project),
+    )
+    manifest = tomli.loads((project / "agent.toml").read_text())
+    assert set(manifest["experimental"]["model_services"]) == {"router", "writer"}
+    assert manifest["experimental"]["prompts"] == {"writer": "main.test.writer_prompt"}
+    for role in ("router", "writer"):
+        run_agentbricks(
+            "experimental",
+            "models",
+            "unbind",
+            "--role",
+            role,
+            "--source",
+            str(project),
+        )
+    run_agentbricks("experimental", "prompts", "unbind", "writer", "--source", str(project))
+    manifest = tomli.loads((project / "agent.toml").read_text())
+    assert "experimental" not in manifest
+    assert manifest["agent"]["framework"] == framework
 
 
 def test_installed_wheel_exposes_agentkit_sdk() -> None:
@@ -279,6 +354,8 @@ def test_existing_init_includes_migration_skill_from_wheel(
     [
         ["sandbox", "--scope", "volume:catalog.schema.volume"],
         ["uc-function", "catalog.schema.function"],
+        ["uc-function", "catalog.schema.function", "--auth", "user"],
+        ["uc-function", "catalog.schema.function", "--auth", "app"],
         ["genie-one"],
         ["genie-agent", "0" * 32],
     ],
@@ -309,6 +386,8 @@ def test_tools_offline_add_review_manifest_remove(
             if not changed:
                 assert "already configured" in added.stdout
         assert [tool["id"] for tool in tomli.loads(manifest.read_text())["tools"]] == ["tested"]
+        expected_auth = args[args.index("--auth") + 1] if "--auth" in args else "user"
+        assert tomli.loads(manifest.read_text())["tools"][0]["auth"] == expected_auth
     run_agentbricks("tools", "remove", "tested", "--source", str(project))
     assert tomli.loads(manifest.read_text()).get("tools", []) == []
     assert {

@@ -39,3 +39,18 @@ def test_databricks_failure_without_action_is_generic(monkeypatch):
         raise AssertionError("expected AgentCliError")
     except dc.AgentCliError as exc:
         assert "apps" not in exc.message and "prof" not in exc.message
+
+
+def test_to_stderr_keeps_stdout_for_the_agentbricks_payload(monkeypatch):
+    # `--output json` prints Agent Bricks' payload on stdout; the CLI's own output must not land there.
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen.update(kw)
+        return types.SimpleNamespace(returncode=0, stdout=None, stderr=None)
+
+    monkeypatch.setattr(dc.subprocess, "run", fake_run)
+    dc._databricks(["sync", "src", "/Workspace/dst"], "prof", to_stderr=True)
+    assert seen["stdout"] == 2
+    dc._databricks(["apps", "logs", "x"], "prof")
+    assert seen["stdout"] is None

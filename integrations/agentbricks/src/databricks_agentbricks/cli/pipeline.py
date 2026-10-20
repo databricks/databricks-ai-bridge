@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import re
-import subprocess
 from pathlib import Path
 from typing import Any
 
 import click
 
+from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.render import field
 from databricks_agentkit import timefmt
@@ -57,14 +57,12 @@ def _render_detail(pipeline: dict) -> None:
 
 
 def _render_run(run: dict) -> None:
-    stats = field(run, "stats") or {}
     render.detail(
         "Dreamer Run",
         field(run, "name") or "—",
         {
             "Resource name": field(run, "name"),
             "State": field(run, "state"),
-            "Stats": stats or None,
             "Error": field(run, "error"),
             "Created": timefmt.absolute(field(run, "create_time")),
             "Finished": timefmt.absolute(field(run, "end_time")),
@@ -114,6 +112,7 @@ def create(obj, memory_store, session_store, model, display_name, instructions, 
         fields={"Resource name": field(data, "name")},
         next_steps=[
             (f"agentbricks memory pipeline get {field(data, 'name')}", "View the pipeline"),
+            (f"agentbricks memory pipeline run {field(data, 'name')}", "Run the pipeline"),
         ],
     )
 
@@ -203,6 +202,39 @@ def update(obj, name, display_name, instructions, model, trigger) -> None:
     _render_detail(data)
 
 
+def _set_trigger(obj, name: str, trigger: str) -> None:
+    client = obj.client()
+    current = client.get_memory_pipeline(name)
+    policy = field(current, "dreamer_policy") or {}
+    current_trigger = field(policy, "trigger") or "MANUAL_ONLY"
+    if current_trigger == "TRIGGER_UNSPECIFIED":
+        current_trigger = "MANUAL_ONLY"
+    if current_trigger == MEMORY_PIPELINE_TRIGGERS[trigger]:
+        state = "paused" if trigger == "manual" else "resumed"
+        raise AgentCliError(f"Memory pipeline '{name}' is already {state}.")
+    data = client.update_memory_pipeline(name, trigger=trigger)
+    if obj.output == "json":
+        render.emit_json(data)
+        return
+    _render_detail(data)
+
+
+@pipeline.command("pause")
+@click.argument("name")
+@click.pass_obj
+def pause(obj, name) -> None:
+    """Pause scheduled runs; active runs continue and manual runs remain available."""
+    _set_trigger(obj, name, "manual")
+
+
+@pipeline.command("resume")
+@click.argument("name")
+@click.pass_obj
+def resume(obj, name) -> None:
+    """Enable scheduled runs, automatically about every 24 hours."""
+    _set_trigger(obj, name, "scheduled")
+
+
 @pipeline.command("delete")
 @click.argument("name")
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
@@ -222,7 +254,16 @@ def delete(obj, name, yes) -> None:
 @click.pass_obj
 def run(obj, name) -> None:
     """Manually run a Dreamer memory pipeline."""
-    data = obj.client().run_memory_pipeline(name)
+    try:
+        data = obj.client().run_memory_pipeline(name)
+    except AgentCliError as exc:
+        # ABORTED means the pipeline already has a run in progress; point at that run.
+        active = re.search(r"memory-pipelines/[^/\s]+/runs/[0-9]+", exc.message)
+        if exc.error_code == "ABORTED" and active:
+            exc.hint = (
+                f"Check its progress with `agentbricks memory pipeline runs get {active.group(0)}`."
+            )
+        raise
     if obj.output == "json":
         render.emit_json(data)
         return
@@ -234,23 +275,45 @@ def runs() -> None:
     """Inspect memory pipeline runs."""
 
 
+@runs.command("list")
+@click.argument("name")
+@click.option("--page-size", type=click.IntRange(min=0), default=50, show_default=True)
+@click.option("--page-token", default=None)
+@click.pass_obj
+def list_runs(obj, name, page_size, page_token) -> None:
+    """List recorded pipeline runs, most recently started first."""
+    data = obj.client().list_memory_pipeline_runs(name, page_size, page_token)
+    if obj.output == "json":
+        render.emit_json(data)
+        return
+    render.resource_table(
+        "Memory Pipeline Runs",
+        [("Resource name", "left"), ("State", "left"), ("Started", "left")],
+        [
+            [field(run, "name"), field(run, "state"), timefmt.absolute(field(run, "create_time"))]
+            for run in (field(data, "pipeline_runs") or [])
+        ],
+        subtitle=(
+            f"Next page: --page-token {field(data, 'next_page_token')}"
+            if field(data, "next_page_token")
+            else None
+        ),
+        no_wrap=[0],
+    )
+
+
 @runs.command("get")
 @click.argument("name")
-@click.pass_context
-def get_run(ctx, name) -> None:
-    """Get run details through the Databricks CLI."""
+@click.pass_obj
+def get_run(obj, name) -> None:
+    """Get run details through the memory pipeline API."""
     match = re.fullmatch(r"memory-pipelines/[^/]+/runs/([0-9]+)", name)
     if match is None:
         raise click.BadParameter(
             "Expected memory-pipelines/<pipeline-id>/runs/<numeric-run-id>.", param_hint="NAME"
         )
-    command = ["databricks", "jobs", "get-run", match.group(1)]
-    if ctx.obj.profile:
-        command.extend(["--profile", ctx.obj.profile])
-    try:
-        result = subprocess.run(command, check=False)
-    except FileNotFoundError as exc:
-        raise click.ClickException(
-            "Databricks CLI not found. Install it and add it to PATH."
-        ) from exc
-    ctx.exit(result.returncode)
+    data = obj.client().get_memory_pipeline_run(name)
+    if obj.output == "json":
+        render.emit_json(data)
+        return
+    _render_run(data)

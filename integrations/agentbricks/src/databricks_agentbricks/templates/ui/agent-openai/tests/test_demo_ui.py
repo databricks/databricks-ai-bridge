@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 from runtime import ui
 
 from databricks_agentkit import DurableAgentServer
+from databricks_agentkit.runtime.auth import InvocationAuthPolicy
 from databricks_agentkit.runtime.store import (
     RUNTIME_STORE_DATABASE_ENV,
     RUNTIME_STORE_LAKEBASE_BRANCH_ENV,
@@ -125,7 +126,9 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
     async def invoke_handler(request, context):
         return {"output": []}
 
-    app = DurableAgentServer(runtime_store=InMemoryRuntimeStore())
+    app = DurableAgentServer(
+        runtime_store=InMemoryRuntimeStore(), auth_policy=InvocationAuthPolicy()
+    )
     app.invoke(invoke_handler)
     app.recover(invoke_handler)
     ui.install_ui(app)
@@ -442,7 +445,7 @@ async def test_local_history_reads_messages_from_in_process_session(monkeypatch)
                 {"role": "assistant", "content": "saved reply"},
             ]
 
-    monkeypatch.setattr(ss, "session_store", lambda session_id: _FakeSession())
+    monkeypatch.setattr(ss, "session_store", lambda session_id, actor=None: _FakeSession())
     result = await ui._local_history("saved-session")
 
     assert result == {

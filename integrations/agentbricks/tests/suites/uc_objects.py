@@ -1,0 +1,51 @@
+"""The UC objects the tools suite uses, created fresh in each test's temporary schema."""
+
+from __future__ import annotations
+
+import dataclasses
+import uuid
+
+from harness.run import E2EError
+from harness.workspace import Workspace
+
+FUNCTION = "uc_marker"
+VOLUME = "ab_volume"
+# The MCP server exposes a function as catalog__schema__function, capped at 64 characters.
+MAX_TOOL_NAME_LENGTH = 64
+
+
+@dataclasses.dataclass(frozen=True)
+class UcFunction:
+    """The scratch UC objects the tools use."""
+
+    function: str
+    volume: str
+    volume_file_path: str
+    volume_marker: str
+
+
+def create_uc_function(workspace: Workspace, scratch_schema: str) -> UcFunction:
+    """Create the marker function and volume in ``scratch_schema``, whose deletion removes them."""
+    catalog, _, schema = scratch_schema.partition(".")
+    exposed_tool_name = f"{scratch_schema}.{FUNCTION}".replace(".", "__")
+    if len(exposed_tool_name) > MAX_TOOL_NAME_LENGTH:
+        raise E2EError(
+            f"The UC function's MCP tool name would exceed {MAX_TOOL_NAME_LENGTH} characters: "
+            f"{exposed_tool_name!r}. Use a shorter catalog."
+        )
+    workspace.sql(
+        f"CREATE FUNCTION `{catalog}`.`{schema}`.`{FUNCTION}`"
+        "(value STRING) RETURNS STRING "
+        "COMMENT 'Deterministic Agent Bricks E2E marker tool' "
+        "RETURN concat('AGENTBRICKS_UC_OK:', value)"
+    )
+    workspace.create_volume(catalog, schema, VOLUME)
+    marker = f"AGENTBRICKS_VOLUME_{uuid.uuid4().hex}"
+    file_path = f"/Volumes/{catalog}/{schema}/{VOLUME}/marker.txt"
+    workspace.upload(file_path, marker.encode())
+    return UcFunction(
+        function=f"{scratch_schema}.{FUNCTION}",
+        volume=f"{scratch_schema}.{VOLUME}",
+        volume_file_path=file_path,
+        volume_marker=marker,
+    )

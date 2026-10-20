@@ -12,7 +12,7 @@ import pytest
 
 
 class FakeServer:
-    def __init__(self, name, url, workspace_client=None, **kwargs):
+    def __init__(self, name, url=None, workspace_client=None, **kwargs):
         self.name = name
         self.url = url
         self.workspace_client = workspace_client
@@ -87,15 +87,18 @@ def tool(
     )
 
 
-def test_clients_are_selected_per_tool_and_request(adapter):
+@pytest.mark.parametrize("kind", ["mcp", "uc_function"])
+def test_clients_are_selected_per_tool_and_request(adapter, kind):
     alice, bob, app = [
         SimpleNamespace(config=SimpleNamespace(host="https://workspace")) for _ in range(3)
     ]
     for user in (alice, bob):
         resolver = Mock(side_effect=lambda mode, user=user: user if mode == "user" else app)
         for mode in ("user", "app", None):
-            server = adapter._server_from_tool(tool(mode), workspace_client_for=resolver)
+            server = adapter._server_from_tool(tool(mode, kind=kind), workspace_client_for=resolver)
             assert server.workspace_client is (user if mode == "user" else app)
+            if adapter.__name__.endswith("openai.mcp"):
+                assert server._agentbricks_request_user is (mode == "user")
         assert [call.args for call in resolver.call_args_list] == [("user",), ("app",), ("app",)]
     adapter.workspace_client.assert_not_called()
 
@@ -107,21 +110,23 @@ def test_framework_adapters_share_auth_classification(adapter):
     assert adapter._tool_error is mcp_tool_error
 
 
-def test_explicit_deployed_user_without_resolver_fails_closed(adapter, monkeypatch):
+@pytest.mark.parametrize("kind", ["mcp", "uc_function"])
+def test_explicit_deployed_user_without_resolver_fails_closed(adapter, monkeypatch, kind):
     from databricks_agentkit.runtime.auth import AuthError
 
     monkeypatch.setenv("DATABRICKS_APP_NAME", "my-agent")
     with pytest.raises(AuthError) as raised:
-        adapter._server_from_tool(tool("user"))
+        adapter._server_from_tool(tool("user", kind=kind))
     assert raised.value.code == "MCP_USER_AUTHORIZATION_MISSING"
     assert raised.value.integration_id == "search"
     adapter.workspace_client.assert_not_called()
 
 
-def test_legacy_and_local_default_identity_remain_supported(adapter):
+@pytest.mark.parametrize("kind", ["mcp", "uc_function"])
+def test_legacy_and_local_default_identity_remain_supported(adapter, kind):
     for mode in (None, "app", "user"):
         assert (
-            adapter._server_from_tool(tool(mode)).workspace_client
+            adapter._server_from_tool(tool(mode, kind=kind)).workspace_client
             is adapter.workspace_client.return_value
         )
 
@@ -133,6 +138,26 @@ def test_extra_servers_are_not_resolved_or_modified(adapter):
     assert asyncio.run(build([extra], workspace_client_for=resolver)) == [extra]
     assert extra.url == "https://customer.example/mcp"
     resolver.assert_not_called()
+
+
+@pytest.mark.parametrize("kind", ["mcp", "uc_function", "sandbox", "genie_one"])
+def test_openai_declared_mcp_approval_keeps_request_identity(adapter, kind):
+    if not adapter.__name__.endswith("openai.mcp"):
+        pytest.skip("OpenAI MCP approval policy")
+    adapter.load_tools.return_value = [tool("user", kind=kind)]
+    extra = FakeServer("customer", "https://customer.example/mcp", object())
+    policy = {"web_search": True, "ungated": False}
+    clients = [SimpleNamespace(config=SimpleNamespace(host="https://workspace")) for _ in range(2)]
+    for client in clients:
+        resolver = Mock(return_value=client)
+        declared, unchanged = asyncio.run(
+            adapter.mcp_servers([extra], workspace_client_for=resolver, require_approval=policy)
+        )
+        assert declared.workspace_client is client
+        assert declared.kwargs["require_approval"] == policy
+        assert declared._agentbricks_request_user is True
+        resolver.assert_called_once_with("user")
+        assert unchanged is extra and "require_approval" not in extra.kwargs
 
 
 def test_resolver_auth_errors_are_not_swallowed(adapter):

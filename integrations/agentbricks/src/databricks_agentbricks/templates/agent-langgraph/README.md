@@ -83,6 +83,15 @@ application session:
 }
 ```
 
+For OBO tools (`auth = "user"`), the same signed-in user submits the approval as a new
+invocation. Keep the same `session_id` and, if supplied, `input.actor`. The new request supplies
+its own user credentials; the paused invocation's credentials are discarded. The browser normally
+uses its existing authenticated session, so approval does not require a page refresh or another
+login unless that session has expired. Automatic crash recovery still cannot recover OBO work.
+
+Malformed middleware decisions return `INVALID_APPROVAL` before the resume value is checkpointed,
+so the user can correct the decision and submit it with a new invocation ID.
+
 The default checkpointer is process-local. Bind a managed Session Store to preserve multi-turn and
 paused LangGraph state across restarts:
 
@@ -109,6 +118,10 @@ Use `agentbricks init --framework langgraph --disable-chat-app` for API-only out
 - Add local tools under `agent/tools/`; modules are auto-discovered.
 - Add MCP servers in `agent/mcps.py` or with `agentbricks tools add mcp`.
 - Bind long-term memory with `agentbricks memory bind <store>`.
+- Route the agent's model through a Unity Gateway model service you own with
+  `agentbricks experimental models bind`, then switch it without a redeploy with
+  `agentbricks experimental models set`. These commands are experimental, so their flags may
+  change between releases.
 
 ```bash
 agentbricks --profile <profile> deploy agent-langgraph --source .
@@ -138,7 +151,11 @@ to the framework-native agent. Internal session keys are never returned to clien
 User-policy invocations use the existing Runtime for synchronous, streaming, and background calls,
 including status polling, event replay, and invocation-ID idempotency. The Runtime Store persists no
 credential; request-user authentication remains process-local for the active first attempt. A
-replacement attempt fails with `MCP_USER_AUTH_RECOVERY_UNSUPPORTED` before agent code runs. Approval
-interruptions remain unsupported and fail with `MCP_USER_AUTH_HITL_UNSUPPORTED`. The agent's
-existing namespaced memory, conversation store, and checkpointer behavior is unchanged; OBO does not
-add another saver.
+replacement attempt fails with `MCP_USER_AUTH_RECOVERY_UNSUPPORTED` before agent code runs.
+Interactive approval uses a new authenticated invocation and rebuilds tools with that request's
+credentials. The agent's existing namespaced memory, conversation store, and checkpointer behavior
+is unchanged; OBO does not add another saver.
+
+Existing generated projects must update their copies of `agent/agent.py` and `runtime/adapter.py`
+to remove the OBO pause/resume rejection guards. Upgrading the installed package alone does not
+rewrite these files. Keep the runtime's automatic-recovery guard.

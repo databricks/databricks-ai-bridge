@@ -17,6 +17,8 @@ from agent.tools import all_tools
 from agents import FunctionTool
 from runtime.adapter import _approval_value, _normalize_item
 
+from databricks_agentkit.runtime.auth import AuthError
+
 
 def test_tools_autoregister():
     tools = all_tools()
@@ -121,7 +123,8 @@ async def test_agent_events_omit_unavailable_mcp_servers(monkeypatch):
     all_servers = [healthy, *unavailable]
     tool_filters = [server.tool_filter for server in all_servers]
 
-    async def mcp_servers(_extra):
+    async def mcp_servers(_extra, *, require_approval):
+        assert require_approval == {"send_message": True}
         return [healthy, *unavailable]
 
     create_agent = MagicMock(return_value=object())
@@ -159,7 +162,8 @@ async def test_agent_events_propagate_request_user_mcp_failure(monkeypatch):
     server.connect = AsyncMock(side_effect=PermissionError("request-user denied"))
     server.cleanup = AsyncMock()
 
-    async def mcp_servers(_extra):
+    async def mcp_servers(_extra, *, require_approval):
+        assert require_approval == {"send_message": True}
         return [server]
 
     monkeypatch.setattr(agent_module, "mcp_servers", mcp_servers)
@@ -371,7 +375,7 @@ async def test_approval_restores_sdk_state_original_model_and_session(approval_r
     assert [item.call_id for item in replayed.interruptions] == ["call-1"]
     assert run.control.model_calls == 1
     snapshot = json.loads(json.dumps(run.store["state"]))
-    with pytest.raises(ValueError):
+    with pytest.raises(AuthError):
         await run.run(
             resume={"decisions": [{"type": "invalid", "call_id": "call-1"}]},
             invocation_id="invalid",
@@ -446,7 +450,7 @@ async def test_adapter_refuses_consumed_approval_but_allows_new_turn(approval_ru
     )
     writes = run.save_state.await_count
     context.invocation_id = "invalid"
-    with pytest.raises(ValueError):
+    with pytest.raises(AuthError):
         await adapter.invoke({"actor": "actor", "resume": {"decisions": []}}, context)
     assert run.save_state.await_count == writes
     context.invocation_id = "resume"
@@ -499,7 +503,7 @@ async def test_recovered_resume_reemits_next_pause_without_reapplying_old_decisi
     assert [item.call_id for item in recovered.interruptions] == ["call-2"]
     assert run.executed == ["sent"]
     assert run.control.model_calls == 2
-    with pytest.raises(ValueError, match="mismatched"):
+    with pytest.raises(AuthError, match="mismatched"):
         await run.run(resume=decisions, invocation_id="stale-decision")
     await run.run(
         resume={"decisions": [{"type": "approve", "call_id": "call-2"}]},

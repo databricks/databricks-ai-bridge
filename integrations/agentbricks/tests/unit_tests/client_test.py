@@ -558,7 +558,7 @@ def test_get_memory_entry_passes_read_mask(workspace_client):
 
 
 @mock.patch("databricks.sdk.WorkspaceClient")
-def test_create_memory_entry_serializes_write_mode(workspace_client):
+def test_create_memory_entry_sends_only_entry_fields(workspace_client):
     client, do = _client(workspace_client)
 
     client.create_memory_entry(
@@ -566,7 +566,8 @@ def test_create_memory_entry_serializes_write_mode(workspace_client):
         "alice",
         "/preferences/style.md",
         content="more",
-        write_mode="MANAGED_MEMORY_ENTRY_WRITE_MODE_APPEND",
+        session_id="session1",
+        source_type="MANAGED_MEMORY_ENTRY_SOURCE_TYPE_AGENT",
     )
 
     do.assert_called_once_with(
@@ -577,8 +578,23 @@ def test_create_memory_entry_serializes_write_mode(workspace_client):
             "actor_id": "alice",
             "path": "/preferences/style.md",
             "content": "more",
-            "write_mode": "MANAGED_MEMORY_ENTRY_WRITE_MODE_APPEND",
+            "session_id": "session1",
+            "source_type": "MANAGED_MEMORY_ENTRY_SOURCE_TYPE_AGENT",
         },
+    )
+
+
+@mock.patch("databricks.sdk.WorkspaceClient")
+def test_list_memory_entries_passes_exact_path(workspace_client):
+    client, do = _client(workspace_client)
+
+    client.list_memory_entries("s1", "alice", path="/preferences/style.md")
+
+    do.assert_called_once_with(
+        "GET",
+        "/api/2.0/agents/memory-stores/s1/entries",
+        query={"actor_id": "alice", "path": "/preferences/style.md"},
+        body=None,
     )
 
 

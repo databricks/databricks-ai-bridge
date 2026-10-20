@@ -61,6 +61,12 @@ def _stub_local_tracing(monkeypatch):
     monkeypatch.setattr(dev_mod, "start_local_tracing_server", lambda source_dir: (None, {}))
 
 
+@pytest.fixture(autouse=True)
+def _stub_free_port(monkeypatch):
+    """Treat the app port as free so dev tests never depend on what this machine is running."""
+    monkeypatch.setattr(dev_mod, "port_in_use", lambda port: False)
+
+
 def test_dev_prepares_when_no_venv(tmp_path: pathlib.Path):
     (tmp_path / "app.yaml").write_text("command: []\n")  # no .venv -> auto-prepare
     with mock.patch.object(dev_mod, "_databricks") as db:
@@ -720,4 +726,18 @@ def test_dev_unauthenticated_profile_fails_before_run_local(
     assert "'proj' (from .env) isn't authenticated" in out
     assert "agentbricks auth login proj" in out
     run_local.assert_not_called()
+
+
+def test_dev_busy_port_renders_error_and_hint(tmp_path: pathlib.Path, monkeypatch):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    monkeypatch.setattr(dev_mod, "port_in_use", lambda port: port == 9100)
+    with mock.patch.object(dev_mod, "_databricks") as db:
+        result = CliRunner().invoke(
+            dev_mod.dev, ["--source", str(tmp_path), "--app-port", "9100"], obj=_Ctx()
+        )
+    assert result.exit_code != 0
+    output = " ".join(result.output.split())
+    assert "Port 9100 is already in use (possibly a previous agentbricks dev run)." in output
+    assert "agentbricks dev --app-port <port>" in output
+    db.assert_not_called()
     assert not (tmp_path / "app.agentbricksdev.yaml").exists()

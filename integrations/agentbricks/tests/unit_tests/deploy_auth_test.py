@@ -33,6 +33,9 @@ from databricks_agentbricks.projects.agent_project import AgentProject, Scope, T
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.reporting import Reporter
 from databricks_agentbricks.services.deploy_service import DeployRequest, DeployService
+from databricks_agentbricks.services.deployment.model_binding_provisioner import (
+    ModelBindingProvisioner,
+)
 from databricks_agentbricks.services.deployment.provisioners import (
     AppProvisioner,
     GrantOutcome,
@@ -148,6 +151,7 @@ def _real_auth_deploy_harness(tmp_path, sdk_apps):
         tracing_provisioner=tracing,
         runtime_store_provisioner=runtime,
         tool_access_provisioner=tool_access,
+        model_binding_provisioner=ModelBindingProvisioner(provider, Mock(spec=Reporter)),
         reporter=reporter,
     )
     return SimpleNamespace(
@@ -210,6 +214,12 @@ def test_user_auth_requires_explicit_auth_on_every_managed_binding(tmp_path):
         ),
         (ToolSpec.genie_one(auth="user"), {"genie"}),
         (ToolSpec.genie_agent("space", space_id="0" * 32, auth="user"), {"genie"}),
+        (
+            ToolSpec.uc_function("lookup", function="main.tools.lookup", auth="user"),
+            {"mcp.functions"},
+        ),
+        (ToolSpec.uc_function("lookup", function="main.tools.lookup", auth="app"), set()),
+        (ToolSpec.uc_function("lookup", function="main.tools.lookup"), set()),
         (ToolSpec.mcp("dbsql", service="system.ai.dbsql", auth="app"), set()),
     ],
 )
@@ -218,6 +228,7 @@ def test_required_user_api_scopes_follow_binding(tmp_path, binding, expected):
     project.add_tool(binding)
 
     assert required_user_api_scopes(project) == expected
+    assert requires_user_auth(project) is (binding.auth == "user")
     assert required_user_api_scopes(None) == set()
 
 

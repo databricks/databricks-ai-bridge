@@ -153,6 +153,7 @@ def test_managed_delete_finishes_before_deleting_app(monkeypatch):
         mock.call.cli(
             ["apps", "delete", "agent-bricks-myapp"],
             "prof",
+            to_stderr=True,
             action="Could not delete deployment 'agent-bricks-myapp'.",
         ),
     ]
@@ -267,5 +268,6 @@ def test_legacy_delete_preserves_existing_behavior(monkeypatch):
     cli.assert_called_once_with(
         ["apps", "delete", "agent-bricks-myapp"],
         "prof",
+        to_stderr=True,
         action="Could not delete deployment 'agent-bricks-myapp'.",
     )

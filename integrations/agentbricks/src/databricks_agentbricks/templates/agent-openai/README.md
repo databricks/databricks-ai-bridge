@@ -86,6 +86,17 @@ new invocation with the same application session:
 Supply one decision per `action_requests` entry, in order, using its `call_id`. A decision's `type`
 must be `approve` or `reject`; rejections may include a string `message`.
 
+OBO tools (`auth = "user"`) support the same interactive approval flow. The same signed-in user
+submits a new invocation with the same `session_id` and, if supplied, `input.actor`. The harness
+rebuilds the agent and tool clients using the new request's credentials, then restores the saved
+JSON state into that agent. It never retains the previous request's live `RunState` or clients.
+The browser normally uses its existing authenticated session; a page refresh or another login is
+unnecessary unless that session has expired. Automatic OBO crash recovery remains unsupported.
+
+Malformed decisions return `INVALID_APPROVAL` before consuming the pending approval. Correct the
+decision and submit it with a new invocation ID. OpenAI approvals support approve/reject; LangGraph
+also supports editing a pending tool call according to its middleware policy.
+
 Pending approvals survive restarts when a Session Store is bound. The harness saves the paused SDK
 state separately from conversation history; without a binding, it stays process-local. Invalid
 decisions leave the approval intact. A valid decision consumes it before execution, so submitting
@@ -120,6 +131,10 @@ Use `agentbricks init --framework openai --disable-chat-app` for API-only output
 - Add local tools under `agent/tools/`; modules are auto-discovered.
 - Add MCP servers in `agent/mcps.py` or with `agentbricks tools add mcp`.
 - Bind long-term memory with `agentbricks memory bind <store>`.
+- Route the agent's model through a Unity Gateway model service you own with
+  `agentbricks experimental models bind`, then switch it without a redeploy with
+  `agentbricks experimental models set`. These commands are experimental, so their flags may
+  change between releases.
 - Bind durable transcript history with `agentbricks sessions bind <store>`.
 
 ```bash
@@ -150,7 +165,12 @@ to the framework-native agent. Internal session keys are never returned to clien
 User-policy invocations use the existing Runtime for synchronous, streaming, and background calls,
 including status polling, event replay, and invocation-ID idempotency. The Runtime Store persists no
 credential; request-user authentication remains process-local for the active first attempt. A
-replacement attempt fails with `MCP_USER_AUTH_RECOVERY_UNSUPPORTED` before agent code runs. Approval
-interruptions remain unsupported and fail with `MCP_USER_AUTH_HITL_UNSUPPORTED`, without storing a
-credential-bearing `RunState`. Existing namespaced memory and conversation-store behavior is
-unchanged; OBO does not add another saver.
+replacement attempt fails with `MCP_USER_AUTH_RECOVERY_UNSUPPORTED` before agent code runs.
+Interactive approvals use new authenticated invocations and the harness's existing JSON checkpoint
+store. Existing namespaced memory and conversation-store behavior is unchanged; OBO does not add
+another saver.
+
+Existing generated projects must update their copies of `agent/agent.py` and `runtime/adapter.py`
+to remove the OBO pause/resume rejection guards and translate malformed decisions to
+`INVALID_APPROVAL`. Upgrading the installed package alone does not rewrite these files. Keep the
+runtime's automatic-recovery guard.

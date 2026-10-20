@@ -95,6 +95,7 @@ A trailing `-p` goes after the full subcommand, not after a group name — `agen
 | [`deployments`](#agentbricks-deployments) | Manage deployed agents |
 | [`endpoint`](#agentbricks-endpoint) | Invoke arbitrary HTTP endpoints. |
 | [`tools`](#agentbricks-tools) | Manage an agent's tools |
+| [`experimental`](#agentbricks-experimental) | Commands whose interface is still being designed: `experimental models`, `experimental prompts` |
 
 ## Commands
 
@@ -136,7 +137,7 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
-| `--framework <langgraph|openai>` | `langgraph` \| `openai` | - | no | Agent framework: langgraph (LangGraph, default) or openai (OpenAI Agents SDK). |
+| `--framework <langgraph|openai>` | `langgraph` \| `openai` | `langgraph` | no | Agent framework: langgraph (LangGraph, default) or openai (OpenAI Agents SDK). |
 | `--server <agentbricks|custom>` | `agentbricks` \| `custom` | `agentbricks` | no | Use the managed invocation server (`agentbricks` is the existing `agent.toml` value) or a minimal custom FastAPI server. |
 | `--profile <PROFILE>` (`-p`) | string | - | no | DATABRICKS_CONFIG_PROFILE to seed the project's .env with, so `agentbricks dev` works right away (default: the global -p, then DATABRICKS_CONFIG_PROFILE, then DEFAULT; with no profile and env-var auth set (DATABRICKS_HOST, DATABRICKS_TOKEN or DATABRICKS_CLIENT_ID), no .env is written). |
 | `--disable-chat-app` | flag | - | no | Scaffold the API-only backend, without the browser chat app. |
@@ -585,6 +586,8 @@ Manage pipelines that distill session history into long-term memory.
 | [`memory pipeline update`](#agentbricks-memory-pipeline-update) | Update a pipeline's display name, instructions, model, or trigger. |
 | [`memory pipeline delete`](#agentbricks-memory-pipeline-delete) | Delete a Dreamer memory pipeline and its backing job. |
 | [`memory pipeline run`](#agentbricks-memory-pipeline-run) | Manually run a Dreamer memory pipeline. |
+| [`memory pipeline pause`](#agentbricks-memory-pipeline-pause) | Pause scheduled runs; active runs continue and manual runs remain available. |
+| [`memory pipeline resume`](#agentbricks-memory-pipeline-resume) | Enable scheduled runs, automatically about every 24 hours. |
 | [`memory pipeline runs`](#agentbricks-memory-pipeline-runs) | Inspect memory pipeline runs. |
 
 ##### `agentbricks memory pipeline create`
@@ -660,6 +663,27 @@ List and detail views accept either model location, preferring the nested value 
 `--trigger` updates `dreamer_policy.trigger`: `manual` maps to `MANUAL_ONLY`, and
 `scheduled` maps to `SCHEDULED`. Omit the flag to preserve the current trigger.
 
+##### `agentbricks memory pipeline pause`
+
+```sh
+agentbricks memory pipeline pause NAME
+```
+
+Set `dreamer_policy.trigger` to `MANUAL_ONLY` to stop scheduled runs. Active runs continue;
+manual `run` calls remain available. `NAME` accepts a pipeline id or full resource name.
+Returns an error if the pipeline is already manual-only (paused).
+
+##### `agentbricks memory pipeline resume`
+
+```sh
+agentbricks memory pipeline resume NAME
+```
+
+Set `dreamer_policy.trigger` to `SCHEDULED` to enable automatic runs about every 24 hours.
+This also enables scheduling for a pipeline originally created as manual-only.
+Returns an error if the pipeline is already scheduled (resumed).
+Both commands update only the trigger and support the global `--output json` option.
+
 ##### `agentbricks memory pipeline delete`
 
 ```text
@@ -674,7 +698,26 @@ agentbricks memory pipeline delete NAME [options]
 
 | Subcommand | Description |
 | --- | --- |
-| [`memory pipeline runs get`](#agentbricks-memory-pipeline-runs-get) | Get run details through the Databricks CLI. |
+| [`memory pipeline runs get`](#agentbricks-memory-pipeline-runs-get) | Get run details through the memory pipeline API. |
+| [`memory pipeline runs list`](#agentbricks-memory-pipeline-runs-list) | List recorded pipeline runs, most recently started first. |
+
+###### `agentbricks memory pipeline runs list`
+
+```sh
+agentbricks --profile dogfood memory pipeline runs list memory-pipelines/<id> --page-size 50
+```
+
+`NAME` accepts a pipeline id or full `memory-pipelines/<id>` resource name.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--page-size` | nonnegative integer | 50 | Maximum results; zero uses the server default of 50, values above 1000 are capped by the server. |
+| `--page-token` | string | - | Continuation token from the previous page for this pipeline. |
+
+Lists persisted history from the memory-pipeline runs API, ordered by descending start time
+and then run ID. Text output shows resource name, state, start time, and a next-page hint.
+Global `--output json` returns the API response, including `pipeline_runs` and `next_page_token`.
+History may be missing or stale after bookkeeping failures; use `runs get` for current Jobs status.
 
 ###### `agentbricks memory pipeline runs get`
 
@@ -683,12 +726,10 @@ agentbricks --profile dogfood memory pipeline runs get \
   memory-pipelines/2043d0c0-7d15-496e-83af-b6893165038f/runs/418898433707211
 ```
 
-`NAME` must be `memory-pipelines/<pipeline-id>/runs/<numeric-run-id>`. This command
-extracts the run ID and calls `databricks jobs get-run <run-id>`, forwarding the selected
-profile. The Databricks CLI must be installed and available on `PATH`. Its stdout, stderr,
-and exit code are passed through unchanged, with terminal streams inherited to preserve native
-coloring; Agent Bricks `--output` does not reformat the result.
-The pipeline ID is not sent to Jobs or checked against the run.
+`NAME` must be `memory-pipelines/<pipeline-id>/runs/<numeric-run-id>`. This command calls
+`GET /api/2.0/agents/{NAME}` using the selected profile and the complete run resource name.
+Text output renders pipeline run details; global `--output json` returns the native
+`PipelineRun` response. It no longer invokes `databricks jobs get-run` or returns the Jobs JSON schema.
 
 ##### `agentbricks memory pipeline run`
 
@@ -1191,6 +1232,186 @@ _Options_
 | `--warehouse <WAREHOUSE_ID>` | string | - | no | SQL warehouse id used to read traces from a UC-backed experiment (required for UC experiments; ignored for managed). Falls back to the MLFLOW_TRACING_SQL_WAREHOUSE_ID env var. |
 | `--source <SOURCE>` | path | `.` | no | Project directory to resolve the experiment from (default: current dir). |
 
+### `agentbricks experimental`
+
+Commands whose interface is still being designed. They work and are tested, but their names, options, and behavior may change between releases without a deprecation period. The agent.toml tables they write live under `[experimental]` for the same reason, so they can graduate to top-level tables later.
+
+| Subcommand | Description |
+| --- | --- |
+| [`experimental models`](#agentbricks-experimental-models) | Choose the models behind your agent |
+| [`experimental prompts`](#agentbricks-experimental-prompts) | Declare the Prompt Registry prompts your agent loads |
+
+### `agentbricks experimental models`
+
+Choose the models behind your agent. Each LLM call site in the agent (a *role*: for example `router` and `writer` in a compound agent, or the single `agent` role in a one-model agent) calls a Unity Catalog AI Gateway model service you own (`catalog.schema.name`, declared under `[experimental.model_services.<role>]` in agent.toml) instead of a hardcoded `system.ai.*` model:
+
+```toml
+[experimental.model_services.router]
+name = "main.my_agent.router_llm"
+default = "system.ai.claude-haiku-4-5"
+
+[experimental.model_services.writer]
+name = "main.my_agent.writer_llm"
+default = "system.ai.claude-sonnet-4-5"
+```
+
+`agentbricks deploy` creates each service if it's missing (routed to its binding's default model), grants the app's service principal EXECUTE on it, and wires it in as `AGENT_MODEL_SERVICE_<ROLE>`; the agent reads it with `resolve_model_service("<role>")`. After that, switching the model behind a service with `models set` takes effect without a code change or redeploy.
+
+| Subcommand | Description |
+| --- | --- |
+| [`models bind`](#agentbricks-experimental-models-bind) | Declare the model service for one of the agent's LLM calls in agent.toml (creates nothing; deploy provisions it). |
+| [`models unbind`](#agentbricks-experimental-models-unbind) | Remove a model-service binding from agent.toml (the service is left in place). |
+| [`models list`](#agentbricks-experimental-models-list) | List the `system.ai.*` chat models you can route the agent to. |
+| [`models status`](#agentbricks-experimental-models-status) | Show each bound model service, the model behind it now, and the bound prompts. |
+| [`models set`](#agentbricks-experimental-models-set) | Switch one model service to a named model. |
+
+#### `agentbricks experimental models bind`
+
+Bind model service SERVICE to one of the agent's LLM calls by declaring it in agent.toml. Bind one service per call site in a compound agent, each under its own `--role`. This only edits agent.toml; `agentbricks deploy` creates the service if it doesn't exist, routed to `--default`. Deploy never repoints an existing service, so a redeploy can't undo an upgrade.
+
+```
+agentbricks experimental models bind SERVICE [options]
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `SERVICE` | yes | Three-part UC name: `catalog.schema.name`. |
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--role <ROLE>` | string | `agent` | no | Name for the LLM call site this service backs (lowercase identifier, e.g. `router`). |
+| `--default <MODEL>` | string | - | no | `system.ai.*` model deploy routes the service to when it creates it (the `system.ai.` prefix is optional). Omit to keep a recorded default. |
+| `--source <SOURCE>` | path | `.` | no | Agent Bricks project containing agent.toml. |
+
+#### `agentbricks experimental models unbind`
+
+Remove a model-service binding from agent.toml. The next deploy removes that role's `AGENT_MODEL_SERVICE_<ROLE>` entry from app.yaml, so the LLM call uses its own default model directly again. The service itself is left in place.
+
+```
+agentbricks experimental models unbind [options]
+```
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--role <ROLE>` | string | only bound role | no | Which bound LLM call site. Required when more than one role is bound. |
+| `--source <SOURCE>` | path | `.` | no | Agent Bricks project containing agent.toml. |
+
+#### `agentbricks experimental models list`
+
+List the chat-capable `system.ai.*` models in the workspace.
+
+```
+agentbricks experimental models list
+```
+
+#### `agentbricks experimental models status`
+
+Show each bound model service, the model it routes to now, and the bound prompts.
+
+```
+agentbricks experimental models status [options]
+```
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--source <SOURCE>` | path | `.` | no | Agent Bricks project containing agent.toml. |
+
+#### `agentbricks experimental models set`
+
+Switch one bound model service to MODEL. Prompts for confirmation; `-o json` switches only with `--yes`.
+
+```
+agentbricks experimental models set MODEL [options]
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `MODEL` | yes | A `system.ai.*` model (the prefix is optional). |
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--role <ROLE>` | string | only bound role | no | Which bound LLM call site. Required when more than one role is bound. |
+| `--yes` (`-y`) | flag | - | no | Switch without asking for confirmation. |
+| `--source <SOURCE>` | path | `.` | no | Agent Bricks project containing agent.toml. |
+
+### `agentbricks experimental prompts`
+
+Declare the MLflow Prompt Registry prompts your agent loads. Each one is a binding under `[experimental.prompts]` in agent.toml, keyed by a short name:
+
+```toml
+[experimental.prompts]
+writer = "main.my_agent.writer"
+```
+
+`agentbricks deploy` grants the app's service principal what the Prompt Registry requires to load them: USE SCHEMA, EXECUTE, CREATE FUNCTION, and MANAGE on each prompt's schema, plus USE CATALOG.
+
+| Subcommand | Description |
+| --- | --- |
+| [`prompts bind`](#agentbricks-experimental-prompts-bind) | Declare a Prompt Registry prompt the agent loads, so deploy grants the app access to it. |
+| [`prompts unbind`](#agentbricks-experimental-prompts-unbind) | Remove a prompt binding from agent.toml (the prompt is left in place). |
+| [`prompts list`](#agentbricks-experimental-prompts-list) | List the bound prompts and the version each one's `@production` alias points at. |
+
+#### `agentbricks experimental prompts bind`
+
+Declare MLflow Prompt Registry prompt PROMPT (`catalog.schema.name`) that the agent loads. This only edits agent.toml. `agentbricks deploy` grants the app's service principal USE SCHEMA, EXECUTE, CREATE FUNCTION, and MANAGE on the prompt's schema, which the Prompt Registry requires even to load a prompt.
+
+```
+agentbricks experimental prompts bind PROMPT [options]
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `PROMPT` | yes | Three-part Prompt Registry name: `catalog.schema.name`. |
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--key <KEY>` | string | prompt's own name | no | Name for this prompt in agent.toml (lowercase identifier, e.g. `writer`). |
+| `--source <SOURCE>` | path | `.` | no | Agent Bricks project containing agent.toml. |
+
+#### `agentbricks experimental prompts unbind`
+
+Remove prompt binding KEY from agent.toml. The prompt itself, and any grants already applied, are left in place.
+
+```
+agentbricks experimental prompts unbind KEY [options]
+```
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--source <SOURCE>` | path | `.` | no | Agent Bricks project containing agent.toml. |
+
+#### `agentbricks experimental prompts list`
+
+List the prompts bound in agent.toml and the version each one's `@production` alias points at (`-` when the prompt or alias doesn't exist yet).
+
+```
+agentbricks experimental prompts list [options]
+```
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--source <SOURCE>` | path | `.` | no | Agent Bricks project containing agent.toml. |
+
 ### `agentbricks deploy`
 
 Deploy your agent to Databricks Apps and get back a hosted URL to try it.
@@ -1472,6 +1693,7 @@ _Options_
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--name <TOOL_ID>` | string | - | no | - |
+| `--auth <user|app>` | `user` \| `app` | `user` | no | - |
 | `--source <SOURCE>` | path | `.` | no | Agent project containing agent.toml. |
 
 ##### `agentbricks tools add genie-one`

@@ -2,7 +2,8 @@
 
 Agent Bricks CLI is an experimental command-line interface for building and deploying custom
 agents on Databricks. It manages memory, sessions, tracing, and deployments from one authenticated
-command.
+command. Under `agentbricks experimental`, it also binds each of the agent's LLM calls to a model
+service you own, so the model behind it can change without a code change or redeploy.
 
 > The underlying APIs are in preview and may need workspace enablement.
 
@@ -29,8 +30,9 @@ invocation protocol to design yourself. Bring your own agent, or start from a te
   (LangGraph or OpenAI Agents) with the runtime, tests, and an optional chat UI wired up; you edit
   the application code (model, tools, prompts).
 - **`agent.toml`** - the declarative source of truth for the Databricks-managed infrastructure your
-  agent depends on: tool bindings (data sandbox, managed MCP services, Unity Catalog functions) and
-  memory, session, and durability resources. `agentbricks deploy` reads it to provision and wire everything
+  agent depends on: tool bindings (data sandbox, managed MCP services, Unity Catalog functions),
+  memory, session, and durability resources, and the model services and Prompt Registry prompts
+  each LLM call uses. `agentbricks deploy` reads it to provision and wire everything
   up (detailed under [Agent tools](#agent-tools)).
 - **`agentbricks deploy`** - provisions the bound stores, grants the app's service principal access to
   them, provisions the durable-runtime database when durability is on, configures tracing, and rolls
@@ -51,6 +53,19 @@ The two ways to run an agent:
 - **Custom server - generic, full control.** `agentbricks init --server custom` scaffolds a minimal FastAPI
   server with no `DurableAgentServer`: you define your own endpoints, request/response shapes, and protocol.
   `agentbricks dev` and `agentbricks deploy` run and ship it the same way.
+
+Both managed framework templates support human approval with request-user (OBO) tools. A new
+invocation from the same authenticated user resumes the saved state with that request's tool
+credentials; the browser can use its existing valid login session.
+
+| Framework | Interactive OBO approval decisions |
+| --- | --- |
+| LangGraph | Approve, edit, or reject according to the middleware policy |
+| OpenAI Agents SDK | Approve or reject, with the pending tool call's `call_id` |
+
+Automatic OBO failure recovery remains unsupported. Existing generated apps need the corresponding
+template source updates; upgrading the installed package does not rewrite their agent or adapter.
+Custom servers own their authentication and approval protocol.
 
 ## Prerequisites
 
@@ -127,11 +142,16 @@ chosen with `databricks auth switch` takes precedence over `[DEFAULT]`.
 
 The CLI sends best effort command usage telemetry after leaf commands. Its log records the static
 command path, package version, operating system, duration, and process outcome (exit code and, for
-nonzero exits, a bounded error category). Parameter entries are limited to options explicitly
-supplied on the command line. Free-form options contribute only their static name. Declared Click
+nonzero exits, a bounded error category). Parameter entries include explicitly supplied options
+and parsed Click defaults with supported typed values, automatically across all commands and
+parent groups. Declare defaults in Click options so the shared emitter can read the resolved
+values; fallbacks applied only inside command callbacks are not visible to Click. Omitted free-form
+options and unresolved `None` defaults produce no entry. Environment, prompt, and default-map inputs
+are not included. Explicit free-form options contribute only their static name. Declared Click
 choices contribute an `AGENTBRICKS_CLI_`-prefixed value. Click boolean and numeric options
-contribute their typed values; non-finite floats and integers outside the log schema's 64-bit
-range remain presence-only. Hidden and deprecated options follow the same policy, and repeated
+contribute their typed values; explicitly supplied non-finite floats and integers outside the log
+schema's 64-bit range remain presence-only, while unsupported defaults are omitted. Hidden and
+deprecated options follow the same policy, and repeated
 options contribute one parameter entry per supplied value, up to 64 entries. Positional arguments,
 raw command arguments, paths, IDs, secrets, arbitrary free-form option values, and exception
 messages are omitted. Set
@@ -299,10 +319,18 @@ memory.delete()
 
 The root collections manage stores: `agentkit.memory_stores.create/get/list` and
 `agentkit.session_stores.create/get/list`. A returned store owns operations on its
-contents, such as `memory_store.add()`, `memory_store.get("memory-id")`,
-`memory_store.list()`, and `memory_store.search()`, or `session_store.add()`,
-`session_store.get("session-id")`, and `session_store.list()`. Returned memories,
-sessions, and stores own their `update()` and `delete()` operations.
+contents, such as `memory_store.add()`, `memory_store.put()`,
+`memory_store.get("memory-id")`, `memory_store.list()`, and `memory_store.search()`, or
+`session_store.add()`, `session_store.get("session-id")`, and `session_store.list()`.
+Returned memories, sessions, and stores own their `update()` and `delete()` operations.
+
+`memory_store.add()` fails with `ALREADY_EXISTS` when a memory already exists at the
+same `actor_id`, `session_id`, and `path`. `memory_store.put()` creates the memory or
+updates the existing one: it replaces the content, or with `append=True` adds `content`
+as new lines, skipping lines already present. `put()` is not atomic, so concurrent
+writers to one path can overwrite each other. `add()`'s `write_mode` argument is
+deprecated; use `put()` instead. `memory_store.list(actor_id=..., path=...)` returns the
+memories at one exact path.
 
 All `list()` methods return iterators that automatically consume server pages. List
 `page_size` and search `limit` values must be between 1 and 100. `session.list_items()`
@@ -478,7 +506,8 @@ from databricks_agentkit import AgentKitClient
 agentkit = AgentKitClient(WorkspaceClient())
 
 memory_store = agentkit.memory_stores.create("support-agent-memory")
-memory_store.add(
+# put() creates the entry, or replaces its content if one already exists at this path.
+memory_store.put(
     actor_id="user-123",
     path="/preferences/communication.md",
     content="Prefers email over phone. Timezone: PST.",
@@ -490,15 +519,27 @@ results = memory_store.search(actor_id="user-123", query="communication preferen
 ```
 
 To browse rather than search, `memory_store.list(actor_id=..., path_prefix=...)` returns entries
-directly.
+directly, and `memory_store.list(actor_id=..., path=...)` returns the entries at one exact path.
 
 In an agent configured with `server = "agentbricks"`, add the memory tools so the model can read and write memory during a run.
-`memory_tools(actor)` exposes `remember` and `recall` bound to one actor's partition; it resolves the
-store from the `[memory_store]` binding, carried to the runtime by the `AGENT_MEMORY_STORE` env var
-that `agentbricks deploy` injects, and returns no tools when no store is set, so the agent runs unchanged.
+`memory_tools(actor)` returns four tools bound to one actor's partition:
+
+- `remember(fact, topic)` appends the fact to one memory per topic, `/{topic}.md`, with the topic
+  reduced to a safe path segment. Remembering a fact that is already there is a no-op.
+- `recall(query, session_id=None)` searches the actor's memories, including ones written under other
+  paths, or only the ones saved under `session_id`.
+- `forget(fact, topic, session_id=None)` removes a matching fact from every memory at the path, or
+  only from the one saved under `session_id`, and deletes a memory once no facts remain.
+- `list_memories(session_id=None)` lists each memory's path, its session if it has one, and how
+  many facts it holds, optionally only for one session.
+
+`remember` writes memories without a `session_id`; memories saved under a session are labeled with
+it in `recall` and `list_memories`. `memory_tools` resolves the store from the `[memory_store]`
+binding, carried to the runtime by the `AGENT_MEMORY_STORE` env var that `agentbricks deploy`
+injects, and returns no tools when no store is set, so the agent runs unchanged.
 That "no store set" path is also how it runs under `agentbricks dev`, which runs locally: memory is off
-there (the store is provisioned and used only at deploy). The OpenAI Agents adapter exposes the same as
-`memory_tools()`:
+there (the store is provisioned and used only at deploy). The OpenAI Agents adapter exposes the same
+tools as `databricks_agentkit.openai.memory_tools(actor)`:
 
 ```python
 from databricks_agentkit.langgraph import memory_tools
@@ -540,6 +581,32 @@ removes the corresponding `AGENT_MEMORY_STORE` or `AGENT_SESSION_STORE` entry fr
 Unbinding does not delete the store or revoke an existing grant to the App's service principal.
 If access must be revoked, coordinate that separately with the store owner or workspace admin.
 
+## Model services and prompts (experimental)
+
+`agentbricks experimental models` and `agentbricks experimental prompts` bind each LLM call in
+your agent to a Unity Gateway model service you own (Unity Gateway was formerly AI Gateway), and
+declare the Prompt Registry prompts it loads. They live under `experimental` because their flags
+and output may still change between releases without a deprecation period. The agent.toml tables
+they write live under `[experimental]` too.
+
+A one-model agent binds one service. A compound agent binds one per call site, each under a role:
+
+```sh
+agentbricks experimental models bind main.my_agent.router_llm --role router --default system.ai.claude-haiku-4-5
+agentbricks experimental models bind main.my_agent.writer_llm --role writer --default system.ai.claude-sonnet-4-5
+agentbricks experimental prompts bind main.my_agent.writer
+agentbricks deploy my-agent      # creates the services and grants the app access to them and the prompt
+agentbricks experimental models status                              # the model behind each service
+agentbricks experimental models set claude-haiku-4-5 --role writer  # switch one, no redeploy
+```
+
+Each LLM call must use its role's service, `resolve_model_service("<role>")`, which reads the
+`AGENT_MODEL_SERVICE_<ROLE>` env var that deploy sets. Deploy creates a service that doesn't exist
+yet, routed to its `--default` model, and never repoints one that does, so a redeploy can't undo a
+switch. For bound prompts, deploy grants the app the schema privileges the Prompt Registry requires
+to load them (USE SCHEMA, EXECUTE, CREATE FUNCTION, and MANAGE). `agentbricks experimental prompts
+list` shows each bound prompt and the version its `@production` alias points at.
+
 ## Commands
 
 For the full command reference - every command, subcommand, argument, and option, in table form -
@@ -573,12 +640,20 @@ agentbricks [-p <profile>] [-o text|json]
     add sandbox      --scope SCOPE [--scope SCOPE ...]
                      [--no-databricks-access-token-included] [--source PATH]
     add mcp          SERVICE [--name NAME] [--source PATH]
-    add uc-function  FUNCTION [--name NAME] [--source PATH]
+    add uc-function  FUNCTION [--name NAME] [--auth user|app] [--source PATH]
     add genie-one    [--name NAME] [--auth user|app] [--source PATH]
     add genie-agent  SPACE_ID [--name NAME] [--auth user|app] [--source PATH]
     list             [--kind sandbox|mcp|uc-function|genie-one|genie-agent]
                      [--schema CATALOG.SCHEMA]
     remove           TOOL_ID [MCP_SERVICE] [--source PATH]
+  models
+    bind       SERVICE [--role ROLE] [--default MODEL] [--source PATH]
+    unbind | list | status
+    set        MODEL [--role ROLE] [--yes]
+  prompts
+    bind       PROMPT [--key KEY] [--source PATH]
+    unbind     KEY [--source PATH]
+    list       [--source PATH]
   deploy       [<name>] [--source PATH] [--instances N]
   deployments  list | get | logs | start | stop | delete
   endpoint
@@ -714,8 +789,9 @@ agentbricks tools list
 
 ### Managed tool identity and migration
 
-`agentbricks tools add mcp`, `agentbricks tools add sandbox`, `agentbricks tools add genie-one`, and
-`agentbricks tools add genie-agent` write explicit `auth = "user"` by default.
+`agentbricks tools add mcp`, `agentbricks tools add sandbox`, `agentbricks tools add uc-function`,
+`agentbricks tools add genie-one`, and `agentbricks tools add genie-agent` write explicit
+`auth = "user"` by default.
 Use `--auth app` for the App service principal instead. This field is on the tool entry, not
 inside `source` or `policy`:
 
@@ -726,7 +802,8 @@ auth = "user"
 source = { kind = "mcp", service = "system.ai.web_search" }
 ```
 
-Direct UC-function bindings remain app/default identity and do not accept `--auth user`.
+UC-function bindings use the request user's permissions by default. Use `--auth app` to execute
+with the App service principal's permissions instead.
 Managed-tool add commands write the selected identity to `agent.toml`; inspect that manifest to
 review configured bindings. Missing legacy auth continues to mean App identity at runtime; it is
 never silently upgraded to user identity.
@@ -825,6 +902,7 @@ Deploy derives Apps user scopes from explicit `auth = "user"` bindings and union
 | Managed MCP (governed ingress) | `ai-gateway` |
 | `system.ai.dbsql` | `ai-gateway`, `sql` |
 | `system.ai.genie_one_mcp` | `ai-gateway`, `genie` |
+| UC function | `mcp.functions` |
 | Sandbox with a Volume downscope | `ai-gateway`, `files` |
 | First-class Genie One or Genie Agent | `genie` |
 | Sandbox with token injection | `ai-gateway`, `workspace.workspace` |
