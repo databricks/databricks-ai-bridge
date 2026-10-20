@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import pathlib
+import subprocess
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import Mock
 
 import pytest
@@ -45,7 +47,7 @@ env:
 
     apps = Mock(spec=AppsClient)
     tracing = Mock(spec=LocalTracingClient)
-    tracing_server = object()
+    tracing_server = cast(subprocess.Popen, Mock(spec=subprocess.Popen))
     tracing.start_dev.return_value = LocalTracingStart(
         tracing_server,
         "http://127.0.0.1:5599",
