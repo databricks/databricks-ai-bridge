@@ -1,4 +1,4 @@
-"""Run the OpenAI Agents SDK agent with the optional Agent Bricks chat app."""
+"""Run the agent with the optional Agent Bricks chat app."""
 
 import os
 from pathlib import Path

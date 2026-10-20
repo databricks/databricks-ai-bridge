@@ -265,3 +265,10 @@ async def run_agent(
                 )
             if span is not None:
                 span.set_outputs({"output": result.final_output})
+
+
+async def read_history(session_id: str, actor: str | None = None) -> dict[str, Any]:
+    """Read transcript history for the optional browser UI."""
+    from databricks_agentkit.openai import read_history as read
+
+    return await read(session_id, actor)
