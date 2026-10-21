@@ -1374,9 +1374,13 @@ class TestHeartbeatContextManager:
 
         with patch(f"{MODULE}.heartbeat_response", new_callable=AsyncMock) as mock_hb:
             async with server._heartbeat("resp_x", attempt_number=1):
-                await asyncio.sleep(0.2)  # enough time for 2+ heartbeats
+                # Wait for the writes rather than a fixed sleep: a busy CI runner can starve the
+                # heartbeat task for a whole short sleep.
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + 5
+                while mock_hb.await_count < 2 and loop.time() < deadline:
+                    await asyncio.sleep(0.01)
 
-        # Heartbeat interval is 0.05s so we should see at least 2 writes.
         assert mock_hb.await_count >= 2
         for call in mock_hb.await_args_list:
             assert call.args[0] == "resp_x"
