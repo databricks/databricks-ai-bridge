@@ -13,7 +13,7 @@ from harness.agentbricks_cli import AgentbricksCli, excerpt, reply
 from harness.cleanup import Cleanup
 from harness.project import Project
 
-QUESTION = "What secret word did I tell you earlier in this conversation? Reply with just the word."
+QUESTION = "What code name did I give you earlier in this conversation? Reply with just the name."
 
 
 # Deploy needs a live workspace.
@@ -37,7 +37,7 @@ def test_sessions(agentbricks_cli: AgentbricksCli, project: Project, cleanup: Cl
 
     agentbricks_cli.invoke(
         app,
-        f"The secret word for this conversation is {word}. Reply with just: noted.",
+        f"The code name for this conversation is {word}. Reply with just: noted.",
         session_id=session,
     )
     same = agentbricks_cli.invoke(app, QUESTION, session_id=session)
