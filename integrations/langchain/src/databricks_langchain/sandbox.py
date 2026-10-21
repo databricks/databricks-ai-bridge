@@ -155,9 +155,15 @@ class DatabricksSandbox(BaseSandbox):
         buf = bytearray()
         offset = 0
         while True:
-            # tail -c is 1-based; read a raw byte range and base64 it so each
-            # response stays under the unary cap regardless of file size.
-            script = 'tail -c +$((DBX_OFF + 1)) "$DBX_PATH" | head -c "$DBX_LEN" | base64'
+            # Read an exact byte range with dd, not `tail | head`: head closing
+            # the pipe early would SIGPIPE tail and defeat pipefail. dd exits 0,
+            # so pipefail surfaces a genuine read failure instead of masking it.
+            # base64 keeps each response under the unary cap regardless of size.
+            script = (
+                "set -e -o pipefail; "
+                'dd if="$DBX_PATH" iflag=skip_bytes,count_bytes bs=65536 '
+                'skip="$DBX_OFF" count="$DBX_LEN" status=none | base64'
+            )
             response = self._exec(
                 script,
                 envs={
