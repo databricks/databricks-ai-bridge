@@ -70,6 +70,10 @@ A trailing `-p` goes after the full subcommand, not after a group name — `agen
 
 ## How to read this reference
 
+- Every leaf command accepts `--profile <PROFILE>` / `-p <PROFILE>` after its full command path,
+  as described under [Global options](#global-options). The option tables below list options
+  specific to each command; `init` lists its own `--profile` because it also writes the selected
+  profile to the new project's `.env`.
 - **Arguments** are positional; **options** are named flags. In a synopsis, `NAME` is required and
   `[NAME]` is optional; `<command>` marks a group that requires a subcommand; `[options]` stands in
   for the option list documented below each command.

@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import enum
 import threading
-from typing import Optional
+from typing import Callable, Optional
 
+from databricks_agentbricks.clients.api_client_provider import validate_profile as _validate_profile
 from databricks_agentbricks.clients.databricks_cli import run_databricks_login
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.profiles import (
@@ -19,11 +20,6 @@ from databricks_agentbricks.projects.profiles import (
     sdk_auth_type,
 )
 from databricks_agentkit._api_client import _AgentBricksApiClient
-
-
-def _validate_profile(profile: Optional[str]) -> tuple[_AgentBricksApiClient, str]:
-    client = _AgentBricksApiClient(profile)
-    return client, client.current_user
 
 
 class _ValidationFailure(enum.Enum):
@@ -126,64 +122,83 @@ def _validate_bounded(
     return outcome[0]
 
 
+ValidationResult = tuple[Optional[tuple[_AgentBricksApiClient, str]], Optional[Exception]]
+
+
+class WorkspaceAuthService:
+    """Coordinate bounded validation and login with supplied workspace collaborators."""
+
+    def __init__(
+        self,
+        validate_bounded: Callable[[Optional[str]], ValidationResult],
+        needs_browser_login: Callable[[Optional[str]], bool],
+        login: Callable[[Optional[str]], None],
+    ) -> None:
+        self._validate_bounded = validate_bounded
+        self._needs_browser_login = needs_browser_login
+        self._login = login
+
+    def preflight_auth(self, profile: Optional[str], source: str) -> _AgentBricksApiClient:
+        """Fail before starting work when the resolved profile cannot authenticate."""
+        if self._needs_browser_login(profile):
+            # Validation would start a browser flow that this command cannot complete.
+            raise _not_signed_in_error(profile, source)
+
+        client_and_user, error = self._validate_bounded(profile)
+        if client_and_user is not None:
+            return client_and_user[0]
+        assert error is not None
+        if _classify_validation_error(error) is _ValidationFailure.UNREACHABLE:
+            raise _unreachable_error(profile, source, error) from error
+        raise _not_signed_in_error(profile, source) from error
+
+    def authenticate_profile(
+        self, profile: str, source: str, *, interactive: bool
+    ) -> tuple[_AgentBricksApiClient, str]:
+        """Validate credentials, signing in once when a person can complete login."""
+        label = _profile_label(profile, source)
+        error: Optional[Exception]
+        if self._needs_browser_login(profile):
+            # Validation would start a browser flow that only the login command should host.
+            error = None
+        else:
+            client_and_user, error = self._validate_bounded(profile)
+            if client_and_user is not None:
+                return client_and_user
+            assert error is not None
+            failure = _classify_validation_error(error)
+            if failure is _ValidationFailure.UNREACHABLE:
+                raise _unreachable_error(profile, source, error) from error
+            if failure is _ValidationFailure.OTHER:
+                raise AgentCliError(f"Could not validate {label}: {error}") from error
+        if not interactive:
+            detail = (
+                "external-browser auth needs an interactive login" if error is None else str(error)
+            )
+            raise AgentCliError(
+                f"Could not validate {label}: {detail}",
+                hint=_sign_in_hint(profile, needs_terminal=True),
+            ) from error
+        self._login(profile)
+        client_and_user, error = self._validate_bounded(profile)
+        if client_and_user is None:
+            raise AgentCliError(
+                f"Databricks login completed, but {label} could not be validated: {error}"
+            ) from error
+        return client_and_user
+
+
+def _service() -> WorkspaceAuthService:
+    return WorkspaceAuthService(_validate_bounded, _needs_browser_login, run_databricks_login)
+
+
 def preflight_auth(profile: Optional[str], source: str) -> _AgentBricksApiClient:
-    """Fail fast when the resolved profile can't authenticate, before a command spins anything up.
-
-    Returns the validated client so the command can reuse it. Without this, an unauthenticated
-    `external-browser` profile hangs on a browser OAuth flow that never completes — the local
-    agent sits stuck with no error. The validation call itself can hang that way, so it runs
-    bounded (see `_validate_bounded`).
-    """
-    if _needs_browser_login(profile):
-        # The bounded validation would open a browser flow this command will abandon at its
-        # timeout, so fail before it starts — interactive or not.
-        raise _not_signed_in_error(profile, source)
-
-    client_and_user, error = _validate_bounded(profile)
-    if client_and_user is not None:
-        return client_and_user[0]
-    assert error is not None
-    if _classify_validation_error(error) is _ValidationFailure.UNREACHABLE:
-        raise _unreachable_error(profile, source, error) from error
-    # A timeout here is most likely a browser flow nobody completed, so it reads as signed out too.
-    raise _not_signed_in_error(profile, source) from error
+    """Validate auth before a command spins anything up, reusing the validated client."""
+    return _service().preflight_auth(profile, source)
 
 
 def authenticate_profile(
     profile: str, source: str, *, interactive: bool
 ) -> tuple[_AgentBricksApiClient, str]:
-    """Validate `profile`, signing in through `databricks auth login` once if it isn't yet.
-
-    Returns the client and the signed-in user; `source` is only named in errors. Without
-    `interactive` (no terminal, or CI) nobody can complete a browser login, so an unauthenticated
-    profile fails with a hint instead of opening one.
-    """
-    label = _profile_label(profile, source)
-    error: Optional[Exception]
-    if _needs_browser_login(profile):
-        # Validation would open a browser flow it then abandons; head straight for the login.
-        error = None
-    else:
-        client_and_user, error = _validate_bounded(profile)
-        if client_and_user is not None:
-            return client_and_user
-        assert error is not None
-        failure = _classify_validation_error(error)
-        if failure is _ValidationFailure.UNREACHABLE:
-            raise _unreachable_error(profile, source, error) from error
-        if failure is _ValidationFailure.OTHER:
-            # A timeout or an unexpected failure won't be fixed by a login; don't open one.
-            raise AgentCliError(f"Could not validate {label}: {error}") from error
-    if not interactive:
-        detail = "external-browser auth needs an interactive login" if error is None else str(error)
-        raise AgentCliError(
-            f"Could not validate {label}: {detail}",
-            hint=_sign_in_hint(profile, needs_terminal=True),
-        ) from error
-    run_databricks_login(profile)
-    client_and_user, error = _validate_bounded(profile)
-    if client_and_user is None:
-        raise AgentCliError(
-            f"Databricks login completed, but {label} could not be validated: {error}"
-        ) from error
-    return client_and_user
+    """Validate a profile and offer interactive login when credentials are missing."""
+    return _service().authenticate_profile(profile, source, interactive=interactive)

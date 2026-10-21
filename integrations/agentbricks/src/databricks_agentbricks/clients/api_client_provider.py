@@ -16,6 +16,12 @@ from typing import Callable, Optional
 from databricks_agentkit._api_client import _AgentBricksApiClient
 
 
+def validate_profile(profile: Optional[str]) -> tuple[_AgentBricksApiClient, str]:
+    """Build a workspace client and confirm its credentials identify a user."""
+    client = _AgentBricksApiClient(profile)
+    return client, client.current_user
+
+
 class ApiClientProvider:
     """Own exactly one lazily created API client for a CLI invocation."""
 

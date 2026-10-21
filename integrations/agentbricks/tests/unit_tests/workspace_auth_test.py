@@ -194,6 +194,25 @@ def test_authenticate_profile_logs_in_then_revalidates(monkeypatch, databricks_l
     )
 
 
+def test_auth_service_logs_in_then_revalidates_through_supplied_collaborators():
+    client = mock.Mock()
+    validate = mock.Mock(
+        side_effect=[(None, Unauthenticated("expired")), ((client, "me@example.com"), None)]
+    )
+    login = mock.Mock()
+    needs_browser_login = mock.Mock(return_value=False)
+    service = workspace_auth.WorkspaceAuthService(validate, needs_browser_login, login)
+
+    assert service.authenticate_profile("prof", "argument", interactive=True) == (
+        client,
+        "me@example.com",
+    )
+
+    assert validate.call_args_list == [mock.call("prof"), mock.call("prof")]
+    needs_browser_login.assert_called_once_with("prof")
+    login.assert_called_once_with("prof")
+
+
 def test_authenticate_profile_reports_a_missing_databricks_cli(fail_validation, databricks_login):
     fail_validation(Unauthenticated("expired"))
     databricks_login.side_effect = FileNotFoundError
