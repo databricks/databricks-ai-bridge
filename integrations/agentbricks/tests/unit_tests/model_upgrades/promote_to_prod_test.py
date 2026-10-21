@@ -112,6 +112,56 @@ def test_promotion_rejects_changed_alias_before_mutating_models_or_prompts(
     live_prompt_version.assert_called_once_with(pt.uri, cache_ttl_seconds=0)
 
 
+def _pinned_pt():
+    return _PromptTarget(
+        uri="prompts:/cat.schema.foo/2",
+        name="cat.schema.foo",
+        alias=None,
+        version="2",
+        short_name="foo",
+        template="hello {{name}}",
+        required_vars=["name"],
+        prior_version=2,
+    )
+
+
+def test_promotion_rejects_a_rewritten_version_pinned_prompt_before_mutating(mocker):
+    # The agent loads /2; a new version with no alias to move would never reach it.
+    update = mocker.patch(
+        "databricks_agentkit.model_upgrades.optimization.model_services.set_model"
+    )
+    register = mocker.patch(
+        "databricks_agentkit.model_upgrades.optimization.mlflow.genai.register_prompt"
+    )
+    et = _EndpointTarget("a.b.llm", ["m2"], "m1")
+    candidate = {"model:a.b.llm": "m2", "prompt:foo": "rewritten {{name}}"}
+    with pytest.raises(ValueError, match="pinned to a version"):
+        promote_to_prod(_result(candidate, prompt_targets=[_pinned_pt()], endpoint_targets=[et]))
+    update.assert_not_called()
+    register.assert_not_called()
+
+
+def test_promotion_still_applies_models_when_a_pinned_prompt_is_unchanged(mocker):
+    mocker.patch(
+        "databricks_agentkit.model_upgrades.optimization._resolve_model_info",
+        return_value={"name": "system.ai.m2", "display_name": "M2", "description": ""},
+    )
+    update = mocker.patch(
+        "databricks_agentkit.model_upgrades.optimization.model_services.set_model"
+    )
+    pt = _pinned_pt()
+    et = _EndpointTarget("a.b.llm", ["m2"], "m1")
+    out = promote_to_prod(
+        _result(
+            {"model:a.b.llm": "m2", "prompt:foo": pt.template},
+            prompt_targets=[pt],
+            endpoint_targets=[et],
+        )
+    )
+    assert out["a.b.llm"] == "updated:m1->m2"
+    update.assert_called_once()
+
+
 def test_endpoint_unchanged_skipped(mocker):
     et = _EndpointTarget(
         name="ep1", candidate_models=["m1"], initial_model="databricks-claude-sonnet-4"

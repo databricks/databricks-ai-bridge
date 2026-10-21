@@ -1797,7 +1797,9 @@ def promote_to_prod(result: Result, *, rollback_alias="production_previous", dry
     For each prompt URI whose template was rewritten, aliases the prior
     production version to `@production_previous`, registers the new template
     as a new version, and re-points the URI's alias (typically
-    `@production`) to the new version. Unchanged prompts are left alone.
+    `@production`) to the new version. Unchanged prompts are left alone. A
+    rewritten prompt whose URI pins a version (`prompts:/name/3`) raises
+    before anything changes: no alias reaches an agent that loads that version.
 
     Endpoint and prompt updates are applied with rollback semantics: all
     destinations are pre-resolved before any update fires, and if any
@@ -1841,6 +1843,15 @@ def promote_to_prod(result: Result, *, rollback_alias="production_previous", dry
         if new_template is None or new_template == pt.template:
             continue
         prompt_changes.append((pt, new_template))
+    pinned = [pt for pt, _ in prompt_changes if not pt.alias]
+    if pinned:
+        # A new version only takes effect by moving an alias; an agent loading a fixed version
+        # would keep serving the old template while this reported it as changed.
+        raise ValueError(
+            f"Prompt(s) {', '.join(pt.uri for pt in pinned)} are pinned to a version, so a "
+            "rewrite can't reach the agent. Optimize an alias-backed URI (prompts:/name@alias) "
+            "instead. No production updates applied."
+        )
 
     print("Planned changes:")
     if not endpoint_changes and not prompt_changes:

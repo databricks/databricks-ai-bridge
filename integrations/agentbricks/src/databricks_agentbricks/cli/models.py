@@ -560,11 +560,15 @@ def _run_state(run) -> tuple[Optional[str], Optional[str]]:
     )
 
 
-def _refresh_latest_run(obj, project) -> Optional[dict]:
-    """The latest recorded upgrade run, with its job state refreshed and its report fetched once done."""
+def _refresh_latest_run(obj, project, upgrade_id: Optional[str] = None) -> Optional[dict]:
+    """The latest recorded upgrade run, or the one ``upgrade_id`` names, with its job state
+    refreshed and its report fetched once done."""
     from databricks_agentbricks import model_upgrade  # noqa: PLC0415
 
     runs = model_upgrade.read_history(project.root)["runs"]
+    if upgrade_id is not None:
+        # Another upgrade from the same project may have been recorded since this one was submitted.
+        runs = [run for run in runs if run.get("upgrade_id") == upgrade_id]
     if not runs:
         return None
     entry = dict(runs[-1])
@@ -915,6 +919,15 @@ def models_upgrade(
             f"{', '.join(bad_uris)}: use a prompts:/ URI, e.g. prompts:/cat.schema.name@production",
             param_hint="--prompt",
         )
+    # Applying registers a new version and moves the URI's alias; an agent that loads a fixed
+    # version would keep loading it, and rollback would have no alias to move back.
+    pinned = [uri for uri in prompt_uris if "@" not in uri and "/" in uri[len("prompts:/") :]]
+    if pinned:
+        raise click.BadParameter(
+            f"{', '.join(pinned)}: an applied rewrite can't reach a prompt pinned to a version. "
+            "Load it by alias in the agent and pass that, e.g. prompts:/cat.schema.name@production",
+            param_hint="--prompt",
+        )
     project = _bound_project(source)
     for ref in (predict_fn, train_data, val_data, *scorers):
         model_upgrade.check_ref(project.root, ref)
@@ -1131,7 +1144,7 @@ def _run_as_job(
             if life_cycle in _TERMINAL_STATES:
                 break
             time.sleep(30)
-    return _refresh_latest_run(obj, project) or {}
+    return _refresh_latest_run(obj, project, config.upgrade_id) or {}
 
 
 @models.command("apply")

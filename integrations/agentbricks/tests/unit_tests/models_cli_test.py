@@ -533,6 +533,19 @@ def test_upgrade_rejects_a_prompt_that_is_not_a_uri(tmp_path, stub_job):
     assert "submit" not in stub_job
 
 
+def test_upgrade_rejects_a_version_pinned_prompt(tmp_path, stub_job):
+    # Applying moves the URI's alias; an agent loading /3 would never see the rewrite.
+    project = _project(tmp_path)
+    result = _invoke(
+        ["upgrade", *_EVAL_FLAGS, "-c", "claude-haiku-4-5",
+         "--prompt", "prompts:/main.my_agent.system/3", "--source", str(project)],
+        _Ctx(_JobClient()),
+    )  # fmt: skip
+    assert result.exit_code != 0
+    assert "pinned to a version" in result.output
+    assert "submit" not in stub_job
+
+
 def test_apply_with_rewritten_prompts_promotes_through_promote_to_prod(
     tmp_path, stub_job, stub_promote, monkeypatch
 ):
@@ -972,6 +985,38 @@ def test_upgrade_with_apply_auto_waits_and_applies(tmp_path, stub_job, stub_prom
     assert json.loads(result.output)["applied"]["changed"] is True
     assert client.model == "system.ai.claude-haiku-4-5"
     assert len(model_upgrade.read_history(project)["actions"]) == 1  # rollback can undo it
+
+
+def test_waiting_upgrade_applies_its_own_run_when_another_was_submitted_since(
+    tmp_path, stub_job, stub_promote, monkeypatch
+):
+    monkeypatch.setattr("databricks_agentbricks.errors._OUTPUT_MODE", "json")
+    project = _project(tmp_path)
+    finished = SimpleNamespace(life_cycle_state="TERMINATED", result_state="SUCCESS")
+    pending = SimpleNamespace(life_cycle_state="PENDING", result_state=None)
+
+    class _Overlap(_JobClient):
+        def get_run(self, run_id):
+            # Upgrade B is submitted from the same project while A (run 42) is still running.
+            if not any(run["run_id"] == 43 for run in model_upgrade.read_history(project)["runs"]):
+                model_upgrade.record_run(
+                    project, {"upgrade_id": "b", "run_on": "job", "run_id": 43, "state": "PENDING"}
+                )
+            return SimpleNamespace(state=finished if run_id == 42 else pending)
+
+    client = _Overlap()
+    result = _invoke(
+        ["upgrade", *_EVAL_FLAGS, "-c", "claude-haiku-4-5", "--apply", "auto",
+         "--source", str(project)],
+        _Ctx(client, "json"),
+    )  # fmt: skip
+    assert result.exit_code == 0, result.output
+    out = json.loads(result.output)
+    assert out["run"]["run_id"] == 42
+    assert stub_job["fetch"][1] == out["upgrade_id"]
+    assert client.model == "system.ai.claude-haiku-4-5"
+    runs = {run["upgrade_id"]: run for run in model_upgrade.read_history(project)["runs"]}
+    assert runs["b"]["state"] == "PENDING"  # B is left for its own command / `models status`
 
 
 def test_upgrade_with_apply_ask_leaves_things_alone_when_declined(tmp_path, stub_job, stub_promote):
