@@ -646,6 +646,15 @@ echo function in `agent/agent.py` with your harness and model. No LangGraph or O
 installed. The reference documents input/output mapping, invocation recovery, and the boundaries
 between session state, long-term memory, and the Runtime Store.
 
+Run your adapted harness locally with `agentbricks dev`; deployment is optional. Keep your existing
+model client, endpoint configuration, and credentials, including research inference backends.
+The local launcher uses a Databricks profile, independently of the model backend. Local sessions
+and tracing require no managed store provisioning; managed long-term memory is disabled in dev.
+
+If your harness already has a working Python environment, point `app.yaml` at that environment's
+interpreter and your startup script, then run `agentbricks dev --no-prepare-environment`. This
+reuses the installed harness and dependencies.
+
 The custom scaffold leaves framework-native tool conversion, approval continuation, and browser UI
 integration to your application. Automatic `agent.toml` tool bindings are rejected because this
 scaffold has no tool adapter. Recovery may rerun incomplete work; make side effects idempotent or

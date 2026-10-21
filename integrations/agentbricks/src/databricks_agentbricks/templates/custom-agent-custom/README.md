@@ -10,6 +10,15 @@ curl -sS http://localhost:8000/invocations \
   -H 'Content-Type: application/json' \
   -d '{"input":[{"role":"user","content":"Hello"}]}'
 uv run pytest
+```
+
+Keep your harness's model client, endpoint configuration, and credentials. Using the AI Gateway
+is optional. The local launcher uses a Databricks profile (`agentbricks -p <profile> dev`),
+independently of model authentication. Local development does not deploy a Databricks App.
+
+Deploy separately if you later need a hosted application:
+
+```bash
 agentbricks --profile <profile> deploy <name> --source .
 ```
 

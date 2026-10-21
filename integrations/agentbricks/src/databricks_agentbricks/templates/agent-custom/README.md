@@ -10,6 +10,14 @@ when your framework needs different inputs, outputs, tools, or checkpoints.
 agentbricks dev
 ```
 
+Use your harness's existing model client, endpoint configuration, and credentials. There is no
+requirement to use Databricks model serving or the AI Gateway. The local launcher uses a Databricks
+profile (`agentbricks -p <profile> dev`); model authentication stays with your harness. Deployment
+is optional, and local development does not create a Databricks App or provision managed stores.
+
+To reuse a working research environment, set `app.yaml`'s command to that environment's Python
+interpreter and your startup script, then run `agentbricks dev --no-prepare-environment`.
+
 The scaffold exposes an HTTP API and has no browser chat app. Send new messages only; the
 adapter loads previous turns from the session. Use a fresh UUID for each new turn and keep
 `session_id` stable within one conversation:
@@ -60,6 +68,11 @@ your application.
 
 ```bash
 uv run pytest
+```
+
+If you later need a hosted application, deploy it separately:
+
+```bash
 agentbricks --profile <profile> deploy <name> --source .
 ```
 
