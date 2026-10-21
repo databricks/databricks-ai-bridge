@@ -38,11 +38,11 @@ class Tool:
     # The id `tools add` binds it under, which `tools remove` takes.
     tool_id: str | None
 
-    def check(self, serialized: str) -> None:
+    def assert_called(self, serialized: str) -> None:
         """Assert the `endpoint invoke --output json` output shows the tool ran and returned its result."""
         assert self._calls(serialized), f"No successful {self.name} result: {excerpt(serialized)}"
 
-    def check_not_called(self, serialized: str) -> None:
+    def assert_not_called(self, serialized: str) -> None:
         """Assert the agent answered without the tool returning its result."""
         assert not self._calls(serialized), f"{self.name} still ran: {excerpt(serialized)}"
 

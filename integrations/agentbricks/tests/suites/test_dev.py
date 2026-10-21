@@ -35,4 +35,4 @@ def test_dev(
                 output = agentbricks_cli.invoke(
                     f"--url http://127.0.0.1:{port} --no-auth", tool.prompt
                 )
-                tool.check(output)
+                tool.assert_called(output)

@@ -61,7 +61,7 @@ def test_user_auth(
     cleanup(f"sessions stores delete {deployed['session_store']} --yes")
 
     with subtests.test(check="user tool"):
-        web_search.check(agentbricks_cli.invoke(app, web_search.prompt))
+        web_search.assert_called(agentbricks_cli.invoke(app, web_search.prompt))
     with subtests.test(check="identity"):
         output = agentbricks_cli.invoke(app, IDENTITY_PROMPT)
         identities = [
