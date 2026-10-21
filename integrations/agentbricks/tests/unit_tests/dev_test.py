@@ -481,13 +481,22 @@ def test_dev_prints_standalone_invoke_for_each_template(tmp_path, framework, ser
         assert "curl -X POST" in panel  # preserve the existing API-only next step
 
 
-@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize(
+    ("framework", "server"),
+    [
+        ("langgraph", "custom"),
+        ("openai", "custom"),
+        ("custom", "custom"),
+        ("custom", "agentbricks"),
+    ],
+)
 def test_dev_custom_server_recommends_wiring_tools_in_agent_code(
     tmp_path: pathlib.Path,
     framework: str,
+    server: str,
 ):
     (tmp_path / "app.yaml").write_text("command: []\n")
-    AgentProject.create(tmp_path, framework=framework, server="custom").write()
+    AgentProject.create(tmp_path, framework=framework, server=server).write()
 
     with mock.patch.object(dev_mod, "_databricks"):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
@@ -496,6 +505,8 @@ def test_dev_custom_server_recommends_wiring_tools_in_agent_code(
     output = " ".join(result.output.split())
     assert "agent/agent.py" in output
     assert "agentbricks tools add" not in output
+    if server == "agentbricks":
+        assert "session_id" in output
 
 
 @pytest.mark.parametrize(

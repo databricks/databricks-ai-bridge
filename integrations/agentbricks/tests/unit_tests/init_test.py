@@ -78,6 +78,12 @@ def test_framework_templates_map_to_names():
         "custom-agent-openai",
         "ui/agent-openai",
     )
+    custom = init_mod._TEMPLATES[AgentFramework.CUSTOM]
+    assert (custom.agentbricks_server, custom.custom_server, custom.chat_app) == (
+        "agent-custom",
+        "custom-agent-custom",
+        None,
+    )
 
 
 def test_init_scaffolds_default_directory(tmp_path: pathlib.Path):
@@ -137,7 +143,19 @@ def test_init_defaults_to_langgraph_with_chat_app(tmp_path: pathlib.Path):
     }
 
 
-@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("existing", [False, True])
+def test_custom_framework_rejects_explicit_chat_app(tmp_path: pathlib.Path, existing: bool):
+    dest = tmp_path if existing else tmp_path / "new"
+    args = ["--framework", "custom", "--enable-chat-app", str(dest)]
+    if existing:
+        args.append("--existing")
+    result = CliRunner().invoke(init_mod.init, args, obj=_Ctx())
+    assert result.exit_code == 2
+    assert "no bundled chat app" in result.output
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai", "custom"])
 def test_init_custom_server_uses_minimal_template(tmp_path: pathlib.Path, framework: str):
     dest = tmp_path / "proj"
     with mock.patch.object(
@@ -256,7 +274,7 @@ def test_init_rejects_unknown_framework(tmp_path: pathlib.Path):
 def test_init_help_keeps_lowercase_selection_values():
     result = CliRunner().invoke(init_mod.init, ["--help"], obj=_Ctx())
     assert result.exit_code == 0, result.output
-    assert "[langgraph|openai]" in result.output
+    assert "[langgraph|openai|custom]" in result.output
     assert "[agentbricks|custom]" in result.output
     assert "AgentFramework" not in result.output
     assert "AgentServer" not in result.output
@@ -353,7 +371,7 @@ def test_init_store_name_overrides(tmp_path: pathlib.Path):
 
 
 @pytest.mark.parametrize("chat_app", [True, False])
-@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("framework", ["langgraph", "openai", "custom"])
 def test_existing_prepares_migration_without_changing_application(
     tmp_path: pathlib.Path, framework: str, chat_app: bool
 ):
@@ -396,6 +414,7 @@ def test_existing_prepares_migration_without_changing_application(
     with mock.patch.object(init_mod, "_copy_packaged_template", side_effect=_copy):
         result = CliRunner().invoke(init_mod.init, args, obj=_Ctx(output="json"))
 
+    chat_app = chat_app and framework != "custom"
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     skill = tmp_path / "agent-bricks-migrate"
@@ -404,7 +423,9 @@ def test_existing_prepares_migration_without_changing_application(
     assert payload["mode"] == "existing"
     assert payload["framework"] == framework
     assert payload["chat_app_enabled"] is chat_app
-    label = {"langgraph": "LangGraph", "openai": "OpenAI Agents SDK"}[framework]
+    label = {"langgraph": "LangGraph", "openai": "OpenAI Agents SDK", "custom": "custom framework"}[
+        framework
+    ]
     assert label in payload["prompt"]
     assert "agent-bricks-migrate/SKILL.md" in payload["prompt"]
     settings = json.loads((skill / "references/migration.json").read_text())

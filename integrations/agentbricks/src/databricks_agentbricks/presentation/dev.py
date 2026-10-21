@@ -6,7 +6,7 @@ import pathlib
 
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.endpoint import print_agent_invoke_command
-from databricks_agentbricks.projects.types import AgentServer
+from databricks_agentbricks.projects.types import AgentFramework, AgentServer
 from databricks_agentbricks.services.dev_service import DevPreview
 
 
@@ -45,6 +45,7 @@ def announce_local_url(
     trace_url: str | None = None,
     *,
     has_chat_ui: bool | None = None,
+    framework: AgentFramework | None = None,
 ) -> None:
     """Show the chat URL or an invocation example before run-local blocks."""
     base = f"http://localhost:{port}"
@@ -53,7 +54,7 @@ def announce_local_url(
         has_chat_ui = (source_dir / "runtime" / "ui.py").is_file()
     tool_step: str | tuple[str, str] = (
         "Edit agent/agent.py to give the agent a tool"
-        if server == AgentServer.CUSTOM
+        if server == AgentServer.CUSTOM or framework == AgentFramework.CUSTOM
         else ("agentbricks tools add mcp <service>", "Give the agent a tool")
     )
     if has_chat_ui:
@@ -75,6 +76,7 @@ def announce_local_url(
         endpoint = f"{base}/api/invocations" if uses_runtime_api else f"{base}/invocations"
         body = (
             '{"id": "00000000-0000-4000-8000-000000000000", '
+            '"session_id": "example-session", '
             '"input": [{"role": "user", "content": "hi"}]}'
             if uses_runtime_api
             else '{"input": [{"role": "user", "content": "hi"}]}'

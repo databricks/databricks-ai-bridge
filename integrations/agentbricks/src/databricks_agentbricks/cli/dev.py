@@ -64,22 +64,23 @@ def dev(
     prepare_environment: Optional[bool],
     app_port: Optional[int],
 ) -> None:
-    """Run your agent locally so you can try it before deploying.
+    """Run your agent locally.
 
     Starts the agent on a local server — by default http://localhost:8000 — and prints where to
     reach it: the chat UI if the project has one, otherwise a sample request against the agent's
     API.
 
-    Auth uses your Databricks profile (`-p` / `agentbricks login`), and the agent reaches Databricks model
-    serving through the AI Gateway on that profile — so there are no model keys to set up.
+    The local launcher uses your Databricks profile (`-p` / `agentbricks login`). Custom harnesses
+    keep their own model clients, endpoint settings, and credentials; using the AI Gateway is
+    optional. The bundled model-backed templates use the AI Gateway with profile authentication.
 
     Under the hood this wraps `databricks apps run-local`: it reads the command + env from
     `app.yaml` and runs the app the way the Apps runtime would, so local behavior matches a
     deployment. The environment is built on the first run and reused after; pass
     `--prepare-environment` to force a rebuild (e.g. after changing dependencies).
 
-    Everything runs locally: `agentbricks dev` is a local deployment that does not depend on a Databricks
-    workspace for its resources. Tracing goes to a local MLflow tracking server (sqlite-backed, under `.agentbricks/`)
+    No App is deployed and no managed resources are provisioned. Tracing goes to a local MLflow
+    tracking server (sqlite-backed, under `.agentbricks/`)
     so traces are recorded on your machine with no workspace experiment or setup - open the printed
     Traces URL to view them (`agentbricks tracing unbind` doesn't affect dev; it only stops the deployed
     agent's tracing). Long-term memory is off and conversation history is in-process (not durable):
@@ -102,5 +103,6 @@ def dev(
             plan.preview.server,
             local_trace_label(plan.preview),
             has_chat_ui=plan.preview.has_chat_ui,
+            framework=plan.preview.framework,
         )
         service.run(plan)

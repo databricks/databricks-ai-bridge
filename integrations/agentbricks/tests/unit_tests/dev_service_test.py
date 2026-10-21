@@ -18,7 +18,7 @@ from databricks_agentbricks.clients.local_tracing_client import (
 )
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.resolver import ProjectResolver
-from databricks_agentbricks.projects.types import AgentServer
+from databricks_agentbricks.projects.types import AgentFramework, AgentServer
 from databricks_agentbricks.services import dev_service as dev_service_module
 from databricks_agentbricks.services.dev_service import DevRequest, DevService
 
@@ -39,7 +39,9 @@ env:
     value: stale-memory
 """
     )
-    project = SimpleNamespace(server=AgentServer.AGENTBRICKS, tools=[])
+    project = SimpleNamespace(
+        server=AgentServer.AGENTBRICKS, framework=AgentFramework.LANGGRAPH, tools=[]
+    )
 
     resolver = Mock(spec=ProjectResolver)
     resolver.load.return_value = project
@@ -93,6 +95,7 @@ def test_prepare_builds_local_plan_and_run_uses_injected_apps_client(
         assert plan.preview.source_dir == tmp_path
         assert plan.preview.port == 9000
         assert plan.preview.server is AgentServer.AGENTBRICKS
+        assert plan.preview.framework is AgentFramework.LANGGRAPH
         assert plan.preview.tracing_uri == "http://127.0.0.1:5599"
         assert plan.preview.local_experiment_name == "local-agent"
         assert plan.preview.tracing_warning is None

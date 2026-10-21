@@ -53,7 +53,7 @@ class _AgentTemplate:
 
     agentbricks_server: str  # scaffold for the Agent Bricks invocation server (the default)
     custom_server: str  # scaffold for the minimal custom FastAPI server (--server custom)
-    chat_app: str  # browser chat-app template, overlaid on the Agent Bricks server scaffold
+    chat_app: str | None  # optional browser chat-app overlay
 
 
 # Framework -> its bundled templates.
@@ -62,12 +62,14 @@ _TEMPLATES = {
         "agent-langgraph", "custom-agent-langgraph", "ui/agent-langgraph"
     ),
     AgentFramework.OPENAI: _AgentTemplate("agent-openai", "custom-agent-openai", "ui/agent-openai"),
+    AgentFramework.CUSTOM: _AgentTemplate("agent-custom", "custom-agent-custom", None),
 }
 
 # Framework -> display label for user-facing text (prompts, help).
 _FRAMEWORK_LABELS = {
     AgentFramework.LANGGRAPH: "LangGraph",
     AgentFramework.OPENAI: "OpenAI Agents SDK",
+    AgentFramework.CUSTOM: "custom framework",
 }
 
 
@@ -227,7 +229,7 @@ def _prepare_migration(
         staged = pathlib.Path(tmp) / _MIGRATION_DIR
         reference = staged / "references" / "template"
         template = _TEMPLATES[framework]
-        overlays = (template.chat_app,) if chat_app_enabled else ()
+        overlays = (template.chat_app,) if chat_app_enabled and template.chat_app else ()
         _copy_packaged_template(template.agentbricks_server, reference, overlays)
         install_workflow_skill(reference)
         project_name = dest.resolve().name
@@ -312,7 +314,8 @@ def _prepare_migration(
     "--framework",
     type=click.Choice([framework.value for framework in AgentFramework]),
     default=AgentFramework.LANGGRAPH.value,
-    help="Agent framework: langgraph (LangGraph, default) or openai (OpenAI Agents SDK).",
+    help="Agent framework: langgraph (LangGraph, default), openai (OpenAI Agents SDK), "
+    "or custom (bring your own framework).",
 )
 @click.option(
     "--server",
@@ -330,7 +333,7 @@ def _prepare_migration(
 @click.option(
     "--disable-chat-app",
     is_flag=True,
-    help="Scaffold the API-only backend, without the browser chat app.",
+    help="Scaffold the API-only backend, without the browser chat app. Custom frameworks are API-only.",
 )
 @click.option(
     "--enable-chat-app",
@@ -374,8 +377,9 @@ def init(
     Pass --profile (or set a default via `agentbricks login` / -p) to seed a local `.env` so the
     scaffolded project runs with `agentbricks dev` right away.
 
-    The scaffold is preconfigured to call Databricks model serving through the AI Gateway using
-    that profile, so it can talk to a model with no separate endpoint or API key to set up.
+    The LangGraph and OpenAI scaffolds call Databricks model serving through the AI Gateway
+    using that profile. The API-only custom framework scaffold shows managed sessions, memory,
+    and invocation recovery around a replaceable echo function; connect your own harness and model.
 
     The default Agent Bricks server supports foreground, streaming, and background invocations through one
     HTTP contract and Runtime Store. Pass --server custom for a minimal foreground-only
@@ -393,8 +397,13 @@ def init(
     selected_server = parse_server(server)
     agentbricks_server = selected_server == AgentServer.AGENTBRICKS
     template = _TEMPLATES[selected_framework]
+    if enable_chat_app and template.chat_app is None:
+        raise click.UsageError(
+            f"The {selected_framework.value!r} framework has no bundled chat app. "
+            "Use its API or implement a UI for your harness."
+        )
     template_name = template.agentbricks_server if agentbricks_server else template.custom_server
-    chat_app_enabled = agentbricks_server and not disable_chat_app
+    chat_app_enabled = agentbricks_server and template.chat_app is not None and not disable_chat_app
     if existing:
         if not agentbricks_server:
             raise click.UsageError(
@@ -420,7 +429,7 @@ def init(
             f"{_FRAMEWORK_LABEL_PHRASE} project, or choose a new directory to scaffold.",
         )
 
-    overlay_names = (template.chat_app,) if chat_app_enabled else ()
+    overlay_names = (template.chat_app,) if chat_app_enabled and template.chat_app else ()
     try:
         # Copy the template bundled with the installed CLI. The scaffold keeps the template's own
         # databricks-agentbricks PyPI dependency; it can't drift from the CLI because both ship together.

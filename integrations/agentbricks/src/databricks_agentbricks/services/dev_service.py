@@ -19,7 +19,7 @@ from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.app_manifest import AppManifest
 from databricks_agentbricks.projects.config import require_managed_tool_support
 from databricks_agentbricks.projects.resolver import ProjectResolver
-from databricks_agentbricks.projects.types import AgentServer
+from databricks_agentbricks.projects.types import AgentFramework, AgentServer
 from databricks_agentkit.runtime.store import RUNTIME_STORE_LOCAL_ENV
 from databricks_agentkit.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
 
@@ -65,6 +65,7 @@ class DevPreview:
     session_store: str | None
     trace_experiment: str | None
     has_chat_ui: bool
+    framework: AgentFramework | None = None
 
 
 @dataclass(frozen=True)
@@ -158,6 +159,7 @@ class DevService:
                 session_store=session_store,
                 trace_experiment=trace_experiment,
                 has_chat_ui=(source_dir / "runtime" / "ui.py").is_file(),
+                framework=project.framework if project else None,
             )
             yield DevPlan(
                 preview=preview,

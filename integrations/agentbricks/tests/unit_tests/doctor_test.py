@@ -83,7 +83,7 @@ def test_fully_onboarded_framework_reports_success(tmp_path: pathlib.Path, frame
     assert "[fail]" not in result.output
 
 
-@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("framework", ["langgraph", "openai", "custom"])
 def test_fresh_generated_project_reports_success(tmp_path: pathlib.Path, framework: str):
     project = tmp_path / framework
     init_result = CliRunner().invoke(
@@ -97,6 +97,27 @@ def test_fresh_generated_project_reports_success(tmp_path: pathlib.Path, framewo
     assert "7/7 checks passed — onboarded" in result.output
 
 
+def test_custom_framework_requires_public_agentkit_integration(tmp_path: pathlib.Path):
+    project = tmp_path / "custom"
+    result = CliRunner().invoke(agentbricks, ["init", "--framework", "custom", str(project)])
+    assert result.exit_code == 0, result.output
+    # Server construction alone is insufficient, and a made-up framework adapter must not count.
+    for source in (project / "runtime").glob("*.py"):
+        source.write_text("")
+    (project / "runtime" / "main.py").write_text(
+        "from databricks_agentkit import DurableAgentServer\n"
+        "from databricks_agentkit.custom import pretend_adapter\n"
+        "app = DurableAgentServer()\n"
+        "app.invoke(lambda value, context: None)\n"
+        "pretend_adapter()\n"
+    )
+    report = doctor_module.inspect_project(project)
+    checks = {check["id"]: check for check in report["checks"]}
+    assert checks["agentbricks_dependency"]["status"] == "pass"
+    assert checks["agent_app"]["status"] == "pass"
+    assert checks["framework_adapter"]["status"] == "fail"
+
+
 def test_plain_repository_is_a_normal_failed_report(tmp_path: pathlib.Path):
     result = CliRunner().invoke(agentbricks, ["doctor", str(tmp_path)])
 
@@ -105,7 +126,10 @@ def test_plain_repository_is_a_normal_failed_report(tmp_path: pathlib.Path):
     assert "Framework: unknown" in result.output
     assert "[fail] agent_manifest:" in result.output
     assert "not onboarded" in result.output
-    assert "agentbricks init --framework <langgraph|openai> --existing <directory>" in result.output
+    assert (
+        "agentbricks init --framework <langgraph|openai|custom> --existing <directory>"
+        in result.output
+    )
     assert "Traceback" not in result.output
 
 
@@ -164,7 +188,7 @@ def test_json_report_has_stable_shape_and_failure_exit_code(tmp_path: pathlib.Pa
         "onboarded": False,
         "checks": report["checks"],
         "summary": {"total": 7, "passed": 0, "failed": 7},
-        "next_step": "agentbricks init --framework <langgraph|openai> --existing <directory>",
+        "next_step": "agentbricks init --framework <langgraph|openai|custom> --existing <directory>",
     }
     assert [check["id"] for check in report["checks"]] == [
         "agent_manifest",
@@ -735,7 +759,7 @@ def test_unknown_framework_next_step_requires_explicit_choice(tmp_path: pathlib.
     text_result = CliRunner().invoke(agentbricks, ["doctor", str(tmp_path)])
     json_result = CliRunner().invoke(agentbricks, ["--output", "json", "doctor", str(tmp_path)])
 
-    expected = "agentbricks init --framework <langgraph|openai> --existing <directory>"
+    expected = "agentbricks init --framework <langgraph|openai|custom> --existing <directory>"
     assert text_result.exit_code == 1
     assert expected in text_result.output
     assert json_result.exit_code == 1
