@@ -11,11 +11,17 @@ from __future__ import annotations
 import pathlib
 from typing import Any, Optional
 
+from rich.text import Text
+
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.endpoint import print_agent_invoke_command
 from databricks_agentbricks.presentation.render import field
 from databricks_agentbricks.presentation.tracing import TRACING_BIND_COMMAND, experiment_url
-from databricks_agentbricks.services.deploy_service import DeployResult
+from databricks_agentbricks.services.deploy_service import DeleteResult, DeployResult
+from databricks_agentbricks.services.deployment.app_provisioner import (
+    APP_DELETE_TIMEOUT_S,
+    source_delete_command,
+)
 from databricks_agentkit import timefmt
 from databricks_agentkit.runtime import prompt_registry
 
@@ -91,12 +97,59 @@ def present_stopped(name: str, *, output: Optional[str]) -> None:
     render.success(f"Stopped deployment '{name}'")
 
 
-def present_deleted(name: str, *, output: Optional[str]) -> None:
+def present_deleted(result: DeleteResult, *, output: Optional[str]) -> None:
     """Confirm a delete: the machine payload for `--output json`, else a success line."""
+    path = result.source_path
     if output == "json":
-        render.emit_json({"deleted": name})
+        render.emit_json(
+            {
+                "deleted": result.deployment,
+                "still_deleting": result.still_deleting,
+                "wait_error": result.wait_error,
+                "source_path": path,
+                "source_path_status": result.source_folder_status,
+                "source_path_error": result.source_folder_error,
+            }
+        )
         return
-    render.success(f"Deleted deployment '{name}'")
+    check = f"`agentbricks deployments get {result.deployment}`"
+    if result.still_deleting:
+        last = f" The last check failed: {result.wait_error}" if result.wait_error else ""
+        render.warning(
+            f"Deployment '{result.deployment}' was still being deleted after "
+            f"{APP_DELETE_TIMEOUT_S // 60} minutes.{last} Check {check}; it may finish on its own."
+        )
+    elif result.wait_error:
+        render.warning(
+            f"Could not confirm deployment '{result.deployment}' was deleted: {result.wait_error} "
+            f"Check {check}; if the profile isn't signed in, run `agentbricks login` first."
+        )
+    else:
+        render.success(f"Deleted deployment '{result.deployment}'")
+    if path is None:
+        return
+    if result.source_folder_status == "kept":
+        _print_source_delete_command(
+            "Kept the source folder; to delete it"
+            if result.confirmed
+            else "Kept the source folder. Once the deployment is gone, delete it",
+            path,
+        )
+    elif result.source_folder_status == "failed":
+        render.warning(str(result.source_folder_error))
+        _print_source_delete_command("To delete it yourself", path)
+    elif result.source_folder_status == "kept_app_not_confirmed":
+        _print_source_delete_command(
+            "Kept the source folder: the deployment wasn't confirmed gone. Once it is, delete it",
+            path,
+        )
+
+
+def _print_source_delete_command(intro: str, path: str) -> None:
+    con = render.console()
+    con.print(Text(intro, style=render.SECONDARY))
+    # A separate, soft-wrapped line avoids copying panel borders or inserted line breaks.
+    con.print(Text(source_delete_command(path), style=render.COMMAND), soft_wrap=True)
 
 
 def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> None:

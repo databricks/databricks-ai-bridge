@@ -40,6 +40,7 @@ from databricks_agentbricks.presentation.deploy import (
 from databricks_agentbricks.presentation.reporter import ClickReporter
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.services.deploy_service import DeployRequest, DeployService
+from databricks_agentbricks.services.deployment.app_provisioner import AppProvisioner
 from databricks_agentbricks.services.deployment.config import (
     _DEFAULT_PIP_INDEX_URL,
     _USE_MANAGED_RUNTIME_STORE,
@@ -56,7 +57,6 @@ from databricks_agentbricks.services.deployment.names import (
     _prefixed_name,  # noqa: F401 - compatibility re-export
 )
 from databricks_agentbricks.services.deployment.provisioners import (
-    AppProvisioner,
     MemoryStoreProvisioner,
     RuntimeStoreProvisioner,
     SessionStoreProvisioner,
@@ -234,14 +234,26 @@ def deployments_stop(obj, name, yes) -> None:
 
 @deployments.command("delete")
 @click.argument("name", type=DeploymentName)
+@click.option(
+    "--delete-source",
+    is_flag=True,
+    help="Also delete the workspace folder the deployment's source was uploaded to, once the "
+    "deployment is gone.",
+)
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
 @click.pass_obj
-def deployments_delete(obj, name, yes) -> None:
-    """Delete a deployment and, when managed provisioning is enabled, its Runtime Store."""
+def deployments_delete(obj, name, delete_source, yes) -> None:
+    """Delete a deployment, and its Runtime Store when managed provisioning is enabled."""
     service = build_deploy_service(obj)
-    target = f"deployment '{name}'"
+    target = service.delete_target(name)
+    parts = [f"deployment '{name}'"]
     if not yes and service.deletes_runtime_store_data():
-        target += " and its Runtime Store data"
-    render.confirm_destroy(target, assume_yes=yes)
-    service.delete(name)
-    present_deleted(name, output=obj.output)
+        parts.append("its Runtime Store data")
+    if delete_source and target.source_path:
+        parts.append(f"its source folder {target.source_path}")
+    described = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+    render.confirm_destroy(described, assume_yes=yes)
+    result = service.delete(target, delete_source=delete_source)
+    present_deleted(result, output=obj.output)
+    if not result.confirmed or result.source_folder_status == "failed":
+        raise click.exceptions.Exit(1)

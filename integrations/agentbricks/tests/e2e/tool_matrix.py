@@ -80,6 +80,7 @@ _WHEEL_SOURCE_FILES = (
     "databricks_agentbricks/projects/config.py",
     "databricks_agentbricks/projects/resolver.py",
     "databricks_agentbricks/services/deploy_service.py",
+    "databricks_agentbricks/services/deployment/app_provisioner.py",
     "databricks_agentbricks/services/deployment/config.py",
     "databricks_agentbricks/services/deployment/names.py",
     "databricks_agentbricks/services/deployment/provisioners.py",
