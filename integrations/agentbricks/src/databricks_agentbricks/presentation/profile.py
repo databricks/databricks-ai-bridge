@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pathlib
+
 import click
 
 from databricks_agentbricks.presentation import render
@@ -11,6 +13,95 @@ from databricks_agentbricks.projects.profiles import (
     profile_exists,
     workspace_for_profile,
 )
+
+
+def show_profile_switched(
+    directory: pathlib.Path,
+    name: str,
+    changed: bool,
+    host: str | None,
+    user: str | None,
+    output: str,
+) -> None:
+    if output == "json":
+        render.emit_json(
+            {
+                "directory": str(directory),
+                "env_profile": name,
+                "changed": changed,
+                "workspace_host": host,
+                "signed_in_user": user,
+            }
+        )
+        return
+    fields = {"Profile (.env)": name}
+    if host:
+        fields["Workspace"] = host
+    if user:
+        fields["Signed in as"] = user
+    render.success(
+        f"Project profile set → '{name}'" if changed else f"Project profile is already '{name}'",
+        fields=fields,
+        next_steps=None if user else [(auth_login_command(name), "Sign in")],
+    )
+
+
+def show_profile_description(
+    profile: str | None,
+    source: str,
+    host: str | None,
+    workspace: str | None,
+    project: str | None,
+    output: str,
+) -> None:
+    if output == "json":
+        render.emit_json(
+            {
+                "profile": profile,
+                "source": source,
+                "workspace_host": host,
+                "project": project,
+            }
+        )
+        return
+    fields = {
+        "Profile": profile or "none (Databricks SDK default)",
+        "Source": source,
+    }
+    if workspace:
+        fields["Workspace"] = workspace
+    fields["Project"] = project or "not in a project"
+    render.detail("Profile", profile or "SDK default", fields)
+
+
+def show_login_result(
+    profile: str,
+    source: str,
+    user: str | None,
+    host: str | None,
+    env_profile: str | None,
+    output: str,
+) -> None:
+    if output == "json":
+        render.emit_json({"profile": profile, "source": source, "user": user, "host": host})
+        return
+    render.success(
+        f"Logged in to '{profile}'",
+        fields={"Profile": profile, "Source": source, "User": user, "Workspace": host},
+    )
+    if env_profile and env_profile != profile:
+        render.console().print(
+            f"[dim]This project still uses profile '{env_profile}' (from .env). "
+            f"Run `{auth_switch_command(profile)}` to switch it.[/]"
+        )
+
+
+def show_databricks_login_result(output: str) -> None:
+    """The result when `databricks auth login` chose the profile, so nothing about it is known here."""
+    if output == "json":
+        render.emit_json({"profile": None, "source": "databricks auth login"})
+    else:
+        render.success("Logged in with `databricks auth login`")
 
 
 def announce_workspace(

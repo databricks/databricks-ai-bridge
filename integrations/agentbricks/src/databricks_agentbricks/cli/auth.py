@@ -11,20 +11,23 @@ import click
 
 from databricks_agentbricks.clients.databricks_cli import run_databricks_login
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.profile import (
     announce_login,
+    show_databricks_login_result,
+    show_login_result,
+    show_profile_description,
+    show_profile_switched,
     warn_sign_in_failed,
     warn_unknown_profile,
 )
 from databricks_agentbricks.projects.config import is_agentbricks_project
 from databricks_agentbricks.projects.env_file import read_env, update_env_profile
 from databricks_agentbricks.projects.profiles import (
-    SOURCE_ENV_FILE,
     SOURCE_FLAG,
     ProfileInfo,
     auth_login_command,
     auth_switch_command,
+    login_target,
     profile_host,
     resolve_profile,
     workspace_for_profile,
@@ -81,29 +84,6 @@ def _resolve_for(obj, directory: pathlib.Path, in_project: bool) -> ProfileInfo:
     return resolve_profile(None, directory if in_project else None)
 
 
-def _login_target(
-    obj, name: Optional[str], env_profile: Optional[str]
-) -> Optional[tuple[str, str]]:
-    """(profile, source) for `auth login`: NAME, the global `-p`, or the project's `.env` only.
-
-    Signing in is an explicit act, so the ambient DATABRICKS_CONFIG_PROFILE and the SDK default
-    are deliberately not consulted. None means nothing chose one but a terminal can pick one.
-    """
-    if name:
-        return name, "argument"
-    if obj.profile_info.source == SOURCE_FLAG and obj.profile_info.name:
-        return obj.profile_info.name, SOURCE_FLAG
-    if env_profile:
-        return env_profile, SOURCE_ENV_FILE
-    if can_prompt_login():
-        return None
-    raise AgentCliError(
-        "No profile to log in to.",
-        hint=f"Pass one (`{auth_login_command(None)}`), or set the project's profile "
-        f"with `{auth_switch_command(None)}`.",
-    )
-
-
 @click.group("auth")
 def auth_group() -> None:
     """Choose, inspect, and sign in to the Databricks profile a project uses.
@@ -136,28 +116,7 @@ def auth_switch(obj, name: str, source: str) -> None:
     directory = _require_project(source)
     changed = update_env_profile(directory, name)
     user = sign_in_chosen_profile(obj, name, "argument")
-    host = profile_host(name)
-    if obj.output == "json":
-        render.emit_json(
-            {
-                "directory": str(directory),
-                "env_profile": name,
-                "changed": changed,
-                "workspace_host": host,
-                "signed_in_user": user,
-            }
-        )
-        return
-    fields = {"Profile (.env)": name}
-    if host:
-        fields["Workspace"] = host
-    if user:
-        fields["Signed in as"] = user
-    render.success(
-        f"Project profile set → '{name}'" if changed else f"Project profile is already '{name}'",
-        fields=fields,
-        next_steps=None if user else [(auth_login_command(name), "Sign in")],
-    )
+    show_profile_switched(directory, name, changed, profile_host(name), user, obj.output)
 
 
 @auth_group.command("describe")
@@ -180,24 +139,7 @@ def auth_describe(obj, source: str) -> None:
     info = _resolve_for(obj, directory, in_project)
     host, workspace = workspace_for_profile(info.name)
     project = str(directory) if in_project else None
-    if obj.output == "json":
-        render.emit_json(
-            {
-                "profile": info.name,
-                "source": info.source,
-                "workspace_host": host,
-                "project": project,
-            }
-        )
-        return
-    fields = {
-        "Profile": info.name or "none (Databricks SDK default)",
-        "Source": info.source,
-    }
-    if workspace:
-        fields["Workspace"] = workspace
-    fields["Project"] = project or "not in a project"
-    render.detail("Profile", info.name or "SDK default", fields)
+    show_profile_description(info.name, info.source, host, workspace, project, obj.output)
 
 
 @auth_group.command("login")
@@ -228,28 +170,20 @@ def auth_login(obj, name: Optional[str], source: str) -> None:
         if is_agentbricks_project(directory)
         else None
     )
-    target = _login_target(obj, name, env_profile)
+    target = login_target(name, obj.profile_info, env_profile)
     if target is None:
+        if not can_prompt_login():
+            raise AgentCliError(
+                "No profile to log in to.",
+                hint=f"Pass one (`{auth_login_command(None)}`), or set the project's profile "
+                f"with `{auth_switch_command(None)}`.",
+            )
         # `databricks auth login` picks the profile; it doesn't say which, so there's nothing to
         # validate or report beyond its own output.
         run_databricks_login(None)
-        if obj.output == "json":
-            render.emit_json({"profile": None, "source": "databricks auth login"})
-        else:
-            render.success("Logged in with `databricks auth login`")
+        show_databricks_login_result(obj.output)
         return
     chosen, origin = target
     announce_login(obj, chosen, origin)
     client, user = authenticate_profile(chosen, origin, interactive=can_prompt_login())
-    if obj.output == "json":
-        render.emit_json({"profile": chosen, "source": origin, "user": user, "host": client.host})
-        return
-    render.success(
-        f"Logged in to '{chosen}'",
-        fields={"Profile": chosen, "Source": origin, "User": user, "Workspace": client.host},
-    )
-    if env_profile and env_profile != chosen:
-        render.console().print(
-            f"[dim]This project still uses profile '{env_profile}' (from .env). "
-            f"Run `{auth_switch_command(chosen)}` to switch it.[/]"
-        )
+    show_login_result(chosen, origin, user, client.host, env_profile, obj.output)

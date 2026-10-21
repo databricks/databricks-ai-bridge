@@ -74,6 +74,23 @@ def resolve_profile(
     return ProfileInfo(None, SOURCE_SDK_DEFAULT)
 
 
+def login_target(
+    name: Optional[str], flag: ProfileInfo, env_profile: Optional[str]
+) -> Optional[tuple[str, str]]:
+    """(profile, source) for `auth login`: NAME, the global `-p`, or the project's `.env` only.
+
+    Signing in is an explicit act, so the ambient DATABRICKS_CONFIG_PROFILE and the SDK default
+    are deliberately not consulted. None means nothing chose one.
+    """
+    if name:
+        return name, "argument"
+    if flag.source == SOURCE_FLAG and flag.name:
+        return flag.name, SOURCE_FLAG
+    if env_profile:
+        return env_profile, SOURCE_ENV_FILE
+    return None
+
+
 def _config_path() -> pathlib.Path:
     # expanduser: the SDK expands `~` in DATABRICKS_CONFIG_FILE; without it a tilde path reads nothing.
     return pathlib.Path(
