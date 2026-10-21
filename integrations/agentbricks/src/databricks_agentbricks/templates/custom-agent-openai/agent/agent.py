@@ -1,3 +1,4 @@
+from functools import lru_cache
 from typing import Any
 
 from agents import Agent, Runner, set_default_openai_api, set_default_openai_client
@@ -8,7 +9,9 @@ from databricks_agentkit import workspace_client, workspace_headers
 MODEL = "databricks-gpt-5-2"
 
 
+@lru_cache(maxsize=1)
 def _configure_client() -> None:
+    # Building the WorkspaceClient blocks on auth; configure the client once, not on every request.
     headers = workspace_headers()
     workspace = workspace_client()
     client = (
