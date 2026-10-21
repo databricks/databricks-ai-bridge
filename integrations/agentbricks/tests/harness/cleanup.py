@@ -14,12 +14,13 @@ from __future__ import annotations
 import dataclasses
 import json
 import pathlib
+import time
 from collections.abc import Callable, Iterator
 from typing import Any
 
 from harness.agentbricks_cli import AgentbricksCli, not_found
 from harness.logs import log
-from harness.run import APP_PREFIX, E2EError, project_prefix, scratch_schema_prefix
+from harness.run import APP_PREFIX, E2EError, now, project_prefix, scratch_schema_prefix
 from harness.workspace import AppIdentity, Workspace
 
 _APPS_RECORD = "apps.jsonl"
@@ -186,9 +187,29 @@ def _delete_leaked_apps(
         result = cli.run(
             f"deployments delete {name} --delete-source --yes", timeout=1500, check=False
         )
-        if result.returncode != 0 and not not_found(result):
-            failures.append(f"App {name}: {(result.stderr or result.stdout).strip()}")
+        if result.returncode == 0 or not_found(result):
+            continue
+        # A non-zero exit can still leave the App deleting, e.g. after a teardown's delete, or
+        # gone with only its folder failing, which the source-folder sweep retries.
+        log(f"cleanup warning | {name} | {(result.stderr or result.stdout).strip()}")
+        try:
+            _wait_until_app_gone(cli, name)
+        except Exception as exc:
+            failures.append(f"App {name}: {exc}")
     return failures
+
+
+def _wait_until_app_gone(cli: AgentbricksCli, name: str, timeout: float = 1200) -> None:
+    started = time.monotonic()
+    next_tick = 60.0
+    while not not_found(cli.run(f"--output json deployments get {name}", check=False)):
+        elapsed = time.monotonic() - started
+        if elapsed >= timeout:
+            raise E2EError(f"App {name!r} still existed {timeout:.0f}s after delete returned.")
+        if elapsed >= next_tick:
+            log(f"tick {now():%H:%M} | delete-{name} | deleting")
+            next_tick += 60
+        time.sleep(15)
 
 
 def _delete_leaked_roles(workspace: Workspace, output: pathlib.Path) -> list[str]:

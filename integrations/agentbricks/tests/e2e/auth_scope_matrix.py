@@ -707,23 +707,7 @@ def auth_scope_tools(
     def cleanup(self) -> None:
         deleted_apps: list[bool] = []
         for app in self.apps:
-            # Also deletes the Runtime Store and source folder, and waits until the App is gone.
-            result = self.run(
-                [
-                    str(self.agentbricks),
-                    "--profile",
-                    self.profile,
-                    "deployments",
-                    "delete",
-                    app,
-                    "--delete-source",
-                    "--yes",
-                ],
-                timeout=1500,
-                check=False,
-            )
-            # A deploy that failed before creating its App leaves nothing to delete.
-            deleted_apps.append(result.returncode == 0 or self._app_absent(app))
+            deleted_apps.append(self._delete_app(app))
         self.cleanup_state["apps_deleted"] = bool(deleted_apps) and all(deleted_apps)
         if self.catalog and self.schema and self.table_name:
             self.sql(f"DROP TABLE IF EXISTS `{self.catalog}`.`{self.schema}`.`{self.table_name}`")
@@ -733,6 +717,31 @@ def auth_scope_tools(
             )
             data = check.get("result", {}).get("data_array") or []
             self.cleanup_state["sql_asset_deleted"] = bool(data and str(data[0][0]) == "0")
+
+    def _delete_app(self, name: str) -> bool:
+        """Delete the App, its Runtime Store and source folder; whether the App is gone after."""
+        try:
+            # Waits until the App is gone, and exits non-zero if it can't confirm that.
+            result = self.run(
+                [
+                    str(self.agentbricks),
+                    "--profile",
+                    self.profile,
+                    "deployments",
+                    "delete",
+                    name,
+                    "--delete-source",
+                    "--yes",
+                ],
+                timeout=1500,
+                check=False,
+                log_output=False,
+            )
+        except subprocess.TimeoutExpired:
+            self.transcript.write(f"cleanup warning | {name} | delete timed out")
+            return False
+        # A deploy that failed before creating its App leaves nothing to delete.
+        return result.returncode == 0 or self._app_absent(name)
 
     def _app_absent(self, name: str) -> bool:
         if self.workspace is None:

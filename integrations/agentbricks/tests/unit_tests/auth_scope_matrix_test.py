@@ -517,3 +517,31 @@ def test_app_absence_propagates_permission_denied():
 
     with pytest.raises(PermissionDenied, match="denied"):
         runner._app_absent("unknown-app")
+
+
+@pytest.mark.parametrize(
+    ("outcome", "app_exists", "expected"),
+    [(0, True, True), (1, False, True), (1, True, False), ("timeout", False, False)],
+)
+def test_delete_app_counts_an_app_deleted_only_once_it_is_gone(outcome, app_exists, expected):
+    from databricks.sdk.errors import NotFound
+
+    matrix = _load_matrix_module()
+    runner = matrix.Runner.__new__(matrix.Runner)
+    runner.agentbricks = "agentbricks"
+    runner.profile = "profile"
+    runner.transcript = SimpleNamespace(write=lambda _: None)
+
+    def run(argv, **kwargs):
+        if outcome == "timeout":
+            raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+        return SimpleNamespace(returncode=outcome)
+
+    def get(name):
+        if not app_exists:
+            raise NotFound("absent")
+
+    runner.run = run
+    runner.workspace = SimpleNamespace(apps=SimpleNamespace(get=get))
+
+    assert runner._delete_app("agent-bricks-app") is expected
