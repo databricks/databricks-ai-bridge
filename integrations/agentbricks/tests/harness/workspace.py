@@ -215,8 +215,7 @@ class Workspace:
         except NotFound:
             pass
 
-    # Deployment sources: `agentbricks deploy` syncs them into the user's workspace home and
-    # `apps delete` leaves them behind.
+    # Deployment sources: `agentbricks deploy` syncs them into the user's workspace home.
 
     @property
     def user_name(self) -> str:

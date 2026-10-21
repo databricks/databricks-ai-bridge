@@ -14,13 +14,12 @@ from __future__ import annotations
 import dataclasses
 import json
 import pathlib
-import time
 from collections.abc import Callable, Iterator
 from typing import Any
 
 from harness.agentbricks_cli import AgentbricksCli, not_found
 from harness.logs import log
-from harness.run import APP_PREFIX, E2EError, now, project_prefix, scratch_schema_prefix
+from harness.run import APP_PREFIX, E2EError, project_prefix, scratch_schema_prefix
 from harness.workspace import AppIdentity, Workspace
 
 _APPS_RECORD = "apps.jsonl"
@@ -54,7 +53,7 @@ class Cleanup:
                 log(f"cleanup warning | {label} | {exc}")
 
     def _run(self, command: str) -> None:
-        result = self._cli.run(command, timeout=1200, check=False)
+        result = self._cli.run(command, timeout=1500, check=False)
         if result.returncode != 0 and not not_found(result):
             raise E2EError((result.stderr or result.stdout).strip())
 
@@ -171,48 +170,25 @@ def _list_all(cli: AgentbricksCli, kind: str, key: str) -> Iterator[dict[str, An
 def _delete_leaked_apps(
     cli: AgentbricksCli, workspace: Workspace, run_id: str, output: pathlib.Path
 ) -> list[str]:
-    """Delete Apps whose per-test cleanup failed or never ran, then wait until every run App is gone.
+    """Delete Apps whose per-test cleanup failed or never ran.
 
-    `deployments delete` returns while the App is still deleting, so a teardown's App can still be
-    listed here; deleting it again only warns, and the wait is what decides success.
+    `deployments delete` waits until the App is gone and exits non-zero if it can't confirm that.
     """
     prefix = _app_prefix(run_id)
-    leaked: list[str] = []
+    failures: list[str] = []
     for deployment in json.loads(cli.run("--output json deployments list").stdout or "[]"):
         name = str(deployment.get("name") or "")
         if not name.startswith(prefix):
             continue
         log(f"deleting leaked App {name}")
-        leaked.append(name)
         # The principal stops resolving once the App is gone, and the later steps need it.
         record_app_identity(output, name, app_identity(cli, workspace, name))
         result = cli.run(
-            f"deployments delete {name} --delete-source --yes", timeout=1200, check=False
+            f"deployments delete {name} --delete-source --yes", timeout=1500, check=False
         )
-        if result.returncode != 0:
-            log(f"cleanup warning | {name} | {(result.stderr or result.stdout).strip()}")
-    # Teardowns deleted the rest of the run's Apps, which apps.jsonl names.
-    failures: list[str] = []
-    for name in sorted(set(leaked) | set(recorded_app_identities(output))):
-        try:
-            wait_until_app_gone(cli, name)
-        except Exception as exc:
-            failures.append(f"App {name}: {exc}")
+        if result.returncode != 0 and not not_found(result):
+            failures.append(f"App {name}: {(result.stderr or result.stdout).strip()}")
     return failures
-
-
-def wait_until_app_gone(cli: AgentbricksCli, name: str, timeout: float = 1200) -> None:
-    """Block until the App is gone; `deployments delete` returns while it is still deleting."""
-    started = time.monotonic()
-    next_tick = 0.0
-    while not not_found(cli.run(f"--output json deployments get {name}", check=False)):
-        elapsed = time.monotonic() - started
-        if elapsed >= timeout:
-            raise E2EError(f"App {name!r} still existed {timeout:.0f}s after delete returned.")
-        if elapsed >= next_tick:
-            log(f"tick {now():%H:%M} | delete-{name} | deleting")
-            next_tick += 60
-        time.sleep(15)
 
 
 def _delete_leaked_roles(workspace: Workspace, output: pathlib.Path) -> list[str]:
@@ -241,7 +217,11 @@ def _delete_leaked_roles(workspace: Workspace, output: pathlib.Path) -> list[str
 
 
 def _delete_leaked_deployment_sources(workspace: Workspace, run_id: str) -> list[str]:
-    """Delete this run's synced source folders, which `apps delete` leaves behind."""
+    """Delete this run's synced source folders that no `deployments delete --delete-source` removed.
+
+    That covers a deploy that failed before its App recorded the folder, and an App delete that
+    wasn't confirmed.
+    """
     failures: list[str] = []
     for path in workspace.deployment_sources_with_prefix(_app_prefix(run_id)):
         log(f"deleting leaked deployment source {path}")

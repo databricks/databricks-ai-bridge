@@ -503,7 +503,7 @@ def test_app_absence_requires_sdk_not_found():
         apps=SimpleNamespace(get=lambda _: (_ for _ in ()).throw(NotFound("absent")))
     )
 
-    assert runner._wait_for_app_absence("deleted-app") is True
+    assert runner._app_absent("deleted-app") is True
 
 
 def test_app_absence_propagates_permission_denied():
@@ -516,4 +516,4 @@ def test_app_absence_propagates_permission_denied():
     )
 
     with pytest.raises(PermissionDenied, match="denied"):
-        runner._wait_for_app_absence("unknown-app")
+        runner._app_absent("unknown-app")

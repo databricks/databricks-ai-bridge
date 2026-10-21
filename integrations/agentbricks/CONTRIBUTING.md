@@ -225,5 +225,5 @@ on `main` to the next minor development version (for example, `0.5.0.dev0` after
 cutting `0.4`). That version identifies development builds; it is not a published
 release. The scaffolds continue to depend on the released package. A new minor
 series starts with a new release branch from `main`. Tagging does not publish the package. Arrange the separate
-secure public registry release and its approval to publish to PyPI. The live workspace tool-matrix tests run
+secure public registry release and its approval to publish to PyPI. The live workspace E2E suites run
 separately in the private integration runner and are not included in this gate.

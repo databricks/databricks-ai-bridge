@@ -219,21 +219,18 @@ The fundamental assertion: when SP-A calls the agent, it sees SP-A's identity; w
 
 ### 7. Agent Bricks (CLI + AgentKit runtime)
 
-**What the bridge provides:** `databricks-agentbricks` ships the `agentbricks` CLI and AgentKit SDK for scaffolding, running, and deploying custom agents. The integration test covers a full deploy-and-invoke journey.
+**What the bridge provides:** `databricks-agentbricks` ships the `agentbricks` CLI and AgentKit SDK for scaffolding, running, and deploying custom agents. The E2E suites cover the deploy-and-invoke journeys.
 
-**Test file:**
+**Test files:**
 
 | Layer | File | What it tests |
 |-------|------|---------------|
-| Agent Bricks | `integrations/agentbricks/tests/integration_tests/test_tool_matrix.py` | Drives `integrations/agentbricks/tests/e2e/tool_matrix.py`: scaffolds LangGraph agents with `agentbricks tools` and a hand-edited `agent.toml`, runs each under `agentbricks dev` and on Databricks Apps, then invokes the sandbox, web-search MCP, a local Python tool, and a temporary UC function. All 16 evidence rows must pass. The CLI and templates come from the built wheel. CI pins the generated Apps' Agent Bricks and LangChain dependencies to the checked-out bridge commit. |
+| Agent Bricks | `integrations/agentbricks/tests/suites/` | One happy-path scenario per command group (`deploy`, `dev`, `tools`, `memory`, `sessions`, tracing), each running the real CLI against a workspace and invoking the agent it produces. The private integration runner runs them nightly. See `integrations/agentbricks/tests/suites/README.md` for how to run them and how they clean up. |
 
 **Key regressions these tests guard against:**
 - A deployed agent that won't boot — durable-runtime store resolution against real Lakebase (the class of bug that shipped in #550)
 - Tool wiring that works under `agentbricks dev` but breaks once deployed to Apps, or vice versa
-- CLI-authored and direct-`agent.toml` agents diverging at runtime
 - `system.ai.*` tools or UC-function invocation breaking under platform changes
-
-**Infrastructure:** Databricks Apps enabled with the CI service principal able to create and delete apps; `system.ai.sandbox` and `system.ai.web_search`; a SQL warehouse; and a scratch UC schema (`AGENTBRICKS_INTEGRATION_UC_SCHEMA`) where the SP can create a temporary function. The test records its own session and memory stores, then best-effort deletes those stores, each App and Runtime Store, matching App-SP Lakebase roles, and the UC function after success or failure. Role deletion requires permission on the shared Lakebase branch; cleanup warnings identify any resources needing manual attention. The wrapper leaves a bounded grace period for cleanup on timeout and names failed matrix cells in its error output.
 
 ---
 
