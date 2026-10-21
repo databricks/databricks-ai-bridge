@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import click
 
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation.endpoint import SsePrinter, render_response
+from databricks_agentbricks.presentation.loadtest import render_loadtest_summary
 from databricks_agentbricks.services.invoke.auth import WorkspaceOAuthAuthenticator
 from databricks_agentbricks.services.invoke.loadtest import run_loadtest
 from databricks_agentbricks.services.invoke.transport import HttpSession
@@ -64,6 +68,23 @@ def endpoint() -> None:
     show_default=True,
     help="Load test duration in seconds with --loadtest.",
 )
+@click.option(
+    "--max-requests",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Stop after this many load requests (excludes preflight) with --loadtest.",
+)
+@click.option(
+    "--cases",
+    "cases_file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="JSON array of request bodies, cycled in order with --loadtest; replaces --json.",
+)
+@click.option(
+    "--report-dir",
+    type=click.Path(path_type=Path),
+    help="Save HTML, CSV, and JSON reports in a new or empty directory with --loadtest.",
+)
 @click.pass_obj
 def invoke(
     obj,
@@ -80,14 +101,31 @@ def invoke(
     loadtest,
     concurrency,
     duration,
+    max_requests,
+    cases_file,
+    report_dir,
 ) -> None:
     """Send an HTTP request, or load test a Databricks App or arbitrary URL."""
     if not loadtest and any(
         click.get_current_context().get_parameter_source(name)
         is not click.core.ParameterSource.DEFAULT
-        for name in ("concurrency", "duration")
+        for name in ("concurrency", "duration", "max_requests", "cases_file", "report_dir")
     ):
-        raise AgentCliError("--concurrency and --duration require --loadtest.")
+        raise AgentCliError(
+            "--concurrency, --duration, --max-requests, --cases, and --report-dir require --loadtest."
+        )
+    cases = None
+    if cases_file is not None:
+        if json_value is not None:
+            raise AgentCliError("--cases and --json are mutually exclusive.")
+        try:
+            cases = json.loads(cases_file.read_text())
+        except (OSError, ValueError) as exc:
+            raise AgentCliError(
+                "--cases must contain a valid JSON array of request bodies."
+            ) from exc
+        if not isinstance(cases, list) or not cases:
+            raise AgentCliError("--cases must contain a nonempty JSON array of request bodies.")
     service = build_invoke_service(obj)
     request = InvokeRequest(
         app=app,
@@ -95,22 +133,26 @@ def invoke(
         method=method,
         path=path,
         query=query,
-        json_value=json_value,
+        json_value=json.dumps(cases[0]) if cases is not None else json_value,
         sse=sse,
         routing_key=routing_key,
         timeout=timeout,
         auth=auth,
     )
     if loadtest:
-        returncode = run_loadtest(
+        result = run_loadtest(
             service.prepare(request),
             concurrency=concurrency,
             duration=duration,
             output=obj.output,
             per_user_routing=bool(app and not routing_key),
+            max_requests=max_requests,
+            cases=cases,
+            report_dir=report_dir,
         )
-        if returncode:
-            raise click.exceptions.Exit(returncode)
+        render_loadtest_summary(result.summary, report_dir=report_dir)
+        if result.returncode:
+            raise click.exceptions.Exit(result.returncode)
         return
     printer = SsePrinter(enabled=sse and obj.output == "text")
     response = service.invoke(request, on_event=printer)

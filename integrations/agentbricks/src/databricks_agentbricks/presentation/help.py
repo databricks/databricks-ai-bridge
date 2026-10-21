@@ -443,7 +443,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
             "agentbricks endpoint invoke agent-bricks-my-agent --path /api/invocations "
             '--json \'{"id":"{{uuid}}","session_id":"{{uuid}}",'
             '"input":[{"role":"user","content":"Hello"}]}\' '
-            "--loadtest --concurrency 5 --duration 60",
+            "--loadtest --concurrency 5 --duration 60 --max-requests 200 --report-dir results/loadtest",
             "load test with Locust and report latency and throughput",
         ),
     ),

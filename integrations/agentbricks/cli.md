@@ -1513,6 +1513,9 @@ _Options_
 | `--loadtest` | flag | - | no | Repeat the request using Locust and report statistics. |
 | `--concurrency <CONCURRENCY>` | integer range | `1` | no | Concurrent users with --loadtest. |
 | `--duration <DURATION>` | integer range | `60` | no | Load test duration in seconds with --loadtest. |
+| `--max-requests <MAX_REQUESTS>` | integer range | - | no | Stop after this many load requests (excludes preflight) with --loadtest. |
+| `--cases <CASES_FILE>` | file path | - | no | JSON array of request bodies, cycled in order with --loadtest; replaces --json. |
+| `--report-dir <REPORT_DIR>` | path | - | no | Save HTML, CSV, and JSON reports in a new or empty directory with --loadtest. |
 
 ### `agentbricks tools`
 

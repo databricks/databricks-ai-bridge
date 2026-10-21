@@ -737,19 +737,45 @@ pip install 'databricks-agentbricks[loadtest]'
 agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
   --path /api/invocations \
   --json '{"id":"{{uuid}}","session_id":"{{uuid}}","input":[{"role":"user","content":"Hello"}]}' \
-  --loadtest --concurrency 5 --duration 60
+  --loadtest --concurrency 5 --duration 60 --max-requests 200 --report-dir results/loadtest
 ```
 
 `--concurrency` sets the number of simultaneous users (default: 1); each sends another request as
-soon as its previous request finishes. `--duration` is in seconds (default: 60). After that period,
-in-flight requests have up to `--timeout` seconds to finish. Locust reports request counts, failures,
-requests per second, and latency percentiles; any failed request makes the command exit nonzero.
-Use `--output json` before `endpoint` for Locust's JSON statistics. Streaming latency measures the
-complete response, and individual responses are not printed during a load test.
+soon as its previous request finishes. `--duration` is in seconds (default: 60). `--max-requests`
+optionally caps dispatched load requests; the run stops at whichever limit comes first. One
+first-case preflight request runs before load and is excluded from all statistics and the cap;
+a failed preflight stops the command. After dispatch stops, in-flight requests have up to
+`--timeout` seconds to finish. Ctrl-C also stops dispatch, drains, and produces a partial report.
+Agent requests can incur model costs and tool side effects, including the preflight.
+
+Locust shows live statistics and a final request/failure, throughput, and percentile report.
+The final summary also shows successful-only latency, completed and successful requests/sec
+(including drain time), incomplete attempts, and streaming metric coverage. Any failed or
+incomplete request makes the command exit nonzero; cancellation exits 130. Native Locust
+percentiles include failed requests and use rounded histogram buckets; the summary labels
+successful-only timings separately. This closed-loop run measures the selected workload,
+including model/tool latency; it does not establish sustainable capacity or judge answer quality.
+
+`--report-dir` exports a standalone `index.html` summary, native `locust.html` charts,
+`locust_*.csv` statistics/history/errors, and `summary.json`. Use a new or empty directory.
+Reports contain metrics rather than request/answer content or credentials. Native charts include
+the target host. Use `--output json` before `endpoint` for Locust's JSON statistics on stdout;
+progress and the final summary stay on stderr.
+
+With `--sse`, latency covers the complete response. Answer-text time to first token (TTFT) is
+measured for supported DurableAgentServer, OpenAI Chat Completions, and Responses SSE events,
+ignoring metadata/tool events. Unsupported or missing text/token usage is reported as unknown,
+with observed-request coverage; token counts are never inferred. Recognized stream errors and
+incomplete supported streams fail the request. Individual responses are not printed or saved.
 
 The payload is repeated as provided, with `{{uuid}}` replaced by a fresh UUID for each request.
 Use this placeholder for invocation IDs on durable agents to avoid replaying a cached invocation.
 Each simulated App user gets a separate routing key unless `--routing-key` explicitly pins one.
+
+To vary inputs, pass `--cases cases.json` instead of `--json`. The file contains a nonempty JSON
+array of complete request bodies, for example `[{"query":"Hello"},{"query":"Goodbye"}]`.
+Requests cycle through the cases in order; reports identify cases by number without storing
+their bodies. `{{uuid}}` also works in case bodies. Every load setting requires `--loadtest`.
 
 ## Command help
 
