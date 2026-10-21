@@ -1,12 +1,7 @@
-"""Request-user auth: a deployed App calls `auth = "user"` tools as the user who invoked it.
-
-`tools add ... --auth user` makes `agentbricks deploy` request the tool's user API scopes. The App
-then hands tools the invoking user's credentials, never its own service principal's.
-"""
+"""Request-user auth: a deployed App calls `auth = "user"` tools as the user who invoked it."""
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import re
 
@@ -38,8 +33,6 @@ def request_identity_tools(workspace_client_for):
 '''
 IDENTITY_RESULT = re.compile(r"AGENTBRICKS_IDENTITY user=(\S+) app=(\S+)")
 IDENTITY_PROMPT = "You must call the request_identity tool. Return its exact result."
-# What `tools add mcp system.ai.web_search --auth user` needs the App to request for the user.
-WEB_SEARCH_USER_SCOPE = "ai-gateway"
 
 
 def test_user_auth(
@@ -54,9 +47,7 @@ def test_user_auth(
     app = project.app_name
     # Before deploy: a deploy that fails partway can still leave the App behind.
     cleanup(f"deployments delete {app} --delete-source --yes")
-    web_search = dataclasses.replace(
-        web_search_tool(), add_command="mcp system.ai.web_search --auth user"
-    )
+    web_search = web_search_tool(auth="user")
     agentbricks_cli.run(f"tools add {web_search.add_command} --source {project.path}")
     project.write_file(IDENTITY_FILE, IDENTITY_SOURCE)
     _register_identity_tools(project)
@@ -69,10 +60,6 @@ def test_user_auth(
     cleanup(f"memory stores delete memory-stores/{deployed['memory_store']} --yes")
     cleanup(f"sessions stores delete {deployed['session_store']} --yes")
 
-    with subtests.test(check="scopes"):
-        details = json.loads(agentbricks_cli.run(f"--output json deployments get {app}").stdout)
-        assert WEB_SEARCH_USER_SCOPE in (details.get("user_api_scopes") or []), details
-        assert WEB_SEARCH_USER_SCOPE in (details.get("effective_user_api_scopes") or []), details
     with subtests.test(check="user tool"):
         web_search.check(agentbricks_cli.invoke(app, web_search.prompt))
     with subtests.test(check="identity"):

@@ -101,7 +101,7 @@ def sandbox_tool(uc_function: UcFunction) -> Tool:
     )
 
 
-def web_search_tool(**_resources: object) -> Tool:
+def web_search_tool(auth: str = "app", **_resources: object) -> Tool:
     return Tool(
         name="mcp",
         prompt=(
@@ -110,7 +110,7 @@ def web_search_tool(**_resources: object) -> Tool:
             "return the title and https URL of one result. Do not answer from memory."
         ),
         called=web_search_called,
-        add_command="mcp system.ai.web_search --auth app",
+        add_command=f"mcp system.ai.web_search --auth {auth}",
         files={},
         tool_id="web_search",
     )
