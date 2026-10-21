@@ -310,9 +310,14 @@ class DeployStateReporter:
         self._tracker.phase(message)
         return self._inner.status(message)
 
-    def progress(self, message: str) -> AbstractContextManager[None]:
+    def progress(
+        self, message: str, *, done_message: Optional[str] = None
+    ) -> AbstractContextManager[None]:
         self._tracker.phase(message)
-        return self._inner.progress(message)
+        return self._inner.progress(message, done_message=done_message)
+
+    def timing(self, phase: str, seconds: float) -> None:
+        self._inner.timing(phase, seconds)
 
     def note(self, message: str) -> None:
         self._inner.note(message)

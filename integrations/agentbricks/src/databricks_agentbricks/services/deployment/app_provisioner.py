@@ -24,7 +24,7 @@ from databricks.sdk.errors import (
 from databricks.sdk.service.apps import App
 
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
-from databricks_agentbricks.clients.apps_client import AppsClient
+from databricks_agentbricks.clients.apps_client import AppsClient, AppState
 from databricks_agentbricks.clients.apps_user_auth_client import (
     AppAuthPlan,
     AppsUserAuthClient,
@@ -86,7 +86,7 @@ def _app_lookup_error(name: DeploymentName, exc: Exception) -> AgentCliError:
 
 
 class AppProvisioner:
-    """Create-or-scale the deployed App, wait for its compute, then sync and roll out the source.
+    """Start the deployed App's compute, sync the source, wait for ACTIVE, then roll out.
 
     Owns the Databricks App that a deploy creates and rolls source out to. Its operations cover App
     creation, compute readiness, and source rollout; bound stores and tracing have their own
@@ -168,25 +168,18 @@ class AppProvisioner:
         auth_plan: AppAuthPlan,
         instance_count: Optional[int],
     ) -> None:
-        """Own App creation, optional scale and scope updates, and ACTIVE-compute readiness.
+        """Create or update a request-user App through the SDK, then wait for ACTIVE compute.
 
-        A request-user App takes the SDK path for scoped creation or masked update; other Apps use
-        the CLI. An omitted instance count preserves an existing App's scale on either path.
+        Only the request-user path uses this; every other App starts early through
+        :meth:`start_compute` and joins in :meth:`wait_for_compute`. An omitted instance count
+        preserves an existing App's scale.
         """
         name = ctx.project.name
-        deployment_exists = ctx.deployment_exists
-        # `apps create` blocks for minutes, so show progress while captured output is unavailable.
-        if auth_plan.scope_update is not None:
-            if auth_plan.scope_update.name != name:
-                raise AgentCliError("App auth plan does not match the deployment being prepared.")
-            with self._reporter.progress("Configuring the agent's request-user access…"):
-                self._reconcile_scoped_app(auth_plan.scope_update, instance_count)
-        elif not deployment_exists:
-            with self._reporter.progress("Creating the agent and starting its compute…"):
-                out = self._apps_client.create(name, instance_count)
-            self._note_cli_output(out)
-        elif instance_count is not None:
-            self._note_cli_output(self._apps_client.create_update_instances(name, instance_count))
+        scope_update = auth_plan.scope_update
+        if scope_update is None or scope_update.name != name:
+            raise AgentCliError("App auth plan does not match the deployment being prepared.")
+        with self._reporter.progress("Configuring the agent's request-user access…"):
+            self._reconcile_scoped_app(scope_update, instance_count)
         # `apps deploy` requires ACTIVE compute, whether the App is new or was previously stopped.
         with self._reporter.progress("Waiting for agent compute to start…"):
             self._apps_client.wait_for_active(name)
@@ -195,6 +188,52 @@ class AppProvisioner:
         # stderr, so `--output json` stdout stays parseable.
         old, new = _AGENT_COMPUTE_OUTPUT
         self._reporter.note(out.replace(old, new).rstrip("\n"))
+
+    def start_compute(
+        self, ctx: ResourceContext, state: Optional[AppState], instance_count: Optional[int]
+    ) -> bool:
+        """Get the App's compute booting server-side without waiting for it; True if this created it.
+
+        A missing App is created with `--no-wait`. An existing App is scaled first when an instance
+        count is given (blocking, as before, so the update can't collide with a starting compute),
+        then a STOPPED App is started with `--no-wait`. Any other state needs no call here; the
+        deploy service joins on ACTIVE later through :meth:`wait_for_compute`.
+        """
+        name = ctx.project.name
+        if state is None:
+            with self._reporter.progress(
+                "Creating the agent; its compute starts in the background…"
+            ):
+                out = self._apps_client.create(name, instance_count, no_wait=True)
+            self._note_cli_output(out)
+            return True
+        if instance_count is not None:
+            self._note_cli_output(self._apps_client.create_update_instances(name, instance_count))
+        if state.compute_state == "STOPPED":
+            with self._reporter.progress("Starting the agent's compute in the background…"):
+                self._apps_client.start_no_wait(name)
+        return False
+
+    def wait_for_compute(self, ctx: ResourceContext) -> None:
+        """Block until the App's compute is ACTIVE, which App updates and `apps deploy` require.
+
+        Starting a STOPPED App also rolls out its last active deployment again, and Apps rejects
+        another deployment until that one settles, so wait it out here too when the read that found
+        compute ACTIVE shows it in progress.
+        """
+        with self._reporter.progress(
+            "Waiting for agent compute to start…", done_message="Agent compute is running"
+        ):
+            deployment_in_progress = self._apps_client.wait_for_active(ctx.project.name)
+        if deployment_in_progress:
+            self._wait_for_previous_deployment(ctx)
+
+    def _wait_for_previous_deployment(self, ctx: ResourceContext) -> None:
+        with self._reporter.progress(
+            "Waiting for the agent's previous deployment to finish…",
+            done_message="Previous deployment finished",
+        ):
+            self._apps_client.wait_for_deployment(ctx.project.name)
 
     def resolve_workspace_path(self, ctx: ResourceContext, requested_path: Optional[str]) -> str:
         """Return the explicit destination for source upload, deriving the default lazily."""
@@ -256,13 +295,28 @@ class AppProvisioner:
             ) from exc
         return True
 
-    def deploy_source(self, ctx: ResourceContext, workspace_path: str) -> None:
-        """Sync source to an already-resolved workspace destination and activate it.
+    def sync_source(self, ctx: ResourceContext, workspace_path: str) -> None:
+        """Upload source to an already-resolved workspace destination.
 
-        Distinct from :meth:`AppsClient.deploy`, which is the single ``databricks apps deploy``
-        call this drives once the source is synced.
+        A plain workspace upload: it neither touches the App nor needs ACTIVE compute, so deploy
+        runs it while the compute boots, once app.yaml is final.
         """
         with self._reporter.progress("Uploading the agent source…"):
             self._apps_client.sync_source(ctx.project.name, ctx.project.source_dir, workspace_path)
-        with self._reporter.progress("Deploying the agent source…"):
-            self._apps_client.deploy(ctx.project.name, workspace_path)
+
+    def roll_out(self, ctx: ResourceContext, workspace_path: str) -> None:
+        """Activate the synced source as the App's deployment; requires ACTIVE compute.
+
+        A deployment that started after :meth:`wait_for_compute` looked (the one `apps start`
+        triggers can surface late) makes `apps deploy` fail; wait it out and retry once.
+        """
+        name = ctx.project.name
+        try:
+            with self._reporter.progress("Deploying the agent source…"):
+                self._apps_client.deploy(name, workspace_path)
+        except AgentCliError:
+            if not self._apps_client.deployment_in_progress(name):
+                raise
+            self._wait_for_previous_deployment(ctx)
+            with self._reporter.progress("Deploying the agent source…"):
+                self._apps_client.deploy(name, workspace_path)
