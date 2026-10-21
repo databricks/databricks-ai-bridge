@@ -712,6 +712,15 @@ def _read_span_model(span):
         model = outputs.get("model")
         if isinstance(model, str) and model:
             return model
+    return _read_span_requested_model(span)
+
+
+def _read_span_requested_model(span):
+    """Model name the request asked for (`mlflow.llm.model`), or None.
+
+    For gateway-routed calls this is the model service (or its `_exp_<id>` clone),
+    which `_estimate_cost_usd` maps back to the candidate model it routes to.
+    """
     if hasattr(span, "get_attribute"):
         try:
             attr = span.get_attribute(_LLM_MODEL_ATTR_KEY)
@@ -767,6 +776,7 @@ def _extract_trace_summary():
                 llm_calls.append(
                     {
                         "model": _read_span_model(span),
+                        "requested": _read_span_requested_model(span),
                         "input": in_t,
                         "output": out_t,
                     }
@@ -981,6 +991,19 @@ def _rate_cost_usd(in_tokens, out_tokens, rate):
     return dbu * _DBU_TO_USD
 
 
+def _price_by_name(names, in_tokens, out_tokens, token_costs):
+    """USD for the first of `names` with a `token_costs` override, else the first MLflow prices."""
+    for name in names:
+        rate = token_costs.get(name)
+        if rate is not None:
+            return _rate_cost_usd(in_tokens, out_tokens, rate)
+    for name in names:
+        cost = _mlflow_model_cost(name, in_tokens, out_tokens)
+        if cost is not None:
+            return cost
+    return None
+
+
 def _estimate_cost_usd(candidate, endpoint_targets, total_tokens, token_costs, llm_calls=None):
     """Rough $-per-call estimate in USD.
 
@@ -988,9 +1011,10 @@ def _estimate_cost_usd(candidate, endpoint_targets, total_tokens, token_costs, l
     *resolved* model -- the model FMAPI actually served (e.g.
     "gpt-5.4-mini-2026-03-17"), echoed in the span response. This is what
     MLflow's pricing catalog can price; the gateway alias / endpoint name that
-    autolog records on the request cannot. Per call, priority is: a `token_costs`
-    override for that model name, then MLflow's catalog, then the fallback rate
-    (warned once).
+    autolog records on the request cannot. Per call, the names tried are the
+    resolved model, then the candidate model its requested service routes to;
+    priority is a `token_costs` override for either name, then MLflow's catalog
+    for either name, then the fallback rate (warned once).
 
     Fallback path (no per-call trace data): split the trace-total tokens evenly
     across `endpoint_targets` and price each by its candidate alias -- coarse,
@@ -1005,18 +1029,20 @@ def _estimate_cost_usd(candidate, endpoint_targets, total_tokens, token_costs, l
             routed[et.name] = routed[et.exp_name] = chosen
         total = 0.0
         for call in llm_calls:
-            model = call.get("model")
-            model = routed.get(model, model)
             in_t = call.get("input") or 0
             out_t = call.get("output") or 0
-            rate = token_costs.get(model) if model else None
-            if rate is not None:
-                total += _rate_cost_usd(in_t, out_t, rate)
+            # Workspaces echo different backend IDs for the same model, and not every one is in
+            # the catalog; then price the call as the candidate its requested service routes to.
+            names = []
+            for name in (call.get("model"), call.get("requested")):
+                name = routed.get(name, name)
+                if name and name not in names:
+                    names.append(name)
+            cost = _price_by_name(names, in_t, out_t, token_costs)
+            if cost is not None:
+                total += cost
                 continue
-            mlflow_cost = _mlflow_model_cost(model, in_t, out_t)
-            if mlflow_cost is not None:
-                total += mlflow_cost
-                continue
+            model = names[0] if names else None
             _warn_once(
                 "cost",
                 "unpriced_model",
