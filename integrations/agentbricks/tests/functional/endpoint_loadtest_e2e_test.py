@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 import signal
@@ -16,6 +17,21 @@ from importlib.util import find_spec
 from pathlib import Path
 
 import pytest
+
+
+def _assert_final_csv_counts(report_dir, summary, case_counts=None):
+    with (report_dir / "locust_stats.csv").open(newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    aggregate = next(row for row in rows if row["Name"] == "Aggregated")
+    assert int(aggregate["Request Count"]) == summary["counts"]["completed"]
+    assert int(aggregate["Failure Count"]) == summary["counts"]["failed"]
+    requests = [row for row in rows if row["Type"] == "POST"]
+    assert sum(int(row["Request Count"]) for row in requests) == summary["counts"]["completed"]
+    if case_counts is not None:
+        assert {row["Name"]: int(row["Request Count"]) for row in requests} == case_counts
+    with (report_dir / "locust_failures.csv").open(newline="") as stream:
+        failures = list(csv.DictReader(stream))
+    assert sum(int(row["Occurrences"]) for row in failures) == summary["counts"]["failed"]
 
 
 @pytest.mark.parametrize("streaming", [False, True])
@@ -155,6 +171,7 @@ def test_loadtest_caps_cases_and_saves_a_complete_report(tmp_path, streaming):
         "ok": 4,
         "alternate" if streaming else "fail": 4,
     }
+    _assert_final_csv_counts(report_dir, summary, {"/run [case 1]": 4, "/run [case 2]": 4})
     assert summary["observed_peak_in_flight"] == 3
     assert peak == 3
     assert len({body["id"] for body in seen}) == 9
@@ -178,7 +195,10 @@ def test_loadtest_caps_cases_and_saves_a_complete_report(tmp_path, streaming):
         assert (report_dir / artifact).is_file(), artifact
 
 
-def test_interrupt_stops_dispatch_and_reports_drained_requests(tmp_path):
+@pytest.mark.parametrize(
+    ("stop_signal", "exit_code"), [(signal.SIGINT, 130), (signal.SIGTERM, 143)]
+)
+def test_interrupt_stops_dispatch_and_reports_drained_requests(tmp_path, stop_signal, exit_code):
     if find_spec("locust") is None:
         pytest.skip("requires databricks-agentbricks[loadtest]")
     agentbricks = Path(sys.executable).with_name("agentbricks")
@@ -245,7 +265,7 @@ def test_interrupt_stops_dispatch_and_reports_drained_requests(tmp_path):
         )
         try:
             assert loading.wait(timeout=15), "CLI did not start concurrent requests"
-            process.send_signal(signal.SIGINT)
+            process.send_signal(stop_signal)
             stdout, stderr = process.communicate(timeout=15)
         finally:
             if process.poll() is None:
@@ -254,7 +274,7 @@ def test_interrupt_stops_dispatch_and_reports_drained_requests(tmp_path):
             server.shutdown()
             worker.join(timeout=5)
 
-    assert process.returncode == 130, stdout + stderr
+    assert process.returncode == exit_code, stdout + stderr
     summary = json.loads((report_dir / "summary.json").read_text())
     assert summary["outcome"] == "cancelled"
     counts = summary["counts"]
@@ -263,6 +283,7 @@ def test_interrupt_stops_dispatch_and_reports_drained_requests(tmp_path):
     assert counts["succeeded"] == counts["started"]
     assert counts["incomplete"] == counts["failed"] == 0
     assert requests == counts["started"] + 1
+    _assert_final_csv_counts(report_dir, summary)
     assert "cancelled" in stderr
     assert (report_dir / "index.html").is_file()
     assert (report_dir / "locust.html").is_file()
@@ -323,3 +344,95 @@ def test_redirect_preflight_never_generates_load(tmp_path):
     assert result.returncode != 0
     assert "preflight failed: HTTP 302" in result.stderr
     assert paths == ["/run"]
+
+
+def test_natural_duration_drains_and_final_csv_matches_all_cases(tmp_path):
+    if find_spec("locust") is None:
+        pytest.skip("requires databricks-agentbricks[loadtest]")
+    agentbricks = Path(sys.executable).with_name("agentbricks")
+    if not agentbricks.is_file():
+        pytest.skip("requires the installed agentbricks CLI")
+    seen = []
+    lock = threading.Lock()
+
+    class Endpoint(BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            with lock:
+                seen.append(body)
+            # Requests remain in flight when the native timer stops dispatch.
+            time.sleep(0.31)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"text":"finished"}')
+
+    cases = tmp_path / "cases.json"
+    cases.write_text('[{"case": 1}, {"case": 2}]')
+    config = tmp_path / "empty.databrickscfg"
+    config.write_text("")
+    report_dir = tmp_path / "report"
+    with ThreadingHTTPServer(("127.0.0.1", 0), Endpoint) as server:
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            result = subprocess.run(
+                [
+                    str(agentbricks),
+                    "--output",
+                    "json",
+                    "endpoint",
+                    "invoke",
+                    "--url",
+                    f"http://127.0.0.1:{server.server_port}",
+                    "--path",
+                    "/run",
+                    "--loadtest",
+                    "--concurrency",
+                    "2",
+                    "--duration",
+                    "2",
+                    "--max-requests",
+                    "1000",
+                    "--timeout",
+                    "3",
+                    "--cases",
+                    str(cases),
+                    "--report-dir",
+                    str(report_dir),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=20,
+                cwd=tmp_path,
+                env={
+                    "PATH": f"{agentbricks.parent}:/usr/bin:/bin",
+                    "HOME": str(tmp_path),
+                    "DATABRICKS_CONFIG_FILE": str(config),
+                    "AGENTBRICKS_DISABLE_TELEMETRY": "1",
+                },
+            )
+        finally:
+            server.shutdown()
+            worker.join(timeout=5)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    summary = json.loads((report_dir / "summary.json").read_text())
+    assert summary["outcome"] == "completed"
+    counts = summary["counts"]
+    assert 4 <= counts["started"] < 1000  # The duration ended the run before its cap.
+    assert counts["started"] == counts["completed"] == counts["succeeded"]
+    assert counts["failed"] == counts["incomplete"] == 0
+    assert len(seen) == counts["completed"] + 1
+    case_counts = Counter(body["case"] for body in seen[1:])
+    _assert_final_csv_counts(
+        report_dir,
+        summary,
+        {f"/run [case {case}]": count for case, count in case_counts.items()},
+    )
+    assert summary["latency_ms"]["all_completed"]["count"] == counts["completed"]
+    native = json.loads(result.stdout)
+    assert sum(row["num_requests"] for row in native) == counts["completed"]

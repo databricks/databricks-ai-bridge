@@ -114,12 +114,17 @@ def run_loadtest(
             start_new_session=True,
         ) as process:
             cancelled = False
+            previous_terminate = signal.signal(
+                signal.SIGTERM, lambda signum, frame: process.send_signal(signum)
+            )
             try:
                 process.communicate(input=json.dumps(config))
             except KeyboardInterrupt:
                 cancelled = True
                 process.send_signal(signal.SIGINT)
                 process.communicate()
+            finally:
+                signal.signal(signal.SIGTERM, previous_terminate)
         summary = json.loads(summary_file.read_text()) if summary_file.exists() else {}
         if cancelled and summary:
             summary["outcome"] = "cancelled"

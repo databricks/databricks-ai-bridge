@@ -1,10 +1,13 @@
 """Locust task loaded by ``python -m locust``, after gevent is initialized."""
 
+import atexit
+import csv
 import json
 import signal
 import sys
 import time
 from collections import Counter
+from io import StringIO
 from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -12,7 +15,8 @@ from uuid import uuid4
 import gevent
 from locust import HttpUser, events, task
 from locust.exception import StopUser
-from locust.stats import RequestStats, StatsEntry
+from locust.html import get_html_report
+from locust.stats import PERCENTILES_TO_REPORT, RequestStats, StatsCSV, StatsEntry
 
 from databricks_agentbricks.services.invoke.loadtest_streaming import (
     StreamError,
@@ -34,7 +38,6 @@ _PEAK = 0
 _ACTIVE = 0
 _START_TIME: float | None = None
 _END_TIME: float | None = None
-_STOP_REASON: str | None = None
 _CANCELLED = False
 _ERRORS: Counter[str] = Counter()
 _SUCCESSFUL = StatsEntry(RequestStats(), "successful latency", "METRIC")
@@ -48,27 +51,16 @@ def start(environment, **kwargs):
     global _START_TIME
     _START_TIME = time.perf_counter()
 
-    def cancel():
+    def cancel(exit_code):
         global _CANCELLED
-        _CANCELLED = True
-        environment.process_exit_code = 130
-        gevent.spawn(environment.runner.quit)
+        if not _CANCELLED:
+            _CANCELLED = True
+            environment.process_exit_code = exit_code
+            gevent.spawn(environment.runner.quit)
 
     # Stop and drain before Locust saves its native HTML report.
-    gevent.signal_handler(signal.SIGINT, cancel)
-
-
-@events.test_stopping.add_listener
-def stopping(environment, **kwargs):
-    global _STOP_REASON
-    elapsed = time.perf_counter() - _START_TIME if _START_TIME is not None else 0
-    reached_cap = _CONFIG.get("max_requests") is not None and _STARTED >= _CONFIG["max_requests"]
-    # Locust's runtime timer starts just before test_start is scheduled.
-    _STOP_REASON = (
-        "completed"
-        if not _CANCELLED and (reached_cap or elapsed >= _CONFIG["duration"] - 0.05)
-        else "cancelled"
-    )
+    gevent.signal_handler(signal.SIGINT, cancel, 130)
+    gevent.signal_handler(signal.SIGTERM, cancel, 143)
 
 
 @events.request.add_listener
@@ -111,18 +103,46 @@ def _timing(entry):
     }
 
 
+def _save_final_csv(environment):
+    writer = StatsCSV(environment, PERCENTILES_TO_REPORT)
+    for suffix, write in (
+        ("_stats.csv", writer.requests_csv),
+        ("_failures.csv", writer.failures_csv),
+        ("_exceptions.csv", writer.exceptions_csv),
+    ):
+        content = StringIO(newline="")
+        # Locust's writerow return annotation differs from stdlib csv.writer.
+        write(csv.writer(content))  # ty: ignore[invalid-argument-type]
+        # Capture before native JSON output resets per-case stats; write after
+        # native handles close so their buffered snapshots cannot overwrite it.
+        atexit.register(
+            Path(environment.parsed_options.csv_prefix + suffix).write_text,
+            content.getvalue(),
+            encoding="utf-8",
+            newline="",
+        )
+
+
 @events.quitting.add_listener
 def finish(environment, **kwargs):
-    # SIGTERM can fire quitting before Locust stops users. Drain first.
+    # Also drain if Locust shuts down before stopping its users.
     if environment.runner.state != "stopped":
         environment.runner.stop()
+    html_file = environment.parsed_options.html_file
+    # Locust's SIGTERM shutdown path skips its usual HTML export.
+    if html_file and not Path(html_file).exists():
+        Path(html_file).write_text(
+            get_html_report(environment, show_download_link=False), encoding="utf-8"
+        )
     elapsed = (
         max((_END_TIME or time.perf_counter()) - _START_TIME, 0.001)
         if _START_TIME is not None
         else 0.001
     )
     incomplete = _STARTED - _COMPLETED
-    outcome = "incomplete" if incomplete or not _STARTED else (_STOP_REASON or "incomplete")
+    outcome = (
+        "incomplete" if incomplete or not _STARTED else "cancelled" if _CANCELLED else "completed"
+    )
     summary = {
         "schema_version": 1,
         "workload": {
@@ -163,6 +183,8 @@ def finish(environment, **kwargs):
         "generator_cpu_warning": environment.runner.cpu_warning_emitted,
     }
     Path(_CONFIG["summary_file"]).write_text(json.dumps(summary, indent=2) + "\n")
+    if environment.parsed_options.csv_prefix:
+        _save_final_csv(environment)
     if outcome != "completed" and environment.process_exit_code is None:
         environment.process_exit_code = 1
 
