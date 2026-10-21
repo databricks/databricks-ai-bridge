@@ -8,9 +8,6 @@ service without changing the public resource surface.
 
 from __future__ import annotations
 
-import configparser
-import os
-import pathlib
 import time
 from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import quote
@@ -106,35 +103,11 @@ def memory_entry_path(store: str, entry: str) -> str:
     return f"{memory_store_path(store)}/entries/{entry}"
 
 
-def _databricks_config_parser(
-    default_section: str = configparser.DEFAULTSECT,
-) -> configparser.ConfigParser:
-    """The parsed Databricks config file, or an empty parser on any problem (never raises).
-
-    expanduser: the SDK expands `~` in DATABRICKS_CONFIG_FILE; without it a tilde path reads
-    nothing. No interpolation: values are taken verbatim — a `%` must not raise at get-time.
-    """
-    parser = configparser.ConfigParser(interpolation=None, default_section=default_section)
-    try:
-        parser.read(
-            pathlib.Path(
-                os.getenv("DATABRICKS_CONFIG_FILE", str(pathlib.Path.home() / ".databrickscfg"))
-            ).expanduser()
-        )
-    except (OSError, configparser.Error):
-        pass
-    return parser
-
-
-def _profile_section(profile: str) -> dict[str, str]:
-    """`profile`'s own keys, as the SDK reads them: a named profile doesn't inherit [DEFAULT]."""
-    # With an unused fallback section, [DEFAULT] parses as an ordinary section like any other.
-    parser = _databricks_config_parser(default_section="\0no-fallback")
-    return dict(parser[profile]) if parser.has_section(profile) else {}
-
-
 def _profile_host(profile: str) -> Optional[str]:
-    return _profile_section(profile).get("host")
+    # Imported here so the runtime import of this module doesn't load the CLI's profile lookups.
+    from databricks_agentbricks.projects.profiles import profile_host
+
+    return profile_host(profile)
 
 
 def _bound_retry_timeout(client: WorkspaceClient) -> WorkspaceClient:
