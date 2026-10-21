@@ -255,8 +255,8 @@ bindings. A declaration does not confirm that the resource exists or that the de
 | Local onboarding checks | `agentbricks doctor .` | Offline; does not verify bindings or deployed resources. |
 | Agent Bricks apps in a workspace | `agentbricks -p <profile> deployments list` | Lists apps with the `agent-bricks-` prefix in the selected workspace, including other projects. |
 | App status and URL | `agentbricks -p <profile> deployments get agent-bricks-<name>` | Queries the selected workspace for the named app. |
-| Memory store IDs and details | `agentbricks -p <profile> memory stores list`, then `agentbricks -p <profile> memory stores get <resource-name>` | Workspace-wide; can include other projects' stores. Use the ID or resource name, not the display name. |
-| Session store names and details | `agentbricks -p <profile> sessions stores list`, then `agentbricks -p <profile> sessions stores get <name>` | Workspace-wide; can include other projects' stores. Use the store name. |
+| Memory store IDs and details | `agentbricks -p <profile> memory stores get <name>`, or `agentbricks -p <profile> memory stores list --name <part-of-name>` | Pass the display name from `agent.toml`, the ID, or the resource name. If several stores share a display name, `get` lists them; pass one resource name. `list` is workspace-wide and paged; `--name` and `--all` read every page. |
+| Session store names and details | `agentbricks -p <profile> sessions stores get <name>`, or `agentbricks -p <profile> sessions stores list --name <part-of-name>` | Pass the store name from `agent.toml`. `list` is workspace-wide and paged; `--name` and `--all` read every page. |
 
 Review each confirmation. Delete a store only after confirming that you own it and no other agent
 needs it, using the same profile and identifier used to inspect it.

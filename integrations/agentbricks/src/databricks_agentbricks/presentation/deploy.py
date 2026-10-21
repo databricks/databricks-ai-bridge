@@ -9,6 +9,7 @@ chooses each verb's `--output json` payload and human rendering; the separate
 from __future__ import annotations
 
 import pathlib
+import shlex
 from typing import Any, Optional
 
 import click
@@ -254,6 +255,20 @@ def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> Non
         (f"agentbricks deployments get {result.deployment}", "Check its status and URL"),
         (f"agentbricks deployments logs {result.deployment}", "Tail its logs"),
     ]
+    if result.memory_store:
+        steps.append(
+            (
+                f"agentbricks memory stores get {shlex.quote(result.memory_store)}",
+                "Look up the memory store",
+            )
+        )
+    if result.session_store:
+        steps.append(
+            (
+                f"agentbricks sessions stores get {shlex.quote(result.session_store)}",
+                "Look up the session store",
+            )
+        )
     if result.url:
         steps.insert(0, f"Open the deployed agent: {result.url}")
     if result.created_app_yaml:

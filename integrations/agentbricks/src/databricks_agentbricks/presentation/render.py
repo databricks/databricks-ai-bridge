@@ -15,6 +15,7 @@ from typing import Any, Callable, Iterable, Iterator, Literal, Optional, Sequenc
 import click
 from rich import box
 from rich.console import Console, Group, RenderableType
+from rich.measure import Measurement
 from rich.panel import Panel
 from rich.status import Status
 from rich.syntax import Syntax
@@ -274,13 +275,18 @@ def resource_table(
     rows: Iterable[Sequence[Any]],
     *,
     subtitle: Optional[str] = None,
+    footer: Optional[str] = None,
     con: Optional[Console] = None,
     no_wrap: Optional[Sequence[int]] = None,
 ) -> None:
     """Render a titled list table.
 
     `columns` is a sequence of (header, justify) where justify is left/right/center.
-    `no_wrap` column indexes are kept full-width; the rest narrow to fit the terminal.
+    `no_wrap` marks identifier columns, which are never cut off: piped output renders the table at
+    its full width so each row stays on one line (and greps cleanly), and a terminal wraps a
+    too-long identifier instead of ending it in an ellipsis. The other columns narrow to fit, on one
+    line.
+    `footer` replaces the trailing item count.
     """
     con = con or _stdout
     rows = list(rows)
@@ -293,25 +299,48 @@ def resource_table(
 
     # Dim, uppercase headers; columns size to content so they always line up.
     table = Table(box=box.SIMPLE_HEAD, expand=False, pad_edge=False, show_edge=False)
+    # Reserve each identifier column's full content width so Rich narrows the others instead, as
+    # long as the identifiers fit side by side; otherwise they fold onto the next line.
+    reserved = {
+        i: max([len(columns[i][0])] + [_cell_len(row[i]) for row in rows]) for i in no_wrap_cols
+    }
+    reserve = sum(reserved.values()) + 3 * len(columns) <= con.width
     for i, (header, justify) in enumerate(columns):
-        # Reserve a no_wrap column's full content width so Rich narrows the others instead.
-        min_width = (
-            max([len(header)] + [_cell_len(row[i]) for row in rows], default=0)
-            if i in no_wrap_cols
-            else None
-        )
         table.add_column(
             header.upper(),
             justify=justify,
             header_style=f"bold {DIM}",
-            no_wrap=i in no_wrap_cols,
-            min_width=min_width,
+            overflow="fold" if i in no_wrap_cols else "ellipsis",
+            # Next to identifier columns the others shorten on one line: wrapping a column narrowed
+            # to a few characters would spread each row over blank-looking lines.
+            no_wrap=bool(no_wrap_cols) and i not in no_wrap_cols,
+            min_width=reserved.get(i) if reserve else None,
         )
     for row in rows:
         table.add_row(*[_cell(v) for v in row])
-    con.print(table)
+    if no_wrap_cols and not con.is_terminal:
+        # Piped output has no screen to fit: print at the table's natural width. `print(width=)`
+        # can't exceed the console's width, so widen the console itself for this one table.
+        natural = Measurement.get(con, con.options.update_width(1_000_000), table).maximum
+        saved_width = con._width
+        con.width = max(con.width, natural)
+        try:
+            con.print(table)
+        finally:
+            con._width = saved_width
+    else:
+        con.print(table)
 
-    con.print(Text(f"{len(rows)} item{'s' if len(rows) != 1 else ''}", style=DIM))
+    if footer is None:
+        footer = f"{len(rows)} item{'s' if len(rows) != 1 else ''}"
+    con.print(Text(footer, style=DIM))
+
+
+def more_pages_footer(shown: int, next_page_token: Optional[str]) -> Optional[str]:
+    """The stores-list footer saying another page exists and how to get it, or None on the last."""
+    if not next_page_token:
+        return None
+    return f"{shown} shown; more available: --page-token {next_page_token}, or use --all / --name"
 
 
 def _cell_len(value: Any) -> int:
