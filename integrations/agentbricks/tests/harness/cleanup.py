@@ -171,27 +171,34 @@ def _list_all(cli: AgentbricksCli, kind: str, key: str) -> Iterator[dict[str, An
 def _delete_leaked_apps(
     cli: AgentbricksCli, workspace: Workspace, run_id: str, output: pathlib.Path
 ) -> list[str]:
-    """Delete Apps whose per-test cleanup failed or never ran.
+    """Delete Apps whose per-test cleanup failed or never ran, then wait until every run App is gone.
 
-    `deployments delete` waits until the App is gone and exits non-zero if it can't confirm that.
+    `deployments delete` exits non-zero when it can't confirm the App is gone, e.g. still deleting
+    after its wait, which a teardown only warns about; the wait is what decides success.
     """
     prefix = _app_prefix(run_id)
-    failures: list[str] = []
+    leaked: list[str] = []
     for deployment in json.loads(cli.run("--output json deployments list").stdout or "[]"):
         name = str(deployment.get("name") or "")
         if not name.startswith(prefix):
             continue
         log(f"deleting leaked App {name}")
+        leaked.append(name)
         # The principal stops resolving once the App is gone, and the later steps need it.
         record_app_identity(output, name, app_identity(cli, workspace, name))
-        result = cli.run(
-            f"deployments delete {name} --delete-source --yes", timeout=1500, check=False
-        )
-        if result.returncode == 0 or not_found(result):
+        try:
+            result = cli.run(
+                f"deployments delete {name} --delete-source --yes", timeout=1500, check=False
+            )
+        except E2EError as exc:  # timed out; the wait below decides
+            log(f"cleanup warning | {name} | {exc}")
             continue
-        # A non-zero exit can still leave the App deleting, e.g. after a teardown's delete, or
-        # gone with only its folder failing, which the source-folder sweep retries.
-        log(f"cleanup warning | {name} | {(result.stderr or result.stdout).strip()}")
+        if result.returncode != 0 and not not_found(result):
+            log(f"cleanup warning | {name} | {(result.stderr or result.stdout).strip()}")
+    # Teardowns deleted the rest of the run's Apps, which apps.jsonl names. Their roles are only
+    # safe to delete once they're gone.
+    failures: list[str] = []
+    for name in sorted(set(leaked) | set(recorded_app_identities(output))):
         try:
             _wait_until_app_gone(cli, name)
         except Exception as exc:

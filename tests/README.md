@@ -330,8 +330,6 @@ See `integrations/agentbricks/tests/suites/README.md` for the options and how a 
 | `OBO_TEST_CLIENT_SECRET` | OBO | Second SP (end-user) client secret |
 | `OBO_TEST_SERVING_ENDPOINT` | OBO | Pre-deployed Model Serving endpoint |
 | `OBO_TEST_APP_NAME` | OBO | Pre-deployed Databricks App name |
-| `AGENTBRICKS_INTEGRATION_WAREHOUSE_ID` | Agent Bricks (optional) | SQL warehouse to use instead of auto-discovering one |
-| `AGENTBRICKS_INTEGRATION_PREPROVISIONED_APP_CATALOG_ACCESS` | Agent Bricks (optional) | Set to `1` when App identities already have `USE CATALOG` |
 | `AGENTBRICKS_WHEEL` | Agent Bricks (optional) | Prebuilt databricks-agentbricks wheel (else one is built during the test) |
 
 ---
