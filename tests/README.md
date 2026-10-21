@@ -42,7 +42,7 @@ The runner executes 8 parallel jobs nightly (and on-demand via `workflow_dispatc
 | `fmapi-tool-calling-tests` | 60 min | `RUN_FMAPI_TOOL_CALLING_TESTS` |
 | `lakebase-tests` | 20 min | `LAKEBASE_INTEGRATION_TESTS` |
 | `obo-credential-tests` | 30 min | `RUN_OBO_INTEGRATION_TESTS` |
-| `agentbricks-tests` | 75 min | `RUN_AGENTBRICKS_INTEGRATION_TESTS` |
+| `agentbricks-tests` | 75 min | *(always runs)* |
 | `obo-redeploy-serving` *(weekly)* | -- | *(separate workflow)* |
 
 If any job fails, an alert fires identifying which jobs broke and linking to the run.
@@ -219,21 +219,18 @@ The fundamental assertion: when SP-A calls the agent, it sees SP-A's identity; w
 
 ### 7. Agent Bricks (CLI + AgentKit runtime)
 
-**What the bridge provides:** `databricks-agentbricks` ships the `agentbricks` CLI and AgentKit SDK for scaffolding, running, and deploying custom agents. The integration test covers a full deploy-and-invoke journey.
+**What the bridge provides:** `databricks-agentbricks` ships the `agentbricks` CLI and AgentKit SDK for scaffolding, running, and deploying custom agents. The E2E suites cover the deploy-and-invoke journeys.
 
-**Test file:**
+**Test files:**
 
 | Layer | File | What it tests |
 |-------|------|---------------|
-| Agent Bricks | `integrations/agentbricks/tests/integration_tests/test_tool_matrix.py` | Drives `integrations/agentbricks/tests/e2e/tool_matrix.py`: scaffolds LangGraph agents with `agentbricks tools` and a hand-edited `agent.toml`, runs each under `agentbricks dev` and on Databricks Apps, then invokes the sandbox, web-search MCP, a local Python tool, and a temporary UC function. All 16 evidence rows must pass. The CLI and templates come from the built wheel. CI pins the generated Apps' Agent Bricks and LangChain dependencies to the checked-out bridge commit. |
+| Agent Bricks | `integrations/agentbricks/tests/suites/` | One happy-path scenario per command group (`deploy`, `dev`, `tools`, `memory`, `sessions`, tracing), each running the real CLI against a workspace and invoking the agent it produces. The private integration runner runs them nightly. See `integrations/agentbricks/tests/suites/README.md` for how to run them and how they clean up. |
 
 **Key regressions these tests guard against:**
 - A deployed agent that won't boot — durable-runtime store resolution against real Lakebase (the class of bug that shipped in #550)
 - Tool wiring that works under `agentbricks dev` but breaks once deployed to Apps, or vice versa
-- CLI-authored and direct-`agent.toml` agents diverging at runtime
 - `system.ai.*` tools or UC-function invocation breaking under platform changes
-
-**Infrastructure:** Databricks Apps enabled with the CI service principal able to create and delete apps; `system.ai.sandbox` and `system.ai.web_search`; a SQL warehouse; and a scratch UC schema (`AGENTBRICKS_INTEGRATION_UC_SCHEMA`) where the SP can create a temporary function. The test records its own session and memory stores, then best-effort deletes those stores, each App and Runtime Store, matching App-SP Lakebase roles, and the UC function after success or failure. Role deletion requires permission on the shared Lakebase branch; cleanup warnings identify any resources needing manual attention. The wrapper leaves a bounded grace period for cleanup on timeout and names failed matrix cells in its error output.
 
 ---
 
@@ -299,19 +296,16 @@ RUN_MCP_INTEGRATION_TESTS=1 uv run python -m pytest tests/integration_tests/test
 
 ### Running Agent Bricks Integration Tests
 
-The suite deploys real Databricks Apps, so it needs a workspace with Apps enabled, `system.ai.*`
-tools, a SQL warehouse, and a scratch UC schema the service principal can create a function in:
+The Agent Bricks E2E suites deploy real Databricks Apps; they take their workspace from pytest flags
+rather than a gate variable:
 
 ```bash
 cd integrations/agentbricks
-RUN_AGENTBRICKS_INTEGRATION_TESTS=1 AGENTBRICKS_INTEGRATION_UC_SCHEMA=catalog.schema \
-  uv run --group tests python -m pytest tests/integration_tests/ -v
+uv run --group tests pytest tests/suites -n 6 --dist loadgroup \
+  --databricks-profile <profile> --catalog <catalog>
 ```
 
-The runner workflow accepts `agentbricks_bridge_ref` (default `main`), resolves it to a commit SHA,
-and sets `AGENTBRICKS_INTEGRATION_BRIDGE_SHA`. This adds Git source overrides to each generated
-App's `pyproject.toml` for `databricks-agentbricks` and `databricks-langchain`, so dev and deploy use
-the same bridge revision. A local run without this variable uses released scaffold dependencies.
+See `integrations/agentbricks/tests/suites/README.md` for the options and how a run cleans up.
 
 ### Environment Variables Reference
 
@@ -336,11 +330,6 @@ the same bridge revision. A local run without this variable uses released scaffo
 | `OBO_TEST_CLIENT_SECRET` | OBO | Second SP (end-user) client secret |
 | `OBO_TEST_SERVING_ENDPOINT` | OBO | Pre-deployed Model Serving endpoint |
 | `OBO_TEST_APP_NAME` | OBO | Pre-deployed Databricks App name |
-| `RUN_AGENTBRICKS_INTEGRATION_TESTS` | Agent Bricks | Set to `1` to enable |
-| `AGENTBRICKS_INTEGRATION_UC_SCHEMA` | Agent Bricks | Two-part `catalog.schema` for the scratch UC function |
-| `AGENTBRICKS_INTEGRATION_BRIDGE_SHA` | Agent Bricks (optional) | 40-character checked-out bridge commit to use for generated App dependencies |
-| `AGENTBRICKS_INTEGRATION_WAREHOUSE_ID` | Agent Bricks (optional) | SQL warehouse to use instead of auto-discovering one |
-| `AGENTBRICKS_INTEGRATION_PREPROVISIONED_APP_CATALOG_ACCESS` | Agent Bricks (optional) | Set to `1` when App identities already have `USE CATALOG` |
 | `AGENTBRICKS_WHEEL` | Agent Bricks (optional) | Prebuilt databricks-agentbricks wheel (else one is built during the test) |
 
 ---
