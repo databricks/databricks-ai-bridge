@@ -25,8 +25,9 @@ from __future__ import annotations
 
 import dataclasses
 import pathlib
+import time
 from dataclasses import dataclass, field
-from typing import Any, Literal, Optional
+from typing import Any, Callable, Literal, Optional
 
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
 from databricks_agentbricks.clients.apps_client import AppsClient
@@ -37,13 +38,15 @@ from databricks_agentbricks.projects.app_manifest import AppManifest
 from databricks_agentbricks.projects.config import require_managed_tool_support
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.projects.types import AgentServer
-from databricks_agentbricks.reporting import Reporter
+from databricks_agentbricks.reporting import Heartbeat, Reporter
+from databricks_agentbricks.services.deployment import deploy_state
 from databricks_agentbricks.services.deployment.app_provisioner import (
     AppProvisioner,
     recorded_source_code_path,
     source_delete_command,
 )
 from databricks_agentbricks.services.deployment.config import _PIP_INDEX_ENVS
+from databricks_agentbricks.services.deployment.deploy_state import DeployStateTracker
 from databricks_agentbricks.services.deployment.model_binding_provisioner import (
     ModelBindingProvisioner,
 )
@@ -62,6 +65,15 @@ from databricks_agentbricks.services.deployment.provisioners import (
 )
 from databricks_agentbricks.services.deployment.tool_access_provisioner import ToolAccessProvisioner
 from databricks_agentkit.runtime.tool_manifest import MODEL_SERVICE_ENV_PREFIX
+
+
+def _error_text(exc: BaseException) -> str:
+    """How a failed deploy's error reads in its state file: the message, then any hint."""
+    if isinstance(exc, AgentCliError):
+        return f"{exc.message}\n{exc.hint}" if exc.hint else exc.message
+    if isinstance(exc, KeyboardInterrupt):
+        return "deploy interrupted"
+    return str(exc) or exc.__class__.__name__
 
 
 def _field(obj: Any, name: str) -> Any:
@@ -175,6 +187,46 @@ class DeleteResult:
 
 
 @dataclass(frozen=True)
+class WaitResult:
+    """Where a deploy stood when `deployments wait` returned, as raw facts.
+
+    ``status`` is ``running`` (still deploying at the timeout), ``succeeded``, or ``failed``.
+    ``log_tail`` holds the end of a failed background deploy's log, or the App's own status message
+    when the outcome came from the workspace rather than a local deploy record; ``log`` is that
+    log's path in the first case.
+    """
+
+    deployment: str
+    status: str
+    phase: str
+    elapsed_s: int
+    url: Optional[str]
+    error: Optional[str]
+    log_tail: list[str]
+    uses_runtime_api: bool
+    log: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class _WaitSnapshot:
+    """One poll of a deploy's progress: its status, phase, and when that phase began."""
+
+    status: str
+    phase: str
+    phase_started: float
+    elapsed_s: float
+    url: Optional[str] = None
+    error: Optional[str] = None
+    log_tail: tuple[str, ...] = ()
+    log: Optional[str] = None
+
+
+# How often `deployments wait` re-reads a local deploy record, and the App when there is none.
+_LOCAL_POLL_S = 2.0
+_SERVER_POLL_S = 5.0
+
+
+@dataclass(frozen=True)
 class _ResolvedDeployment:
     """Locally resolved project and deployment identity, before workspace mutations."""
 
@@ -184,7 +236,7 @@ class _ResolvedDeployment:
 
 
 @dataclass(frozen=True)
-class _PreparedDeployment:
+class PreparedDeployment:
     """Deployment facts after tool/auth preflight has planned any request-user App."""
 
     agent_project: Optional[AgentProject]
@@ -213,6 +265,9 @@ class DeployService:
         tool_access_provisioner: ToolAccessProvisioner,
         model_binding_provisioner: ModelBindingProvisioner,
         reporter: Reporter,
+        state_tracker: Optional[DeployStateTracker] = None,
+        clock: Callable[[], float] = time.time,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._project_resolver = project_resolver
         self._apps_client = apps_client
@@ -225,6 +280,9 @@ class DeployService:
         self._tool_access_provisioner = tool_access_provisioner
         self._model_binding_provisioner = model_binding_provisioner
         self._reporter = reporter
+        self._state_tracker = state_tracker
+        self._clock = clock
+        self._sleep = sleep
 
     # --- lifecycle verbs ----------------------------------------------------
 
@@ -334,7 +392,110 @@ class DeployService:
             return "failed", exc.message
         return ("deleted" if deleted else "already_gone"), None
 
+    # --- wait ---------------------------------------------------------------
+
+    def wait(self, name: Optional[str], source_dir: pathlib.Path, timeout_s: float) -> WaitResult:
+        """Wait up to ``timeout_s`` for a deploy to finish, reporting its phases as it goes.
+
+        NAME defaults to the deployment recorded in agent.toml. A deploy started from
+        ``source_dir`` (foreground or ``--no-wait``) left a local record, which is followed;
+        otherwise the App's own state in the workspace decides. Phase changes and elapsed-time
+        heartbeats go through the reporter's notices (stderr). Never raises for a failed or
+        unfinished deploy: the result says which it is.
+        """
+        project = self._project_resolver.load(source_dir)
+        app = DeploymentName(
+            _prefixed_name(self._project_resolver.resolve_deployment_name(project, name))
+        )
+        uses_runtime_api = bool(project and project.server == AgentServer.AGENTBRICKS)
+        path = deploy_state.state_path(source_dir, app)
+        local = deploy_state.read_state(path) is not None
+        started = self._clock()
+        deadline = started + timeout_s
+        beat: Optional[Heartbeat] = None
+        while True:
+            now = self._clock()
+            snap = (
+                self._local_snapshot(path, now)
+                if local
+                else self._server_snapshot(app, now, started, beat)
+            )
+            if snap.status == deploy_state.RUNNING:
+                if beat is None or snap.phase != beat.phase:
+                    self._reporter.note(f"• {snap.phase}…")
+                    beat = Heartbeat(snap.phase, start=snap.phase_started, now=now)
+                elif line := beat.tick(now):
+                    self._reporter.note(line)
+            if snap.status != deploy_state.RUNNING or now >= deadline:
+                return WaitResult(
+                    deployment=app,
+                    status=snap.status,
+                    phase=snap.phase,
+                    elapsed_s=int(snap.elapsed_s),
+                    url=snap.url,
+                    error=snap.error,
+                    log_tail=list(snap.log_tail),
+                    uses_runtime_api=uses_runtime_api,
+                    log=snap.log,
+                )
+            poll = _LOCAL_POLL_S if local else _SERVER_POLL_S
+            self._sleep(max(0.0, min(poll, deadline - now)))
+
+    def _local_snapshot(self, path: pathlib.Path, now: float) -> _WaitSnapshot:
+        """Read the local deploy record; a vanished or crashed deploy counts as failed."""
+        state = deploy_state.read_state(path) or {
+            "status": deploy_state.FAILED,
+            "error": deploy_state.EXITED_UNEXPECTEDLY,
+        }
+        state = deploy_state.resolve_state(state, now=now)
+        status = str(state.get("status") or deploy_state.FAILED)
+        result = state.get("result")
+        log = state.get("log")
+        return _WaitSnapshot(
+            status=status,
+            phase=str(state.get("phase") or deploy_state.STARTING_PHASE),
+            phase_started=now - deploy_state.seconds_since(state.get("phase_started_at"), now),
+            elapsed_s=deploy_state.seconds_since(state.get("started_at"), now),
+            url=result.get("url") if isinstance(result, dict) else None,
+            error=state.get("error"),
+            log_tail=tuple(deploy_state.log_tail(pathlib.Path(log)))
+            if status == deploy_state.FAILED and log
+            else (),
+            log=str(log) if log else None,
+        )
+
+    def _server_snapshot(
+        self, app: DeploymentName, now: float, started: float, beat: Optional[Heartbeat]
+    ) -> _WaitSnapshot:
+        """Classify the App's state; its phases are timed from when this wait first saw them."""
+        outcome = deploy_state.classify_app(app, self._apps_client.find(app))
+        same_phase = beat is not None and outcome.phase == beat.phase
+        return _WaitSnapshot(
+            status=outcome.status,
+            phase=outcome.phase,
+            phase_started=beat.start if beat is not None and same_phase else now,
+            elapsed_s=now - started,
+            url=outcome.url,
+            error=outcome.error,
+            log_tail=(outcome.message,)
+            if outcome.status == deploy_state.FAILED and outcome.message
+            else (),
+        )
+
     # --- deploy -------------------------------------------------------------
+
+    def check_auth(self) -> None:
+        """Fail now, rather than in a background deploy, when the profile can't authenticate."""
+        try:
+            _ = self._api_client_provider.get().current_user
+        except AgentCliError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - any auth/transport failure reads the same way
+            raise AgentCliError(
+                "Could not authenticate with the Databricks workspace.",
+                hint=f"{exc}\nRun `agentbricks login --profile <profile>` (or pass --profile), "
+                "then rerun the command.",
+            ) from exc
 
     def deploy(self, request: DeployRequest) -> DeployResult:
         """Deploy an agent by coordinating its project, resources, App, rollout, and grants.
@@ -357,7 +518,23 @@ class DeployService:
         own individual resource operations and return typed results for later phases.
         """
         source_dir = pathlib.Path(request.source)
-        prepared = self._prepare_deployment(source_dir, request)
+        prepared = self.prepare(request)
+        tracker = self._state_tracker
+        if tracker is None:
+            return self._roll_out(source_dir, request, prepared)
+        tracker.start(source_dir, prepared.name)
+        try:
+            result = self._roll_out(source_dir, request, prepared)
+        except BaseException as exc:
+            tracker.failed(_error_text(exc))
+            raise
+        tracker.succeeded(result)
+        return result
+
+    def _roll_out(
+        self, source_dir: pathlib.Path, request: DeployRequest, prepared: PreparedDeployment
+    ) -> DeployResult:
+        """Everything after :meth:`prepare`: resources, the App, the rollout, and the grants."""
         name = prepared.name
         instance_count = request.instance_count
         memory_store_name, session_store_name, experiment_name = (
@@ -517,11 +694,22 @@ class DeployService:
             name=DeploymentName(name),
         )
 
-    def _prepare_deployment(
-        self, source_dir: pathlib.Path, request: DeployRequest
-    ) -> _PreparedDeployment:
-        """Validate the project and plan request-user auth before resource provisioning."""
+    def prepare(self, request: DeployRequest) -> PreparedDeployment:
+        """Validate the project and plan request-user auth before resource provisioning.
+
+        These are the quick, synchronous checks `deploy --no-wait` runs in the foreground. A deploy
+        of the same App still running from this project is refused before anything changes.
+        """
+        source_dir = pathlib.Path(request.source)
         resolved = self._resolve_deployment(source_dir, request.name)
+        running = deploy_state.running_deploy(
+            deploy_state.state_path(source_dir, resolved.name), now=self._clock()
+        )
+        if running is not None:
+            raise AgentCliError(
+                f"A deploy of {resolved.name} is already running (pid {running.get('pid')}).",
+                hint=f"run `agentbricks deployments wait {resolved.name}`",
+            )
         agent_project = resolved.agent_project
         if agent_project is not None and agent_project.tools:
             require_managed_tool_support(source_dir)
@@ -552,7 +740,7 @@ class DeployService:
         # Persist the base name so a later `agentbricks deploy` (no NAME) resolves to the same app.
         if agent_project is not None and agent_project.set_deployment_name(resolved.base_name):
             agent_project.write()
-        return _PreparedDeployment(
+        return PreparedDeployment(
             agent_project=agent_project,
             name=resolved.name,
             auth_plan=auth,

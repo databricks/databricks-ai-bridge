@@ -11,13 +11,15 @@ from __future__ import annotations
 import pathlib
 from typing import Any, Optional
 
+import click
 from rich.text import Text
 
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.endpoint import print_agent_invoke_command
 from databricks_agentbricks.presentation.render import field
 from databricks_agentbricks.presentation.tracing import TRACING_BIND_COMMAND, experiment_url
-from databricks_agentbricks.services.deploy_service import DeleteResult, DeployResult
+from databricks_agentbricks.reporting import format_elapsed
+from databricks_agentbricks.services.deploy_service import DeleteResult, DeployResult, WaitResult
 from databricks_agentbricks.services.deployment.app_provisioner import (
     APP_DELETE_TIMEOUT_S,
     source_delete_command,
@@ -152,55 +154,58 @@ def _print_source_delete_command(intro: str, path: str) -> None:
     con.print(Text(source_delete_command(path), style=render.COMMAND), soft_wrap=True)
 
 
+def deploy_result_payload(result: DeployResult) -> dict[str, Any]:
+    """The `--output json` object for a finished deploy, also recorded in its local state file."""
+    store_grant_attempted = result.memory_grant_attempted or result.session_grant_attempted
+    store_grant_error = result.session_grant_error or result.memory_grant_error
+    return {
+        "deployment": result.deployment,
+        "url": result.url,
+        "workspace_path": result.workspace_path,
+        "env": result.env,
+        "memory_store": result.memory_store,
+        "session_store": result.session_store,
+        "trace_experiment_id": result.trace_experiment_id,
+        "uc_trace_tables": result.uc_trace_tables,
+        "trace_setup_error": result.trace_setup_error,
+        "trace_grant": None
+        if not result.trace_experiment_id
+        else ("granted" if result.trace_grant_error is None else "failed"),
+        "trace_grant_error": result.trace_grant_error,
+        # TODO(vNext): add a versioned per-store schema before exposing separate memory and
+        # session grant fields. Preserve the established machine contract until then.
+        "store_grant": "skipped"
+        if not store_grant_attempted
+        else ("granted" if store_grant_error is None else "failed"),
+        "store_grant_error": store_grant_error,
+        "model_services": result.model_services,
+        "model_service_grant": None
+        if not result.model_services
+        else ("granted" if result.model_service_grant_error is None else "failed"),
+        "model_service_grant_error": result.model_service_grant_error,
+        "prompts": result.prompts,
+        "prompt_grant": None
+        if not result.prompts
+        else ("granted" if result.prompt_grant_error is None else "failed"),
+        "prompt_grant_error": result.prompt_grant_error,
+        "tool_access": None
+        if result.tool_access is None
+        else {
+            "app_resources": result.tool_access.app_resources,
+            "uc_grants": result.tool_access.uc_grants,
+            "workspace_grants": result.tool_access.workspace_grants,
+            "direct_resources_only": True,
+            "uc_workspace_grants_additive": bool(
+                result.tool_access.uc_grants or result.tool_access.workspace_grants
+            ),
+        },
+    }
+
+
 def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> None:
     """Report a finished deploy: the machine payload for `--output json`, else the success panel."""
     if output == "json":
-        store_grant_attempted = result.memory_grant_attempted or result.session_grant_attempted
-        store_grant_error = result.session_grant_error or result.memory_grant_error
-        render.emit_json(
-            {
-                "deployment": result.deployment,
-                "url": result.url,
-                "workspace_path": result.workspace_path,
-                "env": result.env,
-                "memory_store": result.memory_store,
-                "session_store": result.session_store,
-                "trace_experiment_id": result.trace_experiment_id,
-                "uc_trace_tables": result.uc_trace_tables,
-                "trace_setup_error": result.trace_setup_error,
-                "trace_grant": None
-                if not result.trace_experiment_id
-                else ("granted" if result.trace_grant_error is None else "failed"),
-                "trace_grant_error": result.trace_grant_error,
-                # TODO(vNext): add a versioned per-store schema before exposing separate memory and
-                # session grant fields. Preserve the established machine contract until then.
-                "store_grant": "skipped"
-                if not store_grant_attempted
-                else ("granted" if store_grant_error is None else "failed"),
-                "store_grant_error": store_grant_error,
-                "model_services": result.model_services,
-                "model_service_grant": None
-                if not result.model_services
-                else ("granted" if result.model_service_grant_error is None else "failed"),
-                "model_service_grant_error": result.model_service_grant_error,
-                "prompts": result.prompts,
-                "prompt_grant": None
-                if not result.prompts
-                else ("granted" if result.prompt_grant_error is None else "failed"),
-                "prompt_grant_error": result.prompt_grant_error,
-                "tool_access": None
-                if result.tool_access is None
-                else {
-                    "app_resources": result.tool_access.app_resources,
-                    "uc_grants": result.tool_access.uc_grants,
-                    "workspace_grants": result.tool_access.workspace_grants,
-                    "direct_resources_only": True,
-                    "uc_workspace_grants_additive": bool(
-                        result.tool_access.uc_grants or result.tool_access.workspace_grants
-                    ),
-                },
-            }
-        )
+        render.emit_json(deploy_result_payload(result))
         return
 
     provisioned: dict[str, Any] = {}
@@ -329,3 +334,66 @@ def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> Non
         next_steps=steps,
     )
     print_agent_invoke_command(result.deployment, uses_runtime_api=result.uses_runtime_api)
+
+
+def present_background_started(
+    name: str, *, log: pathlib.Path, state_file: pathlib.Path, output: Optional[str]
+) -> None:
+    """Confirm a `deploy --no-wait` handoff and point at `deployments wait`."""
+    if output == "json":
+        render.emit_json(
+            {
+                "deployment": name,
+                "status": "started",
+                "log": str(log),
+                "state_file": str(state_file),
+            }
+        )
+        return
+    click.echo(
+        f"Deploy of {name} started in the background. Next: agentbricks deployments wait {name}"
+    )
+
+
+def present_wait_result(result: WaitResult, *, output: Optional[str]) -> None:
+    """Report where a waited-on deploy stands; the command maps the status to its exit code."""
+    if output == "json":
+        render.emit_json(
+            {
+                "deployment": result.deployment,
+                "status": result.status,
+                "phase": result.phase,
+                "elapsed_s": result.elapsed_s,
+                "url": result.url,
+                "error": result.error,
+                "log_tail": result.log_tail,
+            }
+        )
+        return
+    if result.status == "succeeded":
+        render.success(
+            f"Deployed agent '{result.deployment}'",
+            fields={"URL": result.url} if result.url else None,
+            next_steps=[(f"agentbricks deployments logs {result.deployment}", "Tail its logs")],
+        )
+        print_agent_invoke_command(result.deployment, uses_runtime_api=result.uses_runtime_api)
+        return
+    if result.status == "failed":
+        err = render.stderr_console()
+        message, _, detail = (result.error or "The deploy failed.").partition("\n")
+        render.diagnostic(
+            "error",
+            message,
+            help=detail or "fix the cause, then re-run `agentbricks deploy`",
+            con=err,
+        )
+        if result.log_tail:
+            source = f"Last lines of {result.log}" if result.log else "App status"
+            err.print(Text(f"{source}:", style="dim"), soft_wrap=True)
+        for line in result.log_tail:
+            err.print(Text(f"  {line}"), soft_wrap=True)
+        return
+    click.echo(
+        f"still deploying: {result.phase}, {format_elapsed(result.elapsed_s)} elapsed — "
+        "run the same command again"
+    )

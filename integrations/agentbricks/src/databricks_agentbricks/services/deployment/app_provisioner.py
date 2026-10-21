@@ -179,22 +179,16 @@ class AppProvisioner:
         if auth_plan.scope_update is not None:
             if auth_plan.scope_update.name != name:
                 raise AgentCliError("App auth plan does not match the deployment being prepared.")
-            with self._reporter.progress(
-                "Configuring the agent's request-user access (this can take a few minutes)…"
-            ):
+            with self._reporter.progress("Configuring the agent's request-user access…"):
                 self._reconcile_scoped_app(auth_plan.scope_update, instance_count)
         elif not deployment_exists:
-            with self._reporter.progress(
-                "Creating the agent and starting its compute (this can take a few minutes)…"
-            ):
+            with self._reporter.progress("Creating the agent and starting its compute…"):
                 out = self._apps_client.create(name, instance_count)
             self._note_cli_output(out)
         elif instance_count is not None:
             self._note_cli_output(self._apps_client.create_update_instances(name, instance_count))
         # `apps deploy` requires ACTIVE compute, whether the App is new or was previously stopped.
-        with self._reporter.progress(
-            "Waiting for agent compute to start (this can take a few minutes)…"
-        ):
+        with self._reporter.progress("Waiting for agent compute to start…"):
             self._apps_client.wait_for_active(name)
 
     def _note_cli_output(self, out: str) -> None:
@@ -268,5 +262,7 @@ class AppProvisioner:
         Distinct from :meth:`AppsClient.deploy`, which is the single ``databricks apps deploy``
         call this drives once the source is synced.
         """
-        self._apps_client.sync_source(ctx.project.name, ctx.project.source_dir, workspace_path)
-        self._apps_client.deploy(ctx.project.name, workspace_path)
+        with self._reporter.progress("Uploading the agent source…"):
+            self._apps_client.sync_source(ctx.project.name, ctx.project.source_dir, workspace_path)
+        with self._reporter.progress("Deploying the agent source…"):
+            self._apps_client.deploy(ctx.project.name, workspace_path)

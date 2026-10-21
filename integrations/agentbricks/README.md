@@ -36,7 +36,7 @@ invocation protocol to design yourself. Bring your own agent, or start from a te
   up (detailed under [Agent tools](#agent-tools)).
 - **`agentbricks deploy`** - provisions the bound stores, grants the app's service principal access to
   them, provisions the durable-runtime database when durability is on, configures tracing, and rolls
-  out the app. `agentbricks deployments` covers the lifecycle (list, get, logs, start, stop, delete).
+  out the app. `agentbricks deployments` covers the lifecycle (list, get, wait, logs, start, stop, delete).
 - **`agentbricks dev`** - runs your agent from the same manifest the deployment uses, so local behavior
   matches what ships.
 
@@ -169,6 +169,26 @@ local runtime so local behavior matches a deployment.
 stores declared in `agent.toml`, and grants the app's service principal access to the stores and
 direct App-auth tool resources declared there. Use `agentbricks deployments list` to find deployed
 apps, and `agentbricks deployments get agent-bricks-my-agent` to print an app's URL and status.
+
+### Deploying from a coding agent
+
+A first deploy takes ~3 min (mostly starting app compute); redeploys are faster. Either run
+`agentbricks deploy` in the foreground with a long command timeout (for example, Claude Code's Bash
+`timeout: 600000`), or start it in the background and wait on it:
+
+```sh
+agentbricks deploy my-agent --no-wait            # quick checks, then deploys in the background
+agentbricks deployments wait agent-bricks-my-agent
+```
+
+`deployments wait` returns within 100 seconds (`--timeout`). Exit 0 means the agent is deployed and
+running, and it prints the URL; exit 1 means the deploy failed, and it prints the error and the end
+of the deploy log; exit 75 means it is still deploying, so run the same command again. Don't poll
+with `sleep`. Progress lines with the elapsed time go to stderr, also under `-o json`, whose stdout
+is a single JSON document. A second `deploy` of the same app is refused while one is still running
+from the project; the deploy's state and background log are in `.agentbricks/deploy-<app>.json` and
+`.agentbricks/deploy-<app>.log`. If the App is busy with another operation, `deploy` retries for
+about two minutes before failing.
 
 `agentbricks init` declares default memory and session stores in `agent.toml`, so the deployed agent has
 long-term memory and durable conversation history. It creates `<name>-<6-letter-token>-memory` and
@@ -626,8 +646,10 @@ agentbricks [-p <profile>] [-o text|json]
     bind       PROMPT [--key KEY] [--source PATH]
     unbind     KEY [--source PATH]
     list       [--source PATH]
-  deploy       [<name>] [--source PATH] [--instances N]
-  deployments  list | get | logs | start | stop | delete
+  deploy       [<name>] [--source PATH] [--instances N] [--no-wait]
+  deployments
+    wait       [<name>] [--timeout SECONDS] [--source PATH]
+    list | get | logs | start | stop | delete
   endpoint
     invoke      [APP] --path PATH [--url URL] [--json JSON] [--sse]
 ```
