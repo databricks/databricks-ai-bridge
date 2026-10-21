@@ -39,6 +39,14 @@ from databricks_agentbricks.projects.types import (
     parse_framework,
     parse_server,
 )
+from databricks_agentbricks.services.deployment.names import (
+    _DEPLOYMENT_PREFIX,
+    _MAX_DEPLOYMENT_NAME_LEN,
+    _prefixed_name,
+    base_name_problem,
+    fit_base_name,
+    name_budget_hint,
+)
 from databricks_agentbricks.skills import SKILL_DISCOVERY_ROOTS, install_workflow_skill
 
 # Templates ship inside this package (databricks_agentbricks/templates/), so `agentbricks init` always copies
@@ -146,6 +154,45 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
     return True
 
 
+def _scaffold_token() -> str:
+    """A per-scaffold token shared by the default stores, tracing experiment, and a shortened app name."""
+    return "".join(secrets.choice(string.ascii_lowercase) for _ in range(6))
+
+
+def _validate_name(name: Optional[str], directory: Optional[str], existing: bool) -> None:
+    """Reject a --name that can't deploy, before init writes anything."""
+    if name is None:
+        return
+    problem = base_name_problem(name)
+    if problem is None:
+        return
+    command = ["agentbricks", "init", "--name", fit_base_name(name)]
+    if existing:
+        command.append("--existing")
+    if directory:
+        command.append(directory)
+    raise AgentCliError(
+        f"Deployment name {problem}.",
+        hint=name_budget_hint(shlex.join(command)),
+    )
+
+
+def _deployment_name_note(project_name: str, deployment_name: str, truncated: bool) -> str:
+    """The `Deploy name` field: the recorded name, plus why init changed the directory name."""
+    if not truncated:
+        return deployment_name
+    if len(_prefixed_name(project_name)) > _MAX_DEPLOYMENT_NAME_LEN:
+        reason = (
+            f"'{_DEPLOYMENT_PREFIX}' + '{project_name}' would exceed the "
+            f"{_MAX_DEPLOYMENT_NAME_LEN}-character Databricks Apps limit"
+        )
+    elif base_name_problem(project_name):
+        reason = f"'{project_name}' is not a valid Databricks Apps name"
+    else:
+        reason = f"deploy adds the '{_DEPLOYMENT_PREFIX}' prefix"
+    return f"{deployment_name} ({reason}; change it with `agentbricks deploy <name>`)"
+
+
 def _migration_paths(dest: pathlib.Path, target: pathlib.Path) -> tuple[pathlib.Path, ...]:
     """`target` plus every directory under `dest` that Agent Bricks would have to create to reach it."""
     parts = target.relative_to(dest).parts
@@ -198,6 +245,7 @@ def _prepare_migration(
     profile: Optional[str],
     memory_store: Optional[str],
     session_store: Optional[str],
+    name: Optional[str],
 ) -> None:
     """Prepare a reference project and migration instructions without changing the application."""
     if not dest.is_dir():
@@ -231,14 +279,19 @@ def _prepare_migration(
         _copy_packaged_template(template.agentbricks_server, reference, overlays)
         install_workflow_skill(reference)
         project_name = dest.resolve().name
-        token = "".join(secrets.choice(string.ascii_lowercase) for _ in range(6))
-        AgentProject.create(
+        token = _scaffold_token()
+        deployment_name = name or fit_base_name(project_name, token)
+        truncated = name is None and deployment_name != project_name
+        resource_name = name or project_name
+        reference_project = AgentProject.create(
             reference,
             framework=framework,
             server=AgentServer.AGENTBRICKS,
-            memory_store=memory_store or default_store_name(project_name, "memory", token),
-            session_store=session_store or default_store_name(project_name, "sessions", token),
-        ).write()
+            memory_store=memory_store or default_store_name(resource_name, "memory", token),
+            session_store=session_store or default_store_name(resource_name, "sessions", token),
+        )
+        reference_project.set_deployment_name(deployment_name)
+        reference_project.write()
         write_project_metadata(reference, framework=framework, template=template.agentbricks_server)
         source = (
             resources.files("databricks_agentbricks").joinpath("templates").joinpath(_MIGRATION_DIR)
@@ -255,6 +308,7 @@ def _prepare_migration(
                     "server": "agentbricks",
                     "chat_app_enabled": chat_app_enabled,
                     "profile": profile,
+                    "deployment_name": deployment_name,
                 },
                 indent=2,
             )
@@ -286,12 +340,18 @@ def _prepare_migration(
                 "pointers": [str(pointer / "SKILL.md") for pointer in pointers],
                 "template_ref": template_ref,
                 "chat_app_enabled": chat_app_enabled,
+                "deployment_name": deployment_name,
+                "deployment_name_truncated": truncated,
             }
         )
         return
     render.success(
         "Prepared migration instructions (agent conversion is still required)",
-        fields={"Directory": str(dest), "Skill": str(bundle / "SKILL.md")},
+        fields={
+            "Directory": str(dest),
+            "Skill": str(bundle / "SKILL.md"),
+            "Deploy name": _deployment_name_note(project_name, deployment_name, truncated),
+        },
         next_steps=[
             (f"cd {shlex.quote(str(dest))}", "Enter the existing project"),
             f"Open your coding agent and paste the prompt from {_MIGRATION_DIR}/PROMPT.md:",
@@ -342,15 +402,24 @@ def _prepare_migration(
     "--memory-store",
     "memory_store",
     default=None,
-    help="Name for the declared memory store (default: a unique name derived from the directory, "
-    "<dir>-<token>-memory). Only --server agentbricks declares stores by default.",
+    help="Name for the declared memory store (default: a unique name derived from --name or the "
+    "directory, <name>-<token>-memory). Only --server agentbricks declares stores by default.",
 )
 @click.option(
     "--session-store",
     "session_store",
     default=None,
-    help="Name for the declared session store (default: a unique name derived from the directory, "
-    "<dir>-<token>-sessions).",
+    help="Name for the declared session store (default: a unique name derived from --name or the "
+    "directory, <name>-<token>-sessions).",
+)
+@click.option(
+    "--name",
+    "name",
+    default=None,
+    help="Deployment name, recorded in agent.toml as [agent].deployment_name. Deploys as "
+    "agent-bricks-<name>, so it can be up to 17 lowercase letters, digits, and hyphens. Also names "
+    "the default stores and tracing experiment (default: derived from the directory, shortened to "
+    "fit).",
 )
 @click.pass_obj
 def init(
@@ -364,12 +433,14 @@ def init(
     enable_chat_app: bool,
     memory_store: Optional[str],
     session_store: Optional[str],
+    name: Optional[str],
 ) -> None:
     """Scaffold a local agent project from an Agent Bricks template.
 
     DIRECTORY is the target path to create (defaults to the template's own name). The
-    directory must not already exist unless --existing is supplied. Once scaffolded, deploy it with
-    `agentbricks deploy <name> --source <directory>`.
+    directory must not already exist unless --existing is supplied. init records a deployment name
+    that fits the Databricks Apps limit (--name, or the directory name shortened to 17 characters),
+    so `agentbricks deploy` from the project directory needs no NAME.
 
     Pass --profile (or set a default via `agentbricks login` / -p) to seed a local `.env` so the
     scaffolded project runs with `agentbricks dev` right away.
@@ -395,6 +466,7 @@ def init(
     template = _TEMPLATES[selected_framework]
     template_name = template.agentbricks_server if agentbricks_server else template.custom_server
     chat_app_enabled = agentbricks_server and not disable_chat_app
+    _validate_name(name, directory, existing)
     if existing:
         if not agentbricks_server:
             raise click.UsageError(
@@ -409,6 +481,7 @@ def init(
             profile=profile or obj.profile,
             memory_store=memory_store,
             session_store=session_store,
+            name=name,
         )
         return
     dest = pathlib.Path(directory) if directory else pathlib.Path(template_name)
@@ -432,14 +505,18 @@ def init(
             template=template_name,
         )
         experiment_name = None
+        # Store display names aren't unique and projects often share a directory name, so a
+        # per-scaffold token keeps default stores from colliding. Memory, session, the default
+        # tracing experiment, and a shortened deployment name share the token; an explicit
+        # --memory/session-store wins.
+        token = _scaffold_token()
+        deployment_name = name or fit_base_name(dest.name, token)
+        truncated = name is None and deployment_name != dest.name
+        resource_name = name or dest.name
         if agentbricks_server:
-            # Store display names aren't unique and projects often share a directory name, so a
-            # per-scaffold token keeps default stores from colliding. Memory, session, and the default
-            # tracing experiment share the token; an explicit --memory/session-store wins.
-            token = "".join(secrets.choice(string.ascii_lowercase) for _ in range(6))
-            memory_store = memory_store or default_store_name(dest.name, "memory", token)
-            session_store = session_store or default_store_name(dest.name, "sessions", token)
-            experiment_name = default_experiment_name(dest.name, token)
+            memory_store = memory_store or default_store_name(resource_name, "memory", token)
+            session_store = session_store or default_store_name(resource_name, "sessions", token)
+            experiment_name = default_experiment_name(resource_name, token)
         project = AgentProject.create(
             dest,
             framework=selected_framework,
@@ -448,6 +525,8 @@ def init(
             session_store=session_store,
             experiment_name=experiment_name,
         )
+        # Record a name that fits the Apps limit so a bare `agentbricks deploy` works.
+        project.set_deployment_name(deployment_name)
         project.write()
         env_profile = profile or obj.profile
         wrote_env = _write_env(dest, env_profile) if env_profile else False
@@ -469,6 +548,8 @@ def init(
                 "memory_store": memory_store,
                 "session_store": session_store,
                 "experiment_name": experiment_name,
+                "deployment_name": deployment_name,
+                "deployment_name_truncated": truncated,
                 "workflow_skill": str(workflow_skills[0]),
                 "skill_pointers": [str(path) for path in workflow_skills[1:]],
             }
@@ -491,6 +572,7 @@ def init(
         fields["Session store"] = session_store
     if experiment_name:
         fields["Traces experiment"] = experiment_name
+    fields["Deploy name"] = _deployment_name_note(dest.name, deployment_name, truncated)
     steps: list[str | tuple[str, str]] = [(f"cd {dest}", "Enter the project directory")]
     if wrote_env:
         fields["Profile (.env)"] = env_profile
@@ -505,6 +587,9 @@ def init(
     if chat_app_enabled:
         steps.append("Open http://localhost:8000 to chat with it")
     steps.append(
-        (f"agentbricks deploy {dest.name}", "Deploy it to Databricks (from the project dir)")
+        (
+            "agentbricks deploy",
+            f"Deploy it to Databricks as {_prefixed_name(deployment_name)} (from the project dir)",
+        )
     )
     render.success(f"Scaffolded '{template_name}'", fields=fields, next_steps=steps)

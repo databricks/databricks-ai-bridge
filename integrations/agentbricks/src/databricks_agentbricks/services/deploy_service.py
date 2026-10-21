@@ -52,8 +52,11 @@ from databricks_agentbricks.services.deployment.model_binding_provisioner import
 )
 from databricks_agentbricks.services.deployment.names import (
     _DEPLOYMENT_PREFIX,
+    _MAX_DEPLOYMENT_NAME_LEN,
     DeploymentName,
     _prefixed_name,
+    fit_base_name,
+    name_budget_hint,
 )
 from databricks_agentbricks.services.deployment.provisioners import (
     MemoryStoreProvisioner,
@@ -688,6 +691,12 @@ class DeployService:
         agent_project = self._project_resolver.load(source_dir)
         base_name = self._project_resolver.resolve_deployment_name(agent_project, requested_name)
         name = _prefixed_name(base_name)
+        if len(name) > _MAX_DEPLOYMENT_NAME_LEN:
+            # Same check DeploymentName makes, but the hint can name the deploy command that fixes it.
+            raise AgentCliError(
+                f"Deployment name {name!r} is too long ({len(name)} > {_MAX_DEPLOYMENT_NAME_LEN}).",
+                hint=name_budget_hint(f"agentbricks deploy {fit_base_name(base_name)}"),
+            )
         return _ResolvedDeployment(
             agent_project=agent_project,
             base_name=base_name,

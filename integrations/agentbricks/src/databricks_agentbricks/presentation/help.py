@@ -33,12 +33,16 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("agentbricks init my-agent", "scaffold a new agent project"),
         ("cd my-agent", "enter the project directory"),
         ("agentbricks dev", "run the agent locally with a chat UI"),
-        ("agentbricks deploy my-agent", "deploy the agent to Databricks Apps"),
+        ("agentbricks deploy", "deploy the agent to Databricks Apps"),
     ),
     ("login",): (("agentbricks login --profile <profile>", "save a profile as your default"),),
     ("logout",): (("agentbricks logout", "forget the saved default profile"),),
     ("init",): (
         ("agentbricks init my-agent", "scaffold a new agent project"),
+        (
+            "agentbricks init --name billing-bot billing-support-agent",
+            "scaffold it and record a deployment name of up to 17 characters",
+        ),
         (
             "agentbricks init --framework langgraph --existing .",
             "prepare a coding-agent migration bundle for an existing agent",

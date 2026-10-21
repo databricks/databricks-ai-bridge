@@ -15,7 +15,10 @@ project tests as well when code changes require them.
 reconciles app access, and deploys a Databricks App. It does not require a running local dev server.
 The app name is stable: reusing `<name>` deploys new source to the existing `agent-bricks-<name>` app,
 not a separate app. Choose a unique name in the selected workspace for an isolated deployment;
-reuse a name only when updating that app is intended.
+reuse a name only when updating that app is intended. App names cap at 30 characters, so `<name>`
+can be up to 17 lowercase letters, digits, and hyphens. `agentbricks init` records a name that fits
+as `[agent].deployment_name` and prints it as `Deploy name`; from the project directory, a bare
+`agentbricks deploy` uses it.
 Provisioning takes real time; do not start repeated deployments merely because one is still running.
 Inspect `agentbricks deployments get <app-name>` or logs for a failed deployment before retrying.
 

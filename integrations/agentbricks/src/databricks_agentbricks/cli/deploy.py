@@ -247,7 +247,9 @@ def deploy(
 
     NAME is recorded in agent.toml on the first deploy, so a later `agentbricks deploy` from the project
     directory can omit it (passing NAME again updates the recorded name). New apps are named
-    `agent-bricks-<name>`. Use the full app name with the `agentbricks deployments` commands.
+    `agent-bricks-<name>`. App names cap at 30 characters, so NAME can be up to 17
+    (`agentbricks init` records one that fits). Use the full app name with the
+    `agentbricks deployments` commands.
 
     Any memory/session store declared in agent.toml (for example, by `agentbricks memory/sessions bind`)
     is created if it doesn't exist yet; agent.toml itself is never modified for stores.

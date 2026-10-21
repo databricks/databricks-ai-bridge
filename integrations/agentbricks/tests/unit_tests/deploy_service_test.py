@@ -46,7 +46,7 @@ from databricks_agentbricks.services.deployment.deploy_state import DeployStateT
 from databricks_agentbricks.services.deployment.model_binding_provisioner import (
     ModelBindingProvisioner,
 )
-from databricks_agentbricks.services.deployment.names import DeploymentName
+from databricks_agentbricks.services.deployment.names import DeploymentName, fit_base_name
 from databricks_agentbricks.services.deployment.provisioners import (
     GrantOutcome,
     ManifestPatch,
@@ -385,6 +385,23 @@ def test_invalid_resolved_name_fails_before_auth_or_client(
     with pytest.raises(AgentCliError, match="Invalid deployment name"):
         deployment_fixture.service.deploy(_request(tmp_path, name=None))
 
+    deployment_fixture.app.prepare_app_auth.assert_not_called()
+    deployment_fixture.provider.get.assert_not_called()
+
+
+@pytest.mark.parametrize("requested", [None, "caj-langgraph-agent"])
+def test_too_long_name_fails_before_auth_or_client_with_a_suggestion(
+    deployment_fixture, tmp_path: pathlib.Path, requested: str | None
+):
+    deployment_fixture.resolver.resolve_deployment_name.return_value = "caj-langgraph-agent"
+
+    with pytest.raises(AgentCliError, match=r"too long \(32 > 30\)") as excinfo:
+        deployment_fixture.service.deploy(_request(tmp_path, name=requested))
+
+    assert excinfo.value.hint == (
+        "Names can be up to 17 characters (Agent Bricks adds 'agent-bricks-', and app names cap "
+        f"at 30). Try: agentbricks deploy {fit_base_name('caj-langgraph-agent')}"
+    )
     deployment_fixture.app.prepare_app_auth.assert_not_called()
     deployment_fixture.provider.get.assert_not_called()
 
