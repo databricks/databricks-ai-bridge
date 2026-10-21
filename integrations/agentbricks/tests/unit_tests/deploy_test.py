@@ -373,6 +373,50 @@ def test_deploy_cli_passes_request_to_service_and_presents_json(tmp_path: pathli
     assert json.loads(result.output)["deployment"] == "agent-bricks-demo"
 
 
+@pytest.mark.parametrize(
+    "options,expected",
+    [
+        (
+            [
+                "--allowed-origin",
+                "https://chat.example.com",
+                "--allowed-origin",
+                "http://localhost:3000",
+            ],
+            ("https://chat.example.com", "http://localhost:3000"),
+        ),
+        (["--clear-allowed-origins"], ()),
+        ([], None),
+    ],
+)
+def test_deploy_cli_passes_origin_replacement_or_clear(tmp_path, options, expected):
+    service = mock.Mock()
+    service.deploy.return_value = _result()
+    with mock.patch.object(deploy_mod, "build_deploy_service", return_value=service):
+        result = CliRunner().invoke(
+            deploy_mod.deploy,
+            ["demo", "--source", str(tmp_path), *options],
+            obj=_Ctx(),
+        )
+    assert result.exit_code == 0, result.output
+    assert service.deploy.call_args.args[0].allowed_origins == expected
+
+
+def test_deploy_cli_rejects_origins_with_clear():
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        [
+            "demo",
+            "--allowed-origin",
+            "https://chat.example.com",
+            "--clear-allowed-origins",
+        ],
+        obj=_Ctx(),
+    )
+    assert result.exit_code == 2
+    assert "not both" in result.output
+
+
 def test_deploy_json_preserves_additive_tool_access_contract(tmp_path: pathlib.Path):
     service = mock.Mock()
     service.deploy.return_value = replace(

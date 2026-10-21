@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import pathlib
 import subprocess
 from types import SimpleNamespace
@@ -21,6 +22,7 @@ from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.projects.types import AgentServer
 from databricks_agentbricks.services import dev_service as dev_service_module
 from databricks_agentbricks.services.dev_service import DevRequest, DevService
+from databricks_agentkit.runtime.cors import CORS_ALLOWED_ORIGINS_ENV
 
 
 @pytest.fixture
@@ -39,7 +41,7 @@ env:
     value: stale-memory
 """
     )
-    project = SimpleNamespace(server=AgentServer.AGENTBRICKS, tools=[])
+    project = SimpleNamespace(server=AgentServer.AGENTBRICKS, tools=[], allowed_origins=())
 
     resolver = Mock(spec=ProjectResolver)
     resolver.load.return_value = project
@@ -78,6 +80,33 @@ env:
 
 def _manifest_env(path: pathlib.Path) -> dict[str, str]:
     return {entry["name"]: entry["value"] for entry in yaml.safe_load(path.read_text())["env"]}
+
+
+@pytest.mark.parametrize("origins", [("https://chat.example.com",), ()])
+def test_dev_manifest_uses_current_origins_and_overrides_stale_deploy_env(
+    service_fixture,
+    tmp_path,
+    origins,
+):
+    app_yaml = tmp_path / "app.yaml"
+    text = app_yaml.read_text() + (
+        f"  - name: {CORS_ALLOWED_ORIGINS_ENV}\n    value: '[\"https://stale.example.com\"]'\n"
+    )
+    app_yaml.write_text(text)
+    service_fixture.project.allowed_origins = origins
+    with service_fixture.service.prepare(
+        DevRequest(
+            source=str(tmp_path),
+            prepare_environment=False,
+            app_port=9000,
+        )
+    ) as plan:
+        env = _manifest_env(plan.entry_point)
+        if origins:
+            assert json.loads(env[CORS_ALLOWED_ORIGINS_ENV]) == list(origins)
+        else:
+            assert CORS_ALLOWED_ORIGINS_ENV not in env
+    assert app_yaml.read_text() == text
 
 
 def test_prepare_builds_local_plan_and_run_uses_injected_apps_client(

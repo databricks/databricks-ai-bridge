@@ -143,6 +143,12 @@ def _background_argv(obj, request: DeployRequest) -> list[str]:
         argv += ["--instances", str(request.instance_count)]
     if request.allow_user_scope_update:
         argv.append("--allow-user-scope-update")
+    if request.allowed_origins is not None:
+        if request.allowed_origins:
+            for origin in request.allowed_origins:
+                argv += ["--allowed-origin", origin]
+        else:
+            argv.append("--clear-allowed-origins")
     argv.append("--background-child")
     return argv
 
@@ -213,6 +219,18 @@ def _ignore_hangup() -> None:
     help="Number of deployment instances.",
 )
 @click.option(
+    "--allowed-origin",
+    multiple=True,
+    metavar="ORIGIN",
+    help="Allow this browser origin to call the Agent Bricks server. Repeat for multiple origins; "
+    "replaces and records the allowlist in agent.toml. Omit to reuse the recorded origins.",
+)
+@click.option(
+    "--clear-allowed-origins",
+    is_flag=True,
+    help="Clear the recorded browser origin allowlist and disable runtime CORS on this deploy.",
+)
+@click.option(
     "--allow-user-scope-update",
     is_flag=True,
     help="Allow Agent Bricks to add missing user API scopes to an existing App from managed-tool "
@@ -235,6 +253,8 @@ def deploy(
     workspace_path,
     instance_count,
     allow_user_scope_update,
+    allowed_origin,
+    clear_allowed_origins,
     no_wait,
     background_child,
 ) -> None:
@@ -267,6 +287,8 @@ def deploy(
     A first deploy takes a few minutes (mostly starting app compute). From a coding agent or script
     with a short command timeout, use --no-wait and then `agentbricks deployments wait`.
     """
+    if allowed_origin and clear_allowed_origins:
+        raise click.UsageError("Use --allowed-origin or --clear-allowed-origins, not both.")
     request = DeployRequest(
         name=name,
         source=source,
@@ -274,6 +296,7 @@ def deploy(
         workspace_path=workspace_path,
         instance_count=instance_count,
         allow_user_scope_update=allow_user_scope_update,
+        allowed_origins=() if clear_allowed_origins else (allowed_origin or None),
     )
     if background_child:
         _ignore_hangup()

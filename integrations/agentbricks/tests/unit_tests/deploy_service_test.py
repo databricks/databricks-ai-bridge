@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 from contextlib import nullcontext
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock
@@ -63,6 +65,7 @@ from databricks_agentbricks.services.deployment.provisioners import (
 )
 from databricks_agentbricks.services.deployment.tool_access import ToolAccessPlan
 from databricks_agentbricks.services.deployment.tool_access_provisioner import ToolAccessProvisioner
+from databricks_agentkit.runtime.cors import CORS_ALLOWED_ORIGINS_ENV
 from databricks_agentkit.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
 
 
@@ -188,6 +191,45 @@ def _request(
         instance_count=instance_count,
         allow_user_scope_update=allow_user_scope_update,
     )
+
+
+def test_deploy_records_reuses_replaces_and_clears_origins(deployment_fixture, tmp_path):
+    service = deployment_fixture.service
+    request = _request(tmp_path)
+    origins = ("https://chat.example.com", "http://localhost:3000")
+    first = service.deploy(replace(request, allowed_origins=origins))
+    assert AgentProject.load(tmp_path).allowed_origins == origins
+    assert json.loads(first.env[CORS_ALLOWED_ORIGINS_ENV]) == list(origins)
+    assert json.loads(service.deploy(request).env[CORS_ALLOWED_ORIGINS_ENV]) == list(origins)
+
+    replacement = ("https://other.example.com",)
+    service.deploy(replace(request, allowed_origins=replacement))
+    assert AgentProject.load(tmp_path).allowed_origins == replacement
+    cleared = service.deploy(replace(request, allowed_origins=()))
+    assert CORS_ALLOWED_ORIGINS_ENV not in cleared.env
+    manifest = AppManifest.parse((tmp_path / "app.yaml").read_text(), source=tmp_path / "app.yaml")
+    assert CORS_ALLOWED_ORIGINS_ENV not in {entry["name"] for entry in manifest.raw_env()}
+    assert AgentProject.load(tmp_path).allowed_origins == ()
+
+
+def test_invalid_origins_fail_before_auth_and_workspace_access(deployment_fixture, tmp_path):
+    with pytest.raises(AgentCliError, match="Invalid CORS origin"):
+        deployment_fixture.service.deploy(replace(_request(tmp_path), allowed_origins=("*",)))
+    deployment_fixture.app.prepare_app_auth.assert_not_called()
+    deployment_fixture.provider.get.assert_not_called()
+    assert not (tmp_path / "agent.toml").exists()
+
+
+def test_cors_options_require_a_project(deployment_fixture, tmp_path):
+    deployment_fixture.resolver.load.return_value = None
+    with pytest.raises(AgentCliError, match="require an agent.toml"):
+        deployment_fixture.service.deploy(
+            replace(
+                _request(tmp_path),
+                allowed_origins=("https://chat.example.com",),
+            )
+        )
+    deployment_fixture.provider.get.assert_not_called()
 
 
 def test_deploy_passes_returned_state_between_phases(tmp_path: pathlib.Path) -> None:

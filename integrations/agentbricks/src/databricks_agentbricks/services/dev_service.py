@@ -8,6 +8,7 @@ In particular, preparing a project never resolves a workspace client or provisio
 
 from __future__ import annotations
 
+import json
 import pathlib
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -20,6 +21,7 @@ from databricks_agentbricks.projects.app_manifest import AppManifest
 from databricks_agentbricks.projects.config import require_managed_tool_support
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.projects.types import AgentServer
+from databricks_agentkit.runtime.cors import CORS_ALLOWED_ORIGINS_ENV
 from databricks_agentkit.runtime.store import RUNTIME_STORE_LOCAL_ENV
 from databricks_agentkit.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
 
@@ -143,7 +145,11 @@ class DevService:
             if prepare_environment is None:
                 prepare_environment = not (source_dir / ".venv").exists()
 
-            entry_point = _dev_entry_point(app_yaml, tracing_env or None)
+            entry_point = _dev_entry_point(
+                app_yaml,
+                tracing_env or None,
+                allowed_origins=project.allowed_origins if project is not None else None,
+            )
             preview = DevPreview(
                 source_dir=source_dir,
                 # Preserve the CLI's historical display/default behavior while retaining the
@@ -186,7 +192,10 @@ class DevService:
 
 
 def _dev_entry_point(
-    app_yaml: pathlib.Path, extra_env: dict[str, str] | None = None
+    app_yaml: pathlib.Path,
+    extra_env: dict[str, str] | None = None,
+    *,
+    allowed_origins: tuple[str, ...] | None = None,
 ) -> pathlib.Path:
     """Write the local-only manifest consumed by ``apps run-local``.
 
@@ -208,6 +217,16 @@ def _dev_entry_point(
     for name, value in (extra_env or {}).items():
         filtered = [e for e in filtered if not (isinstance(e, dict) and e.get("name") == name)]
         filtered.append({"name": name, "value": value})
+    if allowed_origins is not None:
+        filtered = [
+            e
+            for e in filtered
+            if not (isinstance(e, dict) and e.get("name") == CORS_ALLOWED_ORIGINS_ENV)
+        ]
+        if allowed_origins:
+            filtered.append(
+                {"name": CORS_ALLOWED_ORIGINS_ENV, "value": json.dumps(allowed_origins)}
+            )
     filtered.append({"name": RUNTIME_STORE_LOCAL_ENV, "value": "true"})
     manifest.set_env(filtered)
 

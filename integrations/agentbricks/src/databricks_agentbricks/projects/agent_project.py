@@ -22,6 +22,7 @@ from databricks_agentbricks.projects.types import (
     parse_server,
 )
 from databricks_agentkit.runtime import tool_manifest
+from databricks_agentkit.runtime.cors import allowed_origins_from_manifest, validate_allowed_origins
 
 # agent.toml resource-table names, read by the manifest parsing below (and by `agentbricks dev`/`deploy`).
 MEMORY_STORE_TABLE = "memory_store"
@@ -476,6 +477,7 @@ class AgentProject:
         user_auth: tool_manifest.UserAuthConfig | None = None,
         model_services: dict[str, ModelServiceBinding] | None = None,
         prompts: dict[str, str] | None = None,
+        allowed_origins: tuple[str, ...] = (),
     ) -> None:
         self.root = root
         self.path = root / "agent.toml"
@@ -504,6 +506,7 @@ class AgentProject:
         self.model_services: dict[str, ModelServiceBinding] = dict(model_services or {})
         # Prompt bindings by key: the three-part Prompt Registry name of each prompt the agent loads.
         self.prompts: dict[str, str] = dict(prompts or {})
+        self.allowed_origins = allowed_origins
 
     @classmethod
     def load(cls, root: pathlib.Path | str | None = None) -> "AgentProject":
@@ -540,6 +543,12 @@ class AgentProject:
             user_auth = tool_manifest.parse_user_auth(document)
         except tool_manifest.ToolManifestError as exc:
             raise AgentCliError(str(exc)) from exc
+        try:
+            allowed_origins = allowed_origins_from_manifest(document)
+        except ValueError as exc:
+            raise AgentCliError(str(exc)) from exc
+        if allowed_origins and server != AgentServer.AGENTBRICKS:
+            raise AgentCliError("CORS configuration requires [agent].server = 'agentbricks'.")
         deployment_name = agent.get("deployment_name")
         if deployment_name is not None and not (
             isinstance(deployment_name, str) and deployment_name
@@ -593,6 +602,7 @@ class AgentProject:
             user_auth,
             model_services,
             prompts,
+            allowed_origins,
         )
 
     @classmethod
@@ -641,6 +651,20 @@ class AgentProject:
             raise AgentCliError("agent.toml must declare an [agent] table.")
         agent["deployment_name"] = name
         self.deployment_name = name
+        return True
+
+    def set_allowed_origins(self, origins: tuple[str, ...]) -> bool:
+        try:
+            validated = validate_allowed_origins(origins)
+        except ValueError as exc:
+            raise AgentCliError(str(exc)) from exc
+        if validated and self.server != AgentServer.AGENTBRICKS:
+            raise AgentCliError("CORS configuration requires [agent].server = 'agentbricks'.")
+        if self.allowed_origins == validated:
+            return False
+        cors = self._document.setdefault("cors", tomlkit.table())
+        cors["allowed_origins"] = list(validated)
+        self.allowed_origins = validated
         return True
 
     def add_tool(self, spec: ToolSpec) -> bool:

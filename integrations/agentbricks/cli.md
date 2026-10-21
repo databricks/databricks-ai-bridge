@@ -1387,6 +1387,8 @@ _Options_
 | `--pip-index-url <PIP_INDEX_URL>` | string | `https://pypi.org/simple/` | no | Base URL of the Python Package Index. Defaults to public PyPI. |
 | `--workspace-path <WORKSPACE_PATH>` | string | - | no | Workspace destination for the synced source (defaults to a per-user path). |
 | `--instances <INSTANCES>` | integer range | - | no | Number of deployment instances. |
+| `--allowed-origin <ORIGIN>` | string (repeatable) | - | no | Allow this browser origin to call the Agent Bricks server. Repeat for multiple origins; replaces and records the allowlist in agent.toml. Omit to reuse the recorded origins. |
+| `--clear-allowed-origins` | flag | - | no | Clear the recorded browser origin allowlist and disable runtime CORS on this deploy. |
 | `--allow-user-scope-update` | flag | - | no | Allow Agent Bricks to add missing user API scopes to an existing App from managed-tool inference and `[auth.user]` additions. Once added, later deploys do not need this flag. |
 | `--no-wait` | flag | - | no | Run the quick checks, then finish the deploy in a background process and exit. Follow it with `agentbricks deployments wait`. |
 

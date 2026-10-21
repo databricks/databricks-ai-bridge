@@ -281,6 +281,46 @@ def test_no_wait_passes_through_non_default_options(
     ]
 
 
+@pytest.mark.parametrize(
+    "options,expected",
+    [
+        (
+            [
+                "--allowed-origin",
+                "https://chat.example.com",
+                "--allowed-origin",
+                "http://localhost:3000",
+            ],
+            ("https://chat.example.com", "http://localhost:3000"),
+        ),
+        (["--clear-allowed-origins"], ()),
+        ([], ("https://previous.example.com",)),
+    ],
+)
+def test_no_wait_preserves_cors_configuration_for_background_deploy(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, popen, options, expected
+):
+    project = AgentProject.create(tmp_path, framework="langgraph", server="agentbricks")
+    project.set_allowed_origins(("https://previous.example.com",))
+    project.write()
+    events: list[tuple] = []
+    monkeypatch.setattr(deploy_mod, "_databricks", _DeployRunner(events))
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["demo", "--source", str(tmp_path), "--no-wait", *options],
+        obj=_real_deploy_context(_DeployApi(events)),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert AgentProject.load(tmp_path).allowed_origins == expected
+    [(argv, _)] = popen.calls
+    with deploy_mod.deploy.make_context("deploy", argv[argv.index("deploy") + 1 :]) as child:
+        assert child.params["allowed_origin"] == (expected if "--allowed-origin" in options else ())
+        assert child.params["clear_allowed_origins"] == ("--clear-allowed-origins" in options)
+        assert child.params["background_child"] is True
+
+
 def test_no_wait_bad_name_fails_synchronously_and_spawns_nothing(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, popen
 ):
