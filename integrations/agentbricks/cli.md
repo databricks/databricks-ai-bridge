@@ -1480,11 +1480,11 @@ Invoke arbitrary HTTP endpoints.
 
 | Subcommand | Description |
 | --- | --- |
-| [`endpoint invoke`](#agentbricks-endpoint-invoke) | Send one HTTP request to a Databricks App or arbitrary URL. |
+| [`endpoint invoke`](#agentbricks-endpoint-invoke) | Send an HTTP request, or load test a Databricks App or arbitrary URL. |
 
 #### `agentbricks endpoint invoke`
 
-Send one HTTP request to a Databricks App or arbitrary URL.
+Send an HTTP request, or load test a Databricks App or arbitrary URL.
 
 ```
 agentbricks endpoint invoke [APP] [options]
@@ -1510,6 +1510,9 @@ _Options_
 | `--routing-key <ROUTING_KEY>` | string | - | no | Sticky-routing key; set it to your stable session id to keep a session on one app replica. Sent verbatim as the X-Routing-Key header (default: generated for a Databricks App). Routing only: while session_id is a natural routing key, it is recommended to pass the session id in the --json body for session continuity. |
 | `--timeout <TIMEOUT>` | float range | `300.0` | no | - |
 | `--auth`, `--no-auth` | flag | - | no | Inject Databricks OAuth authentication. |
+| `--loadtest` | flag | - | no | Repeat the request using Locust and report statistics. |
+| `--concurrency <CONCURRENCY>` | integer range | `1` | no | Concurrent users with --loadtest. |
+| `--duration <DURATION>` | integer range | `60` | no | Load test duration in seconds with --loadtest. |
 
 ### `agentbricks tools`
 

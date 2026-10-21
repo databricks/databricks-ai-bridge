@@ -12,7 +12,11 @@ from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.services.deployment.names import _prefixed_name
 from databricks_agentbricks.services.invoke.auth import WorkspaceOAuthAuthenticator
 from databricks_agentbricks.services.invoke.request import build_request
-from databricks_agentbricks.services.invoke.transport import EndpointResponse, HttpSession
+from databricks_agentbricks.services.invoke.transport import (
+    EndpointRequest,
+    EndpointResponse,
+    HttpSession,
+)
 
 _ROUTING_KEY_HEADER = "X-Routing-Key"
 
@@ -65,13 +69,8 @@ class InvokeService:
         self._authenticator = authenticator
         self._transport = transport
 
-    def invoke(
-        self,
-        request: InvokeRequest,
-        *,
-        on_event: Callable[[dict[str, Any]], None] | None = None,
-    ) -> EndpointResponse:
-        """Execute an invocation and raise ``AgentCliError`` for transport/status failures."""
+    def prepare(self, request: InvokeRequest) -> EndpointRequest:
+        """Resolve and authenticate a request for invocation or load testing."""
         endpoint = self._resolve_endpoint(request.app, request.url)
         authenticate = endpoint.is_app if request.auth is None else request.auth
         routing_key = request.routing_key or (str(uuid4()) if endpoint.is_app else None)
@@ -84,14 +83,22 @@ class InvokeService:
             timeout=request.timeout,
             sse=request.sse,
         )
-        wire_request = replace(
+        return replace(
             wire_request,
             headers={
                 **wire_request.headers,
                 **self._platform_headers(authenticate=authenticate, routing_key=routing_key),
             },
         )
-        response = self._transport.send(wire_request, on_event=on_event)
+
+    def invoke(
+        self,
+        request: InvokeRequest,
+        *,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
+    ) -> EndpointResponse:
+        """Execute an invocation and raise ``AgentCliError`` for transport/status failures."""
+        response = self._transport.send(self.prepare(request), on_event=on_event)
         if not 200 <= response.status_code < 300:
             raise AgentCliError(
                 f"Endpoint returned HTTP {response.status_code}.",

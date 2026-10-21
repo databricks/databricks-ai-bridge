@@ -730,6 +730,27 @@ as the session id - put the session id at the top level of the `--json` body for
 also works with a direct App URL and with the generated runtime on localhost. OAuth and session headers are managed by
 the runtime; arbitrary custom request headers are intentionally not exposed by this command.
 
+Add `--loadtest` to repeat the same request with Locust. Install the optional dependency first:
+
+```sh
+pip install 'databricks-agentbricks[loadtest]'
+agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
+  --path /api/invocations \
+  --json '{"id":"{{uuid}}","session_id":"{{uuid}}","input":[{"role":"user","content":"Hello"}]}' \
+  --loadtest --concurrency 5 --duration 60
+```
+
+`--concurrency` sets the number of simultaneous users (default: 1); each sends another request as
+soon as its previous request finishes. `--duration` is in seconds (default: 60). After that period,
+in-flight requests have up to `--timeout` seconds to finish. Locust reports request counts, failures,
+requests per second, and latency percentiles; any failed request makes the command exit nonzero.
+Use `--output json` before `endpoint` for Locust's JSON statistics. Streaming latency measures the
+complete response, and individual responses are not printed during a load test.
+
+The payload is repeated as provided, with `{{uuid}}` replaced by a fresh UUID for each request.
+Use this placeholder for invocation IDs on durable agents to avoid replaying a cached invocation.
+Each simulated App user gets a separate routing key unless `--routing-key` explicitly pins one.
+
 ## Command help
 
 Use the conventional help flag at any command level. Every command's help includes runnable

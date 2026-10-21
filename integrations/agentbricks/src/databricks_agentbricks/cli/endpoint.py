@@ -5,8 +5,10 @@ from __future__ import annotations
 import click
 
 from databricks_agentbricks.clients.apps_client import AppsClient
+from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation.endpoint import SsePrinter, render_response
 from databricks_agentbricks.services.invoke.auth import WorkspaceOAuthAuthenticator
+from databricks_agentbricks.services.invoke.loadtest import run_loadtest
 from databricks_agentbricks.services.invoke.transport import HttpSession
 from databricks_agentbricks.services.invoke_service import InvokeRequest, InvokeService
 
@@ -45,6 +47,23 @@ def endpoint() -> None:
 )
 @click.option("--timeout", type=click.FloatRange(min=0.1), default=300.0, show_default=True)
 @click.option("--auth/--no-auth", default=None, help="Inject Databricks OAuth authentication.")
+@click.option(
+    "--loadtest", is_flag=True, help="Repeat the request using Locust and report statistics."
+)
+@click.option(
+    "--concurrency",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help="Concurrent users with --loadtest.",
+)
+@click.option(
+    "--duration",
+    type=click.IntRange(min=1),
+    default=60,
+    show_default=True,
+    help="Load test duration in seconds with --loadtest.",
+)
 @click.pass_obj
 def invoke(
     obj,
@@ -58,8 +77,17 @@ def invoke(
     routing_key,
     timeout,
     auth,
+    loadtest,
+    concurrency,
+    duration,
 ) -> None:
-    """Send one HTTP request to a Databricks App or arbitrary URL."""
+    """Send an HTTP request, or load test a Databricks App or arbitrary URL."""
+    if not loadtest and any(
+        click.get_current_context().get_parameter_source(name)
+        is not click.core.ParameterSource.DEFAULT
+        for name in ("concurrency", "duration")
+    ):
+        raise AgentCliError("--concurrency and --duration require --loadtest.")
     service = build_invoke_service(obj)
     request = InvokeRequest(
         app=app,
@@ -73,6 +101,17 @@ def invoke(
         timeout=timeout,
         auth=auth,
     )
+    if loadtest:
+        returncode = run_loadtest(
+            service.prepare(request),
+            concurrency=concurrency,
+            duration=duration,
+            output=obj.output,
+            per_user_routing=bool(app and not routing_key),
+        )
+        if returncode:
+            raise click.exceptions.Exit(returncode)
+        return
     printer = SsePrinter(enabled=sse and obj.output == "text")
     response = service.invoke(request, on_event=printer)
     render_response(response, output=obj.output, streamed=sse)

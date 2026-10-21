@@ -439,6 +439,13 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
             '--json \'{"input":"hello"}\'',
             "invoke a local or arbitrary HTTP server",
         ),
+        (
+            "agentbricks endpoint invoke agent-bricks-my-agent --path /api/invocations "
+            '--json \'{"id":"{{uuid}}","session_id":"{{uuid}}",'
+            '"input":[{"role":"user","content":"Hello"}]}\' '
+            "--loadtest --concurrency 5 --duration 60",
+            "load test with Locust and report latency and throughput",
+        ),
     ),
     ("tools",): (
         ("agentbricks tools add --help", "see all tool types you can add"),

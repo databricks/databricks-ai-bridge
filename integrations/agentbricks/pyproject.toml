@@ -33,6 +33,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+loadtest = [
+    "locust>=2.31",
+]
 # Framework adapters are optional; the CLI, store SDK, and HTTP runtime install by default.
 langgraph = [
     "databricks-langchain==0.21.0",
