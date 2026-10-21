@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+import shlex
 import sys
 from typing import Any
 
@@ -248,12 +249,65 @@ def stores_create(obj, display_name, description) -> None:
     )
 
 
+def _render_store_table(items: list, *, title: str, footer: str | None = None) -> None:
+    rows = [
+        [
+            field(s, "display_name"),
+            _store_id(s),
+            timefmt.relative(_store_created(s)),
+            timefmt.relative(_store_updated(s)),
+            _truncate(field(s, "description"), 40),
+        ]
+        for s in items
+    ]
+    render.resource_table(
+        title,
+        [
+            ("Name", "left"),
+            ("Resource name", "left"),
+            ("Created", "left"),
+            ("Updated", "left"),
+            ("Description", "left"),
+        ],
+        rows,
+        footer=footer,
+        no_wrap=[0, 1],  # never cut off the name or resource name; other columns narrow to fit
+    )
+
+
 @stores.command("list")
-@click.option("--page-size", type=int, default=25, show_default=True)
-@click.option("--page-token", default=None)
+@click.option(
+    "--name",
+    "name_filter",
+    default=None,
+    help="Only stores whose display name contains TEXT (case-insensitive). Reads every page.",
+)
+@click.option("--all", "all_", is_flag=True, help="Page through every store.")
+@click.option(
+    "--page-size",
+    type=int,
+    default=25,
+    show_default=True,
+    help="Stores per page without --name or --all.",
+)
+@click.option(
+    "--page-token",
+    default=None,
+    help="Resume from a previous page's token (not with --name or --all).",
+)
 @click.pass_obj
-def stores_list(obj, page_size, page_token) -> None:
-    """List memory stores in the workspace (25 per page; paginates interactively on a terminal)."""
+def stores_list(obj, name_filter, all_, page_size, page_token) -> None:
+    """List memory stores in the workspace.
+
+    Without --name or --all, shows 25 per page: it paginates interactively on a terminal and
+    otherwise prints the --page-token for the next page. --name and --all page through every store
+    and print one complete list. The API has no server-side filter, so --name reads every page.
+    """
+    if name_filter is not None or all_:
+        if page_token is not None:
+            raise click.UsageError("--page-token can't be combined with --name or --all.")
+        _list_all_stores(obj, name_filter)
+        return
     client = obj.client()
     if obj.output == "json":
         render.emit_json(client.list_memory_stores(page_size, page_token))
@@ -263,30 +317,12 @@ def stores_list(obj, page_size, page_token) -> None:
     while True:
         data = client.list_memory_stores(page_size, page_token)
         items = field(data, "managed_memory_stores") or []
-        rows = [
-            [
-                field(s, "display_name"),
-                _store_id(s),
-                timefmt.relative(_store_created(s)),
-                timefmt.relative(_store_updated(s)),
-                _truncate(field(s, "description"), 40),
-            ]
-            for s in items
-        ]
         token = field(data, "next_page_token")
-        render.resource_table(
-            "Managed Memory Stores",
-            [
-                ("Name", "left"),
-                ("Resource name", "left"),
-                ("Created", "left"),
-                ("Updated", "left"),
-                ("Description", "left"),
-            ],
-            rows,
+        _render_store_table(
+            items,
+            title="Managed Memory Stores",
             # In an interactive session the prompt below replaces the token hint.
-            subtitle=None if (interactive and token) else _page_note(data),
-            no_wrap=[1],  # keep the resource name full-width; other columns narrow to fit
+            footer=None if interactive else render.more_pages_footer(len(items), token),
         )
         if not token or not interactive:
             break
@@ -295,12 +331,79 @@ def stores_list(obj, page_size, page_token) -> None:
         page_token = token
 
 
+def _list_all_stores(obj, name_filter: str | None) -> None:
+    from databricks_agentbricks.clients.conversation_store_client import MemoryStoreClient
+
+    with render.status("Listing memory stores…"):
+        found = MemoryStoreClient(obj.api_client_provider).list_all()
+    title = "Managed Memory Stores · all"
+    if name_filter is not None:
+        needle = name_filter.casefold()
+        found = [s for s in found if needle in (field(s, "display_name") or "").casefold()]
+        title = f"Managed Memory Stores · name contains '{name_filter}'"
+    if obj.output == "json":
+        render.emit_json({"managed_memory_stores": found})
+        return
+    _render_store_table(found, title=title)
+
+
+# Errors from a direct GET meaning "not the id of an existing store": NAME may be a display name.
+_GET_FALLBACK_CODES = frozenset(
+    {"NOT_FOUND", "RESOURCE_DOES_NOT_EXIST", "INVALID_PARAMETER_VALUE", "BAD_REQUEST"}
+)
+
+
+def _get_store(obj, name: str) -> dict:
+    """Get a store by id or resource name, falling back to an exact display-name match.
+
+    The id path stays a single GET. Only when it fails as not-found or invalid (or NAME can't be an
+    id at all) are all stores listed and matched on `display_name`, which isn't unique.
+    """
+    from databricks_agentbricks.clients.conversation_store_client import MemoryStoreClient
+
+    raw = name.strip()
+    if "/" not in raw or raw.startswith("memory-stores/"):
+        try:
+            return obj.client().get_memory_store(name)
+        except AgentCliError as exc:
+            if exc.error_code not in _GET_FALLBACK_CODES:
+                raise
+    with render.status(f"Looking up memory store '{name}'…"):
+        matches = MemoryStoreClient(obj.api_client_provider).find_by_display_name(name)
+    if not matches:
+        raise AgentCliError(
+            f"No memory store named '{name}'",
+            hint=(
+                "Search by part of the name: "
+                f"agentbricks memory stores list --name {shlex.quote(name)}"
+            ),
+        )
+    if len(matches) > 1:
+        lines = [
+            f"  {field(s, 'name')}  owner {field(s, 'owner_user_id') or '—'}  "
+            f"created {timefmt.absolute(_store_created(s))}"
+            for s in matches
+        ]
+        raise AgentCliError(
+            f"{len(matches)} memory stores are named '{name}':\n" + "\n".join(lines),
+            hint=(
+                "Pass one resource name, e.g. "
+                f"agentbricks memory stores get {field(matches[0], 'name')}"
+            ),
+        )
+    return matches[0]
+
+
 @stores.command("get")
 @click.argument("name")
 @click.pass_obj
 def stores_get(obj, name) -> None:
-    """Get a memory store by id or resource name."""
-    data = obj.client().get_memory_store(name)
+    """Get a memory store by id, resource name (memory-stores/<id>), or display name.
+
+    A display name is resolved by listing every store; if several stores share it, the command fails
+    and lists their resource names.
+    """
+    data = _get_store(obj, name)
     if obj.output == "json":
         render.emit_json(data)
         return

@@ -17,7 +17,10 @@ from click.testing import CliRunner
 
 from databricks_agentbricks.cli import init as init_mod
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.projects.agent_project import AgentProject
+from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.projects.types import AgentFramework, AgentServer
+from databricks_agentbricks.services.deployment.names import DeploymentName, _prefixed_name
 
 
 class _Ctx:
@@ -130,7 +133,7 @@ def test_init_defaults_to_langgraph_with_chat_app(tmp_path: pathlib.Path):
     token = _default_store_token(manifest)
     assert manifest == {
         "schema_version": 1,
-        "agent": {"framework": "langgraph", "server": "agentbricks"},
+        "agent": {"framework": "langgraph", "server": "agentbricks", "deployment_name": "proj"},
         "memory_store": {"name": f"proj-{token}-memory"},
         "session_store": {"name": f"proj-{token}-sessions"},
         "tracing": {"experiment_name": f"/Shared/agentbricks_traces/proj-{token}"},
@@ -153,7 +156,7 @@ def test_init_custom_server_uses_minimal_template(tmp_path: pathlib.Path, framew
         manifest = tomli.load(manifest_file)
     assert manifest == {
         "schema_version": 1,
-        "agent": {"framework": framework, "server": "custom"},
+        "agent": {"framework": framework, "server": "custom", "deployment_name": "proj"},
     }
     assert "memory_store" not in manifest
     assert "session_store" not in manifest
@@ -172,7 +175,7 @@ def test_init_creates_canonical_agent_manifest(tmp_path: pathlib.Path):
     token = _default_store_token(manifest)
     assert manifest == {
         "schema_version": 1,
-        "agent": {"framework": "openai", "server": "agentbricks"},
+        "agent": {"framework": "openai", "server": "agentbricks", "deployment_name": "proj"},
         "memory_store": {"name": f"proj-{token}-memory"},
         "session_store": {"name": f"proj-{token}-sessions"},
         "tracing": {"experiment_name": f"/Shared/agentbricks_traces/proj-{token}"},
@@ -419,6 +422,12 @@ def test_existing_prepares_migration_without_changing_application(
         manifest = tomli.load(manifest_file)
     assert manifest["memory_store"] == {"name": "chosen-memory"}
     assert manifest["session_store"] == {"name": "chosen-session"}
+    # The migrated project gets a deployment name that fits, recorded in both reference files.
+    deployment_name = manifest["agent"]["deployment_name"]
+    assert len(deployment_name) <= 17
+    assert settings["deployment_name"] == deployment_name
+    assert payload["deployment_name"] == deployment_name
+    assert payload["deployment_name_truncated"] is (deployment_name != tmp_path.name)
     assert manifest["agent"]["framework"] == framework
     assert manifest["agent"]["server"] == "agentbricks"
 
@@ -538,3 +547,170 @@ def test_existing_failed_pointer_removes_the_bundle(tmp_path: pathlib.Path, monk
     result = CliRunner().invoke(init_mod.init, ["--existing", str(tmp_path)], obj=_Ctx())
     assert result.exit_code != 0
     assert list(tmp_path.iterdir()) == []
+
+
+def _flat(output: str) -> str:
+    """Rendered output with panel borders and line wrapping collapsed to single spaces."""
+    return " ".join(output.replace("│", " ").split())
+
+
+def _manifest(dest: pathlib.Path) -> dict:
+    with (dest / "agent.toml").open("rb") as manifest_file:
+        return tomli.load(manifest_file)
+
+
+def test_init_short_directory_records_it_as_the_deployment_name(tmp_path: pathlib.Path):
+    dest = tmp_path / "my-agent"
+    result = CliRunner().invoke(init_mod.init, [str(dest)], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    assert _manifest(dest)["agent"]["deployment_name"] == "my-agent"
+    assert "Deploy name" in result.output
+    assert "would exceed" not in result.output
+    # The last next step is a bare deploy: the recorded name makes NAME unnecessary.
+    output = _flat(result.output)
+    assert "agentbricks deploy Deploy it to Databricks as agent-bricks-my-agent" in output
+    assert "agentbricks deploy my-agent" not in output
+
+
+@pytest.mark.parametrize(
+    ("directory", "args"),
+    [
+        ("caj-langgraph-agent", []),
+        # The default --server custom directory is itself too long.
+        ("custom-agent-langgraph", ["--server", "custom"]),
+    ],
+)
+def test_init_long_directory_records_a_shortened_name(
+    tmp_path: pathlib.Path, directory: str, args: list[str]
+):
+    dest = tmp_path / directory
+    result = CliRunner().invoke(init_mod.init, [*args, str(dest)], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    manifest = _manifest(dest)
+    recorded = manifest["agent"]["deployment_name"]
+    match = re.fullmatch(r"([a-z0-9-]{1,10})-([a-z]{6})", recorded)
+    assert match and directory.startswith(match.group(1))
+    if "memory_store" in manifest:
+        # The shortened app name shares the scaffold token with the stores.
+        assert match.group(2) == _default_store_token(manifest, slug=directory)
+    output = _flat(result.output)
+    assert f"'agent-bricks-' + '{directory}' would exceed the 30-character" in output
+    assert "change it with `agentbricks deploy <name>`" in output
+    assert f"agentbricks deploy {directory}" not in output
+    assert f"agent-bricks-{recorded}" in output
+
+
+def test_init_invalid_directory_name_is_sanitized_with_a_note(tmp_path: pathlib.Path):
+    dest = tmp_path / "My_Agent"
+    result = CliRunner().invoke(init_mod.init, [str(dest)], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    assert _manifest(dest)["agent"]["deployment_name"] == "my-agent"
+    output = _flat(result.output)
+    assert "'My_Agent' is not a valid Databricks Apps name" in output
+
+
+def test_bare_deploy_after_init_resolves_the_recorded_name(tmp_path: pathlib.Path):
+    dest = tmp_path / "caj-langgraph-agent"
+    assert CliRunner().invoke(init_mod.init, [str(dest)], obj=_Ctx()).exit_code == 0
+
+    base = ProjectResolver().resolve_deployment_name(AgentProject.load(dest), None)
+
+    assert base == _manifest(dest)["agent"]["deployment_name"]
+    assert DeploymentName(_prefixed_name(base)) == f"agent-bricks-{base}"
+
+
+@pytest.mark.parametrize(
+    ("name", "problem"),
+    [
+        ("prenick-dev-openai-agent", "is too long to deploy"),
+        ("exactly-eighteen-c", "is too long to deploy"),
+        ("My_Agent", "is not a valid Databricks Apps name"),
+    ],
+)
+def test_init_rejects_an_invalid_name_before_writing(
+    tmp_path: pathlib.Path, name: str, problem: str
+):
+    dest = tmp_path / "new-dir"
+    result = CliRunner().invoke(init_mod.init, ["--name", name, str(dest)], obj=_Ctx())
+
+    assert result.exit_code != 0
+    output = _flat(result.output)
+    assert problem in output
+    assert "Names can be up to 17 characters" in output
+    suggestion = re.search(r"Try: agentbricks init --name (\S+) ", output)
+    assert suggestion and len(suggestion.group(1)) <= 17
+    assert not dest.exists()
+
+
+def test_init_rejects_an_invalid_name_before_preparing_a_migration(tmp_path: pathlib.Path):
+    result = CliRunner().invoke(
+        init_mod.init, ["--existing", "--name", "x" * 18, str(tmp_path)], obj=_Ctx()
+    )
+
+    assert result.exit_code != 0
+    assert "Try: agentbricks init --name xxxxxxxxxx-" in _flat(result.output)
+    assert "--existing" in _flat(result.output)
+    assert not (tmp_path / "agent-bricks-migrate").exists()
+
+
+def test_init_name_records_and_names_the_stores_and_experiment(tmp_path: pathlib.Path):
+    dest = tmp_path / "billing-support-agent"
+    result = CliRunner().invoke(
+        init_mod.init, ["--name", "billing-bot", str(dest)], obj=_Ctx(output="json")
+    )
+
+    assert result.exit_code == 0, result.output
+    manifest = _manifest(dest)
+    token = _default_store_token(manifest, slug="billing-bot")
+    assert manifest["agent"]["deployment_name"] == "billing-bot"
+    assert manifest["tracing"] == {
+        "experiment_name": f"/Shared/agentbricks_traces/billing-bot-{token}"
+    }
+    payload = json.loads(result.output)
+    assert payload["deployment_name"] == "billing-bot"
+    # The user chose the name, so init didn't adjust it.
+    assert payload["deployment_name_truncated"] is False
+
+
+def test_init_explicit_stores_win_over_name(tmp_path: pathlib.Path):
+    dest = tmp_path / "proj"
+    result = CliRunner().invoke(
+        init_mod.init, ["--name", "billing-bot", "--memory-store", "mem-x", str(dest)], obj=_Ctx()
+    )
+
+    assert result.exit_code == 0, result.output
+    manifest = _manifest(dest)
+    assert manifest["memory_store"] == {"name": "mem-x"}
+    assert manifest["session_store"]["name"].startswith("billing-bot-")
+
+
+@pytest.mark.parametrize(
+    ("directory", "truncated"),
+    [("my-agent", False), ("caj-langgraph-agent", True), ("My_Agent", True)],
+)
+def test_init_json_reports_the_deployment_name(
+    tmp_path: pathlib.Path, directory: str, truncated: bool
+):
+    dest = tmp_path / directory
+    result = CliRunner().invoke(init_mod.init, [str(dest)], obj=_Ctx(output="json"))
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["deployment_name"] == _manifest(dest)["agent"]["deployment_name"]
+    assert payload["deployment_name_truncated"] is truncated
+
+
+def test_existing_with_name_records_it(tmp_path: pathlib.Path):
+    result = CliRunner().invoke(
+        init_mod.init, ["--existing", "--name", "billing-bot", str(tmp_path)], obj=_Ctx()
+    )
+
+    assert result.exit_code == 0, result.output
+    reference = tmp_path / "agent-bricks-migrate" / "references"
+    assert _manifest(reference / "template")["agent"]["deployment_name"] == "billing-bot"
+    settings = json.loads((reference / "migration.json").read_text())
+    assert settings["deployment_name"] == "billing-bot"
+    assert "Deploy name" in result.output

@@ -10,8 +10,7 @@ no methods, no collaborators): :class:`ProjectContext` is the deploy identity an
 :class:`ResourceContext` adds the bindings read from ``agent.toml`` plus whether the app pre-existed
 this deploy. The deploy service passes resolved identities explicitly to store grant phases.
 
-The module also holds :class:`AppProvisioner`, which owns the deployed app itself and is deliberately
-separate from the typed resource provisioners.
+:class:`AppProvisioner`, which owns the deployed app itself, lives in ``app_provisioner``.
 """
 
 from __future__ import annotations
@@ -19,24 +18,13 @@ from __future__ import annotations
 import pathlib
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import timedelta
 from types import MappingProxyType
 from typing import Optional
-
-from databricks.sdk.errors import DatabricksError
-from databricks.sdk.service.apps import App
 
 import databricks_agentbricks.clients.legacy_runtime_store as legacy_runtime_store
 import databricks_agentbricks.clients.managed_runtime_store as managed_runtime_store
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
 from databricks_agentbricks.clients.apps_client import AppsClient
-from databricks_agentbricks.clients.apps_user_auth_client import (
-    AppAuthPlan,
-    AppsUserAuthClient,
-    AppUserScopeUpdatePlan,
-    validate_app_user_scope_drift,
-    wait_for_app_user_scopes,
-)
 from databricks_agentbricks.clients.conversation_store_client import (
     MemoryStoreClient,
     SessionStoreClient,
@@ -48,7 +36,6 @@ from databricks_agentbricks.projects.agent_project import AgentProject
 from databricks_agentbricks.projects.types import AgentServer
 from databricks_agentbricks.reporting import Reporter
 from databricks_agentbricks.services.deployment.config import (
-    _AGENT_COMPUTE_OUTPUT,
     _AGENTKIT_RUNTIME_STORE_SCHEMA,
     mlflow_tracing_config,
 )
@@ -446,146 +433,14 @@ class RuntimeStoreProvisioner:
         """Whether the Runtime Store is service-managed, so a delete must tear it down first."""
         return self._use_managed
 
-    def delete_managed(self, name: DeploymentName) -> None:
-        """Drop the deployment's service-managed Runtime Store and its data."""
-        sp = self._apps.get_service_principal(name)
-        if not sp:
+    def delete_managed(self, name: DeploymentName, service_principal: Optional[str]) -> None:
+        """Drop the deployment's service-managed Runtime Store and its data.
+
+        ``service_principal`` is the App's, read by the caller while the App still exists.
+        """
+        if not service_principal:
             raise AgentCliError(
                 "Could not resolve the app's service principal for Runtime Store cleanup.",
                 hint="The deployment was retained. Check access to the app and retry deletion.",
             )
-        managed_runtime_store.delete(self._api_client_provider.get(), name, sp)
-
-
-class AppProvisioner:
-    """Create-or-scale the deployed App, wait for its compute, then sync and roll out the source.
-
-    Owns the Databricks App that a deploy creates and rolls source out to. Its operations cover App
-    creation, compute readiness, and source rollout; bound stores and tracing have their own
-    provisioners.
-
-    Like the rest of the services layer it talks to the terminal only through the injected
-    :class:`Reporter`. Non-auth Apps use the injected CLI-backed ``AppsClient``; request-user Apps
-    use the SDK-backed scope plan so creation and masked updates retain the required scopes.
-    """
-
-    def __init__(
-        self,
-        apps_client: AppsClient,
-        api_client_provider: ApiClientProvider,
-        apps_user_auth_client: AppsUserAuthClient,
-        reporter: Reporter,
-    ) -> None:
-        self._apps_client = apps_client
-        self._api_client_provider = api_client_provider
-        self._apps_user_auth_client = apps_user_auth_client
-        self._reporter = reporter
-
-    def prepare_app_auth(
-        self,
-        name: DeploymentName,
-        project: Optional[AgentProject],
-        *,
-        allow_existing_app_update: bool,
-    ) -> AppAuthPlan:
-        """Validate request-user requirements and read App scopes before any deployment mutation."""
-        return self._apps_user_auth_client.plan_user_auth(
-            name, project, allow_existing_app_update=allow_existing_app_update
-        )
-
-    @staticmethod
-    def _reconcile_scoped_app(plan: AppUserScopeUpdatePlan, instance_count: Optional[int]) -> None:
-        """Create or update a request-user App with only the required scopes and explicit scale.
-
-        The SDK path is necessary for scoped creation. Existing Apps receive a masked update that
-        preserves unrelated settings; known scope drift fails before that update. Apps has no
-        compare-and-swap contract, so owners must still coordinate concurrent changes.
-        """
-        if not set(plan.existing_scopes or ()).issubset(plan.scopes):
-            raise AgentCliError(
-                "Automatic removal of Apps user scopes is unsupported.",
-                hint="Remove scopes explicitly in Databricks Apps and verify the effective scopes. "
-                "The SDK omits empty lists when serializing App; no removal was sent.",
-            )
-        desired = App(
-            name=plan.name,
-            user_api_scopes=list(plan.scopes),
-            forward_user_access_token=True if plan.existing_scopes is None else None,
-        )
-        if instance_count is not None:
-            desired.compute_min_instances = instance_count
-            desired.compute_max_instances = instance_count
-        try:
-            if plan.existing_scopes is None:
-                plan.apps.create(desired)
-            else:
-                validate_app_user_scope_drift(plan)
-                mask = []
-                if plan.scopes != plan.existing_scopes:
-                    mask.append("user_api_scopes")
-                if instance_count is not None:
-                    mask.extend(("compute_min_instances", "compute_max_instances"))
-                if mask:
-                    plan.apps.create_update(
-                        plan.name, update_mask=",".join(mask), app=desired
-                    ).result(timeout=timedelta(minutes=5))
-        except (DatabricksError, TimeoutError) as exc:
-            raise AgentCliError(f"Could not reconcile Apps user scopes for '{plan.name}'.") from exc
-        wait_for_app_user_scopes(plan)
-
-    def ensure_app_ready(
-        self,
-        ctx: ResourceContext,
-        *,
-        auth_plan: AppAuthPlan,
-        instance_count: Optional[int],
-    ) -> None:
-        """Own App creation, optional scale and scope updates, and ACTIVE-compute readiness.
-
-        A request-user App takes the SDK path for scoped creation or masked update; other Apps use
-        the CLI. An omitted instance count preserves an existing App's scale on either path.
-        """
-        name = ctx.project.name
-        deployment_exists = ctx.deployment_exists
-        # `apps create` blocks for minutes, so show progress while captured output is unavailable.
-        if auth_plan.scope_update is not None:
-            if auth_plan.scope_update.name != name:
-                raise AgentCliError("App auth plan does not match the deployment being prepared.")
-            with self._reporter.progress(
-                "Configuring the agent's request-user access (this can take a few minutes)…"
-            ):
-                self._reconcile_scoped_app(auth_plan.scope_update, instance_count)
-        elif not deployment_exists:
-            with self._reporter.progress(
-                "Creating the agent and starting its compute (this can take a few minutes)…"
-            ):
-                out = self._apps_client.create(name, instance_count)
-            self._note_cli_output(out)
-        elif instance_count is not None:
-            self._note_cli_output(self._apps_client.create_update_instances(name, instance_count))
-        # `apps deploy` requires ACTIVE compute, whether the App is new or was previously stopped.
-        with self._reporter.progress(
-            "Waiting for agent compute to start (this can take a few minutes)…"
-        ):
-            self._apps_client.wait_for_active(name)
-
-    def _note_cli_output(self, out: str) -> None:
-        # stderr, so `--output json` stdout stays parseable.
-        old, new = _AGENT_COMPUTE_OUTPUT
-        self._reporter.note(out.replace(old, new).rstrip("\n"))
-
-    def resolve_workspace_path(self, ctx: ResourceContext, requested_path: Optional[str]) -> str:
-        """Return the explicit destination for source upload, deriving the default lazily."""
-        if requested_path:
-            return requested_path
-        current_user = self._api_client_provider.get().current_user
-        return f"/Workspace/Users/{current_user}/agentbricks_deployments/{ctx.project.name}"
-
-    def deploy_source(self, ctx: ResourceContext, workspace_path: str) -> None:
-        """Sync source to an already-resolved workspace destination and activate it.
-
-        Distinct from :meth:`AppsClient.deploy`, which is the single ``databricks apps deploy``
-        call this drives once the source is synced.
-        """
-        self._apps_client.sync_source(ctx.project.name, ctx.project.source_dir, workspace_path)
-        self._apps_client.deploy(ctx.project.name, workspace_path)
+        managed_runtime_store.delete(self._api_client_provider.get(), name, service_principal)

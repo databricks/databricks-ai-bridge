@@ -36,7 +36,7 @@ invocation protocol to design yourself. Bring your own agent, or start from a te
   up (detailed under [Agent tools](#agent-tools)).
 - **`agentbricks deploy`** - provisions the bound stores, grants the app's service principal access to
   them, provisions the durable-runtime database when durability is on, configures tracing, and rolls
-  out the app. `agentbricks deployments` covers the lifecycle (list, get, logs, start, stop, delete).
+  out the app. `agentbricks deployments` covers the lifecycle (list, get, wait, logs, start, stop, delete).
 - **`agentbricks dev`** - runs your agent from the same manifest the deployment uses, so local behavior
   matches what ships.
 
@@ -159,16 +159,41 @@ agentbricks login --profile <profile>
 agentbricks init my-agent       # Defaults to LangGraph; add --framework=openai for OpenAI Agents SDK
 cd my-agent
 agentbricks dev                 # optional: develop and test locally
-agentbricks deploy my-agent     # deploy to Databricks
+agentbricks deploy              # deploy to Databricks as agent-bricks-my-agent
 ```
 
 `agentbricks dev` runs the agent locally on `http://localhost:8000`, wrapping the Databricks Apps
 local runtime so local behavior matches a deployment.
 
-`agentbricks deploy my-agent` deploys a Databricks App named `agent-bricks-my-agent`, provisions the
+`agentbricks init` records the deployment name in `agent.toml`, so `agentbricks deploy` from the
+project directory deploys a Databricks App named `agent-bricks-my-agent`, provisions the
 stores declared in `agent.toml`, and grants the app's service principal access to the stores and
 direct App-auth tool resources declared there. Use `agentbricks deployments list` to find deployed
 apps, and `agentbricks deployments get agent-bricks-my-agent` to print an app's URL and status.
+Databricks App names cap at 30 characters, so a deployment name can be up to 17 characters after
+the `agent-bricks-` prefix. `init` shortens a longer directory name to fit (for example
+`caj-langgraph-agent` becomes `caj-langgr-<token>`); pass `agentbricks init --name <name>` to choose
+it yourself, or `agentbricks deploy <name>` to change it later.
+
+### Deploying from a coding agent
+
+A first deploy takes ~3 min (mostly starting app compute); redeploys are faster. Either run
+`agentbricks deploy` in the foreground with a long command timeout (for example, Claude Code's Bash
+`timeout: 600000`), or start it in the background and wait on it:
+
+```sh
+agentbricks deploy my-agent --no-wait            # quick checks, then deploys in the background
+agentbricks deployments wait agent-bricks-my-agent
+```
+
+`deployments wait` returns within 100 seconds (`--timeout`). Exit 0 means the agent is deployed and
+running, and it prints the URL; exit 1 means the deploy failed, and it prints the error and the end
+of the deploy log; exit 75 means it is still deploying, so run the same command again. Don't poll
+with `sleep`. Progress lines with the elapsed time go to stderr, also under `-o json`, whose stdout
+is a single JSON document. A second `deploy` of the same app is refused while one is still running
+from the project; the deploy's state and background log are in `.agentbricks/deploy-<app>.json` and
+`.agentbricks/deploy-<app>.log`. If the App is busy with another operation, `deploy` retries for
+about two minutes before failing.
 
 `agentbricks init` declares default memory and session stores in `agent.toml`, so the deployed agent has
 long-term memory and durable conversation history. It creates `<name>-<6-letter-token>-memory` and
@@ -235,15 +260,15 @@ bindings. A declaration does not confirm that the resource exists or that the de
 | Local onboarding checks | `agentbricks doctor .` | Offline; does not verify bindings or deployed resources. |
 | Agent Bricks apps in a workspace | `agentbricks -p <profile> deployments list` | Lists apps with the `agent-bricks-` prefix in the selected workspace, including other projects. |
 | App status and URL | `agentbricks -p <profile> deployments get agent-bricks-<name>` | Queries the selected workspace for the named app. |
-| Memory store IDs and details | `agentbricks -p <profile> memory stores list`, then `agentbricks -p <profile> memory stores get <resource-name>` | Workspace-wide; can include other projects' stores. Use the ID or resource name, not the display name. |
-| Session store names and details | `agentbricks -p <profile> sessions stores list`, then `agentbricks -p <profile> sessions stores get <name>` | Workspace-wide; can include other projects' stores. Use the store name. |
+| Memory store IDs and details | `agentbricks -p <profile> memory stores get <name>`, or `agentbricks -p <profile> memory stores list --name <part-of-name>` | Pass the display name from `agent.toml`, the ID, or the resource name. If several stores share a display name, `get` lists them; pass one resource name. `list` is workspace-wide and paged; `--name` and `--all` read every page. |
+| Session store names and details | `agentbricks -p <profile> sessions stores get <name>`, or `agentbricks -p <profile> sessions stores list --name <part-of-name>` | Pass the store name from `agent.toml`. `list` is workspace-wide and paged; `--name` and `--all` read every page. |
 
 Review each confirmation. Delete a store only after confirming that you own it and no other agent
 needs it, using the same profile and identifier used to inspect it.
 
 | Clean up | Command | Details |
 | --- | --- | --- |
-| Deployment | `agentbricks -p <profile> deployments delete agent-bricks-<name>` | Managed Runtime Store cleanup checks the app identity and runs before app deletion; a cleanup failure retains the app for retry. Memory/session stores, tracing experiments, tools, and source files are retained. |
+| Deployment | `agentbricks -p <profile> deployments delete agent-bricks-<name> [--delete-source]` | Managed Runtime Store cleanup checks the app identity and runs before app deletion; a cleanup failure retains the app for retry. Returns once the app is gone. The workspace folder its source was uploaded to is kept unless you pass `--delete-source`, which deletes it once the app is confirmed gone; otherwise delete prints the command to remove it. Exits 1 if the app isn't confirmed gone or a requested folder delete fails. Memory/session stores, tracing experiments and tools are retained. |
 | [Memory store](cli.md#agentbricks-memory-stores-delete) | `agentbricks -p <profile> memory stores delete <resource-name>` | Soft-deletes the store after confirmation. |
 | [Session store](cli.md#agentbricks-sessions-stores-delete) | `agentbricks -p <profile> sessions stores delete <name>` | Deletes the store after confirmation. |
 
@@ -706,9 +731,11 @@ agentbricks [-p <profile>] [-o text|json]
     bind       PROMPT [--key KEY] [--source PATH]
     unbind     KEY [--source PATH]
     list       [--source PATH]
-  deploy       [<name>] [--source PATH] [--instances N]
+  deploy       [<name>] [--source PATH] [--instances N] [--no-wait]
                [--allowed-origin ORIGIN ... | --clear-allowed-origins]
-  deployments  list | get | logs | start | stop | delete
+  deployments
+    wait       [<name>] [--timeout SECONDS] [--source PATH]
+    list | get | logs | start | stop | delete
   endpoint
     invoke      [APP] --path PATH [--url URL] [--json JSON] [--sse]
 ```

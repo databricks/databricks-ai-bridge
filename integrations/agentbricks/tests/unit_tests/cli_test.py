@@ -170,9 +170,12 @@ def test_help_examples_recommend_the_default_happy_path():
             "agentbricks init my-agent",
             "cd my-agent",
             "agentbricks dev",
-            "agentbricks deploy my-agent",
+            "agentbricks deploy",
         ),
-        ("init",): ("agentbricks init my-agent",),
+        ("init",): (
+            "agentbricks init my-agent",
+            "agentbricks init --name billing-bot billing-support-agent",
+        ),
         ("dev",): ("agentbricks dev",),
         ("memory",): (
             "agentbricks memory stores create --display-name agent-memory",
@@ -327,7 +330,7 @@ def test_root_help_shows_numbered_getting_started_path():
     # The path is numbered and ordered: login (1) → init (2) → cd (3) → dev (4) → deploy (5).
     assert numbered[0].startswith("1") and "agentbricks login --profile" in numbered[0]
     assert numbered[1].startswith("2") and "agentbricks init my-agent" in numbered[1]
-    assert numbered[4].startswith("5") and "agentbricks deploy my-agent" in numbered[4]
+    assert numbered[4].startswith("5") and "agentbricks deploy " in numbered[4]
 
 
 def test_help_dims_headings_and_descriptions_not_names():

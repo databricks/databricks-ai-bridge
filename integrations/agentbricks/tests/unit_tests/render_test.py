@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import io
+import time
 from datetime import datetime, timedelta, timezone
 
 from rich.console import Console
+from rich.status import Status
 
 from databricks_agentbricks.presentation import render
+from databricks_agentbricks.reporting import Heartbeat, format_elapsed
 from databricks_agentkit import timefmt
 
 
@@ -242,11 +245,152 @@ def test_progress_prints_persistent_line_in_text_mode(monkeypatch):
     assert "Waiting for app compute…" in buf.getvalue()
 
 
-def test_progress_skips_output_in_json_mode(monkeypatch):
+def test_progress_keeps_stdout_clean_in_json_mode(monkeypatch):
     from databricks_agentbricks import errors
 
     con, buf = _console()
+    err, err_buf = _console()
     monkeypatch.setattr(errors, "_OUTPUT_MODE", "json")
-    with render.progress("Waiting for app compute…", con=con):
+    with render.progress("Waiting for app compute…", con=con, err=err):
         pass
-    assert buf.getvalue() == ""  # nothing emitted in json mode
+    assert buf.getvalue() == ""  # stdout carries only the command's JSON document
+    assert err_buf.getvalue() == "• Waiting for app compute…\n"
+
+
+# --- heartbeats --------------------------------------------------------------
+
+
+class _FakeClock:
+    """A monotonic clock that advances ``step`` seconds on every read."""
+
+    def __init__(self, step: float) -> None:
+        self.now = 0.0
+        self.step = step
+
+    def __call__(self) -> float:
+        value = self.now
+        self.now += self.step
+        return value
+
+
+def _wait_for(predicate, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate() and time.monotonic() < deadline:
+        time.sleep(0.005)
+
+
+def test_heartbeat_ticks_once_per_interval():
+    beat = Heartbeat("Waiting for agent compute to start…", start=100.0)
+
+    assert beat.phase == "Waiting for agent compute to start"
+    assert beat.tick(114.9) is None
+    assert beat.tick(115.0) == "• Waiting for agent compute to start… 0:15"
+    assert beat.tick(120.0) is None
+    assert beat.tick(130.2) == "• Waiting for agent compute to start… 0:30"
+    # A late tick reports once, then resumes on the interval grid.
+    assert beat.tick(181.0) == "• Waiting for agent compute to start… 1:21"
+    assert beat.tick(189.0) is None
+    assert beat.tick(190.0) == "• Waiting for agent compute to start… 1:30"
+
+
+def test_heartbeat_picks_up_a_phase_already_in_progress():
+    # A waiter that joins 30 s into a phase reports next at 0:45, timed from the phase's start.
+    beat = Heartbeat("Deploying the agent source", start=0.0, now=30.0)
+
+    assert beat.tick(44.0) is None
+    assert beat.tick(45.0) == "• Deploying the agent source… 0:45"
+
+
+def test_format_elapsed():
+    assert format_elapsed(0) == "0:00"
+    assert format_elapsed(45.9) == "0:45"
+    assert format_elapsed(100) == "1:40"
+    assert format_elapsed(-3) == "0:00"
+
+
+def test_progress_prints_heartbeats_to_stderr_without_a_tty(monkeypatch):
+    from databricks_agentbricks import errors
+
+    monkeypatch.setattr(errors, "_OUTPUT_MODE", "text")
+    monkeypatch.setattr(render, "_HEARTBEAT_POLL_S", 0.001)
+    con, buf = _console()
+    err, err_buf = _console()
+    clock = _FakeClock(step=5.0)  # every heartbeat-thread poll moves the clock 5 s
+    with render.progress("Uploading the agent source…", con=con, err=err, clock=clock):
+        _wait_for(lambda: err_buf.getvalue().count("\n") >= 3)
+
+    assert buf.getvalue() == "• Uploading the agent source…\n"
+    lines = err_buf.getvalue().splitlines()
+    assert lines[:3] == [
+        "• Uploading the agent source… 0:15",
+        "• Uploading the agent source… 0:30",
+        "• Uploading the agent source… 0:45",
+    ]
+
+
+def test_status_prints_heartbeats_only_to_stderr_in_json_mode(monkeypatch):
+    from databricks_agentbricks import errors
+
+    monkeypatch.setattr(errors, "_OUTPUT_MODE", "json")
+    monkeypatch.setattr(render, "_HEARTBEAT_POLL_S", 0.001)
+    con, buf = _console()
+    err, err_buf = _console()
+    with render.status("Reconciling Runtime Store…", con=con, err=err, clock=_FakeClock(5.0)):
+        _wait_for(lambda: "0:15" in err_buf.getvalue())
+
+    assert buf.getvalue() == ""
+    assert err_buf.getvalue().splitlines()[0] == "• Reconciling Runtime Store… 0:15"
+
+
+def test_short_step_prints_no_heartbeat(monkeypatch):
+    from databricks_agentbricks import errors
+
+    monkeypatch.setattr(errors, "_OUTPUT_MODE", "text")
+    con, _ = _console()
+    err, err_buf = _console()
+    with render.status("Reconciling memory store 'm'…", con=con, err=err):
+        pass
+    assert err_buf.getvalue() == ""
+
+
+def test_tty_progress_shows_elapsed_in_spinner_without_extra_lines(monkeypatch):
+    from databricks_agentbricks import errors
+
+    monkeypatch.setattr(errors, "_OUTPUT_MODE", "text")
+    monkeypatch.setattr(render, "_HEARTBEAT_POLL_S", 0.001)
+    updates: list[str] = []
+    original_update = Status.update
+
+    def record_update(self, status=None, **kwargs):
+        if status is not None:
+            updates.append(str(status))
+        return original_update(self, status, **kwargs)
+
+    monkeypatch.setattr(Status, "update", record_update)
+    buf = io.StringIO()
+    con = Console(file=buf, width=200, force_terminal=True, no_color=True)
+    err, err_buf = _console()
+    with render.progress(
+        "Waiting for agent compute to start…", con=con, err=err, clock=_FakeClock(5)
+    ):
+        _wait_for(lambda: "0:15" in updates)
+
+    assert "0:15" in updates
+    assert err_buf.getvalue() == ""  # no heartbeat lines on a TTY
+    assert buf.getvalue().count("• Waiting for agent compute to start…") == 1
+
+
+def test_reporter_note_prints_through_a_live_tty_spinner(monkeypatch):
+    # A busy-App retry notice arrives while the deploy's spinner is live; rich only keeps a line
+    # clear of the spinner's redraw when it goes through the sys.stderr proxy the spinner installs.
+    from databricks_agentbricks import errors
+    from databricks_agentbricks.presentation.reporter import ClickReporter
+
+    monkeypatch.setattr(errors, "_OUTPUT_MODE", "text")
+    buf = io.StringIO()
+    con = Console(file=buf, width=200, force_terminal=True, no_color=True)
+    notice = "App is busy (another operation in progress); retrying in 5s…"
+    with render.progress("Deploying the agent source…", con=con):
+        ClickReporter().note(notice)
+
+    assert notice in buf.getvalue()

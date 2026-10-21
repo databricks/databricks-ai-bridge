@@ -91,6 +91,8 @@ jobs:
           from pathlib import Path
           output, summary, plan_file, current = sys.argv[1:]
           plan = json.loads(Path(plan_file).read_text())
+          # The step summary isn't readable through the API; log the plan for `gh run view --log`.
+          print('AGENTBRICKS_PLAN=' + json.dumps({**plan, 'current_version': current}))
           tag_sha = subprocess.check_output(
               ['git', 'ls-remote', '--tags', 'origin', f"refs/tags/{plan['tag']}"],
           ).decode().partition('\t')[0]
