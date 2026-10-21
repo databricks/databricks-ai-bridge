@@ -41,6 +41,7 @@ from databricks_agentbricks.reporting import Reporter
 from databricks_agentbricks.services.deployment.app_provisioner import (
     AppProvisioner,
     recorded_source_code_path,
+    source_delete_command,
 )
 from databricks_agentbricks.services.deployment.config import _PIP_INDEX_ENVS
 from databricks_agentbricks.services.deployment.model_binding_provisioner import (
@@ -302,8 +303,7 @@ class DeployService:
             if delete_source and target.source_path:
                 self._reporter.note(
                     f"Kept the source folder {target.source_path}: the wait was interrupted. Once "
-                    f"the deployment is gone, run `databricks workspace delete "
-                    f"{target.source_path} --recursive`."
+                    f"the deployment is gone, run `{source_delete_command(target.source_path)}`."
                 )
             raise
         confirmed = not wait.timed_out and wait.error is None

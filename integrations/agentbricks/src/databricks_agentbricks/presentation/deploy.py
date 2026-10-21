@@ -18,7 +18,10 @@ from databricks_agentbricks.presentation.endpoint import print_agent_invoke_comm
 from databricks_agentbricks.presentation.render import field
 from databricks_agentbricks.presentation.tracing import TRACING_BIND_COMMAND, experiment_url
 from databricks_agentbricks.services.deploy_service import DeleteResult, DeployResult
-from databricks_agentbricks.services.deployment.app_provisioner import APP_DELETE_TIMEOUT_S
+from databricks_agentbricks.services.deployment.app_provisioner import (
+    APP_DELETE_TIMEOUT_S,
+    source_delete_command,
+)
 from databricks_agentkit import timefmt
 from databricks_agentkit.runtime import prompt_registry
 
@@ -123,6 +126,8 @@ def present_deleted(result: DeleteResult, *, output: Optional[str]) -> None:
         )
     else:
         render.success(f"Deleted deployment '{result.deployment}'")
+    if path is None:
+        return
     if result.source_folder_status == "kept":
         _print_source_delete_command(
             "Kept the source folder; to delete it"
@@ -131,7 +136,8 @@ def present_deleted(result: DeleteResult, *, output: Optional[str]) -> None:
             path,
         )
     elif result.source_folder_status == "failed":
-        render.warning(f"{result.source_folder_error} Delete it yourself if you no longer need it.")
+        render.warning(str(result.source_folder_error))
+        _print_source_delete_command("To delete it yourself", path)
     elif result.source_folder_status == "kept_app_not_confirmed":
         _print_source_delete_command(
             "Kept the source folder: the deployment wasn't confirmed gone. Once it is, delete it",
@@ -139,14 +145,11 @@ def present_deleted(result: DeleteResult, *, output: Optional[str]) -> None:
         )
 
 
-def _print_source_delete_command(intro: str, path: Optional[str]) -> None:
+def _print_source_delete_command(intro: str, path: str) -> None:
     con = render.console()
     con.print(Text(intro, style=render.SECONDARY))
     # A separate, soft-wrapped line avoids copying panel borders or inserted line breaks.
-    con.print(
-        Text(f"databricks workspace delete {path} --recursive", style=render.COMMAND),
-        soft_wrap=True,
-    )
+    con.print(Text(source_delete_command(path), style=render.COMMAND), soft_wrap=True)
 
 
 def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> None:

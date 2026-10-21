@@ -6,6 +6,7 @@ deployment itself, and deleting it can also cover the source folder deploy uploa
 
 from __future__ import annotations
 
+import shlex
 import time
 from dataclasses import dataclass
 from datetime import timedelta
@@ -58,6 +59,11 @@ def recorded_source_code_path(app: App) -> Optional[str]:
         if deployment is not None and deployment.source_code_path:
             return deployment.source_code_path
     return None
+
+
+def source_delete_command(path: str) -> str:
+    """The shell command that deletes a source folder, quoted for copy-paste."""
+    return shlex.join(["databricks", "workspace", "delete", path, "--recursive"])
 
 
 # What a workspace call can fail with besides a typed API error. Connection failures surface as

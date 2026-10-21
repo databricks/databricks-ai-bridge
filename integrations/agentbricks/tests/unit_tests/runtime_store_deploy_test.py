@@ -6,6 +6,7 @@ from unittest import mock
 
 import pytest
 from click.testing import CliRunner
+from databricks.sdk.errors import PermissionDenied
 from delete_test_fixtures import fake_workspace_client
 
 from databricks_agentbricks.cli import deploy as deploy_mod
@@ -366,6 +367,38 @@ def test_delete_without_delete_source_keeps_the_folder_and_says_how_to_delete_it
     assert f"databricks workspace delete {_DEFAULT_SOURCE} --recursive" in " ".join(
         result.output.split()
     )
+
+
+def test_delete_fails_when_the_requested_source_folder_could_not_be_deleted(monkeypatch):
+    w = fake_workspace_client(source_code_path=_DEFAULT_SOURCE)
+    w.workspace.delete.side_effect = PermissionDenied("no permission")
+    monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", False)
+    monkeypatch.setattr(deploy_mod, "_databricks", mock.Mock(side_effect=_cli_runner(w)))
+
+    result = CliRunner().invoke(
+        deploy_mod.deployments_delete,
+        ["agent-bricks-myapp", "--delete-source", "--yes"],
+        obj=_ctx(mock.Mock(), w),
+    )
+
+    assert result.exit_code == 1
+    output = " ".join(result.output.split())
+    assert "no permission" in output
+    assert f"databricks workspace delete {_DEFAULT_SOURCE} --recursive" in output
+
+
+def test_delete_command_quotes_a_source_path_for_the_shell(monkeypatch):
+    path = "/Workspace/Users/user@example.com/my agent"
+    w = fake_workspace_client(source_code_path=path)
+    monkeypatch.setattr(deploy_mod, "_USE_MANAGED_RUNTIME_STORE", False)
+    monkeypatch.setattr(deploy_mod, "_databricks", mock.Mock(side_effect=_cli_runner(w)))
+
+    result = CliRunner().invoke(
+        deploy_mod.deployments_delete, ["agent-bricks-myapp", "--yes"], obj=_ctx(mock.Mock(), w)
+    )
+
+    assert result.exit_code == 0, result.output
+    assert f"databricks workspace delete '{path}' --recursive" in result.output
 
 
 @pytest.mark.parametrize(("flags", "named"), [(["--delete-source"], True), ([], False)])
