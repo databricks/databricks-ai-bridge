@@ -421,15 +421,18 @@ def success(
     *,
     fields: Optional[dict[str, Any]] = None,
     next_steps: "Optional[Sequence[str | tuple[str, str]]]" = None,
+    example: Optional[tuple[str, str]] = None,
     con: Optional[Console] = None,
 ) -> None:
-    """A green success panel with optional details and a Next step(s) list.
+    """A green success panel with optional details, a Next step(s) list, and a trailing example.
 
     Each next step is either a ``(command, description)`` pair — the command is shown in cyan (the
     actionable accent) with the description in secondary — or a bare string for a non-command
     instruction (e.g. ``"Open http://localhost:8000"``), rendered as prose. Commands are
     **copy-safe**: no ``$`` prompt prefix, so they paste straight into a shell. The heading is
-    "Next step" or "Next steps", chosen automatically from the count.
+    "Next step" or "Next steps", chosen automatically from the count. ``example`` is a
+    ``(label, command)`` pair shown last, each on its own full-width row, so a long command doesn't
+    squeeze the step descriptions.
     """
     con = con or _stdout
     body: list[RenderableType] = [Text("✔ ", style=SUCCESS) + Text(title, style="bold")]
@@ -459,6 +462,12 @@ def success(
                 # Prose (e.g. "Open <url>") renders plainly — no command accent, no prompt marker.
                 steps.add_row(Text(step), "")
         body.append(steps)
+
+    if example:
+        label, command = example
+        body.append(Text(label, style=SECONDARY))
+        # Fold rather than crop a long, space-free token (e.g. a JSON body) at the border.
+        body.append(Text(command, style=COMMAND, overflow="fold"))
 
     con.print()
     con.print(Panel(Group(*body), border_style=SUCCESS, box=box.ROUNDED))

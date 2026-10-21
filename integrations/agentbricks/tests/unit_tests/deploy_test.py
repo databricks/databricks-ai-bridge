@@ -31,6 +31,7 @@ from databricks_agentbricks.clients.tracing_client import (
     TracingClient,
 )
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.presentation.endpoint import agent_invoke_command
 from databricks_agentbricks.projects.agent_project import AgentProject
 from databricks_agentbricks.projects.app_manifest import AppManifest
 from databricks_agentbricks.projects.resolver import ProjectResolver
@@ -371,6 +372,34 @@ def test_deploy_cli_passes_request_to_service_and_presents_json(tmp_path: pathli
         allow_user_scope_update=True,
     )
     assert json.loads(result.output)["deployment"] == "agent-bricks-demo"
+    assert "Invoke with Agent Bricks" not in result.output
+    assert "agentbricks endpoint invoke" not in result.output
+
+
+@pytest.mark.parametrize("uses_runtime_api", [False, True])
+def test_deploy_prints_invoke_inside_success_panel(tmp_path: pathlib.Path, uses_runtime_api):
+    service = mock.Mock()
+    service.deploy.return_value = replace(
+        _result(), source=str(tmp_path), uses_runtime_api=uses_runtime_api
+    )
+
+    with mock.patch.object(deploy_mod, "build_deploy_service", return_value=service):
+        result = CliRunner().invoke(
+            deploy_mod.deploy, ["demo", "--source", str(tmp_path)], obj=_Ctx()
+        )
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    # The panel's bottom border is the last thing deploy prints.
+    assert [line for line in lines if line.strip()][-1].startswith("╰"), result.output
+    title = next(i for i, line in enumerate(lines) if "Deployed agent 'agent-bricks-demo'" in line)
+    label = next(i for i, line in enumerate(lines) if "Invoke with Agent Bricks" in line)
+    heading = next(i for i, line in enumerate(lines) if "Next step" in line)
+    assert title < heading < label
+    assert all(line.startswith(("│", "╰")) for line in lines[label:] if line.strip())
+    rows = [line.strip("│ ") for line in lines[label + 1 :] if line.startswith("│")]
+    command = agent_invoke_command("agent-bricks-demo", uses_runtime_api=uses_runtime_api)
+    assert "".join("".join(rows).split()) == "".join(command.split()), result.output
 
 
 def test_deploy_json_preserves_additive_tool_access_contract(tmp_path: pathlib.Path):

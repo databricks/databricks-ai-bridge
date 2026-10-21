@@ -7,7 +7,6 @@ import shlex
 from typing import TYPE_CHECKING, Any
 
 import click
-from rich.text import Text
 
 from databricks_agentbricks.presentation import render
 
@@ -70,12 +69,9 @@ def agent_invoke_command(target: str, *, uses_runtime_api: bool) -> str:
     return f"agentbricks endpoint invoke {target} --path {path} --json {json_arg}"
 
 
-def print_agent_invoke_command(target: str, *, uses_runtime_api: bool) -> None:
-    """Print only the new invocation example without changing the existing success panel."""
-    con = render.console()
-    con.print(Text("Invoke with Agent Bricks", style=render.SECONDARY))
-    # A separate, soft-wrapped line avoids copying panel borders or inserted line breaks.
-    con.print(
-        Text(agent_invoke_command(target, uses_runtime_api=uses_runtime_api), style=render.COMMAND),
-        soft_wrap=True,
+def agent_invoke_example(target: str, *, uses_runtime_api: bool) -> tuple[str, str]:
+    """Label and command for the invocation example shown last in a success panel."""
+    return (
+        "Invoke with Agent Bricks",
+        agent_invoke_command(target, uses_runtime_api=uses_runtime_api),
     )

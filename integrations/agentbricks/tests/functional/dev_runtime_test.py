@@ -295,16 +295,16 @@ def test_scaffolded_agent_boots_and_answers_locally(
             assert _wait_until_listening(app_port, server), (
                 f"agent never started listening — it failed to boot.\n{log_path.read_text()}"
             )
-            # 6. Copy dev's actual output unchanged into each available shell. The line is longer
-            #    than the console width: hard wraps or panel borders would break shell parsing.
+            # 6. Copy dev's actual in-panel command line into each available shell. The console is
+            #    wide enough for the command to sit on one `│ … │` line; only the borders are dropped.
             buf = io.StringIO()
-            monkeypatch.setattr(render, "_stdout", Console(file=buf, width=80, no_color=True))
+            monkeypatch.setattr(render, "_stdout", Console(file=buf, width=200, no_color=True))
             _announce_local_url(project, app_port, AgentServer(server_kind))
             (tmp_path / "next-steps.txt").write_text(buf.getvalue())
             commands = [
-                line
+                line.removeprefix("│ ").removesuffix("│").strip()
                 for line in buf.getvalue().splitlines()
-                if line.startswith("agentbricks endpoint")
+                if line.startswith("│ agentbricks endpoint")
             ]
             assert len(commands) == 1, buf.getvalue()
             cli_env = {**boot_env, "PATH": f"{agentbricks.parent}:/usr/bin:/bin"}
