@@ -15,7 +15,9 @@ from databricks_agentbricks.projects.types import AgentFramework, parse_framewor
 
 _CONFIG_PATH = pathlib.Path(".agentbricks/project.toml")
 _SCHEMA_VERSION = 1
-_CUSTOM_SERVER_TEMPLATES = frozenset({"custom-agent-langgraph", "custom-agent-openai"})
+_CUSTOM_SERVER_TEMPLATES = frozenset(
+    {"custom-agent-langgraph", "custom-agent-openai", "custom-agent-maf"}
+)
 
 
 @dataclass(frozen=True)

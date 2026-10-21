@@ -62,12 +62,14 @@ _TEMPLATES = {
         "agent-langgraph", "custom-agent-langgraph", "ui/agent-langgraph"
     ),
     AgentFramework.OPENAI: _AgentTemplate("agent-openai", "custom-agent-openai", "ui/agent-openai"),
+    AgentFramework.MAF: _AgentTemplate("agent-maf", "custom-agent-maf", "ui/agent-openai"),
 }
 
 # Framework -> display label for user-facing text (prompts, help).
 _FRAMEWORK_LABELS = {
     AgentFramework.LANGGRAPH: "LangGraph",
     AgentFramework.OPENAI: "OpenAI Agents SDK",
+    AgentFramework.MAF: "Microsoft Agent Framework",
 }
 
 
@@ -312,7 +314,8 @@ def _prepare_migration(
     "--framework",
     type=click.Choice([framework.value for framework in AgentFramework]),
     default=AgentFramework.LANGGRAPH.value,
-    help="Agent framework: langgraph (LangGraph, default) or openai (OpenAI Agents SDK).",
+    help="Agent framework: langgraph (LangGraph, default), openai (OpenAI Agents SDK), "
+    "or maf (Microsoft Agent Framework).",
 )
 @click.option(
     "--server",

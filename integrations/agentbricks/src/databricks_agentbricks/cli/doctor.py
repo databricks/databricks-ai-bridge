@@ -26,7 +26,7 @@ from packaging.utils import canonicalize_name
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.agent_project import AgentProject
 
-_SUPPORTED_FRAMEWORKS = ("langgraph", "openai")
+_SUPPORTED_FRAMEWORKS = ("langgraph", "openai", "maf")
 _MAX_CONFIG_BYTES = 512 * 1024
 _MAX_SOURCE_BYTES = 256 * 1024
 _MAX_SOURCE_FILES = 1_000
@@ -55,6 +55,16 @@ _TEST_DIRECTORIES = frozenset({"test", "tests", "testdata"})
 # Keep this synchronized with the public adapter calls exercised by the generated framework
 # templates. Prefix matching is intentionally forbidden: a made-up symbol is not migration proof.
 _FRAMEWORK_ADAPTER_CALLS = {
+    "maf": frozenset(
+        {
+            "databricks_agentkit.maf.configure_tracing",
+            "databricks_agentkit.maf.genie_tools",
+            "databricks_agentkit.maf.mcp_tools",
+            "databricks_agentkit.maf.memory_tools",
+            "databricks_agentkit.maf.session_store",
+            "databricks_agentkit.maf.start_trace",
+        }
+    ),
     "langgraph": frozenset(
         {
             "databricks_agentkit.langgraph.checkpointer",
@@ -224,7 +234,7 @@ def _agent_manifest(
         )
     framework = _framework(agent.get("framework"))
     if framework is None:
-        detail = f"{path} must declare agent.framework as langgraph or openai."
+        detail = f"{path} must declare agent.framework as langgraph, openai, or maf."
         return (
             _check("agent_manifest", False, detail),
             _check(
@@ -290,7 +300,9 @@ def _project_metadata(
         ), framework
     if framework is None:
         return _check(
-            "project_metadata", False, f"{path} must declare framework as langgraph or openai."
+            "project_metadata",
+            False,
+            f"{path} must declare framework as langgraph, openai, or maf.",
         ), None
     template = result.data.get("template")
     if not isinstance(template, str) or not template.strip():
@@ -1033,7 +1045,7 @@ def inspect_project(directory: pathlib.Path) -> dict[str, Any]:
     onboarded = failed == 0
     next_step = None
     if not onboarded:
-        framework_option = framework or "<langgraph|openai>"
+        framework_option = framework or "<langgraph|openai|maf>"
         next_step = f"agentbricks init --framework {framework_option} --existing <directory>"
     return {
         "directory": str(root),

@@ -32,6 +32,11 @@ dependencies = [
 
 [project.optional-dependencies]
 # Framework adapters are optional; the CLI, store SDK, and HTTP runtime install by default.
+maf = [
+    "agent-framework-core>=1.21.0,<2",
+    "agent-framework-openai>=1.16.0,<2",
+    "databricks-openai>=0.13.0",
+]
 langgraph = [
     "databricks-langchain==0.21.0",
     "langgraph>=1.1.0",

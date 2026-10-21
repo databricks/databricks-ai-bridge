@@ -135,14 +135,14 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
-| `--framework <langgraph|openai>` | `langgraph` \| `openai` | `langgraph` | no | Agent framework: langgraph (LangGraph, default) or openai (OpenAI Agents SDK). |
+| `--framework <langgraph|openai|maf>` | `langgraph` \| `openai` \| `maf` | `langgraph` | no | Agent framework: langgraph (LangGraph, default), openai (OpenAI Agents SDK), or maf (Microsoft Agent Framework). |
 | `--server <agentbricks|custom>` | `agentbricks` \| `custom` | `agentbricks` | no | Use the managed invocation server (`agentbricks` is the existing `agent.toml` value) or a minimal custom FastAPI server. |
 | `--profile <PROFILE>` | string | - | no | Seed a local .env with this DATABRICKS_CONFIG_PROFILE so `agentbricks dev` works immediately (defaults to the profile from -p / `agentbricks login`). |
 | `--disable-chat-app` | flag | - | no | Scaffold the API-only backend, without the browser chat app. |
 | `--enable-chat-app` | flag | - | no | Deprecated: the chat app is included by default; this flag is a no-op. |
 | `--memory-store <MEMORY_STORE>` | string | - | no | Name for the declared memory store (default: derived from the directory, <dir>-memory). Only --server agentbricks declares stores by default. |
 | `--session-store <SESSION_STORE>` | string | - | no | Name for the declared session store (default: derived from the directory, <dir>-session). |
-| `--existing` | flag | - | no | Prepare a coding-agent migration bundle for an existing LangGraph or OpenAI Agents SDK project (defaults to `.`). Requires `--server agentbricks`. |
+| `--existing` | flag | - | no | Prepare a coding-agent migration bundle for an existing LangGraph, OpenAI Agents SDK, or Microsoft Agent Framework project (defaults to `.`). Requires `--server agentbricks`. |
 
 ### `agentbricks doctor`
 
