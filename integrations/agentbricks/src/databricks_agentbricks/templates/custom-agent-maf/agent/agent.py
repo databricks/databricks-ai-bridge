@@ -10,6 +10,8 @@ from databricks_agentkit import workspace_client, workspace_headers
 async def invoke(messages: list[dict[str, Any]]) -> dict[str, Any]:
     agent = Agent(
         name="Agent",
+        # Databricks Responses is stateless; send history instead of previous_response_id.
+        default_options={"store": False},
         instructions="You are a helpful assistant.",
         client=OpenAIChatClient(
             model="system.ai.claude-sonnet-4-5",

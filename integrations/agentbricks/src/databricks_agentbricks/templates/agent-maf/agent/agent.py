@@ -45,6 +45,8 @@ def create_agent(
         )
     return Agent(
         name="Agent",
+        # Databricks Responses is stateless; send history instead of previous_response_id.
+        default_options={"store": False},
         instructions="You are a helpful assistant."
         + (f"\n{instructions}" if instructions else ""),
         client=OpenAIChatClient(

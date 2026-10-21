@@ -25,6 +25,7 @@ import sys
 import threading
 import time
 import uuid
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -39,18 +40,18 @@ _MARKER = "AGENTBRICKS_DEV_OK"
 
 
 class _FakeServingHandler(BaseHTTPRequestHandler):
-    """Minimal model-serving stand-in: config discovery and chat completions in both modes.
+    """Model-serving stand-in for Chat Completions and Responses, including streaming.
 
-    ChatDatabricks calls ``/serving-endpoints/chat/completions`` with ``stream=True``; we answer with
-    OpenAI-shaped SSE whose content is the marker, so the agent's reply is deterministic.
+    Both protocols return the marker, so the frameworks' native HTTP clients produce a
+    deterministic answer without replacing the scaffolded agent or its model client.
     """
 
     def log_message(self, format: str, *args: object) -> None:  # silence per-request logging
         pass
 
-    def _json(self, obj: dict) -> None:
+    def _json(self, obj: dict, *, status: int = 200) -> None:
         data = json.dumps(obj).encode()
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
@@ -62,6 +63,9 @@ class _FakeServingHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length") or 0)
         request = json.loads(self.rfile.read(length))
+        if self.path.endswith("/responses"):
+            self._responses(request)
+            return
         metadata = {"id": "chatcmpl-test", "created": 1, "model": "databricks-gpt-5-2"}
         if not request.get("stream"):
             self._json(
@@ -98,6 +102,121 @@ class _FakeServingHandler(BaseHTTPRequestHandler):
             chunk = {**metadata, "object": "chat.completion.chunk", **chunk}
             self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
         self.wfile.write(b"data: [DONE]\n\n")
+
+    def _responses(self, request: dict) -> None:
+        # Databricks requires stateless Responses calls, including native tool-loop followups.
+        if any(key in request for key in ("previous_response_id", "conversation")):
+            self._json(
+                {"error": {"message": "Server-side Responses state is unsupported"}}, status=400
+            )
+            return
+        text = {"type": "output_text", "text": _MARKER, "annotations": [], "logprobs": []}
+        item = {
+            "id": "msg-test",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [text],
+        }
+        has_time_tool = any(
+            tool.get("name") == "get_current_time" for tool in request.get("tools", [])
+        )
+        tool_outputs = [
+            entry
+            for entry in request.get("input", [])
+            if isinstance(entry, dict) and entry.get("type") == "function_call_output"
+        ]
+        if has_time_tool and not tool_outputs:
+            item = {
+                "id": "fc-test",
+                "type": "function_call",
+                "call_id": "call-time-test",
+                "name": "get_current_time",
+                "arguments": "{}",
+                "status": "completed",
+            }
+        response = {
+            "id": "resp-tool-test" if item["type"] == "function_call" else "resp-test",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "databricks-gpt-5-2",
+            "output": [item],
+            "parallel_tool_calls": True,
+            "tool_choice": "auto",
+            "tools": [],
+            "metadata": {},
+            "error": None,
+            "incomplete_details": None,
+            "usage": {
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "total_tokens": 2,
+                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+        }
+        if not request.get("stream"):
+            self._json(response)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        part = {"item_id": item["id"], "output_index": 0, "content_index": 0}
+        events = [
+            {
+                "type": "response.created",
+                "response": {**response, "status": "in_progress", "output": [], "usage": None},
+            },
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    **item,
+                    "status": "in_progress",
+                    **({"arguments": ""} if item["type"] == "function_call" else {"content": []}),
+                },
+            },
+        ]
+        if item["type"] == "function_call":
+            events.extend(
+                [
+                    {"type": "response.function_call_arguments.delta", **part, "delta": "{}"},
+                    {
+                        "type": "response.function_call_arguments.done",
+                        **part,
+                        "name": "get_current_time",
+                        "arguments": "{}",
+                    },
+                ]
+            )
+        else:
+            events.extend(
+                [
+                    {
+                        "type": "response.content_part.added",
+                        **part,
+                        "part": {**text, "text": ""},
+                    },
+                    {
+                        "type": "response.output_text.delta",
+                        **part,
+                        "delta": _MARKER,
+                        "logprobs": [],
+                    },
+                    {"type": "response.output_text.done", **part, "text": _MARKER, "logprobs": []},
+                    {"type": "response.content_part.done", **part, "part": text},
+                ]
+            )
+        events.extend(
+            [
+                {"type": "response.output_item.done", "output_index": 0, "item": item},
+                {"type": "response.completed", "response": response},
+            ]
+        )
+        for sequence_number, event in enumerate(events):
+            event["sequence_number"] = sequence_number
+            self.wfile.write(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode())
 
 
 def _free_port() -> int:
@@ -157,7 +276,7 @@ def _pin_package_source(
     pyproject.write_text(tomlkit.dumps(document))
 
 
-@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("framework", ["langgraph", "openai", "maf"])
 @pytest.mark.parametrize(
     "server_kind,chat_ui", [("agentbricks", True), ("agentbricks", False), ("custom", False)]
 )
@@ -255,7 +374,20 @@ def test_scaffolded_agent_boots_and_answers_locally(
     manifest.unlink(missing_ok=True)  # don't leave the local-only manifest in the project tree
 
     # 4. Fake model serving.
-    fake = ThreadingHTTPServer(("127.0.0.1", 0), _FakeServingHandler)
+    model_requests = []
+    responses_requests = []
+
+    class RecordingServingHandler(_FakeServingHandler):
+        def do_POST(self):
+            if self.path.endswith(("/responses", "/chat/completions")):
+                model_requests.append(self.path)
+            super().do_POST()
+
+        def _responses(self, request):
+            responses_requests.append(request)
+            super()._responses(request)
+
+    fake = ThreadingHTTPServer(("127.0.0.1", 0), RecordingServingHandler)
     fake_port = fake.server_address[1]
     threading.Thread(target=fake.serve_forever, daemon=True).start()
 
@@ -330,6 +462,27 @@ def test_scaffolded_agent_boots_and_answers_locally(
                         invocation_id = uuid.UUID(body["id"])
                         assert invocation_id not in invocation_ids
                         invocation_ids.add(invocation_id)
+            expected_path = "/responses" if framework == "maf" else "/chat/completions"
+            assert model_requests
+            assert all(path.endswith(expected_path) for path in model_requests), model_requests
+            if framework == "maf":
+                assert all(request.get("store") is False for request in responses_requests)
+            if framework == "maf" and server_kind == "agentbricks":
+                tool_outputs = [
+                    entry
+                    for request in responses_requests
+                    for entry in request.get("input", [])
+                    if isinstance(entry, dict) and entry.get("type") == "function_call_output"
+                ]
+                assert len(tool_outputs) == 2 * len(shells), responses_requests
+                for output in tool_outputs:
+                    assert output["call_id"] == "call-time-test"
+                    datetime.fromisoformat(output["output"])
         finally:
             _terminate(server)
             fake.shutdown()
+            (tmp_path / "model-requests.json").write_text(json.dumps(model_requests, indent=2))
+            if responses_requests:
+                (tmp_path / "responses-requests.json").write_text(
+                    json.dumps(responses_requests, indent=2)
+                )
