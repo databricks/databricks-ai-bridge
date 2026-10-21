@@ -64,6 +64,23 @@ async def test_lifecycle_exec_and_file_round_trip() -> None:
         await client.delete(session)
 
 
+async def test_large_file_round_trip_spans_multiple_download_chunks() -> None:
+    # 1 MiB > the 256 KiB download chunk, so read() must stitch several capped
+    # responses back together; os.urandom defeats any accidental compression.
+    payload = os.urandom(1024 * 1024)
+    client = _client()
+    session = await client.create(options=DatabricksSandboxClientOptions())
+    try:
+        await session.start()
+        root = session.state.manifest.root
+        await session.write(Path(f"{root}/big.bin"), io.BytesIO(payload))
+        stream = await session.read(Path(f"{root}/big.bin"))
+        assert stream.read() == payload
+    finally:
+        await session.aclose()
+        await client.delete(session)
+
+
 async def test_persist_and_hydrate_workspace() -> None:
     payload = bytes(range(256)) * 1024  # 256 KiB, exercises multi-chunk base64 transfer
     client = _client()

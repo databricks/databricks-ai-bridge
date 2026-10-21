@@ -15,6 +15,7 @@ import base64
 import importlib
 import io
 import sys
+import tarfile
 import types
 import uuid
 from pathlib import Path
@@ -246,8 +247,9 @@ async def test_download_reassembles_chunks(mod: Any, monkeypatch: pytest.MonkeyP
     session, calls = _session(mod, responses)
     data = await session._download_bytes("/w/f.bin")
     assert data == payload
-    assert calls[0]["envs"] == {"DBX_PATH": "/w/f.bin", "DBX_OFF": "0", "DBX_LEN": "4"}
-    assert calls[1]["envs"]["DBX_OFF"] == "4"
+    assert calls[0]["envs"] == {"DBX_PATH": "/w/f.bin", "DBX_IDX": "0", "DBX_LEN": "4"}
+    assert calls[1]["envs"]["DBX_IDX"] == "1"
+    assert calls[2]["envs"]["DBX_IDX"] == "2"
 
 
 @pytest.mark.asyncio
@@ -586,10 +588,16 @@ async def test_read_unexpected_classify_raises_archive_error(mod: Any) -> None:
 
 
 @pytest.mark.asyncio
-async def test_download_script_uses_pipefail(mod: Any) -> None:
+async def test_download_reads_fixed_blocks_with_dd_under_pipefail(mod: Any) -> None:
     session, calls = _session(mod, [_response(stdout=base64.b64encode(b"x").decode("ascii"))])
     await session._download_bytes("/w/f.bin")
-    assert "set -o pipefail" in calls[0]["args"][1]
+    script = calls[0]["args"][1]
+    # dd block reads (not `tail | head`) so head closing early cannot SIGPIPE the
+    # producer and fail the command under pipefail on a multi-chunk file.
+    assert "set -o pipefail" in script
+    assert "dd if=" in script
+    assert "iflag=fullblock" in script
+    assert "tail -c" not in script
 
 
 @pytest.mark.asyncio
@@ -664,3 +672,44 @@ async def test_persist_workspace_cleans_up_on_download_failure(
     with pytest.raises(RuntimeError):
         await session.persist_workspace()
     assert removed  # finally-block cleanup still ran
+
+
+def _tar_bytes(*names: str) -> bytes:
+    """Build a tar archive holding the given member names (1-byte files each)."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        for name in names:
+            info = tarfile.TarInfo(name=name)
+            info.size = 1
+            tar.addfile(info, io.BytesIO(b"x"))
+    return buf.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_hydrate_rejects_path_traversal_archive(mod: Any) -> None:
+    session = _lifecycle_session(mod, _FakeLifecycleApi())
+    session._provisioned = True
+    # A member escaping the workspace root must be rejected before extraction.
+    with pytest.raises(WorkspaceArchiveWriteError):
+        await session.hydrate_workspace(io.BytesIO(_tar_bytes("../escape.txt")))
+
+
+@pytest.mark.asyncio
+async def test_hydrate_extracts_safe_archive(mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    session = _lifecycle_session(mod, _FakeLifecycleApi())
+    session._provisioned = True
+    uploaded: list[bytes] = []
+
+    async def fake_upload(path: str, content: bytes) -> None:
+        uploaded.append(content)
+
+    async def fake_exec(*command: Any, **kwargs: Any) -> Any:
+        return mod.ExecResult(stdout=b"", stderr=b"", exit_code=0)
+
+    monkeypatch.setattr(session, "_upload_bytes", fake_upload)
+    monkeypatch.setattr(session, "exec", fake_exec)
+    monkeypatch.setattr(session, "_remove_archive", _async_return(None))
+
+    payload = _tar_bytes("./a.txt")
+    await session.hydrate_workspace(io.BytesIO(payload))
+    assert uploaded == [payload]  # safe archive proceeded to upload + extract

@@ -47,6 +47,7 @@ try:
     )
     from agents.sandbox.snapshot import SnapshotBase, SnapshotSpec, resolve_snapshot
     from agents.sandbox.types import ExecResult, User
+    from agents.sandbox.util.tar_utils import UnsafeTarMemberError, validate_tar_bytes
     from agents.sandbox.workspace_paths import sandbox_path_str
     from databricks.sdk import WorkspaceClient
     from databricks.sdk.errors import NotFound
@@ -99,9 +100,11 @@ _CD_EXEC_SCRIPT = 'cd "$DBX_CWD" 2>/dev/null; exec "$@"'
 # base64 of a chunk sent in a command env var must stay under the per-arg/env limit
 # (MAX_ARG_STRLEN, 128 KiB); a multiple of 4 keeps every chunk independently decodable.
 _UPLOAD_B64_CHUNK = 120 * 1024
-# A downloaded raw byte range, once base64-encoded, must stay under the unary response
-# cap (512 KiB); a multiple of 3 avoids base64 padding except on the final chunk.
-_DOWNLOAD_RAW_CHUNK = 300 * 1024
+# A downloaded raw byte range is base64-encoded (~4/3 size + line breaks) in the
+# command's stdout, which the daemon hard-caps at 512 KiB and silently truncates.
+# 256 KiB raw -> ~354 KiB of base64, comfortably under the cap with margin. A
+# multiple of 3 avoids base64 padding except on the final chunk.
+_DOWNLOAD_RAW_CHUNK = 256 * 1024
 
 _IMPORT_ERROR = (
     "DatabricksSandboxClient requires databricks-openai[sandbox]. "
@@ -374,23 +377,26 @@ class DatabricksSandboxSession(BaseSandboxSession):
 
     async def _download_bytes(self, path: str) -> bytes:
         buf = bytearray()
-        offset = 0
+        index = 0
         while True:
-            # tail -c is 1-based; read a raw byte range and base64 it so each response
-            # stays under the unary cap regardless of file size. pipefail makes a
-            # failing tail (e.g. the file vanished) fail the command instead of
-            # silently base64-ing empty input into a zero-byte "success".
+            # Read the file one fixed-size block at a time with dd and base64 it.
+            # dd reads directly from the file (no `tail | head` pipe, which under
+            # pipefail fails the whole command when head closes the pipe early on a
+            # multi-chunk file), iflag=fullblock guarantees a whole block per read
+            # except at EOF, and pipefail still surfaces a genuinely failing read
+            # (e.g. a missing file) instead of a silent empty result.
             script = (
                 "set -o pipefail; "
-                'tail -c +$((DBX_OFF + 1)) "$DBX_PATH" | head -c "$DBX_LEN" | base64'
+                'dd if="$DBX_PATH" bs="$DBX_LEN" skip="$DBX_IDX" count=1 '
+                "iflag=fullblock 2>/dev/null | base64"
             )
             response = await self._exec_sync(
                 _SHELL,
                 ["-lc", script],
                 envs={
                     "DBX_PATH": path,
-                    "DBX_OFF": str(offset),
                     "DBX_LEN": str(_DOWNLOAD_RAW_CHUNK),
+                    "DBX_IDX": str(index),
                 },
             )
             if not _completed(response):
@@ -405,7 +411,7 @@ class DatabricksSandboxSession(BaseSandboxSession):
             buf.extend(chunk)
             if len(chunk) < _DOWNLOAD_RAW_CHUNK:
                 break
-            offset += _DOWNLOAD_RAW_CHUNK
+            index += 1
         return bytes(buf)
 
     async def _classify_path(self, path: str) -> str:
@@ -504,9 +510,22 @@ class DatabricksSandboxSession(BaseSandboxSession):
             raise WorkspaceWriteTypeError(
                 path=Path(self.state.manifest.root), actual_type=type(raw).__name__
             )
+        payload = bytes(raw)
+        # Reject path-traversal / unsafe symlink members before extracting into the
+        # workspace, using the SDK's shared safe-tar policy (the same check the
+        # first-party backends run). allow_external_symlink_targets=False matches
+        # the strict extraction the daemon's `tar -xf` would otherwise perform blind.
+        try:
+            validate_tar_bytes(payload, allow_external_symlink_targets=False)
+        except UnsafeTarMemberError as exc:
+            raise WorkspaceArchiveWriteError(
+                path=Path(self.state.manifest.root),
+                context={"backend": "databricks", "reason": "unsafe_tar_member"},
+                cause=exc,
+            ) from exc
         root = self.state.manifest.root
         archive = self._archive_path()
-        await self._upload_bytes(archive, bytes(raw))
+        await self._upload_bytes(archive, payload)
         try:
             result = await self.exec("tar", "-C", root, "-xf", archive, shell=False)
             if not result.ok():
