@@ -36,10 +36,14 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ),
         ("cd my-agent", "enter the project directory"),
         ("agentbricks dev", "run the agent locally with a chat UI"),
-        ("agentbricks deploy my-agent", "deploy the agent to Databricks Apps"),
+        ("agentbricks deploy", "deploy the agent to Databricks Apps"),
     ),
     ("init",): (
         ("agentbricks init my-agent", "scaffold a new agent project"),
+        (
+            "agentbricks init --name billing-bot billing-support-agent",
+            "scaffold it and record a deployment name of up to 17 characters",
+        ),
         (
             "agentbricks init --framework langgraph --existing .",
             "prepare a coding-agent migration bundle for an existing agent",
@@ -94,9 +98,11 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("memory", "stores", "list"): (
         ("agentbricks memory stores list", "list managed memory stores"),
+        ("agentbricks memory stores list --name agent-memory", "find stores by part of the name"),
     ),
     ("memory", "stores", "get"): (
         ("agentbricks memory stores get <store>", "show one store's details"),
+        ("agentbricks memory stores get agent-memory", "look up by the name in agent.toml"),
     ),
     ("memory", "stores", "update"): (
         ('agentbricks memory stores update <store> --description "Agent memory"', "edit a store"),
@@ -242,6 +248,10 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("sessions", "stores", "list"): (
         ("agentbricks sessions stores list", "list managed session stores"),
+        (
+            "agentbricks sessions stores list --name agent-sessions",
+            "find stores by part of the name",
+        ),
     ),
     ("sessions", "stores", "get"): (
         ("agentbricks sessions stores get agent-sessions", "show one store's details"),
@@ -414,11 +424,16 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("deploy",): (
         ("agentbricks deploy my-agent", "deploy the agent"),
         ("agentbricks deploy my-agent --instances 2", "deploy with two instances"),
+        ("agentbricks deploy my-agent --no-wait", "start in the background, then wait"),
     ),
     ("deployments",): (("agentbricks deployments list", "list agent deployments"),),
     ("deployments", "list"): (("agentbricks deployments list", "list agent deployments"),),
     ("deployments", "get"): (
         ("agentbricks deployments get agent-bricks-my-agent", "show one deployment"),
+    ),
+    ("deployments", "wait"): (
+        ("agentbricks deployments wait", "wait for this project's deployment"),
+        ("agentbricks deployments wait agent-bricks-my-agent", "wait for a named deployment"),
     ),
     ("deployments", "logs"): (
         ("agentbricks deployments logs agent-bricks-my-agent", "stream a deployment's logs"),
@@ -431,6 +446,10 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("deployments", "delete"): (
         ("agentbricks deployments delete agent-bricks-my-agent", "delete a deployment"),
+        (
+            "agentbricks deployments delete agent-bricks-my-agent --delete-source",
+            "delete a deployment and its uploaded source folder",
+        ),
     ),
     ("endpoint",): (
         (

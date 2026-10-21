@@ -22,7 +22,7 @@ def test_memory(agentbricks_cli: AgentbricksCli, project: Project, cleanup: Clea
     project.pin_runtime()
     app = project.app_name
     # Before deploy: a deploy that fails partway can still leave the App behind.
-    cleanup(f"deployments delete {app} --yes")
+    cleanup(f"deployments delete {app} --delete-source --yes")
     deployed = json.loads(
         agentbricks_cli.run(
             f"--output json deploy {app} --source {project.path}", timeout=2400

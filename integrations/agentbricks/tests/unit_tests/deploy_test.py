@@ -7,6 +7,7 @@ so this file focuses on the CLI adapter, manifest contract, and client behavior 
 
 from __future__ import annotations
 
+import functools
 import json
 import pathlib
 import types
@@ -36,6 +37,8 @@ from databricks_agentbricks.projects.app_manifest import AppManifest
 from databricks_agentbricks.projects.profiles import ProfileInfo
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.services.deploy_service import (
+    DeleteResult,
+    DeleteTarget,
     DeployRequest,
     DeployResult,
     ToolAccessSummary,
@@ -340,8 +343,18 @@ def test_delete_announces_the_workspace_used_by_its_client(write_databrickscfg, 
     ctx = CliContext("prof", "text")
     service = mock.Mock()
     service.deletes_runtime_store_data.return_value = managed
-    if managed:
-        service.delete.side_effect = lambda name: ctx.client()
+    target = DeleteTarget(DeploymentName("demo"), source_path=None, service_principal=None)
+    service.delete_target.return_value = target
+    deleted = DeleteResult(
+        "demo", None, "not_recorded", None, still_deleting=False, wait_error=None
+    )
+
+    def delete(_target, *, delete_source):
+        if managed:
+            ctx.client()
+        return deleted
+
+    service.delete.side_effect = delete
     with (
         mock.patch.object(deploy_mod, "build_deploy_service", return_value=service),
         mock.patch(
@@ -355,7 +368,7 @@ def test_delete_announces_the_workspace_used_by_its_client(write_databrickscfg, 
     host = "https://workspace.example" if managed else "https://profile.example"
     assert result.output.count(f"Using profile 'prof' (from --profile) · {host}") == 1
     assert client.call_count == int(managed)
-    service.delete.assert_called_once_with("demo")
+    service.delete.assert_called_once_with(target, delete_source=False)
 
 
 def test_deploy_rejects_instance_count_above_platform_limit():
@@ -676,6 +689,8 @@ def test_real_cli_deploy_reconciles_resources_and_rolls_out_in_order(
         "/Workspace/Users/me@example.com/agentbricks_deployments/agent-bricks-demo",
         "--exclude",
         "uv.lock",
+        "--exclude",
+        ".agentbricks",
     ]
     assert next(call for call in app_calls if call[:2] == ["apps", "deploy"]) == [
         "apps",
@@ -904,6 +919,52 @@ def test_real_cli_redeploy_scales_existing_app_without_create(
     }
     assert any(call[0] == "sync" for call in app_calls)
     assert any(call[:2] == ["apps", "deploy"] for call in app_calls)
+
+
+class _BusyDeployRunner(_DeployRunner):
+    """`_DeployRunner` whose first ``busy`` `apps deploy` calls fail the way a busy App does."""
+
+    def __init__(self, events: list[tuple], *, busy: int):
+        super().__init__(events, exists=True)
+        self.busy = busy
+
+    def __call__(self, args, profile, **kwargs):
+        if list(args[:2]) == ["apps", "deploy"] and self.busy:
+            self.busy -= 1
+            self.events.append(("apps", tuple(args)))
+            error = "Error: Another operation is in progress. Please retry in a few moments."
+            return types.SimpleNamespace(returncode=1, stdout=error, stderr="")
+        return super().__call__(args, profile, **kwargs)
+
+
+@pytest.mark.parametrize("output", ["text", "json"])
+def test_real_cli_deploy_prints_busy_retry_notices_to_stderr(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, output: str
+):
+    project = AgentProject.create(tmp_path, framework="langgraph", server="custom")
+    project.set_deployment_name("demo")
+    project.write()
+    events: list[tuple] = []
+    runner = _BusyDeployRunner(events, busy=2)
+    monkeypatch.setattr(deploy_mod, "_databricks", runner)
+    monkeypatch.setattr(
+        deploy_mod, "AppsClient", functools.partial(AppsClient, sleep=lambda _: None)
+    )
+    monkeypatch.setattr("databricks_agentbricks.errors._OUTPUT_MODE", output)
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["--source", str(tmp_path), "--pip-index-url", ""],
+        obj=_real_deploy_context(_DeployApi(events), output=output),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert sum(1 for e in events if e[0] == "apps" and list(e[1][:2]) == ["apps", "deploy"]) == 3
+    assert "App is busy (another operation in progress); retrying in 5s…" in result.stderr
+    assert "App is busy (another operation in progress); retrying in 10s…" in result.stderr
+    assert "App is busy" not in result.stdout
+    if output == "json":
+        assert json.loads(result.stdout)["deployment"] == "agent-bricks-demo"
 
 
 def test_real_cli_missing_name_fails_before_external_mutation(

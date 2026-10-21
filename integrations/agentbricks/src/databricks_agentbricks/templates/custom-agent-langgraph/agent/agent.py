@@ -1,3 +1,4 @@
+from functools import lru_cache
 from typing import Any
 
 from databricks_langchain import ChatDatabricks
@@ -16,9 +17,15 @@ class _RoutedChatDatabricks(ChatDatabricks):
         return kwargs
 
 
+@lru_cache(maxsize=1)
+def _model() -> _RoutedChatDatabricks:
+    # Building the WorkspaceClient blocks on auth; do it once, not on every request.
+    return _RoutedChatDatabricks(endpoint=MODEL, workspace_client=workspace_client())
+
+
 async def invoke(messages: list[dict[str, Any]]) -> dict[str, Any]:
     agent = create_agent(
-        model=_RoutedChatDatabricks(endpoint=MODEL, workspace_client=workspace_client()),
+        model=_model(),
         tools=[],
     )
     result = await agent.ainvoke({"messages": messages})

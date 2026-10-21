@@ -102,7 +102,9 @@ A trailing `-p` goes after the full subcommand, not after a group name — `agen
 
 Scaffold a local agent project from an Agent Bricks CLI template.
 
-DIRECTORY is the target path to create (defaults to the template's own name). The directory must not already exist — except a project `init` itself scaffolded, where a rerun changes nothing and points at `agentbricks dev` / `agentbricks deploy` (use `agentbricks auth switch <profile>` to change its workspace). Use `--existing` to migrate a project Agent Bricks did not generate.
+DIRECTORY is the target path to create (defaults to the template's own name). The directory must not already exist — except a project `init` itself scaffolded, where a rerun changes nothing and points at `agentbricks dev` / `agentbricks deploy` (use `agentbricks auth switch <profile>` to change its workspace). Use `--existing` to migrate a project Agent Bricks did not generate. init records a deployment name that fits the Databricks Apps limit (--name, or the directory name shortened to 17 characters), so `agentbricks deploy` from the project directory needs no NAME.
+
+Databricks App names cap at 30 characters and deploy adds the `agent-bricks-` prefix, so a deployment name can be up to 17 lowercase letters, digits, and hyphens. init records `[agent].deployment_name` in `agent.toml` and shows it as `Deploy name`. A directory name that is valid and fits is recorded unchanged. Otherwise init sanitizes it and, if it is still over 17 characters, keeps its first 10 characters plus `-<token>`, the same 6-letter token as the default stores (`caj-langgraph-agent` becomes `caj-langgr-<token>`). `--name` is validated before any file is written; an invalid name fails with a suggestion. JSON results include `deployment_name` and `deployment_name_truncated` (true when init changed the directory name to fit).
 
 The project's `.env` pins a Databricks profile: --profile (or the global -p, or DATABRICKS_CONFIG_PROFILE), else the default set with `databricks auth switch`, else `DEFAULT`, so the project keeps its workspace however the shell is set up later. With env-var auth set (`DATABRICKS_HOST`, `DATABRICKS_TOKEN` or `DATABRICKS_CLIENT_ID`, e.g. CI) and no profile, `init` writes no `.env` and every command keeps using those environment variables (`agentbricks dev` passes them to the local agent through `databricks apps run-local`). In an interactive terminal, `init` then signs in to it, opening `databricks auth login` only if it isn't authenticated yet (which also creates a missing profile, asking for the workspace URL); a failed sign-in keeps the scaffold and lists `agentbricks auth login <profile>` as a next step. Non-interactive and CI runs skip sign-in (and warn if the profile isn't in your Databricks config yet). If nothing chose a profile and `[DEFAULT]` doesn't exist but other profiles do, `init` doesn't sign in, since that would add a machine-wide `[DEFAULT]`, and lists those profiles for `agentbricks auth switch` instead. Change the profile later with `agentbricks auth switch <profile>`. With `-o json`, the result includes `env_profile`, `workspace_host`, and `signed_in_user`.
 
@@ -141,8 +143,9 @@ _Options_
 | `--profile <PROFILE>` (`-p`) | string | - | no | DATABRICKS_CONFIG_PROFILE to seed the project's .env with, so `agentbricks dev` works right away (default: the global -p, then DATABRICKS_CONFIG_PROFILE, then DEFAULT; with no profile and env-var auth set (DATABRICKS_HOST, DATABRICKS_TOKEN or DATABRICKS_CLIENT_ID), no .env is written). |
 | `--disable-chat-app` | flag | - | no | Scaffold the API-only backend, without the browser chat app. |
 | `--enable-chat-app` | flag | - | no | Deprecated: the chat app is included by default; this flag is a no-op. |
-| `--memory-store <MEMORY_STORE>` | string | - | no | Name for the declared memory store (default: derived from the directory, <dir>-memory). Only --server agentbricks declares stores by default. |
-| `--session-store <SESSION_STORE>` | string | - | no | Name for the declared session store (default: derived from the directory, <dir>-session). |
+| `--memory-store <MEMORY_STORE>` | string | - | no | Name for the declared memory store (default: a unique name derived from --name or the directory, <name>-<token>-memory). Only --server agentbricks declares stores by default. |
+| `--session-store <SESSION_STORE>` | string | - | no | Name for the declared session store (default: a unique name derived from --name or the directory, <name>-<token>-sessions). |
+| `--name <NAME>` | string | - | no | Deployment name, recorded in agent.toml as [agent].deployment_name. Deploys as agent-bricks-<name>, so it can be up to 17 lowercase letters, digits, and hyphens. Also names the default stores and tracing experiment (default: derived from the directory, shortened to fit). |
 | `--existing` | flag | - | no | Prepare a coding-agent migration bundle for an existing LangGraph or OpenAI Agents SDK project (defaults to `.`). Requires `--server agentbricks`. |
 
 ### `agentbricks auth`
@@ -234,7 +237,11 @@ change files. It checks `agent.toml`, `.agentbricks/project.toml`, the framework
 `DurableAgentServer` instance with an `invoke` hook plus a recognized framework adapter call; test,
 example, and old/stale directories are excluded. A bounded source scan that exceeds a limit is
 reported while the evidence it already found still counts. These checks are static repository
-evidence, not proof that the configured startup command executes the files found. Doctor exits 0
+evidence, not proof that the configured startup command executes the files found. The
+`deployment_name` check confirms that `[agent].deployment_name` (or the directory name when none is
+recorded) fits the Databricks Apps limit: up to 17 lowercase letters, digits, and hyphens after the
+`agent-bricks-` prefix. On failure its detail gives `agentbricks deploy <name>` with a name that fits;
+when it is the only failing check, that is also the report's `next_step`. Doctor exits 0
 only when every check passes, and exits 1 after printing a normal report otherwise. If the framework
 is unknown, the remediation requires an explicit `--framework <framework_name>`. Use global
 `-o json` for a structured report.
@@ -299,8 +306,8 @@ Workspace-scoped managed memory stores.
 | Subcommand | Description |
 | --- | --- |
 | [`memory stores create`](#agentbricks-memory-stores-create) | Create a memory store. |
-| [`memory stores list`](#agentbricks-memory-stores-list) | List memory stores in the workspace (25 per page; paginates interactively on a terminal). |
-| [`memory stores get`](#agentbricks-memory-stores-get) | Get a memory store by id or resource name. |
+| [`memory stores list`](#agentbricks-memory-stores-list) | List memory stores in the workspace. |
+| [`memory stores get`](#agentbricks-memory-stores-get) | Get a memory store by id, resource name (memory-stores/<id>), or display name. |
 | [`memory stores update`](#agentbricks-memory-stores-update) | Update a store's display name and/or description. |
 | [`memory stores delete`](#agentbricks-memory-stores-delete) | Delete (soft-delete) a memory store. |
 
@@ -322,7 +329,11 @@ _Options_
 
 ##### `agentbricks memory stores list`
 
-List memory stores in the workspace (25 per page; paginates interactively on a terminal).
+List memory stores in the workspace.
+
+Without --name or --all, shows 25 per page: it paginates interactively on a terminal and otherwise
+prints the --page-token for the next page. --name and --all page through every store and print one
+complete list. The API has no server-side filter, so --name reads every page.
 
 ```
 agentbricks memory stores list [options]
@@ -333,12 +344,17 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
-| `--page-size <PAGE_SIZE>` | integer | `25` | no | - |
-| `--page-token <PAGE_TOKEN>` | string | - | no | - |
+| `--name <NAME>` | string | - | no | Only stores whose display name contains TEXT (case-insensitive). Reads every page. |
+| `--all` | flag | - | no | Page through every store. |
+| `--page-size <PAGE_SIZE>` | integer | `25` | no | Stores per page without --name or --all. |
+| `--page-token <PAGE_TOKEN>` | string | - | no | Resume from a previous page's token (not with --name or --all). |
 
 ##### `agentbricks memory stores get`
 
-Get a memory store by id or resource name.
+Get a memory store by id, resource name (memory-stores/<id>), or display name.
+
+A display name is resolved by listing every store; if several stores share it, the command fails and
+lists their resource names.
 
 ```
 agentbricks memory stores get NAME
@@ -791,8 +807,8 @@ Workspace-scoped session stores.
 | Subcommand | Description |
 | --- | --- |
 | [`sessions stores create`](#agentbricks-sessions-stores-create) | Create a session store. |
-| [`sessions stores list`](#agentbricks-sessions-stores-list) | List session stores in the workspace (25 per page; paginates interactively on a terminal). |
-| [`sessions stores get`](#agentbricks-sessions-stores-get) | Get a session store by name. |
+| [`sessions stores list`](#agentbricks-sessions-stores-list) | List session stores in the workspace. |
+| [`sessions stores get`](#agentbricks-sessions-stores-get) | Get a session store by name (the name in agent.toml) or resource name (session-stores/<name>). |
 | [`sessions stores update`](#agentbricks-sessions-stores-update) | Update a store's description and/or metadata. |
 | [`sessions stores delete`](#agentbricks-sessions-stores-delete) | Delete a session store. |
 
@@ -815,7 +831,11 @@ _Options_
 
 ##### `agentbricks sessions stores list`
 
-List session stores in the workspace (25 per page; paginates interactively on a terminal).
+List session stores in the workspace.
+
+Without --name or --all, shows 25 per page: it paginates interactively on a terminal and otherwise
+prints the --page-token for the next page. --name and --all page through every store and print one
+complete list. The API has no server-side filter, so --name reads every page.
 
 ```
 agentbricks sessions stores list [options]
@@ -826,12 +846,14 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
-| `--page-size <PAGE_SIZE>` | integer | `25` | no | - |
-| `--page-token <PAGE_TOKEN>` | string | - | no | - |
+| `--name <NAME>` | string | - | no | Only stores whose name contains TEXT (case-insensitive). Reads every page. |
+| `--all` | flag | - | no | Page through every store. |
+| `--page-size <PAGE_SIZE>` | integer | `25` | no | Stores per page without --name or --all. |
+| `--page-token <PAGE_TOKEN>` | string | - | no | Resume from a previous page's token (not with --name or --all). |
 
 ##### `agentbricks sessions stores get`
 
-Get a session store by name.
+Get a session store by name (the name in agent.toml) or resource name (session-stores/<name>).
 
 ```
 agentbricks sessions stores get NAME
@@ -1417,13 +1439,15 @@ Deploy your agent to Databricks Apps and get back a hosted URL to try it.
 
 Rolls the agent out to Databricks Apps and prints the URL where you (or anyone you share it with) can use it. The deployed agent reaches Databricks model serving through the AI Gateway using the app's own identity - no model keys to configure - and `deploy` also reconciles the stores declared in agent.toml and wires in any tracing. `deploy` first checks that the resolved profile can authenticate and fails fast with the `agentbricks auth login` command to run.
 
-NAME is recorded in agent.toml on the first deploy, so a later `agentbricks deploy` from the project directory can omit it (passing NAME again updates the recorded name). Deployed apps are named `agent-bricks-<name>`. A project with a recorded base name reuses that app when NAME is omitted; you can also pass the full app name to update it. Use the full app name with the `agentbricks deployments` commands.
+NAME is recorded in agent.toml on the first deploy, so a later `agentbricks deploy` from the project directory can omit it (passing NAME again updates the recorded name). Deployed apps are named `agent-bricks-<name>`. App names cap at 30 characters, so NAME can be up to 17 (`agentbricks init` records one that fits). A longer name fails before anything is provisioned, with a suggested name that fits. A project with a recorded base name reuses that app when NAME is omitted; you can also pass the full app name to update it. Use the full app name with the `agentbricks deployments` commands.
 
 Any memory/session store declared in agent.toml (for example, by `agentbricks memory/sessions bind`) is created if it doesn't exist yet; agent.toml itself is never modified for stores.
 
 Scaling to multiple instances (--instances) uses best-effort sticky routing, so a browser session automatically stays on one instance.
 
 To keep a session on one app replica (sticky routing), API clients must resend a stable UUID (for example, their session id) in the `X-Routing-Key` request header on every request. The header is a routing hint only - non-blank, no more than 128 UTF-8 bytes, used verbatim - not authentication and not the session id itself (send the session id in the request body). Example: `X-Routing-Key: <uuid>`
+
+A first deploy takes a few minutes (mostly starting app compute). From a coding agent or script with a short command timeout, use --no-wait and then `agentbricks deployments wait`.
 
 ```
 agentbricks deploy [NAME] [options]
@@ -1445,19 +1469,23 @@ _Options_
 | `--workspace-path <WORKSPACE_PATH>` | string | - | no | Workspace destination for the synced source (defaults to a per-user path). |
 | `--instances <INSTANCES>` | integer range | - | no | Number of deployment instances. |
 | `--allow-user-scope-update` | flag | - | no | Allow Agent Bricks to add missing user API scopes to an existing App from managed-tool inference and `[auth.user]` additions. Once added, later deploys do not need this flag. |
+| `--no-wait` | flag | - | no | Run the quick checks, then finish the deploy in a background process and exit. Follow it with `agentbricks deployments wait`. |
+
+`deploy` refuses to start while another deploy of the same app is still running from the project. It records its progress in `.agentbricks/deploy-<app>.json`, and a `--no-wait` deploy logs to `.agentbricks/deploy-<app>.log`. Long steps print `• <step>… M:SS` every 15 seconds: on stderr when output isn't a terminal or under `-o json` (whose stdout is exactly one JSON document), and in the spinner on a terminal. With `--no-wait`, text output is `Deploy of <app> started in the background. Next: agentbricks deployments wait <app>` and `-o json` output is `{"deployment", "status": "started", "log", "state_file"}`.
 
 ### `agentbricks deployments`
 
-Inspect and manage deployed agents: list, get, stream logs, start, stop, or delete.
+Inspect and manage deployed agents: list, get, wait, stream logs, start, stop, or delete.
 
 | Subcommand | Description |
 | --- | --- |
 | [`deployments list`](#agentbricks-deployments-list) | List Agent Bricks deployments (apps named `agent-bricks-*`). |
 | [`deployments get`](#agentbricks-deployments-get) | Get an agent deployment's details. |
+| [`deployments wait`](#agentbricks-deployments-wait) | Wait for a deployment to finish, for up to --timeout seconds, then report it. |
 | [`deployments logs`](#agentbricks-deployments-logs) | Stream a deployment's logs. |
 | [`deployments start`](#agentbricks-deployments-start) | Start a deployment. |
 | [`deployments stop`](#agentbricks-deployments-stop) | Stop a deployment. |
-| [`deployments delete`](#agentbricks-deployments-delete) | Delete a deployment. |
+| [`deployments delete`](#agentbricks-deployments-delete) | Delete a deployment, and its Runtime Store when managed provisioning is enabled. |
 
 #### `agentbricks deployments list`
 
@@ -1481,6 +1509,34 @@ _Arguments_
 | Argument | Required | Description |
 | --- | --- | --- |
 | `NAME` | yes | - |
+
+#### `agentbricks deployments wait`
+
+Wait for a deployment to finish, for up to --timeout seconds, then report it.
+
+Follows the deploy started by `agentbricks deploy` (including --no-wait) in this project, or otherwise the App's state in the workspace. NAME defaults to the deployment recorded in agent.toml.
+
+Exit status: 0 deployed and running; 1 failed; 75 still deploying at the timeout (run the same command again).
+
+```
+agentbricks deployments wait [NAME] [options]
+```
+
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `NAME` | no | - |
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--timeout <TIMEOUT>` | integer range | `100` | no | Seconds to wait before returning exit 75. |
+| `--source <SOURCE>` | path | `.` | no | Project directory the deploy ran from. |
+
+On exit 0 it prints the URL and the invoke command; on exit 1, the error and the last 20 lines of the deploy log (or the App's status message); on exit 75, `still deploying: <phase>, M:SS elapsed — run the same command again`. Phase changes and heartbeats go to stderr. Under `-o json`, stdout is exactly one object `{deployment, status, phase, elapsed_s, url, error, log_tail}` with the same exit code.
 
 #### `agentbricks deployments logs`
 
@@ -1535,7 +1591,7 @@ _Options_
 
 #### `agentbricks deployments delete`
 
-Delete a deployment.
+Delete a deployment, and its Runtime Store when managed provisioning is enabled.
 
 ```
 agentbricks deployments delete NAME [options]
@@ -1552,6 +1608,7 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
+| `--delete-source` | flag | - | no | Also delete the workspace folder the deployment's source was uploaded to, once the deployment is gone. |
 | `--yes`, `-y` | flag | - | no | Skip the confirmation prompt. |
 
 ### `agentbricks endpoint`

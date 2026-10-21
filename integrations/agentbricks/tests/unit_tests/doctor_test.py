@@ -10,6 +10,7 @@ from click.testing import CliRunner
 
 import databricks_agentbricks.cli.doctor as doctor_module
 from databricks_agentbricks.cli.app import agentbricks
+from databricks_agentbricks.services.deployment.names import fit_base_name
 
 _SOURCE_WIRING = (
     "from databricks_agentkit import DurableAgentServer\n"
@@ -37,7 +38,9 @@ def _write_onboarded_project(root: pathlib.Path, framework: str) -> None:
     root.mkdir(parents=True, exist_ok=True)
     (root / ".agentbricks").mkdir()
     (root / "agent.toml").write_text(
-        f'schema_version = 1\n\n[agent]\nframework = "{framework}"\nserver = "agentbricks"\n',
+        f'schema_version = 1\n\n[agent]\nframework = "{framework}"\nserver = "agentbricks"\n'
+        # A fresh init records a deployment name that fits; pytest's tmp_path names often don't.
+        'deployment_name = "my-agent"\n',
         encoding="utf-8",
     )
     (root / ".agentbricks" / "project.toml").write_text(
@@ -79,7 +82,7 @@ def test_fully_onboarded_framework_reports_success(tmp_path: pathlib.Path, frame
 
     assert result.exit_code == 0, result.output
     assert f"Framework: {framework}" in result.output
-    assert "7/7 checks passed — onboarded" in result.output
+    assert "8/8 checks passed — onboarded" in result.output
     assert "[fail]" not in result.output
 
 
@@ -94,7 +97,7 @@ def test_fresh_generated_project_reports_success(tmp_path: pathlib.Path, framewo
     assert init_result.exit_code == 0, init_result.output
     result = CliRunner().invoke(agentbricks, ["doctor", str(project)])
     assert result.exit_code == 0, result.output
-    assert "7/7 checks passed — onboarded" in result.output
+    assert "8/8 checks passed — onboarded" in result.output
 
 
 def test_plain_repository_is_a_normal_failed_report(tmp_path: pathlib.Path):
@@ -154,16 +157,18 @@ def test_semantically_invalid_manifest_becomes_a_failed_check(tmp_path: pathlib.
 
 
 def test_json_report_has_stable_shape_and_failure_exit_code(tmp_path: pathlib.Path):
-    result = CliRunner().invoke(agentbricks, ["--output", "json", "doctor", str(tmp_path)])
+    project = tmp_path / "caj-langgraph-agent"
+    project.mkdir()
+    result = CliRunner().invoke(agentbricks, ["--output", "json", "doctor", str(project)])
 
     assert result.exit_code == 1
     report = json.loads(result.output)
     assert report == {
-        "directory": str(tmp_path.resolve()),
+        "directory": str(project.resolve()),
         "framework": None,
         "onboarded": False,
         "checks": report["checks"],
-        "summary": {"total": 7, "passed": 0, "failed": 7},
+        "summary": {"total": 8, "passed": 0, "failed": 8},
         "next_step": "agentbricks init --framework <langgraph|openai> --existing <directory>",
     }
     assert [check["id"] for check in report["checks"]] == [
@@ -174,6 +179,7 @@ def test_json_report_has_stable_shape_and_failure_exit_code(tmp_path: pathlib.Pa
         "app_command",
         "agent_app",
         "framework_adapter",
+        "deployment_name",
     ]
     assert all(set(check) == {"id", "status", "detail"} for check in report["checks"])
     assert {check["status"] for check in report["checks"]} == {"fail"}
@@ -790,3 +796,74 @@ def test_doctor_is_registered_and_help_documents_directory():
     assert "defaults to the current directory" in command.output
     assert "EXAMPLES" in command.output
     assert "agentbricks doctor ." in command.output
+
+
+def _deployment_name_check(report: dict) -> dict:
+    return next(check for check in report["checks"] if check["id"] == "deployment_name")
+
+
+def test_deployment_name_check_passes_for_recorded_name(tmp_path: pathlib.Path):
+    project = tmp_path / "caj-langgraph-agent"
+    _write_onboarded_project(project, "langgraph")
+
+    result = CliRunner().invoke(agentbricks, ["--output", "json", "doctor", str(project)])
+
+    assert result.exit_code == 0, result.output
+    check = _deployment_name_check(json.loads(result.output))
+    assert check == {
+        "id": "deployment_name",
+        "status": "pass",
+        "detail": "'my-agent' deploys as agent-bricks-my-agent (21/30).",
+    }
+
+
+def test_deployment_name_check_fails_for_long_directory_with_the_fix(tmp_path: pathlib.Path):
+    project = tmp_path / "caj-langgraph-agent"
+    _write_onboarded_project(project, "langgraph")
+    manifest = project / "agent.toml"
+    manifest.write_text(
+        manifest.read_text().replace('deployment_name = "my-agent"\n', ""), encoding="utf-8"
+    )
+    fix = f"agentbricks deploy {fit_base_name('caj-langgraph-agent')}"
+
+    result = CliRunner().invoke(agentbricks, ["--output", "json", "doctor", str(project)])
+
+    assert result.exit_code == 1
+    report = json.loads(result.output)
+    check = _deployment_name_check(report)
+    assert check["status"] == "fail"
+    assert check["detail"] == (
+        "No deployment_name in agent.toml, and the directory name 'caj-langgraph-agent' is too "
+        "long to deploy (agent-bricks-caj-langgraph-agent is 32 > 30). Fix: " + fix
+    )
+    # The name is the only problem, so the next step is the deploy fix rather than a migration.
+    assert report["summary"] == {"total": 8, "passed": 7, "failed": 1}
+    assert report["next_step"] == fix
+
+    text = CliRunner().invoke(agentbricks, ["doctor", str(project)])
+    assert f"Next: run `{fix}` to deploy under a name that fits" in text.output
+
+
+def test_deployment_name_check_fails_for_invalid_recorded_name(tmp_path: pathlib.Path):
+    _write_onboarded_project(tmp_path / "proj", "openai")
+    manifest = tmp_path / "proj" / "agent.toml"
+    manifest.write_text(manifest.read_text().replace('"my-agent"', '"My_Agent"'), encoding="utf-8")
+
+    result = CliRunner().invoke(agentbricks, ["--output", "json", "doctor", str(tmp_path / "proj")])
+
+    check = _deployment_name_check(json.loads(result.output))
+    assert check["status"] == "fail"
+    assert check["detail"].startswith("agent.toml deployment_name 'My_Agent' is not a valid")
+    assert check["detail"].endswith("Fix: agentbricks deploy my-agent")
+
+
+def test_deployment_name_failure_with_other_failures_keeps_migration_step(tmp_path: pathlib.Path):
+    project = tmp_path / "caj-langgraph-agent"
+    project.mkdir()
+
+    report = json.loads(
+        CliRunner().invoke(agentbricks, ["--output", "json", "doctor", str(project)]).output
+    )
+
+    assert _deployment_name_check(report)["status"] == "fail"
+    assert report["next_step"].startswith("agentbricks init --framework")

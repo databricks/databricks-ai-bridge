@@ -25,6 +25,12 @@ from packaging.utils import canonicalize_name
 
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.agent_project import AgentProject
+from databricks_agentbricks.services.deployment.names import (
+    _MAX_DEPLOYMENT_NAME_LEN,
+    _prefixed_name,
+    base_name_problem,
+    fit_base_name,
+)
 
 _SUPPORTED_FRAMEWORKS = ("langgraph", "openai")
 _MAX_CONFIG_BYTES = 512 * 1024
@@ -272,6 +278,36 @@ def _agent_manifest(
         server_check,
         project.framework.value,
     )
+
+
+def _deployment_name_check(root: pathlib.Path) -> tuple[DoctorCheck, str | None]:
+    """Whether the recorded deployment name (or the directory name) fits the Apps name limit.
+
+    Returns the check and, on failure, the deploy command that records a name that fits.
+    """
+    result = _toml_result(root, root / "agent.toml", "agent manifest")
+    agent = (result.data or {}).get("agent")
+    recorded = agent.get("deployment_name") if isinstance(agent, dict) else None
+    has_recorded = isinstance(recorded, str) and bool(recorded)
+    name = recorded if isinstance(recorded, str) and recorded else root.name
+    problem = base_name_problem(name)
+    if problem is None:
+        prefixed = _prefixed_name(name)
+        return (
+            _check(
+                "deployment_name",
+                True,
+                f"'{name}' deploys as {prefixed} ({len(prefixed)}/{_MAX_DEPLOYMENT_NAME_LEN}).",
+            ),
+            None,
+        )
+    fix = f"agentbricks deploy {fit_base_name(name)}"
+    source = (
+        "agent.toml deployment_name"
+        if has_recorded
+        else "No deployment_name in agent.toml, and the directory name"
+    )
+    return _check("deployment_name", False, f"{source} {problem}. Fix: {fix}"), fix
 
 
 def _project_metadata(
@@ -1019,6 +1055,7 @@ def inspect_project(directory: pathlib.Path) -> dict[str, Any]:
     metadata_check, _ = _project_metadata(root, framework)
     dependency_check = _dependency_check(dependencies, dependency_error, framework)
     agent_app_check, adapter_check = _source_checks(evidence, framework)
+    name_check, name_fix = _deployment_name_check(root)
     checks = [
         manifest_check,
         server_check,
@@ -1027,12 +1064,16 @@ def inspect_project(directory: pathlib.Path) -> dict[str, Any]:
         _app_command(root),
         agent_app_check,
         adapter_check,
+        name_check,
     ]
     passed = sum(check.status == "pass" for check in checks)
     failed = len(checks) - passed
     onboarded = failed == 0
     next_step = None
-    if not onboarded:
+    if failed == 1 and name_fix is not None:
+        # Only the name is wrong: deploying under a name that fits records it, no migration needed.
+        next_step = name_fix
+    elif not onboarded:
         framework_option = framework or "<langgraph|openai>"
         next_step = f"agentbricks init --framework {framework_option} --existing <directory>"
     return {
@@ -1081,10 +1122,16 @@ def _emit_text(report: dict[str, Any]) -> None:
     click.echo(f"Summary: {summary['passed']}/{summary['total']} checks passed — {result}.")
     if not report["onboarded"]:
         next_step = _terminal_text(report["next_step"], limit=_MAX_HUMAN_PATH_CHARS)
-        click.echo(
-            f"Next: use `{next_step}` to prepare migration instructions"
-            " (it does not modify application source)."
-        )
+        if report["next_step"].startswith("agentbricks deploy "):
+            click.echo(
+                f"Next: run `{next_step}` to deploy under a name that fits"
+                " (it is recorded in agent.toml)."
+            )
+        else:
+            click.echo(
+                f"Next: use `{next_step}` to prepare migration instructions"
+                " (it does not modify application source)."
+            )
 
 
 @click.command()
@@ -1105,7 +1152,9 @@ def doctor(obj: Any, directory: pathlib.Path) -> None:
     """Check whether an existing agent repository is onboarded to Agent Bricks.
 
     DIRECTORY defaults to the current directory. Doctor reads local configuration and Python source
-    without importing it, making network calls, or changing any files.
+    without importing it, making network calls, or changing any files. It also checks that the
+    recorded deployment name (or the directory name) fits the Databricks Apps limit of 17 characters
+    after the agent-bricks- prefix.
     """
     try:
         report = inspect_project(directory)

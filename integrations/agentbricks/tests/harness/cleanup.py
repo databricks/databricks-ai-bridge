@@ -186,7 +186,9 @@ def _delete_leaked_apps(
         leaked.append(name)
         # The principal stops resolving once the App is gone, and the later steps need it.
         record_app_identity(output, name, app_identity(cli, workspace, name))
-        result = cli.run(f"deployments delete {name} --yes", timeout=1200, check=False)
+        result = cli.run(
+            f"deployments delete {name} --delete-source --yes", timeout=1200, check=False
+        )
         if result.returncode != 0:
             log(f"cleanup warning | {name} | {(result.stderr or result.stdout).strip()}")
     # Teardowns deleted the rest of the run's Apps, which apps.jsonl names.

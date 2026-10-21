@@ -24,7 +24,7 @@ def test_deploy(
     project.pin_runtime()
     app = project.app_name
     # Before deploy: a deploy that fails partway can still leave the App behind.
-    cleanup(f"deployments delete {app} --yes")
+    cleanup(f"deployments delete {app} --delete-source --yes")
     for tool in tools:
         if tool.add_command:
             agentbricks_cli.run(f"tools add {tool.add_command} --source {project.path}")
