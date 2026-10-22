@@ -203,8 +203,14 @@ def deploy_result_payload(result: DeployResult) -> dict[str, Any]:
     }
 
 
-def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> None:
-    """Report a finished deploy: the machine payload for `--output json`, else the success panel."""
+def present_deploy_result(
+    result: DeployResult, *, output: Optional[str], elapsed_s: Optional[float] = None
+) -> None:
+    """Report a finished deploy: the machine payload for `--output json`, else the success panel.
+
+    Text output ends with the deploy's wall time when ``elapsed_s`` is given; the JSON payload is
+    unchanged so scripts keep their established contract.
+    """
     if output == "json":
         render.emit_json(deploy_result_payload(result))
         return
@@ -351,6 +357,8 @@ def present_deploy_result(result: DeployResult, *, output: Optional[str]) -> Non
             agent_invoke_step(result.deployment, uses_runtime_api=result.uses_runtime_api),
         ],
     )
+    if elapsed_s is not None:
+        render.console().print(f"Deployed in {render.format_duration(elapsed_s)}")
 
 
 def present_background_started(

@@ -137,7 +137,7 @@ def _real_auth_deploy_harness(tmp_path, sdk_apps):
     tracing.grant.return_value = GrantOutcome.skipped()
     runtime = Mock(spec=RuntimeStoreProvisioner)
     runtime.reconcile.return_value = RuntimeStoreState(False, None, ManifestPatch({}))
-    runtime.after_app_ready.return_value = ManifestPatch({})
+    runtime.after_app_created.return_value = ManifestPatch({})
     tool_access = Mock(spec=ToolAccessProvisioner)
     tool_access.plan.return_value = ToolAccessPlan()
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import pathlib
@@ -9,7 +10,7 @@ from contextlib import nullcontext
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 import requests
@@ -25,7 +26,7 @@ from databricks.sdk.service.apps import App, AppDeployment
 from delete_test_fixtures import fake_workspace_client
 
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
-from databricks_agentbricks.clients.apps_client import AppsClient
+from databricks_agentbricks.clients.apps_client import AppsClient, AppState
 from databricks_agentbricks.clients.apps_user_auth_client import (
     AppAuthPlan,
     AppUserScopeUpdatePlan,
@@ -114,7 +115,7 @@ def deployment_fixture(tmp_path: pathlib.Path) -> SimpleNamespace:
     resolver.resource_bindings.return_value = (None, None, None)
 
     apps = Mock(spec=AppsClient)
-    apps.exists.return_value = False
+    apps.app_state.return_value = None
     apps.get_service_principal.return_value = "sp-123"
     apps.get_app_url.return_value = "https://demo.example"
     provider = Mock(spec=ApiClientProvider)
@@ -135,13 +136,14 @@ def deployment_fixture(tmp_path: pathlib.Path) -> SimpleNamespace:
     tracing.grant.return_value = GrantOutcome.skipped()
     runtime = Mock(spec=RuntimeStoreProvisioner)
     runtime.reconcile.return_value = RuntimeStoreState(False, None, ManifestPatch({}))
-    runtime.after_app_ready.return_value = ManifestPatch({})
+    runtime.after_app_created.return_value = ManifestPatch({})
     tool_access = Mock(spec=ToolAccessProvisioner)
     tool_access.plan.return_value = ToolAccessPlan()
 
     app = Mock(spec=AppProvisioner)
     app.prepare_app_auth.return_value = _no_auth_plan()
     app.resolve_workspace_path.return_value = "/Workspace/demo"
+    app.start_compute.return_value = True
     reporter = Mock(spec=Reporter)
     reporter.status.return_value = nullcontext()
     reporter.progress.return_value = nullcontext()
@@ -248,7 +250,7 @@ def test_deploy_passes_returned_state_between_phases(tmp_path: pathlib.Path) -> 
     resolver.resource_bindings.return_value = ("memory", "session", "/Shared/trace")
 
     apps = Mock(spec=AppsClient)
-    apps.exists.return_value = False
+    apps.app_state.return_value = None
     apps.get_service_principal.return_value = "sp-123"
     apps.get_app_url.return_value = "https://demo.example"
     provider = Mock(spec=ApiClientProvider)
@@ -272,7 +274,7 @@ def test_deploy_passes_returned_state_between_phases(tmp_path: pathlib.Path) -> 
     tracing.grant.return_value = GrantOutcome(attempted=True, error=None)
     runtime = Mock(spec=RuntimeStoreProvisioner)
     runtime.reconcile.return_value = runtime_state
-    runtime.after_app_ready.return_value = ManifestPatch({"RUNTIME_STORE_DATABASE": "db-id"})
+    runtime.after_app_created.return_value = ManifestPatch({"RUNTIME_STORE_DATABASE": "db-id"})
     tool_access = Mock(spec=ToolAccessProvisioner)
     tool_plan = ToolAccessPlan(app_resources=({"name": "tool"},))
     tool_access.plan.return_value = tool_plan
@@ -281,29 +283,36 @@ def test_deploy_passes_returned_state_between_phases(tmp_path: pathlib.Path) -> 
     auth_plan = _no_auth_plan()
     app.prepare_app_auth.return_value = auth_plan
     app.resolve_workspace_path.return_value = "/Workspace/demo"
+    app.start_compute.return_value = True
 
-    def check_manifest_before_app_ready(*args: object, **kwargs: object) -> None:
+    def check_manifest_before_sync(*args: object, **kwargs: object) -> None:
+        # The upload is now the step that needs the final env, late Runtime Store keys included.
         manifest = AppManifest.parse_lenient((tmp_path / "app.yaml").read_text())
         env = {entry["name"]: entry["value"] for entry in manifest.raw_env()}
         assert env == {
             "MLFLOW_EXPERIMENT_ID": "42",
             "AGENT_MEMORY_STORE": "mem-id",
             "AGENT_SESSION_STORE": "session",
+            "RUNTIME_STORE_DATABASE": "db-id",
         }
 
-    app.ensure_app_ready.side_effect = check_manifest_before_app_ready
+    app.sync_source.side_effect = check_manifest_before_sync
     phases = Mock()
     for name, method in (
+        ("app_state", apps.app_state),
+        ("start_compute", app.start_compute),
         ("memory_reconcile", memory.reconcile),
         ("session_reconcile", session.reconcile),
         ("tracing_reconcile", tracing.reconcile),
         ("runtime_reconcile", runtime.reconcile),
-        ("app_ready", app.ensure_app_ready),
-        ("runtime_after_app", runtime.after_app_ready),
+        ("runtime_after_app_created", runtime.after_app_created),
+        ("workspace_path", app.resolve_workspace_path),
+        ("sync_source", app.sync_source),
+        ("wait_for_compute", app.wait_for_compute),
+        ("runtime_attach", runtime.attach_to_app),
         ("tool_access_plan", tool_access.plan),
         ("tool_access_reconcile", tool_access.reconcile_before_rollout),
-        ("workspace_path", app.resolve_workspace_path),
-        ("deploy_source", app.deploy_source),
+        ("roll_out", app.roll_out),
         ("tool_access_finalize", tool_access.finalize_after_rollout),
         ("memory_grant", memory.grant),
         ("session_grant", session.grant),
@@ -336,22 +345,29 @@ def test_deploy_passes_returned_state_between_phases(tmp_path: pathlib.Path) -> 
     )
 
     assert [call[0] for call in phases.mock_calls] == [
+        "app_state",
+        "start_compute",
         "memory_reconcile",
         "session_reconcile",
         "tracing_reconcile",
         "runtime_reconcile",
-        "app_ready",
-        "runtime_after_app",
+        "runtime_after_app_created",
+        "workspace_path",
+        "sync_source",
+        "wait_for_compute",
+        "runtime_attach",
         "tool_access_plan",
         "tool_access_reconcile",
-        "workspace_path",
-        "deploy_source",
+        "roll_out",
         "tool_access_finalize",
         "memory_grant",
         "session_grant",
         "tracing_grant",
     ]
-    assert runtime.after_app_ready.call_args.args[1] is runtime_state
+    assert app.start_compute.call_args.args[1:] == (None, None)
+    assert runtime.after_app_created.call_args.args[1] is runtime_state
+    assert runtime.attach_to_app.call_args.args[1] is runtime_state
+    app.ensure_app_ready.assert_not_called()
     tool_access.plan.assert_called_once_with(project.tools)
     assert tool_access.reconcile_before_rollout.call_args.args == (
         DeploymentName("agent-bricks-demo"),
@@ -370,7 +386,6 @@ def test_deploy_passes_returned_state_between_phases(tmp_path: pathlib.Path) -> 
         project,
         allow_existing_app_update=False,
     )
-    assert app.ensure_app_ready.call_args.kwargs["auth_plan"] is auth_plan
     provider.get.assert_called_once_with()
     assert result.deployment == "agent-bricks-demo"
     assert result.workspace_path == "/Workspace/demo"
@@ -470,13 +485,17 @@ def test_preflight_managed_tool_failure_is_before_workspace_client(
 
 def test_omitted_name_reuses_recorded_existing_app(deployment_fixture, tmp_path: pathlib.Path):
     deployment_fixture.project.set_deployment_name("demo")
-    deployment_fixture.apps.exists.return_value = True
+    state = AppState("ACTIVE", has_active_deployment=True, service_principal_client_id="sp-123")
+    deployment_fixture.apps.app_state.return_value = state
 
     prepared = deployment_fixture.service.prepare(_request(tmp_path, name=None))
 
     assert prepared.name == DeploymentName("agent-bricks-demo")
     assert prepared.deployment_exists is True
-    deployment_fixture.apps.exists.assert_called_once_with(DeploymentName("agent-bricks-demo"))
+    # The one read also carries the compute state, so deploy doesn't read the App again.
+    assert prepared.app_state is state
+    deployment_fixture.apps.app_state.assert_called_once_with(DeploymentName("agent-bricks-demo"))
+    deployment_fixture.apps.exists.assert_not_called()
 
 
 def test_required_auth_reports_note_and_uses_auth_app_state(
@@ -498,44 +517,116 @@ def test_required_auth_reports_note_and_uses_auth_app_state(
 
 
 @pytest.mark.parametrize(
-    ("auth_plan", "app_exists", "expected_exists", "instances"),
+    ("app_state", "instances", "expected_exists"),
     [
-        (_no_auth_plan(), False, False, 2),
-        (_no_auth_plan(), True, True, None),
-        (_auth_plan(existing_scopes=("ai-gateway",)), True, True, 4),
+        (None, 2, False),
+        (AppState("ACTIVE", True, "sp-123"), None, True),
+        (AppState("STOPPED", True, "sp-123"), 3, True),
+        (AppState("ACTIVE", False, "sp-123"), None, False),
     ],
-    ids=["create", "redeploy", "auth-reconciled"],
+    ids=["create", "redeploy", "stopped-scaled", "resume-without-deployment"],
 )
-def test_deploy_passes_create_redeploy_and_scale_facts_to_app(
+def test_deploy_starts_compute_early_from_one_app_read(
     deployment_fixture,
     tmp_path: pathlib.Path,
-    auth_plan: AppAuthPlan,
-    app_exists: bool,
-    expected_exists: bool,
+    app_state: AppState | None,
     instances: int | None,
+    expected_exists: bool,
 ):
-    deployment_fixture.app.prepare_app_auth.return_value = auth_plan
-    deployment_fixture.apps.exists.return_value = app_exists
+    deployment_fixture.apps.app_state.return_value = app_state
+    deployment_fixture.app.start_compute.return_value = app_state is None
 
     result = deployment_fixture.service.deploy(_request(tmp_path, instance_count=instances))
 
-    context = deployment_fixture.app.ensure_app_ready.call_args.args[0]
+    context = deployment_fixture.app.start_compute.call_args.args[0]
+    # An App that never rolled out still counts as a first deployment, so a resume writes the
+    # first-deploy env.
     assert context.deployment_exists is expected_exists
-    deployment_fixture.app.ensure_app_ready.assert_called_once_with(
-        context,
-        auth_plan=auth_plan,
-        instance_count=instances,
-    )
-    deployment_fixture.app.prepare_app_auth.assert_called_once_with(
-        DeploymentName("agent-bricks-demo"),
-        deployment_fixture.project,
-        allow_existing_app_update=False,
-    )
-    if auth_plan.app_existed is None:
-        deployment_fixture.apps.exists.assert_called_once_with(DeploymentName("agent-bricks-demo"))
-    else:
-        deployment_fixture.apps.exists.assert_not_called()
+    deployment_fixture.app.start_compute.assert_called_once_with(context, app_state, instances)
+    deployment_fixture.apps.app_state.assert_called_once_with(DeploymentName("agent-bricks-demo"))
+    deployment_fixture.apps.exists.assert_not_called()
+    deployment_fixture.app.ensure_app_ready.assert_not_called()
+    deployment_fixture.app.wait_for_compute.assert_called_once_with(context)
     assert result.instance_count == instances
+
+
+def test_deploy_reads_state_of_an_app_preflight_only_knew_exists(
+    deployment_fixture, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """An App known to exist but without a state read is read, never mistaken for a missing one."""
+    f = deployment_fixture
+    prepare = f.service.prepare
+
+    def known_to_exist(*args: object, **kwargs: object):
+        prepared = prepare(*args, **kwargs)
+        return dataclasses.replace(prepared, deployment_exists=True, app_state=None)
+
+    monkeypatch.setattr(f.service, "prepare", known_to_exist)
+    existing = AppState("ACTIVE", True, "sp-123")
+    f.apps.app_state.return_value = existing
+    f.app.start_compute.return_value = False
+
+    f.service.deploy(_request(tmp_path))
+
+    f.apps.app_state.assert_called_once_with(DeploymentName("agent-bricks-demo"))
+    assert f.app.start_compute.call_args.args[1] is existing
+
+
+def test_deploy_scoped_app_keeps_original_order(deployment_fixture, tmp_path: pathlib.Path):
+    """FR-6: a request-user App is made ready after the reconciles, as before the early start."""
+    auth_plan = _auth_plan(existing_scopes=("ai-gateway",))
+    f = deployment_fixture
+    f.app.prepare_app_auth.return_value = auth_plan
+    f.runtime.reconcile.return_value = RuntimeStoreState(True, None, ManifestPatch({}))
+    phases = Mock()
+    for name, method in (
+        ("memory_reconcile", f.memory.reconcile),
+        ("session_reconcile", f.session.reconcile),
+        ("tracing_reconcile", f.tracing.reconcile),
+        ("runtime_reconcile", f.runtime.reconcile),
+        ("app_ready", f.app.ensure_app_ready),
+        ("runtime_after_app_created", f.runtime.after_app_created),
+        ("runtime_attach", f.runtime.attach_to_app),
+        ("tool_access_plan", f.tool_access.plan),
+        ("tool_access_reconcile", f.tool_access.reconcile_before_rollout),
+        ("workspace_path", f.app.resolve_workspace_path),
+        ("sync_source", f.app.sync_source),
+        ("roll_out", f.app.roll_out),
+        ("tool_access_finalize", f.tool_access.finalize_after_rollout),
+        ("memory_grant", f.memory.grant),
+        ("session_grant", f.session.grant),
+        ("tracing_grant", f.tracing.grant),
+    ):
+        phases.attach_mock(method, name)
+
+    result = f.service.deploy(_request(tmp_path, instance_count=4))
+
+    assert [call[0] for call in phases.mock_calls] == [
+        "memory_reconcile",
+        "session_reconcile",
+        "tracing_reconcile",
+        "runtime_reconcile",
+        "app_ready",
+        "runtime_after_app_created",
+        "runtime_attach",
+        "tool_access_plan",
+        "tool_access_reconcile",
+        "workspace_path",
+        "sync_source",
+        "roll_out",
+        "tool_access_finalize",
+        "memory_grant",
+        "session_grant",
+        "tracing_grant",
+    ]
+    context = f.app.ensure_app_ready.call_args.args[0]
+    assert context.deployment_exists is True
+    f.app.ensure_app_ready.assert_called_once_with(context, auth_plan=auth_plan, instance_count=4)
+    f.app.start_compute.assert_not_called()
+    f.app.wait_for_compute.assert_not_called()
+    f.apps.app_state.assert_not_called()
+    f.apps.exists.assert_not_called()
+    assert result.instance_count == 4
 
 
 def test_deploy_merges_manifest_env_and_writes_late_runtime_patch(
@@ -572,11 +663,12 @@ env:
         ManifestPatch({"RUNTIME": "early"}),
     )
     late_patch = ManifestPatch({"RUNTIME_LATE": "late"}, ("REMOVE_LATE",))
-    deployment_fixture.runtime.after_app_ready.return_value = late_patch
+    deployment_fixture.runtime.after_app_created.return_value = late_patch
     phases: list[str] = []
 
-    def check_initial_manifest(*args: object, **kwargs: object) -> None:
-        phases.append("app-ready")
+    def add_late_patch(*args: object, **kwargs: object) -> ManifestPatch:
+        # The initial env is already written while the compute boots; the late patch is not.
+        phases.append("runtime-after-app")
         env = {
             entry["name"]: entry["value"]
             for entry in AppManifest.parse_lenient((tmp_path / "app.yaml").read_text()).raw_env()
@@ -584,17 +676,14 @@ env:
         assert "RUNTIME_LATE" not in env
         assert env["PIP_INDEX_URL"] == "https://packages.example/simple"
         assert "REMOVE_EARLY" not in env
-
-    deployment_fixture.app.ensure_app_ready.side_effect = check_initial_manifest
-
-    def add_late_patch(*args: object, **kwargs: object) -> ManifestPatch:
-        phases.append("runtime-after-app")
         return late_patch
 
-    deployment_fixture.runtime.after_app_ready.side_effect = add_late_patch
+    deployment_fixture.runtime.after_app_created.side_effect = add_late_patch
     deployment_fixture.app.resolve_workspace_path.side_effect = (
         lambda *args: phases.append("workspace") or "/Workspace/custom"
     )
+    deployment_fixture.app.sync_source.side_effect = lambda *args: phases.append("sync")
+    deployment_fixture.app.wait_for_compute.side_effect = lambda *args: phases.append("wait")
 
     result = deployment_fixture.service.deploy(
         _request(
@@ -609,7 +698,7 @@ env:
         entry["name"]: entry["value"]
         for entry in AppManifest.parse_lenient((tmp_path / "app.yaml").read_text()).raw_env()
     }
-    assert phases == ["app-ready", "runtime-after-app", "workspace"]
+    assert phases == ["runtime-after-app", "workspace", "sync", "wait"]
     assert final_env == {
         "KEEP": "old",
         "MEMORY": "memory-id",
@@ -624,14 +713,10 @@ env:
     assert result.env["RUNTIME_LATE"] == "late"
     assert result.workspace_path == "/Workspace/custom"
     assert result.created_app_yaml is False
-    deployment_fixture.app.ensure_app_ready.assert_called_once_with(
-        deployment_fixture.app.ensure_app_ready.call_args.args[0],
-        auth_plan=deployment_fixture.app.prepare_app_auth.return_value,
-        instance_count=3,
-    )
-    deployment_fixture.runtime.after_app_ready.assert_called_once_with(
-        deployment_fixture.app.ensure_app_ready.call_args.args[0],
-        deployment_fixture.runtime.reconcile.return_value,
+    context = deployment_fixture.app.start_compute.call_args.args[0]
+    deployment_fixture.app.start_compute.assert_called_once_with(context, None, 3)
+    deployment_fixture.runtime.after_app_created.assert_called_once_with(
+        context, deployment_fixture.runtime.reconcile.return_value
     )
 
 
@@ -715,7 +800,7 @@ def test_tool_access_failure_stops_before_source_rollout(
     with pytest.raises(AgentCliError, match="tool grant denied"):
         deployment_fixture.service.deploy(_request(tmp_path))
 
-    deployment_fixture.app.deploy_source.assert_not_called()
+    deployment_fixture.app.roll_out.assert_not_called()
     deployment_fixture.tool_access.finalize_after_rollout.assert_not_called()
 
 
@@ -782,6 +867,7 @@ def test_memory_store_grant_uses_reconciled_resource_name_and_shared_sp():
 def _app_provisioner_for_test() -> SimpleNamespace:
     apps = Mock(spec=AppsClient)
     apps.create.return_value = "App compute"
+    apps.wait_for_active.return_value = False
     reporter = Mock(spec=Reporter)
     reporter.progress.return_value = nullcontext()
     return SimpleNamespace(
@@ -796,16 +882,17 @@ def _app_provisioner_for_test() -> SimpleNamespace:
     )
 
 
-@pytest.mark.parametrize(("deployment_exists", "instances"), [(False, None), (True, 2)])
-def test_app_provisioner_reports_cli_output_on_stderr(deployment_exists, instances):
+@pytest.mark.parametrize(
+    ("state", "instances"), [(None, None), (AppState("ACTIVE", True, "sp-123"), 2)]
+)
+def test_app_provisioner_reports_cli_output_on_stderr(state, instances):
     # The App the CLI prints is progress; stdout carries only the `--output json` payload.
     harness = _app_provisioner_for_test()
+    harness.apps.create.return_value = "App compute"
     harness.apps.create_update_instances.return_value = "App compute"
 
-    harness.provisioner.ensure_app_ready(
-        _app_context(deployment_exists=deployment_exists),
-        auth_plan=_no_auth_plan(),
-        instance_count=instances,
+    harness.provisioner.start_compute(
+        _app_context(deployment_exists=state is not None), state, instances
     )
 
     harness.reporter.note.assert_called_once_with("Agent compute")
@@ -876,27 +963,230 @@ def test_app_provisioner_existing_auth_uses_masked_sdk_update():
     harness.apps.wait_for_active.assert_called_once_with(DeploymentName("agent-bricks-demo"))
 
 
-@pytest.mark.parametrize(
-    ("deployment_exists", "instance_count", "method"),
-    [(False, 2, "create"), (True, 3, "create_update_instances")],
-)
-def test_app_provisioner_no_auth_uses_cli_create_or_scale(
-    deployment_exists: bool, instance_count: int, method: str
-):
+def test_app_provisioner_start_compute_creates_a_missing_app_without_waiting():
     harness = _app_provisioner_for_test()
 
-    harness.provisioner.ensure_app_ready(
-        _app_context(deployment_exists=deployment_exists),
-        auth_plan=_no_auth_plan(),
+    created = harness.provisioner.start_compute(
+        _app_context(deployment_exists=False), None, instance_count=2
+    )
+
+    assert created is True
+    harness.apps.create.assert_called_once_with(
+        DeploymentName("agent-bricks-demo"), 2, no_wait=True
+    )
+    harness.apps.create_update_instances.assert_not_called()
+    harness.apps.start_no_wait.assert_not_called()
+    harness.apps.wait_for_active.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("compute_state", "instance_count", "expected_calls"),
+    [
+        ("ACTIVE", None, []),
+        ("STARTING", None, []),
+        ("STOPPED", None, ["start_no_wait"]),
+        ("STOPPED", 3, ["create_update_instances", "start_no_wait"]),
+        ("ACTIVE", 3, ["create_update_instances"]),
+    ],
+)
+def test_app_provisioner_start_compute_starts_only_a_stopped_app(
+    compute_state: str, instance_count: int | None, expected_calls: list[str]
+):
+    harness = _app_provisioner_for_test()
+    harness.apps.create_update_instances.return_value = "App compute scaled\n"
+    calls = Mock()
+    calls.attach_mock(harness.apps.create_update_instances, "create_update_instances")
+    calls.attach_mock(harness.apps.start_no_wait, "start_no_wait")
+
+    created = harness.provisioner.start_compute(
+        _app_context(deployment_exists=True),
+        AppState(compute_state, has_active_deployment=True, service_principal_client_id="sp"),
         instance_count=instance_count,
     )
 
-    getattr(harness.apps, method).assert_called_once_with(
-        DeploymentName("agent-bricks-demo"), instance_count
+    assert created is False
+    assert [call[0] for call in calls.mock_calls] == expected_calls
+    harness.apps.create.assert_not_called()
+    harness.apps.wait_for_active.assert_not_called()
+    if instance_count is not None:
+        harness.reporter.note.assert_called_once_with("Agent compute scaled")
+
+
+def test_app_provisioner_wait_for_compute_shows_elapsed_progress():
+    harness = _app_provisioner_for_test()
+
+    harness.provisioner.wait_for_compute(_app_context(deployment_exists=False))
+
+    harness.reporter.progress.assert_called_once_with(
+        "Waiting for agent compute to start…", done_message="Agent compute is running"
     )
-    other = "create_update_instances" if method == "create" else "create"
-    getattr(harness.apps, other).assert_not_called()
     harness.apps.wait_for_active.assert_called_once_with(DeploymentName("agent-bricks-demo"))
+    harness.apps.wait_for_deployment.assert_not_called()
+
+
+def test_app_provisioner_wait_for_compute_waits_out_the_deployment_a_start_triggered():
+    # `apps start` on a STOPPED App rolls out its last deployment again; `apps deploy` collides
+    # with it ("pending deployment in progress") unless the join waits for it to settle.
+    harness = _app_provisioner_for_test()
+    harness.apps.wait_for_active.return_value = True
+    calls = Mock()
+    calls.attach_mock(harness.apps.wait_for_active, "wait_for_active")
+    calls.attach_mock(harness.apps.wait_for_deployment, "wait_for_deployment")
+
+    harness.provisioner.wait_for_compute(_app_context(deployment_exists=True))
+
+    name = DeploymentName("agent-bricks-demo")
+    assert calls.mock_calls == [call.wait_for_active(name), call.wait_for_deployment(name)]
+    assert harness.reporter.progress.call_args_list[-1] == call(
+        "Waiting for the agent's previous deployment to finish…",
+        done_message="Previous deployment finished",
+    )
+
+
+def test_app_provisioner_roll_out_retries_once_after_a_late_pending_deployment():
+    harness = _app_provisioner_for_test()
+    harness.apps.deploy.side_effect = [AgentCliError("Could not deploy"), None]
+    harness.apps.deployment_in_progress.return_value = True
+
+    harness.provisioner.roll_out(_app_context(deployment_exists=True), "/Workspace/demo")
+
+    name = DeploymentName("agent-bricks-demo")
+    harness.apps.wait_for_deployment.assert_called_once_with(name)
+    assert harness.apps.deploy.call_args_list == [call(name, "/Workspace/demo")] * 2
+
+
+def test_app_provisioner_roll_out_raises_a_failure_with_no_deployment_in_progress():
+    harness = _app_provisioner_for_test()
+    harness.apps.deploy.side_effect = AgentCliError("Could not deploy")
+    harness.apps.deployment_in_progress.return_value = False
+
+    with pytest.raises(AgentCliError, match="Could not deploy"):
+        harness.provisioner.roll_out(_app_context(deployment_exists=True), "/Workspace/demo")
+
+    harness.apps.deploy.assert_called_once()
+    harness.apps.wait_for_deployment.assert_not_called()
+
+
+def test_app_provisioner_splits_sync_from_rollout():
+    harness = _app_provisioner_for_test()
+    ctx = _app_context(deployment_exists=False)
+
+    harness.provisioner.sync_source(ctx, "/Workspace/demo")
+    harness.apps.deploy.assert_not_called()
+    harness.provisioner.roll_out(ctx, "/Workspace/demo")
+
+    harness.apps.sync_source.assert_called_once_with(
+        DeploymentName("agent-bricks-demo"), pathlib.Path("."), "/Workspace/demo"
+    )
+    harness.apps.deploy.assert_called_once_with(
+        DeploymentName("agent-bricks-demo"), "/Workspace/demo"
+    )
+
+
+def test_app_provisioner_ensure_app_ready_is_only_for_request_user_apps():
+    harness = _app_provisioner_for_test()
+
+    with pytest.raises(AgentCliError, match="auth plan does not match"):
+        harness.provisioner.ensure_app_ready(
+            _app_context(deployment_exists=False), auth_plan=_no_auth_plan(), instance_count=None
+        )
+    harness.apps.create.assert_not_called()
+
+
+_PARTIAL_APP_NOTE = (
+    "App 'agent-bricks-demo' was created but has no deployment yet. Re-run `agentbricks deploy` "
+    "to resume (the app is reused), or remove it with "
+    "`agentbricks deployments delete agent-bricks-demo`."
+)
+
+
+@pytest.mark.parametrize("original_hint", [None, "Check the store permissions."])
+def test_failure_after_early_create_says_the_app_was_kept(
+    deployment_fixture, tmp_path: pathlib.Path, original_hint: str | None
+):
+    deployment_fixture.memory.reconcile.side_effect = AgentCliError(
+        "Could not reconcile memory store 'memory'.", hint=original_hint
+    )
+
+    with pytest.raises(AgentCliError, match="Could not reconcile memory store") as exc:
+        deployment_fixture.service.deploy(_request(tmp_path))
+
+    expected = f"{original_hint}\n{_PARTIAL_APP_NOTE}" if original_hint else _PARTIAL_APP_NOTE
+    assert exc.value.hint == expected
+    deployment_fixture.app.start_compute.assert_called_once()
+    deployment_fixture.app.roll_out.assert_not_called()
+    deployment_fixture.reporter.note.assert_not_called()
+
+
+@pytest.mark.parametrize("error", [KeyboardInterrupt(), RuntimeError("boom")])
+def test_interrupt_or_unexpected_error_after_early_create_notes_the_app(
+    deployment_fixture, tmp_path: pathlib.Path, error: BaseException
+):
+    deployment_fixture.app.wait_for_compute.side_effect = error
+
+    with pytest.raises(type(error)):
+        deployment_fixture.service.deploy(_request(tmp_path))
+
+    deployment_fixture.reporter.note.assert_called_once_with(_PARTIAL_APP_NOTE)
+
+
+def test_failure_on_an_existing_app_gets_no_partial_app_note(
+    deployment_fixture, tmp_path: pathlib.Path
+):
+    deployment_fixture.apps.app_state.return_value = AppState("ACTIVE", True, "sp-123")
+    deployment_fixture.app.start_compute.return_value = False
+    deployment_fixture.app.roll_out.side_effect = AgentCliError("rollout failed", hint="logs")
+
+    with pytest.raises(AgentCliError) as exc:
+        deployment_fixture.service.deploy(_request(tmp_path))
+
+    assert exc.value.hint == "logs"
+    deployment_fixture.reporter.note.assert_not_called()
+
+
+def test_failure_after_rollout_gets_no_partial_app_note(deployment_fixture, tmp_path: pathlib.Path):
+    deployment_fixture.tool_access.finalize_after_rollout.side_effect = AgentCliError(
+        "prune failed"
+    )
+
+    with pytest.raises(AgentCliError) as exc:
+        deployment_fixture.service.deploy(_request(tmp_path))
+
+    assert exc.value.hint is None
+    deployment_fixture.app.roll_out.assert_called_once()
+
+
+def test_create_failure_gets_no_partial_app_note(deployment_fixture, tmp_path: pathlib.Path):
+    deployment_fixture.app.start_compute.side_effect = AgentCliError("create denied")
+
+    with pytest.raises(AgentCliError) as exc:
+        deployment_fixture.service.deploy(_request(tmp_path))
+
+    assert exc.value.hint is None
+    deployment_fixture.memory.reconcile.assert_not_called()
+
+
+def test_deploy_reports_one_timing_per_phase_plus_total(deployment_fixture, tmp_path: pathlib.Path):
+    deployment_fixture.service.deploy(_request(tmp_path))
+
+    phases = [call.args[0] for call in deployment_fixture.reporter.timing.call_args_list]
+    assert phases == [
+        "preflight",
+        "app_start",
+        "reconcile",
+        "runtime_store",
+        "app_yaml",
+        "sync",
+        "compute_wait",
+        "app_update",
+        "rollout",
+        "grants",
+        "total",
+    ]
+    assert all(
+        isinstance(call.args[1], float) and call.args[1] >= 0
+        for call in deployment_fixture.reporter.timing.call_args_list
+    )
 
 
 def test_deploy_without_agent_project_still_deploys_named_source(
@@ -1365,7 +1655,7 @@ def test_deploy_records_success_through_the_state_tracker(
 
 
 def test_deploy_records_failure_and_reraises(deployment_fixture, tmp_path: pathlib.Path):
-    deployment_fixture.app.deploy_source.side_effect = AgentCliError(
+    deployment_fixture.app.roll_out.side_effect = AgentCliError(
         "Could not deploy 'agent-bricks-demo'.", hint="app crashed"
     )
     tracker = DeployStateTracker(result_payload=lambda result: {})
@@ -1377,7 +1667,10 @@ def test_deploy_records_failure_and_reraises(deployment_fixture, tmp_path: pathl
     state = deploy_state.read_state(deploy_state.state_path(tmp_path, "agent-bricks-demo"))
     assert state is not None
     assert state["status"] == "failed"
-    assert state["error"] == "Could not deploy 'agent-bricks-demo'.\napp crashed"
+    # The App this run created is kept, so the recorded error carries the resume/delete note.
+    message, detail, note = state["error"].split("\n")
+    assert (message, detail) == ("Could not deploy 'agent-bricks-demo'.", "app crashed")
+    assert "agentbricks deployments delete agent-bricks-demo" in note
 
 
 def test_prepare_refuses_a_running_deploy_before_any_change(

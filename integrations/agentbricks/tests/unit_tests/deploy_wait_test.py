@@ -77,7 +77,7 @@ def test_json_deploy_writes_one_document_and_records_the_result(
     payload = json.loads(result.stdout)  # the whole of stdout is one JSON document
     assert payload["deployment"] == _APP
     # Progress and relayed `apps create` output went to stderr instead.
-    assert "• Creating the agent and starting its compute…" in result.stderr
+    assert "• Creating the agent; its compute starts in the background…" in result.stderr
     assert "Agent compute" in result.stderr
     state = _state(project)
     assert state["status"] == "succeeded"
@@ -107,7 +107,9 @@ def test_failed_deploy_records_the_error(project: pathlib.Path, monkeypatch: pyt
     assert result.exit_code == 1
     state = _state(project)
     assert state["status"] == "failed"
-    assert state["error"] == f"Could not deploy '{_APP}'."
+    message, note = state["error"].split("\n")
+    assert message == f"Could not deploy '{_APP}'."
+    assert f"agentbricks deployments delete {_APP}" in note
     assert state["phase"] == "Deploying the agent source"
 
 

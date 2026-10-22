@@ -175,6 +175,10 @@ the `agent-bricks-` prefix. `init` shortens a longer directory name to fit (for 
 `caj-langgraph-agent` becomes `caj-langgr-<token>`); pass `agentbricks init --name <name>` to choose
 it yourself, or `agentbricks deploy <name>` to change it later.
 
+The app's compute starts first and boots while the other resources are provisioned. If a first
+deploy stops partway, the app it created is kept: re-run `agentbricks deploy` to resume, or remove
+it with `agentbricks deployments delete agent-bricks-my-agent`.
+
 ### Deploying from a coding agent
 
 A first deploy takes ~3 min (mostly starting app compute); redeploys are faster. Either run

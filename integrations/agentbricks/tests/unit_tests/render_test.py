@@ -6,6 +6,7 @@ import io
 import time
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from rich.console import Console
 from rich.status import Status
 
@@ -417,3 +418,55 @@ def test_reporter_note_prints_through_a_live_tty_spinner(monkeypatch):
         ClickReporter().note(notice)
 
     assert notice in buf.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("seconds", "expected"),
+    [(0, "0s"), (45.9, "45s"), (60, "1m00s"), (72, "1m12s"), (125, "2m05s")],
+)
+def test_format_duration(seconds, expected):
+    assert render.format_duration(seconds) == expected
+
+
+def test_progress_with_done_message_prints_the_total_wait(monkeypatch):
+    from databricks_agentbricks import errors
+
+    monkeypatch.setattr(errors, "_OUTPUT_MODE", "text")
+    now = [100.0]
+    con, buf = _console()
+    err, _ = _console()
+    with render.progress(
+        "Waiting for agent compute to start…",
+        con=con,
+        err=err,
+        clock=lambda: now[0],
+        interval=1000,
+        done_message="Agent compute is running",
+    ):
+        now[0] = 164.0
+    lines = buf.getvalue().splitlines()
+    assert lines[0].endswith("Waiting for agent compute to start…")
+    assert lines[-1] == "  Agent compute is running (waited 1m04s)"
+
+
+def test_progress_with_done_message_prints_nothing_more_on_failure(monkeypatch):
+    from databricks_agentbricks import errors
+
+    monkeypatch.setattr(errors, "_OUTPUT_MODE", "text")
+    con, buf = _console()
+    with pytest.raises(RuntimeError):
+        with render.progress("Waiting…", con=con, done_message="Agent compute is running"):
+            raise RuntimeError("timed out")
+    assert "Agent compute is running" not in buf.getvalue()
+
+
+def test_progress_done_message_goes_to_stderr_in_json_mode(monkeypatch):
+    from databricks_agentbricks import errors
+
+    monkeypatch.setattr(errors, "_OUTPUT_MODE", "json")
+    con, buf = _console()
+    err, err_buf = _console()
+    with render.progress("Waiting…", con=con, err=err, done_message="Agent compute is running"):
+        pass
+    assert buf.getvalue() == ""
+    assert err_buf.getvalue().splitlines()[-1] == "  Agent compute is running (waited 0s)"

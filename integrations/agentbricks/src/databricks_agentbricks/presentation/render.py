@@ -103,6 +103,14 @@ def _plain_heartbeats(
         yield
 
 
+def format_duration(seconds: float) -> str:
+    """Render a wall-clock duration compactly: ``45s``, ``1m12s``, ``2m05s``."""
+    total = int(seconds)
+    if total < 60:
+        return f"{total}s"
+    return f"{total // 60}m{total % 60:02d}s"
+
+
 @contextmanager
 def _spinner_elapsed(spinner: Status, label: str, clock: Callable[[], float]) -> Iterator[None]:
     """Keep a TTY spinner's text at ``label`` plus the elapsed ``M:SS`` while the body runs."""
@@ -151,6 +159,7 @@ def progress(
     err: Optional[Console] = None,
     clock: Callable[[], float] = time.monotonic,
     interval: float = HEARTBEAT_INTERVAL_S,
+    done_message: Optional[str] = None,
 ) -> Iterator[None]:
     """Like ``status``, but first prints a persistent line so feedback survives the spinner.
 
@@ -159,21 +168,27 @@ def progress(
     a durable "• message" line up front, then runs a bare elapsed-time spinner beneath it on a TTY,
     or ``status``'s plain stderr heartbeats otherwise. Under ``-o json`` the up-front line goes to
     stderr too, so stdout stays a single JSON document.
+    With ``done_message`` a successful exit also prints "done_message (waited 1m04s)", so the wait
+    survives in scrollback and logs.
     """
     from databricks_agentbricks import errors  # local import avoids a cycle at module load
 
     con = con or _stdout
     err = err or _stderr
-    (err if errors._OUTPUT_MODE == "json" else con).print(f"[{DIM}]•[/] {message}")
+    line_con = err if errors._OUTPUT_MODE == "json" else con
+    line_con.print(f"[{DIM}]•[/] {message}")
+    start = clock()
     if _plain_progress(con):
         with _plain_heartbeats(message, err, clock, interval):
             yield
-        return
-    # Empty label: the persistent line above already carries the message, so the spinner
-    # underneath is just the animated glyph and the elapsed time — no duplicated sentence.
-    with con.status("", spinner="dots") as spinner:
-        with _spinner_elapsed(spinner, "", clock):
-            yield
+    else:
+        # Empty label: the persistent line above already carries the message, so the spinner
+        # underneath is just the animated glyph and the elapsed time — no duplicated sentence.
+        with con.status("", spinner="dots") as spinner:
+            with _spinner_elapsed(spinner, "", clock):
+                yield
+    if done_message is not None:
+        line_con.print(f"  {done_message} [{DIM}](waited {format_duration(clock() - start)})[/]")
 
 
 # --- small helpers -----------------------------------------------------------

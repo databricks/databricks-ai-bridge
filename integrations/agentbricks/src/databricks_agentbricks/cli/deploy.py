@@ -271,6 +271,9 @@ def deploy(
     (`agentbricks init` records one that fits). Use the full app name with the
     `agentbricks deployments` commands.
 
+    If a first deploy stops partway, the app it created is kept: re-run `agentbricks deploy` to
+    resume, or remove it with `agentbricks deployments delete <app-name>`.
+
     Any memory/session store declared in agent.toml (for example, by `agentbricks memory/sessions bind`)
     is created if it doesn't exist yet; agent.toml itself is never modified for stores.
 
@@ -313,8 +316,9 @@ def deploy(
         )
         present_background_started(prepared.name, log=log, state_file=state_file, output=obj.output)
         return
+    started = time.monotonic()
     result = service.deploy(request)
-    present_deploy_result(result, output=obj.output)
+    present_deploy_result(result, output=obj.output, elapsed_s=time.monotonic() - started)
 
 
 # --- agentbricks deployments <lifecycle> ------------------------------------------
