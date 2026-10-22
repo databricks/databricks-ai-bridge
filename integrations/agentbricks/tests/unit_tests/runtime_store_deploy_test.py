@@ -191,6 +191,7 @@ def _ctx(client, workspace_client, *, output="text"):
         profile="prof",
         output=output,
         api_client_provider=types.SimpleNamespace(get=lambda: client),
+        announce_workspace=lambda: None,
     )
 
 
@@ -481,7 +482,7 @@ def test_unconfirmed_delete_reports_the_result_and_fails(monkeypatch, wait, stil
     ("wait", "expected"),
     [
         (AppDeleteWaitResult(timed_out=True), "it may finish on its own"),
-        (AppDeleteWaitResult(error="expired"), "agentbricks login"),
+        (AppDeleteWaitResult(error="expired"), "agentbricks auth login"),
     ],
 )
 def test_unconfirmed_delete_text_says_what_to_do(monkeypatch, wait, expected):

@@ -29,9 +29,8 @@ from packaging.requirements import Requirement
 
 # Every top-level command; `<group> --help` proves each module imports and wires up as installed.
 _COMMANDS = (
-    "login",
-    "logout",
     "init",
+    "auth",
     "doctor",
     "dev",
     "memory",
@@ -58,8 +57,8 @@ def run_agentbricks(tmp_path: pathlib.Path):
     home.mkdir()
     empty_cfg = tmp_path / "empty.databrickscfg"
     empty_cfg.write_text("")
-    # Isolate HOME so login/logout can't touch the real ~/.agentbricks; empty config file so no real
-    # profile is reachable. env= replaces the environment wholesale (no ambient DATABRICKS_* leaks).
+    # Isolate HOME so no real token cache is visible; empty config file so no real profile is
+    # reachable. env= replaces the environment wholesale (no ambient DATABRICKS_* leaks).
     env = {
         "PATH": f"{agentbricks.parent}:/usr/bin:/bin",
         "HOME": str(home),
@@ -87,7 +86,7 @@ def run_agentbricks(tmp_path: pathlib.Path):
     return run
 
 
-@pytest.mark.parametrize("profile_source", ["saved", "sdk"])
+@pytest.mark.parametrize("profile_source", ["flag", "sdk"])
 @pytest.mark.parametrize("command", ["memory-list", "slow-init", "default-init"])
 def test_cli_posts_telemetry_to_local_receiver(
     run_agentbricks, tmp_path, profile_source, command
@@ -132,15 +131,9 @@ def test_cli_posts_telemetry_to_local_receiver(
                 f"[{profile_name}]\nhost = http://127.0.0.1:{server.server_port}\n"
                 "token = local-test-token\n"
             )
-            agentbricks_home = tmp_path / "agentbricks-home"
-            agentbricks_home.mkdir()
-            env_override = {
-                "DATABRICKS_CONFIG_FILE": str(config_file),
-                "AGENTBRICKS_CONFIG_HOME": str(agentbricks_home),
-            }
-            if profile_source == "saved":
-                (agentbricks_home / "config.json").write_text(json.dumps({"profile": profile_name}))
-            else:
+            env_override = {"DATABRICKS_CONFIG_FILE": str(config_file)}
+            profile_args = ["-p", profile_name] if profile_source == "flag" else []
+            if profile_source == "sdk":
                 env_override["DATABRICKS_CONFIG_PROFILE"] = profile_name
 
             if command == "slow-init":
@@ -168,7 +161,9 @@ def test_cli_posts_telemetry_to_local_receiver(
                 arguments = ["init", str(tmp_path / "agent")]
             else:
                 arguments = ["memory", "stores", "list", "--page-size", "7"]
-            result = run_agentbricks("-o", "json", *arguments, env_override=env_override)
+            result = run_agentbricks(
+                *profile_args, "-o", "json", *arguments, env_override=env_override
+            )
             assert result.stdout
             if command == "memory-list":
                 assert reads.get(timeout=5).startswith("/api/2.0/agents/memory-stores")
@@ -237,6 +232,9 @@ def test_cli_posts_telemetry_to_local_receiver(
             "name": "agentbricks memory stores list.page_size",
             "int_value": 7,
         }
+    if profile_source == "flag":
+        # Free-text values aren't logged, only that the option was passed.
+        expected_parameters["agentbricks.profile"] = {"name": "agentbricks.profile"}
     assert {parameter["name"]: parameter for parameter in log["parameters"]} == expected_parameters
 
 
@@ -538,6 +536,9 @@ def test_tracing_unbind_then_bind_requires_an_experiment(
     assert "Pass --experiment-name or --experiment-id" in result.stderr
 
 
-def test_logout_runs_cleanly(run_agentbricks) -> None:
-    # Isolated HOME: there's no saved selection to forget, but it must still exit cleanly.
-    run_agentbricks("logout")
+def test_profile_get_reports_sdk_default_outside_a_project(run_agentbricks) -> None:
+    # No -p, no DATABRICKS_CONFIG_PROFILE, no project: resolution falls through to the SDK default.
+    result = run_agentbricks("--output", "json", "auth", "describe")
+    payload = json.loads(result.stdout)
+    assert payload["profile"] is None
+    assert payload["source"] == "Databricks SDK default"

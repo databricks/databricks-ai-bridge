@@ -75,6 +75,7 @@ def _build_mlflow_trace_client(obj) -> MLflowTraceClient:
     return MLflowTraceClient(
         obj.profile,
         mlflow_loader=_mlflow,
+        on_workspace=obj.announce_workspace,
     )
 
 

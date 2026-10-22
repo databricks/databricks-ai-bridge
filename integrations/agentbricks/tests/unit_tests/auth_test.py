@@ -1,193 +1,338 @@
-"""Unit tests for `agentbricks login` / `logout` and the saved-profile helpers.
+"""Unit tests for `agentbricks auth` (switch / describe / login) and the profile-aware root context.
 
-`AGENTBRICKS_CONFIG_HOME` redirects the config file into a tmp dir, and `_AgentBricksApiClient`
-is stubbed so login never touches the network.
+The workspace boundary (`workspace_auth._validate_bounded`), `subprocess.run`, and the terminal check are
+stubbed; `DATABRICKS_CONFIG_FILE` points at a tmp file (see conftest.py).
 """
 
 from __future__ import annotations
 
 import json
-import sys
+import pathlib
 from unittest import mock
 
 import pytest
 from click.testing import CliRunner
 from databricks.sdk.errors import Unauthenticated
 
+from databricks_agentbricks.cli import app as cli
 from databricks_agentbricks.cli import auth
+from databricks_agentbricks.cli.app import CliContext
+from databricks_agentbricks.clients import api_client_provider
+from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.projects.env_file import read_env
+from databricks_agentbricks.projects.profiles import ProfileInfo
+from databricks_agentbricks.services import workspace_auth
 
 
-@pytest.fixture(autouse=True)
-def _disable_telemetry(monkeypatch):
-    monkeypatch.setenv("AGENTBRICKS_DISABLE_TELEMETRY", "1")
+def _write_env(directory: pathlib.Path, profile: str) -> None:
+    (directory / ".env").write_text(f"DATABRICKS_CONFIG_PROFILE={profile}\n")
 
 
-class _Ctx:
-    """Stand-in for CliContext: auth commands read only .profile and .output."""
-
-    def __init__(self, profile=None, output="text"):
-        self.profile = profile
-        self.output = output
-
-
-def _stub_client(monkeypatch, user="me@example.com", host="https://ws"):
-    fake = mock.Mock()
-    fake.current_user = user
-    fake.host = host
-    monkeypatch.setattr(auth, "_AgentBricksApiClient", lambda profile: fake)
+@pytest.fixture
+def project(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
+    """An Agent Bricks project directory (has app.yaml) that is also the cwd."""
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    monkeypatch.chdir(tmp_path)
+    return tmp_path
 
 
-def test_load_default_profile_missing_returns_none(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENTBRICKS_CONFIG_HOME", str(tmp_path))
-    assert auth.load_default_profile() is None
+@pytest.fixture
+def env_project(project: pathlib.Path) -> pathlib.Path:
+    """The `project`, whose .env selects profile 'proj'."""
+    _write_env(project, "proj")
+    return project
 
 
-def test_login_persists_and_load_round_trips(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENTBRICKS_CONFIG_HOME", str(tmp_path))
-    _stub_client(monkeypatch)
-    databricks_login = mock.Mock()
-    monkeypatch.setattr(auth.subprocess, "run", databricks_login)
-    result = CliRunner().invoke(auth.login, ["--profile", "my-workspace"], obj=_Ctx())
+@pytest.fixture
+def outside_project(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
+    """A cwd that is not an Agent Bricks project (no app.yaml)."""
+    monkeypatch.chdir(tmp_path)
+    return tmp_path
+
+
+@pytest.fixture
+def fake_api_client(monkeypatch: pytest.MonkeyPatch) -> mock.Mock:
+    """Replace the workspace client the provider builds, so first use makes no SDK calls."""
+    client_cls = mock.Mock()
+    client_cls.return_value.host = None
+    monkeypatch.setattr(api_client_provider, "_AgentBricksApiClient", client_cls)
+    return client_cls
+
+
+def _ctx(profile=None, output="text") -> CliContext:
+    ctx = CliContext(profile, output)
+    ctx.select_profile()
+    return ctx
+
+
+def _invoke_profile(args, **ctx_kwargs):
+    return CliRunner().invoke(auth.auth_group, args, obj=_ctx(**ctx_kwargs))
+
+
+def _get_json(args: list[str]) -> dict:
+    result = CliRunner().invoke(cli.agentbricks, ["-o", "json", *args])
     assert result.exit_code == 0, result.output
-    assert auth.load_default_profile() == "my-workspace"
-    databricks_login.assert_not_called()
+    return json.loads(result.output)
 
 
-def test_login_json_output(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENTBRICKS_CONFIG_HOME", str(tmp_path))
-    _stub_client(monkeypatch)
-    result = CliRunner().invoke(auth.login, ["-p", "prof"], obj=_Ctx(output="json"))
+def _flat(output: str) -> str:
+    return " ".join(output.split())
+
+
+def test_context_precedence_is_flag_then_env_file_then_env_var(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "from-env-var")
+    _write_env(tmp_path, "proj")
+    ambient, project, flagged = _ctx(), _ctx(), _ctx("from-flag")
+
+    project.select_profile(tmp_path)
+    flagged.select_profile(tmp_path)
+
+    assert ambient.profile_info == ProfileInfo("from-env-var", "DATABRICKS_CONFIG_PROFILE")
+    assert project.profile_info == ProfileInfo("proj", ".env")
+    assert flagged.profile_info == ProfileInfo("from-flag", "--profile")
+
+
+def test_profile_flag_after_subcommand_wins(env_project):
+    payload = _get_json(["-p", "before", "auth", "describe", "-p", "after"])
+
+    assert (payload["profile"], payload["source"]) == ("after", "--profile")
+
+
+def test_outside_a_project_ignores_env_file(outside_project, monkeypatch):
+    _write_env(outside_project, "proj")
+
+    payload = _get_json(["auth", "describe"])
+    assert (payload["profile"], payload["source"]) == (None, "Databricks SDK default")
+
+    monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "ambient")
+    payload = _get_json(["auth", "describe"])
+    assert (payload["profile"], payload["source"], payload["project"]) == (
+        "ambient",
+        "DATABRICKS_CONFIG_PROFILE",
+        None,
+    )
+
+
+def test_first_workspace_call_names_profile_and_host_once(
+    capsys, write_databrickscfg, fake_api_client
+):
+    write_databrickscfg("[ws]\nhost = https://ws.example\n")
+    ctx = _ctx("ws")
+
+    ctx.client()
+    ctx.client()
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.count("Using profile 'ws' (from --profile) · https://ws.example") == 1
+
+
+def test_first_workspace_call_reports_resolved_host_once(
+    capsys, write_databrickscfg, fake_api_client
+):
+    write_databrickscfg("[ws]\nhost = https://profile.example\n")
+    fake_api_client.return_value.host = "https://resolved.example"
+    ctx = _ctx("ws")
+
+    ctx.client()
+    ctx.client()
+
+    error_output = capsys.readouterr().err
+    assert error_output.count("Using profile 'ws' (from --profile) · https://resolved.example") == 1
+    assert "https://profile.example" not in error_output
+
+
+def test_failed_client_construction_still_names_offline_workspace(
+    capsys, write_databrickscfg, fake_api_client
+):
+    write_databrickscfg("[ws]\nhost = https://profile.example\n")
+    fake_api_client.side_effect = AgentCliError("synthetic authentication failure")
+
+    with pytest.raises(AgentCliError):
+        _ctx("ws").client()
+
+    assert (
+        "Using profile 'ws' (from --profile) · https://profile.example" in capsys.readouterr().err
+    )
+
+
+def test_workspace_notice_names_sdk_default_auth(capsys, monkeypatch, fake_api_client):
+    monkeypatch.setenv("DATABRICKS_HOST", "https://env.example")
+
+    _ctx().client()
+
+    assert (
+        "Using Databricks SDK default auth · https://env.example (from DATABRICKS_HOST)"
+        in capsys.readouterr().err
+    )
+
+
+def test_workspace_notice_reports_environment_host_for_named_profile(
+    capsys, monkeypatch, write_databrickscfg, fake_api_client
+):
+    write_databrickscfg("[ws]\nhost = https://profile.example\n")
+    monkeypatch.setenv("DATABRICKS_HOST", "https://env.example")
+    monkeypatch.setenv("DATABRICKS_TOKEN", "test-token")
+
+    _ctx("ws").client()
+
+    assert "Using profile 'ws' (from --profile) · https://env.example (from DATABRICKS_HOST)" in (
+        capsys.readouterr().err
+    )
+
+
+def test_describe_and_workspace_notice_report_switched_default(
+    outside_project, capsys, write_databrickscfg, fake_api_client, validated_profile
+):
+    write_databrickscfg(
+        "[DEFAULT]\nhost = https://default.example\n"
+        "[__settings__]\ndefault_profile = switched\n"
+        "[switched]\nhost = https://switched.example\n"
+    )
+
+    assert _get_json(["auth", "describe"])["workspace_host"] == "https://switched.example"
+    validated_profile.assert_not_called()
+    fake_api_client.assert_not_called()
+    _ctx().client()
+
+    assert "https://switched.example ([switched] profile)" in capsys.readouterr().err
+
+
+def test_describe_reports_environment_host_even_with_a_flagged_profile(
+    outside_project, monkeypatch, write_databrickscfg, validated_profile
+):
+    write_databrickscfg("[ws]\nhost = https://profile.example\n")
+    monkeypatch.setenv("DATABRICKS_HOST", "https://env.example")
+    monkeypatch.setenv("DATABRICKS_TOKEN", "test-token")
+
+    assert _get_json(["auth", "describe", "-p", "ws"])["workspace_host"] == "https://env.example"
+    validated_profile.assert_not_called()
+
+
+def test_login_notice_reports_environment_host(
+    outside_project, monkeypatch, write_databrickscfg, validated_profile
+):
+    write_databrickscfg("[ws]\nhost = https://profile.example\n")
+    monkeypatch.setenv("DATABRICKS_HOST", "https://env.example")
+
+    result = _invoke_profile(["login", "ws"])
+
     assert result.exit_code == 0, result.output
-    assert json.loads(result.output) == {
-        "profile": "prof",
-        "user": "me@example.com",
-        "host": "https://ws",
+    assert "Logging in to profile 'ws' (from argument) — https://env.example" in result.output
+
+
+def test_workspace_notice_is_silent_for_json(capsys, fake_api_client):
+    _ctx("ws", output="json").client()
+
+    assert capsys.readouterr().err == ""
+
+
+def test_get_reports_profile_source_host_and_project_without_workspace_calls(
+    env_project, write_databrickscfg, validated_profile
+):
+    write_databrickscfg("[proj]\nhost = https://proj.example\n")
+
+    assert _get_json(["auth", "describe"]) == {
+        "profile": "proj",
+        "source": ".env",
+        "workspace_host": "https://proj.example",
+        "project": str(env_project),
     }
+    validated_profile.assert_not_called()
 
 
-def test_login_falls_back_to_global_profile(tmp_path, monkeypatch):
-    # When the command's own --profile is omitted, the global -p (obj.profile) is saved.
-    monkeypatch.setenv("AGENTBRICKS_CONFIG_HOME", str(tmp_path))
-    _stub_client(monkeypatch)
-    result = CliRunner().invoke(auth.login, [], obj=_Ctx(profile="from-global"))
-    assert result.exit_code == 0, result.output
-    assert auth.load_default_profile() == "from-global"
+def test_set_rewrites_profile_line_and_keeps_other_lines(project):
+    (project / ".env").write_text("OTHER=1\nDATABRICKS_CONFIG_PROFILE=old\nLAST=2\n")
 
-
-def test_login_without_any_profile_errors(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENTBRICKS_CONFIG_HOME", str(tmp_path))
-    result = CliRunner().invoke(auth.login, [], obj=_Ctx(profile=None))
-    assert result.exit_code != 0
-    assert auth.load_default_profile() is None
-
-
-def test_login_configures_invalid_profile_then_revalidates(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENTBRICKS_CONFIG_HOME", str(tmp_path))
-    validated = mock.Mock(current_user="me@example.com", host="https://ws")
-    agentbricks_client = mock.Mock(side_effect=[auth.AgentCliError("no credentials"), validated])
-    monkeypatch.setattr(auth, "_AgentBricksApiClient", agentbricks_client)
-    monkeypatch.setattr(auth, "_is_interactive", lambda: True)
-    databricks_login = mock.Mock(return_value=mock.Mock(returncode=0))
-    monkeypatch.setattr(auth.subprocess, "run", databricks_login)
-
-    result = CliRunner().invoke(auth.login, ["--profile", "prof"], obj=_Ctx())
+    result = _invoke_profile(["switch", "new"])
 
     assert result.exit_code == 0, result.output
-    assert auth.load_default_profile() == "prof"
-    assert agentbricks_client.call_args_list == [mock.call("prof"), mock.call("prof")]
-    databricks_login.assert_called_once_with(
-        ["databricks", "auth", "login", "--profile", "prof"],
-        text=True,
-        check=False,
-        stdout=mock.ANY,
-    )
+    assert (project / ".env").read_text() == "OTHER=1\nDATABRICKS_CONFIG_PROFILE=new\nLAST=2\n"
 
 
-def test_databricks_login_routes_child_stdout_to_stderr(monkeypatch):
-    databricks_login = mock.Mock(return_value=mock.Mock(returncode=0))
-    monkeypatch.setattr(auth.subprocess, "run", databricks_login)
-
-    auth._run_databricks_login("prof")
-
-    databricks_login.assert_called_once_with(
-        ["databricks", "auth", "login", "--profile", "prof"],
-        text=True,
-        check=False,
-        stdout=sys.stderr,
-    )
-
-
-def test_login_reauthenticates_unauthenticated_api_response(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENTBRICKS_CONFIG_HOME", str(tmp_path))
-    validated = mock.Mock(current_user="me@example.com", host="https://ws")
-    validate_profile = mock.Mock(
-        side_effect=[Unauthenticated("expired credentials"), (validated, "me@example.com")]
-    )
-    monkeypatch.setattr(auth, "_validate_profile", validate_profile)
-    monkeypatch.setattr(auth, "_is_interactive", lambda: True)
-    databricks_login = mock.Mock(return_value=mock.Mock(returncode=0))
-    monkeypatch.setattr(auth.subprocess, "run", databricks_login)
-
-    result = CliRunner().invoke(auth.login, ["--profile", "prof"], obj=_Ctx())
-
-    assert result.exit_code == 0, result.output
-    assert validate_profile.call_count == 2
-    databricks_login.assert_called_once()
-
-
-def test_login_does_not_reauthenticate_non_auth_validation_error(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENTBRICKS_CONFIG_HOME", str(tmp_path))
-    monkeypatch.setattr(
-        auth, "_validate_profile", mock.Mock(side_effect=RuntimeError("service unavailable"))
-    )
-    monkeypatch.setattr(auth, "_is_interactive", lambda: True)
-    databricks_login = mock.Mock()
-    monkeypatch.setattr(auth.subprocess, "run", databricks_login)
-
-    result = CliRunner().invoke(auth.login, ["--profile", "prof"], obj=_Ctx())
+def test_set_requires_a_project(outside_project):
+    result = _invoke_profile(["switch", "ml"])
 
     assert result.exit_code != 0
-    assert "service unavailable" in result.output
-    assert auth.load_default_profile() is None
+    assert "isn't an Agent Bricks project" in _flat(result.output)
+    assert not (outside_project / ".env").exists()
+
+
+def test_set_signs_in_when_interactive(project, interactive_terminal, validated_profile):
+    result = _invoke_profile(["switch", "ml"], output="json")
+
+    assert result.exit_code == 0, result.output
+    validated_profile.assert_called_once_with("ml")
+    assert json.loads(result.output)["signed_in_user"] == "me@example.com"
+
+
+def test_set_noninteractive_suggests_login_without_signing_in(project, validated_profile):
+    result = _invoke_profile(["switch", "ml"])
+
+    assert result.exit_code == 0, result.output
+    assert "agentbricks auth login ml" in _flat(result.output)
+    validated_profile.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("args", "flag", "expected_profile", "expected_source"),
+    [
+        (["login", "named"], "flagged", "named", "argument"),
+        (["login"], "flagged", "flagged", "--profile"),
+        (["login"], None, "proj", ".env"),
+    ],
+    ids=["argument-beats-flag", "global-flag-beats-env-file", "project-env-file"],
+)
+def test_login_target_precedence(
+    env_project, validated_profile, args, flag, expected_profile, expected_source
+):
+    result = _invoke_profile(args, profile=flag, output="json")
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["source"] == expected_source
+    validated_profile.assert_called_once_with(expected_profile)
+
+
+def test_login_without_a_target_errors_with_hint_and_ignores_env_var(
+    outside_project, monkeypatch, validated_profile
+):
+    monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "ambient")
+
+    out = _flat(_invoke_profile(["login"]).output)
+
+    assert "No profile to log in to." in out
+    assert "agentbricks auth login <profile>" in out
+    validated_profile.assert_not_called()
+
+
+def test_login_runs_databricks_cli_when_unauthenticated_and_interactive(
+    monkeypatch, interactive_terminal, databricks_login
+):
+    client = mock.Mock(host="https://ws.example")
+    validate = mock.Mock(side_effect=[(None, Unauthenticated("expired")), ((client, "me"), None)])
+    monkeypatch.setattr(workspace_auth, "_validate_bounded", validate)
+
+    result = _invoke_profile(["login", "ml"])
+
+    assert result.exit_code == 0, result.output
+    assert databricks_login.call_args.args[0] == ["databricks", "auth", "login", "--profile", "ml"]
+    assert "Logged in to 'ml'" in _flat(result.output)
+
+
+def test_login_noninteractive_unauthenticated_fails_without_browser(
+    fail_validation, databricks_login
+):
+    fail_validation(Unauthenticated("expired"))
+
+    result = _invoke_profile(["login", "ml"])
+
+    assert result.exit_code != 0
+    assert "interactive terminal" in _flat(result.output)
     databricks_login.assert_not_called()
 
 
-def test_login_does_not_launch_browser_when_noninteractive(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENTBRICKS_CONFIG_HOME", str(tmp_path))
-    monkeypatch.setattr(
-        auth, "_AgentBricksApiClient", mock.Mock(side_effect=auth.AgentCliError("no credentials"))
-    )
-    monkeypatch.setattr(auth, "_is_interactive", lambda: False)
-    databricks_login = mock.Mock()
-    monkeypatch.setattr(auth.subprocess, "run", databricks_login)
+def test_login_leaves_project_env_file_alone(env_project, validated_profile):
+    result = _invoke_profile(["login", "other"])
 
-    result = CliRunner().invoke(auth.login, ["--profile", "prof"], obj=_Ctx())
-
-    assert result.exit_code != 0
-    assert "interactive terminal" in result.output
-    assert auth.load_default_profile() is None
-    databricks_login.assert_not_called()
-
-
-def test_login_reports_when_databricks_cli_is_missing(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENTBRICKS_CONFIG_HOME", str(tmp_path))
-    monkeypatch.setattr(
-        auth, "_AgentBricksApiClient", mock.Mock(side_effect=auth.AgentCliError("no credentials"))
-    )
-    monkeypatch.setattr(auth, "_is_interactive", lambda: True)
-    monkeypatch.setattr(auth.subprocess, "run", mock.Mock(side_effect=FileNotFoundError))
-
-    result = CliRunner().invoke(auth.login, ["--profile", "prof"], obj=_Ctx())
-
-    assert result.exit_code != 0
-    assert "Could not configure Databricks authentication" in result.output
-    assert "not found" in result.output
-    assert auth.load_default_profile() is None
-
-
-def test_logout_clears_saved_profile(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENTBRICKS_CONFIG_HOME", str(tmp_path))
-    (tmp_path / "config.json").write_text(json.dumps({"profile": "x"}))
-    result = CliRunner().invoke(auth.logout, [], obj=_Ctx())
     assert result.exit_code == 0, result.output
-    assert auth.load_default_profile() is None
+    assert read_env(env_project / ".env").get("DATABRICKS_CONFIG_PROFILE") == "proj"

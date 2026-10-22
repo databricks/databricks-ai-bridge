@@ -38,6 +38,26 @@ def announce_bound_resources(preview: DevPreview) -> None:
         )
 
 
+def announce_agent_profile(
+    profile: str | None,
+    profile_source: str,
+    env_file_profile: str | None,
+    *,
+    env_credential: str | None,
+) -> None:
+    """Note when the agent's credentials differ from what `.env` alone would suggest."""
+    if env_credential:
+        render.console().print(
+            f"[dim]The agent authenticates with the {env_credential} credentials in .env, "
+            "not the resolved profile.[/]"
+        )
+    elif profile and env_file_profile and env_file_profile != profile:
+        render.console().print(
+            f"[dim]The agent will run with profile '{profile}' (from {profile_source}), "
+            f"not .env's '{env_file_profile}'.[/]"
+        )
+
+
 def announce_local_url(
     source_dir: pathlib.Path,
     port: int,
@@ -59,7 +79,7 @@ def announce_local_url(
     uses_runtime_api = has_chat_ui or server == AgentServer.AGENTBRICKS
     invoke_step = agent_invoke_step(f"--url {base}", uses_runtime_api=uses_runtime_api)
     if has_chat_ui:
-        fields = {"Chat UI": base}
+        fields: dict[str, str] = {"Chat UI": base}
         if trace_url:
             fields["Traces"] = trace_url
         render.success(

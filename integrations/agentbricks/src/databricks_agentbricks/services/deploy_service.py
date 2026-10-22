@@ -553,7 +553,7 @@ class DeployService:
         except Exception as exc:  # noqa: BLE001 - any auth/transport failure reads the same way
             raise AgentCliError(
                 "Could not authenticate with the Databricks workspace.",
-                hint=f"{exc}\nRun `agentbricks login --profile <profile>` (or pass --profile), "
+                hint=f"{exc}\nRun `agentbricks auth login <profile>` (or pass --profile), "
                 "then rerun the command.",
             ) from exc
 

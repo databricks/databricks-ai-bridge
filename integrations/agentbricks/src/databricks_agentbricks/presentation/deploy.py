@@ -125,7 +125,7 @@ def present_deleted(result: DeleteResult, *, output: Optional[str]) -> None:
     elif result.wait_error:
         render.warning(
             f"Could not confirm deployment '{result.deployment}' was deleted: {result.wait_error} "
-            f"Check {check}; if the profile isn't signed in, run `agentbricks login` first."
+            f"Check {check}; if the profile isn't signed in, run `agentbricks auth login <profile>` first."
         )
     else:
         render.success(f"Deleted deployment '{result.deployment}'")

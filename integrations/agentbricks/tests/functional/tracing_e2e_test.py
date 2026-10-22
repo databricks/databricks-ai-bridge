@@ -70,8 +70,8 @@ def local_trace_store(tmp_path: pathlib.Path) -> pathlib.Path:
 def _agentbricks_json(*args: str, project: pathlib.Path, home: pathlib.Path):
     """Run the real `agentbricks` CLI with `--output json`, isolated HOME, and return the parsed stdout.
 
-    Inherits PATH so the read command can find `uvx`, but points HOME at an empty dir (no agentbricks login /
-    real ~/.agentbricks) and silences MLflow's agent hint so stdout is clean JSON.
+    Inherits PATH so the read command can find `uvx`, but points HOME at an empty dir (no real token
+    cache) and silences MLflow's agent hint so stdout is clean JSON.
     """
     agentbricks = pathlib.Path(sys.executable).with_name("agentbricks")
     if not agentbricks.is_file():
