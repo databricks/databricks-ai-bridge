@@ -178,10 +178,24 @@ def run_loadtest(
                 observations = (
                     json.loads(observations_file.read_text()) if observations_file.exists() else []
                 )
-                summary["mlflow"] = mlflow_service.finish(observations)
-                summary["mlflow"]["eligible_successes"] = summary.get("counts", {}).get(
-                    "succeeded", 0
-                )
+                analysis_exit = 130
+
+                def interrupt_analysis(signum, frame):
+                    nonlocal analysis_exit
+                    analysis_exit = 128 + signum
+                    raise KeyboardInterrupt
+
+                previous_terminate = signal.signal(signal.SIGTERM, interrupt_analysis)
+                try:
+                    summary["mlflow"] = mlflow_service.finish(observations)
+                    summary["mlflow"]["eligible_successes"] = summary.get("counts", {}).get(
+                        "succeeded", 0
+                    )
+                except KeyboardInterrupt:
+                    returncode = analysis_exit
+                    summary["mlflow"] = {"status": "not_run", "reason": "analysis_cancelled"}
+                finally:
+                    signal.signal(signal.SIGTERM, previous_terminate)
                 if not returncode and (
                     summary["mlflow"].get("evaluation", {}).get("status") in {"failed", "partial"}
                     or summary["mlflow"].get("traces", {}).get("errors", 0)

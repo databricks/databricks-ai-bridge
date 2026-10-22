@@ -4,8 +4,10 @@ import json
 import signal
 import sys
 import uuid
+from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
+from typing import cast
 from unittest.mock import MagicMock, Mock
 
 import pytest
@@ -498,6 +500,40 @@ def test_cancelled_load_does_not_start_judging(monkeypatch):
     mlflow.finish.assert_not_called()
     assert result.returncode == 143
     assert result.summary["mlflow"] == {"status": "not_run", "reason": "cancelled"}
+
+
+@pytest.mark.parametrize("stop_signal", [signal.SIGINT, signal.SIGTERM])
+def test_interrupt_during_mlflow_keeps_completed_performance_report(
+    monkeypatch, tmp_path, stop_signal
+):
+    _preflight(monkeypatch)
+    _process(monkeypatch, summary={"counts": {"succeeded": 2}, "outcome": "completed"})
+    mlflow = Mock(max_requests=3)
+    previous_terminate = signal.getsignal(signal.SIGTERM)
+
+    def interrupted(observations):
+        if stop_signal == signal.SIGTERM:
+            handler = cast(Callable[[int, object], None], signal.getsignal(signal.SIGTERM))
+            assert callable(handler)
+            handler(signal.SIGTERM, None)
+        raise KeyboardInterrupt
+
+    mlflow.finish.side_effect = interrupted
+    report = tmp_path / "report"
+    result = loadtest_mod.run_loadtest(
+        _request(),
+        concurrency=1,
+        duration=1,
+        output="text",
+        per_user_routing=False,
+        mlflow_service=mlflow,
+        report_dir=report,
+    )
+    assert result.returncode == 128 + stop_signal
+    assert result.summary["outcome"] == "completed"
+    assert result.summary["mlflow"] == {"status": "not_run", "reason": "analysis_cancelled"}
+    assert json.loads((report / "summary.json").read_text()) == result.summary
+    assert signal.getsignal(signal.SIGTERM) == previous_terminate
 
 
 @pytest.mark.parametrize(
