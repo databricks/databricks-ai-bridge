@@ -6,6 +6,7 @@ import io
 import time
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from rich.console import Console
 from rich.status import Status
 
@@ -121,6 +122,29 @@ def test_success_next_steps_render_command_and_description():
     assert "Scaffold a new agent project" in out
     # A bare-string step renders as prose (no command accent, no bullet).
     assert "Open http://localhost:8000 to chat with it" in out
+
+
+def test_success_next_steps_lead_with_description_above_command():
+    con, buf = _console()
+    render.success(
+        "Logged in",
+        next_steps=[
+            "Open http://localhost:8000 to chat with it",
+            ("agentbricks init my-agent", "Scaffold a new agent project"),
+            ("agentbricks dev", "Run it locally"),
+        ],
+        con=con,
+    )
+    rows = [line.strip("│ ") for line in buf.getvalue().splitlines() if line.startswith("│")]
+    # Every command sits alone on the line under its description, so it copies without the gloss.
+    steps = rows[rows.index("Next steps") + 1 :]
+    assert steps == [
+        "Open http://localhost:8000 to chat with it",
+        "Scaffold a new agent project",
+        "agentbricks init my-agent",
+        "Run it locally",
+        "agentbricks dev",
+    ]
 
 
 def test_success_single_next_step_uses_singular_heading():
@@ -394,3 +418,55 @@ def test_reporter_note_prints_through_a_live_tty_spinner(monkeypatch):
         ClickReporter().note(notice)
 
     assert notice in buf.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("seconds", "expected"),
+    [(0, "0s"), (45.9, "45s"), (60, "1m00s"), (72, "1m12s"), (125, "2m05s")],
+)
+def test_format_duration(seconds, expected):
+    assert render.format_duration(seconds) == expected
+
+
+def test_progress_with_done_message_prints_the_total_wait(monkeypatch):
+    from databricks_agentbricks import errors
+
+    monkeypatch.setattr(errors, "_OUTPUT_MODE", "text")
+    now = [100.0]
+    con, buf = _console()
+    err, _ = _console()
+    with render.progress(
+        "Waiting for agent compute to start…",
+        con=con,
+        err=err,
+        clock=lambda: now[0],
+        interval=1000,
+        done_message="Agent compute is running",
+    ):
+        now[0] = 164.0
+    lines = buf.getvalue().splitlines()
+    assert lines[0].endswith("Waiting for agent compute to start…")
+    assert lines[-1] == "  Agent compute is running (waited 1m04s)"
+
+
+def test_progress_with_done_message_prints_nothing_more_on_failure(monkeypatch):
+    from databricks_agentbricks import errors
+
+    monkeypatch.setattr(errors, "_OUTPUT_MODE", "text")
+    con, buf = _console()
+    with pytest.raises(RuntimeError):
+        with render.progress("Waiting…", con=con, done_message="Agent compute is running"):
+            raise RuntimeError("timed out")
+    assert "Agent compute is running" not in buf.getvalue()
+
+
+def test_progress_done_message_goes_to_stderr_in_json_mode(monkeypatch):
+    from databricks_agentbricks import errors
+
+    monkeypatch.setattr(errors, "_OUTPUT_MODE", "json")
+    con, buf = _console()
+    err, err_buf = _console()
+    with render.progress("Waiting…", con=con, err=err, done_message="Agent compute is running"):
+        pass
+    assert buf.getvalue() == ""
+    assert err_buf.getvalue().splitlines()[-1] == "  Agent compute is running (waited 0s)"

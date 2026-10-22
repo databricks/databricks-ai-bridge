@@ -196,7 +196,7 @@ def test_deploy_reports_grant_failures_without_undoing_rollout(tmp_path, deploym
     f.provider.get.return_value = client
     client.grant_error = "access denied"
     result = f.service.deploy(_request(tmp_path))
-    f.app.deploy_source.assert_called_once()
+    f.app.roll_out.assert_called_once()
     assert "access denied" in result.model_service_grant_error
     assert "access denied" in result.prompt_grant_error
 

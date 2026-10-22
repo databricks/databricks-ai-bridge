@@ -160,7 +160,7 @@ def test_state_reporter_records_phases_and_delegates(tmp_path: pathlib.Path):
     state = deploy_state.read_state(deploy_state.state_path(tmp_path, "agent-bricks-x"))
     assert state is not None
     assert state["phase"] == "Deploying the agent source"
-    inner.progress.assert_called_once_with("Deploying the agent source…")
+    inner.progress.assert_called_once_with("Deploying the agent source…", done_message=None)
     inner.note.assert_called_once()
     inner.echo.assert_called_once_with("out", add_newline=False)
 

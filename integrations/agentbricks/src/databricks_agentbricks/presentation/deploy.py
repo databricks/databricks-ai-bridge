@@ -16,7 +16,7 @@ import click
 from rich.text import Text
 
 from databricks_agentbricks.presentation import render
-from databricks_agentbricks.presentation.endpoint import print_agent_invoke_command
+from databricks_agentbricks.presentation.endpoint import agent_invoke_step
 from databricks_agentbricks.presentation.render import field
 from databricks_agentbricks.presentation.tracing import TRACING_BIND_COMMAND, experiment_url
 from databricks_agentbricks.reporting import format_elapsed
@@ -204,11 +204,13 @@ def deploy_result_payload(result: DeployResult) -> dict[str, Any]:
 
 
 def present_deploy_result(
-    result: DeployResult,
-    *,
-    output: Optional[str],
+    result: DeployResult, *, output: Optional[str], elapsed_s: Optional[float] = None
 ) -> None:
-    """Report a finished deploy: the machine payload for `--output json`, else the success panel."""
+    """Report a finished deploy: the machine payload for `--output json`, else the success panel.
+
+    Text output ends with the deploy's wall time when ``elapsed_s`` is given; the JSON payload is
+    unchanged so scripts keep their established contract.
+    """
     if output == "json":
         render.emit_json(deploy_result_payload(result))
         return
@@ -350,9 +352,13 @@ def present_deploy_result(
     render.success(
         f"Deployed agent '{result.deployment}'",
         fields=fields,
-        next_steps=steps,
+        next_steps=[
+            *steps,
+            agent_invoke_step(result.deployment, uses_runtime_api=result.uses_runtime_api),
+        ],
     )
-    print_agent_invoke_command(result.deployment, uses_runtime_api=result.uses_runtime_api)
+    if elapsed_s is not None:
+        render.console().print(f"Deployed in {render.format_duration(elapsed_s)}")
 
 
 def present_background_started(
@@ -393,9 +399,11 @@ def present_wait_result(result: WaitResult, *, output: Optional[str]) -> None:
         render.success(
             f"Deployed agent '{result.deployment}'",
             fields={"URL": result.url} if result.url else None,
-            next_steps=[(f"agentbricks deployments logs {result.deployment}", "Tail its logs")],
+            next_steps=[
+                (f"agentbricks deployments logs {result.deployment}", "Tail its logs"),
+                agent_invoke_step(result.deployment, uses_runtime_api=result.uses_runtime_api),
+            ],
         )
-        print_agent_invoke_command(result.deployment, uses_runtime_api=result.uses_runtime_api)
         return
     if result.status == "failed":
         err = render.stderr_console()

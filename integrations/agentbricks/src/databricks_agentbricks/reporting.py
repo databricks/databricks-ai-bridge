@@ -19,8 +19,17 @@ class Reporter(Protocol):
         """A transient spinner around a short reconcile step."""
         ...
 
-    def progress(self, message: str) -> AbstractContextManager[None]:
-        """A persistent progress line around a long-running provision step."""
+    def progress(
+        self, message: str, *, done_message: Optional[str] = None
+    ) -> AbstractContextManager[None]:
+        """A persistent progress line around a long-running provision step.
+
+        With ``done_message`` a successful exit also prints ``done_message`` with the total wait.
+        """
+        ...
+
+    def timing(self, phase: str, seconds: float) -> None:
+        """A per-phase duration, shown only when the adapter's debug-timings switch is on."""
         ...
 
     def note(self, message: str) -> None:

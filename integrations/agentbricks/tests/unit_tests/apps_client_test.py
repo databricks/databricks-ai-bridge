@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import types
 
 import pytest
 
 from databricks_agentbricks.clients import apps_client as apps_client_mod
-from databricks_agentbricks.clients.apps_client import AppsClient
+from databricks_agentbricks.clients.apps_client import AppsClient, AppState
 from databricks_agentbricks.errors import AgentCliError
 
 
@@ -117,7 +118,64 @@ def test_wait_for_running_returns_when_compute_active():
     client = AppsClient(
         "prof", runner=_runner([], stdout='{"compute_status": {"state": "ACTIVE"}}')
     )
-    client.wait_for_active("app", timeout_s=1)  # returns without raising
+    assert client.wait_for_active("app", timeout_s=1) is False
+
+
+def test_wait_for_running_reports_a_deployment_in_progress_from_the_same_read():
+    # What `apps get` shows right after `apps start` on a STOPPED App: compute is up, and the
+    # start's rollout of the last active deployment is still pending.
+    payload = {
+        "compute_status": {"state": "ACTIVE"},
+        "pending_deployment": {"deployment_id": "d2", "status": {"state": "IN_PROGRESS"}},
+    }
+    calls: list = []
+    client = AppsClient("prof", runner=_runner(calls, stdout=json.dumps(payload)))
+
+    assert client.wait_for_active("app", timeout_s=1) is True
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"pending_deployment": {"status": {"state": "IN_PROGRESS"}}}, True),
+        ({"pendingDeployment": {"status": {"state": "IN_PROGRESS"}}}, True),
+        ({"pending_deployment": {"status": {"state": "SUCCEEDED"}}}, False),
+        ({"pending_deployment": {"status": {"state": "FAILED"}}}, False),
+        ({"active_deployment": {"status": {"state": "SUCCEEDED"}}}, False),
+    ],
+)
+def test_deployment_in_progress_reads_the_pending_deployment(payload, expected):
+    client = AppsClient("prof", runner=_runner([], stdout=json.dumps(payload)))
+    assert client.deployment_in_progress("app") is expected
+
+
+def test_deployment_in_progress_is_false_when_the_app_cannot_be_read():
+    client = AppsClient("prof", runner=_runner([], returncode=1, stdout="{}"))
+    assert client.deployment_in_progress("app") is False
+
+
+def test_wait_for_deployment_polls_until_the_pending_deployment_settles(monkeypatch):
+    states = iter(["IN_PROGRESS", "IN_PROGRESS", "SUCCEEDED"])
+    reads = []
+
+    def runner(args, profile, **kwargs):
+        reads.append(args)
+        payload = {"pending_deployment": {"status": {"state": next(states)}}}
+        return types.SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(apps_client_mod.time, "sleep", lambda s: None)
+    AppsClient("prof", runner=runner).wait_for_deployment("app", timeout_s=60)
+
+    assert len(reads) == 3
+
+
+def test_wait_for_deployment_times_out(monkeypatch):
+    payload = {"pending_deployment": {"status": {"state": "IN_PROGRESS"}}}
+    client = AppsClient("prof", runner=_runner([], stdout=json.dumps(payload)))
+    monkeypatch.setattr(apps_client_mod.time, "sleep", lambda s: None)
+    with pytest.raises(AgentCliError, match="still had a deployment in progress"):
+        client.wait_for_deployment("app", timeout_s=0)
 
 
 def test_wait_for_running_times_out(monkeypatch):
@@ -316,3 +374,114 @@ def test_find_returns_payload_or_none_when_missing():
     broken = AppsClient("prof", runner=_runner([], returncode=1, stderr="Error: 401"))
     with pytest.raises(AgentCliError, match="Could not check whether deployment"):
         broken.find("agent-bricks-myapp")
+
+
+def _sequence_runner(calls, payloads):
+    """Serve one `apps get -o json` payload per call, repeating the last one."""
+
+    def run(args, profile, **kwargs):
+        calls.append(args)
+        stdout = payloads[min(len(calls), len(payloads)) - 1]
+        return types.SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    return run
+
+
+def test_service_principal_miss_is_not_cached():
+    calls = []
+    client = AppsClient(
+        "prof",
+        runner=_sequence_runner(calls, ["{}", '{"service_principal_client_id": "sp-123"}']),
+    )
+
+    assert client.get_service_principal("agent-bricks-myapp") is None
+    assert client.get_service_principal("agent-bricks-myapp") == "sp-123"
+    assert client.get_service_principal("agent-bricks-myapp") == "sp-123"
+    assert len(calls) == 2  # the hit is cached; the miss was re-read
+
+
+def test_wait_for_service_principal_polls_until_it_appears(monkeypatch):
+    calls = []
+    sleeps = []
+    monkeypatch.setattr(apps_client_mod.time, "sleep", sleeps.append)
+    client = AppsClient(
+        "prof",
+        runner=_sequence_runner(calls, ["{}", "{}", '{"service_principal_client_id": "sp-123"}']),
+    )
+
+    assert client.wait_for_service_principal("agent-bricks-myapp") == "sp-123"
+    assert len(calls) == 3
+    assert sleeps == [2, 2]
+
+
+def test_wait_for_service_principal_gives_up_after_its_timeout(monkeypatch):
+    clock = iter(range(0, 1000, 30))
+    monkeypatch.setattr(apps_client_mod.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(apps_client_mod.time, "sleep", lambda s: None)
+    calls = []
+    client = AppsClient("prof", runner=_sequence_runner(calls, ["{}"]))
+
+    assert client.wait_for_service_principal("agent-bricks-myapp", timeout_s=60) is None
+    assert len(calls) == 2  # the clock reads 30 s after the first miss and 60 s after the second
+
+
+def test_app_state_reads_compute_deployment_and_seeds_the_principal():
+    calls = []
+    payload = (
+        '{"compute_status": {"state": "STOPPED"}, "active_deployment": {"deployment_id": "d"},'
+        ' "service_principal_client_id": "sp-123"}'
+    )
+    client = AppsClient("prof", runner=_runner(calls, stdout=payload))
+
+    assert client.app_state("agent-bricks-myapp") == AppState(
+        compute_state="STOPPED", has_active_deployment=True, service_principal_client_id="sp-123"
+    )
+    assert client.get_service_principal("agent-bricks-myapp") == "sp-123"
+    assert calls == [
+        (
+            ["apps", "get", "agent-bricks-myapp", "-o", "json"],
+            "prof",
+            {"capture": True, "check": False},
+        )
+    ]
+
+
+def test_app_state_of_a_never_deployed_app():
+    client = AppsClient("prof", runner=_runner([], stdout='{"computeStatus": {"state": "ACTIVE"}}'))
+
+    assert client.app_state("agent-bricks-myapp") == AppState("ACTIVE", False, None)
+
+
+def test_app_state_none_only_on_definitive_not_found():
+    missing = AppsClient(
+        "prof", runner=_runner([], returncode=1, stderr="Error: app does not exist")
+    )
+    assert missing.app_state("agent-bricks-myapp") is None
+
+    failing = AppsClient("prof", runner=_runner([], returncode=1, stderr="Error: 401"))
+    with pytest.raises(AgentCliError, match="Could not check whether deployment"):
+        failing.app_state("agent-bricks-myapp")
+
+    garbled = AppsClient("prof", runner=_runner([], stdout="not json"))
+    with pytest.raises(AgentCliError, match="Could not check whether deployment"):
+        garbled.app_state("agent-bricks-myapp")
+
+
+def test_no_wait_calls_pass_the_flag():
+    calls = []
+    client = AppsClient("prof", runner=_runner(calls))
+
+    client.create("agent-bricks-myapp", None, no_wait=True)
+    client.start_no_wait("agent-bricks-myapp")
+
+    assert [call[0] for call in calls] == [
+        ["apps", "create", "agent-bricks-myapp", "--no-wait"],
+        ["apps", "start", "agent-bricks-myapp", "--no-wait"],
+    ]
+
+
+def test_create_blocks_by_default_for_other_callers():
+    calls = []
+    AppsClient("prof", runner=_runner(calls)).create("agent-bricks-myapp", None)
+
+    assert calls[0][0] == ["apps", "create", "agent-bricks-myapp"]

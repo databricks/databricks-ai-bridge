@@ -5,7 +5,7 @@ from __future__ import annotations
 import pathlib
 
 from databricks_agentbricks.presentation import render
-from databricks_agentbricks.presentation.endpoint import print_agent_invoke_command
+from databricks_agentbricks.presentation.endpoint import agent_invoke_step
 from databricks_agentbricks.projects.types import AgentServer
 from databricks_agentbricks.services.dev_service import DevPreview
 
@@ -76,6 +76,8 @@ def announce_local_url(
         if server == AgentServer.CUSTOM
         else ("agentbricks tools add mcp <service>", "Give the agent a tool")
     )
+    uses_runtime_api = has_chat_ui or server == AgentServer.AGENTBRICKS
+    invoke_step = agent_invoke_step(f"--url {base}", uses_runtime_api=uses_runtime_api)
     if has_chat_ui:
         fields: dict[str, str] = {"Chat UI": base}
         if trace_url:
@@ -88,10 +90,10 @@ def announce_local_url(
                 tool_step,
                 ("agentbricks memory bind <store>", "Attach a memory / session store"),
                 (f"agentbricks deploy {deploy_name}", "Deploy it to Databricks"),
+                invoke_step,
             ],
         )
     else:
-        uses_runtime_api = server == AgentServer.AGENTBRICKS
         endpoint = f"{base}/api/invocations" if uses_runtime_api else f"{base}/invocations"
         body = (
             '{"id": "00000000-0000-4000-8000-000000000000", '
@@ -110,9 +112,6 @@ def announce_local_url(
                 (sample, "Send a test request"),
                 tool_step,
                 (f"agentbricks deploy {deploy_name}", "Deploy it to Databricks"),
+                invoke_step,
             ],
         )
-
-    print_agent_invoke_command(
-        f"--url {base}", uses_runtime_api=has_chat_ui or server == AgentServer.AGENTBRICKS
-    )

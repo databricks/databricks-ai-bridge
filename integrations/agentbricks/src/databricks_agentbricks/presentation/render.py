@@ -103,6 +103,14 @@ def _plain_heartbeats(
         yield
 
 
+def format_duration(seconds: float) -> str:
+    """Render a wall-clock duration compactly: ``45s``, ``1m12s``, ``2m05s``."""
+    total = int(seconds)
+    if total < 60:
+        return f"{total}s"
+    return f"{total // 60}m{total % 60:02d}s"
+
+
 @contextmanager
 def _spinner_elapsed(spinner: Status, label: str, clock: Callable[[], float]) -> Iterator[None]:
     """Keep a TTY spinner's text at ``label`` plus the elapsed ``M:SS`` while the body runs."""
@@ -151,6 +159,7 @@ def progress(
     err: Optional[Console] = None,
     clock: Callable[[], float] = time.monotonic,
     interval: float = HEARTBEAT_INTERVAL_S,
+    done_message: Optional[str] = None,
 ) -> Iterator[None]:
     """Like ``status``, but first prints a persistent line so feedback survives the spinner.
 
@@ -159,21 +168,27 @@ def progress(
     a durable "• message" line up front, then runs a bare elapsed-time spinner beneath it on a TTY,
     or ``status``'s plain stderr heartbeats otherwise. Under ``-o json`` the up-front line goes to
     stderr too, so stdout stays a single JSON document.
+    With ``done_message`` a successful exit also prints "done_message (waited 1m04s)", so the wait
+    survives in scrollback and logs.
     """
     from databricks_agentbricks import errors  # local import avoids a cycle at module load
 
     con = con or _stdout
     err = err or _stderr
-    (err if errors._OUTPUT_MODE == "json" else con).print(f"[{DIM}]•[/] {message}")
+    line_con = err if errors._OUTPUT_MODE == "json" else con
+    line_con.print(f"[{DIM}]•[/] {message}")
+    start = clock()
     if _plain_progress(con):
         with _plain_heartbeats(message, err, clock, interval):
             yield
-        return
-    # Empty label: the persistent line above already carries the message, so the spinner
-    # underneath is just the animated glyph and the elapsed time — no duplicated sentence.
-    with con.status("", spinner="dots") as spinner:
-        with _spinner_elapsed(spinner, "", clock):
-            yield
+    else:
+        # Empty label: the persistent line above already carries the message, so the spinner
+        # underneath is just the animated glyph and the elapsed time — no duplicated sentence.
+        with con.status("", spinner="dots") as spinner:
+            with _spinner_elapsed(spinner, "", clock):
+                yield
+    if done_message is not None:
+        line_con.print(f"  {done_message} [{DIM}](waited {format_duration(clock() - start)})[/]")
 
 
 # --- small helpers -----------------------------------------------------------
@@ -425,11 +440,12 @@ def success(
 ) -> None:
     """A green success panel with optional details and a Next step(s) list.
 
-    Each next step is either a ``(command, description)`` pair — the command is shown in cyan (the
-    actionable accent) with the description in secondary — or a bare string for a non-command
-    instruction (e.g. ``"Open http://localhost:8000"``), rendered as prose. Commands are
-    **copy-safe**: no ``$`` prompt prefix, so they paste straight into a shell. The heading is
-    "Next step" or "Next steps", chosen automatically from the count.
+    Each next step is either a ``(command, description)`` pair — the description is shown in
+    secondary on its own line, with the command in cyan (the actionable accent) on the line below —
+    or a bare string for a non-command instruction (e.g. ``"Open http://localhost:8000"``), rendered
+    as prose. Commands are **copy-safe**: no ``$`` prompt prefix and a full-width line to
+    themselves, so they paste straight into a shell. The heading is "Next step" or "Next steps",
+    chosen automatically from the count.
     """
     con = con or _stdout
     body: list[RenderableType] = [Text("✔ ", style=SUCCESS) + Text(title, style="bold")]
@@ -446,19 +462,16 @@ def success(
         # Singular vs plural from the count, per the design.
         heading = "Next step" if len(next_steps) == 1 else "Next steps"
         body.append(Text(heading, style=SECONDARY))
-        # A two-column grid aligns every command's description at the same offset.
-        steps = Table.grid(padding=(0, 2))
-        steps.add_column()
-        steps.add_column(style=SECONDARY)
         for step in next_steps:
             if isinstance(step, tuple):
-                # The actionable command is cyan; its description trails in secondary.
+                # The description leads; the cyan command gets the full width of the line below.
                 command, description = step
-                steps.add_row(Text(command, style=COMMAND), description)
+                body.append(Text(description, style=SECONDARY))
+                # Fold rather than crop a long, space-free token (e.g. a JSON body) at the border.
+                body.append(Text(command, style=COMMAND, overflow="fold"))
             else:
                 # Prose (e.g. "Open <url>") renders plainly — no command accent, no prompt marker.
-                steps.add_row(Text(step), "")
-        body.append(steps)
+                body.append(Text(step))
 
     con.print()
     con.print(Panel(Group(*body), border_style=SUCCESS, box=box.ROUNDED))

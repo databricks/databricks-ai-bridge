@@ -396,27 +396,18 @@ class RuntimeStoreProvisioner:
                 ),
             )
 
-    def after_app_ready(self, ctx: ResourceContext, state: RuntimeStoreState) -> ManifestPatch:
-        """Attach the legacy backend to the app, or provision the managed store the app now owns.
+    def after_app_created(self, ctx: ResourceContext, state: RuntimeStoreState) -> ManifestPatch:
+        """Provision the managed store the app owns, as soon as the app exists.
 
-        The managed branch contributes late env after the app exists. The deploy service owns the
-        corresponding second manifest write.
+        Needs only the app's service principal, not ACTIVE compute, so deploy runs it while the
+        compute boots; the SP can lag a `--no-wait` create, so it is polled briefly. The managed
+        branch contributes late env; the deploy service owns the corresponding second manifest
+        write. The legacy backend has nothing to do here - see :meth:`attach_to_app`.
         """
-        if not state.enabled:
+        if not state.enabled or state.legacy_backend is not None:
             return ManifestPatch(env={})
         with self._reporter.status("Reconciling Runtime Store…"):
-            if state.legacy_backend is not None:
-                resource_error = self._apps.attach_postgres_backends(
-                    ctx.project.name, [state.legacy_backend]
-                )
-                if resource_error:
-                    raise AgentCliError(
-                        "Could not attach the Lakebase resource required for the Runtime Store.",
-                        hint=resource_error,
-                    )
-                return ManifestPatch(env={})
-
-            sp = self._apps.get_service_principal(ctx.project.name)
+            sp = self._apps.wait_for_service_principal(ctx.project.name)
             backend = managed_runtime_store.get_or_create_backend(
                 self._api_client_provider.get(), ctx.project.name, sp
             )
@@ -428,6 +419,24 @@ class RuntimeStoreProvisioner:
             if not ctx.deployment_exists and ctx.project.name.startswith(_DEPLOYMENT_PREFIX):
                 env[RUNTIME_STORE_SCHEMA_ENV] = _AGENTKIT_RUNTIME_STORE_SCHEMA
             return ManifestPatch(env=env)
+
+    def attach_to_app(self, ctx: ResourceContext, state: RuntimeStoreState) -> None:
+        """Attach the legacy backend to the app as a resource; a no-op for the managed store.
+
+        This updates the App, which fails while its compute is starting, so deploy runs it only
+        after the compute is ACTIVE.
+        """
+        if not state.enabled or state.legacy_backend is None:
+            return
+        with self._reporter.status("Reconciling Runtime Store…"):
+            resource_error = self._apps.attach_postgres_backends(
+                ctx.project.name, [state.legacy_backend]
+            )
+        if resource_error:
+            raise AgentCliError(
+                "Could not attach the Lakebase resource required for the Runtime Store.",
+                hint=resource_error,
+            )
 
     def manages_persistent_data(self) -> bool:
         """Whether the Runtime Store is service-managed, so a delete must tear it down first."""

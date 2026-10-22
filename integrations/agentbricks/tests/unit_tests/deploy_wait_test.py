@@ -82,7 +82,7 @@ def test_json_deploy_writes_one_document_and_records_the_result(
     payload = json.loads(result.stdout)  # the whole of stdout is one JSON document
     assert payload["deployment"] == _APP
     # Progress and relayed `apps create` output went to stderr instead.
-    assert "• Creating the agent and starting its compute…" in result.stderr
+    assert "• Creating the agent; its compute starts in the background…" in result.stderr
     assert "Agent compute" in result.stderr
     state = _state(project)
     assert state["status"] == "succeeded"
@@ -112,7 +112,9 @@ def test_failed_deploy_records_the_error(project: pathlib.Path, monkeypatch: pyt
     assert result.exit_code == 1
     state = _state(project)
     assert state["status"] == "failed"
-    assert state["error"] == f"Could not deploy '{_APP}'."
+    message, note = state["error"].split("\n")
+    assert message == f"Could not deploy '{_APP}'."
+    assert f"agentbricks deployments delete {_APP}" in note
     assert state["phase"] == "Deploying the agent source"
 
 
@@ -286,6 +288,46 @@ def test_no_wait_passes_through_non_default_options(
     ]
 
 
+@pytest.mark.parametrize(
+    "options,expected",
+    [
+        (
+            [
+                "--allowed-origin",
+                "https://chat.example.com",
+                "--allowed-origin",
+                "http://localhost:3000",
+            ],
+            ("https://chat.example.com", "http://localhost:3000"),
+        ),
+        (["--clear-allowed-origins"], ()),
+        ([], ("https://previous.example.com",)),
+    ],
+)
+def test_no_wait_preserves_cors_configuration_for_background_deploy(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, popen, options, expected
+):
+    project = AgentProject.create(tmp_path, framework="langgraph", server="agentbricks")
+    project.set_allowed_origins(("https://previous.example.com",))
+    project.write()
+    events: list[tuple] = []
+    monkeypatch.setattr(deploy_mod, "_databricks", _DeployRunner(events))
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["demo", "--source", str(tmp_path), "--no-wait", *options],
+        obj=_real_deploy_context(_DeployApi(events)),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert AgentProject.load(tmp_path).allowed_origins == expected
+    [(argv, _)] = popen.calls
+    with deploy_mod.deploy.make_context("deploy", argv[argv.index("deploy") + 1 :]) as child:
+        assert child.params["allowed_origin"] == (expected if "--allowed-origin" in options else ())
+        assert child.params["clear_allowed_origins"] == ("--clear-allowed-origins" in options)
+        assert child.params["background_child"] is True
+
+
 def test_no_wait_bad_name_fails_synchronously_and_spawns_nothing(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, popen
 ):
@@ -398,6 +440,8 @@ def test_wait_reports_a_finished_deploy_with_its_url(project: pathlib.Path):
     assert "Deployed agent 'agent-bricks-demo'" in result.stdout
     assert "https://agent.example" in result.stdout
     assert f"agentbricks endpoint invoke {_APP}" in result.stdout
+    # The invoke step is the panel's last row: nothing prints after the bottom border.
+    assert result.stdout.rstrip().endswith("╯")
 
 
 def test_wait_reports_a_failed_background_deploy_with_its_log_tail(project: pathlib.Path):
