@@ -26,7 +26,12 @@ configuration and client examples; [AGENTS.md](AGENTS.md) provides the developme
 agentbricks dev
 ```
 
-The API is available at `http://localhost:8000/api/invocations`. Every request supplies a UUID `id`.
+The API is available at `http://localhost:8000/api/invocations`, or on the port you pass with
+`--app-port`. The `http://localhost:8001` URL that `databricks apps run-local` also prints is its
+proxy to the same app. Requests can fail for a few seconds while the server starts; wait for
+`Uvicorn running on ...` in the log.
+
+Every request supplies a UUID `id`.
 That ID is the invocation identifier and idempotency key. Supply the stable application session as
 the top-level `session_id`; agent-specific values live inside the opaque `input` object:
 
@@ -42,6 +47,31 @@ curl -sS http://localhost:8000/api/invocations \
 Reuse `SESSION_ID` for multi-turn conversation state. Generate a new `INVOCATION_ID` for each turn.
 Retrying the same request with the same invocation ID returns the persisted result; changing the
 request while reusing the ID returns `409`.
+
+## Long-term memory
+
+The Session Store keeps one conversation's state, keyed by the top-level `session_id`. The Memory Store
+keeps facts the agent recalls across conversations, keyed by `actor`: `runtime/adapter.py` reads
+`input.actor` and passes it to `memory_tools(actor)`. If you leave out `actor`, it defaults to the
+`session_id`, so long-term memory won't carry across sessions. For memory that persists, pass a stable
+`actor`, such as the end user's ID, from trusted application context. With a request-user
+(`auth = "user"`) tool bound, the adapter also namespaces a supplied `actor` to the signed-in user; see
+[Request-user authorization](#request-user-authorization).
+
+Memory is off under `agentbricks dev`, so try it against the deployed app: two invocations with
+different `session_id`s and the same `actor`.
+
+```bash
+ACTOR=user-123
+
+# Conversation 1: the agent saves a fact with its memory tool.
+agentbricks --profile <profile> endpoint invoke agent-bricks-<name> --path /api/invocations \
+  --json "{\"id\":\"$(uuidgen)\",\"session_id\":\"$(uuidgen)\",\"input\":{\"actor\":\"$ACTOR\",\"messages\":[{\"role\":\"user\",\"content\":\"Remember that I prefer answers as bullet points.\"}]}}"
+
+# Conversation 2: a new session_id, same actor, so the agent can recall it.
+agentbricks --profile <profile> endpoint invoke agent-bricks-<name> --path /api/invocations \
+  --json "{\"id\":\"$(uuidgen)\",\"session_id\":\"$(uuidgen)\",\"input\":{\"actor\":\"$ACTOR\",\"messages\":[{\"role\":\"user\",\"content\":\"How do I like my answers formatted?\"}]}}"
+```
 
 ## Invocation modes
 
