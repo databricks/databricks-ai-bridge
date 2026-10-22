@@ -58,6 +58,33 @@ def test_add_managed_tool_writes_explicit_auth(tmp_path, arguments, auth):
     assert result.exit_code == 0, result.output
     assert AgentProject.load(project).tools[0].auth == (auth or "user")
     assert f'auth = "{auth or "user"}"' in (project / "agent.toml").read_text()
+    assert ("worker-failure recovery" in result.output) == (auth != "app")
+
+
+@pytest.mark.parametrize("auth", ["app", "user"])
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["mcp", "system.ai.web_search"],
+        ["sandbox", "--scope", "volume:main.data.files"],
+        ["uc-function", "main.tools.lookup"],
+    ],
+)
+def test_add_tool_json_reports_auth_limitations(tmp_path, auth, arguments):
+    project = _project(tmp_path)
+    result = CliRunner().invoke(
+        tools,
+        ["add", *arguments, "--auth", auth, "--source", str(project)],
+        obj=_Ctx("json"),
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert bool(payload["warnings"]) == (auth == "user")
+    if auth == "user":
+        assert "human approval" in payload["warnings"][0]
+        assert "Use --auth app only when" in payload["warnings"][0]
+        assert "App service principal's permissions" in payload["warnings"][0]
+    assert payload["tool"]["auth"] == auth
 
 
 def test_add_user_uc_function_preserves_legacy_binding_auth(tmp_path):
@@ -394,7 +421,11 @@ def test_genie_add_remove_is_manifest_only_and_idempotent(
     record = {"id": tool_id, "kind": kind, "source": source_value, "auth": "user"}
     first = runner.invoke(tools, args, obj=_Ctx(output="json"))
     assert first.exit_code == 0, first.output
-    assert json.loads(first.output) == {
+    first_payload = json.loads(first.output)
+    warnings = first_payload.pop("warnings")
+    assert len(warnings) == 1
+    assert "Request-user mode applies to every invocation" in warnings[0]
+    assert first_payload == {
         "schema_version": 1,
         "changed": True,
         "changed_files": [str(manifest)],
