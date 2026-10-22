@@ -10,13 +10,9 @@ from dataclasses import dataclass
 from typing import Any, Callable, Iterator, Optional
 
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
-from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.errors import AgentCliError, store_create_permission_error
 
 _STORE_PAGE_SIZE = 100  # the memory- and session-stores list APIs cap page_size at 100
-
-_LAKEBASE_PERMISSION_DOCS = (
-    "https://docs.databricks.com/aws/en/oltp/projects/manage-project-permissions"
-)
 
 
 def _field(payload: Any, name: str) -> Any:
@@ -61,27 +57,14 @@ class SessionStoreReconcileResult:
     created: bool
 
 
-def _store_create_permission_error(name: str, kind: str, cause: AgentCliError) -> AgentCliError:
-    """PERMISSION_DENIED on create: the workspace admin has restricted Lakebase project creation."""
-    return AgentCliError(
-        f"You don't have permission to create {kind} store '{name}'.",
-        error_code=cause.error_code,
-        hint=(
-            "Creating a managed store provisions a Lakebase project, which your workspace admin "
-            "has restricted. Ask your workspace admin to grant you permission to create Lakebase "
-            f"projects ({_LAKEBASE_PERMISSION_DOCS}), or bind an existing store you can access "
-            "with --no-create-stores."
-        ),
-    )
-
-
 def _store_access_error(name: str, kind: str) -> AgentCliError:
     """The store already exists but isn't accessible to the caller."""
+    command = "memory" if kind == "memory" else "sessions"
     return AgentCliError(
         f"{kind.capitalize()} store '{name}' already exists but you don't have access to it.",
         hint=(
             "Ask the store's owner or your workspace admin to grant you access, or bind a "
-            "different store you can access with --no-create-stores."
+            f"different store with `agentbricks {command} bind <existing-store>` and deploy again."
         ),
     )
 
@@ -129,7 +112,7 @@ class MemoryStoreClient:
             ), True
         except AgentCliError as exc:
             if exc.error_code == "PERMISSION_DENIED":
-                raise _store_create_permission_error(display_name, "memory", exc) from exc
+                raise store_create_permission_error(display_name, "memory", exc) from exc
             if exc.error_code != "ALREADY_EXISTS":
                 raise
         store = self.resolve(display_name)
@@ -194,7 +177,7 @@ class SessionStoreClient:
             ), True
         except AgentCliError as exc:
             if exc.error_code == "PERMISSION_DENIED":
-                raise _store_create_permission_error(name, "session", exc) from exc
+                raise store_create_permission_error(name, "session", exc) from exc
             if exc.error_code != "ALREADY_EXISTS":
                 raise
         try:

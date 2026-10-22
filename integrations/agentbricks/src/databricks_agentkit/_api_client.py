@@ -15,7 +15,12 @@ import time
 from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import quote
 
-from databricks_agentbricks.errors import TRANSIENT_ERROR_CODES, AgentCliError, wrap_api_error
+from databricks_agentbricks.errors import (
+    TRANSIENT_ERROR_CODES,
+    AgentCliError,
+    store_create_permission_error,
+    wrap_api_error,
+)
 from databricks_agentkit import models
 from databricks_agentkit.runtime import model_services, prompt_registry
 
@@ -411,16 +416,19 @@ class _AgentBricksApiClient:
         retry_transient: bool = False,
     ) -> models.MemoryStore:
         body = _body(display_name=display_name, description=description)
-        return _as(
-            models.MemoryStore,
-            self._do(
+        try:
+            response = self._do(
                 "POST",
                 f"{_BASE}/memory-stores",
                 query={"managed_memory_store_id": display_name},
                 body=body,
                 safe_to_retry=retry_transient,
-            ),
-        )
+            )
+        except AgentCliError as exc:
+            if exc.error_code == "PERMISSION_DENIED":
+                raise store_create_permission_error(display_name, "memory", exc) from exc
+            raise
+        return _as(models.MemoryStore, response)
 
     def get_memory_store(self, name: str) -> models.MemoryStore:
         return _as(models.MemoryStore, self._do("GET", f"{_BASE}/{memory_store_path(name)}"))
@@ -587,16 +595,19 @@ class _AgentBricksApiClient:
         retry_transient: bool = False,
     ) -> models.SessionStore:
         body = _body(description=description, metadata=metadata)
-        return _as(
-            models.SessionStore,
-            self._do(
+        try:
+            response = self._do(
                 "POST",
                 f"{_BASE}/session-stores",
                 query={"session_store_name": name, "session_store_id": name},
                 body=body,
                 safe_to_retry=retry_transient,
-            ),
-        )
+            )
+        except AgentCliError as exc:
+            if exc.error_code == "PERMISSION_DENIED":
+                raise store_create_permission_error(name, "session", exc) from exc
+            raise
+        return _as(models.SessionStore, response)
 
     def get_session_store(self, name: str) -> models.SessionStore:
         return _as(models.SessionStore, self._do("GET", f"{_BASE}/{session_store_path(name)}"))
