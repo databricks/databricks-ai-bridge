@@ -2,8 +2,8 @@
 
 Agent Bricks CLI is an experimental command-line interface for building and deploying custom
 agents on Databricks. It manages memory, sessions, tracing, and deployments from one authenticated
-command. Under `agentbricks experimental`, it also binds each of the agent's LLM calls to a model
-service you own, so the model behind it can change without a code change or redeploy.
+command. Under `agentbricks experimental`, it also picks the model and prompt behind each of the
+agent's LLM calls by searching candidates on your own eval set.
 
 > The underlying APIs are in preview and may need workspace enablement.
 
@@ -36,7 +36,7 @@ invocation protocol to design yourself. Bring your own agent, or start from a te
   up (detailed under [Agent tools](#agent-tools)).
 - **`agentbricks deploy`** - provisions the bound stores, grants the app's service principal access to
   them, provisions the durable-runtime database when durability is on, configures tracing, and rolls
-  out the app. `agentbricks deployments` covers the lifecycle (list, get, logs, start, stop, delete).
+  out the app. `agentbricks deployments` covers the lifecycle (list, get, wait, logs, start, stop, delete).
 - **`agentbricks dev`** - runs your agent from the same manifest the deployment uses, so local behavior
   matches what ships.
 
@@ -159,16 +159,45 @@ agentbricks login --profile <profile>
 agentbricks init my-agent       # Defaults to LangGraph; add --framework=openai for OpenAI Agents SDK
 cd my-agent
 agentbricks dev                 # optional: develop and test locally
-agentbricks deploy my-agent     # deploy to Databricks
+agentbricks deploy              # deploy to Databricks as agent-bricks-my-agent
 ```
 
 `agentbricks dev` runs the agent locally on `http://localhost:8000`, wrapping the Databricks Apps
 local runtime so local behavior matches a deployment.
 
-`agentbricks deploy my-agent` deploys a Databricks App named `agent-bricks-my-agent`, provisions the
+`agentbricks init` records the deployment name in `agent.toml`, so `agentbricks deploy` from the
+project directory deploys a Databricks App named `agent-bricks-my-agent`, provisions the
 stores declared in `agent.toml`, and grants the app's service principal access to the stores and
 direct App-auth tool resources declared there. Use `agentbricks deployments list` to find deployed
 apps, and `agentbricks deployments get agent-bricks-my-agent` to print an app's URL and status.
+Databricks App names cap at 30 characters, so a deployment name can be up to 17 characters after
+the `agent-bricks-` prefix. `init` shortens a longer directory name to fit (for example
+`caj-langgraph-agent` becomes `caj-langgr-<token>`); pass `agentbricks init --name <name>` to choose
+it yourself, or `agentbricks deploy <name>` to change it later.
+
+The app's compute starts first and boots while the other resources are provisioned. If a first
+deploy stops partway, the app it created is kept: re-run `agentbricks deploy` to resume, or remove
+it with `agentbricks deployments delete agent-bricks-my-agent`.
+
+### Deploying from a coding agent
+
+A first deploy takes ~3 min (mostly starting app compute); redeploys are faster. Either run
+`agentbricks deploy` in the foreground with a long command timeout (for example, Claude Code's Bash
+`timeout: 600000`), or start it in the background and wait on it:
+
+```sh
+agentbricks deploy my-agent --no-wait            # quick checks, then deploys in the background
+agentbricks deployments wait agent-bricks-my-agent
+```
+
+`deployments wait` returns within 100 seconds (`--timeout`). Exit 0 means the agent is deployed and
+running, and it prints the URL; exit 1 means the deploy failed, and it prints the error and the end
+of the deploy log; exit 75 means it is still deploying, so run the same command again. Don't poll
+with `sleep`. Progress lines with the elapsed time go to stderr, also under `-o json`, whose stdout
+is a single JSON document. A second `deploy` of the same app is refused while one is still running
+from the project; the deploy's state and background log are in `.agentbricks/deploy-<app>.json` and
+`.agentbricks/deploy-<app>.log`. If the App is busy with another operation, `deploy` retries for
+about two minutes before failing.
 
 `agentbricks init` declares default memory and session stores in `agent.toml`, so the deployed agent has
 long-term memory and durable conversation history. It creates `<name>-<6-letter-token>-memory` and
@@ -235,8 +264,8 @@ bindings. A declaration does not confirm that the resource exists or that the de
 | Local onboarding checks | `agentbricks doctor .` | Offline; does not verify bindings or deployed resources. |
 | Agent Bricks apps in a workspace | `agentbricks -p <profile> deployments list` | Lists apps with the `agent-bricks-` prefix in the selected workspace, including other projects. |
 | App status and URL | `agentbricks -p <profile> deployments get agent-bricks-<name>` | Queries the selected workspace for the named app. |
-| Memory store IDs and details | `agentbricks -p <profile> memory stores list`, then `agentbricks -p <profile> memory stores get <resource-name>` | Workspace-wide; can include other projects' stores. Use the ID or resource name, not the display name. |
-| Session store names and details | `agentbricks -p <profile> sessions stores list`, then `agentbricks -p <profile> sessions stores get <name>` | Workspace-wide; can include other projects' stores. Use the store name. |
+| Memory store IDs and details | `agentbricks -p <profile> memory stores get <name>`, or `agentbricks -p <profile> memory stores list --name <part-of-name>` | Pass the display name from `agent.toml`, the ID, or the resource name. If several stores share a display name, `get` lists them; pass one resource name. `list` is workspace-wide and paged; `--name` and `--all` read every page. |
+| Session store names and details | `agentbricks -p <profile> sessions stores get <name>`, or `agentbricks -p <profile> sessions stores list --name <part-of-name>` | Pass the store name from `agent.toml`. `list` is workspace-wide and paged; `--name` and `--all` read every page. |
 
 Review each confirmation. Delete a store only after confirming that you own it and no other agent
 needs it, using the same profile and identifier used to inspect it.
@@ -383,6 +412,86 @@ Changing the server type of an existing deployment is not supported. To use a di
 scaffold a new project with the desired `agentbricks init --server` option and deploy it under a new name.
 See the [runtime guide](src/databricks_agentkit/runtime/README.md) for agent hooks, full API examples,
 and recovery behavior.
+
+### Call an agent from an external browser (CORS)
+
+An external frontend, such as a React app at `https://chat.example.com`, has a different origin
+from the agent's Databricks Apps URL. Enable CORS for its exact origin when deploying:
+
+```sh
+agentbricks deploy my-agent \
+  --allowed-origin https://chat.example.com \
+  --allowed-origin http://localhost:3000
+```
+
+This replaces the allowlist and records it in `agent.toml`:
+
+```toml
+[cors]
+allowed_origins = ["https://chat.example.com", "http://localhost:3000"]
+```
+
+Later `agentbricks deploy` calls reuse the recorded origins. Direct edits to this table also
+apply to `agentbricks dev` and the next deployment. To revoke browser access, use
+`agentbricks deploy --clear-allowed-origins` or set `allowed_origins = []` and redeploy.
+CORS is off by default. Origins include scheme, hostname, and optional port; paths, wildcards,
+and `null` origins are rejected. For internationalized hostnames, supply the browser's ASCII/punycode
+origin (for example, `https://xn--fa-hia.example` for `https://faß.example`); Unicode input is rejected
+to avoid changing the allowed hostname. You can copy `window.location.origin` from the frontend's
+browser console. IPv6 addresses are compressed to match browser origins. List every intended origin
+when replacing the allowlist and remove development origins before production deployment.
+
+The customer journey is:
+
+1. Deploy the managed agent server with the external frontend's allowed origin.
+2. Authenticate the frontend user and obtain a Databricks user OAuth token. For an external IdP
+   such as Microsoft Entra, configure [account-wide token federation](https://docs.databricks.com/aws/en/dev-tools/auth/oauth-federation)
+   and exchange the user's IdP JWT for a Databricks user token. An IdP login alone is insufficient.
+3. Send the token to the agent's `/api/` endpoints using `fetch`. The caller needs Apps `CAN USE`
+   permission and the required OAuth scopes. User-authorized tools also need Apps user-token
+   forwarding enabled, `auth = "user"` bindings, and the caller's resource permissions.
+4. Receive JSON or stream SSE events directly in the browser:
+
+```javascript
+const response = await fetch(`${agentUrl}/api/invocations`, {
+  method: "POST",
+  credentials: "omit",
+  headers: {
+    Authorization: `Bearer ${databricksUserToken}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    id: crypto.randomUUID(),
+    input: { messages: [{ role: "user", content: "Hello" }] },
+    stream: true,
+  }),
+});
+if (!response.ok || !response.body) throw new Error(`Invocation failed: ${response.status}`);
+const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+while (true) {
+  const { value, done } = await reader.read();
+  if (done) break;
+  console.log(value); // Feed these SSE chunks to the frontend's SSE parser.
+}
+```
+
+The runtime allows `GET`/`POST` and the `Authorization`, `Content-Type`, `X-Routing-Key`, and
+`Last-Event-ID` request headers. It answers preflight without invoking the agent and adds CORS
+headers to JSON, SSE, polling, and agent-generated error responses. Use `fetch` for authenticated
+SSE; native `EventSource` cannot set the bearer Authorization header. Cross-origin cookie
+authentication is not enabled. The bundled chat UI uses same-origin requests and needs no allowlist.
+
+CORS controls browser access to responses; it does not replace authentication or prevent non-browser
+clients from calling the API. Apps ingress must allow unauthenticated `OPTIONS` requests through.
+Errors generated by ingress, including rejected tokens, do not pass through runtime middleware and
+can appear as generic browser CORS failures. Verify a deployed App's preflight and authenticated
+stream before relying on this path; a same-origin backend proxy is an alternative when ingress
+cannot satisfy the browser contract.
+
+Both the CLI and the agent project's `databricks-agentbricks` dependency must contain this feature;
+upgrading the CLI alone does not upgrade an already resolved runtime dependency. Before release,
+follow [the unreleased SDK instructions](CONTRIBUTING.md#testing-sdk--runtime-changes-in-a-scaffold).
+The flags require `server = "agentbricks"`; custom servers configure their own CORS middleware.
 
 ## Memory and sessions
 
@@ -553,31 +662,78 @@ removes the corresponding `AGENT_MEMORY_STORE` or `AGENT_SESSION_STORE` entry fr
 Unbinding does not delete the store or revoke an existing grant to the App's service principal.
 If access must be revoked, coordinate that separately with the store owner or workspace admin.
 
-## Model services and prompts (experimental)
+## Model and prompt upgrades (experimental)
 
-`agentbricks experimental models` and `agentbricks experimental prompts` bind each LLM call in
-your agent to a Unity Gateway model service you own (Unity Gateway was formerly AI Gateway), and
-declare the Prompt Registry prompts it loads. They live under `experimental` because their flags
-and output may still change between releases without a deprecation period. The agent.toml tables
-they write live under `[experimental]` too.
+`agentbricks experimental models` and `agentbricks experimental prompts` find the best model and
+prompt for each LLM call in your agent and swap them in. They live under `experimental` because
+their flags and output may still change between releases without a deprecation period. The
+agent.toml tables they write live under `[experimental]` too.
 
-A one-model agent binds one service. A compound agent binds one per call site, each under a role:
+Point each of the agent's LLM calls at a Unity Gateway model service you own (Unity Gateway was
+formerly AI Gateway), and the models behind them can change without a code change or redeploy. A
+one-model agent binds one service. A compound agent binds one per call site, each under a role,
+and declares the Prompt Registry prompts it loads so the search can rewrite them too:
 
 ```sh
 agentbricks experimental models bind main.my_agent.router_llm --role router --default system.ai.claude-haiku-4-5
 agentbricks experimental models bind main.my_agent.writer_llm --role writer --default system.ai.claude-sonnet-4-5
 agentbricks experimental prompts bind main.my_agent.writer
 agentbricks deploy my-agent      # creates the services and grants the app access to them and the prompt
-agentbricks experimental models status                              # the model behind each service
-agentbricks experimental models set claude-haiku-4-5 --role writer  # switch one, no redeploy
+agentbricks experimental models upgrade -c router=claude-haiku-4-5,gpt-5-4-nano -c writer=claude-haiku-4-5 \
+  --predict agent.eval:predict --train-data agent.eval:TRAIN --val-data agent.eval:VAL \
+  --scorer agent.eval:SCORERS
+agentbricks experimental models status        # the job's state, then its recommendation
+agentbricks experimental models apply         # switch to it
 ```
 
-Each LLM call must use its role's service, `resolve_model_service("<role>")`, which reads the
-`AGENT_MODEL_SERVICE_<ROLE>` env var that deploy sets. Deploy creates a service that doesn't exist
-yet, routed to its `--default` model, and never repoints one that does, so a redeploy can't undo a
-switch. For bound prompts, deploy grants the app the schema privileges the Prompt Registry requires
-to load them (USE SCHEMA, EXECUTE, CREATE FUNCTION, and MANAGE). `agentbricks experimental prompts
-list` shows each bound prompt and the version its `@production` alias points at.
+By default `models upgrade` uploads the project to your workspace and runs the search as a
+serverless Databricks job, because a search can take hours. `--run-on local` runs it in your
+terminal instead, which needs the `upgrade` extra and the agent's dependencies installed. Each call
+takes longer from a laptop than on a serverless job, and a record slower than `--latency-gate` (60
+seconds by default) scores 0, so raise it if a local run warns that records went over the gate. The job imports the `predict_fn`,
+eval data, and scorers you name from the project (the same inputs `optimize_prompts_and_models`
+takes, below) and runs each eval record once per candidate, against a temporary `<service>_exp_<id>`
+clone. Each LLM call must use its role's service, `resolve_model_service("<role>")`, which reads the
+`AGENT_MODEL_SERVICE_<ROLE>` env var that deploy (and the job, before importing your code) sets.
+GEPA also rewrites every prompt bound with `prompts bind` for each candidate model. Pass
+`--prompt` to pick specific prompts instead, or `--models-only` to leave prompts alone. `models apply` switches
+to the best quality / latency / cost trade-off and registers any rewritten prompts (prior versions
+keep `@production_previous`). `models rollback` undoes the whole last apply: it switches every
+model back and moves each prompt's alias back to its prior version. Apply refuses recommendations
+whose prompt aliases changed during the search; rollback checks those aliases against the versions
+recorded when the recommendation was applied. If rollback fails partway through, run it again
+to finish the remaining changes. Each search owns its temporary clones, so overlapping jobs can
+evaluate different models independently.
+
+The search is `databricks_agentkit.model_upgrades`, which you can also call directly (for example
+from a notebook) to tune several model services and MLflow Prompt Registry prompts together:
+
+```python
+from databricks_agentkit.model_upgrades import optimize_prompts_and_models, promote_to_prod
+
+result = optimize_prompts_and_models(
+    predict,  # predict(inputs: dict) -> answer
+    train_data,  # [{"inputs": {...}, "expectations": {"expected_response": ...}}, ...]
+    val_data,
+    prompt_uris=["prompts:/main.my_agent.router@production"],
+    gateway_endpoints={
+        "main.my_agent.router_llm": ["claude-haiku-4-5", "gpt-5-4-mini"],
+        "main.my_agent.writer_llm": ["claude-sonnet-4-5", "claude-haiku-4-5"],
+    },
+    scorers=scorers,  # MLflow scorers, or (inputs, expectations, answer) -> float
+    max_metric_calls=200,
+)
+promote_to_prod(result)  # repoints the services, registers and aliases the winning prompts
+```
+
+Model choices use a UCB1 bandit by default (`model_selection="reflection"` asks the reflection LLM
+instead); prompts are rewritten by GEPA's reflection loop, which uses Claude Opus 5.5. Both need the `upgrade` extra:
+`pip install 'databricks-agentbricks[upgrade]'`.
+
+Prompts the agent loads from the MLflow Prompt Registry go under `[experimental.prompts]`
+(`agentbricks experimental prompts bind main.my_agent.writer`), and deploy grants the app
+the schema privileges the registry requires to load them. `agentbricks experimental prompts list`
+shows each bound prompt and the version its `@production` alias points at.
 
 ## Commands
 
@@ -622,12 +778,21 @@ agentbricks [-p <profile>] [-o text|json]
     bind       SERVICE [--role ROLE] [--default MODEL] [--source PATH]
     unbind | list | status
     set        MODEL [--role ROLE] [--yes]
+    rollback   [--role ROLE] [--yes]
+    upgrade    [--candidates [ROLE=]MODEL[,...] [...]] [--prompt URI ... | --models-only] --predict REF --train-data REF --val-data REF
+               --scorer REF [...] [--budget N] [--quality-weight Q] [--latency-weight L] [--cost-weight C]
+               [--timeout-hours H]
+               [--run-on job|local] [--apply never|ask|auto] [--wait]
+    apply      [--yes]
   prompts
     bind       PROMPT [--key KEY] [--source PATH]
     unbind     KEY [--source PATH]
     list       [--source PATH]
-  deploy       [<name>] [--source PATH] [--instances N]
-  deployments  list | get | logs | start | stop | delete
+  deploy       [<name>] [--source PATH] [--instances N] [--no-wait]
+               [--allowed-origin ORIGIN ... | --clear-allowed-origins]
+  deployments
+    wait       [<name>] [--timeout SECONDS] [--source PATH]
+    list | get | logs | start | stop | delete
   endpoint
     invoke      [APP] --path PATH [--url URL] [--json JSON] [--sse]
 ```

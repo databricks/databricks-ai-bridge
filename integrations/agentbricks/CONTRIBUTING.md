@@ -101,6 +101,21 @@ cat /tmp/scratch-agent/.venv/lib/python*/site-packages/databricks_agentkit-*.dis
 agentbricks deployments logs agent-bricks-<name>
 ```
 
+## Deploy phase timings
+
+`agentbricks deploy` ends its text output with the total wall time (`Deployed in 2m05s`). To see
+where that time went, set `AGENTBRICKS_DEBUG_TIMINGS=1`; deploy then prints one
+`timing: <phase> <seconds>s` line per phase, plus `timing: total`, to stderr:
+
+```sh
+AGENTBRICKS_DEBUG_TIMINGS=1 agentbricks -p <profile> deploy my-agent
+```
+
+The phases are `preflight`, `app_start` (the `--no-wait` create or start), `reconcile`,
+`runtime_store`, `app_yaml`, `sync`, `compute_wait` (the join on ACTIVE compute), `app_update`,
+`rollout`, and `grants`; a request-user App reports `app_ready` instead of `app_start` and
+`compute_wait`. The switch is a debugging aid and is deliberately not shown in `--help`.
+
 ## CLI telemetry
 
 The `agentbricks` console entry point runs `databricks_agentbricks.cli:main`. In `cli/app.py`,
@@ -225,5 +240,5 @@ on `main` to the next minor development version (for example, `0.5.0.dev0` after
 cutting `0.4`). That version identifies development builds; it is not a published
 release. The scaffolds continue to depend on the released package. A new minor
 series starts with a new release branch from `main`. Tagging does not publish the package. Arrange the separate
-secure public registry release and its approval to publish to PyPI. The live workspace tool-matrix tests run
+secure public registry release and its approval to publish to PyPI. The live workspace E2E suites run
 separately in the private integration runner and are not included in this gate.

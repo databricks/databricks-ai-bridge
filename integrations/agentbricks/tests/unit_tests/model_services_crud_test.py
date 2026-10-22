@@ -32,9 +32,15 @@ class _Api:
 
 
 class _Schemas:
-    def __init__(self, error=None):
+    def __init__(self, error=None, existing=()):
         self.created: list[tuple[str, str]] = []
         self._error = error
+        self._existing = set(existing)
+
+    def get(self, full_name):
+        if full_name not in self._existing:
+            raise Exception(f"Schema '{full_name}' does not exist.")
+        return {"full_name": full_name}
 
     def create(self, name, catalog_name):
         self.created.append((catalog_name, name))
@@ -124,6 +130,16 @@ def test_create_makes_schema_then_posts_under_parent():
 def test_create_tolerates_existing_schema(error):
     client = _fake_client(schema_error=error)
     ms.create(client, SERVICE, "claude-sonnet-4-5")
+    assert client.api_client.calls[-1][0] == "POST"
+
+
+def test_create_skips_creating_a_schema_that_exists():
+    # A create fails in a catalog at its schema limit (or without CREATE SCHEMA) even for an
+    # existing schema, so it must not be attempted.
+    client = _fake_client(schema_error=Exception("Cannot create 1 Schema(s) in Catalog x"))
+    client.schemas._existing.add("main.my_agent")
+    ms.create(client, SERVICE, "claude-sonnet-4-5")
+    assert client.schemas.created == []
     assert client.api_client.calls[-1][0] == "POST"
 
 

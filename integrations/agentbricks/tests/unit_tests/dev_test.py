@@ -13,6 +13,7 @@ from click.testing import CliRunner
 from databricks_agentbricks.cli import dev as dev_mod
 from databricks_agentbricks.clients.local_tracing_client import LocalTracingStart
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.presentation.endpoint import agent_invoke_command
 from databricks_agentbricks.projects.agent_project import AgentProject, ToolSpec
 from databricks_agentbricks.projects.config import write_project_metadata
 
@@ -47,6 +48,11 @@ class _Ctx:
 
     def client(self):
         return mock.Mock(current_user="me@example.com", host="https://my-workspace.databricks.com")
+
+
+def _panel_text(output: str) -> str:
+    """The success panel's rows joined back into text, without borders or padding."""
+    return " ".join(line.strip("│ ") for line in output.splitlines() if line.startswith("│"))
 
 
 @pytest.fixture(autouse=True)
@@ -422,7 +428,7 @@ def test_dev_announces_chat_ui_when_overlay_present(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     assert "Chat UI" in result.output
     assert "http://localhost:9000" in result.output
-    output = " ".join(result.output.split())
+    output = _panel_text(result.output)
     assert "agentbricks endpoint invoke" in output
     assert "--url http://localhost:9000" in output
     assert "--path /api/invocations" in output
@@ -438,7 +444,7 @@ def test_dev_announces_api_endpoint_when_no_ui(tmp_path: pathlib.Path):
     assert "http://localhost:8000/invocations" in result.output
     # a copy-pasteable sample request, not just the bare endpoint
     assert "curl -X POST" in " ".join(result.output.split())
-    output = " ".join(result.output.split())
+    output = _panel_text(result.output)
     assert "agentbricks endpoint invoke" in output
     assert "--url http://localhost:8000" in output
     assert "--path /invocations" in output
@@ -448,7 +454,7 @@ def test_dev_announces_api_endpoint_when_no_ui(tmp_path: pathlib.Path):
 @pytest.mark.parametrize(
     "server,chat_ui", [("agentbricks", True), ("agentbricks", False), ("custom", False)]
 )
-def test_dev_prints_standalone_invoke_for_each_template(tmp_path, framework, server, chat_ui):
+def test_dev_prints_invoke_inside_panel_for_each_template(tmp_path, framework, server, chat_ui):
     (tmp_path / "app.yaml").write_text("command: []\n")
     AgentProject.create(tmp_path, framework=framework, server=server).write()
     if chat_ui:
@@ -458,25 +464,25 @@ def test_dev_prints_standalone_invoke_for_each_template(tmp_path, framework, ser
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
 
     assert result.exit_code == 0, result.output
-    commands = [
-        line for line in result.output.splitlines() if line.startswith("agentbricks endpoint")
-    ]
-    assert len(commands) == 1, result.output
-    command = commands[0]
-    path = "/api/invocations" if server == "agentbricks" else "/invocations"
-    assert (
-        f"agentbricks endpoint invoke --url http://localhost:8000 --path {path} --json " in command
+    lines = result.output.splitlines()
+    # The success output ends at the panel's bottom border; nothing trails it.
+    assert [line for line in lines if line.strip()][-1].startswith("╰"), result.output
+    label = next(i for i, line in enumerate(lines) if "Invoke with Agent Bricks" in line)
+    deploy = next(i for i, line in enumerate(lines) if "agentbricks deploy" in line)
+    assert lines[label].startswith("│") and lines[deploy].startswith("│")
+    assert deploy < label  # the invoke example is the last entry, after the other next steps
+    rows = [line.strip("│ ") for line in lines[label + 1 :] if line.startswith("│")]
+    assert all(line.startswith(("│", "╰")) for line in lines[label:] if line.strip())
+    command = agent_invoke_command(
+        "--url http://localhost:8000", uses_runtime_api=server == "agentbricks"
     )
-    assert "│" not in command
+    assert "".join("".join(rows).split()) == "".join(command.split()), result.output
+    path = "/api/invocations" if server == "agentbricks" else "/invocations"
+    assert f"--path {path} --json " in command
     assert ("$(uuidgen)" in command) is (server == "agentbricks")
-    panel, example = result.output.split("Invoke with Agent Bricks\n")
-    assert panel.splitlines()[-1].startswith("╰")
-    assert example.splitlines() == [command]
-    assert any(line.startswith("│") and "agentbricks deploy" in line for line in panel.splitlines())
+    panel = "\n".join(lines[:label])
     if server == "agentbricks":
-        assert any(
-            line.startswith("│") and "agentbricks tools add" in line for line in panel.splitlines()
-        )
+        assert "agentbricks tools add" in panel
     if not chat_ui:
         assert "curl -X POST" in panel  # preserve the existing API-only next step
 

@@ -7,7 +7,7 @@ switch chooses between the legacy per-app Lakebase project and the service-manag
 `agent.toml` is the CLI's authoring source, resolved here into the `AGENT_MEMORY_STORE` /
 `AGENT_SESSION_STORE` env vars written into `app.yaml` — the runtime reads those, never
 `agent.toml`. `agentbricks deployments` covers the lifecycle verbs
-(`list`/`get`/`logs`/`start`/`stop`/`delete`).
+(`list`/`get`/`wait`/`logs`/`start`/`stop`/`delete`).
 
 Every verb here is a thin adapter: it builds a `DeployService` from the CLI context, handles any
 terminal confirmation, calls one method, and hands the raw result to a presenter. The work itself
@@ -17,6 +17,14 @@ that is not part of the Agent Bricks CLI surface).
 """
 
 from __future__ import annotations
+
+import os
+import pathlib
+import signal
+import subprocess
+import sys
+import time
+from typing import Any, Callable, Optional
 
 import click
 
@@ -30,16 +38,20 @@ from databricks_agentbricks.clients.databricks_cli import _databricks
 from databricks_agentbricks.clients.tracing_client import TracingClient
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.deploy import (
+    deploy_result_payload,
+    present_background_started,
     present_deleted,
     present_deploy_result,
     present_deployment_detail,
     present_deployments_list,
     present_started,
     present_stopped,
+    present_wait_result,
 )
 from databricks_agentbricks.presentation.reporter import ClickReporter
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.services.deploy_service import DeployRequest, DeployService
+from databricks_agentbricks.services.deployment import deploy_state
 from databricks_agentbricks.services.deployment.app_provisioner import AppProvisioner
 from databricks_agentbricks.services.deployment.config import (
     _DEFAULT_PIP_INDEX_URL,
@@ -48,6 +60,10 @@ from databricks_agentbricks.services.deployment.config import (
     TRACES_TRACKING_URI_ENV,  # noqa: F401 - compatibility re-export
     MlflowTracingConfig,  # noqa: F401 - compatibility re-export
     mlflow_tracing_config,  # noqa: F401 - compatibility re-export
+)
+from databricks_agentbricks.services.deployment.deploy_state import (
+    DeployStateReporter,
+    DeployStateTracker,
 )
 from databricks_agentbricks.services.deployment.model_binding_provisioner import (
     ModelBindingProvisioner,
@@ -64,13 +80,23 @@ from databricks_agentbricks.services.deployment.provisioners import (
 )
 from databricks_agentbricks.services.deployment.tool_access_provisioner import ToolAccessProvisioner
 
+# `deployments wait` returns before a coding agent's usual 120 s command timeout, and exits with
+# EX_TEMPFAIL from sysexits.h when the deploy is still running so the caller knows to wait again.
+_WAIT_TIMEOUT_S = 100
+_EX_TEMPFAIL = 75
 
-def build_deploy_service(obj) -> DeployService:
-    """Compose a deployment service for this CLI invocation without opening an API client."""
+
+def build_deploy_service(obj, *, background: bool = False) -> DeployService:
+    """Compose a deployment service for this CLI invocation without opening an API client.
+
+    A deploy records its progress in the project's state file through a reporter that wraps the
+    terminal one; ``background`` marks the detached child of `deploy --no-wait`.
+    """
     api_client_provider = obj.api_client_provider
-    apps_client = AppsClient(obj.profile, runner=_databricks)
+    state_tracker = DeployStateTracker(result_payload=deploy_result_payload, background=background)
+    reporter = DeployStateReporter(ClickReporter(), state_tracker)
+    apps_client = AppsClient(obj.profile, runner=_databricks, on_busy=reporter.note)
     apps_user_auth_client = AppsUserAuthClient(obj.profile)
-    reporter = ClickReporter()
     return DeployService(
         project_resolver=ProjectResolver(),
         apps_client=apps_client,
@@ -93,7 +119,73 @@ def build_deploy_service(obj) -> DeployService:
         tool_access_provisioner=ToolAccessProvisioner(apps_client, obj.profile, reporter),
         model_binding_provisioner=ModelBindingProvisioner(api_client_provider, reporter),
         reporter=reporter,
+        state_tracker=state_tracker,
     )
+
+
+def _background_argv(obj, request: DeployRequest) -> list[str]:
+    """The command line that re-runs this deploy as the detached child of `deploy --no-wait`.
+
+    The same arguments plus the resolved --profile; the child's output is a log, so it uses text.
+    """
+    argv = [sys.executable, "-m", "databricks_agentbricks.cli"]
+    if obj.profile:
+        argv += ["--profile", obj.profile]
+    argv.append("deploy")
+    if request.name is not None:
+        argv.append(request.name)
+    argv += ["--source", str(pathlib.Path(request.source).resolve())]
+    if request.pip_index_url != _DEFAULT_PIP_INDEX_URL:
+        argv.append(f"--pip-index-url={request.pip_index_url or ''}")
+    if request.workspace_path:
+        argv += ["--workspace-path", request.workspace_path]
+    if request.instance_count is not None:
+        argv += ["--instances", str(request.instance_count)]
+    if request.allow_user_scope_update:
+        argv.append("--allow-user-scope-update")
+    if request.allowed_origins is not None:
+        if request.allowed_origins:
+            for origin in request.allowed_origins:
+                argv += ["--allowed-origin", origin]
+        else:
+            argv.append("--clear-allowed-origins")
+    argv.append("--background-child")
+    return argv
+
+
+def spawn_background_deploy(
+    argv: list[str], *, log: pathlib.Path, popen: Optional[Callable[..., Any]] = None
+) -> int:
+    """Start ``argv`` detached from this terminal, writing its output to ``log``; return its pid.
+
+    The child gets its own session (so closing the shell or the coding agent's command sandbox
+    doesn't hang it up), reads from /dev/null, and writes stdout and stderr to the log unbuffered.
+    """
+    log.parent.mkdir(parents=True, exist_ok=True)
+    kwargs: dict[str, Any] = {}
+    if os.name == "nt":
+        kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
+            subprocess, "CREATE_NEW_PROCESS_GROUP", 0
+        )
+    else:
+        kwargs["start_new_session"] = True
+    with log.open("wb") as out:
+        process = (popen or subprocess.Popen)(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=subprocess.STDOUT,
+            env={**os.environ, "PYTHONUNBUFFERED": "1", "AGENTBRICKS_DISABLE_AGENT_HINT": "1"},
+            close_fds=True,
+            **kwargs,
+        )
+    return process.pid
+
+
+def _ignore_hangup() -> None:
+    """Keep a background deploy running if its original terminal goes away."""
+    if hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
 
 
 # --- agentbricks deploy -----------------------------------------------------------
@@ -127,11 +219,31 @@ def build_deploy_service(obj) -> DeployService:
     help="Number of deployment instances.",
 )
 @click.option(
+    "--allowed-origin",
+    multiple=True,
+    metavar="ORIGIN",
+    help="Allow this browser origin to call the Agent Bricks server. Repeat for multiple origins; "
+    "replaces and records the allowlist in agent.toml. Omit to reuse the recorded origins.",
+)
+@click.option(
+    "--clear-allowed-origins",
+    is_flag=True,
+    help="Clear the recorded browser origin allowlist and disable runtime CORS on this deploy.",
+)
+@click.option(
     "--allow-user-scope-update",
     is_flag=True,
     help="Allow Agent Bricks to add missing user API scopes to an existing App from managed-tool "
     "inference and [auth.user] additions. Once added, later deploys do not need this flag.",
 )
+@click.option(
+    "--no-wait",
+    is_flag=True,
+    help="Run the quick checks, then finish the deploy in a background process and exit. Follow "
+    "it with `agentbricks deployments wait`.",
+)
+# Internal: marks the detached process `--no-wait` starts. Not part of the CLI surface.
+@click.option("--background-child", is_flag=True, hidden=True)
 @click.pass_obj
 def deploy(
     obj,
@@ -141,6 +253,10 @@ def deploy(
     workspace_path,
     instance_count,
     allow_user_scope_update,
+    allowed_origin,
+    clear_allowed_origins,
+    no_wait,
+    background_child,
 ) -> None:
     """Deploy your agent to Databricks Apps and get back a hosted URL to try it.
 
@@ -151,7 +267,12 @@ def deploy(
 
     NAME is recorded in agent.toml on the first deploy, so a later `agentbricks deploy` from the project
     directory can omit it (passing NAME again updates the recorded name). New apps are named
-    `agent-bricks-<name>`. Use the full app name with the `agentbricks deployments` commands.
+    `agent-bricks-<name>`. App names cap at 30 characters, so NAME can be up to 17
+    (`agentbricks init` records one that fits). Use the full app name with the
+    `agentbricks deployments` commands.
+
+    If a first deploy stops partway, the app it created is kept: re-run `agentbricks deploy` to
+    resume, or remove it with `agentbricks deployments delete <app-name>`.
 
     Any memory/session store declared in agent.toml (for example, by `agentbricks memory/sessions bind`)
     is created if it doesn't exist yet; agent.toml itself is never modified for stores.
@@ -165,7 +286,12 @@ def deploy(
     The header is a routing hint only - non-blank, no more than 128 UTF-8 bytes, used verbatim -
     not authentication and not the session id itself (send the session id in the request body):
       X-Routing-Key: <uuid>
+
+    A first deploy takes a few minutes (mostly starting app compute). From a coding agent or script
+    with a short command timeout, use --no-wait and then `agentbricks deployments wait`.
     """
+    if allowed_origin and clear_allowed_origins:
+        raise click.UsageError("Use --allowed-origin or --clear-allowed-origins, not both.")
     request = DeployRequest(
         name=name,
         source=source,
@@ -173,9 +299,26 @@ def deploy(
         workspace_path=workspace_path,
         instance_count=instance_count,
         allow_user_scope_update=allow_user_scope_update,
+        allowed_origins=() if clear_allowed_origins else (allowed_origin or None),
     )
-    result = build_deploy_service(obj).deploy(request)
-    present_deploy_result(result, output=obj.output)
+    if background_child:
+        _ignore_hangup()
+    service = build_deploy_service(obj, background=background_child)
+    if no_wait and not background_child:
+        # Fail fast in the foreground on anything quick to check; the child repeats these checks.
+        prepared = service.prepare(request)
+        service.check_auth()
+        source_dir = pathlib.Path(source)
+        log = deploy_state.log_path(source_dir, prepared.name)
+        pid = spawn_background_deploy(_background_argv(obj, request), log=log)
+        state_file = deploy_state.record_background_start(
+            source_dir, prepared.name, pid=pid, now=time.time()
+        )
+        present_background_started(prepared.name, log=log, state_file=state_file, output=obj.output)
+        return
+    started = time.monotonic()
+    result = service.deploy(request)
+    present_deploy_result(result, output=obj.output, elapsed_s=time.monotonic() - started)
 
 
 # --- agentbricks deployments <lifecycle> ------------------------------------------
@@ -183,7 +326,7 @@ def deploy(
 
 @click.group()
 def deployments() -> None:
-    """Inspect and manage deployed agents: list, get, stream logs, start, stop, or delete."""
+    """Inspect and manage deployed agents: list, get, wait, stream logs, start, stop, or delete."""
 
 
 @deployments.command("list")
@@ -199,6 +342,43 @@ def deployments_list(obj) -> None:
 def deployments_get(obj, name) -> None:
     """Get an agent deployment's details."""
     present_deployment_detail(build_deploy_service(obj).get(name), name, output=obj.output)
+
+
+@deployments.command("wait")
+@click.argument("name", required=False)
+@click.option(
+    "--timeout",
+    "timeout_s",
+    type=click.IntRange(min=0),
+    default=_WAIT_TIMEOUT_S,
+    show_default=True,
+    help="Seconds to wait before returning exit 75.",
+)
+@click.option(
+    "--source",
+    default=".",
+    show_default=True,
+    type=click.Path(exists=True, file_okay=False),
+    help="Project directory the deploy ran from.",
+)
+@click.pass_context
+def deployments_wait(ctx: click.Context, name, timeout_s, source) -> None:
+    """Wait for a deployment to finish, for up to --timeout seconds, then report it.
+
+    Follows the deploy started by `agentbricks deploy` (including --no-wait) in this project, or
+    otherwise the App's state in the workspace. NAME defaults to the deployment recorded in
+    agent.toml.
+
+    Exit status: 0 deployed and running; 1 failed; 75 still deploying at the timeout (run the same
+    command again).
+    """
+    obj = ctx.obj
+    result = build_deploy_service(obj).wait(name, pathlib.Path(source), timeout_s)
+    present_wait_result(result, output=obj.output)
+    if result.status == deploy_state.FAILED:
+        ctx.exit(1)
+    if result.status == deploy_state.RUNNING:
+        ctx.exit(_EX_TEMPFAIL)
 
 
 @deployments.command("logs")
