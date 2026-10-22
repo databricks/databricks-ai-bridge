@@ -83,6 +83,8 @@ def test_loadtest_reuses_app_auth_and_request_with_per_user_routing(monkeypatch,
         "max_requests": None,
         "cases": None,
         "report_dir": None,
+        "follow_events": False,
+        "mlflow_service": None,
     }
 
 
@@ -112,6 +114,8 @@ def test_loadtest_url_uses_requested_settings_without_app_routing(monkeypatch):
         "max_requests": 9,
         "cases": None,
         "report_dir": None,
+        "follow_events": False,
+        "mlflow_service": None,
     }
 
 
@@ -123,6 +127,10 @@ def test_loadtest_url_uses_requested_settings_without_app_routing(monkeypatch):
         ("--max-requests", "2"),
         ("--cases", "cases.json"),
         ("--report-dir", "reports"),
+        ("--experiment-id", "123"),
+        ("--scorer", "quality"),
+        ("--mlflow-max-requests", "5"),
+        ("--warehouse", "warehouse"),
     ],
 )
 def test_load_settings_require_loadtest_before_resolving_an_endpoint(
@@ -241,6 +249,104 @@ def _request(**changes) -> EndpointRequest:
     return EndpointRequest(**(values | changes))
 
 
+def test_mlflow_options_forward_registered_scorers_and_expectations(monkeypatch, tmp_path):
+    captured = _capture_loadtest(monkeypatch)
+    mlflow = Mock()
+    constructor = Mock(return_value=mlflow)
+    monkeypatch.setattr(endpoint_mod, "LoadTestMLflowService", constructor)
+    expectations = tmp_path / "expected.json"
+    expectations.write_text('[{"expected_response":"two"}]')
+    result = CliRunner().invoke(
+        endpoint,
+        [
+            "invoke",
+            "--url",
+            "http://localhost:8000",
+            "--path",
+            "/run",
+            "--loadtest",
+            "--experiment-id",
+            "123",
+            "--scorer",
+            "correctness",
+            "--scorer",
+            "relevance",
+            "--traces",
+            "--mlflow-max-requests",
+            "3",
+            "--warehouse",
+            "abc",
+            "--expectations",
+            str(expectations),
+        ],
+        obj=_Ctx(),
+    )
+    assert result.exit_code == 0, result.output
+    constructor.assert_called_once_with(
+        "test-profile",
+        "123",
+        scorer_names=("correctness", "relevance"),
+        traces=True,
+        max_requests=3,
+        expectations=[{"expected_response": "two"}],
+        warehouse_id="abc",
+    )
+    assert captured["mlflow_service"] is mlflow
+
+
+@pytest.mark.parametrize(
+    "options, expected",
+    [
+        (["--traces"], "--experiment-id"),
+        (["--scorer", "quality"], "--experiment-id"),
+        (["--experiment-id", "123"], "--scorer or --traces"),
+        (["--mlflow-max-requests", "2"], "--scorer or --traces"),
+    ],
+)
+def test_mlflow_options_reject_incomplete_configuration_before_endpoint_resolution(
+    monkeypatch, options, expected
+):
+    monkeypatch.setattr(
+        endpoint_mod,
+        "build_invoke_service",
+        lambda *a: pytest.fail("Must reject before resolution"),
+    )
+    result = CliRunner().invoke(
+        endpoint, ["invoke", "--path", "/run", "--loadtest", *options], obj=_Ctx()
+    )
+    assert result.exit_code != 0
+    assert expected in result.output
+
+
+@pytest.mark.parametrize("contents", ["{}", "[]", "[null]", "[{},{}]", "not-json"])
+def test_expectations_require_one_object_per_case(monkeypatch, tmp_path, contents):
+    expectations = tmp_path / "expected.json"
+    expectations.write_text(contents)
+    monkeypatch.setattr(
+        endpoint_mod,
+        "build_invoke_service",
+        lambda *a: pytest.fail("Must reject before resolution"),
+    )
+    result = CliRunner().invoke(
+        endpoint,
+        [
+            "invoke",
+            "--path",
+            "/run",
+            "--loadtest",
+            "--scorer",
+            "quality",
+            "--experiment-id",
+            "123",
+            "--expectations",
+            str(expectations),
+        ],
+        obj=_Ctx(),
+    )
+    assert result.exit_code != 0
+    assert "--expectations" in result.output
+
+
 def _preflight(monkeypatch, *, status=200, error=None, events=()):
     transport = Mock()
     transport.send.return_value = EndpointResponse(
@@ -331,6 +437,96 @@ def test_locust_receives_private_request_on_stdin_and_native_options(monkeypatch
     assert captured["stdin"] is loadtest_mod.subprocess.PIPE
     assert captured["start_new_session"] is True
     assert "stdout" not in captured and "stderr" not in captured
+
+
+@pytest.mark.parametrize(
+    "body,method", [({}, "POST"), ({"background": True, "stream": True}, "GET"), (None, "POST")]
+)
+def test_follow_events_rejects_invalid_invocation_bodies_before_traffic(monkeypatch, body, method):
+    monkeypatch.setattr(loadtest_mod, "find_spec", lambda name: object())
+    transport = _preflight(monkeypatch)
+    with pytest.raises(AgentCliError, match="background=true"):
+        loadtest_mod.run_loadtest(
+            _request(body=body, method=method),
+            concurrency=1,
+            duration=1,
+            output="text",
+            per_user_routing=False,
+            follow_events=True,
+        )
+    transport.send.assert_not_called()
+
+
+def test_mlflow_enrichment_runs_after_load_and_updates_saved_summary(monkeypatch, tmp_path):
+    _preflight(monkeypatch)
+    _, captured = _process(
+        monkeypatch, summary={"counts": {"succeeded": 2}, "outcome": "completed"}
+    )
+    mlflow = Mock(max_requests=3)
+    mlflow.finish.return_value = {"sampled_successes": 0, "evaluation": {"status": "no_samples"}}
+    report = tmp_path / "report"
+    result = loadtest_mod.run_loadtest(
+        _request(),
+        concurrency=1,
+        duration=1,
+        output="text",
+        per_user_routing=False,
+        mlflow_service=mlflow,
+        report_dir=report,
+    )
+    mlflow.prepare.assert_called_once_with()
+    mlflow.finish.assert_called_once_with([])
+    assert captured["config"]["mlflow_max_requests"] == 3
+    assert result.summary["mlflow"]["eligible_successes"] == 2
+    assert json.loads((report / "summary.json").read_text()) == result.summary
+
+
+def test_cancelled_load_does_not_start_judging(monkeypatch):
+    _preflight(monkeypatch)
+    _process(
+        monkeypatch, returncode=143, summary={"counts": {"succeeded": 2}, "outcome": "cancelled"}
+    )
+    mlflow = Mock(max_requests=3)
+    result = loadtest_mod.run_loadtest(
+        _request(),
+        concurrency=1,
+        duration=1,
+        output="text",
+        per_user_routing=False,
+        mlflow_service=mlflow,
+    )
+    mlflow.finish.assert_not_called()
+    assert result.returncode == 143
+    assert result.summary["mlflow"] == {"status": "not_run", "reason": "cancelled"}
+
+
+@pytest.mark.parametrize(
+    "enrichment,code",
+    [
+        ({"evaluation": {"status": "failed"}}, 1),
+        ({"evaluation": {"status": "partial"}}, 1),
+        ({"evaluation": {"status": "completed", "metrics": {"quality/mean": 0}}}, 0),
+        ({"traces": {"status": "partial", "missing": 3, "errors": 0}}, 0),
+        ({"traces": {"status": "partial", "errors": 1}}, 1),
+    ],
+)
+def test_mlflow_execution_errors_preserve_performance_but_exit_nonzero(
+    monkeypatch, enrichment, code
+):
+    _preflight(monkeypatch)
+    _process(monkeypatch, summary={"counts": {"succeeded": 2}, "outcome": "completed"})
+    mlflow = Mock(max_requests=3)
+    mlflow.finish.return_value = enrichment
+    result = loadtest_mod.run_loadtest(
+        _request(),
+        concurrency=1,
+        duration=1,
+        output="text",
+        per_user_routing=False,
+        mlflow_service=mlflow,
+    )
+    assert result.returncode == code
+    assert result.summary["outcome"] == "completed"
 
 
 def test_report_options_save_summary_without_persisting_the_private_request(monkeypatch, tmp_path):

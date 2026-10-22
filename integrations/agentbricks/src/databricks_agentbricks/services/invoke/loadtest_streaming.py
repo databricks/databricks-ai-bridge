@@ -1,4 +1,4 @@
-"""Observe supported answer-text SSE timings without retaining agent content."""
+"""Observe supported SSE timings, optionally retaining a bounded evaluation sample."""
 
 import json
 import time
@@ -28,18 +28,27 @@ def output_tokens(event):
 class StreamMetrics:
     """Chat, Responses, and DurableAgentServer answer-text TTFT observations."""
 
-    def __init__(self):
+    def __init__(self, *, capture_output=False):
         self.ttft_ms = None
         self.output_tokens = None
         self.supported = False
         self.completed = False
+        self.terminal_event = None
+        self.trace_id = None
+        self._text = [] if capture_output else None
 
-    def read(self, response, started):
-        """Consume the complete stream, retaining timings and usage only."""
+    @property
+    def answer(self):
+        return "".join(self._text) if self._text is not None else None
+
+    def read(self, response, started, *, timeout=None):
+        """Consume the complete stream; sample content only when explicitly requested."""
         data = []
         event_type = ""
         # One-byte reads avoid Requests buffering short text events until EOF.
         for raw in response.iter_lines(chunk_size=1):
+            if timeout is not None and time.perf_counter() - started >= timeout:
+                raise TimeoutError("Request deadline exceeded")
             line = raw.decode("utf-8", errors="replace")
             if not line:
                 if data:
@@ -70,6 +79,8 @@ class StreamMetrics:
         if not isinstance(data, dict):
             return
         kind = data.get("type", event_type)
+        if self._text is not None:
+            self.trace_id = explicit_trace_id(data) or self.trace_id
         if data.get("error") or (
             isinstance(kind, str)
             and kind
@@ -103,11 +114,15 @@ class StreamMetrics:
             if kind == "response.output_text.delta":
                 text = data.get("delta")
             self.completed |= kind in {"response.completed", "run.completed"}
+            if kind in {"response.completed", "run.completed"}:
+                self.terminal_event = kind
         elif kind == "delta" and isinstance(data.get("content"), str):
             self.supported = True
             text = data.get("content")
         if isinstance(text, str) and text and self.ttft_ms is None:
             self.ttft_ms = elapsed_ms
+        if isinstance(text, str) and self._text is not None:
+            self._text.append(text)
         tokens = output_tokens(data)
         if tokens is not None:
             self.output_tokens = tokens
@@ -116,3 +131,14 @@ class StreamMetrics:
         """Require terminal completion only for protocols we recognize."""
         if self.supported and not self.completed:
             raise StreamError("Incomplete supported SSE response")
+
+
+def explicit_trace_id(value):
+    """Accept explicit IDs only; never guess one from answer text or request IDs."""
+    if isinstance(value, dict):
+        identifier = value.get("trace_id")
+        if isinstance(identifier, str) and identifier and len(identifier) <= 256:
+            return (
+                identifier if all(char.isalnum() or char in "-_" for char in identifier) else None
+            )
+    return None

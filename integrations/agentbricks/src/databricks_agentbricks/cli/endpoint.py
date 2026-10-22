@@ -13,6 +13,7 @@ from databricks_agentbricks.presentation.endpoint import SsePrinter, render_resp
 from databricks_agentbricks.presentation.loadtest import render_loadtest_summary
 from databricks_agentbricks.services.invoke.auth import WorkspaceOAuthAuthenticator
 from databricks_agentbricks.services.invoke.loadtest import run_loadtest
+from databricks_agentbricks.services.invoke.loadtest_mlflow import LoadTestMLflowService
 from databricks_agentbricks.services.invoke.transport import HttpSession
 from databricks_agentbricks.services.invoke_service import InvokeRequest, InvokeService
 
@@ -85,6 +86,39 @@ def endpoint() -> None:
     type=click.Path(path_type=Path),
     help="Save HTML, CSV, and JSON reports in a new or empty directory with --loadtest.",
 )
+@click.option(
+    "--follow-events",
+    is_flag=True,
+    help="Load test background POST, GET events, and GET status as one invocation.",
+)
+@click.option(
+    "--experiment-id", help="Existing MLflow experiment for load-test traces and evaluation."
+)
+@click.option(
+    "--scorer",
+    "scorer_names",
+    multiple=True,
+    help="Registered MLflow scorer name; repeat to evaluate captured load-test answers.",
+)
+@click.option(
+    "--traces", is_flag=True, help="Read explicitly correlated MLflow traces after the load test."
+)
+@click.option(
+    "--mlflow-max-requests",
+    type=click.IntRange(min=1),
+    default=20,
+    show_default=True,
+    help="Maximum dispatched requests sampled for MLflow traces/evaluation.",
+)
+@click.option(
+    "--expectations",
+    "expectations_file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="JSON array of MLflow expectation objects, one per load-test case.",
+)
+@click.option(
+    "--warehouse", "warehouse_id", help="SQL warehouse ID for reading UC-backed MLflow traces."
+)
 @click.pass_obj
 def invoke(
     obj,
@@ -104,16 +138,47 @@ def invoke(
     max_requests,
     cases_file,
     report_dir,
+    follow_events,
+    experiment_id,
+    scorer_names,
+    traces,
+    mlflow_max_requests,
+    expectations_file,
+    warehouse_id,
 ) -> None:
     """Send an HTTP request, or load test a Databricks App or arbitrary URL."""
     if not loadtest and any(
         click.get_current_context().get_parameter_source(name)
         is not click.core.ParameterSource.DEFAULT
-        for name in ("concurrency", "duration", "max_requests", "cases_file", "report_dir")
-    ):
-        raise AgentCliError(
-            "--concurrency, --duration, --max-requests, --cases, and --report-dir require --loadtest."
+        for name in (
+            "concurrency",
+            "duration",
+            "max_requests",
+            "cases_file",
+            "report_dir",
+            "follow_events",
+            "experiment_id",
+            "scorer_names",
+            "traces",
+            "mlflow_max_requests",
+            "expectations_file",
+            "warehouse_id",
         )
+    ):
+        raise AgentCliError("Load-test options require --loadtest.")
+    mlflow_enabled = bool(scorer_names or traces)
+    if mlflow_enabled and not experiment_id:
+        raise AgentCliError("--scorer and --traces require --experiment-id.")
+    if not mlflow_enabled and (
+        experiment_id
+        or expectations_file
+        or warehouse_id
+        or click.get_current_context().get_parameter_source("mlflow_max_requests")
+        is not click.core.ParameterSource.DEFAULT
+    ):
+        raise AgentCliError("MLflow options require --scorer or --traces.")
+    if expectations_file and not scorer_names:
+        raise AgentCliError("--expectations requires --scorer.")
     cases = None
     if cases_file is not None:
         if json_value is not None:
@@ -126,6 +191,18 @@ def invoke(
             ) from exc
         if not isinstance(cases, list) or not cases:
             raise AgentCliError("--cases must contain a nonempty JSON array of request bodies.")
+    expectations = None
+    if expectations_file is not None:
+        try:
+            expectations = json.loads(expectations_file.read_text())
+        except (OSError, ValueError) as exc:
+            raise AgentCliError("--expectations must contain a JSON array of objects.") from exc
+        if (
+            not isinstance(expectations, list)
+            or len(expectations) != (len(cases) if cases is not None else 1)
+            or any(not isinstance(item, dict) for item in expectations)
+        ):
+            raise AgentCliError("--expectations requires one object per load-test case.")
     service = build_invoke_service(obj)
     request = InvokeRequest(
         app=app,
@@ -149,6 +226,20 @@ def invoke(
             max_requests=max_requests,
             cases=cases,
             report_dir=report_dir,
+            follow_events=follow_events,
+            mlflow_service=(
+                LoadTestMLflowService(
+                    obj.profile,
+                    experiment_id,
+                    scorer_names=scorer_names,
+                    traces=traces,
+                    max_requests=mlflow_max_requests,
+                    expectations=expectations,
+                    warehouse_id=warehouse_id,
+                )
+                if mlflow_enabled
+                else None
+            ),
         )
         render_loadtest_summary(result.summary, report_dir=report_dir)
         if result.returncode:

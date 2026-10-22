@@ -3,6 +3,7 @@
 import atexit
 import csv
 import json
+import os
 import signal
 import sys
 import time
@@ -13,16 +14,14 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 import gevent
+import requests
 from locust import HttpUser, events, task
 from locust.exception import StopUser
 from locust.html import get_html_report
 from locust.stats import PERCENTILES_TO_REPORT, RequestStats, StatsCSV, StatsEntry
 
-from databricks_agentbricks.services.invoke.loadtest_streaming import (
-    StreamError,
-    StreamMetrics,
-    output_tokens,
-)
+from databricks_agentbricks.services.invoke.loadtest_request import perform_request
+from databricks_agentbricks.services.invoke.loadtest_streaming import StreamError
 
 _CONFIG = json.load(sys.stdin)
 _REQUEST = _CONFIG["request"]
@@ -44,6 +43,7 @@ _SUCCESSFUL = StatsEntry(RequestStats(), "successful latency", "METRIC")
 _TTFT = StatsEntry(RequestStats(), "answer-text TTFT", "METRIC")
 _USAGE_COUNT = 0
 _OUTPUT_TOKENS = 0
+_OBSERVATIONS = []
 
 
 @events.test_start.add_listener
@@ -74,6 +74,8 @@ def record(response_time, exception, context, **kwargs):
     if exception is not None:
         _ERRORS[observation.get("error") or type(exception).__name__] += 1
         return
+    if observation.get("sample") is not None:
+        _OBSERVATIONS.append(observation["sample"])
     _SUCCESSFUL.log(response_time, 0)
     if observation.get("ttft_ms") is not None:
         _TTFT.log(observation["ttft_ms"], 0)
@@ -150,6 +152,7 @@ def finish(environment, **kwargs):
             "duration_seconds": _CONFIG["duration"],
             "max_requests": _CONFIG.get("max_requests"),
             "cases": len(_BODIES),
+            "follow_events": _CONFIG.get("follow_events", False),
         },
         "outcome": outcome,
         "counts": {
@@ -182,6 +185,13 @@ def finish(environment, **kwargs):
         "errors": dict(_ERRORS),
         "generator_cpu_warning": environment.runner.cpu_warning_emitted,
     }
+    if _CONFIG.get("mlflow_max_requests", 0):
+        descriptor = os.open(
+            _CONFIG["observations_file"], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+        )
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(_OBSERVATIONS, stream)
     Path(_CONFIG["summary_file"]).write_text(json.dumps(summary, indent=2) + "\n")
     if environment.parsed_options.csv_prefix:
         _save_final_csv(environment)
@@ -199,9 +209,13 @@ class EndpointUser(HttpUser):
         host += f":{_origin.port}"
 
     def on_start(self):
-        self.client.headers.update(_REQUEST["headers"])
+        self._session = requests.Session()
+        self._session.headers.update(_REQUEST["headers"])
         if _CONFIG["per_user_routing"]:
-            self.client.headers["X-Routing-Key"] = str(uuid4())
+            self._session.headers["X-Routing-Key"] = str(uuid4())
+
+    def on_stop(self):
+        self._session.close()
 
     @task
     def invoke(self):
@@ -215,76 +229,53 @@ class EndpointUser(HttpUser):
         _STARTED += 1
         _ACTIVE += 1
         _PEAK = max(_PEAK, _ACTIVE)
+        # Reserve samples at admission, before yielding; failed samples are not replaced.
+        capture_output = _STARTED <= _CONFIG.get("mlflow_max_requests", 0)
         observation = {}
+        failure = None
+        completed = False
         started = time.perf_counter()
         name = urlsplit(_REQUEST["url"]).path or "/"
         if _CASES is not None:
             name += f" [case {case + 1}]"
         try:
             with gevent.Timeout(_REQUEST["timeout"], TimeoutError("Request deadline exceeded")):
-                with self.client.request(
-                    _REQUEST["method"],
-                    _REQUEST["url"],
-                    name=name,
-                    data=body,
-                    timeout=_REQUEST["timeout"],
-                    allow_redirects=False,
-                    stream=True,
-                    catch_response=True,
-                    context={"loadtest": observation},
-                ) as response:
-                    try:
-                        if not response.status_code:
-                            response.raise_for_status()
-                        if not 200 <= response.status_code < 300:
-                            # Include the entire failed response in its client latency.
-                            _ = response.content
-                            observation["error"] = f"HTTP {response.status_code}"
-                            response.failure(observation["error"])
-                        elif (
-                            response.headers.get("Content-Type", "").split(";", 1)[0]
-                            == "text/event-stream"
-                        ):
-                            metrics = StreamMetrics()
-                            metrics.read(response, started)
-                            observation.update(
-                                ttft_ms=metrics.ttft_ms, output_tokens=metrics.output_tokens
-                            )
-                        else:
-                            content = response.content
-                            try:
-                                observation["output_tokens"] = output_tokens(json.loads(content))
-                            except (ValueError, TypeError):
-                                pass
-                    except Exception as error:
-                        observation["error"] = (
-                            f"HTTP {response.status_code}"
-                            if response.status_code and not 200 <= response.status_code < 300
-                            else str(error)
-                            if isinstance(error, StreamError)
-                            else type(error).__name__
-                        )
-                        response.failure(observation["error"])
-                    finally:
-                        response.request_meta["response_time"] = (
-                            time.perf_counter() - started
-                        ) * 1000
-                        if response.raw is not None:
-                            response.request_meta["response_length"] = response.raw.tell()
-                        response.close()
+                measured = perform_request(
+                    self._session,
+                    _REQUEST,
+                    body,
+                    started,
+                    follow_events=_CONFIG.get("follow_events", False),
+                    capture_output=capture_output,
+                )
+                observation.update(
+                    ttft_ms=measured.get("ttft_ms"), output_tokens=measured.get("output_tokens")
+                )
+                if capture_output:
+                    observation["sample"] = {
+                        "case_index": case,
+                        "inputs": json.loads(body) if body is not None else None,
+                        "outputs": measured.get("outputs"),
+                        "trace_id": measured.get("trace_id"),
+                    }
         except Exception as error:
-            # Failures before a response exists must still appear in native stats.
-            if not observation.get("recorded"):
-                observation["error"] = type(error).__name__
+            observation["error"] = (
+                str(error) if isinstance(error, StreamError) else type(error).__name__
+            )
+            failure = RuntimeError(observation["error"])
+            completed = True
+        else:
+            completed = True
+        finally:
+            if completed:
                 self.environment.events.request.fire(
                     request_type=_REQUEST["method"],
                     name=name,
                     response_time=(time.perf_counter() - started) * 1000,
                     response_length=0,
-                    exception=RuntimeError(observation["error"]),
+                    exception=failure,
                     context={"loadtest": observation},
                 )
-        finally:
             _ACTIVE -= 1
             if (
                 _CONFIG.get("max_requests") is not None

@@ -1516,6 +1516,13 @@ _Options_
 | `--max-requests <MAX_REQUESTS>` | integer range | - | no | Stop after this many load requests (excludes preflight) with --loadtest. |
 | `--cases <CASES_FILE>` | file path | - | no | JSON array of request bodies, cycled in order with --loadtest; replaces --json. |
 | `--report-dir <REPORT_DIR>` | path | - | no | Save HTML, CSV, and JSON reports in a new or empty directory with --loadtest. |
+| `--follow-events` | flag | - | no | Load test background POST, GET events, and GET status as one invocation. |
+| `--experiment-id <EXPERIMENT_ID>` | string | - | no | Existing MLflow experiment for load-test traces and evaluation. |
+| `--scorer <SCORER_NAMES>` | string | - | no | Registered MLflow scorer name; repeat to evaluate captured load-test answers. |
+| `--traces` | flag | - | no | Read explicitly correlated MLflow traces after the load test. |
+| `--mlflow-max-requests <MLFLOW_MAX_REQUESTS>` | integer range | `20` | no | Maximum dispatched requests sampled for MLflow traces/evaluation. |
+| `--expectations <EXPECTATIONS_FILE>` | file path | - | no | JSON array of MLflow expectation objects, one per load-test case. |
+| `--warehouse <WAREHOUSE_ID>` | string | - | no | SQL warehouse ID for reading UC-backed MLflow traces. |
 
 ### `agentbricks tools`
 
