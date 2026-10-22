@@ -105,18 +105,19 @@ eval "$(_AGENTBRICKS_COMPLETE=zsh_source agentbricks)"
 ## Authentication
 
 Agent Bricks CLI uses [Databricks authentication](https://docs.databricks.com/aws/en/dev-tools/cli/authentication).
-Sign in to a profile, then scaffold a project that records it in its `.env`:
+Create a project with the profile you want it to use (replace `my-profile` with your profile name):
 
 ```sh
-agentbricks auth login <profile>
-agentbricks init my-agent --profile <profile>
+agentbricks init my-agent --profile my-profile
 ```
 
-`agentbricks auth login` validates the profile and, in an interactive terminal, runs
-`databricks auth login --profile <profile>` if it is not authenticated yet (this needs the Databricks
-CLI; in CI or without a terminal, authenticate the profile beforehand). It saves nothing. To change a
-project's profile later, run `agentbricks auth switch <profile>` in the project directory, and
-`agentbricks auth describe` shows which profile (and workspace) a directory would use.
+`init` records the profile in the new project's `.env`. In an interactive terminal, it checks
+whether you are signed in and runs `databricks auth login --profile my-profile` if needed. In CI or
+without a terminal, configure authentication beforehand; `init` does not open a login flow there.
+Use `agentbricks auth describe` in the project to see which profile and workspace a command would
+use. `agentbricks auth login <profile>` signs in without changing the project's choice; to change
+that choice, run `agentbricks auth switch <profile>` in the project. An interactive `auth switch`
+also signs in if needed.
 
 Inside an Agent Bricks project (a directory with `.agentbricks/project.toml` or `app.yaml`), every
 command uses the profile in the project's `.env`. Outside a project, pass the global `--profile/-p`
@@ -169,15 +170,18 @@ failed upload never change the command result.
 
 ## Quickstart
 
-The shortest path from a blank directory to a running and deployed agent:
+A typical path from a blank directory to a running and deployed agent:
 
 ```sh
-agentbricks auth login <profile>
-agentbricks init my-agent --profile <profile>  # LangGraph by default; add --framework=openai for OpenAI Agents SDK
+agentbricks init my-agent --profile my-profile  # LangGraph by default; add --framework=openai for OpenAI Agents SDK
 cd my-agent
+agentbricks auth describe      # optional: check the selected profile and workspace
 agentbricks dev                 # optional: develop and test locally
 agentbricks deploy              # deploy to Databricks as agent-bricks-my-agent
 ```
+
+Replace `my-profile` with the Databricks profile for your workspace. In an interactive terminal,
+`init` signs in to it if needed.
 
 To move an existing project to a different workspace later, run `agentbricks auth switch <other>` in
 its directory. Rerunning `agentbricks init` on a project it scaffolded changes nothing. (`--existing`

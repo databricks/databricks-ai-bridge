@@ -27,12 +27,19 @@ See [Installation](README.md#installation) for installation details and shell co
 ## Authentication
 
 Agent Bricks CLI authenticates with a [Databricks configuration profile](https://docs.databricks.com/aws/en/dev-tools/cli/authentication).
-Sign in with `agentbricks auth login <profile>` (a wrapper over `databricks auth login`), then
-select the profile with `--profile` / `-p` on any command or record it in the project's `.env`
-(`agentbricks init <dir> --profile <profile>`, or `agentbricks auth switch <profile>` later).
+Start with `agentbricks init my-agent --profile my-profile` (using your profile name), then run
+`agentbricks dev` and `agentbricks deploy` from `my-agent`. `init` records the profile in the
+project's `.env` and signs in if needed in an interactive terminal. In CI or without a terminal,
+configure authentication beforehand. Run `agentbricks auth describe` to check the selected profile
+and workspace.
+`agentbricks auth login <profile>` signs in without changing the project;
+`agentbricks auth switch <profile>` changes its `.env` profile and signs in if needed in an
+interactive terminal. Use `--profile` / `-p` to override the choice for one command. See the
+[Quickstart](README.md#quickstart) for the full journey.
+
 Inside an Agent Bricks project (a directory with `.agentbricks/project.toml` or `app.yaml`) every
-command uses that project's `.env` profile. Nothing is saved outside the project: there is no
-global default profile. The profile is resolved in this order, most to least specific:
+command uses that project's `.env` profile. Agent Bricks saves no separate default profile outside
+the project. The profile is resolved in this order, most to least specific:
 
 1. `--profile` / `-p`
 2. the project `.env`'s `DATABRICKS_CONFIG_PROFILE` — only inside an Agent Bricks project; `dev` and
@@ -192,7 +199,7 @@ With `-o json`: `{"directory", "env_profile", "changed", "workspace_host", "sign
 
 Show the profile the CLI would use in a directory, and where it came from.
 
-Resolution order: the global `-p`, the project's `.env` (inside an Agent Bricks project), the DATABRICKS_CONFIG_PROFILE environment variable, then the Databricks SDK's default authentication. Read-only; no workspace calls are made. The output shows the profile (or `none (Databricks SDK default)`), its source, the workspace host (for the SDK default: `DATABRICKS_HOST`, else the `[DEFAULT]` profile's host), and the project directory.
+Resolution order: the global `-p`, the project's `.env` (inside an Agent Bricks project), the DATABRICKS_CONFIG_PROFILE environment variable, then the Databricks SDK's default authentication. Read-only; no workspace calls are made. The output shows the profile (or `none (Databricks SDK default)`), its source, the workspace host (for the SDK default: `DATABRICKS_HOST`, else the default chosen with `databricks auth switch`, then `[DEFAULT]`), and the project directory.
 
 ```
 agentbricks auth describe [options]
