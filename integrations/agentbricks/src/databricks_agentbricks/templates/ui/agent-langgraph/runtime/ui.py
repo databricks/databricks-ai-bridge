@@ -173,6 +173,104 @@ def _discover_chat_models() -> list[str]:
     return _rank_models(default, names)
 
 
+# The framework this overlay's agent.toml declares; load_tools rejects a manifest for another one.
+_FRAMEWORK = "langgraph"
+# Readable type names for the agent.toml [[tools]] kinds, shown as badges in the Tools pane.
+_TOOL_LABELS = {
+    "mcp": "MCP service",
+    "uc_function": "UC function",
+    "genie_one": "Genie One",
+    "genie_agent": "Genie Agent",
+    "sandbox": "Sandbox",
+}
+# The `agentbricks tools add` recipes the Tools pane offers to copy (the ones
+# `agentbricks tools list` prints; `tools add sandbox` then asks for the volumes to
+# allow with --scope), plus the command that discovers more MCP services.
+_ADD_COMMANDS = (
+    {
+        "kind": "mcp",
+        "label": "Managed MCP service",
+        "command": "agentbricks tools add mcp system.ai.web_search",
+    },
+    {
+        "kind": "uc-function",
+        "label": "Unity Catalog function",
+        "command": "agentbricks tools add uc-function catalog.schema.function",
+    },
+    {"kind": "genie-one", "label": "Genie One", "command": "agentbricks tools add genie-one"},
+    {
+        "kind": "genie-agent",
+        "label": "Genie Agent",
+        "command": "agentbricks tools add genie-agent SPACE_ID",
+    },
+    {"kind": "sandbox", "label": "Sandbox", "command": "agentbricks tools add sandbox"},
+    {
+        "kind": "discover",
+        "label": "Find more MCP services",
+        "command": "agentbricks tools list --kind mcp",
+    },
+)
+
+
+def _connected_tools() -> list[dict[str, str]]:
+    """The managed ``[[tools]]`` bindings in agent.toml, in manifest order.
+
+    Uses the same parser the adapters use, re-reading agent.toml on every call so a binding added or
+    removed with ``agentbricks tools add``/``remove`` shows up without restarting the app.
+    """
+    from databricks_agentkit.runtime.tool_manifest import load_tools
+
+    connected = []
+    for tool in load_tools(expected_framework=_FRAMEWORK):
+        if tool.kind == "sandbox":
+            source = ", ".join(f"{scope.kind}:{scope.value}" for scope in tool.downscope)
+        else:
+            source = tool.service or tool.function or tool.space_id or ""
+        connected.append(
+            {
+                "id": tool.id,
+                "kind": tool.kind,
+                "label": _TOOL_LABELS.get(tool.kind, tool.kind),
+                "source": source,
+                # Unset auth runs as the app, matching the adapters' `tool.auth or "app"`.
+                "auth": tool.auth or "app",
+            }
+        )
+    return connected
+
+
+def _local_tools() -> list[dict[str, str]]:
+    """The Python tools the agent is built with (``agent.tools.all_tools()``), imported lazily."""
+    from agent.tools import all_tools
+
+    local = []
+    for tool in all_tools():
+        lines = (getattr(tool, "description", "") or "").strip().splitlines()
+        local.append({"name": tool.name, "description": lines[0].strip() if lines else ""})
+    return local
+
+
+def _tools() -> dict[str, Any]:
+    """The Tools pane payload. Each section fails on its own so one bad source can't hide the rest."""
+    errors: list[dict[str, str]] = []
+    try:
+        connected = _connected_tools()
+    except Exception as exc:  # noqa: BLE001 - surface a bad agent.toml in the pane, not as a 500
+        connected = []
+        errors.append({"section": "connected", "message": str(exc)})
+    try:
+        local = _local_tools()
+    except Exception as exc:  # noqa: BLE001 - surface a broken agent.tools import in the pane
+        local = []
+        errors.append({"section": "local", "message": f"Could not load agent.tools: {exc}"})
+    return {
+        "connected": connected,
+        "local": local,
+        "add_commands": [dict(command) for command in _ADD_COMMANDS],
+        "errors": errors,
+    }
+
+
 class _ManagedStateClient:
     def __init__(self) -> None:
         self._workspace = workspace_client()
@@ -404,6 +502,10 @@ def install_ui(app: FastAPI) -> None:
         # runtime config so the rest of the UI becomes interactive immediately.
         available_models = await asyncio.to_thread(_discover_chat_models)
         return {"default": _default_model(), "available": available_models}
+
+    @app.get("/api/demo/tools", include_in_schema=False)
+    async def demo_tools() -> dict:
+        return await asyncio.to_thread(_tools)
 
     @app.post("/api/demo/memory/entries", include_in_schema=False)
     async def create_memory_entry(request: Request, payload: MemoryEntryRequest) -> dict:

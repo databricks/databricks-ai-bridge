@@ -551,3 +551,33 @@ def test_open_session_rejects_another_actor(monkeypatch):
     response = client.post("/api/demo/sessions/s2/open")
     assert response.status_code == 403
     assert response.json()["detail"] == "Session belongs to another actor."
+
+
+def test_demo_tools_route_lists_bindings_local_tools_and_add_commands(monkeypatch, tmp_path):
+    (tmp_path / "agent.toml").write_text(
+        'schema_version = 1\n\n[agent]\nname = "demo"\nframework = "openai"\n\n'
+        '[[tools]]\nid = "web_search"\nauth = "user"\n'
+        'source = { kind = "mcp", service = "system.ai.web_search" }\n'
+    )
+    monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
+    payload = _client(monkeypatch).get("/api/demo/tools").json()
+
+    assert payload["connected"] == [
+        {
+            "id": "web_search",
+            "kind": "mcp",
+            "label": "MCP service",
+            "source": "system.ai.web_search",
+            "auth": "user",
+        }
+    ]
+    assert {"get_current_time", "send_message"} <= {tool["name"] for tool in payload["local"]}
+    assert [entry["command"] for entry in payload["add_commands"]] == [
+        "agentbricks tools add mcp system.ai.web_search",
+        "agentbricks tools add uc-function catalog.schema.function",
+        "agentbricks tools add genie-one",
+        "agentbricks tools add genie-agent SPACE_ID",
+        "agentbricks tools add sandbox",
+        "agentbricks tools list --kind mcp",
+    ]
+    assert payload["errors"] == []
