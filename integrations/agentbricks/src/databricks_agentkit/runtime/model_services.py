@@ -257,8 +257,15 @@ def ensure_schema(client: WorkspaceClient, name: str) -> None:
     UC 404s a model-service create under a nonexistent schema with a bare "Resource not found".
     Reports a duplicate inconsistently (the typed AlreadyExists, or a 400 BadRequest saying
     "already exists"), so both are tolerated; anything else (no catalog, no permission) raises.
+    An existing schema is never created again: a create needs CREATE SCHEMA and fails in a catalog
+    at its schema limit, even when the schema is already there.
     """
     catalog, schema, _ = name.split(".")
+    try:
+        client.schemas.get(full_name=f"{catalog}.{schema}")
+        return
+    except Exception:  # noqa: BLE001 - missing or unreadable; the create below decides
+        pass
     try:
         client.schemas.create(name=schema, catalog_name=catalog)
     except Exception as exc:  # noqa: BLE001 - re-raised unless it's the duplicate case

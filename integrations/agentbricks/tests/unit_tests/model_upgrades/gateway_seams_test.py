@@ -121,6 +121,77 @@ def test_cost_prices_calls_to_the_service_as_the_routed_candidate(mocker):
     assert priced == ["claude-haiku-4-5"]
 
 
+def test_cost_prices_an_uncataloged_backend_id_as_the_routed_candidate():
+    # Workspaces echo different backend IDs; one the catalog lacks must not drop to the fallback
+    # rate, which is below Haiku's price and would make Sonnet look cheaper than Haiku.
+    et = _target()
+    calls = [
+        {
+            "model": "workspace-specific-sonnet-id",
+            "requested": et.exp_name,
+            "input": 1_000_000,
+            "output": 0,
+        }
+    ]
+    cost = opt._estimate_cost_usd(
+        {"model:main.agent.llm": "claude-sonnet-4-5"}, [et], {}, {}, llm_calls=calls
+    )
+    assert cost == opt._mlflow_model_cost("claude-sonnet-4-5", 1_000_000, 0)
+    assert cost != opt._rate_cost_usd(1_000_000, 0, opt._FALLBACK_TOKEN_RATE)
+
+
+def test_cost_prefers_a_priceable_backend_id_over_the_routed_candidate(mocker):
+    priced = []
+
+    def _cost(model, in_t, out_t):
+        priced.append(model)
+        return 0.002
+
+    mocker.patch(
+        "databricks_agentkit.model_upgrades.optimization._mlflow_model_cost", side_effect=_cost
+    )
+    et = _target()
+    calls = [
+        {
+            "model": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "requested": et.exp_name,
+            "input": 100,
+            "output": 50,
+        }
+    ]
+    cost = opt._estimate_cost_usd(
+        {"model:main.agent.llm": "claude-sonnet-4-5"}, [et], {}, {}, llm_calls=calls
+    )
+    assert cost == 0.002
+    assert priced == ["global.anthropic.claude-sonnet-4-5-20250929-v1:0"]
+
+
+def test_trace_summary_records_the_requested_service_for_each_llm_call(mocker):
+    span = mocker.Mock(
+        outputs={"model": "workspace-specific-sonnet-id"},
+        start_time_ns=0,
+        end_time_ns=1,
+    )
+    span.name = "ChatCompletion"
+    span.get_attribute.side_effect = lambda key: {
+        opt._TOKEN_USAGE_KEY: {"input_tokens": 10, "output_tokens": 5},
+        opt._LLM_MODEL_ATTR_KEY: "main.agent.llm_exp_test",
+    }.get(key)
+    mocker.patch(
+        f"{opt.__name__}._get_active_trace",
+        return_value=mocker.Mock(data=mocker.Mock(spans=[span])),
+    )
+    calls = opt._extract_trace_summary()["llm_calls"]
+    assert calls == [
+        {
+            "model": "workspace-specific-sonnet-id",
+            "requested": "main.agent.llm_exp_test",
+            "input": 10,
+            "output": 5,
+        }
+    ]
+
+
 def test_overlapping_runs_keep_their_models_and_cleanup_independent(mocker):
     services = {}
     mocker.patch(
