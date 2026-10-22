@@ -1,5 +1,5 @@
 import os
-from typing import Any, Generator
+from typing import Any, Generator, TypeVar
 
 from databricks.sdk import WorkspaceClient
 from httpx import AsyncClient, Auth, Client, Request, Response
@@ -7,12 +7,14 @@ from openai import APIConnectionError, APIStatusError, AsyncOpenAI, OpenAI
 from openai.resources.chat import AsyncChat, Chat
 from openai.resources.chat.completions import AsyncCompletions, Completions
 from openai.resources.responses import AsyncResponses, Responses
+from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from typing_extensions import override
 
 # Prefix for routing requests to Databricks Apps
 _APPS_ENDPOINT_PREFIX = "apps/"
 # Domain pattern indicating a Databricks App URL
 _DATABRICKS_APPS_DOMAIN = "databricksapps"
+_ResponseT = TypeVar("_ResponseT")
 
 
 def _get_openai_api_key():
@@ -106,6 +108,57 @@ def _fix_empty_assistant_content_in_messages(messages: Any) -> None:
         if message.get("role") == "assistant" and message.get("tool_calls"):
             if _is_empty_content(message.get("content")):
                 message["content"] = " "
+
+
+def _restore_gemini_tool_signatures(messages: Any) -> Any:
+    """Restore the gateway field after an Agents SDK provider-data round trip.
+
+    Agents uses Google's OpenAI-compatible extension, while the Databricks gateway
+    expects ``thoughtSignature``. Copy changed messages so stored history is unchanged.
+    """
+    if not messages:
+        return messages
+    prepared = []
+    for message in messages:
+        if not isinstance(message, dict) or not message.get("tool_calls"):
+            prepared.append(message)
+            continue
+        calls = []
+        for call in message["tool_calls"]:
+            extra = call.get("extra_content")
+            google = extra.get("google") if isinstance(extra, dict) else None
+            signature = google.get("thought_signature") if isinstance(google, dict) else None
+            if signature and "thoughtSignature" not in call:
+                call = {**call, "thoughtSignature": signature}
+            calls.append(call)
+        prepared.append({**message, "tool_calls": calls})
+    return prepared
+
+
+def _normalize_gemini_tool_signatures(data: Any) -> None:
+    """Expose gateway signatures in the shape understood by the Agents SDK.
+
+    Run before OpenAI model construction for both JSON responses and SSE chunks.
+    Keep the original gateway field and any existing provider extensions intact.
+    """
+    if not isinstance(data, dict):
+        return
+    for choice in data.get("choices") or []:
+        message = choice.get("message") or choice.get("delta")
+        if not isinstance(message, dict):
+            continue
+        for call in message.get("tool_calls") or []:
+            signature = call.get("thoughtSignature")
+            extra = call.get("extra_content") or {}
+            if not signature or not isinstance(extra, dict):
+                continue
+            google = extra.get("google") or {}
+            if not isinstance(google, dict):
+                continue
+            call["extra_content"] = {
+                **extra,
+                "google": {"thought_signature": signature, **google},
+            }
 
 
 def _resolve_base_url(
@@ -233,6 +286,8 @@ class DatabricksCompletions(Completions):
     """Completions that conditionally strips 'strict' from tools for non-GPT models."""
 
     def create(self, **kwargs):
+        if "messages" in kwargs:
+            kwargs["messages"] = _restore_gemini_tool_signatures(kwargs["messages"])
         model = kwargs.get("model")
         if _should_strip_strict(model):
             _strip_strict_from_tools(kwargs.get("tools"))
@@ -414,6 +469,14 @@ class DatabricksOpenAI(OpenAI):
         )
 
     @override
+    def _process_response_data(
+        self, *, data: object, cast_to: type[_ResponseT], response: Response
+    ) -> _ResponseT:
+        if cast_to in (ChatCompletion, ChatCompletionChunk):
+            _normalize_gemini_tool_signatures(data)
+        return super()._process_response_data(data=data, cast_to=cast_to, response=response)
+
+    @override
     @property
     def chat(self) -> Chat:
         if not isinstance(super().chat, DatabricksChat):
@@ -437,6 +500,8 @@ class AsyncDatabricksCompletions(AsyncCompletions):
     """Async completions that conditionally strips 'strict' from tools for non-GPT models."""
 
     async def create(self, **kwargs):
+        if "messages" in kwargs:
+            kwargs["messages"] = _restore_gemini_tool_signatures(kwargs["messages"])
         model = kwargs.get("model")
         if _should_strip_strict(model):
             _strip_strict_from_tools(kwargs.get("tools"))
@@ -580,6 +645,14 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
             http_client=_get_authorized_async_http_client(workspace_client, follow_redirects),
             **kwargs,
         )
+
+    @override
+    def _process_response_data(
+        self, *, data: object, cast_to: type[_ResponseT], response: Response
+    ) -> _ResponseT:
+        if cast_to in (ChatCompletion, ChatCompletionChunk):
+            _normalize_gemini_tool_signatures(data)
+        return super()._process_response_data(data=data, cast_to=cast_to, response=response)
 
     @property
     def chat(self) -> AsyncChat:
