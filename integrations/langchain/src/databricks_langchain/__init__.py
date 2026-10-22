@@ -26,6 +26,7 @@ from databricks_langchain.multi_server_mcp_client import (
     DatabricksMultiServerMCPClient,
     MCPServer,
 )
+from databricks_langchain.sandbox_session import DatabricksSandboxSession
 from databricks_langchain.sandbox_tool import DatabricksSandboxTool
 from databricks_langchain.store import AsyncDatabricksStore, DatabricksStore
 from databricks_langchain.vector_search_retriever_tool import VectorSearchRetrieverTool
@@ -38,6 +39,7 @@ __all__ = [
     "ChatDatabricks",
     "CheckpointSaver",
     "DatabricksEmbeddings",
+    "DatabricksSandboxSession",
     "DatabricksSandboxTool",
     "DatabricksStore",
     "DatabricksVectorSearch",
