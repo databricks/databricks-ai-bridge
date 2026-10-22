@@ -43,6 +43,8 @@ The UI reads local history from the agent's in-process session (`SQLiteSession`)
 from Session Store items. It keeps a stable application session UUID in browser local storage,
 sends it as every durable invocation's top-level `session_id`, and also uses the same value in the
 independent `X-Routing-Key` header for sticky routing; each turn gets a separate invocation UUID.
+It also sends the signed-in user as `input.actor`, so memory carries across that user's chat
+sessions.
 
 The Sessions card creates new session UUIDs in the browser. With a managed Session Store,
 `GET /api/demo/sessions` lists the most recent sessions for the signed-in actor and each Open action
