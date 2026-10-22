@@ -41,9 +41,15 @@ def _has_lines(content: str, lines: str) -> bool:
 
 @dataclass(frozen=True, kw_only=True)
 class Memory:
+    """A memory entry; non-identity fields omitted by ``read_mask`` are ``None``.
+
+    Include ``name`` in a read mask to retain the entry's identity for ``id``, ``update``, and
+    ``delete``.
+    """
+
     name: str
-    actor_id: str
-    path: str
+    actor_id: Optional[str] = None
+    path: Optional[str] = None
     session_id: Optional[str] = None
     content: Optional[str] = None
     description: Optional[str] = None
@@ -550,9 +556,9 @@ class MemoryStores:
     def _memory_from_response(self, response: dict[str, Any], store: MemoryStore) -> Memory:
         return Memory(
             name=response["name"],
-            actor_id=response["actor_id"],
+            actor_id=response.get("actor_id"),
             session_id=response.get("session_id"),
-            path=response["path"],
+            path=response.get("path"),
             content=response.get("content"),
             description=response.get("description"),
             source_type=response.get("source_type"),
