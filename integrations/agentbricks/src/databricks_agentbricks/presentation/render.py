@@ -425,11 +425,12 @@ def success(
 ) -> None:
     """A green success panel with optional details and a Next step(s) list.
 
-    Each next step is either a ``(command, description)`` pair — the command is shown in cyan (the
-    actionable accent) with the description in secondary — or a bare string for a non-command
-    instruction (e.g. ``"Open http://localhost:8000"``), rendered as prose. Commands are
-    **copy-safe**: no ``$`` prompt prefix, so they paste straight into a shell. The heading is
-    "Next step" or "Next steps", chosen automatically from the count.
+    Each next step is either a ``(command, description)`` pair — the description is shown in
+    secondary on its own line, with the command in cyan (the actionable accent) on the line below —
+    or a bare string for a non-command instruction (e.g. ``"Open http://localhost:8000"``), rendered
+    as prose. Commands are **copy-safe**: no ``$`` prompt prefix and a full-width line to
+    themselves, so they paste straight into a shell. The heading is "Next step" or "Next steps",
+    chosen automatically from the count.
     """
     con = con or _stdout
     body: list[RenderableType] = [Text("✔ ", style=SUCCESS) + Text(title, style="bold")]
@@ -446,19 +447,16 @@ def success(
         # Singular vs plural from the count, per the design.
         heading = "Next step" if len(next_steps) == 1 else "Next steps"
         body.append(Text(heading, style=SECONDARY))
-        # A two-column grid aligns every command's description at the same offset.
-        steps = Table.grid(padding=(0, 2))
-        steps.add_column()
-        steps.add_column(style=SECONDARY)
         for step in next_steps:
             if isinstance(step, tuple):
-                # The actionable command is cyan; its description trails in secondary.
+                # The description leads; the cyan command gets the full width of the line below.
                 command, description = step
-                steps.add_row(Text(command, style=COMMAND), description)
+                body.append(Text(description, style=SECONDARY))
+                # Fold rather than crop a long, space-free token (e.g. a JSON body) at the border.
+                body.append(Text(command, style=COMMAND, overflow="fold"))
             else:
                 # Prose (e.g. "Open <url>") renders plainly — no command accent, no prompt marker.
-                steps.add_row(Text(step), "")
-        body.append(steps)
+                body.append(Text(step))
 
     con.print()
     con.print(Panel(Group(*body), border_style=SUCCESS, box=box.ROUNDED))

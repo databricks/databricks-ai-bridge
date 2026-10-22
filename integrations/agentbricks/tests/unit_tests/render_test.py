@@ -123,6 +123,29 @@ def test_success_next_steps_render_command_and_description():
     assert "Open http://localhost:8000 to chat with it" in out
 
 
+def test_success_next_steps_lead_with_description_above_command():
+    con, buf = _console()
+    render.success(
+        "Logged in",
+        next_steps=[
+            "Open http://localhost:8000 to chat with it",
+            ("agentbricks init my-agent", "Scaffold a new agent project"),
+            ("agentbricks dev", "Run it locally"),
+        ],
+        con=con,
+    )
+    rows = [line.strip("│ ") for line in buf.getvalue().splitlines() if line.startswith("│")]
+    # Every command sits alone on the line under its description, so it copies without the gloss.
+    steps = rows[rows.index("Next steps") + 1 :]
+    assert steps == [
+        "Open http://localhost:8000 to chat with it",
+        "Scaffold a new agent project",
+        "agentbricks init my-agent",
+        "Run it locally",
+        "agentbricks dev",
+    ]
+
+
 def test_success_single_next_step_uses_singular_heading():
     con, buf = _console()
     render.success(
