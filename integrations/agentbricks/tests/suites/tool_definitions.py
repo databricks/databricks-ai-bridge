@@ -8,6 +8,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from harness.agentbricks_cli import excerpt, tool_results
+from harness.workspace import Workspace
 from uc_objects import UcFunction
 
 PYTHON_MARKER_FILE = "agent/tools/matrix_marker.py"
@@ -101,7 +102,7 @@ def sandbox_tool(uc_function: UcFunction) -> Tool:
     )
 
 
-def web_search_tool(auth: str = "app", **_resources: object) -> Tool:
+def web_search_tool(**_resources: object) -> Tool:
     return Tool(
         name="mcp",
         prompt=(
@@ -110,7 +111,7 @@ def web_search_tool(auth: str = "app", **_resources: object) -> Tool:
             "return the title and https URL of one result. Do not answer from memory."
         ),
         called=web_search_called,
-        add_command=f"mcp system.ai.web_search --auth {auth}",
+        add_command="mcp system.ai.web_search --auth app",
         files={},
         tool_id="web_search",
     )
@@ -130,15 +131,17 @@ def python_tool() -> Tool:
     )
 
 
-def uc_function_tool(uc_function: UcFunction) -> Tool:
+def uc_function_tool(uc_function: UcFunction, workspace_client: Workspace) -> Tool:
     return Tool(
         name="uc_function",
         prompt=(
             "You must call the Unity Catalog function tool that computes the Agent Bricks marker, "
             "with value 'matrix'. Return the called tool's exact result."
         ),
-        called=returned(UC_MARKER),
-        add_command=f"uc-function {uc_function.function} --name agentbricks_uc_marker",
+        # The function returns `current_user()`. Bound with `--auth user`, it runs as whoever
+        # invoked the agent, not the deployed App's service principal.
+        called=returned(f"{UC_MARKER}:{workspace_client.user_name}"),
+        add_command=f"uc-function {uc_function.function} --name agentbricks_uc_marker --auth user",
         files={},
         tool_id="agentbricks_uc_marker",
     )
@@ -164,6 +167,6 @@ TOOL_DEFINITIONS = (
     ToolDefinition("sandbox", ("uc_function",), sandbox_tool),
     ToolDefinition("mcp", ("workspace_client",), web_search_tool),
     ToolDefinition("python", (), python_tool),
-    ToolDefinition("uc_function", ("uc_function",), uc_function_tool),
+    ToolDefinition("uc_function", ("uc_function", "workspace_client"), uc_function_tool),
     ToolDefinition("genie", ("genie_space",), genie_tool),
 )

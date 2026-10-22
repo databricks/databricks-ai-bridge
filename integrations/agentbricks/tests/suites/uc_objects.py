@@ -37,7 +37,7 @@ def create_uc_function(workspace: Workspace, scratch_schema: str) -> UcFunction:
         f"CREATE FUNCTION `{catalog}`.`{schema}`.`{FUNCTION}`"
         "(value STRING) RETURNS STRING "
         "COMMENT 'Deterministic Agent Bricks E2E marker tool' "
-        "RETURN concat('AGENTBRICKS_UC_OK:', value)"
+        "RETURN concat('AGENTBRICKS_UC_OK:', value, ':', current_user())"
     )
     workspace.create_volume(catalog, schema, VOLUME)
     marker = f"AGENTBRICKS_VOLUME_{uuid.uuid4().hex}"
