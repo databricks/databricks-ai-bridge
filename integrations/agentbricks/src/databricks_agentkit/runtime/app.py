@@ -337,6 +337,8 @@ class DurableAgentServer(FastAPI):
         payload: JsonObject = {
             "id": invocation_id or state.invocation_id,
             "status": state.status.value.lower(),
+            "attempt": state.attempt,
+            "is_recovery": state.attempt > 1,
         }
         if state.status == InvocationStatus.COMPLETED:
             payload["output"] = copy.deepcopy(state.response)
