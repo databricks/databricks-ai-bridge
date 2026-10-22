@@ -27,6 +27,9 @@ memory = [
   "langgraph-checkpoint-postgres>=2.0.5",
   "databricks-ai-bridge[memory]>=0.17.0",
 ]
+sandbox = [
+  "databricks-sdk[sandbox]>=0.153.0",
+]
 
 [dependency-groups]
 dev = [
