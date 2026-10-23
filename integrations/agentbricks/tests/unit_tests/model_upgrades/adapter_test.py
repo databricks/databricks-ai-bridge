@@ -853,16 +853,11 @@ def test_prompt_only_cost_uses_traced_calls(override):
     assert cost == pytest.approx(0.0042 if override else 0.008)
 
 
-def test_evaluate_records_raw_medians_and_a_failure_adds_no_latency_or_cost(mocker):
-    def predict(inputs):
-        if inputs["n"] == 3:
-            raise RuntimeError("boom")
-        return "ok"
-
+def _median_adapter(mocker, predict, scorer):
     et = _EndpointTarget(name="ep1", candidate_models=["m1"], initial_model="m1")
     state = _state(
         predict_fn=predict,
-        scorers=[lambda inputs, expected, answer: expected["q"]],
+        scorers=[scorer],
         endpoint_targets=[et],
         token_costs={"m1": {"input": 1.0, "output": 0.0}},  # 1M input tokens -> 0.07 USD
     )
@@ -871,21 +866,61 @@ def test_evaluate_records_raw_medians_and_a_failure_adds_no_latency_or_cost(mock
         f"{opt.__name__}._extract_trace_summary",
         return_value={"total_tokens": {"input": 1_000_000, "output": 0}, "spans": []},
     )
-    batch = [
-        {"inputs": {"n": 1}, "expectations": {"q": 1.0}},
-        {"inputs": {"n": 2}, "expectations": {"q": 0.5}},
-        {"inputs": {"n": 3}, "expectations": {"q": 1.0}},
-    ]
-    candidate = {"model:ep1": "m1"}
-    adapter = _AgentAdapter(state)
-    adapter.evaluate(batch, candidate)
+    return _AgentAdapter(state)
 
-    medians = opt._median_metrics(adapter, candidate, batch)
+
+def test_evaluate_records_raw_medians_and_a_failure_adds_no_latency_or_cost(mocker):
+    def predict(inputs):
+        if inputs["n"] == 3:
+            raise RuntimeError("boom")
+        return "ok"
+
+    adapter = _median_adapter(mocker, predict, lambda inputs, expected, answer: expected["q"])
+    val = opt._tag_validation_records(
+        [
+            {"inputs": {"n": 1}, "expectations": {"q": 1.0}},
+            {"inputs": {"n": 2}, "expectations": {"q": 0.5}},
+            {"inputs": {"n": 3}, "expectations": {"q": 1.0}},
+        ]
+    )
+    candidate = {"model:ep1": "m1"}
+    adapter.evaluate(val, candidate)
+
+    medians = opt._median_metrics(adapter, candidate, len(val))
+    assert medians is not None
     assert medians["quality"] == pytest.approx(0.5)  # 1.0, 0.5, and the failure's 0.0
     assert medians["cost_usd"] == pytest.approx(1.0 * _DBU_TO_USD)
-    failed = adapter._raw_metrics[(opt._json_key(candidate), opt._json_key(batch[2]))]
+    failed = adapter._val_metrics[(opt._json_key(candidate), 2)]
     assert failed == {"quality": 0.0, "latency_s": None, "cost_usd": None}
-    assert opt._median_metrics(adapter, {"model:ep1": "other"}, batch) is None
+    assert opt._median_metrics(adapter, {"model:ep1": "other"}, len(val)) is None
+
+
+def test_medians_keep_identical_validation_rows_apart(mocker):
+    # GEPA scores identical rows as separate examples; the median must too.
+    qualities = iter([0.0, 0.0, 1.0])
+    adapter = _median_adapter(
+        mocker, lambda inputs: "ok", lambda inputs, expected, answer: next(qualities)
+    )
+    record = {"inputs": {"n": 1}, "expectations": {}}
+    candidate = {"model:ep1": "m1"}
+    adapter.evaluate(opt._tag_validation_records([record, record, record]), candidate)
+    medians = opt._median_metrics(adapter, candidate, 3)
+    assert medians is not None
+    assert medians["quality"] == 0.0
+
+
+def test_training_evaluations_do_not_count_toward_the_medians(mocker):
+    qualities = iter([1.0, 0.0])
+    adapter = _median_adapter(
+        mocker, lambda inputs: "ok", lambda inputs, expected, answer: next(qualities)
+    )
+    record = {"inputs": {"n": 1}, "expectations": {}}
+    candidate = {"model:ep1": "m1"}
+    adapter.evaluate(opt._tag_validation_records([record]), candidate)  # validation: 1.0
+    adapter.evaluate([record], candidate)  # the same record in a training minibatch: 0.0
+    medians = opt._median_metrics(adapter, candidate, 1)
+    assert medians is not None
+    assert medians["quality"] == 1.0
 
 
 def test_median_handles_even_counts_and_missing_values():

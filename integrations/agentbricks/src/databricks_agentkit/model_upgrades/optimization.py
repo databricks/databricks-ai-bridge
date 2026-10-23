@@ -1091,8 +1091,17 @@ def _estimate_cost_usd(candidate, endpoint_targets, total_tokens, token_costs, l
 
 
 def _json_key(value):
-    """A stable, hashable key for a candidate or eval record."""
+    """A stable, hashable key for a candidate."""
     return json.dumps(value, sort_keys=True, default=str)
+
+
+# GEPA gets copies of the validation records tagged with their position, so the adapter can tell a
+# validation evaluation from a training one and keep identical validation rows apart.
+_VAL_INDEX_KEY = "_model_upgrades_val_index"
+
+
+def _tag_validation_records(val_data):
+    return [{**record, _VAL_INDEX_KEY: i} for i, record in enumerate(val_data)]
 
 
 def _median(values):
@@ -1103,11 +1112,12 @@ def _median(values):
     return values[mid] if len(values) % 2 else (values[mid - 1] + values[mid]) / 2
 
 
-def _median_metrics(adapter, candidate, records):
-    """``candidate``'s median quality, latency (s), and cost ($) over ``records``, or None."""
-    raw = getattr(adapter, "_raw_metrics", {})
+def _median_metrics(adapter, candidate, val_records):
+    """``candidate``'s median quality, latency (s), and cost ($) over its evaluations of the
+    ``val_records`` validation rows, or None if it has none."""
+    raw = getattr(adapter, "_val_metrics", {})
     key = _json_key(candidate)
-    measured = [raw[(key, _json_key(r))] for r in records if (key, _json_key(r)) in raw]
+    measured = [raw[(key, i)] for i in range(val_records) if (key, i) in raw]
     if not measured:
         return None
     return {
@@ -1151,9 +1161,9 @@ class _AgentAdapter(gepa.GEPAAdapter):
     def __init__(self, state):
         self.state = state
         self._model_history = {et.name: defaultdict(list) for et in state.endpoint_targets}
-        # (candidate, record) -> raw quality / latency / cost of its latest evaluation, so the
-        # result can report the seed's and winner's medians in units, not 0-1 objective scores.
-        self._raw_metrics = {}
+        # (candidate, validation row) -> raw quality / latency / cost of its latest evaluation, so
+        # the result can report the seed's and winner's medians in units, not 0-1 objective scores.
+        self._val_metrics = {}
         self._last_metrics = {}
 
     def _validate(self, candidate):
@@ -1313,7 +1323,9 @@ class _AgentAdapter(gepa.GEPAAdapter):
                 scores.append(score)
                 outputs.append(answer)
                 all_obj.append(obj)
-                self._raw_metrics[(_json_key(candidate), _json_key(record))] = self._last_metrics
+                val_index = record.get(_VAL_INDEX_KEY)
+                if val_index is not None:
+                    self._val_metrics[(_json_key(candidate), val_index)] = self._last_metrics
                 if capture_traces:
                     trajectories.append(
                         {
@@ -1784,7 +1796,7 @@ def optimize_prompts_and_models(
         defaults: dict[str, Any] = {
             "seed_candidate": seed,
             "trainset": train_data,
-            "valset": val_data,
+            "valset": _tag_validation_records(val_data),
             "adapter": adapter,
             "reflection_lm": f"databricks/{state.reflection_model}",
             "reflection_prompt_template": templates,
@@ -1816,8 +1828,8 @@ def optimize_prompts_and_models(
             f"baseline {baseline_score:.3f} -> best {best_score:.3f} "
             f"(delta {best_score - baseline_score:+.3f})"
         )
-        baseline_metrics = _median_metrics(adapter, seed, val_data)
-        best_metrics = _median_metrics(adapter, gepa_result.best_candidate, val_data)
+        baseline_metrics = _median_metrics(adapter, seed, len(val_data))
+        best_metrics = _median_metrics(adapter, gepa_result.best_candidate, len(val_data))
         if baseline_metrics and best_metrics:
             line = _format_metrics_change(baseline_metrics, best_metrics)
             if line:
