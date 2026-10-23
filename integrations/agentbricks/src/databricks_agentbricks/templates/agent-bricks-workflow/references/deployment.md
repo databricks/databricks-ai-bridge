@@ -15,9 +15,22 @@ project tests as well when code changes require them.
 reconciles app access, and deploys a Databricks App. It does not require a running local dev server.
 The app name is stable: reusing `<name>` deploys new source to the existing `agent-bricks-<name>` app,
 not a separate app. Choose a unique name in the selected workspace for an isolated deployment;
-reuse a name only when updating that app is intended.
+reuse a name only when updating that app is intended. App names cap at 30 characters, so `<name>`
+can be up to 17 lowercase letters, digits, and hyphens. `agentbricks init` records a name that fits
+as `[agent].deployment_name` and prints it as `Deploy name`; from the project directory, a bare
+`agentbricks deploy` uses it.
 Provisioning takes real time; do not start repeated deployments merely because one is still running.
 Inspect `agentbricks deployments get <app-name>` or logs for a failed deployment before retrying.
+
+### Deploying from a coding agent
+
+A first deploy takes ~3 min (mostly starting app compute); redeploys are faster. Either run
+`agentbricks deploy` in the foreground with a long command timeout (for example, Claude Code's Bash
+`timeout: 600000`), or run `agentbricks deploy <name> --no-wait` and then
+`agentbricks deployments wait <app-name>` until it exits 0. Exit 75 means it is still deploying;
+run the same command again. Exit 1 means it failed: the output carries the error and the log tail.
+Don't poll with `sleep`. A second `agentbricks deploy` of the same app is refused while one is still
+running from the project.
 
 Under `agentbricks dev`, Runtime Store invocation state is in memory. Managed conversation
 history is replaced by local state and managed long-term memory is off. Do not claim that a local

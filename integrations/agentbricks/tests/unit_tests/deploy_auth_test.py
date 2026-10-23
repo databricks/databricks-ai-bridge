@@ -33,11 +33,11 @@ from databricks_agentbricks.projects.agent_project import AgentProject, Scope, T
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.reporting import Reporter
 from databricks_agentbricks.services.deploy_service import DeployRequest, DeployService
+from databricks_agentbricks.services.deployment.app_provisioner import AppProvisioner
 from databricks_agentbricks.services.deployment.model_binding_provisioner import (
     ModelBindingProvisioner,
 )
 from databricks_agentbricks.services.deployment.provisioners import (
-    AppProvisioner,
     GrantOutcome,
     ManifestPatch,
     MemoryStoreProvisioner,
@@ -137,7 +137,7 @@ def _real_auth_deploy_harness(tmp_path, sdk_apps):
     tracing.grant.return_value = GrantOutcome.skipped()
     runtime = Mock(spec=RuntimeStoreProvisioner)
     runtime.reconcile.return_value = RuntimeStoreState(False, None, ManifestPatch({}))
-    runtime.after_app_ready.return_value = ManifestPatch({})
+    runtime.after_app_created.return_value = ManifestPatch({})
     tool_access = Mock(spec=ToolAccessProvisioner)
     tool_access.plan.return_value = ToolAccessPlan()
 

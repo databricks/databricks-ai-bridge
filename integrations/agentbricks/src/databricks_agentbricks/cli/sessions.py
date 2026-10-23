@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import shlex
 import sys
 from typing import Any, Optional
 
@@ -179,12 +180,64 @@ def stores_create(obj, name, description, metadata) -> None:
     )
 
 
+def _render_store_table(items_: list, *, title: str, footer: str | None = None) -> None:
+    rows = [
+        [
+            field(s, "session_store_name"),
+            timefmt.relative(field(s, "create_time")),
+            timefmt.relative(field(s, "update_time")),
+            _truncate(field(s, "description"), 40),
+        ]
+        for s in items_
+    ]
+    render.resource_table(
+        title,
+        [
+            # A session store's resource name is its workspace-unique, human-readable name.
+            ("Resource name", "left"),
+            ("Created", "left"),
+            ("Updated", "left"),
+            ("Description", "left"),
+        ],
+        rows,
+        footer=footer,
+        no_wrap=[0],  # never cut off the resource name; other columns narrow to fit
+    )
+
+
 @stores.command("list")
-@click.option("--page-size", type=int, default=25, show_default=True)
-@click.option("--page-token", default=None)
+@click.option(
+    "--name",
+    "name_filter",
+    default=None,
+    help="Only stores whose name contains TEXT (case-insensitive). Reads every page.",
+)
+@click.option("--all", "all_", is_flag=True, help="Page through every store.")
+@click.option(
+    "--page-size",
+    type=int,
+    default=25,
+    show_default=True,
+    help="Stores per page without --name or --all.",
+)
+@click.option(
+    "--page-token",
+    default=None,
+    help="Resume from a previous page's token (not with --name or --all).",
+)
 @click.pass_obj
-def stores_list(obj, page_size, page_token) -> None:
-    """List session stores in the workspace (25 per page; paginates interactively on a terminal)."""
+def stores_list(obj, name_filter, all_, page_size, page_token) -> None:
+    """List session stores in the workspace.
+
+    Without --name or --all, shows 25 per page: it paginates interactively on a terminal and
+    otherwise prints the --page-token for the next page. --name and --all page through every store
+    and print one complete list. The API has no server-side filter, so --name reads every page.
+    """
+    if name_filter is not None or all_:
+        if page_token is not None:
+            raise click.UsageError("--page-token can't be combined with --name or --all.")
+        _list_all_stores(obj, name_filter)
+        return
     client = obj.client()
     if obj.output == "json":
         render.emit_json(client.list_session_stores(page_size, page_token))
@@ -194,29 +247,12 @@ def stores_list(obj, page_size, page_token) -> None:
     while True:
         data = client.list_session_stores(page_size, page_token)
         items_ = field(data, "session_stores") or []
-        rows = [
-            [
-                field(s, "session_store_name"),
-                timefmt.relative(field(s, "create_time")),
-                timefmt.relative(field(s, "update_time")),
-                _truncate(field(s, "description"), 40),
-            ]
-            for s in items_
-        ]
         token = field(data, "next_page_token")
-        render.resource_table(
-            "Session Stores",
-            [
-                # A session store's resource name is its workspace-unique, human-readable name.
-                ("Resource name", "left"),
-                ("Created", "left"),
-                ("Updated", "left"),
-                ("Description", "left"),
-            ],
-            rows,
+        _render_store_table(
+            items_,
+            title="Session Stores",
             # In an interactive session the prompt below replaces the token hint.
-            subtitle=None if (interactive and token) else _page_note(data),
-            no_wrap=[0],  # keep the resource name full-width; other columns narrow to fit
+            footer=None if interactive else render.more_pages_footer(len(items_), token),
         )
         if not token or not interactive:
             break
@@ -225,12 +261,39 @@ def stores_list(obj, page_size, page_token) -> None:
         page_token = token
 
 
+def _list_all_stores(obj, name_filter: Optional[str]) -> None:
+    from databricks_agentbricks.clients.conversation_store_client import SessionStoreClient
+
+    with render.status("Listing session stores…"):
+        found = SessionStoreClient(obj.api_client_provider).list_all()
+    title = "Session Stores · all"
+    if name_filter is not None:
+        needle = name_filter.casefold()
+        found = [s for s in found if needle in (field(s, "session_store_name") or "").casefold()]
+        title = f"Session Stores · name contains '{name_filter}'"
+    if obj.output == "json":
+        render.emit_json({"session_stores": found})
+        return
+    _render_store_table(found, title=title)
+
+
 @stores.command("get")
 @click.argument("name")
 @click.pass_obj
 def stores_get(obj, name) -> None:
-    """Get a session store by name."""
-    data = obj.client().get_session_store(name)
+    """Get a session store by name (the name in agent.toml) or resource name (session-stores/<name>)."""
+    try:
+        data = obj.client().get_session_store(name)
+    except AgentCliError as exc:
+        if exc.error_code not in {"NOT_FOUND", "RESOURCE_DOES_NOT_EXIST"}:
+            raise
+        raise AgentCliError(
+            f"No session store named '{name}'",
+            hint=(
+                "Search by part of the name: "
+                f"agentbricks sessions stores list --name {shlex.quote(name)}"
+            ),
+        ) from exc
     if obj.output == "json":
         render.emit_json(data)
         return

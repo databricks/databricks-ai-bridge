@@ -96,23 +96,6 @@ async def test_adapter_uses_context_session_and_namespaces_untrusted_actor(templ
         calls.clear()
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("key", ["resume", "approval", "approvals"])
-async def test_user_hitl_input_rejected_before_framework_execution(template, monkeypatch, key):
-    _framework, adapter, _agent = template
-    from databricks_agentkit.runtime.auth import AuthError
-
-    run = Mock(side_effect=AssertionError("must reject before running"))
-    monkeypatch.setattr(adapter, "run_agent", run)
-    context = SimpleNamespace(
-        request_auth=RequestAuth("alice"), session_id="public", emit=AsyncMock()
-    )
-    with pytest.raises(AuthError) as raised:
-        await adapter.invoke({key: {}}, context)
-    assert raised.value.code == "MCP_USER_AUTH_HITL_UNSUPPORTED"
-    run.assert_not_called()
-
-
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
 @pytest.mark.parametrize("overlay", [False, True])
 def test_main_lets_durable_agent_server_infer_auth_policy_after_configure(framework, overlay):
@@ -215,32 +198,6 @@ async def test_ui_runtime_capabilities_ignore_tool_auth_policy(framework, user_a
 
 
 @pytest.mark.asyncio
-async def test_openai_does_not_retain_request_bound_run_state(template, monkeypatch):
-    framework, _adapter, agent = template
-    if framework != "openai":
-        pytest.skip("OpenAI RunState custody")
-    from databricks_agentkit.runtime.auth import AuthError
-
-    monkeypatch.setattr(agent, "mcp_servers", AsyncMock(return_value=[]))
-    monkeypatch.setattr(agent, "create_agent", Mock(return_value=object()))
-    monkeypatch.setattr(agent, "session_store", Mock(return_value=None))
-    monkeypatch.setattr(
-        agent, "start_trace", Mock(return_value=__import__("contextlib").nullcontext())
-    )
-    result = SimpleNamespace(
-        interruptions=[object()], to_state=Mock(), final_output=None, is_complete=True
-    )
-    monkeypatch.setattr(agent.Runner, "run_streamed", Mock(return_value=result))
-    with pytest.raises(AuthError) as raised:
-        async with agent.run_agent([], session_id="private", workspace_client_for=Mock()):
-            pass
-    assert raised.value.code == "MCP_USER_AUTH_HITL_UNSUPPORTED"
-    result.to_state.assert_not_called()
-    assert "private" not in agent._pending_runs
-    assert "context" not in agent.Runner.run_streamed.call_args.kwargs
-
-
-@pytest.mark.asyncio
 async def test_openai_request_exit_cancels_native_run(template, monkeypatch):
     framework, _adapter, agent = template
     if framework != "openai":
@@ -262,3 +219,588 @@ async def test_openai_request_exit_cancels_native_run(template, monkeypatch):
         async with agent.run_agent([], session_id="private", workspace_client_for=Mock()):
             raise RuntimeError("disconnected")
     result.cancel.assert_called_once_with()
+
+
+@pytest.fixture
+def hitl_app(template, monkeypatch):
+    """Real HTTP runtime, graph and middleware; only model/tool I/O is local."""
+    from contextlib import nullcontext
+
+    from langchain.agents import create_agent
+    from langchain.agents.middleware import HumanInTheLoopMiddleware
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+    from langchain_core.messages import AIMessage
+    from langchain_core.tools import tool
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    from databricks_agentkit import DurableAgentServer
+    from databricks_agentkit.runtime.auth import InvocationAuthPolicy
+    from databricks_agentkit.runtime.store import InMemoryRuntimeStore
+
+    _framework, adapter, agent = template
+    monkeypatch.setenv("DATABRICKS_APP_NAME", "hitl-test")
+    monkeypatch.setenv("DATABRICKS_HOST", "https://workspace.example")
+    monkeypatch.delenv("DATABRICKS_AGENTBRICKS_RUNTIME_STORE_LOCAL", raising=False)
+    # Keep SDK discovery offline while exercising the real request-bound credential resolver.
+    monkeypatch.setattr(
+        "databricks.sdk.WorkspaceClient",
+        lambda **kwargs: SimpleNamespace(config=SimpleNamespace(token=kwargs["token"])),
+    )
+    saver = InMemorySaver()
+    writes = []
+    credentials = []
+
+    class Model(FakeMessagesListChatModel):
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+        async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+            self.i = int(any(message.type == "tool" for message in messages))
+            return self._generate(messages, stop, run_manager, **kwargs)
+
+    async def create_graph(actor, model=None, *, workspace_client_for=None):
+        assert workspace_client_for is not None
+        credentials.append(workspace_client_for.__self__)
+
+        @tool
+        async def record_action(text: str) -> str:
+            """Record the approved action locally."""
+            client = workspace_client_for("user")
+            writes.append((text, client.config.token))
+            return "Action recorded"
+
+        return create_agent(
+            Model(
+                responses=[
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "record_action",
+                                "args": {"text": "original"},
+                                "id": "action-call",
+                                "type": "tool_call",
+                            }
+                        ],
+                    ),
+                    AIMessage(content="Review handled"),
+                ]
+            ),
+            [record_action],
+            middleware=[HumanInTheLoopMiddleware(interrupt_on={"record_action": True})],
+            checkpointer=saver,
+        )
+
+    monkeypatch.setattr(agent, "create_agent_graph", create_graph)
+    monkeypatch.setattr(agent, "start_trace", lambda **kwargs: nullcontext())
+    store = InMemoryRuntimeStore()
+    app = DurableAgentServer(
+        runtime_store=store, auth_policy=InvocationAuthPolicy(user_required=True)
+    )
+    app.invoke(adapter.invoke)
+    app.recover(adapter.recover)
+    return SimpleNamespace(
+        app=app, store=store, saver=saver, writes=writes, credentials=credentials
+    )
+
+
+@asynccontextmanager
+async def hitl_client(app):
+    import httpx
+
+    await app._runtime.start()
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app), base_url="https://test"
+        ) as client:
+            yield client
+    finally:
+        await app._runtime.stop()
+
+
+def hitl_headers(token, user="alice"):
+    return {"x-forwarded-user": user, "x-forwarded-access-token": token}
+
+
+def hitl_request(value, *, stream=False):
+    from uuid import uuid4
+
+    return {"id": str(uuid4()), "session_id": "review-session", "input": value, "stream": stream}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("template", ["langgraph"], indirect=True)
+@pytest.mark.parametrize("decision", ["approve", "edit", "reject"])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_langgraph_user_hitl_resumes_with_current_request_credentials(
+    hitl_app, decision, stream
+):
+    from databricks_agentkit.runtime.auth import AuthError
+
+    state = hitl_app
+    async with hitl_client(state.app) as client:
+        pause = await client.post(
+            "/api/invocations",
+            json=hitl_request(
+                {"messages": [{"role": "user", "content": "Record an action"}]}, stream=stream
+            ),
+            headers=hitl_headers("before-approval-token"),
+        )
+        assert pause.status_code == 200
+        if stream:
+            assert "event: interrupt" in pause.text
+            assert "event: run.failed" not in pause.text
+        else:
+            assert pause.json()["output"]["status"] == "interrupted"
+        assert state.writes == []
+        with pytest.raises(AuthError, match="no longer active"):
+            state.credentials[0].client_for("user")
+
+        approval = {"type": decision}
+        if decision == "edit":
+            approval["edited_action"] = {"name": "record_action", "args": {"text": "edited"}}
+        body = hitl_request({"resume": {"decisions": [approval]}}, stream=stream)
+        resume = await client.post(
+            "/api/invocations", json=body, headers=hitl_headers("after-approval-token")
+        )
+        assert resume.status_code == 200
+        if stream:
+            assert "event: run.completed" in resume.text
+            assert "event: run.failed" not in resume.text
+        else:
+            assert resume.json()["output"]["status"] == "completed"
+        replay = await client.post(
+            "/api/invocations", json=body, headers=hitl_headers("replay-token")
+        )
+        assert replay.status_code == 200
+        assert replay.text == resume.text
+
+    expected = (
+        []
+        if decision == "reject"
+        else [("edited" if decision == "edit" else "original", "after-approval-token")]
+    )
+    assert state.writes == expected
+    assert len(state.credentials) == 2
+    for auth in state.credentials:
+        with pytest.raises(AuthError, match="no longer active"):
+            auth.client_for("user")
+    persisted = repr(
+        (state.store.states, state.store.persisted_events, state.saver.storage, state.saver.writes)
+    )
+    for token in ("before-approval-token", "after-approval-token", "replay-token"):
+        assert token not in persisted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("template", ["langgraph"], indirect=True)
+async def test_langgraph_user_hitl_requires_authenticated_session_owner(hitl_app):
+    state = hitl_app
+    async with hitl_client(state.app) as client:
+        pause = await client.post(
+            "/api/invocations",
+            json=hitl_request({"messages": [{"role": "user", "content": "Record an action"}]}),
+            headers=hitl_headers("owner-token"),
+        )
+        assert pause.json()["output"]["status"] == "interrupted"
+        approval = {"resume": {"decisions": [{"type": "approve"}]}}
+        missing = await client.post("/api/invocations", json=hitl_request(approval))
+        assert missing.status_code == 401
+        assert missing.json()["error"]["code"] == "MCP_USER_AUTH_REQUIRED"
+        other = await client.post(
+            "/api/invocations",
+            json=hitl_request(approval),
+            headers=hitl_headers("other-token", "bob"),
+        )
+        assert state.writes == []
+        assert "Action recorded" not in other.text
+        owner = await client.post(
+            "/api/invocations",
+            json=hitl_request(approval),
+            headers=hitl_headers("owner-resume-token"),
+        )
+        assert owner.status_code == 200
+        assert state.writes == [("original", "owner-resume-token")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("template", ["langgraph"], indirect=True)
+@pytest.mark.parametrize(
+    "decisions",
+    [
+        [],
+        [{"type": "invalid"}],
+        [{"type": "edit"}],
+        [{"type": "respond"}],
+        [{"type": "approve"}, {"type": "approve"}],
+    ],
+)
+async def test_langgraph_user_hitl_invalid_decision_does_not_execute_or_consume_approval(
+    hitl_app, decisions
+):
+    state = hitl_app
+    async with hitl_client(state.app) as client:
+        pause = await client.post(
+            "/api/invocations",
+            json=hitl_request({"messages": [{"role": "user", "content": "Record an action"}]}),
+            headers=hitl_headers("pause-token"),
+        )
+        assert pause.json()["output"]["status"] == "interrupted"
+        invalid = await client.post(
+            "/api/invocations",
+            json=hitl_request({"resume": {"decisions": decisions}}),
+            headers=hitl_headers("invalid-decision-token"),
+        )
+        assert invalid.status_code == 400
+        assert invalid.json()["error"]["code"] == "INVALID_APPROVAL"
+        assert state.writes == []
+        valid = await client.post(
+            "/api/invocations",
+            json=hitl_request({"resume": {"decisions": [{"type": "approve"}]}}),
+            headers=hitl_headers("approved-token"),
+        )
+        assert valid.status_code == 200
+    assert state.writes == [("original", "approved-token")]
+
+
+@pytest.fixture(params=["memory-function", "managed-function", "memory-mcp", "managed-mcp"])
+def openai_hitl_app(template, request, monkeypatch):
+    """Real SDK serialization, tool dispatch and checkpoint adapters with local I/O."""
+    from contextlib import nullcontext
+
+    from agents import Agent, Model, RunConfig, function_tool
+    from agents.mcp import MCPServer
+    from mcp.types import CallToolResult, TextContent, Tool
+    from openai.types.responses import (
+        Response,
+        ResponseCompletedEvent,
+        ResponseFunctionToolCall,
+        ResponseOutputMessage,
+        ResponseOutputText,
+    )
+    from template_history_fixtures import SessionStoreTransport
+
+    from databricks_agentkit import DurableAgentServer
+    from databricks_agentkit.openai import sessions
+    from databricks_agentkit.runtime.auth import InvocationAuthPolicy
+    from databricks_agentkit.runtime.store import InMemoryRuntimeStore
+
+    _framework, adapter, agent = template
+    checkpoints = importlib.import_module("agent.checkpoints")
+    mode, tool_kind = request.param.split("-")
+    transport = SessionStoreTransport()
+    store_name = "hitl" if mode == "managed" else None
+    monkeypatch.setattr(checkpoints, "resolve_session_store", lambda: store_name)
+    monkeypatch.setattr(checkpoints, "SessionStoreClient", lambda: transport)
+    monkeypatch.setattr(
+        "databricks_agentkit.runtime.tool_manifest.resolve_session_store", lambda *_args: store_name
+    )
+    monkeypatch.setattr(sessions, "SessionStoreClient", lambda *_args: transport)
+    monkeypatch.setattr(sessions, "_local_sessions", {})
+    monkeypatch.setenv("DATABRICKS_APP_NAME", "hitl-test")
+    monkeypatch.setenv("DATABRICKS_HOST", "https://workspace.example")
+    monkeypatch.delenv("DATABRICKS_AGENTBRICKS_RUNTIME_STORE_LOCAL", raising=False)
+    monkeypatch.setattr(
+        "databricks.sdk.WorkspaceClient",
+        lambda **kwargs: SimpleNamespace(config=SimpleNamespace(token=kwargs["token"])),
+    )
+    writes, credentials, servers = [], [], []
+
+    class ApprovalModel(Model):
+        async def get_response(self, *_args, **_kwargs):
+            raise AssertionError("Expected native streaming")
+
+        async def stream_response(self, system_instructions, input, *_args, **_kwargs):
+            if any(item.get("type") == "function_call_output" for item in input):
+                output = ResponseOutputMessage(
+                    id="answer",
+                    role="assistant",
+                    status="completed",
+                    type="message",
+                    content=[
+                        ResponseOutputText(
+                            text="Review handled", type="output_text", annotations=[]
+                        )
+                    ],
+                )
+            else:
+                output = ResponseFunctionToolCall(
+                    id="action",
+                    type="function_call",
+                    call_id="action-call",
+                    name="record_action",
+                    arguments='{"text":"original"}',
+                )
+            yield ResponseCompletedEvent(
+                type="response.completed",
+                sequence_number=0,
+                response=Response(
+                    id="reply",
+                    created_at=0,
+                    model="test",
+                    object="response",
+                    output=[output],
+                    parallel_tool_calls=False,
+                    tool_choice="auto",
+                    tools=[],
+                ),
+            )
+
+    class UserMCP(MCPServer):
+        tool_filter = None
+        cache_tools_list = True
+        _agentbricks_request_user = True
+
+        def __init__(self, resolver, require_approval):
+            super().__init__(require_approval=require_approval)
+            self.resolver = resolver
+            self.closed = False
+
+        @property
+        def name(self):
+            return "request-user-tools"
+
+        async def connect(self):
+            pass
+
+        async def cleanup(self):
+            self.closed = True
+
+        async def list_tools(self, *_args, **_kwargs):
+            return [
+                Tool(
+                    name="record_action",
+                    description="Record an approved action",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {"text": {"type": "string"}},
+                        "required": ["text"],
+                        "additionalProperties": False,
+                    },
+                )
+            ]
+
+        async def call_tool(self, tool_name, arguments, meta=None):
+            assert not self.closed and tool_name == "record_action"
+            writes.append((arguments["text"], self.resolver("user").config.token))
+            return CallToolResult(content=[TextContent(type="text", text="Action recorded")])
+
+        async def list_prompts(self):
+            raise NotImplementedError
+
+        async def get_prompt(self, name, arguments=None):
+            raise NotImplementedError
+
+    async def mcp_servers(_configured, *, workspace_client_for, require_approval):
+        assert require_approval == {"record_action": True}
+        if tool_kind == "function":
+            return []
+        server = UserMCP(workspace_client_for, require_approval)
+        servers.append(server)
+        return [server]
+
+    def create_agent(actor, mcp, model=None, *, workspace_client_for):
+        credentials.append(workspace_client_for.__self__)
+
+        @function_tool(needs_approval=True)
+        async def record_action(text: str) -> str:
+            """Record an approved action locally."""
+            writes.append((text, workspace_client_for("user").config.token))
+            return "Action recorded"
+
+        return Agent(
+            name="Agent",
+            model=ApprovalModel(),
+            mcp_servers=mcp,
+            tools=[record_action] if tool_kind == "function" else [],
+        )
+
+    monkeypatch.setattr(agent, "create_agent", create_agent)
+    monkeypatch.setattr(agent, "mcp_servers", mcp_servers)
+    monkeypatch.setattr(agent, "REQUIRE_APPROVAL", {"record_action"})
+    monkeypatch.setattr(agent, "start_trace", lambda **_kwargs: nullcontext())
+    run_streamed = agent.Runner.run_streamed
+    monkeypatch.setattr(
+        agent.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: run_streamed(
+            *args, **kwargs, run_config=RunConfig(tracing_disabled=True)
+        ),
+    )
+    runtime = InMemoryRuntimeStore()
+    app = DurableAgentServer(
+        runtime_store=runtime, auth_policy=InvocationAuthPolicy(user_required=True)
+    )
+    app.invoke(adapter.invoke)
+    app.recover(adapter.recover)
+    yield SimpleNamespace(
+        app=app,
+        store=runtime,
+        agent=agent,
+        checkpoints=checkpoints,
+        transport=transport,
+        writes=writes,
+        credentials=credentials,
+        servers=servers,
+        mode=mode,
+    )
+    for session in sessions._local_sessions.values():
+        session.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("template", ["openai"], indirect=True)
+@pytest.mark.parametrize("decision", ["approve", "reject"])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_openai_user_hitl_resumes_with_current_request_credentials(
+    openai_hitl_app, decision, stream
+):
+    from databricks_agentkit.runtime.auth import AuthError
+
+    state = openai_hitl_app
+    async with hitl_client(state.app) as client:
+        pause = await client.post(
+            "/api/invocations",
+            headers=hitl_headers("before-approval-token"),
+            json=hitl_request(
+                {"messages": [{"role": "user", "content": "Record an action"}]}, stream=stream
+            ),
+        )
+        assert pause.status_code == 200
+        if stream:
+            assert "event: interrupt" in pause.text and "event: run.failed" not in pause.text
+        else:
+            assert pause.json()["output"]["status"] == "interrupted"
+        assert state.writes == []
+        assert all(server.closed for server in state.servers)
+        with pytest.raises(AuthError, match="no longer active"):
+            state.credentials[0].client_for("user")
+        # Only JSON snapshots are retained; there is no live RunState in the agent cache.
+        assert state.agent._pending_runs == {}
+        persisted = (
+            state.transport.items if state.mode == "managed" else state.checkpoints._local_items
+        )
+        encoded = json.dumps(persisted)
+        assert "run_state" in encoded and "before-approval-token" not in encoded
+        if state.mode == "managed":
+            # Clear process-local caches; the next invocation must load the managed snapshot.
+            state.checkpoints._local_items.clear()
+        body = hitl_request(
+            {"resume": {"decisions": [{"type": decision, "call_id": "action-call"}]}}, stream=stream
+        )
+        resume = await client.post(
+            "/api/invocations", json=body, headers=hitl_headers("after-approval-token")
+        )
+        assert resume.status_code == 200
+        if stream:
+            assert "event: run.completed" in resume.text and "event: run.failed" not in resume.text
+        else:
+            assert resume.json()["output"]["status"] == "completed"
+        replay = await client.post(
+            "/api/invocations", json=body, headers=hitl_headers("replay-token")
+        )
+        assert replay.status_code == 200 and replay.text == resume.text
+        assert len(state.credentials) == 2
+        consumed = await client.post(
+            "/api/invocations",
+            json=hitl_request(body["input"]),
+            headers=hitl_headers("consumed-token"),
+        )
+        assert consumed.status_code == 500  # Existing consumed-approval contract.
+    assert state.writes == ([] if decision == "reject" else [("original", "after-approval-token")])
+    assert all(server.closed for server in state.servers)
+    for auth in state.credentials:
+        with pytest.raises(AuthError, match="no longer active"):
+            auth.client_for("user")
+    persisted = repr(
+        (
+            state.store.states,
+            state.store.persisted_events,
+            state.checkpoints._local_items,
+            state.transport.items,
+        )
+    )
+    for token in (
+        "before-approval-token",
+        "after-approval-token",
+        "replay-token",
+        "consumed-token",
+    ):
+        assert token not in persisted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("template", ["openai"], indirect=True)
+async def test_openai_user_hitl_requires_authenticated_session_owner(openai_hitl_app):
+    state = openai_hitl_app
+    async with hitl_client(state.app) as client:
+        pause = await client.post(
+            "/api/invocations",
+            headers=hitl_headers("owner-token"),
+            json=hitl_request({"messages": [{"role": "user", "content": "Record an action"}]}),
+        )
+        assert pause.json()["output"]["status"] == "interrupted"
+        approval = {"resume": {"decisions": [{"type": "approve", "call_id": "action-call"}]}}
+        missing = await client.post("/api/invocations", json=hitl_request(approval))
+        assert missing.status_code == 401
+        assert missing.json()["error"]["code"] == "MCP_USER_AUTH_REQUIRED"
+        other = await client.post(
+            "/api/invocations",
+            json=hitl_request(approval),
+            headers=hitl_headers("other-token", "bob"),
+        )
+        assert other.status_code == 500 and "Action recorded" not in other.text
+        assert state.writes == []
+        owner = await client.post(
+            "/api/invocations",
+            json=hitl_request(approval),
+            headers=hitl_headers("owner-resume-token"),
+        )
+        assert owner.status_code == 200
+        assert state.writes == [("original", "owner-resume-token")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("template", ["openai"], indirect=True)
+@pytest.mark.parametrize(
+    "decisions",
+    [
+        [],
+        [{"type": "invalid", "call_id": "action-call"}],
+        [{"type": "approve", "call_id": "stale"}],
+        [{"type": "approve"}],
+        [{"type": "edit", "call_id": "action-call"}],
+        [{"type": "reject", "call_id": "action-call", "message": 5}],
+    ],
+)
+async def test_openai_user_hitl_invalid_decision_keeps_approval(openai_hitl_app, decisions):
+    state = openai_hitl_app
+    async with hitl_client(state.app) as client:
+        pause = await client.post(
+            "/api/invocations",
+            headers=hitl_headers("pause-token"),
+            json=hitl_request({"messages": [{"role": "user", "content": "Record an action"}]}),
+        )
+        assert pause.json()["output"]["status"] == "interrupted"
+        before = json.dumps((state.checkpoints._local_items, state.transport.items), sort_keys=True)
+        invalid = await client.post(
+            "/api/invocations",
+            headers=hitl_headers("invalid-decision-token"),
+            json=hitl_request({"resume": {"decisions": decisions}}),
+        )
+        assert invalid.status_code == 400
+        assert invalid.json()["error"]["code"] == "INVALID_APPROVAL"
+        assert state.writes == []
+        assert (
+            json.dumps((state.checkpoints._local_items, state.transport.items), sort_keys=True)
+            == before
+        )
+        valid = await client.post(
+            "/api/invocations",
+            headers=hitl_headers("approved-token"),
+            json=hitl_request(
+                {"resume": {"decisions": [{"type": "approve", "call_id": "action-call"}]}}
+            ),
+        )
+        assert valid.status_code == 200
+        assert state.writes == [("original", "approved-token")]

@@ -40,6 +40,7 @@ def local_trace_store(tmp_path: pathlib.Path) -> pathlib.Path:
     import mlflow
 
     from databricks_agentbricks.cli import tracing as tracing_mod
+    from databricks_agentbricks.clients.local_tracing_client import _wait_for_server
 
     project = tmp_path / "agent"
     project.mkdir()
@@ -50,7 +51,7 @@ def local_trace_store(tmp_path: pathlib.Path) -> pathlib.Path:
         pytest.skip("local MLflow server could not be started")
     try:
         uri = env["MLFLOW_TRACKING_URI"]
-        if not tracing_mod._wait_for_server(uri, server, timeout=180):
+        if not _wait_for_server(uri, server, timeout=180):
             pytest.skip("local MLflow server did not become ready")
         mlflow.set_tracking_uri(uri)
         mlflow.set_experiment(env["MLFLOW_EXPERIMENT_NAME"])

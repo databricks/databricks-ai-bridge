@@ -33,12 +33,16 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("agentbricks init my-agent", "scaffold a new agent project"),
         ("cd my-agent", "enter the project directory"),
         ("agentbricks dev", "run the agent locally with a chat UI"),
-        ("agentbricks deploy my-agent", "deploy the agent to Databricks Apps"),
+        ("agentbricks deploy", "deploy the agent to Databricks Apps"),
     ),
     ("login",): (("agentbricks login --profile <profile>", "save a profile as your default"),),
     ("logout",): (("agentbricks logout", "forget the saved default profile"),),
     ("init",): (
         ("agentbricks init my-agent", "scaffold a new agent project"),
+        (
+            "agentbricks init --name billing-bot billing-support-agent",
+            "scaffold it and record a deployment name of up to 17 characters",
+        ),
         (
             "agentbricks init --framework langgraph --existing .",
             "prepare a coding-agent migration bundle for an existing agent",
@@ -73,9 +77,11 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("memory", "stores", "list"): (
         ("agentbricks memory stores list", "list managed memory stores"),
+        ("agentbricks memory stores list --name agent-memory", "find stores by part of the name"),
     ),
     ("memory", "stores", "get"): (
         ("agentbricks memory stores get <store>", "show one store's details"),
+        ("agentbricks memory stores get agent-memory", "look up by the name in agent.toml"),
     ),
     ("memory", "stores", "update"): (
         ('agentbricks memory stores update <store> --description "Agent memory"', "edit a store"),
@@ -168,16 +174,20 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("agentbricks memory pipeline run <pipeline>", "start a Dreamer run"),
     ),
     ("memory", "pipeline", "runs"): (
+        ("agentbricks memory pipeline runs list <pipeline> --page-size 50", "list recorded runs"),
         (
             "agentbricks memory pipeline runs get memory-pipelines/<pipeline>/runs/<run-id>",
-            "get run details through the Databricks CLI",
+            "get run details through the memory pipeline API",
         ),
     ),
     ("memory", "pipeline", "runs", "get"): (
         (
             "agentbricks memory pipeline runs get memory-pipelines/<pipeline>/runs/<run-id>",
-            "get run details through the Databricks CLI",
+            "get run details through the memory pipeline API",
         ),
+    ),
+    ("memory", "pipeline", "runs", "list"): (
+        ("agentbricks memory pipeline runs list <pipeline> --page-size 50", "list recorded runs"),
     ),
     ("sessions",): (
         ("agentbricks sessions stores create --name agent-sessions", "create a session store"),
@@ -217,6 +227,10 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("sessions", "stores", "list"): (
         ("agentbricks sessions stores list", "list managed session stores"),
+        (
+            "agentbricks sessions stores list --name agent-sessions",
+            "find stores by part of the name",
+        ),
     ),
     ("sessions", "stores", "get"): (
         ("agentbricks sessions stores get agent-sessions", "show one store's details"),
@@ -318,11 +332,14 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
             "agentbricks experimental models bind main.my_agent.llm --default system.ai.claude-sonnet-4-5",
             "call a model service you own (deploy creates it)",
         ),
-        ("agentbricks experimental models status", "the model behind each bound service"),
         (
-            "agentbricks experimental models set claude-haiku-4-5 --role router",
-            "switch one role's model, with no code change or redeploy",
+            "agentbricks experimental models upgrade -c claude-haiku-4-5 --predict agent.eval:predict "
+            "--train-data agent.eval:TRAIN --val-data agent.eval:VAL --scorer agent.eval:SCORERS",
+            "search models (and prompts) on your eval set, as a Databricks job",
         ),
+        ("agentbricks experimental models status", "check on the job and see its recommendation"),
+        ("agentbricks experimental models apply", "apply the recommendation"),
+        ("agentbricks experimental models rollback", "undo the last apply or set"),
     ),
     ("experimental", "models", "bind"): (
         (
@@ -366,7 +383,31 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("agentbricks experimental models list", "models you can route a service to"),
     ),
     ("experimental", "models", "status"): (
-        ("agentbricks experimental models status", "each role's model and the bound prompts"),
+        ("agentbricks experimental models status", "each role's model and the latest run"),
+    ),
+    ("experimental", "models", "upgrade"): (
+        (
+            "agentbricks experimental models upgrade -c router=claude-haiku-4-5,gpt-5-4-nano "
+            "-c writer=claude-haiku-4-5 --prompt prompts:/main.my_agent.writer@production "
+            "--predict agent.eval:predict --train-data agent.eval:TRAIN "
+            "--val-data agent.eval:VAL --scorer agent.eval:SCORERS",
+            "search every role's model and a prompt together",
+        ),
+        (
+            "agentbricks experimental models upgrade -c claude-haiku-4-5 --predict agent.eval:predict "
+            "--train-data agent.eval:TRAIN --val-data agent.eval:VAL --scorer agent.eval:SCORERS "
+            "--apply ask",
+            "wait for the result and confirm before applying it",
+        ),
+        (
+            "agentbricks experimental models upgrade -c claude-haiku-4-5 --predict agent.eval:predict "
+            "--train-data agent.eval:TRAIN --val-data agent.eval:VAL --scorer agent.eval:SCORERS "
+            "--run-on local",
+            "run the search in this process instead of a job",
+        ),
+    ),
+    ("experimental", "models", "apply"): (
+        ("agentbricks experimental models apply", "promote every model and prompt that won"),
     ),
     ("experimental", "models", "set"): (
         (
@@ -376,6 +417,13 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         (
             "agentbricks experimental models set claude-haiku-4-5 --role router",
             "switch one role's model",
+        ),
+    ),
+    ("experimental", "models", "rollback"): (
+        ("agentbricks experimental models rollback", "undo the last apply: its models and prompts"),
+        (
+            "agentbricks experimental models rollback --role router",
+            "undo one role's last model switch",
         ),
     ),
     ("tracing", "list"): (
@@ -389,11 +437,16 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("deploy",): (
         ("agentbricks deploy my-agent", "deploy the agent"),
         ("agentbricks deploy my-agent --instances 2", "deploy with two instances"),
+        ("agentbricks deploy my-agent --no-wait", "start in the background, then wait"),
     ),
     ("deployments",): (("agentbricks deployments list", "list agent deployments"),),
     ("deployments", "list"): (("agentbricks deployments list", "list agent deployments"),),
     ("deployments", "get"): (
         ("agentbricks deployments get agent-bricks-my-agent", "show one deployment"),
+    ),
+    ("deployments", "wait"): (
+        ("agentbricks deployments wait", "wait for this project's deployment"),
+        ("agentbricks deployments wait agent-bricks-my-agent", "wait for a named deployment"),
     ),
     ("deployments", "logs"): (
         ("agentbricks deployments logs agent-bricks-my-agent", "stream a deployment's logs"),
@@ -406,6 +459,10 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("deployments", "delete"): (
         ("agentbricks deployments delete agent-bricks-my-agent", "delete a deployment"),
+        (
+            "agentbricks deployments delete agent-bricks-my-agent --delete-source",
+            "delete a deployment and its uploaded source folder",
+        ),
     ),
     ("endpoint",): (
         (

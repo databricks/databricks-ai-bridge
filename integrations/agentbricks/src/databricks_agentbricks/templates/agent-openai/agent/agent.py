@@ -33,14 +33,14 @@ logger = logging.getLogger(__name__)
 # the gateway (see `use_ai_gateway=True` in configure()). Swap for any `system.ai.*` model service
 # your workspace exposes — the demo chat app's picker lists what's available.
 # `agentbricks experimental models bind` swaps this for a model service you own (wired in by `agentbricks deploy`
-# as AGENT_MODEL_SERVICE_AGENT), so `agentbricks experimental models set` can change the model without a code
+# as AGENT_MODEL_SERVICE_AGENT), so `agentbricks experimental models upgrade` can change the model without a code
 # change.
 MODEL = resolve_model_service() or "system.ai.claude-sonnet-4-5"
 
 # Tools that require human approval before they run. Add a tool's name here and the agent pauses when
 # the model calls it, emitting an `interrupt` event; the client resumes by sending `resume` with the
-# same session id. The tools declare `needs_approval=True` themselves (see agent/tools/); this set is
-# how the runtime knows which pending calls to surface. Empty it to disable approval gating.
+# same session id. Local tools also declare `needs_approval=True` (see agent/tools/). For CLI-declared
+# MCP tools, this set configures the SDK approval policy using their exposed tool names.
 REQUIRE_APPROVAL = {"send_message"}
 
 # Native callers keep pauses local; the example adapter supplies Session Store checkpoints.
@@ -180,7 +180,9 @@ async def run_agent(
             _pending_runs[session_id] = value
 
     auth_kwargs = {"workspace_client_for": workspace_client_for} if workspace_client_for else {}
-    servers = await mcp_servers(build_mcp_servers(), **auth_kwargs)
+    servers = await mcp_servers(
+        build_mcp_servers(), require_approval=dict.fromkeys(REQUIRE_APPROVAL, True), **auth_kwargs
+    )
     async with MCPServerManager(servers) as manager:
         for server, error in manager.errors.items():
             if getattr(server, "_agentbricks_request_user", False) is True or isinstance(
@@ -217,9 +219,14 @@ async def run_agent(
             workspace_client_for=workspace_client_for,
         )
         if snapshot is not None:
+            # Restore references into this request's new agent and tool clients. The saved JSON
+            # contains execution state, not the previous agent or its credential-bound clients.
             agent_input = await RunState.from_json(agent, snapshot["run_state"])
             if resume is not None and snapshot["invocation_id"] != invocation_id:
-                agent_input = resume_agent(agent_input, resume)
+                try:
+                    agent_input = resume_agent(agent_input, resume)
+                except ValueError as error:
+                    raise AuthError("INVALID_APPROVAL", str(error), 400) from error
                 # Consume before executing. Interrupted continuations must not replay tools.
                 await persist(
                     {
@@ -245,12 +252,8 @@ async def run_agent(
                             pass
 
             if result.interruptions:
-                if workspace_client_for is not None:
-                    raise AuthError(
-                        "MCP_USER_AUTH_HITL_UNSUPPORTED",
-                        "Request-user invocations do not support paused approvals.",
-                        400,
-                    )
+                # Do not retain the live RunState: its agent holds request-bound tool clients.
+                # Runner receives no request credentials in its serializable context.
                 await persist(
                     {
                         "run_state": result.to_state().to_json(),

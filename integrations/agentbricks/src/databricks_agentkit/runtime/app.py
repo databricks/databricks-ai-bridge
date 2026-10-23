@@ -15,8 +15,14 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic import JsonValue as PydanticJsonValue
+from starlette.middleware.cors import CORSMiddleware
+from starlette.types import ASGIApp
 
 from databricks_agentkit.runtime.auth import AuthError, InvocationAuthPolicy, RequestAuthContext
+from databricks_agentkit.runtime.cors import (
+    allowed_origins_from_environment,
+    validate_allowed_origins,
+)
 from databricks_agentkit.runtime.runtime import Runtime
 from databricks_agentkit.runtime.store import RuntimeStore
 from databricks_agentkit.runtime.types import (
@@ -59,7 +65,13 @@ class DurableAgentServer(FastAPI):
         *,
         runtime_store: RuntimeStore | None = None,
         auth_policy: InvocationAuthPolicy | None = None,
+        allowed_origins: list[str] | tuple[str, ...] | None = None,
     ) -> None:
+        self._cors_allowed_origins = (
+            allowed_origins_from_environment()
+            if allowed_origins is None
+            else validate_allowed_origins(allowed_origins)
+        )
         self.auth_policy = (
             auth_policy
             if auth_policy is not None
@@ -121,6 +133,19 @@ class DurableAgentServer(FastAPI):
             f"{_API_ROOT}/{{invocation_id}}/events",
             self._events,
             methods=["GET"],
+        )
+
+    def build_middleware_stack(self) -> ASGIApp:
+        app = super().build_middleware_stack()
+        if not self._cors_allowed_origins:
+            return app
+        # Wrap ServerErrorMiddleware too so uncaught errors remain readable by approved frontends.
+        return CORSMiddleware(
+            app,
+            allow_origins=list(self._cors_allowed_origins),
+            allow_methods=["GET", "POST"],
+            allow_headers=["Authorization", "Content-Type", "X-Routing-Key", "Last-Event-ID"],
+            allow_credentials=False,
         )
 
     def invoke(self, function: InvocationHook) -> InvocationHook:

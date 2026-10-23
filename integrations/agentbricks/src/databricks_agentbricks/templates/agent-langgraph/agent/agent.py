@@ -1,11 +1,15 @@
 import os
 from collections.abc import AsyncGenerator, Callable
+from functools import lru_cache
 from typing import Any
 
 from databricks.sdk import WorkspaceClient
 from databricks_langchain import ChatDatabricks
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langchain.agents.middleware.human_in_the_loop import HITLResponse
+from langgraph.types import Command
+from pydantic import TypeAdapter, ValidationError
 
 from agent.mcps import build_mcp_servers
 
@@ -32,7 +36,7 @@ from databricks_agentkit.runtime.tool_manifest import resolve_model_service
 # the gateway (see `use_ai_gateway=True` below). Swap for any `system.ai.*` model service your
 # workspace exposes — the demo chat app's picker lists what's available.
 # `agentbricks experimental models bind` swaps this for a model service you own (wired in by `agentbricks deploy`
-# as AGENT_MODEL_SERVICE_AGENT), so `agentbricks experimental models set` can change the model without a code
+# as AGENT_MODEL_SERVICE_AGENT), so `agentbricks experimental models upgrade` can change the model without a code
 # change.
 MODEL = resolve_model_service() or "system.ai.claude-sonnet-4-5"
 
@@ -53,6 +57,17 @@ class _RoutedChatDatabricks(ChatDatabricks):
         return kwargs
 
 
+@lru_cache(maxsize=1)
+def _app_workspace_client() -> WorkspaceClient:
+    """The App's own client, shared across turns.
+
+    Constructing a WorkspaceClient resolves auth with blocking network calls (and, locally, a
+    `databricks auth token` subprocess). Doing that per turn inside the async graph builder stalls
+    every request on the event loop; the SDK refreshes tokens itself, so one client suffices.
+    """
+    return workspace_client()
+
+
 def configure() -> None:
     """Wire up global state; call once at server startup (not at import)."""
     _check_databricks_auth()
@@ -67,7 +82,7 @@ def _check_databricks_auth() -> None:
     the model client uses, so the failure is immediate and actionable.
     """
     try:
-        workspace_client()
+        _app_workspace_client()
     except Exception as e:
         profile = os.getenv("DATABRICKS_CONFIG_PROFILE")
         target = (
@@ -113,7 +128,7 @@ async def create_agent_graph(
         # use_ai_gateway routes to the Unity Catalog AI Gateway (`<host>/ai-gateway/mlflow/v1`), so
         # `endpoint` is a `system.ai.*` model name rather than a serving-endpoint name.
         model=_RoutedChatDatabricks(
-            endpoint=endpoint, workspace_client=workspace_client(), use_ai_gateway=True
+            endpoint=endpoint, workspace_client=_app_workspace_client(), use_ai_gateway=True
         ),
         tools=tools,
         middleware=middleware,
@@ -140,6 +155,36 @@ async def recovery_input(
     return None if current_invocation_checkpointed else agent_input
 
 
+async def _validate_approval_resume(graph: Any, config: dict, agent_input: Any) -> None:
+    """Reject malformed middleware decisions before LangGraph checkpoints the resume value."""
+    if not isinstance(agent_input, Command) or agent_input.resume is None:
+        return
+    state = await graph.aget_state(config)
+    pending = [item for task in state.tasks for item in task.interrupts]
+    resume = agent_input.resume
+    keyed = isinstance(resume, dict) and any(item.id in resume for item in pending)
+    for item in pending:
+        if not isinstance(item.value, dict) or "review_configs" not in item.value:
+            continue  # Application-defined interrupts keep their native resume contract.
+        if keyed and item.id not in resume:
+            continue
+        response = resume[item.id] if keyed else resume
+        try:
+            decisions = TypeAdapter(HITLResponse).validate_python(response)["decisions"]
+        except ValidationError as error:
+            raise AuthError(
+                "INVALID_APPROVAL", "Invalid approval decision payload.", 400
+            ) from error
+        reviews = item.value["review_configs"]
+        if len(decisions) != len(reviews) or any(
+            decision["type"] not in review["allowed_decisions"]
+            for decision, review in zip(decisions, reviews, strict=True)
+        ):
+            raise AuthError(
+                "INVALID_APPROVAL", "Provide one allowed decision per pending tool call.", 400
+            )
+
+
 async def run_agent(
     agent_input: Any,
     *,
@@ -155,12 +200,16 @@ async def run_agent(
     This is the framework-native entrypoint. It has no dependency on Agent Bricks request or context types,
     so it can be called from another server, a notebook, or a test harness.
     """
+    # Each interactive resume builds tools from this request's credentials. Only graph state,
+    # never the graph or its credential-bound clients, survives the approval pause.
     actor = actor or session_id
     if graph is None:
         graph = await create_agent_graph(actor, model, workspace_client_for=workspace_client_for)
     config = thread_config(session_id, actor)
     if invocation_id:
         config["metadata"] = invocation_metadata(invocation_id)
+
+    await _validate_approval_resume(graph, config, agent_input)
 
     last_update: Any = None
     with start_trace(name="invoke", inputs=agent_input, session_id=session_id) as span:
@@ -172,12 +221,6 @@ async def run_agent(
         ):
             if event[0] == "updates":
                 last_update = event[1]
-                if workspace_client_for is not None and last_update.get("__interrupt__"):
-                    raise AuthError(
-                        "MCP_USER_AUTH_HITL_UNSUPPORTED",
-                        "Request-user invocations do not support paused approvals.",
-                        400,
-                    )
             yield event
         if span is not None and last_update is not None:
             span.set_outputs(last_update)

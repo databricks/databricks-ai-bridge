@@ -2,15 +2,31 @@
 
 from __future__ import annotations
 
+import dataclasses
+import json
+import os
 import pathlib
 from contextlib import nullcontext
+from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import Mock
+from typing import Any
+from unittest.mock import Mock, call
 
 import pytest
+import requests
+from databricks.sdk.errors import (
+    BadRequest,
+    InternalError,
+    NotFound,
+    PermissionDenied,
+    ResourceDoesNotExist,
+    Unauthenticated,
+)
+from databricks.sdk.service.apps import App, AppDeployment
+from delete_test_fixtures import fake_workspace_client
 
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
-from databricks_agentbricks.clients.apps_client import AppsClient
+from databricks_agentbricks.clients.apps_client import AppsClient, AppState
 from databricks_agentbricks.clients.apps_user_auth_client import (
     AppAuthPlan,
     AppUserScopeUpdatePlan,
@@ -22,12 +38,19 @@ from databricks_agentbricks.projects.app_manifest import AppManifest
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.reporting import Reporter
 from databricks_agentbricks.services.deploy_service import DeployRequest, DeployService
+from databricks_agentbricks.services.deployment import app_provisioner as app_provisioner_mod
+from databricks_agentbricks.services.deployment import deploy_state
+from databricks_agentbricks.services.deployment.app_provisioner import (
+    AppDeleteWaitResult,
+    AppProvisioner,
+    recorded_source_code_path,
+)
+from databricks_agentbricks.services.deployment.deploy_state import DeployStateTracker
 from databricks_agentbricks.services.deployment.model_binding_provisioner import (
     ModelBindingProvisioner,
 )
-from databricks_agentbricks.services.deployment.names import DeploymentName
+from databricks_agentbricks.services.deployment.names import DeploymentName, fit_base_name
 from databricks_agentbricks.services.deployment.provisioners import (
-    AppProvisioner,
     GrantOutcome,
     ManifestPatch,
     MemoryStoreProvisioner,
@@ -43,6 +66,7 @@ from databricks_agentbricks.services.deployment.provisioners import (
 )
 from databricks_agentbricks.services.deployment.tool_access import ToolAccessPlan
 from databricks_agentbricks.services.deployment.tool_access_provisioner import ToolAccessProvisioner
+from databricks_agentkit.runtime.cors import CORS_ALLOWED_ORIGINS_ENV
 from databricks_agentkit.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
 
 
@@ -91,7 +115,7 @@ def deployment_fixture(tmp_path: pathlib.Path) -> SimpleNamespace:
     resolver.resource_bindings.return_value = (None, None, None)
 
     apps = Mock(spec=AppsClient)
-    apps.exists.return_value = False
+    apps.app_state.return_value = None
     apps.get_service_principal.return_value = "sp-123"
     apps.get_app_url.return_value = "https://demo.example"
     provider = Mock(spec=ApiClientProvider)
@@ -112,13 +136,14 @@ def deployment_fixture(tmp_path: pathlib.Path) -> SimpleNamespace:
     tracing.grant.return_value = GrantOutcome.skipped()
     runtime = Mock(spec=RuntimeStoreProvisioner)
     runtime.reconcile.return_value = RuntimeStoreState(False, None, ManifestPatch({}))
-    runtime.after_app_ready.return_value = ManifestPatch({})
+    runtime.after_app_created.return_value = ManifestPatch({})
     tool_access = Mock(spec=ToolAccessProvisioner)
     tool_access.plan.return_value = ToolAccessPlan()
 
     app = Mock(spec=AppProvisioner)
     app.prepare_app_auth.return_value = _no_auth_plan()
     app.resolve_workspace_path.return_value = "/Workspace/demo"
+    app.start_compute.return_value = True
     reporter = Mock(spec=Reporter)
     reporter.status.return_value = nullcontext()
     reporter.progress.return_value = nullcontext()
@@ -170,6 +195,45 @@ def _request(
     )
 
 
+def test_deploy_records_reuses_replaces_and_clears_origins(deployment_fixture, tmp_path):
+    service = deployment_fixture.service
+    request = _request(tmp_path)
+    origins = ("https://chat.example.com", "http://localhost:3000")
+    first = service.deploy(replace(request, allowed_origins=origins))
+    assert AgentProject.load(tmp_path).allowed_origins == origins
+    assert json.loads(first.env[CORS_ALLOWED_ORIGINS_ENV]) == list(origins)
+    assert json.loads(service.deploy(request).env[CORS_ALLOWED_ORIGINS_ENV]) == list(origins)
+
+    replacement = ("https://other.example.com",)
+    service.deploy(replace(request, allowed_origins=replacement))
+    assert AgentProject.load(tmp_path).allowed_origins == replacement
+    cleared = service.deploy(replace(request, allowed_origins=()))
+    assert CORS_ALLOWED_ORIGINS_ENV not in cleared.env
+    manifest = AppManifest.parse((tmp_path / "app.yaml").read_text(), source=tmp_path / "app.yaml")
+    assert CORS_ALLOWED_ORIGINS_ENV not in {entry["name"] for entry in manifest.raw_env()}
+    assert AgentProject.load(tmp_path).allowed_origins == ()
+
+
+def test_invalid_origins_fail_before_auth_and_workspace_access(deployment_fixture, tmp_path):
+    with pytest.raises(AgentCliError, match="Invalid CORS origin"):
+        deployment_fixture.service.deploy(replace(_request(tmp_path), allowed_origins=("*",)))
+    deployment_fixture.app.prepare_app_auth.assert_not_called()
+    deployment_fixture.provider.get.assert_not_called()
+    assert not (tmp_path / "agent.toml").exists()
+
+
+def test_cors_options_require_a_project(deployment_fixture, tmp_path):
+    deployment_fixture.resolver.load.return_value = None
+    with pytest.raises(AgentCliError, match="require an agent.toml"):
+        deployment_fixture.service.deploy(
+            replace(
+                _request(tmp_path),
+                allowed_origins=("https://chat.example.com",),
+            )
+        )
+    deployment_fixture.provider.get.assert_not_called()
+
+
 def test_deploy_passes_returned_state_between_phases(tmp_path: pathlib.Path) -> None:
     """The service owns phase order and state; collaborators need no live workspace client."""
     project = AgentProject.create(
@@ -186,7 +250,7 @@ def test_deploy_passes_returned_state_between_phases(tmp_path: pathlib.Path) -> 
     resolver.resource_bindings.return_value = ("memory", "session", "/Shared/trace")
 
     apps = Mock(spec=AppsClient)
-    apps.exists.return_value = False
+    apps.app_state.return_value = None
     apps.get_service_principal.return_value = "sp-123"
     apps.get_app_url.return_value = "https://demo.example"
     provider = Mock(spec=ApiClientProvider)
@@ -210,7 +274,7 @@ def test_deploy_passes_returned_state_between_phases(tmp_path: pathlib.Path) -> 
     tracing.grant.return_value = GrantOutcome(attempted=True, error=None)
     runtime = Mock(spec=RuntimeStoreProvisioner)
     runtime.reconcile.return_value = runtime_state
-    runtime.after_app_ready.return_value = ManifestPatch({"RUNTIME_STORE_DATABASE": "db-id"})
+    runtime.after_app_created.return_value = ManifestPatch({"RUNTIME_STORE_DATABASE": "db-id"})
     tool_access = Mock(spec=ToolAccessProvisioner)
     tool_plan = ToolAccessPlan(app_resources=({"name": "tool"},))
     tool_access.plan.return_value = tool_plan
@@ -219,29 +283,36 @@ def test_deploy_passes_returned_state_between_phases(tmp_path: pathlib.Path) -> 
     auth_plan = _no_auth_plan()
     app.prepare_app_auth.return_value = auth_plan
     app.resolve_workspace_path.return_value = "/Workspace/demo"
+    app.start_compute.return_value = True
 
-    def check_manifest_before_app_ready(*args: object, **kwargs: object) -> None:
+    def check_manifest_before_sync(*args: object, **kwargs: object) -> None:
+        # The upload is now the step that needs the final env, late Runtime Store keys included.
         manifest = AppManifest.parse_lenient((tmp_path / "app.yaml").read_text())
         env = {entry["name"]: entry["value"] for entry in manifest.raw_env()}
         assert env == {
             "MLFLOW_EXPERIMENT_ID": "42",
             "AGENT_MEMORY_STORE": "mem-id",
             "AGENT_SESSION_STORE": "session",
+            "RUNTIME_STORE_DATABASE": "db-id",
         }
 
-    app.ensure_app_ready.side_effect = check_manifest_before_app_ready
+    app.sync_source.side_effect = check_manifest_before_sync
     phases = Mock()
     for name, method in (
+        ("app_state", apps.app_state),
+        ("start_compute", app.start_compute),
         ("memory_reconcile", memory.reconcile),
         ("session_reconcile", session.reconcile),
         ("tracing_reconcile", tracing.reconcile),
         ("runtime_reconcile", runtime.reconcile),
-        ("app_ready", app.ensure_app_ready),
-        ("runtime_after_app", runtime.after_app_ready),
+        ("runtime_after_app_created", runtime.after_app_created),
+        ("workspace_path", app.resolve_workspace_path),
+        ("sync_source", app.sync_source),
+        ("wait_for_compute", app.wait_for_compute),
+        ("runtime_attach", runtime.attach_to_app),
         ("tool_access_plan", tool_access.plan),
         ("tool_access_reconcile", tool_access.reconcile_before_rollout),
-        ("workspace_path", app.resolve_workspace_path),
-        ("deploy_source", app.deploy_source),
+        ("roll_out", app.roll_out),
         ("tool_access_finalize", tool_access.finalize_after_rollout),
         ("memory_grant", memory.grant),
         ("session_grant", session.grant),
@@ -274,22 +345,29 @@ def test_deploy_passes_returned_state_between_phases(tmp_path: pathlib.Path) -> 
     )
 
     assert [call[0] for call in phases.mock_calls] == [
+        "app_state",
+        "start_compute",
         "memory_reconcile",
         "session_reconcile",
         "tracing_reconcile",
         "runtime_reconcile",
-        "app_ready",
-        "runtime_after_app",
+        "runtime_after_app_created",
+        "workspace_path",
+        "sync_source",
+        "wait_for_compute",
+        "runtime_attach",
         "tool_access_plan",
         "tool_access_reconcile",
-        "workspace_path",
-        "deploy_source",
+        "roll_out",
         "tool_access_finalize",
         "memory_grant",
         "session_grant",
         "tracing_grant",
     ]
-    assert runtime.after_app_ready.call_args.args[1] is runtime_state
+    assert app.start_compute.call_args.args[1:] == (None, None)
+    assert runtime.after_app_created.call_args.args[1] is runtime_state
+    assert runtime.attach_to_app.call_args.args[1] is runtime_state
+    app.ensure_app_ready.assert_not_called()
     tool_access.plan.assert_called_once_with(project.tools)
     assert tool_access.reconcile_before_rollout.call_args.args == (
         DeploymentName("agent-bricks-demo"),
@@ -308,7 +386,6 @@ def test_deploy_passes_returned_state_between_phases(tmp_path: pathlib.Path) -> 
         project,
         allow_existing_app_update=False,
     )
-    assert app.ensure_app_ready.call_args.kwargs["auth_plan"] is auth_plan
     provider.get.assert_called_once_with()
     assert result.deployment == "agent-bricks-demo"
     assert result.workspace_path == "/Workspace/demo"
@@ -342,8 +419,7 @@ def test_resolve_prefixes_name_and_persists_it_before_auth(
     deployment_fixture, tmp_path: pathlib.Path
 ):
     deployment_fixture.resolver.resolve_deployment_name.return_value = "first-run"
-    prepared = deployment_fixture.service._prepare_deployment(
-        tmp_path,
+    prepared = deployment_fixture.service.prepare(
         _request(tmp_path, name="first-run", instance_count=2, allow_user_scope_update=True),
     )
 
@@ -370,6 +446,23 @@ def test_invalid_resolved_name_fails_before_auth_or_client(
     deployment_fixture.provider.get.assert_not_called()
 
 
+@pytest.mark.parametrize("requested", [None, "caj-langgraph-agent"])
+def test_too_long_name_fails_before_auth_or_client_with_a_suggestion(
+    deployment_fixture, tmp_path: pathlib.Path, requested: str | None
+):
+    deployment_fixture.resolver.resolve_deployment_name.return_value = "caj-langgraph-agent"
+
+    with pytest.raises(AgentCliError, match=r"too long \(32 > 30\)") as excinfo:
+        deployment_fixture.service.deploy(_request(tmp_path, name=requested))
+
+    assert excinfo.value.hint == (
+        "Names can be up to 17 characters (Agent Bricks adds 'agent-bricks-', and app names cap "
+        f"at 30). Try: agentbricks deploy {fit_base_name('caj-langgraph-agent')}"
+    )
+    deployment_fixture.app.prepare_app_auth.assert_not_called()
+    deployment_fixture.provider.get.assert_not_called()
+
+
 def test_preflight_managed_tool_failure_is_before_workspace_client(
     deployment_fixture, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -392,15 +485,17 @@ def test_preflight_managed_tool_failure_is_before_workspace_client(
 
 def test_omitted_name_reuses_recorded_existing_app(deployment_fixture, tmp_path: pathlib.Path):
     deployment_fixture.project.set_deployment_name("demo")
-    deployment_fixture.apps.exists.return_value = True
+    state = AppState("ACTIVE", has_active_deployment=True, service_principal_client_id="sp-123")
+    deployment_fixture.apps.app_state.return_value = state
 
-    prepared = deployment_fixture.service._prepare_deployment(
-        tmp_path, _request(tmp_path, name=None)
-    )
+    prepared = deployment_fixture.service.prepare(_request(tmp_path, name=None))
 
     assert prepared.name == DeploymentName("agent-bricks-demo")
     assert prepared.deployment_exists is True
-    deployment_fixture.apps.exists.assert_called_once_with(DeploymentName("agent-bricks-demo"))
+    # The one read also carries the compute state, so deploy doesn't read the App again.
+    assert prepared.app_state is state
+    deployment_fixture.apps.app_state.assert_called_once_with(DeploymentName("agent-bricks-demo"))
+    deployment_fixture.apps.exists.assert_not_called()
 
 
 def test_required_auth_reports_note_and_uses_auth_app_state(
@@ -410,8 +505,8 @@ def test_required_auth_reports_note_and_uses_auth_app_state(
         existing_scopes=("ai-gateway",)
     )
 
-    prepared = deployment_fixture.service._prepare_deployment(
-        tmp_path, _request(tmp_path, allow_user_scope_update=True, instance_count=3)
+    prepared = deployment_fixture.service.prepare(
+        _request(tmp_path, allow_user_scope_update=True, instance_count=3)
     )
 
     assert prepared.auth_plan.required is True
@@ -422,44 +517,116 @@ def test_required_auth_reports_note_and_uses_auth_app_state(
 
 
 @pytest.mark.parametrize(
-    ("auth_plan", "app_exists", "expected_exists", "instances"),
+    ("app_state", "instances", "expected_exists"),
     [
-        (_no_auth_plan(), False, False, 2),
-        (_no_auth_plan(), True, True, None),
-        (_auth_plan(existing_scopes=("ai-gateway",)), True, True, 4),
+        (None, 2, False),
+        (AppState("ACTIVE", True, "sp-123"), None, True),
+        (AppState("STOPPED", True, "sp-123"), 3, True),
+        (AppState("ACTIVE", False, "sp-123"), None, False),
     ],
-    ids=["create", "redeploy", "auth-reconciled"],
+    ids=["create", "redeploy", "stopped-scaled", "resume-without-deployment"],
 )
-def test_deploy_passes_create_redeploy_and_scale_facts_to_app(
+def test_deploy_starts_compute_early_from_one_app_read(
     deployment_fixture,
     tmp_path: pathlib.Path,
-    auth_plan: AppAuthPlan,
-    app_exists: bool,
-    expected_exists: bool,
+    app_state: AppState | None,
     instances: int | None,
+    expected_exists: bool,
 ):
-    deployment_fixture.app.prepare_app_auth.return_value = auth_plan
-    deployment_fixture.apps.exists.return_value = app_exists
+    deployment_fixture.apps.app_state.return_value = app_state
+    deployment_fixture.app.start_compute.return_value = app_state is None
 
     result = deployment_fixture.service.deploy(_request(tmp_path, instance_count=instances))
 
-    context = deployment_fixture.app.ensure_app_ready.call_args.args[0]
+    context = deployment_fixture.app.start_compute.call_args.args[0]
+    # An App that never rolled out still counts as a first deployment, so a resume writes the
+    # first-deploy env.
     assert context.deployment_exists is expected_exists
-    deployment_fixture.app.ensure_app_ready.assert_called_once_with(
-        context,
-        auth_plan=auth_plan,
-        instance_count=instances,
-    )
-    deployment_fixture.app.prepare_app_auth.assert_called_once_with(
-        DeploymentName("agent-bricks-demo"),
-        deployment_fixture.project,
-        allow_existing_app_update=False,
-    )
-    if auth_plan.app_existed is None:
-        deployment_fixture.apps.exists.assert_called_once_with(DeploymentName("agent-bricks-demo"))
-    else:
-        deployment_fixture.apps.exists.assert_not_called()
+    deployment_fixture.app.start_compute.assert_called_once_with(context, app_state, instances)
+    deployment_fixture.apps.app_state.assert_called_once_with(DeploymentName("agent-bricks-demo"))
+    deployment_fixture.apps.exists.assert_not_called()
+    deployment_fixture.app.ensure_app_ready.assert_not_called()
+    deployment_fixture.app.wait_for_compute.assert_called_once_with(context)
     assert result.instance_count == instances
+
+
+def test_deploy_reads_state_of_an_app_preflight_only_knew_exists(
+    deployment_fixture, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """An App known to exist but without a state read is read, never mistaken for a missing one."""
+    f = deployment_fixture
+    prepare = f.service.prepare
+
+    def known_to_exist(*args: object, **kwargs: object):
+        prepared = prepare(*args, **kwargs)
+        return dataclasses.replace(prepared, deployment_exists=True, app_state=None)
+
+    monkeypatch.setattr(f.service, "prepare", known_to_exist)
+    existing = AppState("ACTIVE", True, "sp-123")
+    f.apps.app_state.return_value = existing
+    f.app.start_compute.return_value = False
+
+    f.service.deploy(_request(tmp_path))
+
+    f.apps.app_state.assert_called_once_with(DeploymentName("agent-bricks-demo"))
+    assert f.app.start_compute.call_args.args[1] is existing
+
+
+def test_deploy_scoped_app_keeps_original_order(deployment_fixture, tmp_path: pathlib.Path):
+    """FR-6: a request-user App is made ready after the reconciles, as before the early start."""
+    auth_plan = _auth_plan(existing_scopes=("ai-gateway",))
+    f = deployment_fixture
+    f.app.prepare_app_auth.return_value = auth_plan
+    f.runtime.reconcile.return_value = RuntimeStoreState(True, None, ManifestPatch({}))
+    phases = Mock()
+    for name, method in (
+        ("memory_reconcile", f.memory.reconcile),
+        ("session_reconcile", f.session.reconcile),
+        ("tracing_reconcile", f.tracing.reconcile),
+        ("runtime_reconcile", f.runtime.reconcile),
+        ("app_ready", f.app.ensure_app_ready),
+        ("runtime_after_app_created", f.runtime.after_app_created),
+        ("runtime_attach", f.runtime.attach_to_app),
+        ("tool_access_plan", f.tool_access.plan),
+        ("tool_access_reconcile", f.tool_access.reconcile_before_rollout),
+        ("workspace_path", f.app.resolve_workspace_path),
+        ("sync_source", f.app.sync_source),
+        ("roll_out", f.app.roll_out),
+        ("tool_access_finalize", f.tool_access.finalize_after_rollout),
+        ("memory_grant", f.memory.grant),
+        ("session_grant", f.session.grant),
+        ("tracing_grant", f.tracing.grant),
+    ):
+        phases.attach_mock(method, name)
+
+    result = f.service.deploy(_request(tmp_path, instance_count=4))
+
+    assert [call[0] for call in phases.mock_calls] == [
+        "memory_reconcile",
+        "session_reconcile",
+        "tracing_reconcile",
+        "runtime_reconcile",
+        "app_ready",
+        "runtime_after_app_created",
+        "runtime_attach",
+        "tool_access_plan",
+        "tool_access_reconcile",
+        "workspace_path",
+        "sync_source",
+        "roll_out",
+        "tool_access_finalize",
+        "memory_grant",
+        "session_grant",
+        "tracing_grant",
+    ]
+    context = f.app.ensure_app_ready.call_args.args[0]
+    assert context.deployment_exists is True
+    f.app.ensure_app_ready.assert_called_once_with(context, auth_plan=auth_plan, instance_count=4)
+    f.app.start_compute.assert_not_called()
+    f.app.wait_for_compute.assert_not_called()
+    f.apps.app_state.assert_not_called()
+    f.apps.exists.assert_not_called()
+    assert result.instance_count == 4
 
 
 def test_deploy_merges_manifest_env_and_writes_late_runtime_patch(
@@ -496,11 +663,12 @@ env:
         ManifestPatch({"RUNTIME": "early"}),
     )
     late_patch = ManifestPatch({"RUNTIME_LATE": "late"}, ("REMOVE_LATE",))
-    deployment_fixture.runtime.after_app_ready.return_value = late_patch
+    deployment_fixture.runtime.after_app_created.return_value = late_patch
     phases: list[str] = []
 
-    def check_initial_manifest(*args: object, **kwargs: object) -> None:
-        phases.append("app-ready")
+    def add_late_patch(*args: object, **kwargs: object) -> ManifestPatch:
+        # The initial env is already written while the compute boots; the late patch is not.
+        phases.append("runtime-after-app")
         env = {
             entry["name"]: entry["value"]
             for entry in AppManifest.parse_lenient((tmp_path / "app.yaml").read_text()).raw_env()
@@ -508,17 +676,14 @@ env:
         assert "RUNTIME_LATE" not in env
         assert env["PIP_INDEX_URL"] == "https://packages.example/simple"
         assert "REMOVE_EARLY" not in env
-
-    deployment_fixture.app.ensure_app_ready.side_effect = check_initial_manifest
-
-    def add_late_patch(*args: object, **kwargs: object) -> ManifestPatch:
-        phases.append("runtime-after-app")
         return late_patch
 
-    deployment_fixture.runtime.after_app_ready.side_effect = add_late_patch
+    deployment_fixture.runtime.after_app_created.side_effect = add_late_patch
     deployment_fixture.app.resolve_workspace_path.side_effect = (
         lambda *args: phases.append("workspace") or "/Workspace/custom"
     )
+    deployment_fixture.app.sync_source.side_effect = lambda *args: phases.append("sync")
+    deployment_fixture.app.wait_for_compute.side_effect = lambda *args: phases.append("wait")
 
     result = deployment_fixture.service.deploy(
         _request(
@@ -533,7 +698,7 @@ env:
         entry["name"]: entry["value"]
         for entry in AppManifest.parse_lenient((tmp_path / "app.yaml").read_text()).raw_env()
     }
-    assert phases == ["app-ready", "runtime-after-app", "workspace"]
+    assert phases == ["runtime-after-app", "workspace", "sync", "wait"]
     assert final_env == {
         "KEEP": "old",
         "MEMORY": "memory-id",
@@ -548,14 +713,10 @@ env:
     assert result.env["RUNTIME_LATE"] == "late"
     assert result.workspace_path == "/Workspace/custom"
     assert result.created_app_yaml is False
-    deployment_fixture.app.ensure_app_ready.assert_called_once_with(
-        deployment_fixture.app.ensure_app_ready.call_args.args[0],
-        auth_plan=deployment_fixture.app.prepare_app_auth.return_value,
-        instance_count=3,
-    )
-    deployment_fixture.runtime.after_app_ready.assert_called_once_with(
-        deployment_fixture.app.ensure_app_ready.call_args.args[0],
-        deployment_fixture.runtime.reconcile.return_value,
+    context = deployment_fixture.app.start_compute.call_args.args[0]
+    deployment_fixture.app.start_compute.assert_called_once_with(context, None, 3)
+    deployment_fixture.runtime.after_app_created.assert_called_once_with(
+        context, deployment_fixture.runtime.reconcile.return_value
     )
 
 
@@ -639,7 +800,7 @@ def test_tool_access_failure_stops_before_source_rollout(
     with pytest.raises(AgentCliError, match="tool grant denied"):
         deployment_fixture.service.deploy(_request(tmp_path))
 
-    deployment_fixture.app.deploy_source.assert_not_called()
+    deployment_fixture.app.roll_out.assert_not_called()
     deployment_fixture.tool_access.finalize_after_rollout.assert_not_called()
 
 
@@ -706,6 +867,7 @@ def test_memory_store_grant_uses_reconciled_resource_name_and_shared_sp():
 def _app_provisioner_for_test() -> SimpleNamespace:
     apps = Mock(spec=AppsClient)
     apps.create.return_value = "App compute"
+    apps.wait_for_active.return_value = False
     reporter = Mock(spec=Reporter)
     reporter.progress.return_value = nullcontext()
     return SimpleNamespace(
@@ -718,6 +880,23 @@ def _app_provisioner_for_test() -> SimpleNamespace:
             reporter,
         ),
     )
+
+
+@pytest.mark.parametrize(
+    ("state", "instances"), [(None, None), (AppState("ACTIVE", True, "sp-123"), 2)]
+)
+def test_app_provisioner_reports_cli_output_on_stderr(state, instances):
+    # The App the CLI prints is progress; stdout carries only the `--output json` payload.
+    harness = _app_provisioner_for_test()
+    harness.apps.create.return_value = "App compute"
+    harness.apps.create_update_instances.return_value = "App compute"
+
+    harness.provisioner.start_compute(
+        _app_context(deployment_exists=state is not None), state, instances
+    )
+
+    harness.reporter.note.assert_called_once_with("Agent compute")
+    harness.reporter.echo.assert_not_called()
 
 
 def test_app_provisioner_new_auth_uses_scoped_sdk_create():
@@ -784,27 +963,230 @@ def test_app_provisioner_existing_auth_uses_masked_sdk_update():
     harness.apps.wait_for_active.assert_called_once_with(DeploymentName("agent-bricks-demo"))
 
 
-@pytest.mark.parametrize(
-    ("deployment_exists", "instance_count", "method"),
-    [(False, 2, "create"), (True, 3, "create_update_instances")],
-)
-def test_app_provisioner_no_auth_uses_cli_create_or_scale(
-    deployment_exists: bool, instance_count: int, method: str
-):
+def test_app_provisioner_start_compute_creates_a_missing_app_without_waiting():
     harness = _app_provisioner_for_test()
 
-    harness.provisioner.ensure_app_ready(
-        _app_context(deployment_exists=deployment_exists),
-        auth_plan=_no_auth_plan(),
+    created = harness.provisioner.start_compute(
+        _app_context(deployment_exists=False), None, instance_count=2
+    )
+
+    assert created is True
+    harness.apps.create.assert_called_once_with(
+        DeploymentName("agent-bricks-demo"), 2, no_wait=True
+    )
+    harness.apps.create_update_instances.assert_not_called()
+    harness.apps.start_no_wait.assert_not_called()
+    harness.apps.wait_for_active.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("compute_state", "instance_count", "expected_calls"),
+    [
+        ("ACTIVE", None, []),
+        ("STARTING", None, []),
+        ("STOPPED", None, ["start_no_wait"]),
+        ("STOPPED", 3, ["create_update_instances", "start_no_wait"]),
+        ("ACTIVE", 3, ["create_update_instances"]),
+    ],
+)
+def test_app_provisioner_start_compute_starts_only_a_stopped_app(
+    compute_state: str, instance_count: int | None, expected_calls: list[str]
+):
+    harness = _app_provisioner_for_test()
+    harness.apps.create_update_instances.return_value = "App compute scaled\n"
+    calls = Mock()
+    calls.attach_mock(harness.apps.create_update_instances, "create_update_instances")
+    calls.attach_mock(harness.apps.start_no_wait, "start_no_wait")
+
+    created = harness.provisioner.start_compute(
+        _app_context(deployment_exists=True),
+        AppState(compute_state, has_active_deployment=True, service_principal_client_id="sp"),
         instance_count=instance_count,
     )
 
-    getattr(harness.apps, method).assert_called_once_with(
-        DeploymentName("agent-bricks-demo"), instance_count
+    assert created is False
+    assert [call[0] for call in calls.mock_calls] == expected_calls
+    harness.apps.create.assert_not_called()
+    harness.apps.wait_for_active.assert_not_called()
+    if instance_count is not None:
+        harness.reporter.note.assert_called_once_with("Agent compute scaled")
+
+
+def test_app_provisioner_wait_for_compute_shows_elapsed_progress():
+    harness = _app_provisioner_for_test()
+
+    harness.provisioner.wait_for_compute(_app_context(deployment_exists=False))
+
+    harness.reporter.progress.assert_called_once_with(
+        "Waiting for agent compute to start…", done_message="Agent compute is running"
     )
-    other = "create_update_instances" if method == "create" else "create"
-    getattr(harness.apps, other).assert_not_called()
     harness.apps.wait_for_active.assert_called_once_with(DeploymentName("agent-bricks-demo"))
+    harness.apps.wait_for_deployment.assert_not_called()
+
+
+def test_app_provisioner_wait_for_compute_waits_out_the_deployment_a_start_triggered():
+    # `apps start` on a STOPPED App rolls out its last deployment again; `apps deploy` collides
+    # with it ("pending deployment in progress") unless the join waits for it to settle.
+    harness = _app_provisioner_for_test()
+    harness.apps.wait_for_active.return_value = True
+    calls = Mock()
+    calls.attach_mock(harness.apps.wait_for_active, "wait_for_active")
+    calls.attach_mock(harness.apps.wait_for_deployment, "wait_for_deployment")
+
+    harness.provisioner.wait_for_compute(_app_context(deployment_exists=True))
+
+    name = DeploymentName("agent-bricks-demo")
+    assert calls.mock_calls == [call.wait_for_active(name), call.wait_for_deployment(name)]
+    assert harness.reporter.progress.call_args_list[-1] == call(
+        "Waiting for the agent's previous deployment to finish…",
+        done_message="Previous deployment finished",
+    )
+
+
+def test_app_provisioner_roll_out_retries_once_after_a_late_pending_deployment():
+    harness = _app_provisioner_for_test()
+    harness.apps.deploy.side_effect = [AgentCliError("Could not deploy"), None]
+    harness.apps.deployment_in_progress.return_value = True
+
+    harness.provisioner.roll_out(_app_context(deployment_exists=True), "/Workspace/demo")
+
+    name = DeploymentName("agent-bricks-demo")
+    harness.apps.wait_for_deployment.assert_called_once_with(name)
+    assert harness.apps.deploy.call_args_list == [call(name, "/Workspace/demo")] * 2
+
+
+def test_app_provisioner_roll_out_raises_a_failure_with_no_deployment_in_progress():
+    harness = _app_provisioner_for_test()
+    harness.apps.deploy.side_effect = AgentCliError("Could not deploy")
+    harness.apps.deployment_in_progress.return_value = False
+
+    with pytest.raises(AgentCliError, match="Could not deploy"):
+        harness.provisioner.roll_out(_app_context(deployment_exists=True), "/Workspace/demo")
+
+    harness.apps.deploy.assert_called_once()
+    harness.apps.wait_for_deployment.assert_not_called()
+
+
+def test_app_provisioner_splits_sync_from_rollout():
+    harness = _app_provisioner_for_test()
+    ctx = _app_context(deployment_exists=False)
+
+    harness.provisioner.sync_source(ctx, "/Workspace/demo")
+    harness.apps.deploy.assert_not_called()
+    harness.provisioner.roll_out(ctx, "/Workspace/demo")
+
+    harness.apps.sync_source.assert_called_once_with(
+        DeploymentName("agent-bricks-demo"), pathlib.Path("."), "/Workspace/demo"
+    )
+    harness.apps.deploy.assert_called_once_with(
+        DeploymentName("agent-bricks-demo"), "/Workspace/demo"
+    )
+
+
+def test_app_provisioner_ensure_app_ready_is_only_for_request_user_apps():
+    harness = _app_provisioner_for_test()
+
+    with pytest.raises(AgentCliError, match="auth plan does not match"):
+        harness.provisioner.ensure_app_ready(
+            _app_context(deployment_exists=False), auth_plan=_no_auth_plan(), instance_count=None
+        )
+    harness.apps.create.assert_not_called()
+
+
+_PARTIAL_APP_NOTE = (
+    "App 'agent-bricks-demo' was created but has no deployment yet. Re-run `agentbricks deploy` "
+    "to resume (the app is reused), or remove it with "
+    "`agentbricks deployments delete agent-bricks-demo`."
+)
+
+
+@pytest.mark.parametrize("original_hint", [None, "Check the store permissions."])
+def test_failure_after_early_create_says_the_app_was_kept(
+    deployment_fixture, tmp_path: pathlib.Path, original_hint: str | None
+):
+    deployment_fixture.memory.reconcile.side_effect = AgentCliError(
+        "Could not reconcile memory store 'memory'.", hint=original_hint
+    )
+
+    with pytest.raises(AgentCliError, match="Could not reconcile memory store") as exc:
+        deployment_fixture.service.deploy(_request(tmp_path))
+
+    expected = f"{original_hint}\n{_PARTIAL_APP_NOTE}" if original_hint else _PARTIAL_APP_NOTE
+    assert exc.value.hint == expected
+    deployment_fixture.app.start_compute.assert_called_once()
+    deployment_fixture.app.roll_out.assert_not_called()
+    deployment_fixture.reporter.note.assert_not_called()
+
+
+@pytest.mark.parametrize("error", [KeyboardInterrupt(), RuntimeError("boom")])
+def test_interrupt_or_unexpected_error_after_early_create_notes_the_app(
+    deployment_fixture, tmp_path: pathlib.Path, error: BaseException
+):
+    deployment_fixture.app.wait_for_compute.side_effect = error
+
+    with pytest.raises(type(error)):
+        deployment_fixture.service.deploy(_request(tmp_path))
+
+    deployment_fixture.reporter.note.assert_called_once_with(_PARTIAL_APP_NOTE)
+
+
+def test_failure_on_an_existing_app_gets_no_partial_app_note(
+    deployment_fixture, tmp_path: pathlib.Path
+):
+    deployment_fixture.apps.app_state.return_value = AppState("ACTIVE", True, "sp-123")
+    deployment_fixture.app.start_compute.return_value = False
+    deployment_fixture.app.roll_out.side_effect = AgentCliError("rollout failed", hint="logs")
+
+    with pytest.raises(AgentCliError) as exc:
+        deployment_fixture.service.deploy(_request(tmp_path))
+
+    assert exc.value.hint == "logs"
+    deployment_fixture.reporter.note.assert_not_called()
+
+
+def test_failure_after_rollout_gets_no_partial_app_note(deployment_fixture, tmp_path: pathlib.Path):
+    deployment_fixture.tool_access.finalize_after_rollout.side_effect = AgentCliError(
+        "prune failed"
+    )
+
+    with pytest.raises(AgentCliError) as exc:
+        deployment_fixture.service.deploy(_request(tmp_path))
+
+    assert exc.value.hint is None
+    deployment_fixture.app.roll_out.assert_called_once()
+
+
+def test_create_failure_gets_no_partial_app_note(deployment_fixture, tmp_path: pathlib.Path):
+    deployment_fixture.app.start_compute.side_effect = AgentCliError("create denied")
+
+    with pytest.raises(AgentCliError) as exc:
+        deployment_fixture.service.deploy(_request(tmp_path))
+
+    assert exc.value.hint is None
+    deployment_fixture.memory.reconcile.assert_not_called()
+
+
+def test_deploy_reports_one_timing_per_phase_plus_total(deployment_fixture, tmp_path: pathlib.Path):
+    deployment_fixture.service.deploy(_request(tmp_path))
+
+    phases = [call.args[0] for call in deployment_fixture.reporter.timing.call_args_list]
+    assert phases == [
+        "preflight",
+        "app_start",
+        "reconcile",
+        "runtime_store",
+        "app_yaml",
+        "sync",
+        "compute_wait",
+        "app_update",
+        "rollout",
+        "grants",
+        "total",
+    ]
+    assert all(
+        isinstance(call.args[1], float) and call.args[1] >= 0
+        for call in deployment_fixture.reporter.timing.call_args_list
+    )
 
 
 def test_deploy_without_agent_project_still_deploys_named_source(
@@ -867,41 +1249,548 @@ def test_deletes_runtime_store_data_reflects_provisioner(deployment_fixture, man
     deployment_fixture.runtime.manages_persistent_data.assert_called_once_with()
 
 
+_DEFAULT_SOURCE = "/Workspace/Users/user@example.com/agentbricks_deployments/agent-bricks-demo"
+
+
+def _existing_app(deployment_fixture, *, source: str | None = _DEFAULT_SOURCE) -> None:
+    deployment = AppDeployment(source_code_path=source) if source else None
+    deployment_fixture.app.find.return_value = App(
+        name="agent-bricks-demo", active_deployment=deployment, service_principal_client_id="sp-1"
+    )
+    deployment_fixture.app.delete_source.return_value = True
+    deployment_fixture.app.wait_until_deleted.return_value = AppDeleteWaitResult()
+
+
+def _delete(deployment_fixture, *, delete_source: bool = True, name: str = "agent-bricks-demo"):
+    service = deployment_fixture.service
+    return service.delete(service.delete_target(DeploymentName(name)), delete_source=delete_source)
+
+
 def test_delete_unmanaged_runtime_store_deletes_app_only(deployment_fixture):
     name = DeploymentName("agent-bricks-demo")
+    _existing_app(deployment_fixture)
     deployment_fixture.runtime.manages_persistent_data.return_value = False
 
-    deployment_fixture.service.delete(name)
+    result = _delete(deployment_fixture)
 
     deployment_fixture.runtime.delete_managed.assert_not_called()
-    deployment_fixture.reporter.status.assert_not_called()
+    deployment_fixture.reporter.status.assert_called_once_with(
+        "Waiting for the deployment to be deleted…"
+    )
     deployment_fixture.apps.delete.assert_called_once_with(name)
+    assert result.still_deleting is False
 
 
 def test_delete_managed_runtime_store_before_app(deployment_fixture):
     name = DeploymentName("agent-bricks-demo")
+    _existing_app(deployment_fixture)
     events: list[str] = []
     deployment_fixture.runtime.manages_persistent_data.return_value = True
-    deployment_fixture.runtime.delete_managed.side_effect = lambda value: events.append(
-        f"runtime:{value}"
+    deployment_fixture.runtime.delete_managed.side_effect = lambda value, sp: events.append(
+        f"runtime:{value}:{sp}"
     )
     deployment_fixture.apps.delete.side_effect = lambda value: events.append(f"app:{value}")
+    deployment_fixture.app.wait_until_deleted.side_effect = lambda value: (
+        events.append(f"gone:{value}") or AppDeleteWaitResult()
+    )
+    deployment_fixture.app.delete_source.side_effect = lambda path: (
+        events.append(f"source:{path}") or True
+    )
 
-    deployment_fixture.service.delete(name)
+    _delete(deployment_fixture)
 
-    assert events == [f"runtime:{name}", f"app:{name}"]
-    deployment_fixture.reporter.status.assert_called_once_with("Deleting Runtime Store…")
-    deployment_fixture.runtime.delete_managed.assert_called_once_with(name)
-    deployment_fixture.apps.delete.assert_called_once_with(name)
+    # The folder goes only once the App is gone, so a stalled delete keeps its source.
+    assert events == [
+        f"runtime:{name}:sp-1",
+        f"app:{name}",
+        f"gone:{name}",
+        f"source:{_DEFAULT_SOURCE}",
+    ]
+    assert deployment_fixture.reporter.status.call_args_list[0].args == ("Deleting Runtime Store…",)
 
 
 def test_delete_keeps_app_when_managed_cleanup_fails(deployment_fixture):
     name = DeploymentName("agent-bricks-demo")
+    _existing_app(deployment_fixture)
     deployment_fixture.runtime.manages_persistent_data.return_value = True
     deployment_fixture.runtime.delete_managed.side_effect = AgentCliError("cleanup failed")
 
     with pytest.raises(AgentCliError, match="cleanup failed"):
-        deployment_fixture.service.delete(name)
+        _delete(deployment_fixture)
 
-    deployment_fixture.runtime.delete_managed.assert_called_once_with(name)
+    deployment_fixture.runtime.delete_managed.assert_called_once_with(name, "sp-1")
     deployment_fixture.apps.delete.assert_not_called()
+
+
+def test_delete_of_a_missing_deployment_deletes_nothing(deployment_fixture):
+    deployment_fixture.app.find.return_value = None
+
+    with pytest.raises(AgentCliError, match="does not exist"):
+        _delete(deployment_fixture)
+
+    deployment_fixture.runtime.delete_managed.assert_not_called()
+    deployment_fixture.apps.delete.assert_not_called()
+    deployment_fixture.app.delete_source.assert_not_called()
+
+
+def test_delete_fails_when_the_app_cannot_be_read(deployment_fixture):
+    deployment_fixture.app.find.side_effect = AgentCliError("Could not check whether ...")
+
+    with pytest.raises(AgentCliError, match="Could not check"):
+        _delete(deployment_fixture)
+
+    deployment_fixture.apps.delete.assert_not_called()
+    deployment_fixture.app.delete_source.assert_not_called()
+
+
+def test_delete_without_a_recorded_deployment_deletes_no_folder(deployment_fixture):
+    _existing_app(deployment_fixture, source=None)
+    deployment_fixture.runtime.manages_persistent_data.return_value = False
+
+    result = _delete(deployment_fixture)
+
+    assert result.source_path is None
+    assert result.source_folder_status == "not_recorded"
+    deployment_fixture.app.delete_source.assert_not_called()
+    deployment_fixture.apps.delete.assert_called_once_with("agent-bricks-demo")
+
+
+def test_delete_keeps_the_source_folder_unless_asked(deployment_fixture):
+    _existing_app(deployment_fixture)
+    deployment_fixture.runtime.manages_persistent_data.return_value = False
+
+    result = _delete(deployment_fixture, delete_source=False)
+
+    assert result.source_path == _DEFAULT_SOURCE
+    assert result.source_folder_status == "kept"
+    assert result.confirmed is True
+    deployment_fixture.app.delete_source.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "source",
+    [_DEFAULT_SOURCE, "/Workspace/Users/user@example.com/my-agent", "/Workspace/Shared/agent"],
+)
+def test_delete_source_deletes_whatever_folder_the_app_recorded(deployment_fixture, source):
+    # The user asked for it, so the folder needn't be deploy's default to be deleted.
+    _existing_app(deployment_fixture, source=source)
+    deployment_fixture.runtime.manages_persistent_data.return_value = False
+
+    result = _delete(deployment_fixture)
+
+    assert result.source_folder_status == "deleted"
+    deployment_fixture.app.delete_source.assert_called_once_with(source)
+
+
+def test_delete_reports_a_source_folder_it_could_not_delete(deployment_fixture):
+    _existing_app(deployment_fixture)
+    deployment_fixture.runtime.manages_persistent_data.return_value = False
+    deployment_fixture.app.delete_source.side_effect = AgentCliError("permission denied")
+
+    result = _delete(deployment_fixture)
+
+    # The App is already gone, so the folder's failure is reported, not raised.
+    deployment_fixture.apps.delete.assert_called_once_with("agent-bricks-demo")
+    assert result.source_folder_status == "failed"
+    assert result.source_folder_error == "permission denied"
+
+
+def test_delete_reports_a_source_folder_that_was_already_gone(deployment_fixture):
+    _existing_app(deployment_fixture)
+    deployment_fixture.runtime.manages_persistent_data.return_value = False
+    deployment_fixture.app.delete_source.return_value = False
+
+    result = _delete(deployment_fixture)
+
+    assert result.source_folder_status == "already_gone"
+    assert result.source_folder_error is None
+
+
+@pytest.mark.parametrize(
+    ("wait", "still_deleting"),
+    [(AppDeleteWaitResult(timed_out=True), True), (AppDeleteWaitResult(error="expired"), False)],
+)
+def test_delete_keeps_the_folder_when_the_app_is_not_confirmed_gone(
+    deployment_fixture, wait, still_deleting
+):
+    _existing_app(deployment_fixture)
+    deployment_fixture.runtime.manages_persistent_data.return_value = False
+    deployment_fixture.app.wait_until_deleted.return_value = wait
+
+    result = _delete(deployment_fixture)
+
+    assert result.still_deleting is still_deleting
+    assert result.wait_error == wait.error
+    assert result.confirmed is False
+    assert result.source_folder_status == "kept_app_not_confirmed"
+    deployment_fixture.app.delete_source.assert_not_called()
+
+
+def test_delete_interrupted_during_the_wait_keeps_the_folder_and_says_so(deployment_fixture):
+    _existing_app(deployment_fixture)
+    deployment_fixture.runtime.manages_persistent_data.return_value = False
+    deployment_fixture.app.wait_until_deleted.side_effect = KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        _delete(deployment_fixture)
+
+    deployment_fixture.app.delete_source.assert_not_called()
+    (message,) = deployment_fixture.reporter.note.call_args.args
+    assert f"databricks workspace delete {_DEFAULT_SOURCE} --recursive" in message
+
+
+@pytest.mark.parametrize(
+    ("active", "pending", "expected"),
+    [
+        ("/a", None, "/a"),
+        (None, "/p", "/p"),
+        ("/a", "/p", "/p"),  # a pending rollout is newer than the active one
+        (None, None, None),
+    ],
+)
+def test_recorded_source_code_path_reads_the_newest_deployment(active, pending, expected):
+    app = App(
+        name="app",
+        active_deployment=AppDeployment(source_code_path=active) if active else None,
+        pending_deployment=AppDeployment(source_code_path=pending) if pending else None,
+    )
+
+    assert recorded_source_code_path(app) == expected
+
+
+def _app_provisioner(workspace_client) -> AppProvisioner:
+    provider = Mock(spec=ApiClientProvider)
+    provider.get.return_value = SimpleNamespace(workspace_client=workspace_client)
+    return AppProvisioner(Mock(spec=AppsClient), provider, Mock(), Mock(spec=Reporter))
+
+
+def test_find_returns_none_only_when_the_app_does_not_exist():
+    w = fake_workspace_client()
+    provisioner = _app_provisioner(w)
+    app = provisioner.find(DeploymentName("agent-bricks-demo"))
+    assert app is not None and app.name == "agent-bricks-demo"
+
+    w.remove_app()
+    assert provisioner.find(DeploymentName("agent-bricks-demo")) is None
+
+
+@pytest.mark.parametrize("error", [Unauthenticated("expired"), InternalError("boom")])
+def test_find_raises_when_it_cannot_tell(error):
+    w = Mock()
+    w.apps.get.side_effect = error
+
+    with pytest.raises(AgentCliError, match="Could not check whether deployment"):
+        _app_provisioner(w).find(DeploymentName("agent-bricks-demo"))
+
+
+def test_wait_until_deleted_retries_a_check_that_fails(monkeypatch):
+    monkeypatch.setattr(app_provisioner_mod.time, "sleep", lambda _s: None)
+    w = Mock()
+    w.apps.get.side_effect = [
+        InternalError("blip"),
+        TimeoutError("Timed out after 0:01:00"),
+        requests.ConnectionError("connection reset"),
+        App(name="app"),
+        NotFound("gone"),
+    ]
+
+    assert _app_provisioner(w).wait_until_deleted(DeploymentName("app")) == AppDeleteWaitResult()
+    assert w.apps.get.call_count == 5
+
+
+_TOKEN_REFRESH_FAILED = ValueError("oauth2: token expired and refresh token is not set")
+# What a `databricks auth login` profile's credential provider raises when its refresh fails.
+_CLI_LOGIN_EXPIRED = OSError("cannot get access token: refresh token is invalid")
+# What the OIDC and Model Serving credential providers raise.
+_OTHER_LOGIN_FAILURES = [Exception("Cannot get oidc token"), RuntimeError("no invokers token")]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        Unauthenticated("expired"),
+        PermissionDenied("no"),
+        BadRequest("bad"),
+        _TOKEN_REFRESH_FAILED,
+        _CLI_LOGIN_EXPIRED,
+        *_OTHER_LOGIN_FAILURES,
+    ],
+)
+def test_wait_until_deleted_stops_at_once_on_an_error_that_wont_clear(monkeypatch, error):
+    monkeypatch.setattr(app_provisioner_mod.time, "sleep", lambda _s: None)
+    w = Mock()
+    w.apps.get.side_effect = error
+
+    wait = _app_provisioner(w).wait_until_deleted(DeploymentName("app"))
+
+    assert wait == AppDeleteWaitResult(error=str(error))
+    assert w.apps.get.call_count == 1
+
+
+def test_wait_until_deleted_reports_running_out():
+    w = fake_workspace_client()
+
+    wait = _app_provisioner(w).wait_until_deleted(DeploymentName("app"), timeout_s=0)
+
+    assert wait == AppDeleteWaitResult(timed_out=True)
+
+
+def test_wait_until_deleted_running_out_keeps_the_last_failed_check():
+    w = Mock()
+    w.apps.get.side_effect = InternalError("boom")
+
+    wait = _app_provisioner(w).wait_until_deleted(DeploymentName("app"), timeout_s=0)
+
+    assert wait == AppDeleteWaitResult(timed_out=True, error="boom")
+
+
+@pytest.mark.parametrize(
+    "error", [_TOKEN_REFRESH_FAILED, _CLI_LOGIN_EXPIRED, *_OTHER_LOGIN_FAILURES]
+)
+def test_find_reports_a_failed_login(error):
+    w = Mock()
+    w.apps.get.side_effect = error
+
+    with pytest.raises(AgentCliError, match="Could not check whether deployment"):
+        _app_provisioner(w).find(DeploymentName("agent-bricks-demo"))
+
+
+def test_delete_source_deletes_the_folder_recursively():
+    w = Mock()
+
+    assert _app_provisioner(w).delete_source("/Workspace/x") is True
+    w.workspace.delete.assert_called_once_with("/Workspace/x", recursive=True)
+
+
+def test_delete_source_of_a_missing_folder_is_not_an_error():
+    w = Mock()
+    w.workspace.delete.side_effect = ResourceDoesNotExist("Path (/Workspace/x) doesn't exist.")
+
+    assert _app_provisioner(w).delete_source("/Workspace/x") is False
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        TimeoutError("Timed out after 0:01:00"),
+        requests.ConnectionError("connection reset"),
+        _TOKEN_REFRESH_FAILED,
+        _CLI_LOGIN_EXPIRED,
+        *_OTHER_LOGIN_FAILURES,
+    ],
+)
+def test_delete_source_network_or_login_failure_is_reported_not_a_traceback(error):
+    w = Mock()
+    w.workspace.delete.side_effect = error
+
+    with pytest.raises(AgentCliError, match="Could not delete the uploaded source folder"):
+        _app_provisioner(w).delete_source("/Workspace/x")
+
+
+def test_delete_source_failure_carries_the_reason():
+    w = Mock()
+    w.workspace.delete.side_effect = PermissionDenied("User cannot delete /Workspace/x")
+
+    with pytest.raises(AgentCliError, match="User cannot delete"):
+        _app_provisioner(w).delete_source("/Workspace/x")
+
+
+# --- state file and wait -------------------------------------------------------------------
+
+
+class _Clock:
+    """Wall-clock stand-in: ``sleep`` advances time and runs an optional per-sleep hook."""
+
+    def __init__(self, start: float = 1_800_000_000.0, on_sleep=None) -> None:
+        self.now = start
+        self.sleeps: list[float] = []
+        self.on_sleep = on_sleep
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+        if self.on_sleep is not None:
+            self.on_sleep(self)
+
+
+def _service_with(fixture, clock: _Clock, **extra) -> DeployService:
+    """The fixture's service, rebuilt with a fake clock (and any extra collaborators)."""
+    return DeployService(
+        project_resolver=fixture.resolver,
+        apps_client=fixture.apps,
+        api_client_provider=fixture.provider,
+        app_provisioner=fixture.app,
+        memory_store_provisioner=fixture.memory,
+        session_store_provisioner=fixture.session,
+        tracing_provisioner=fixture.tracing,
+        runtime_store_provisioner=fixture.runtime,
+        tool_access_provisioner=fixture.tool_access,
+        model_binding_provisioner=ModelBindingProvisioner(fixture.provider, fixture.reporter),
+        reporter=fixture.reporter,
+        clock=clock,
+        sleep=clock.sleep,
+        **extra,
+    )
+
+
+def _notes(fixture) -> list[str]:
+    return [call.args[0] for call in fixture.reporter.note.call_args_list]
+
+
+def test_deploy_records_success_through_the_state_tracker(
+    deployment_fixture, tmp_path: pathlib.Path
+):
+    tracker = DeployStateTracker(result_payload=lambda result: {"url": result.url})
+    service = _service_with(deployment_fixture, _Clock(), state_tracker=tracker)
+
+    service.deploy(_request(tmp_path))
+
+    state = deploy_state.read_state(deploy_state.state_path(tmp_path, "agent-bricks-demo"))
+    assert state is not None
+    assert state["status"] == "succeeded"
+    assert state["result"] == {"url": "https://demo.example"}
+
+
+def test_deploy_records_failure_and_reraises(deployment_fixture, tmp_path: pathlib.Path):
+    deployment_fixture.app.roll_out.side_effect = AgentCliError(
+        "Could not deploy 'agent-bricks-demo'.", hint="app crashed"
+    )
+    tracker = DeployStateTracker(result_payload=lambda result: {})
+    service = _service_with(deployment_fixture, _Clock(), state_tracker=tracker)
+
+    with pytest.raises(AgentCliError):
+        service.deploy(_request(tmp_path))
+
+    state = deploy_state.read_state(deploy_state.state_path(tmp_path, "agent-bricks-demo"))
+    assert state is not None
+    assert state["status"] == "failed"
+    # The App this run created is kept, so the recorded error carries the resume/delete note.
+    message, detail, note = state["error"].split("\n")
+    assert (message, detail) == ("Could not deploy 'agent-bricks-demo'.", "app crashed")
+    assert "agentbricks deployments delete agent-bricks-demo" in note
+
+
+def test_prepare_refuses_a_running_deploy_before_any_change(
+    deployment_fixture, tmp_path: pathlib.Path
+):
+    clock = _Clock()
+    deploy_state.write_state(
+        deploy_state.state_path(tmp_path, "agent-bricks-demo"),
+        {
+            "pid": os.getppid(),
+            "status": "running",
+            "phase_started_at": deploy_state.timestamp(clock.now),
+        },
+    )
+
+    with pytest.raises(AgentCliError, match="already running") as raised:
+        _service_with(deployment_fixture, clock).prepare(_request(tmp_path))
+
+    assert raised.value.hint == "run `agentbricks deployments wait agent-bricks-demo`"
+    deployment_fixture.app.prepare_app_auth.assert_not_called()
+    assert deployment_fixture.project.deployment_name is None
+
+
+def test_wait_follows_the_local_record_until_it_succeeds(deployment_fixture, tmp_path):
+    path = deploy_state.state_path(tmp_path, "agent-bricks-demo")
+    start = 1_800_000_000.0
+
+    def advance(clock: _Clock) -> None:
+        elapsed = clock.now - start
+        state: dict[str, Any] = {
+            "pid": os.getpid(),
+            "started_at": deploy_state.timestamp(start),
+            "status": "running",
+            "phase": "Waiting for agent compute to start",
+            "phase_started_at": deploy_state.timestamp(start),
+        }
+        if elapsed >= 20:
+            state.update(phase="Deploying the agent source")
+            state["phase_started_at"] = deploy_state.timestamp(start + 20)
+        if elapsed >= 40:
+            state.update(status="succeeded", result={"url": "https://demo.example"})
+        deploy_state.write_state(path, state)
+
+    clock = _Clock(start, on_sleep=advance)
+    advance(clock)
+
+    result = _service_with(deployment_fixture, clock).wait(None, tmp_path, timeout_s=100)
+
+    assert result.status == "succeeded"
+    assert result.url == "https://demo.example"
+    assert result.deployment == "agent-bricks-demo"
+    assert result.elapsed_s == 40
+    assert result.uses_runtime_api is True
+    assert set(clock.sleeps) == {2.0}  # the local record is re-read every 2 s
+    assert _notes(deployment_fixture) == [
+        "• Waiting for agent compute to start…",
+        "• Waiting for agent compute to start… 0:16",
+        "• Deploying the agent source…",
+        "• Deploying the agent source… 0:16",
+    ]
+
+
+def test_wait_returns_running_at_the_timeout(deployment_fixture, tmp_path):
+    clock = _Clock()
+    deploy_state.write_state(
+        deploy_state.state_path(tmp_path, "agent-bricks-demo"),
+        {
+            "pid": os.getpid(),
+            "started_at": deploy_state.timestamp(clock.now - 60),
+            "status": "running",
+            "phase": "Waiting for agent compute to start",
+            "phase_started_at": deploy_state.timestamp(clock.now - 30),
+        },
+    )
+
+    result = _service_with(deployment_fixture, clock).wait("demo", tmp_path, timeout_s=10)
+
+    assert result.status == "running"
+    assert result.phase == "Waiting for agent compute to start"
+    assert result.elapsed_s == 70
+    assert sum(clock.sleeps) == 10
+    # Joined 30 s into the phase, so the next heartbeat (0:45) falls after the 10 s timeout.
+    assert _notes(deployment_fixture) == ["• Waiting for agent compute to start…"]
+
+
+def test_wait_follows_the_app_from_starting_to_active(deployment_fixture, tmp_path):
+    payloads = [
+        {"compute_status": {"state": "STARTING"}},
+        {"compute_status": {"state": "STARTING"}},
+        {"compute_status": {"state": "ACTIVE"}, "pending_deployment": {"status": {}}},
+        {
+            "url": "https://demo.example",
+            "compute_status": {"state": "ACTIVE"},
+            "active_deployment": {"status": {"state": "SUCCEEDED"}},
+        },
+    ]
+    deployment_fixture.apps.find.side_effect = payloads
+    clock = _Clock()
+
+    result = _service_with(deployment_fixture, clock).wait("demo", tmp_path, timeout_s=100)
+
+    assert result.status == "succeeded"
+    assert result.url == "https://demo.example"
+    assert result.elapsed_s == 15
+    assert clock.sleeps == [5.0, 5.0, 5.0]
+    deployment_fixture.apps.find.assert_called_with(DeploymentName("agent-bricks-demo"))
+    assert _notes(deployment_fixture) == [
+        "• Waiting for agent compute to start…",
+        "• Deploying the agent source…",
+    ]
+
+
+def test_wait_reports_the_apps_failure_message(deployment_fixture, tmp_path):
+    deployment_fixture.apps.find.return_value = {
+        "compute_status": {"state": "ACTIVE"},
+        "active_deployment": {"status": {"state": "FAILED", "message": "build failed"}},
+    }
+
+    result = _service_with(deployment_fixture, _Clock()).wait("demo", tmp_path, timeout_s=100)
+
+    assert result.status == "failed"
+    assert result.error == "Could not deploy 'agent-bricks-demo'."
+    assert result.log_tail == ["build failed"]
