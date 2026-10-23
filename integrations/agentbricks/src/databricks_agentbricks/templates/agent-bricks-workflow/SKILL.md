@@ -26,6 +26,8 @@ Skill discovery does not authorize provisioning, deployment, live calls, or dele
   relevant offline checks and perform only the live validation the user has requested.
 - **Tools, memory, sessions, or tracing:** read [state and tools](references/state-and-tools.md)
   for resource identity, permissions, and focused diagnostics.
+- **Better or cheaper models and prompts:** read [model and prompt upgrades](references/model-upgrades.md)
+  before binding model services, writing an eval module, or running `experimental models upgrade`.
 
 ## Work from installed evidence
 
