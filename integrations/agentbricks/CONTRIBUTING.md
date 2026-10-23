@@ -145,9 +145,9 @@ the SDK resolve the selected or default profile. Local commands may run without 
 credentials, and transport failures must not change command behavior. When changing this path,
 update `tests/unit_tests/telemetry_test.py` and the telemetry description in `README.md`.
 
-Run `uv run pytest tests/functional/cli_smoke_test.py -k telemetry_to_local_receiver -q` from
+Run `uv run pytest tests/suites/test_telemetry.py --workspace fake -q` from
 `integrations/agentbricks` to exercise the installed CLI, Click hook, SDK authentication, and HTTP
-upload against a temporary local receiver. It verifies the FrontendLog payload without workspace
+upload against the fake workspace's receiver. It verifies the FrontendLog payload without workspace
 credentials; it does not verify Lumberjack ingestion, which requires a test workspace with the
 registered schema deployed.
 
@@ -240,5 +240,6 @@ on `main` to the next minor development version (for example, `0.5.0.dev0` after
 cutting `0.4`). That version identifies development builds; it is not a published
 release. The scaffolds continue to depend on the released package. A new minor
 series starts with a new release branch from `main`. Tagging does not publish the package. Arrange the separate
-secure public registry release and its approval to publish to PyPI. The live workspace E2E suites run
-separately in the private integration runner and are not included in this gate.
+secure public registry release and its approval to publish to PyPI. The gate runs the unit and framework tests and the E2E suites
+against the fake workspace (`--workspace fake`) from the built wheels. The live workspace E2E suites
+run separately in the private integration runner and are not included in this gate.

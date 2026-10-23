@@ -22,8 +22,21 @@ uv run pytest tests/suites -n 6 --dist loadgroup \
   `export PYTEST_ADDOPTS="--databricks-profile <profile> --catalog <catalog>"`.
 - `--model` sets the model every invocation asks for (workspaces name models differently, e.g.
   `system.ai.databricks-gpt-5-2` on staging).
-- `--workspace fake` runs against no workspace; everything that needs one is skipped.
+- `--workspace fake` runs against a local fake workspace (`tests/harness/fake_workspace.py`) with
+  a scripted model, so no credentials are needed; whatever needs a real workspace (deploy, memory,
+  sessions, deployed tracing, UC-backed tools) is skipped. It needs the `databricks` CLI on `PATH`,
+  because `agentbricks dev` runs the app through `databricks apps run-local`. The fake run strips
+  ambient `DATABRICKS_*`, `MLFLOW_*` and `AGENTBRICKS_*` variables from the CLI's environment.
+- `--wheel` and `--bridge-wheel` pin generated projects to prebuilt `databricks-agentbricks` and
+  `databricks-ai-bridge` wheels (without `--wheel`, a wheel is built from this checkout; without
+  `--bridge-wheel`, projects install the released `databricks-ai-bridge`).
 - `--keep-resources` keeps leftovers for debugging; each test still deletes its App and stores.
+
+CI runs the fake-workspace suites from built wheels: `.github/scripts/run_agentbricks_tests.sh suites-fake` builds both wheels,
+installs them into a fresh venv and runs `pytest tests/suites --workspace fake -n auto --dist loadgroup`
+from it, so `test_packaging.py` and every other suite exercise the shipped console script and
+package data rather than the editable checkout. Run the same script from `integrations/agentbricks`
+to reproduce CI.
 
 The run id and output directory (logs, generated projects, `apps.jsonl`) are printed at the start:
 `Agent Bricks E2E output: /tmp/agentbricks-e2e-<id> (run <id>)`.
@@ -58,12 +71,13 @@ Every resource a run creates carries its run id, and is deleted at three points:
 | `tests/suites/conftest.py` | All pytest wiring: options, hooks, and the fixtures every suite shares |
 | `tests/harness/run.py` | `RunConfig`, the run id, and the name prefixes every resource carries |
 | `tests/harness/target.py` | The `--workspace live\|fake` seam the CLI and fixtures talk to |
+| `tests/harness/fake_workspace.py` | The in-process fake workspace: config discovery, current user, a scripted chat model, and a telemetry receiver |
 | `tests/harness/agentbricks_cli.py` | Runs `agentbricks` commands: `cli.run("tools add ...")`, and `cli.start("dev ...")` in the background; `cli.invoke(app, prompt)` runs `endpoint invoke` with the `--model` the run asks for |
 | `tests/harness/project.py` | A test's project: run-scoped path and App name, its files, and `pin_runtime()` |
 | `tests/harness/workspace.py` | Databricks SDK helpers for what is not under test: prerequisites (UC objects, warehouse, Genie) and cleanup no CLI command does yet |
 | `tests/harness/cleanup.py` | Deleting what the suites create: per test through the CLI, and per run for the rest |
 | `tests/harness/logs.py` | Test-log output; every command is echoed so a run's log replays it |
-| `tests/suites/test_<group>.py` | One file per CLI command group: `test_tools`, `test_dev`, `test_deploy`, `test_memory`, `test_sessions`, `test_tracing` |
+| `tests/suites/test_<group>.py` | One file per CLI command group: `test_tools`, `test_dev`, `test_deploy`, `test_memory`, `test_sessions`, `test_tracing`, `test_telemetry`, plus `test_packaging` for what only breaks in the installed wheel |
 | `tests/suites/tool_definitions.py`, `uc_objects.py` | The tools `test_tools`, `test_dev` and `test_deploy` add, and the UC objects they use |
 
 `conftest.py` files are the only code pytest calls by name. `tests/harness/` sits next to `tests/suites/`

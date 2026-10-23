@@ -7,12 +7,15 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from harness.agentbricks_cli import AgentbricksCli
 from harness.cleanup import Cleanup
 from harness.project import Project
 from tool_definitions import Tool
 
 
+# Deploy needs a live workspace.
+@pytest.mark.usefixtures("workspace_client")
 def test_deploy(
     agentbricks_cli: AgentbricksCli,
     project: Project,

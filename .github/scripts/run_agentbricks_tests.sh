@@ -16,6 +16,20 @@ case "${1:-}" in
     PYTHONPATH=src/databricks_agentbricks/templates/agent-openai \
       uv run --no-sync pytest src/databricks_agentbricks/templates/agent-openai/tests
     ;;
+  suites-fake)
+    # `agentbricks dev` runs the app through `databricks apps run-local`, so the CLI must be on PATH.
+    uv build --wheel --out-dir dist ../..
+    uv build --wheel --out-dir dist
+    uv venv .venv-suites
+    uv pip install --python .venv-suites/bin/python --no-sources \
+      "$(ls dist/databricks_ai_bridge-*.whl)" \
+      "$(ls dist/databricks_agentbricks-*.whl)" --group tests
+    .venv-suites/bin/pytest tests/suites --workspace fake -n auto --dist loadgroup \
+      --wheel "$(ls "$PWD"/dist/databricks_agentbricks-*.whl)" \
+      --bridge-wheel "$(ls "$PWD"/dist/databricks_ai_bridge-*.whl)"
+    ;;
+  # Release branches cut before tests/suites ran against a fake workspace still carry
+  # tests/functional; the release cut runs this script from main against them.
   functional)
     uv build --wheel --out-dir dist ../..
     uv build --wheel --out-dir dist
@@ -28,7 +42,7 @@ case "${1:-}" in
       .venv-functional/bin/pytest tests/functional/
     ;;
   *)
-    echo 'Usage: run_agentbricks_tests.sh {unit {lowest-direct|highest}|framework|functional}' >&2
+    echo 'Usage: run_agentbricks_tests.sh {unit {lowest-direct|highest}|framework|suites-fake|functional}' >&2
     exit 2
     ;;
 esac

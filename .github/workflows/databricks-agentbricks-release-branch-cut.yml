@@ -266,6 +266,8 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           python-version: '3.12'
+      - name: Install the Databricks CLI
+        uses: databricks/setup-cli@e0f69d54c90e95ccad22d5ff17751da665e599a9
       - name: Test the exact pushed release wheels (Python 3.12)
         env:
           BRANCH: ${{ needs.plan.outputs.branch }}
@@ -276,7 +278,9 @@ jobs:
           test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
           test "$(git ls-remote --heads origin "refs/heads/$BRANCH" | cut -f1)" = "$RELEASE_SHA"
           cd integrations/agentbricks
-          bash "$GITHUB_WORKSPACE/workflow-tools/.github/scripts/run_agentbricks_tests.sh" functional
+          mode=suites-fake
+          if [ -d tests/functional ]; then mode=functional; fi
+          bash "$GITHUB_WORKSPACE/workflow-tools/.github/scripts/run_agentbricks_tests.sh" "$mode"
 
   tag:
     needs: [plan, cut, unit_tests, framework_tests, functional_tests]

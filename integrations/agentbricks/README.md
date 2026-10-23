@@ -1183,12 +1183,13 @@ Read-only live discovery can be checked against the installed wheel without crea
 or deploying an agent:
 
 ```sh
-AGENTBRICKS_E2E_PROFILE=<profile> .venv-functional/bin/pytest tests/e2e/tool_discovery_test.py -v
+AGENTBRICKS_E2E_PROFILE=<profile> .venv-suites/bin/pytest tests/e2e/tool_discovery_test.py -v
 ```
 
 The live checks compare default and MCP-filtered discovery with the compatibility service list.
-Set `AGENTBRICKS_E2E_SCHEMA=catalog.schema` to exercise an additional schema. The installed CLI's local
-add/review/remove flows and all updated help pages are covered by `tests/functional/cli_smoke_test.py`.
+Set `AGENTBRICKS_E2E_SCHEMA=catalog.schema` to exercise an additional schema. The local add/review/remove flows and all updated help pages are covered by the unit tests
+(`tools_test.py`, `tools_discovery_test.py`, `cli_test.py`), and the installed CLI's help pages load
+in `tests/suites/test_packaging.py`.
 
 In managed-server templates, custom Python tools are code-first. Write them with the framework's native
 decorator in `agent/tools/`: LangGraph uses `@tool`, while OpenAI Agents uses `@function_tool`. The

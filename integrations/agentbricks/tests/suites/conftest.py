@@ -93,6 +93,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="Prebuilt databricks-agentbricks wheel (default: build one from this checkout).",
     )
     group.addoption(
+        "--bridge-wheel",
+        type=pathlib.Path,
+        help="databricks-ai-bridge wheel generated projects install (default: the release on the "
+        "package index).",
+    )
+    group.addoption(
         "--warehouse-id",
         help="SQL warehouse for UC setup (default: first running).",
     )
@@ -161,6 +167,7 @@ def _base_run_config(config: pytest.Config) -> RunConfig:
         warehouse_id=option("warehouse_id"),
         model=option("model"),
         wheel=option("wheel"),
+        bridge_wheel=option("bridge_wheel"),
     )
     config.stash[_RUN_KEY] = run
     return run

@@ -91,10 +91,12 @@ class AgentbricksCli:
         # whoever launches it, and the hint would corrupt --output json errors on stderr. Test runs
         # are not product usage, so they send no CLI telemetry.
         self._env = {
-            **os.environ,
+            **target_workspace.base_env,
             **target_workspace.env,
             "AGENTBRICKS_DISABLE_AGENT_HINT": "1",
             "AGENTBRICKS_DISABLE_TELEMETRY": "1",
+            # MLflow prints its own hint to stdout when a command starts a local server.
+            "MLFLOW_DISABLE_AGENT_HINT": "1",
         }
         self._sequence = 0
 
@@ -105,15 +107,16 @@ class AgentbricksCli:
         timeout: float = 300,
         check: bool = True,
         retry_server_errors: bool = False,
+        env: Mapping[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        """Run ``agentbricks <command>`` to completion.
+        """Run ``agentbricks <command>`` to completion, with ``env`` added to the CLI's environment.
 
         ``retry_server_errors`` retries an ``endpoint invoke`` the agent answered with a 5xx; any
         other failure, including a 4xx, is the CLI's or the agent's and fails at once.
         """
         argv = self._argv(command)
         for attempt in range(1, 4):
-            result = self._run_once(argv, self._label(command), timeout)
+            result = self._run_once(argv, self._label(command), timeout, env)
             output = result.stderr or result.stdout
             if (
                 result.returncode == 0
@@ -157,6 +160,13 @@ class AgentbricksCli:
             retry_server_errors=True,
         ).stdout
 
+    def run_printed(self, command_line: str, shell: str) -> subprocess.CompletedProcess[str]:
+        """Run, in ``shell``, a command line the CLI printed for a developer to copy and paste."""
+        bin_dir = pathlib.Path(_agentbricks_bin()).parent
+        path = os.pathsep.join([str(bin_dir), self._env.get("PATH", "")])
+        label = self._label(f"printed {pathlib.Path(shell).name}")
+        return self._run_once([shell, "-f", "-c", command_line], label, 60, {"PATH": path})
+
     @contextlib.contextmanager
     def start(
         self, command: str, *, env: Mapping[str, str] | None = None
@@ -198,7 +208,7 @@ class AgentbricksCli:
         return "-".join([f"{self._sequence:03d}", *names])
 
     def _run_once(
-        self, argv: list[str], label: str, timeout: float
+        self, argv: list[str], label: str, timeout: float, env: Mapping[str, str] | None
     ) -> subprocess.CompletedProcess[str]:
         """Run with stdout and stderr in log files, printing progress while a command is slow."""
         stdout_path = self.logs_dir / f"{label}.out"
@@ -212,7 +222,7 @@ class AgentbricksCli:
         ):
             process = subprocess.Popen(
                 argv,
-                env=self._env,
+                env={**self._env, **(env or {})},
                 text=True,
                 stdout=out,
                 stderr=err,
