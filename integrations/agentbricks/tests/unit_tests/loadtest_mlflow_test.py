@@ -12,16 +12,16 @@ from unittest.mock import Mock
 import pandas as pd
 import pytest
 
-from databricks_agentbricks.clients.loadtest_mlflow_client import (
+from databricks_agentbricks.clients.evaluation_client import (
+    EvaluationClient,
     EvaluationFacts,
-    MLflowLoadTestClient,
 )
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.services.invoke.loadtest_mlflow import LoadTestMLflowService
+from databricks_agentbricks.services.evaluation_service import EvaluationService
 
 
 def _client():
-    client = Mock(spec=MLflowLoadTestClient)
+    client = Mock(spec=EvaluationClient)
     client.experiment_by_id.return_value = SimpleNamespace(tags={})
     client.get_scorer.side_effect = lambda name, experiment_id: name
     client.evaluation_run.return_value = nullcontext("evaluation-run")
@@ -44,7 +44,7 @@ def _observation(case_index=0, trace_id=None):
 def test_preflight_validates_selected_experiment_scorers_and_uc_warehouse_once():
     client = _client()
     client.resolve_warehouse_id.return_value = "warehouse"
-    service = LoadTestMLflowService(
+    service = EvaluationService(
         "staging",
         "123",
         scorer_names=("quality", "quality"),
@@ -66,11 +66,11 @@ def test_preflight_fails_without_experiment_or_scorer_and_hides_exception_conten
     client = _client()
     client.experiment_by_id.return_value = None
     with pytest.raises(AgentCliError, match="does not exist"):
-        LoadTestMLflowService("staging", "123", scorer_names=("quality",), client=client).prepare()
+        EvaluationService("staging", "123", scorer_names=("quality",), client=client).prepare()
     client.get_scorer.assert_not_called()
     client.experiment_by_id.side_effect = RuntimeError("PRIVATE-QUESTION PRIVATE-ANSWER")
     with pytest.raises(AgentCliError) as error:
-        LoadTestMLflowService("staging", "123", client=client).prepare()
+        EvaluationService("staging", "123", client=client).prepare()
     assert "RuntimeError" in str(error.value)
     assert "PRIVATE" not in str(error.value)
 
@@ -79,17 +79,17 @@ def test_preflight_fails_without_experiment_or_scorer_and_hides_exception_conten
 def test_expectations_require_array_of_case_objects(expectations):
     client = _client()
     with pytest.raises(AgentCliError, match="array of objects"):
-        LoadTestMLflowService("staging", "123", expectations=expectations, client=client).prepare()
+        EvaluationService("staging", "123", expectations=expectations, client=client).prepare()
     client.select_workspace.assert_not_called()
 
 
 def test_finish_uses_bounded_answers_and_case_expectations_without_public_content():
     client = _client()
-    service = LoadTestMLflowService(
+    service = EvaluationService(
         "staging",
         "123",
         scorer_names=("quality",),
-        max_requests=2,
+        max_samples=2,
         expectations=[{"expected_response": "FIRST"}, {"expected_response": "SECOND"}],
         client=client,
     )
@@ -131,7 +131,7 @@ def test_trace_coverage_uses_explicit_ids_only_and_profiles_span_type_without_na
         None,
         PermissionError("PRIVATE-ERROR"),
     ]
-    service = LoadTestMLflowService(
+    service = EvaluationService(
         "staging", "123", scorer_names=("quality",), traces=True, client=client
     )
     result = service.finish(
@@ -172,7 +172,7 @@ def test_one_scorer_failure_keeps_other_scores_and_performance_result_available(
         RuntimeError("PRIVATE-ANSWER"),
         EvaluationFacts({"good/mean": 0.5}, 1, 0),
     ]
-    result = LoadTestMLflowService(
+    result = EvaluationService(
         "staging", "123", scorer_names=("bad", "good"), client=client
     ).finish([_observation(), _observation()])
     assert result["evaluation"]["status"] == "partial"
@@ -184,7 +184,7 @@ def test_one_scorer_failure_keeps_other_scores_and_performance_result_available(
 
 def test_no_samples_does_not_create_evaluation_run_or_report_zero_coverage():
     client = _client()
-    result = LoadTestMLflowService(
+    result = EvaluationService(
         "staging", "123", scorer_names=("quality",), traces=True, client=client
     ).finish([])
     assert result["evaluation"]["status"] == result["traces"]["status"] == "no_samples"
@@ -217,7 +217,7 @@ def test_native_evaluate_counts_rows_not_feedbacks_and_omits_rationales(monkeypa
 
     monkeypatch.setattr(mlflow.genai, "evaluate", evaluate)
     previous_logging = logging.root.manager.disable
-    facts = MLflowLoadTestClient("staging").evaluate(records, "quality")
+    facts = EvaluationClient("staging").evaluate(records, "quality")
     assert observed == [{"data": records, "scorers": ["quality"]}]
     assert facts == EvaluationFacts({"quality/mean": 0.5}, 3, 1)
     assert logging.root.manager.disable == previous_logging
@@ -230,14 +230,12 @@ def test_unknown_native_coverage_remains_unknown(monkeypatch):
     monkeypatch.setattr(
         mlflow.genai, "evaluate", lambda **kwargs: SimpleNamespace(metrics={}, result_df=None)
     )
-    assert MLflowLoadTestClient("staging").evaluate([], "quality") == EvaluationFacts(
-        {}, None, None
-    )
+    assert EvaluationClient("staging").evaluate([], "quality") == EvaluationFacts({}, None, None)
     client = _client()
     client.evaluate.return_value = EvaluationFacts({}, None, None)
     client.evaluate.side_effect = None
-    result = LoadTestMLflowService(
-        "staging", "123", scorer_names=("quality",), client=client
-    ).finish([_observation()])
+    result = EvaluationService("staging", "123", scorer_names=("quality",), client=client).finish(
+        [_observation()]
+    )
     assert result["evaluation"]["scorers"][0]["coverage"] is None
     assert result["evaluation"]["scorers"][0]["scored"] is None

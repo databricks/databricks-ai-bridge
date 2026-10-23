@@ -99,6 +99,7 @@ def test_loadtest_caps_cases_and_saves_a_complete_report(tmp_path, streaming):
         )
     )
     report_dir = tmp_path / "report"
+    responses_file = tmp_path / "responses.json"
     config = tmp_path / "empty.databrickscfg"
     config.write_text("")
     with ThreadingHTTPServer(("127.0.0.1", 0), Endpoint) as server:
@@ -110,12 +111,11 @@ def test_loadtest_caps_cases_and_saves_a_complete_report(tmp_path, streaming):
                 "--output",
                 "json",
                 "endpoint",
-                "invoke",
+                "loadtest",
                 "--url",
                 f"http://127.0.0.1:{server.server_port}",
                 "--path",
                 "/run",
-                "--loadtest",
                 "--concurrency",
                 "3",
                 "--duration",
@@ -124,10 +124,14 @@ def test_loadtest_caps_cases_and_saves_a_complete_report(tmp_path, streaming):
                 "8",
                 "--timeout",
                 "3",
-                "--cases",
+                "--requests",
                 str(cases),
                 "--report-dir",
                 str(report_dir),
+                "--save-responses",
+                str(responses_file),
+                "--sample-requests",
+                "3",
             ]
             if streaming:
                 command.append("--sse")
@@ -194,6 +198,21 @@ def test_loadtest_caps_cases_and_saves_a_complete_report(tmp_path, streaming):
     for artifact in ("index.html", "locust.html", "locust_stats.csv", "locust_stats_history.csv"):
         assert (report_dir / artifact).is_file(), artifact
 
+    responses = json.loads(responses_file.read_text())
+    assert responses["schema_version"] == 1
+    assert responses["case_count"] == 2
+    observations = responses["observations"]
+    assert len(observations) == (3 if streaming else 2)
+    assert responses_file.stat().st_mode & 0o777 == 0o600
+    assert {item["inputs"]["id"] for item in observations}.issubset(
+        {body["id"] for body in seen[1:]}
+    )
+    for item in observations:
+        assert item["outputs"] == (
+            "hello" if streaming else {"usage": {"completion_tokens": 4}, "text": "hello"}
+        )
+    assert all("hello" not in file.read_text() for file in report_dir.iterdir())
+
 
 @pytest.mark.parametrize(
     ("stop_signal", "exit_code"), [(signal.SIGINT, 130), (signal.SIGTERM, 143)]
@@ -235,14 +254,13 @@ def test_interrupt_stops_dispatch_and_reports_drained_requests(tmp_path, stop_si
             [
                 str(agentbricks),
                 "endpoint",
-                "invoke",
+                "loadtest",
                 "--url",
                 f"http://127.0.0.1:{server.server_port}",
                 "--path",
                 "/run",
                 "--json",
                 "{}",
-                "--loadtest",
                 "--concurrency",
                 "3",
                 "--duration",
@@ -317,12 +335,11 @@ def test_redirect_preflight_never_generates_load(tmp_path):
                 [
                     str(agentbricks),
                     "endpoint",
-                    "invoke",
+                    "loadtest",
                     "--url",
                     f"http://127.0.0.1:{server.server_port}",
                     "--path",
                     "/run",
-                    "--loadtest",
                     "--duration",
                     "2",
                 ],
@@ -385,12 +402,11 @@ def test_natural_duration_drains_and_final_csv_matches_all_cases(tmp_path):
                     "--output",
                     "json",
                     "endpoint",
-                    "invoke",
+                    "loadtest",
                     "--url",
                     f"http://127.0.0.1:{server.server_port}",
                     "--path",
                     "/run",
-                    "--loadtest",
                     "--concurrency",
                     "2",
                     "--duration",
@@ -399,7 +415,7 @@ def test_natural_duration_drains_and_final_csv_matches_all_cases(tmp_path):
                     "1000",
                     "--timeout",
                     "3",
-                    "--cases",
+                    "--requests",
                     str(cases),
                     "--report-dir",
                     str(report_dir),
@@ -538,14 +554,13 @@ def test_follow_events_counts_one_complete_journey_and_rejects_failures(tmp_path
                 [
                     str(agentbricks),
                     "endpoint",
-                    "invoke",
+                    "loadtest",
                     "--url",
                     f"http://127.0.0.1:{server.server_port}",
                     "--path",
                     "/api/invocations",
                     "--routing-key",
                     "local-test-route",
-                    "--loadtest",
                     "--follow-events",
                     "--concurrency",
                     "2",
@@ -555,7 +570,7 @@ def test_follow_events_counts_one_complete_journey_and_rejects_failures(tmp_path
                     "4",
                     "--timeout",
                     "3",
-                    "--cases",
+                    "--requests",
                     str(cases),
                     "--report-dir",
                     str(report_dir),
@@ -613,7 +628,7 @@ def test_follow_events_counts_one_complete_journey_and_rejects_failures(tmp_path
 
 
 @pytest.mark.parametrize("streaming", [False, True])
-def test_worker_captures_only_reserved_successes_in_private_mlflow_file(tmp_path, streaming):
+def test_worker_captures_only_reserved_successes_in_private_observation_file(tmp_path, streaming):
     """Content is opt-in, first-N bounded, correlated from explicit IDs, and absent from reports."""
     if find_spec("locust") is None:
         pytest.skip("requires databricks-agentbricks[loadtest]")
@@ -686,7 +701,7 @@ def test_worker_captures_only_reserved_successes_in_private_mlflow_file(tmp_path
                         "duration": 10,
                         "max_requests": 6,
                         "summary_file": str(summary_file),
-                        "mlflow_max_requests": 3,
+                        "sample_requests": 3,
                         "observations_file": str(observations_file),
                     }
                 ),

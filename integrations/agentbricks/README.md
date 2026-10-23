@@ -795,6 +795,12 @@ agentbricks [-p <profile>] [-o text|json]
     list | get | logs | start | stop | delete
   endpoint
     invoke      [APP] --path PATH [--url URL] [--json JSON] [--sse]
+    loadtest    [APP] --path PATH [--url URL] [--json JSON | --requests FILE] [--sse]
+                [--concurrency N] [--duration SECONDS] [--max-requests N] [--follow-events]
+                [--report-dir PATH] [--save-responses FILE] [--sample-requests N]
+  eval
+    run         --data FILE --experiment-id ID [--scorer NAME ...] [--traces]
+                [--expectations FILE] [--warehouse ID] [--max-samples N] [--report-dir PATH]
 ```
 
 ## Bring an existing agent
@@ -895,19 +901,24 @@ as the session id - put the session id at the top level of the `--json` body for
 also works with a direct App URL and with the generated runtime on localhost. OAuth and session headers are managed by
 the runtime; arbitrary custom request headers are intentionally not exposed by this command.
 
-Add `--loadtest` to repeat the same request with Locust. Install the optional dependency first:
+## Load test HTTP endpoints
+
+`agentbricks endpoint loadtest` repeats requests with Locust. The load generator runs on the machine
+where you execute the command, against a deployed Databricks App, localhost, or another HTTP server.
+Install the optional dependency first:
 
 ```sh
 pip install 'databricks-agentbricks[loadtest]'
-agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
+agentbricks --profile <profile> endpoint loadtest agent-bricks-my-agent \
   --path /api/invocations \
   --json '{"id":"{{uuid}}","session_id":"{{uuid}}","input":[{"role":"user","content":"Hello"}]}' \
-  --loadtest --concurrency 5 --duration 60 --max-requests 200 --report-dir results/loadtest
+  --concurrency 5 --duration 60 --max-requests 200 --report-dir results/loadtest
 ```
 
 `--concurrency` sets the number of simultaneous users (default: 1); each sends another request as
 soon as its previous request finishes. `--duration` is in seconds (default: 60). `--max-requests`
-optionally caps dispatched load requests; the run stops at whichever limit comes first. One
+optionally caps dispatched load requests. Whichever is reached first, the duration or request cap,
+stops dispatch; neither takes precedence over the other. One
 first-case preflight request runs before load and is excluded from all statistics and the cap;
 a failed preflight stops the command. After dispatch stops, in-flight requests have up to
 `--timeout` seconds to finish. Ctrl-C also stops dispatch, drains, and produces a partial report.
@@ -919,11 +930,12 @@ The final summary also shows successful-only latency, completed and successful r
 incomplete request makes the command exit nonzero; cancellation exits 130. Native Locust
 percentiles include failed requests and use rounded histogram buckets; the summary labels
 successful-only timings separately. This closed-loop run measures the selected workload,
-including model/tool latency; it does not establish sustainable capacity. Answer quality is only
-evaluated when you explicitly select MLflow scorers, as described below.
+including model/tool latency; it does not establish sustainable capacity. Evaluate captured answers
+separately with `agentbricks eval run`, as described below.
 
-`--report-dir` exports a standalone `index.html` summary, native `locust.html` charts,
-`locust_*.csv` statistics/history/errors, and `summary.json`. Use a new or empty directory.
+`--report-dir` always exports all report formats together: a standalone `index.html` summary, native
+`locust.html` charts, `locust_*.csv` statistics/history/errors, and `summary.json`. There is no format
+selector. Use a new or empty directory.
 Local reports contain metrics rather than request/answer content or credentials. Native charts include
 the target host. Use `--output json` before `endpoint` for Locust's JSON statistics on stdout;
 progress and the final summary stay on stderr.
@@ -939,21 +951,25 @@ The payload is repeated as provided, with `{{uuid}}` replaced by a fresh UUID fo
 Use this placeholder for invocation IDs on durable agents to avoid replaying a cached invocation.
 Each simulated App user gets a separate routing key unless `--routing-key` explicitly pins one.
 
-To vary inputs, pass `--cases cases.json` instead of `--json`. The file contains a nonempty JSON
+To vary inputs, pass `--requests requests.json` instead of `--json`. The file contains a nonempty JSON
 array of complete request bodies, for example `[{"query":"Hello"},{"query":"Goodbye"}]`.
 Requests cycle through the cases in order; reports identify cases by number without storing
-their bodies. `{{uuid}}` also works in case bodies. Every load setting requires `--loadtest`.
+their bodies. `{{uuid}}` also works in these request bodies. Load settings belong to
+`endpoint loadtest`; `endpoint invoke` sends one request.
 
-For a managed runtime's background invocation, add `--follow-events`. Each simulated user submits
-one POST, opens the returned event stream with GET, consumes `run.completed`, then GETs final status
-and verifies the completed invocation. Provide a POST body with `background: true` and `stream: true`;
-`--follow-events` consumes the event stream without needing `--sse`:
+For a `DurableAgentServer` background invocation, add `--follow-events`. This option requires its
+background protocol: HTTP 202 with the same invocation `id`, `events_url`, and `status_url`, an SSE stream ending in
+`run.completed`, and a completed final status with the matching invocation ID and output. Custom
+servers can use it if they implement that same contract. Ordinary HTTP and SSE load tests work
+without this background protocol. Each simulated user submits one POST, opens the returned event
+stream with GET, then GETs and verifies final status. Provide a POST body with an `id`,
+`background: true`, and `stream: true`; `--follow-events` consumes the event stream without `--sse`:
 
 ```sh
-agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
+agentbricks --profile <profile> endpoint loadtest agent-bricks-my-agent \
   --path /api/invocations \
   --json '{"id":"{{uuid}}","session_id":"{{uuid}}","input":[{"role":"user","content":"Hello"}],"background":true,"stream":true}' \
-  --loadtest --follow-events --concurrency 5 --duration 60 --max-requests 200 \
+  --follow-events --concurrency 5 --duration 60 --max-requests 200 \
   --report-dir results/journey
 ```
 
@@ -963,49 +979,71 @@ POST. The calls keep the same authentication and routing key. Returned event/sta
 on the target origin. The excluded preflight also runs the complete journey. Automatic reconnect
 and stream replay are separate scenarios and are not exercised by this option.
 
-To evaluate answers, install the evaluation extra and choose an existing MLflow experiment in the
-selected workspace. Trace inspection alone uses the included MLflow client and only needs the
-`loadtest` extra:
+## Evaluate captured responses
+
+Load tests generate traffic and performance reports. `agentbricks eval run` separately reads saved
+responses, inspects their MLflow traces, and evaluates answers with existing registered scorers.
+It never invokes the target again, so evaluation does not change the load test's measurements.
+
+Capture a bounded sample explicitly with `--save-responses`:
 
 ```sh
-pip install 'databricks-agentbricks[loadtest,evaluation]'
-agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent \
+agentbricks --profile <profile> endpoint loadtest agent-bricks-my-agent \
   --path /api/invocations \
   --json '{"id":"{{uuid}}","session_id":"{{uuid}}","input":[{"role":"user","content":"Hello"}],"stream":true}' \
-  --sse --loadtest --concurrency 5 --duration 60 --max-requests 200 \
+  --sse --concurrency 5 --duration 60 --max-requests 200 \
+  --save-responses responses.json --sample-requests 20 --report-dir results/loadtest
+```
+
+Only the first `--sample-requests` dispatched load requests are eligible for capture (default: 20).
+Failed requests reduce the usable sample count and are not replaced. The excluded preflight is not
+sampled. Without `--save-responses`, individual requests and answers are not saved. The response
+artifact is a separate owner-only file (mode 0600) containing raw request bodies, answers, and any
+returned trace IDs. Supply a new file in an existing parent directory, outside `--report-dir`.
+Keep it out of shared report bundles.
+
+The JSON artifact contains `schema_version: 1`, the original `case_count`, and an `observations` array.
+Each observation contains `case_index` (zero-based), `inputs`, `outputs`, and `trace_id`.
+
+To evaluate answers, install the evaluation extra and select an existing MLflow experiment in the
+workspace. Trace inspection alone uses the included MLflow client and does not need the evaluation
+extra or Locust:
+
+```sh
+pip install 'databricks-agentbricks[evaluation]'
+agentbricks --profile <profile> eval run --data responses.json \
   --experiment-id <experiment-id> --scorer <registered-scorer-name> --traces \
-  --mlflow-max-requests 20 --report-dir results/evaluated-loadtest
+  --max-samples 20 --report-dir results/evaluation
 ```
 
 `--scorer` selects an existing registered MLflow scorer by name; repeat it for multiple scorers.
-`--traces` reads existing agent traces. Either option requires `--experiment-id`; `--experiment-id`
-alone does not turn on evaluation or tracing. Scorer registration and the experiment are checked
-before load; judge/provider execution is checked when evaluation runs.
+`--traces` reads existing agent traces. Select at least one scorer or `--traces`, and provide
+`--experiment-id`. The experiment and registered scorers are checked before analysis;
+judge/provider execution is checked when evaluation runs.
 
 For reference-based scorers, use `--expectations expectations.json`: a JSON array with one object
-for every case, in the same order, or one object for a single `--json` body. For example,
+for every original request case, in the same order, or one object for a single `--json` body. For example,
 `[{"expected_response":"Hello"}]`. Expectations require at least one scorer.
 
-MLflow work runs after load and in-flight drain. It evaluates captured successful outputs without
-invoking the target again, so judge latency does not change the performance measurements. Only the
-first `--mlflow-max-requests` dispatched load requests are eligible for capture (default: 20);
-failed requests reduce the number of usable samples. The preflight is not sampled. Scorers receive
+`--max-samples` limits how many saved observations are analyzed (default: 20). Scorers receive
 the materialized request body as `inputs`, and accumulated answer text for supported SSE or the
 JSON response's `output` value (otherwise its complete body) as `outputs`. Other JSON input shapes
 are wrapped as `{"request": <body>}`. Evaluation sends these inputs, outputs, and supplied
 expectations to MLflow and may incur judge/model costs.
-MLflow stores evaluation details in the selected experiment; exported load-test reports contain
-coverage, scorer metrics/errors, and links without request text, answers, or judge rationales.
+MLflow stores evaluation details in the selected experiment. Evaluation `--report-dir` writes both
+`index.html` and `summary.json` together, including coverage, scorer metrics/errors, trace timings, and links
+without request text, answers, or judge rationales. It does not generate Locust CSV files.
 
 Trace inspection requires the agent to already emit MLflow traces and explicitly return the
 corresponding trace ID in `X-MLflow-Trace-ID` or a top-level `trace_id` in its JSON/SSE payload. The
-load test does not enable tracing on the agent or match traces by time or input text. Missing IDs
-or unavailable traces remain visible in coverage. Use `--warehouse <id>`
-when reading traces from a Unity Catalog-backed experiment. Reports aggregate durations by span
+commands do not enable tracing on the agent or match traces by time or input text. Missing IDs
+or unavailable traces remain visible in coverage. Use `--warehouse <id>` or set
+`MLFLOW_TRACING_SQL_WAREHOUSE_ID` when reading traces from a Unity Catalog-backed experiment.
+Reports aggregate durations by span
 type; overlapping spans do not sum to total invocation latency. Trace-aware scorers receive fetched
 traces only with `--traces`; metrics for traced and untraced samples are labeled separately.
-Evaluation and trace-read outcomes are reported separately from performance failures. Evaluation
-execution failures or trace-read errors make the command exit nonzero. Missing trace IDs alone do
+Evaluation and trace-read outcomes are reported by `eval run`, separately from the load test.
+Evaluation execution failures or trace-read errors make `eval run` exit nonzero. Missing trace IDs alone do
 not; low judge scores do not fail the command because no quality threshold is configured.
 These bounded samples describe observed answers and traces; they are not a quality assessment of every completed request.
 

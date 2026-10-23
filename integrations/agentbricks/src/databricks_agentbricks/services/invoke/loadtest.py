@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import signal
 import subprocess
 import sys
@@ -16,7 +17,6 @@ from typing import Any
 from uuid import uuid4
 
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.services.invoke.loadtest_mlflow import LoadTestMLflowService
 from databricks_agentbricks.services.invoke.loadtest_streaming import StreamMetrics
 from databricks_agentbricks.services.invoke.transport import EndpointRequest, HttpSession
 
@@ -38,12 +38,13 @@ def run_loadtest(
     cases: list[Any] | None = None,
     report_dir: Path | None = None,
     follow_events: bool = False,
-    mlflow_service: LoadTestMLflowService | None = None,
+    responses_file: Path | None = None,
+    sample_requests: int = 20,
 ) -> LoadtestResult:
     """Delegate scheduling, statistics, and failure reporting to Locust."""
     if find_spec("locust") is None:
         raise AgentCliError(
-            "Locust is required for --loadtest.",
+            "Locust is required for endpoint loadtest.",
             hint="Install the loadtest extra: pip install 'databricks-agentbricks[loadtest]'",
         )
     if follow_events and (
@@ -60,8 +61,20 @@ def run_loadtest(
         raise AgentCliError(
             "--follow-events requires POST bodies with an id, background=true and stream=true."
         )
-    if mlflow_service is not None:
-        mlflow_service.prepare()
+    if responses_file is not None:
+        responses_file = responses_file.absolute()
+        if responses_file.exists() or responses_file.is_symlink():
+            raise AgentCliError(
+                "--save-responses requires a new file; existing files are preserved."
+            )
+        if not responses_file.parent.is_dir():
+            raise AgentCliError("The parent directory of --save-responses must exist.")
+        if sample_requests < 1:
+            raise AgentCliError("--sample-requests must be positive.")
+        if report_dir is not None and responses_file.resolve().is_relative_to(report_dir.resolve()):
+            raise AgentCliError(
+                "--save-responses must be outside --report-dir; it contains request and answer content."
+            )
     if report_dir is not None:
         report_dir = report_dir.resolve()
         if report_dir.exists() and (not report_dir.is_dir() or any(report_dir.iterdir())):
@@ -144,11 +157,12 @@ def run_loadtest(
             "cases": cases,
             "summary_file": str(summary_file),
             "follow_events": follow_events,
-            "mlflow_max_requests": mlflow_service.max_requests if mlflow_service else 0,
+            "sample_requests": sample_requests if responses_file is not None else 0,
             "observations_file": str(observations_file),
         }
         # A separate process group lets Ctrl-C stop dispatch and drain before reporting.
-        # Credentials and payloads travel only through stdin, never arguments or files.
+        # Credentials travel only through stdin, never arguments or files. Body/answer capture
+        # is opt-in and separate from the content-free performance reports.
         with subprocess.Popen(
             command,
             stdin=subprocess.PIPE,
@@ -171,36 +185,26 @@ def run_loadtest(
         returncode = 130 if cancelled else process.returncode
         if cancelled and summary:
             summary["outcome"] = "cancelled"
-        if mlflow_service is not None and summary:
-            if cancelled or process.returncode in (130, 143):
-                summary["mlflow"] = {"status": "not_run", "reason": "cancelled"}
-            else:
-                observations = (
-                    json.loads(observations_file.read_text()) if observations_file.exists() else []
-                )
-                analysis_exit = 130
-
-                def interrupt_analysis(signum, frame):
-                    nonlocal analysis_exit
-                    analysis_exit = 128 + signum
-                    raise KeyboardInterrupt
-
-                previous_terminate = signal.signal(signal.SIGTERM, interrupt_analysis)
-                try:
-                    summary["mlflow"] = mlflow_service.finish(observations)
-                    summary["mlflow"]["eligible_successes"] = summary.get("counts", {}).get(
-                        "succeeded", 0
-                    )
-                except KeyboardInterrupt:
-                    returncode = analysis_exit
-                    summary["mlflow"] = {"status": "not_run", "reason": "analysis_cancelled"}
-                finally:
-                    signal.signal(signal.SIGTERM, previous_terminate)
-                if not returncode and (
-                    summary["mlflow"].get("evaluation", {}).get("status") in {"failed", "partial"}
-                    or summary["mlflow"].get("traces", {}).get("errors", 0)
-                ):
-                    returncode = 1
         if report_dir is not None and summary:
             (report_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+        if responses_file is not None:
+            observations = (
+                json.loads(observations_file.read_text()) if observations_file.exists() else []
+            )
+            try:
+                descriptor = os.open(responses_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                    json.dump(
+                        {
+                            "schema_version": 1,
+                            "case_count": len(cases) if cases is not None else 1,
+                            "observations": observations,
+                        },
+                        stream,
+                    )
+                    stream.write("\n")
+            except OSError as exc:
+                raise AgentCliError(
+                    "Could not save responses; any completed performance report is preserved."
+                ) from exc
         return LoadtestResult(returncode, summary)

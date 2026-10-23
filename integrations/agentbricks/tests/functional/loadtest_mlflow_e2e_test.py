@@ -5,16 +5,18 @@ from __future__ import annotations
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib import import_module
 from importlib.util import find_spec
 from pathlib import Path
 
 import mlflow
 import pytest
+from click.testing import CliRunner
 from mlflow.genai.scorers import scorer
 
-from databricks_agentbricks.clients.loadtest_mlflow_client import MLflowLoadTestClient
+from databricks_agentbricks.clients.evaluation_client import EvaluationClient
+from databricks_agentbricks.services.evaluation_service import EvaluationService
 from databricks_agentbricks.services.invoke.loadtest import run_loadtest
-from databricks_agentbricks.services.invoke.loadtest_mlflow import LoadTestMLflowService
 from databricks_agentbricks.services.invoke.transport import EndpointRequest
 
 
@@ -38,22 +40,25 @@ def test_registered_scorer_evaluates_existing_traced_and_untraced_answers(
 
     matches_reference.register(name="matches_reference", experiment_id=experiment_id)
 
-    class LocalClient(MLflowLoadTestClient):
+    class LocalClient(EvaluationClient):
         def select_workspace(self):
             self.module.set_tracking_uri(tracking_uri)
 
         def browser_url(self, *args, **kwargs):
             return None
 
-    service = LoadTestMLflowService(
-        None,
-        experiment_id,
-        traces=True,
-        max_requests=4,
-        scorer_names=("matches_reference",),
-        expectations=[{"expected_response": "PRIVATE-ANSWER"}] * 2,
-        client=LocalClient(None),
+    eval_mod = import_module("databricks_agentbricks.cli.eval")
+    monkeypatch.setattr(
+        eval_mod,
+        "build_evaluation_service",
+        lambda obj, experiment_id, **options: EvaluationService(
+            obj.profile, experiment_id, client=LocalClient(None), **options
+        ),
     )
+    monkeypatch.setenv("AGENTBRICKS_DISABLE_TELEMETRY", "1")
+    responses_file = tmp_path / "responses.json"
+    expectations_file = tmp_path / "expectations.json"
+    expectations_file.write_text(json.dumps([{"expected_response": "PRIVATE-ANSWER"}] * 2))
     seen = []
 
     class Endpoint(BaseHTTPRequestHandler):
@@ -100,7 +105,8 @@ def test_registered_scorer_evaluates_existing_traced_and_untraced_answers(
                 cases=cases,
                 output="text",
                 per_user_routing=False,
-                mlflow_service=service,
+                responses_file=responses_file,
+                sample_requests=4,
                 report_dir=tmp_path / "report",
             )
         finally:
@@ -109,9 +115,31 @@ def test_registered_scorer_evaluates_existing_traced_and_untraced_answers(
     assert load.returncode == 0
     assert len(seen) == 7  # One excluded readiness call + six measured calls; judging adds none.
     assert load.summary["counts"]["succeeded"] == 6
-    result = load.summary["mlflow"]
+    assert "mlflow" not in load.summary
+    command = CliRunner().invoke(
+        eval_mod.evaluation,
+        [
+            "run",
+            "--data",
+            str(responses_file),
+            "--experiment-id",
+            experiment_id,
+            "--scorer",
+            "matches_reference",
+            "--traces",
+            "--expectations",
+            str(expectations_file),
+            "--max-samples",
+            "4",
+            "--report-dir",
+            str(tmp_path / "evaluation"),
+        ],
+        obj=type("Context", (), {"profile": None, "output": "json"})(),
+    )
+    assert command.exit_code == 0, command.output
+    result = json.loads(command.stdout)
+    assert len(seen) == 7  # Evaluation consumes saved data and sends no target requests.
     assert result["sampled_successes"] == 4
-    assert result["eligible_successes"] == 6
 
     assert result["evaluation"]["status"] == "completed", result
     outcome = result["evaluation"]["scorers"][0]
@@ -126,6 +154,7 @@ def test_registered_scorer_evaluates_existing_traced_and_untraced_answers(
     assert run.info.status == "FINISHED"
     assert run.data.metrics["traced/matches_reference/mean"] == 1
     assert run.data.metrics["untraced/matches_reference/mean"] == 0
-    assert json.loads((tmp_path / "report" / "summary.json").read_text())["mlflow"] == result
+    assert json.loads((tmp_path / "evaluation" / "summary.json").read_text()) == result
+    assert (tmp_path / "evaluation" / "index.html").is_file()
     assert "PRIVATE" not in json.dumps(result)
     assert "WRONG-ANSWER" not in json.dumps(result)

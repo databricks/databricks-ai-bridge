@@ -40,6 +40,7 @@ _COMMANDS = (
     "deploy",
     "deployments",
     "endpoint",
+    "eval",
     "tools",
     "experimental",
 )

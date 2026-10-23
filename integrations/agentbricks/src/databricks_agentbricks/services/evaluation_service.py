@@ -1,11 +1,13 @@
-"""Bounded, opt-in MLflow profiling and judging after measured traffic has stopped."""
+"""Evaluate saved agent answers and profile their explicitly correlated MLflow traces."""
 
 from __future__ import annotations
 
+import json
 from collections import Counter, defaultdict
+from pathlib import Path
 from typing import Any
 
-from databricks_agentbricks.clients.loadtest_mlflow_client import MLflowLoadTestClient
+from databricks_agentbricks.clients.evaluation_client import EvaluationClient
 from databricks_agentbricks.errors import AgentCliError
 
 _SPAN_TYPES = {
@@ -26,7 +28,62 @@ _SPAN_TYPES = {
 }
 
 
-class LoadTestMLflowService:
+_MAX_DATA_BYTES = 64 * 1024 * 1024
+
+
+def _invalid_json_constant(value: str) -> None:
+    raise ValueError("Non-finite JSON number")
+
+
+def read_evaluation_json(path: Path) -> Any:
+    """Read bounded private input without reflecting its contents in errors."""
+    try:
+        with path.open("rb") as source:
+            content = source.read(_MAX_DATA_BYTES + 1)
+        if len(content) > _MAX_DATA_BYTES:
+            raise ValueError("input exceeds size limit")
+        return json.loads(content.decode("utf-8"), parse_constant=_invalid_json_constant)
+    except (OSError, ValueError, RecursionError) as exc:
+        raise AgentCliError("Cannot read evaluation input as JSON (maximum 64 MiB).") from exc
+
+
+def load_evaluation_data(path: Path, *, max_samples: int = 20) -> tuple[int, list[dict[str, Any]]]:
+    """Validate a saved-response artifact before resolving any workspace resources."""
+    data = read_evaluation_json(path)
+    valid = (
+        isinstance(data, dict)
+        and type(data.get("schema_version")) is int
+        and data["schema_version"] == 1
+    )
+    case_count = data.get("case_count") if isinstance(data, dict) else None
+    observations = data.get("observations") if isinstance(data, dict) else None
+    if (
+        not valid
+        or type(case_count) is not int
+        or case_count < 1
+        or not isinstance(observations, list)
+        or max_samples < 1
+    ):
+        raise AgentCliError(
+            "Invalid evaluation data: expected a version 1 saved-response artifact."
+        )
+    for observation in observations:
+        if (
+            not isinstance(observation, dict)
+            or type(observation.get("case_index")) is not int
+            or not 0 <= observation["case_index"] < case_count
+            or "inputs" not in observation
+            or "outputs" not in observation
+            or not (observation.get("trace_id") is None or isinstance(observation["trace_id"], str))
+        ):
+            raise AgentCliError(
+                "Invalid evaluation observation: require inputs, outputs, a valid case_index, "
+                "and an optional string trace_id."
+            )
+    return case_count, observations[:max_samples]
+
+
+class EvaluationService:
     def __init__(
         self,
         profile: str | None,
@@ -34,16 +91,16 @@ class LoadTestMLflowService:
         *,
         scorer_names: tuple[str, ...] = (),
         traces: bool = False,
-        max_requests: int = 20,
+        max_samples: int = 20,
         expectations: list[dict[str, Any]] | None = None,
         warehouse_id: str | None = None,
-        client: MLflowLoadTestClient | None = None,
+        client: EvaluationClient | None = None,
     ):
-        self.client = client or MLflowLoadTestClient(profile)
+        self.client = client or EvaluationClient(profile)
         self.experiment_id = experiment_id
         self.scorer_names = tuple(dict.fromkeys(scorer_names))
         self.traces = traces
-        self.max_requests = max_requests
+        self.max_samples = max_samples
         self.expectations = expectations
         self.warehouse_id = warehouse_id
         self._scorers: list[Any] | None = None
@@ -55,10 +112,10 @@ class LoadTestMLflowService:
             return None  # Optional links must not invalidate successful reads or scores.
 
     def prepare(self) -> None:
-        """Validate dependencies, experiment, warehouse, and scorers before any traffic."""
+        """Validate dependencies, experiment, warehouse, and scorers before analysis."""
         if self._scorers is not None:
             return
-        if not self.experiment_id or self.max_requests < 1:
+        if not self.experiment_id or self.max_samples < 1:
             raise AgentCliError("MLflow requires an experiment id and a positive sample limit.")
         if self.expectations is not None and (
             not isinstance(self.expectations, list)
@@ -92,8 +149,7 @@ class LoadTestMLflowService:
             ) from exc
 
     def finish(self, observations: list[dict[str, Any]]) -> dict[str, Any]:
-        self.prepare()
-        selected = observations[: self.max_requests]
+        selected = observations[: self.max_samples]
         traces: dict[str, Any] = {
             "status": "disabled",
             "selected": len(selected),
@@ -106,6 +162,46 @@ class LoadTestMLflowService:
             "urls": [],
             "error_types": [],
         }
+        evaluation: dict[str, Any] = {
+            "status": "disabled",
+            "run_id": None,
+            "run_url": None,
+            "scorers": [],
+        }
+        summary = {
+            "schema_version": 1,
+            "status": "completed",
+            "experiment_id": self.experiment_id,
+            "sample_limit": self.max_samples,
+            "sampled_successes": len(selected),
+            "evaluation": evaluation,
+            "traces": traces,
+        }
+        try:
+            self.prepare()
+            self._analyze(selected, traces, evaluation)
+        except KeyboardInterrupt:
+            summary["status"] = "cancelled"
+            if self.traces:
+                traces.update(
+                    status="cancelled",
+                    missing=len(selected) - traces["fetched"],
+                    coverage=traces["fetched"] / len(selected) if selected else None,
+                )
+            if self.scorer_names:
+                evaluation["status"] = "cancelled"
+                for outcome in evaluation["scorers"]:
+                    if outcome["status"] == "running":
+                        outcome["status"] = "cancelled"
+        except AgentCliError:
+            raise
+        if summary["status"] != "cancelled" and (
+            evaluation["status"] in {"failed", "partial"} or traces["errors"]
+        ):
+            summary["status"] = "failed"
+        return summary
+
+    def _analyze(self, selected: list[dict[str, Any]], traces: dict, evaluation: dict) -> None:
         batches: dict[bool, list[dict[str, Any]]] = defaultdict(list)
         durations: dict[str, list[float]] = defaultdict(list)
         trace_errors: Counter[str] = Counter()
@@ -160,12 +256,6 @@ class LoadTestMLflowService:
                     for kind, values in sorted(durations.items())
                 ],
             )
-        evaluation: dict[str, Any] = {
-            "status": "disabled",
-            "run_id": None,
-            "run_url": None,
-            "scorers": [],
-        }
         if self._scorers:
             evaluation["status"] = "no_samples"
             if selected:
@@ -175,7 +265,7 @@ class LoadTestMLflowService:
                         for name, scorer in zip(self.scorer_names, self._scorers, strict=True):
                             outcome = {
                                 "name": name,
-                                "status": "completed",
+                                "status": "running",
                                 "selected": len(selected),
                                 "scored": 0,
                                 "errors": 0,
@@ -183,6 +273,7 @@ class LoadTestMLflowService:
                                 "metrics": {},
                                 "error_types": [],
                             }
+                            evaluation["scorers"].append(outcome)
                             unknown_coverage = False
                             for has_trace, batch in batches.items():
                                 try:
@@ -206,12 +297,12 @@ class LoadTestMLflowService:
                             outcome["coverage"] = (
                                 None if unknown_coverage else outcome["scored"] / len(selected)
                             )
+                            outcome["status"] = "completed"
                             if outcome["scored"] < len(selected) or outcome["errors"]:
                                 outcome["status"] = "partial" if outcome["scored"] else "failed"
                             if unknown_coverage:
                                 outcome.update(status="partial", scored=None)
                             self.client.log_metrics(outcome["metrics"])
-                            evaluation["scorers"].append(outcome)
                         evaluation["run_url"] = self._url(run_id=run_id)
                     statuses = {item["status"] for item in evaluation["scorers"]}
                     evaluation["status"] = (
@@ -223,10 +314,3 @@ class LoadTestMLflowService:
                     )
                 except Exception as exc:
                     evaluation.update(status="failed", error_types=[type(exc).__name__])
-        return {
-            "experiment_id": self.experiment_id,
-            "sample_limit": self.max_requests,
-            "sampled_successes": len(selected),
-            "evaluation": evaluation,
-            "traces": traces,
-        }

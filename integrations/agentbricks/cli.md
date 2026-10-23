@@ -68,7 +68,8 @@ These options apply to every command. Pass them before the command name, for exa
 | [`tracing`](#agentbricks-tracing) | Set up and inspect agent tracing |
 | [`deploy`](#agentbricks-deploy) | Deploy an agent to Databricks Apps |
 | [`deployments`](#agentbricks-deployments) | Manage deployed agents |
-| [`endpoint`](#agentbricks-endpoint) | Invoke arbitrary HTTP endpoints. |
+| [`endpoint`](#agentbricks-endpoint) | Invoke or load test HTTP endpoints |
+| [`eval`](#agentbricks-eval) | Analyze saved responses with MLflow traces and registered scorers |
 | [`tools`](#agentbricks-tools) | Manage an agent's tools |
 | [`experimental`](#agentbricks-experimental) | Commands whose interface is still being designed: `experimental models`, `experimental prompts` |
 
@@ -1608,15 +1609,16 @@ _Options_
 
 ### `agentbricks endpoint`
 
-Invoke arbitrary HTTP endpoints.
+Invoke or load test Databricks Apps and arbitrary HTTP endpoints.
 
 | Subcommand | Description |
 | --- | --- |
-| [`endpoint invoke`](#agentbricks-endpoint-invoke) | Send an HTTP request, or load test a Databricks App or arbitrary URL. |
+| [`endpoint invoke`](#agentbricks-endpoint-invoke) | Send one HTTP request to a Databricks App or arbitrary URL. |
+| [`endpoint loadtest`](#agentbricks-endpoint-loadtest) | Repeat HTTP requests with Locust and report performance. |
 
 #### `agentbricks endpoint invoke`
 
-Send an HTTP request, or load test a Databricks App or arbitrary URL.
+Send one HTTP request to a Databricks App or arbitrary URL.
 
 ```
 agentbricks endpoint invoke [APP] [options]
@@ -1642,19 +1644,118 @@ _Options_
 | `--routing-key <ROUTING_KEY>` | string | - | no | Sticky-routing key; set it to your stable session id to keep a session on one app replica. Sent verbatim as the X-Routing-Key header (default: generated for a Databricks App). Routing only: while session_id is a natural routing key, it is recommended to pass the session id in the --json body for session continuity. |
 | `--timeout <TIMEOUT>` | float range | `300.0` | no | - |
 | `--auth`, `--no-auth` | flag | - | no | Inject Databricks OAuth authentication. |
-| `--loadtest` | flag | - | no | Repeat the request using Locust and report statistics. |
-| `--concurrency <CONCURRENCY>` | integer range | `1` | no | Concurrent users with --loadtest. |
-| `--duration <DURATION>` | integer range | `60` | no | Load test duration in seconds with --loadtest. |
-| `--max-requests <MAX_REQUESTS>` | integer range | - | no | Stop after this many load requests (excludes preflight) with --loadtest. |
-| `--cases <CASES_FILE>` | file path | - | no | JSON array of request bodies, cycled in order with --loadtest; replaces --json. |
-| `--report-dir <REPORT_DIR>` | path | - | no | Save HTML, CSV, and JSON reports in a new or empty directory with --loadtest. |
-| `--follow-events` | flag | - | no | Load test background POST, GET events, and GET status as one invocation. |
-| `--experiment-id <EXPERIMENT_ID>` | string | - | no | Existing MLflow experiment for load-test traces and evaluation. |
-| `--scorer <SCORER_NAMES>` | string | - | no | Registered MLflow scorer name; repeat to evaluate captured load-test answers. |
-| `--traces` | flag | - | no | Read explicitly correlated MLflow traces after the load test. |
-| `--mlflow-max-requests <MLFLOW_MAX_REQUESTS>` | integer range | `20` | no | Maximum dispatched requests sampled for MLflow traces/evaluation. |
-| `--expectations <EXPECTATIONS_FILE>` | file path | - | no | JSON array of MLflow expectation objects, one per load-test case. |
-| `--warehouse <WAREHOUSE_ID>` | string | - | no | SQL warehouse ID for reading UC-backed MLflow traces. |
+
+#### `agentbricks endpoint loadtest`
+
+Repeat HTTP requests with Locust and report performance. Requires
+`pip install 'databricks-agentbricks[loadtest]'`. The load generator runs on the machine executing
+the command; the target can be a deployed Databricks App, localhost, or another HTTP server.
+
+```
+agentbricks endpoint loadtest [APP] --path PATH [options]
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `APP` | no | Databricks App name; use `--url` for an arbitrary server. |
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--url <URL>` | string | - | no | Base URL for localhost or an arbitrary HTTP server. |
+| `--method <METHOD>` | string | `POST` | no | HTTP method. |
+| `--path <PATH>` | string | - | yes | Request path, such as /api/invocations. |
+| `--query <QUERY>` | string | - | no | Query parameter as 'name=value'; repeat for more. |
+| `--json <JSON_VALUE>` | string | - | no | Complete JSON request body; mutually exclusive with `--requests`. |
+| `--sse` | flag | - | no | Consume responses as Server-Sent Events. |
+| `--routing-key <ROUTING_KEY>` | string | - | no | Sticky-routing key sent as X-Routing-Key. By default, each simulated App user gets a separate key. Put session_id in the request body for session continuity. |
+| `--timeout <TIMEOUT>` | float range | `300.0` | no | Request timeout and maximum drain time in seconds after dispatch stops. |
+| `--auth`, `--no-auth` | flag | - | no | Inject Databricks OAuth authentication. |
+| `--concurrency <CONCURRENCY>` | integer range | `1` | no | Concurrent simulated users. Each starts another request when its previous request finishes. |
+| `--duration <DURATION>` | integer range | `60` | no | Stop dispatch after this many seconds, or earlier if `--max-requests` is reached. |
+| `--max-requests <MAX_REQUESTS>` | integer range | - | no | Cap dispatched load requests, excluding preflight; dispatch stops at this cap or `--duration`, whichever comes first. |
+| `--requests <REQUESTS_FILE>` | file path | - | no | Nonempty JSON array of complete request bodies, cycled in order; mutually exclusive with `--json`. |
+| `--report-dir <REPORT_DIR>` | path | - | no | Write all HTML, CSV, and JSON report formats together in a new or empty directory. |
+| `--follow-events` | flag | - | no | Measure background POST, GET events, and GET status as one invocation. Requires the DurableAgentServer background protocol or a compatible custom server. |
+| `--save-responses <FILE>` | file path | - | no | Save sampled raw requests, answers, and returned trace IDs in a new owner-only JSON file outside `--report-dir`, for `eval run`. The parent directory must exist. |
+| `--sample-requests <N>` | integer range | `20` | no | First N dispatched requests eligible for response capture with `--save-responses`; failed samples are not replaced. |
+
+One first-case preflight request is excluded from statistics, request caps, and response samples.
+Duration and request cap have equal priority: reaching either stops dispatch, then in-flight requests
+drain for up to `--timeout` seconds. Ctrl-C also drains and produces a partial report.
+`{{uuid}}` in request bodies is replaced with a fresh UUID for each invocation.
+
+`--report-dir` writes `index.html`, `locust.html`, `locust_*.csv`, and `summary.json` together;
+there is no format selector. Reports contain metrics and the target host, without request bodies
+or answers. `--save-responses` explicitly saves sensitive content to a separate mode 0600 file;
+keep that artifact out of shared report bundles. Its schema is
+`{"schema_version":1,"case_count":N,"observations":[{"case_index":0,"inputs":{},"outputs":"...","trace_id":null}]}`.
+`case_index` is zero-based; failed eligible requests are omitted and not replaced.
+
+`--follow-events` requires POST bodies with an `id`, `background: true`, and `stream: true`.
+The server must return HTTP 202 with the same invocation `id`, `events_url`, and `status_url`, an SSE stream ending in
+`run.completed`, and completed final status with a matching ID and output. Custom servers work
+if they implement this contract. Ordinary HTTP and SSE load tests do not need it. The three
+calls count as one invocation; follow-up URLs must remain on the target origin.
+
+```sh
+agentbricks --profile <profile> endpoint loadtest agent-bricks-my-agent \
+  --path /api/invocations --requests requests.json \
+  --concurrency 5 --duration 60 --max-requests 200 --report-dir results/loadtest \
+  --save-responses responses.json --sample-requests 20
+```
+
+### `agentbricks eval`
+
+Analyze saved responses with MLflow traces and registered scorers, separately from traffic generation.
+
+| Subcommand | Description |
+| --- | --- |
+| [`eval run`](#agentbricks-eval-run) | Read saved responses and run MLflow trace analysis or evaluation. |
+
+#### `agentbricks eval run`
+
+Read the response artifact produced by `endpoint loadtest --save-responses`. This command does
+not invoke the target. Scorer evaluation requires
+`pip install 'databricks-agentbricks[evaluation]'`; trace inspection alone uses the included
+MLflow client and needs neither that extra nor Locust.
+
+```
+agentbricks eval run --data FILE --experiment-id ID [options]
+```
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--data <FILE>` | file path | - | yes | Saved response artifact with schema_version, case_count, and observations. |
+| `--experiment-id <EXPERIMENT_ID>` | string | - | yes | Existing MLflow experiment for trace reads and evaluation results. |
+| `--scorer <NAME>` | string | - | no | Existing registered MLflow scorer name; repeat for multiple scorers. Select a scorer or `--traces`. |
+| `--traces` | flag | - | no | Fetch existing traces using explicit trace IDs in the saved observations. |
+| `--expectations <FILE>` | file path | - | no | JSON array with one expectation object per original request case, in the same order. Requires a scorer. |
+| `--warehouse <WAREHOUSE_ID>` | string | - | no | SQL warehouse ID for reading Unity Catalog-backed MLflow traces. Requires `--traces`; falls back to MLFLOW_TRACING_SQL_WAREHOUSE_ID. |
+| `--max-samples <N>` | integer range | `20` | no | Maximum saved observations to analyze. |
+| `--report-dir <REPORT_DIR>` | path | - | no | Write both index.html and summary.json evaluation reports in a new or empty directory; no Locust CSV files. |
+
+Choose an existing experiment and at least one registered scorer or `--traces`. Expectations use
+the original request case order, including cases that have no successful samples. For a single
+`--json` body, supply one object, for example `[{"expected_response":"Hello"}]`.
+
+Trace inspection requires explicit IDs returned by the agent in `X-MLflow-Trace-ID` or a top-level
+`trace_id` in its JSON/SSE payload; neither command enables agent tracing or infers correlations.
+Reports show trace coverage, span-type timings, scorer results/errors, and MLflow links, without raw
+requests, answers, or judge rationales. MLflow stores evaluation inputs and outputs in the selected
+experiment, and judging may incur model costs. Missing trace IDs reduce coverage; trace-read or
+evaluation execution errors produce a nonzero exit. Low scores alone do not fail the command.
+
+```sh
+agentbricks --profile <profile> eval run --data responses.json \
+  --experiment-id <experiment-id> --scorer <registered-scorer-name> --traces \
+  --max-samples 20 --report-dir results/evaluation
+```
 
 ### `agentbricks tools`
 

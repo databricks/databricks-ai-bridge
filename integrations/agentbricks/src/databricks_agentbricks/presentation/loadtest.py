@@ -5,7 +5,6 @@ from __future__ import annotations
 from html import escape
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 import click
 
@@ -91,64 +90,6 @@ def _rows(summary: dict) -> list[tuple[str, str]]:
     return rows
 
 
-def _mlflow_rows(summary: dict) -> list[tuple[str, str]]:
-    mlflow = summary.get("mlflow")
-    if not mlflow:
-        return []
-    if mlflow.get("status") == "not_run":
-        return [("MLflow status", f"not run ({mlflow.get('reason', 'unavailable')})")]
-    captured = str(mlflow["sampled_successes"])
-    if "eligible_successes" in mlflow:
-        captured += f"/{mlflow['eligible_successes']} successful requests"
-    rows = [
-        ("MLflow experiment", str(mlflow["experiment_id"])),
-        (
-            "Successful captured samples",
-            f"{captured} captured; first "
-            f"{mlflow['sample_limit']} dispatched load requests eligible",
-        ),
-    ]
-    evaluation = mlflow.get("evaluation", {})
-    rows.append(("Evaluation status", str(evaluation.get("status", "disabled"))))
-    if evaluation.get("error_types"):
-        rows.append(("Evaluation error types", ", ".join(evaluation["error_types"])))
-    for scorer in evaluation.get("scorers", []):
-        scored = "unknown" if scorer["scored"] is None else str(scorer["scored"])
-        rows.append(
-            (
-                f"Scorer {scorer['name']}",
-                f"{scorer['status']}: {scored}/{scorer['selected']} scored, "
-                f"{scorer['errors']} errors",
-            )
-        )
-        for name, value in scorer.get("metrics", {}).items():
-            rows.append((f"{scorer['name']}: {name}", _number(value)))
-        if scorer.get("error_types"):
-            rows.append((f"{scorer['name']}: error types", ", ".join(scorer["error_types"])))
-    traces = mlflow.get("traces", {})
-    rows.append(("Trace status", str(traces.get("status", "disabled"))))
-    if traces.get("status") != "disabled":
-        rows.append(
-            (
-                "Trace coverage",
-                f"{traces.get('fetched', 0)}/{traces.get('selected', 0)} fetched, "
-                f"{traces.get('correlated', 0)} explicitly correlated, "
-                f"{traces.get('missing', 0)} missing, {traces.get('errors', 0)} errors",
-            )
-        )
-        for span in traces.get("spans", []):
-            rows.append(
-                (
-                    f"Span type {span['span_type']}",
-                    f"{span['count']} spans, {_number(span['total_duration_ms'])}ms total, "
-                    f"{_number(span['mean_duration_ms'])}ms average",
-                )
-            )
-        if traces.get("error_types"):
-            rows.append(("Trace error types", ", ".join(traces["error_types"])))
-    return rows
-
-
 def _table(rows: list[tuple[str, str]]) -> str:
     return (
         "<table>"
@@ -159,61 +100,15 @@ def _table(rows: list[tuple[str, str]]) -> str:
     )
 
 
-def _mlflow_links(summary: dict) -> list[tuple[str, str]]:
-    mlflow = summary.get("mlflow", {})
-    urls = [("MLflow evaluation run", mlflow.get("evaluation", {}).get("run_url"))]
-    urls.extend(
-        (f"MLflow trace {number}", url)
-        for number, url in enumerate(mlflow.get("traces", {}).get("urls", []), start=1)
-    )
-    result = []
-    for label, url in urls:
-        if not isinstance(url, str):
-            continue
-        try:
-            parsed = urlsplit(url)
-        except ValueError:
-            continue
-        if parsed.scheme in ("http", "https") and parsed.hostname and not parsed.username:
-            result.append((label, url))
-    return result
-
-
-def _mlflow_html(summary: dict, rows: list[tuple[str, str]]) -> str:
-    if not rows:
-        return ""
-    result = "<h2>MLflow results</h2>" + _table(rows)
-    if summary["mlflow"].get("status") == "not_run":
-        return result
-    result += (
-        "<p>Requested evaluation and trace reads run after load, on bounded captured successful outputs. "
-        "They do not invoke the target again or contribute to performance timings. "
-        "Evaluation errors are separate from request failures; metrics describe the scored sample. "
-        "Span durations can overlap and do not sum to invocation latency. "
-        "Request text, answers, judge rationales, and span contents are omitted from this report.</p>"
-    )
-    for label, url in _mlflow_links(summary):
-        result += f'<p><a href="{escape(url, quote=True)}">{escape(label)}</a></p>'
-
-    return result
-
-
 def render_loadtest_summary(summary: dict, *, report_dir: Path | None = None) -> None:
     """Print final metrics to stderr and optionally write an HTML report overview."""
     if not summary:
         return
     rows = _rows(summary)
-    mlflow_rows = _mlflow_rows(summary)
     errors = summary.get("errors", {})
     click.echo("\nLoad test report", err=True)
     for label, value in rows:
         click.echo(f"  {label}: {value}", err=True)
-    if mlflow_rows:
-        click.echo("  MLflow results (after load):", err=True)
-        for label, value in mlflow_rows:
-            click.echo(f"    {label}: {value}", err=True)
-        for label, url in _mlflow_links(summary):
-            click.echo(f"    {label}: {url}", err=True)
     if summary.get("generator_cpu_warning"):
         click.echo(
             "  Generator CPU exceeded Locust's limit; results may be generator-limited.", err=True
@@ -252,7 +147,6 @@ def render_loadtest_summary(summary: dict, *, report_dir: Path | None = None) ->
         "Performance completion does not establish sustainable capacity or answer quality. "
         "Token totals include only usage reported by successful responses; "
         "unknown first-content times are not treated as zero.</p>"
-        + _mlflow_html(summary, mlflow_rows)
         + "<h2>Request errors</h2>"
         + errors_html
         + "<h2>Details</h2><ul><li><a href='locust.html'>Locust charts and statistics</a></li>"

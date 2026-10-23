@@ -185,7 +185,7 @@ def finish(environment, **kwargs):
         "errors": dict(_ERRORS),
         "generator_cpu_warning": environment.runner.cpu_warning_emitted,
     }
-    if _CONFIG.get("mlflow_max_requests", 0):
+    if _CONFIG.get("sample_requests", 0):
         descriptor = os.open(
             _CONFIG["observations_file"], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
         )
@@ -230,7 +230,7 @@ class EndpointUser(HttpUser):
         _ACTIVE += 1
         _PEAK = max(_PEAK, _ACTIVE)
         # Reserve samples at admission, before yielding; failed samples are not replaced.
-        capture_output = _STARTED <= _CONFIG.get("mlflow_max_requests", 0)
+        capture_output = _STARTED <= _CONFIG.get("sample_requests", 0)
         observation = {}
         failure = None
         completed = False

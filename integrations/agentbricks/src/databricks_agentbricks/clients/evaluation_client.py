@@ -23,7 +23,7 @@ class EvaluationFacts:
     errors: int | None
 
 
-class MLflowLoadTestClient(MLflowTraceClient):
+class EvaluationClient(MLflowTraceClient):
     """Evaluate existing answers, never call the agent again."""
 
     def get_scorer(self, name: str, experiment_id: str) -> Any:
@@ -35,7 +35,7 @@ class MLflowLoadTestClient(MLflowTraceClient):
     @contextmanager
     def evaluation_run(self, experiment_id: str) -> Iterator[str]:
         with self.module.start_run(
-            experiment_id=experiment_id, run_name="AgentBricks load test evaluation"
+            experiment_id=experiment_id, run_name="AgentBricks evaluation"
         ) as run:
             yield run.info.run_id
 
@@ -43,7 +43,7 @@ class MLflowLoadTestClient(MLflowTraceClient):
         from mlflow.genai import evaluate
 
         # Native displays and scorer failures can include answer text. Keep CLI JSON and its
-        # shareable performance logs content-free; full assessments remain in the MLflow run.
+        # shareable evaluation logs content-free; full assessments remain in the MLflow run.
         previous_logging = logging.root.manager.disable
         try:
             logging.disable(logging.CRITICAL)
