@@ -112,6 +112,8 @@ def test_report_round_trips_through_json():
         val_records=3,
         prompt_changes=["a.b.system"],
         mlflow_run_id="r1",
+        baseline_metrics={"quality": 0.5, "latency_s": 3.0, "cost_usd": 0.004},
+        best_metrics={"quality": 0.9, "latency_s": 1.5, "cost_usd": None},
     )
     assert model_upgrade.UpgradeReport.from_json(report.to_json()) == report
     assert report.changed
@@ -383,3 +385,12 @@ def test_run_upgrade_reports_candidates_rejected_on_the_sample(monkeypatch):
         "system.ai.claude-haiku-4-5": 0.6,
     }
     assert rec.sample_only_scores == pytest.approx({"system.ai.gpt-6-luna": 0.3})
+
+
+def test_report_from_before_medians_were_recorded_still_loads():
+    data = model_upgrade.UpgradeReport(
+        recommendations={}, baseline_score=0.5, best_score=0.6
+    ).to_json()
+    del data["baseline_metrics"], data["best_metrics"]
+    report = model_upgrade.UpgradeReport.from_json(data)
+    assert report.baseline_metrics is None and report.best_metrics is None

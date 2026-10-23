@@ -2,6 +2,7 @@
 
 import pytest
 
+from databricks_agentkit.model_upgrades import optimization as opt
 from databricks_agentkit.model_upgrades import optimize_prompts_and_models, score
 
 
@@ -506,3 +507,41 @@ def test_result_keeps_every_model_the_search_tried(mocker, fake_scorers):
     assert result.model_history == {
         "ep1": {"databricks-gpt-5-4-mini": [0.5, 0.6], "databricks-gpt-6-luna": [0.2]},
     }
+
+
+def test_optimize_reports_the_seeds_and_winners_medians(mocker, fake_scorers):
+    real_adapter = opt._AgentAdapter
+    fake_gepa = _mock_optimize_env(mocker)
+    # The real adapter, so its evaluations record raw metrics; routing is stubbed.
+    mocker.patch("databricks_agentkit.model_upgrades.optimization._AgentAdapter", real_adapter)
+    mocker.patch("databricks_agentkit.model_upgrades.optimization._sync_destinations")
+    mocker.patch("databricks_agentkit.model_upgrades.optimization._preflight")
+    mocker.patch(
+        "databricks_agentkit.model_upgrades.optimization._extract_trace_summary",
+        return_value={"total_tokens": {"input": 1_000_000, "output": 0}, "spans": []},
+    )
+    val = [{"inputs": {"n": i}, "expectations": {"expected_response": "x"}} for i in range(3)]
+    best = {"model:ep1": "databricks-gpt-5-4-mini"}
+
+    def _optimize(**kwargs):
+        kwargs["adapter"].evaluate(val, kwargs["seed_candidate"])
+        kwargs["adapter"].evaluate(val, best)
+        return mocker.Mock(best_candidate=best, val_aggregate_scores=[0.5, 0.6], best_idx=1)
+
+    fake_gepa.optimize.side_effect = _optimize
+    result = optimize_prompts_and_models(
+        lambda inputs: "ok",
+        [],
+        val,
+        gateway_endpoints={"ep1": ["databricks-gpt-5-4-mini", "databricks-claude-sonnet-4"]},
+        scorers=fake_scorers,
+        max_metric_calls=10,
+        token_costs={
+            "databricks-claude-sonnet-4": {"input": 4.0, "output": 0.0},
+            "databricks-gpt-5-4-mini": {"input": 1.0, "output": 0.0},
+        },
+    )
+    assert result.baseline_metrics["quality"] == 1.0
+    assert result.baseline_metrics["cost_usd"] == pytest.approx(4.0 * 0.07)
+    assert result.best_metrics["cost_usd"] == pytest.approx(1.0 * 0.07)
+    assert result.best_metrics["latency_s"] is not None

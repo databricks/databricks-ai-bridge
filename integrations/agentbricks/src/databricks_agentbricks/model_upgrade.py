@@ -101,6 +101,9 @@ class UpgradeReport:
     # Prompts (registry names) the winner rewrote; empty when only models changed.
     prompt_changes: list[str] = field(default_factory=list)
     mlflow_run_id: Optional[str] = None
+    # Medians over the eval records, in raw units: quality, latency_s, cost_usd (None if unmeasured).
+    baseline_metrics: Optional[dict[str, Optional[float]]] = None
+    best_metrics: Optional[dict[str, Optional[float]]] = None
 
     @property
     def changed(self) -> bool:
@@ -127,6 +130,8 @@ class UpgradeReport:
             val_records=int(data.get("val_records", 0)),
             prompt_changes=list(data.get("prompt_changes") or []),
             mlflow_run_id=data.get("mlflow_run_id"),
+            baseline_metrics=data.get("baseline_metrics"),
+            best_metrics=data.get("best_metrics"),
         )
 
     def to_json(self) -> dict[str, Any]:
@@ -149,6 +154,8 @@ class UpgradeReport:
             "val_records": self.val_records,
             "prompt_changes": self.prompt_changes,
             "mlflow_run_id": self.mlflow_run_id,
+            "baseline_metrics": self.baseline_metrics,
+            "best_metrics": self.best_metrics,
         }
 
 
@@ -349,6 +356,8 @@ def run_upgrade(
         train_records=len(train_data),
         val_records=len(val_data),
         prompt_changes=prompt_changes,
+        baseline_metrics=getattr(result, "baseline_metrics", None),
+        best_metrics=getattr(result, "best_metrics", None),
     )
     return report, result
 
