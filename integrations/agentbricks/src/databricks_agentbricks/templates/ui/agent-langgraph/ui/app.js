@@ -1370,22 +1370,37 @@ elements.promptInput.addEventListener("keydown", (event) => {
   }
 });
 
-document.querySelectorAll(".mode-button").forEach((button) => {
+// At most one mode tip shows: the option last hovered or focused.
+const modeOptions = [...document.querySelectorAll(".mode-option")];
+const touchOnly = window.matchMedia("(hover: none)");
+
+function showModeTip(option) {
+  modeOptions.forEach((item) => item.classList.toggle("tip-visible", item === option));
+}
+
+modeOptions.forEach((option) => {
+  const button = option.querySelector(".mode-button");
   button.addEventListener("click", () => {
     state.mode = button.dataset.mode;
     document.querySelectorAll(".mode-button").forEach((item) => item.classList.toggle("active", item === button));
   });
-  // A tip hidden with Escape comes back once focus or the pointer leaves.
-  button.addEventListener("blur", () => button.classList.remove("tip-dismissed"));
-  button.parentElement.addEventListener("mouseleave", () => button.classList.remove("tip-dismissed"));
+  // Touch fires pointerenter and pointerleave around every tap, so touch relies on focus.
+  option.addEventListener("pointerenter", (event) => {
+    if (event.pointerType !== "touch") showModeTip(option);
+  });
+  option.addEventListener("pointerleave", (event) => {
+    if (event.pointerType !== "touch" && option.classList.contains("tip-visible")) showModeTip(null);
+  });
+  button.addEventListener("focus", () => {
+    if (button.matches(":focus-visible") || touchOnly.matches) showModeTip(option);
+  });
+  button.addEventListener("blur", () => {
+    if (option.classList.contains("tip-visible")) showModeTip(null);
+  });
 });
 
-// Escape hides the mode tip shown by hover or focus.
 document.addEventListener("keydown", (event) => {
-  if (event.key !== "Escape") return;
-  document
-    .querySelectorAll(".mode-option:hover > .mode-button, .mode-button:focus")
-    .forEach((button) => button.classList.add("tip-dismissed"));
+  if (event.key === "Escape") showModeTip(null);
 });
 
 elements.modelSelect.addEventListener("change", () => {

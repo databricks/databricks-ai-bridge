@@ -85,77 +85,94 @@ def test_mode_tooltips_match_across_templates():
 
 
 @pytest.mark.parametrize("template", TEMPLATES)
-def test_mode_tooltip_shows_on_hover_and_focus(template):
+def test_mode_tooltip_visibility_is_driven_by_one_class(template):
     css = (UI_ROOT / template / "ui/styles.css").read_text()
-    reveal = re.search(r"([^{}]*)\{\s*visibility:\s*visible;\s*\}", css)
-    assert reveal, "no rule reveals the mode tooltip"
-    selectors = [selector.strip() for selector in reveal.group(1).split(",")]
-    assert ".mode-option:hover > .mode-tip" in selectors
-    assert ".mode-button:focus-visible + .mode-tip" in selectors
-    assert re.search(
-        r"\.mode-button\.tip-dismissed \+ \.mode-tip\s*\{\s*visibility:\s*hidden;", css
-    )
-    # Hovering one mode hides the focused mode's tip, so tips never overlap.
-    assert re.search(
-        r"\.mode-switcher:has\(\.mode-option:hover\) \.mode-option:not\(:hover\) > \.mode-tip"
-        r"\s*\{\s*visibility:\s*hidden;",
-        css,
-    )
-    # The dismissed rule must come after the reveal rules so Escape wins.
-    assert css.index(".mode-button.tip-dismissed") > reveal.start()
+    reveals = re.findall(r"([^{}/]*)\{\s*visibility:\s*visible;\s*\}", css)
+    # Stacked :hover/:focus reveal rules let two tips show at once, so JS owns visibility.
+    assert [selector.strip() for selector in reveals] == [".mode-option.tip-visible > .mode-tip"]
+    assert ":hover > .mode-tip" not in css
+    assert ":focus-visible + .mode-tip" not in css
 
 
 @pytest.mark.parametrize("template", TEMPLATES)
-def test_escape_dismisses_mode_tooltip_until_focus_or_pointer_leaves(template):
+def test_at_most_one_mode_tooltip_shows(template):
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node.js is required to exercise the shipped JavaScript")
     source = (UI_ROOT / template / "ui/app.js").read_text()
     match = re.search(
-        r'^document\.querySelectorAll\("\.mode-button"\)\.forEach\(.*?'
-        r"^// Escape hides the mode tip.*?^\}\);",
+        r"^// At most one mode tip shows.*?"
+        r'^document\.addEventListener\("keydown".*?^\}\);',
         source,
         re.M | re.S,
     )
-    assert match, "Missing mode-button wiring in app.js"
+    assert match, "Missing mode tip wiring in app.js"
     program = (
         r"""
 import assert from 'node:assert/strict';
 const target = () => ({ listeners: {},
   addEventListener(type, handler) { (this.listeners[type] ??= []).push(handler); },
   fire(type, event = {}) { for (const handler of this.listeners[type] ?? []) handler(event); } });
-const button = Object.assign(target(), { dataset: { mode: 'background' }, classes: new Set(),
-  parentElement: target(), hovered: false, focused: false });
-button.classList = {
-  add: name => button.classes.add(name),
-  remove: name => button.classes.delete(name),
-  toggle: (name, on) => on ? button.classes.add(name) : button.classes.delete(name),
-};
-// Only the Escape handler's hover/focus query depends on the button's state.
+const classList = () => { const names = new Set(); return { names,
+  add: name => names.add(name),
+  contains: name => names.has(name),
+  toggle: (name, on) => on ? names.add(name) : names.delete(name) }; };
+const options = ['streaming', 'background', 'sync'].map(mode => {
+  const button = Object.assign(target(), { dataset: { mode }, classList: classList(),
+    focusVisible: false, matches: selector => selector === ':focus-visible' && button.focusVisible });
+  return Object.assign(target(), { mode, button, classList: classList(), querySelector: () => button });
+});
 const document = Object.assign(target(), { querySelectorAll: selector =>
-  selector === '.mode-button' || button.hovered || button.focused ? [button] : [] });
+  selector === '.mode-option' ? options : options.map(option => option.button) });
+const window = { matchMedia: () => ({ matches: false }) };
 const state = {};
 """
         + match.group()
         + r"""
-const dismissed = () => button.classes.has('tip-dismissed');
-document.fire('keydown', { key: 'Escape' });
-assert.equal(dismissed(), false, 'Escape ignores tips that are not shown');
-button.focused = true;
+const [streaming, background, sync] = options;
+const shown = () => options.filter(option => option.classList.contains('tip-visible')).map(option => option.mode);
+const mouse = { pointerType: 'mouse' };
+
+// Sweep the pointer across every button, including out-of-order leave events.
+for (const option of options) {
+  option.fire('pointerenter', mouse);
+  assert.deepEqual(shown(), [option.mode]);
+}
+streaming.fire('pointerleave', mouse);
+assert.deepEqual(shown(), ['sync'], 'a late leave from another option keeps the current tip');
+sync.fire('pointerleave', mouse);
+assert.deepEqual(shown(), []);
+
+// Tab to Streaming, then hover Background without clicking (the reported overlap).
+streaming.button.focusVisible = true;
+streaming.button.fire('focus');
+assert.deepEqual(shown(), ['streaming']);
+background.fire('pointerenter', mouse);
+assert.deepEqual(shown(), ['background']);
+streaming.button.fire('blur');
+assert.deepEqual(shown(), ['background'], 'blurring a hidden tip leaves the hovered one');
+background.fire('pointerleave', mouse);
+assert.deepEqual(shown(), []);
+
+// A mouse click focuses without :focus-visible, so it shows nothing extra.
+streaming.button.focusVisible = false;
+sync.button.fire('focus');
+assert.deepEqual(shown(), []);
+
+// Touch taps don't flash a tip via pointer events.
+background.fire('pointerenter', { pointerType: 'touch' });
+assert.deepEqual(shown(), []);
+
+// Escape hides whichever tip is up.
+background.fire('pointerenter', mouse);
 document.fire('keydown', { key: 'Enter' });
-assert.equal(dismissed(), false);
+assert.deepEqual(shown(), ['background']);
 document.fire('keydown', { key: 'Escape' });
-assert.equal(dismissed(), true, 'Escape hides the focused tip');
-button.focused = false;
-button.fire('blur');
-assert.equal(dismissed(), false);
-button.hovered = true;
-document.fire('keydown', { key: 'Escape' });
-assert.equal(dismissed(), true, 'Escape hides the hovered tip');
-button.parentElement.fire('mouseleave');
-assert.equal(dismissed(), false);
-button.fire('click');
+assert.deepEqual(shown(), []);
+
+background.button.fire('click');
 assert.equal(state.mode, 'background', 'clicking still selects the mode');
+assert.deepEqual(options.map(option => option.button.classList.contains('active')), [false, true, false]);
 """
     )
     result = subprocess.run(

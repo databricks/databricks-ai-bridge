@@ -1199,24 +1199,9 @@ h2 {
   left: auto;
 }
 
-.mode-option:hover > .mode-tip,
-.mode-button:focus-visible + .mode-tip {
+/* app.js sets tip-visible on at most one option at a time. */
+.mode-option.tip-visible > .mode-tip {
   visibility: visible;
-}
-
-@media (hover: none) {
-  .mode-button:focus + .mode-tip {
-    visibility: visible;
-  }
-}
-
-/* Hovering one mode hides the focused mode's tip so only one shows. */
-.mode-switcher:has(.mode-option:hover) .mode-option:not(:hover) > .mode-tip {
-  visibility: hidden;
-}
-
-.mode-button.tip-dismissed + .mode-tip {
-  visibility: hidden;
 }
 
 .composer-model {
