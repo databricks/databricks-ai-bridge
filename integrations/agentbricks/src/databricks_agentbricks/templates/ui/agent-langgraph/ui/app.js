@@ -53,6 +53,10 @@ const elements = {
   memoryEntries: document.querySelector("#memory-entries"),
   memoryPipelineRun: document.querySelector("#memory-pipeline-run"),
   memoryPipelineBody: document.querySelector("#memory-pipeline-body"),
+  memoryPipelineConfirm: document.querySelector("#memory-pipeline-confirm"),
+  memoryPipelineConfirmText: document.querySelector("#memory-pipeline-confirm-text"),
+  memoryPipelineCancel: document.querySelector("#memory-pipeline-cancel"),
+  memoryPipelineStart: document.querySelector("#memory-pipeline-start"),
   memoryModal: document.querySelector("#memory-modal"),
   memoryModalTitle: document.querySelector("#memory-modal-title"),
   memoryModalBody: document.querySelector("#memory-modal-body"),
@@ -906,8 +910,15 @@ function pipelineRunning(runs) {
 function updatePipelineButton(pipeline, runs) {
   const busy = pipelineState.starting || pipelineRunning(runs);
   elements.memoryPipelineRun.hidden = !pipeline;
-  elements.memoryPipelineRun.disabled = busy;
+  elements.memoryPipelineRun.disabled = busy || !elements.memoryPipelineConfirm.hidden;
   elements.memoryPipelineRun.textContent = busy ? "Running…" : "Run now";
+  if (!pipeline || busy) elements.memoryPipelineConfirm.hidden = true;
+}
+
+function setPipelineConfirm(open) {
+  elements.memoryPipelineConfirmText.textContent = PIPELINE_RUN_CONFIRM;
+  elements.memoryPipelineConfirm.hidden = !open;
+  elements.memoryPipelineRun.disabled = open;
 }
 
 function renderPipeline(pipeline, runs, notice = "") {
@@ -989,6 +1000,7 @@ async function loadPipeline(notice = "") {
     }
   } catch (error) {
     elements.memoryPipelineRun.hidden = true;
+    elements.memoryPipelineConfirm.hidden = true;
     elements.memoryPipelineBody.replaceChildren(
       pipelineText("memory-error", error instanceof Error ? error.message : String(error)),
     );
@@ -996,8 +1008,9 @@ async function loadPipeline(notice = "") {
   }
 }
 
+// Called from the confirm's "Run" button: "Run now" only opens the warning.
 async function runPipeline() {
-  if (!window.confirm(PIPELINE_RUN_CONFIRM)) return;
+  elements.memoryPipelineConfirm.hidden = true;
   pipelineState.starting = true;
   updatePipelineButton(true, []);
   let notice = "";
@@ -1027,6 +1040,7 @@ function openMemoryPane() {
 
 function closeMemoryPane() {
   window.clearTimeout(pipelineState.timer);
+  setPipelineConfirm(false);
   elements.leftCard.classList.remove("memory-open");
   elements.memoryPane.hidden = true;
   elements.capabilitiesBlock.hidden = false;
@@ -1751,7 +1765,9 @@ elements.memoryRefresh.addEventListener("click", () => {
   void loadMemory();
   void loadPipeline();
 });
-elements.memoryPipelineRun.addEventListener("click", () => void runPipeline());
+elements.memoryPipelineRun.addEventListener("click", () => setPipelineConfirm(true));
+elements.memoryPipelineCancel.addEventListener("click", () => setPipelineConfirm(false));
+elements.memoryPipelineStart.addEventListener("click", () => void runPipeline());
 elements.memoryActor.addEventListener("input", () => {
   window.clearTimeout(memoryState.searchTimer);
   memoryState.searchTimer = window.setTimeout(() => void loadMemory(), 300);
