@@ -248,8 +248,8 @@ def test_pipeline_run_calls_use_the_pipeline_resource(ui):
 
 _JS_FUNCTIONS = (
     "formatJson prettyDateTime memoryStoreName jsonResponse pipelineText pipelineCommand "
-    "pipelineSetting pipelineRunError pipelineRunning updatePipelineButton renderPipeline "
-    "loadPipeline runPipeline"
+    "pipelineSetting pipelineRunError pipelineRunning updatePipelineButton setPipelineConfirm "
+    "renderPipeline loadPipeline runPipeline"
 ).split()
 
 _JS_HARNESS = r"""
@@ -267,15 +267,16 @@ class Node {
 }
 const document = { createElement: (tag) => new Node(tag) };
 const elements = { memoryPipelineRun: new Node('button'), memoryPipelineBody: new Node('div'),
+  memoryPipelineConfirm: new Node('div'), memoryPipelineConfirmText: new Node('p'),
   memoryPane: new Node('div') };
+elements.memoryPipelineConfirm.hidden = true;
 const state = { config: { memory: { pipelines: true, store: 'memory-stores/store' },
   session: { store: 'sessions' } } };
 const events = [], requests = [], timers = [], log = [];
 const addEvent = (type, payload) => events.push({ type, payload });
 const demoUrl = (path) => path;
-let confirmAnswer = true, responses = {};
+let responses = {};
 const window = {
-  confirm: (message) => { log.push(['confirm', message]); return confirmAnswer; },
   setTimeout: (fn, ms) => { timers.push(ms); return timers.length; },
   clearTimeout: () => {},
 };
@@ -291,6 +292,7 @@ const GET = 'GET /api/demo/memory/pipeline', POST = 'POST /api/demo/memory/pipel
 const pipeline = JSON.parse(process.argv[1]);
 const body = () => elements.memoryPipelineBody.text();
 const button = elements.memoryPipelineRun;
+const confirmBox = elements.memoryPipelineConfirm;
 
 // FR-6: without pipelines in config the pane says so and makes no calls.
 state.config.memory.pipelines = false;
@@ -326,23 +328,28 @@ assert.equal(button.textContent, 'Run now');
 assert.deepEqual(timers, [], 'no polling once runs are finished');
 assert.equal(events.at(-1).type, 'memory.pipeline.get');
 
-// FR-3: declining the confirm starts nothing.
+// FR-3: "Run now" opens the warning without starting a run; Cancel closes it.
 requests.length = 0;
-confirmAnswer = false;
-await runPipeline();
+setPipelineConfirm(true);
+assert.equal(confirmBox.hidden, false);
+assert.match(elements.memoryPipelineConfirmText.textContent,
+  /^Run the pipeline now\? It can rewrite, merge, or delete any memory in this store, including ones the agent saved\.$/);
+assert.equal(button.disabled, true);
+setPipelineConfirm(false);
+assert.equal(confirmBox.hidden, true);
+assert.equal(button.disabled, false);
 assert.equal(requests.length, 0);
-assert.match(log.at(-1)[1], /It can rewrite, merge, or delete any memory in this store, including ones the agent saved\./);
 
 // FR-3, FR-4: confirming posts the run, then the running state disables the button and polls.
-confirmAnswer = true;
+setPipelineConfirm(true);
 log.length = 0;
 responses[POST] = [200, { name: 'memory-pipelines/p-1/runs/3', state: 'RUNNING' }];
 responses[GET] = [200, { pipeline, runs: [
   { name: 'memory-pipelines/p-1/runs/3', state: 'RUNNING', create_time: '2026-10-22T10:40:00Z' },
 ] }];
 await runPipeline();
-assert.deepEqual(log.map(([kind]) => kind), ['confirm', 'fetch', 'fetch']);
 assert.deepEqual(requests, [POST, GET]);
+assert.equal(confirmBox.hidden, true);
 assert.ok(events.some((event) => event.type === 'memory.pipeline.run'));
 assert.equal(button.disabled, true);
 assert.equal(button.textContent, 'Running…');
@@ -395,6 +402,19 @@ def test_memory_pane_pipeline_block(framework):
 
 
 @pytest.mark.parametrize("framework", FRAMEWORKS)
+def test_run_now_opens_the_warning_and_only_its_run_button_starts_a_run(framework):
+    source = (UI_TEMPLATES / f"agent-{framework}" / "ui" / "app.js").read_text()
+
+    assert "window.confirm" not in source
+    for wiring in (
+        'memoryPipelineRun.addEventListener("click", () => setPipelineConfirm(true));',
+        'memoryPipelineCancel.addEventListener("click", () => setPipelineConfirm(false));',
+        'memoryPipelineStart.addEventListener("click", () => void runPipeline());',
+    ):
+        assert wiring in source
+
+
+@pytest.mark.parametrize("framework", FRAMEWORKS)
 def test_memory_pane_has_the_pipeline_block(framework):
     html = (UI_TEMPLATES / f"agent-{framework}" / "ui" / "index.html").read_text()
 
@@ -402,6 +422,12 @@ def test_memory_pane_has_the_pipeline_block(framework):
     assert (
         '<button id="memory-pipeline-run" class="text-button" type="button" hidden>Run now</button>'
         in html
+    )
+    assert re.search(
+        r'<div id="memory-pipeline-confirm" [^>]*role="alertdialog"[^>]* hidden>', html
+    )
+    assert (
+        '<button id="memory-pipeline-start" class="text-button" type="button">Run</button>' in html
     )
     # The block sits between the store header and the Actor ID field.
     assert (
@@ -419,3 +445,4 @@ def test_hidden_run_now_button_is_not_displayed(framework):
     assert re.search(
         r"^\.memory-pipeline-head \.text-button\[hidden\] \{\s*display: none;\s*\}", css, re.M
     )
+    assert re.search(r"^\.memory-pipeline-confirm\[hidden\] \{\s*display: none;\s*\}", css, re.M)

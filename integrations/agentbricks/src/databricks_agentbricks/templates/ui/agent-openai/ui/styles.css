@@ -1961,6 +1961,34 @@ h2 {
   opacity: 0.55;
 }
 
+.memory-pipeline-confirm {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+  border-radius: var(--radius-small);
+  background: color-mix(in srgb, var(--danger) 6%, transparent);
+}
+
+.memory-pipeline-confirm[hidden] {
+  display: none;
+}
+
+.memory-pipeline-confirm p {
+  margin: 0 0 8px;
+  color: var(--ink);
+}
+
+.memory-pipeline-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+#memory-pipeline-start {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
 .memory-pipeline-body .memory-field-hint {
   margin: 4px 0;
 }
