@@ -429,12 +429,24 @@ def test_memory_pane_has_the_pipeline_block(framework):
     assert (
         '<button id="memory-pipeline-start" class="text-button" type="button">Run</button>' in html
     )
-    # The block sits between the store header and the Actor ID field.
+    # The block comes after the Actor ID field and the entries list.
     assert (
-        html.index('id="memory-store-name"')
+        html.index('for="memory-actor-input"')
+        < html.index('id="memory-entries"')
         < html.index('id="memory-pipeline"')
-        < html.index('for="memory-actor-input"')
     )
+
+
+@pytest.mark.parametrize("framework", FRAMEWORKS)
+def test_memory_entries_scroll_above_the_pipeline(framework):
+    css = (UI_TEMPLATES / f"agent-{framework}" / "ui" / "styles.css").read_text()
+
+    # A capped, scrolling entries list keeps many memories from pushing the pipeline down.
+    entries = re.search(r"^\.memory-entries \{(.*?)\}", css, re.M | re.S)
+    assert entries
+    assert "max-height: 320px;" in entries.group(1)
+    assert "overflow-y: auto;" in entries.group(1)
+    assert "flex: 1;" not in entries.group(1)
 
 
 @pytest.mark.parametrize("framework", FRAMEWORKS)
