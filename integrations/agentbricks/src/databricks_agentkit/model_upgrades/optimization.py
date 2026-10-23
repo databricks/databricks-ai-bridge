@@ -1118,15 +1118,21 @@ def _median_metrics(adapter, candidate, records):
 
 def _format_metrics_change(baseline, best):
     """One line: how the median quality, latency, and cost moved from the seed to the winner."""
+
+    def usd(value):
+        # Sub-cent costs keep 2 significant figures instead of rounding to $0.0000.
+        decimals = 4 if value <= 0 else max(4, 1 - math.floor(math.log10(value)))
+        return f"${value:.{decimals}f}"
+
     parts = []
     for name, label, fmt in (
-        ("quality", "quality", "{:.2f}"),
-        ("latency_s", "latency", "{:.1f}s"),
-        ("cost_usd", "cost", "${:.4f}"),
+        ("quality", "quality", "{:.2f}".format),
+        ("latency_s", "latency", "{:.1f}s".format),
+        ("cost_usd", "cost", usd),
     ):
         before, after = baseline.get(name), best.get(name)
         if before is not None and after is not None:
-            parts.append(f"{label} {fmt.format(before)} -> {fmt.format(after)}")
+            parts.append(f"{label} {fmt(before)} -> {fmt(after)}")
     return "median " + ", ".join(parts) if parts else ""
 
 

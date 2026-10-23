@@ -891,3 +891,11 @@ def test_evaluate_records_raw_medians_and_a_failure_adds_no_latency_or_cost(mock
 def test_median_handles_even_counts_and_missing_values():
     assert opt._median([3.0, 1.0, None, 2.0, 4.0]) == pytest.approx(2.5)
     assert opt._median([None]) is None
+
+
+def test_metrics_change_line_keeps_sub_cent_costs_readable():
+    line = opt._format_metrics_change(
+        {"quality": 0.0, "latency_s": 2.3, "cost_usd": 0.00012},
+        {"quality": 1.0, "latency_s": 0.5, "cost_usd": 0.00004},
+    )
+    assert line == "median quality 0.00 -> 1.00, latency 2.3s -> 0.5s, cost $0.00012 -> $0.000040"

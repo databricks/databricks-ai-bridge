@@ -21,6 +21,7 @@ Runs and switches are recorded in ``.agentbricks/model_upgrades.json``.
 
 from __future__ import annotations
 
+import math
 import pathlib
 from typing import Optional
 
@@ -588,20 +589,26 @@ def _refresh_latest_run(obj, project, upgrade_id: Optional[str] = None) -> Optio
     return entry
 
 
+def _usd(value: float) -> str:
+    """Dollars to at least 4 decimals, keeping 2 significant figures of sub-cent amounts."""
+    decimals = 4 if value <= 0 else max(4, 1 - math.floor(math.log10(value)))
+    return f"${value:.{decimals}f}"
+
+
 def _median_fields(report) -> dict[str, str]:
     """``Median <metric>: before → after (change)`` for each metric both runs measured."""
     before, after = report.baseline_metrics or {}, report.best_metrics or {}
     fields = {}
     for key, label, fmt in (
-        ("quality", "Median quality", "{:.2f}"),
-        ("latency_s", "Median latency", "{:.1f}s"),
-        ("cost_usd", "Median cost per request", "${:.4f}"),
+        ("quality", "Median quality", "{:.2f}".format),
+        ("latency_s", "Median latency", "{:.1f}s".format),
+        ("cost_usd", "Median cost per request", _usd),
     ):
         old, new = before.get(key), after.get(key)
         if old is None or new is None:
             continue
         change = f" ({(new - old) / old:+.0%})" if old else ""
-        fields[label] = f"{fmt.format(old)} → {fmt.format(new)}{change}"
+        fields[label] = f"{fmt(old)} → {fmt(new)}{change}"
     return fields
 
 
