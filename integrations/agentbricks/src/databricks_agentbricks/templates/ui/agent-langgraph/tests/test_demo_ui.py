@@ -97,6 +97,24 @@ class _FakeStateClient:
             ]
         }
 
+    def find_memory_pipeline(self):
+        return {"name": "memory-pipelines/p1", "memory_store": "memory-stores/store"}
+
+    def list_memory_pipeline_runs(self, pipeline):
+        return {
+            "pipeline_runs": [
+                {
+                    "name": f"{pipeline}/runs/{i}",
+                    "state": "SUCCEEDED",
+                    "create_time": f"2026-10-0{i}",
+                }
+                for i in range(1, 8)
+            ]
+        }
+
+    def run_memory_pipeline(self, pipeline):
+        return {"name": f"{pipeline}/runs/8", "state": "RUNNING"}
+
 
 class _FakeInterrupt:
     def __init__(self, value, id):
@@ -458,7 +476,9 @@ async def test_checkpoint_history_reads_messages_and_interrupts(monkeypatch):
         }
         return SimpleNamespace(
             checkpoint={"channel_values": {"messages": [message]}},
-            pending_writes=[("task", "__interrupt__", [_FakeInterrupt({"approval": True}, "int-1")])],
+            pending_writes=[
+                ("task", "__interrupt__", [_FakeInterrupt({"approval": True}, "int-1")])
+            ],
         )
 
     monkeypatch.setattr(session_store, "history_checkpoint", saved_checkpoint)
@@ -484,6 +504,7 @@ def test_managed_memory_and_session_routes(monkeypatch):
         "enabled": True,
         "store": "memory-stores/store",
         "actor": "alice",
+        "pipelines": False,
     }
     assert config["session"]["store"] == "sessions"
     assert config["session"]["actor"] == "alice"
@@ -555,6 +576,19 @@ def test_managed_memory_and_session_routes(monkeypatch):
         ]["data"]["content"]
         == "s2"
     )
+
+
+def test_memory_pipeline_routes(monkeypatch):
+    # Without both stores the pipeline routes refuse before calling the API.
+    unconfigured = _client(monkeypatch)
+    assert unconfigured.get("/api/demo/memory/pipeline").status_code == 503
+    assert unconfigured.post("/api/demo/memory/pipeline/run").status_code == 503
+
+    client = _client(monkeypatch, configured=True, session_id="s1")
+    pipeline = client.get("/api/demo/memory/pipeline").json()
+    assert pipeline["pipeline"]["name"] == "memory-pipelines/p1"
+    assert [run["name"][-1] for run in pipeline["runs"]] == ["7", "6", "5", "4", "3"]
+    assert client.post("/api/demo/memory/pipeline/run").json()["state"] == "RUNNING"
 
 
 def test_open_session_rejects_another_actor(monkeypatch):

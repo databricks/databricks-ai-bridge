@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
     <title>Agent Bricks Workbench</title>
-    <link rel="stylesheet" href="/ui-assets/styles.css?v=5" />
+    <link rel="stylesheet" href="/ui-assets/styles.css?v=6" />
   </head>
   <body>
     <div class="app-shell">
@@ -111,6 +111,13 @@
                   <span id="memory-store-resource"></span>
                 </div>
               </div>
+              <section id="memory-pipeline" class="memory-pipeline" aria-labelledby="memory-pipeline-title">
+                <div class="memory-pipeline-head">
+                  <h3 id="memory-pipeline-title" class="memory-field-label">Memory pipeline</h3>
+                  <button id="memory-pipeline-run" class="text-button" type="button" hidden>Run now</button>
+                </div>
+                <div id="memory-pipeline-body" class="memory-pipeline-body" aria-live="polite"></div>
+              </section>
               <label class="memory-field-label" for="memory-actor-input">Actor ID</label>
               <p class="memory-field-hint">Memories are scoped to an actor. Change this to browse another actor's entries.</p>
               <input id="memory-actor-input" class="memory-actor" type="text" placeholder="Actor ID" autocomplete="off" spellcheck="false" />
@@ -286,6 +293,6 @@
     </div>
 
     <script src="/ui-assets/markdown-it-15.0.2.min.js" defer></script>
-    <script src="/ui-assets/app.js?v=5" defer></script>
+    <script src="/ui-assets/app.js?v=6" defer></script>
   </body>
 </html>

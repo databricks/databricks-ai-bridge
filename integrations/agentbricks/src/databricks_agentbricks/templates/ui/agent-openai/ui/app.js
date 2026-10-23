@@ -53,6 +53,8 @@ const elements = {
   memorySearch: document.querySelector("#memory-search-input"),
   memoryCount: document.querySelector("#memory-count"),
   memoryEntries: document.querySelector("#memory-entries"),
+  memoryPipelineRun: document.querySelector("#memory-pipeline-run"),
+  memoryPipelineBody: document.querySelector("#memory-pipeline-body"),
   memoryModal: document.querySelector("#memory-modal"),
   memoryModalTitle: document.querySelector("#memory-modal-title"),
   memoryModalBody: document.querySelector("#memory-modal-body"),
@@ -833,6 +835,170 @@ async function loadMemory() {
   }
 }
 
+// ---- Memory pipeline (inside the Memory pane) -------------------------------
+
+const PIPELINE_TRIGGERS = { MANUAL_ONLY: "Manual only", SCHEDULED: "Every ~24h" };
+const PIPELINE_RUN_STATES = {
+  RUNNING: ["Running", "degraded"],
+  SUCCEEDED: ["Succeeded", "enabled"],
+  FAILED: ["Failed", "disabled"],
+  CANCELLED: ["Cancelled", ""],
+};
+const PIPELINE_RUN_CONFIRM =
+  "Run the pipeline now? It can rewrite, merge, or delete any memory in this store, including ones the agent saved.";
+const PIPELINE_POLL_MS = 10000;
+const pipelineState = { timer: null, starting: false };
+
+function pipelineText(className, text, tag = "p") {
+  const node = document.createElement(tag);
+  node.className = className;
+  node.textContent = text;
+  return node;
+}
+
+function pipelineCommand(command) {
+  const row = document.createElement("div");
+  row.className = "cap-command";
+  const code = document.createElement("code");
+  code.textContent = command;
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.setAttribute("aria-label", `Copy command: ${command}`);
+  copy.innerHTML =
+    '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+  copy.addEventListener("click", () => void navigator.clipboard.writeText(command).catch(() => {}));
+  row.append(code, copy);
+  return row;
+}
+
+function pipelineSetting(label, value) {
+  const row = document.createElement("div");
+  row.className = "memory-pipeline-setting";
+  row.append(pipelineText("memory-pipeline-key", label, "span"), pipelineText("memory-pipeline-value", value, "span"));
+  return row;
+}
+
+function pipelineRunError(error) {
+  if (!error) return "";
+  return typeof error === "string" ? error : error.message || formatJson(error);
+}
+
+function pipelineRunning(runs) {
+  return runs[0]?.state === "RUNNING";
+}
+
+// "Run now" is off while a run is starting or in progress: a pipeline runs one at a time.
+function updatePipelineButton(pipeline, runs) {
+  const busy = pipelineState.starting || pipelineRunning(runs);
+  elements.memoryPipelineRun.hidden = !pipeline;
+  elements.memoryPipelineRun.disabled = busy;
+  elements.memoryPipelineRun.textContent = busy ? "Running…" : "Run now";
+}
+
+function renderPipeline(pipeline, runs, notice = "") {
+  const body = elements.memoryPipelineBody;
+  body.replaceChildren();
+  updatePipelineButton(pipeline, runs);
+  if (notice) body.append(pipelineText("memory-error", notice));
+  if (!pipeline) {
+    const memoryStore = memoryStoreName();
+    const sessionStore = state.config?.session.store || "<session-store>";
+    body.append(
+      pipelineText("memory-field-hint", "No pipeline for this store pair. Create one:"),
+      pipelineCommand(
+        `agentbricks memory pipeline create --memory-store ${memoryStore} --session-store ${sessionStore}`,
+      ),
+    );
+    return;
+  }
+  const policy = pipeline.dreamer_policy || {};
+  const name = pipeline.display_name || String(pipeline.name || "").split("/").pop() || "Memory pipeline";
+  body.append(
+    pipelineText("memory-pipeline-name", `${name} · ${PIPELINE_TRIGGERS[policy.trigger] || "Manual only"}`),
+    pipelineSetting("Model", policy.model || pipeline.model || "Default"),
+  );
+  const instructions = pipelineSetting("Instructions", policy.instructions || "Default");
+  // Long instructions stay clamped to two lines until clicked.
+  instructions.addEventListener("click", () => instructions.classList.toggle("expanded"));
+  body.append(
+    instructions,
+    pipelineText(
+      "memory-field-hint",
+      "Model and instruction changes apply to the next run. Change them with agentbricks memory pipeline update.",
+    ),
+    pipelineText("memory-field-label", "Recent runs", "h4"),
+  );
+  if (!runs.length) {
+    body.append(pipelineText("memory-field-hint", "No runs yet."));
+    return;
+  }
+  const list = document.createElement("ul");
+  list.className = "memory-pipeline-runs";
+  for (const run of runs) {
+    const [label, orb] = PIPELINE_RUN_STATES[run.state] || [run.state || "Unknown", ""];
+    const item = document.createElement("li");
+    const status = document.createElement("span");
+    status.className = `status-orb ${orb}`.trim();
+    status.setAttribute("aria-hidden", "true");
+    item.append(
+      status,
+      pipelineText("memory-pipeline-state", label, "span"),
+      pipelineText("memory-entry-time", prettyDateTime(run.create_time), "span"),
+    );
+    const error = pipelineRunError(run.error);
+    if (error) item.append(pipelineText("memory-pipeline-run-error", error));
+    list.append(item);
+  }
+  body.append(list);
+}
+
+async function loadPipeline(notice = "") {
+  window.clearTimeout(pipelineState.timer);
+  if (!state.config?.memory.pipelines) {
+    // Never call the pipeline routes here: they need a deployed app with both stores bound.
+    elements.memoryPipelineRun.hidden = true;
+    elements.memoryPipelineBody.replaceChildren(
+      pipelineText("memory-field-hint", "Memory pipelines need a deployed app with sessions and memory bound."),
+    );
+    return;
+  }
+  try {
+    const response = await fetch(demoUrl("/api/demo/memory/pipeline"), { cache: "no-store" });
+    const { pipeline, runs = [] } = await jsonResponse(response);
+    renderPipeline(pipeline, runs, notice);
+    addEvent("memory.pipeline.get", { pipeline: pipeline?.name || null, runs: runs.length, status: runs[0]?.state });
+    // Refresh while a run is in progress and the pane is open.
+    if (pipelineRunning(runs) && !elements.memoryPane.hidden) {
+      window.clearTimeout(pipelineState.timer);
+      pipelineState.timer = window.setTimeout(() => void loadPipeline(), PIPELINE_POLL_MS);
+    }
+  } catch (error) {
+    elements.memoryPipelineRun.hidden = true;
+    elements.memoryPipelineBody.replaceChildren(
+      pipelineText("memory-error", error instanceof Error ? error.message : String(error)),
+    );
+    addEvent("memory.pipeline.error", { message: String(error) });
+  }
+}
+
+async function runPipeline() {
+  if (!window.confirm(PIPELINE_RUN_CONFIRM)) return;
+  pipelineState.starting = true;
+  updatePipelineButton(true, []);
+  let notice = "";
+  try {
+    const response = await fetch(demoUrl("/api/demo/memory/pipeline/run"), { method: "POST" });
+    const run = await jsonResponse(response);
+    addEvent("memory.pipeline.run", { run_id: run.name, status: run.state });
+  } catch (error) {
+    notice = error instanceof Error ? error.message : String(error);
+    addEvent("memory.pipeline.error", { message: notice });
+  } finally {
+    pipelineState.starting = false;
+  }
+  await loadPipeline(notice);
+}
+
 function openMemoryPane() {
   elements.leftCard.classList.add("memory-open");
   elements.capabilitiesBlock.hidden = true;
@@ -841,9 +1007,11 @@ function openMemoryPane() {
   elements.memoryStoreResource.textContent = state.config?.memory.store || "";
   if (!elements.memoryActor.value) elements.memoryActor.value = state.config?.memory.actor || "";
   void loadMemory();
+  void loadPipeline();
 }
 
 function closeMemoryPane() {
+  window.clearTimeout(pipelineState.timer);
   elements.leftCard.classList.remove("memory-open");
   elements.memoryPane.hidden = true;
   elements.capabilitiesBlock.hidden = false;
@@ -1348,7 +1516,10 @@ async function loadConfig() {
     addEvent("runtime.config", config);
     void refreshSessionView({ hydrateChat: true });
     // The memory pane loads lazily when opened; refresh it if it is already open.
-    if (!elements.memoryPane.hidden) void loadMemory();
+    if (!elements.memoryPane.hidden) {
+      void loadMemory();
+      void loadPipeline();
+    }
     return config;
   } catch (error) {
     throw error;
@@ -1462,7 +1633,11 @@ document.querySelectorAll(".capability").forEach((button) => {
 
 // Memory pane controls.
 elements.memoryBack.addEventListener("click", closeMemoryPane);
-elements.memoryRefresh.addEventListener("click", () => loadMemory());
+elements.memoryRefresh.addEventListener("click", () => {
+  void loadMemory();
+  void loadPipeline();
+});
+elements.memoryPipelineRun.addEventListener("click", () => void runPipeline());
 elements.memoryActor.addEventListener("input", () => {
   window.clearTimeout(memoryState.searchTimer);
   memoryState.searchTimer = window.setTimeout(() => void loadMemory(), 300);
