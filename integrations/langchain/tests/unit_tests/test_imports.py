@@ -2,6 +2,7 @@ from databricks_langchain import (
     ChatDatabricks,
     DatabricksEmbeddings,
     DatabricksFunctionClient,
+    DatabricksSandbox,
     DatabricksVectorSearch,
     GenieAgent,
     UCFunctionToolkit,
@@ -13,6 +14,7 @@ from databricks_langchain import (
 assert ChatDatabricks
 assert DatabricksEmbeddings
 assert DatabricksFunctionClient
+assert DatabricksSandbox
 assert DatabricksVectorSearch
 assert GenieAgent
 assert UCFunctionToolkit
