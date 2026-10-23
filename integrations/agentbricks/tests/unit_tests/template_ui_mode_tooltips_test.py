@@ -95,6 +95,12 @@ def test_mode_tooltip_shows_on_hover_and_focus(template):
     assert re.search(
         r"\.mode-button\.tip-dismissed \+ \.mode-tip\s*\{\s*visibility:\s*hidden;", css
     )
+    # Hovering one mode hides the focused mode's tip, so tips never overlap.
+    assert re.search(
+        r"\.mode-switcher:has\(\.mode-option:hover\) \.mode-option:not\(:hover\) > \.mode-tip"
+        r"\s*\{\s*visibility:\s*hidden;",
+        css,
+    )
     # The dismissed rule must come after the reveal rules so Escape wins.
     assert css.index(".mode-button.tip-dismissed") > reveal.start()
 
