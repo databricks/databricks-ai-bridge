@@ -409,3 +409,13 @@ def test_memory_pane_has_the_pipeline_block(framework):
         < html.index('id="memory-pipeline"')
         < html.index('for="memory-actor-input"')
     )
+
+
+@pytest.mark.parametrize("framework", FRAMEWORKS)
+def test_hidden_run_now_button_is_not_displayed(framework):
+    css = (UI_TEMPLATES / f"agent-{framework}" / "ui" / "styles.css").read_text()
+
+    # `.text-button` sets `display: inline-flex`, which overrides the `hidden` attribute.
+    assert re.search(
+        r"^\.memory-pipeline-head \.text-button\[hidden\] \{\s*display: none;\s*\}", css, re.M
+    )
