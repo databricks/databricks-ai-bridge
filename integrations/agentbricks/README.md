@@ -1179,16 +1179,8 @@ with TOML inspection. Replace `agentbricks mcp list [--schema catalog.schema]` w
 `agentbricks tools list --kind mcp [--schema catalog.schema]`; the former command is removed. Use
 `agentbricks tools list --help` for the new discovery contract.
 
-Read-only live discovery can be checked against the installed wheel without creating a project
-or deploying an agent:
-
-```sh
-AGENTBRICKS_E2E_PROFILE=<profile> .venv-functional/bin/pytest tests/e2e/tool_discovery_test.py -v
-```
-
-The live checks compare default and MCP-filtered discovery with the compatibility service list.
-Set `AGENTBRICKS_E2E_SCHEMA=catalog.schema` to exercise an additional schema. The installed CLI's local
-add/review/remove flows and all updated help pages are covered by `tests/functional/cli_smoke_test.py`.
+The installed CLI's local add/review/remove flows and all updated help pages are covered by
+`tests/functional/cli_smoke_test.py`.
 
 In managed-server templates, custom Python tools are code-first. Write them with the framework's native
 decorator in `agent/tools/`: LangGraph uses `@tool`, while OpenAI Agents uses `@function_tool`. The
@@ -1297,18 +1289,6 @@ Managed MCP Servers workspace preview; delegated access requires the `genie` OAu
 The effective caller needs access to the data, the SQL warehouse, and the selected Genie space
 where applicable. Agent Bricks CLI does not grant permissions or promise a service-principal fallback when
 caller credentials lack access. An offline add succeeding does not establish runtime access.
-
-The opt-in live tests exercise both frameworks against the configured workspace and an existing
-Genie space. From `integrations/agentbricks`, with both framework extras installed:
-
-```sh
-DATABRICKS_CONFIG_PROFILE=my-workspace RUN_AGENTBRICKS_GENIE_TESTS=1 \
-  AGENTBRICKS_GENIE_SPACE_ID=SPACE_ID \
-  uv run pytest tests/integration_tests/genie_tools_test.py
-```
-
-By default they ask for the row count of `samples.nyctaxi.trips`. Set `AGENTBRICKS_GENIE_QUESTION` for
-another dataset and `AGENTBRICKS_GENIE_EXPECTED_VALUE` to assert a known result cell.
 
 ## Initialize the chat app demo
 

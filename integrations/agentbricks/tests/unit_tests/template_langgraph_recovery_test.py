@@ -1,8 +1,6 @@
 """Recover template responses from real LangGraph checkpoints without a model service."""
 
-import importlib
 import json
-import sys
 from collections.abc import Iterator, Sequence
 from contextlib import nullcontext
 from pathlib import Path
@@ -10,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from template_fixtures import forget_template, import_template
 
 from databricks_agentkit.runtime.session_store_client import (
     Session,
@@ -56,12 +55,7 @@ def template(request, monkeypatch):
     template_path = (
         Path(__file__).parents[2] / "src/databricks_agentbricks/templates/agent-langgraph"
     )
-    monkeypatch.syspath_prepend(str(template_path))
-    for name in list(sys.modules):
-        if name in {"agent", "runtime"} or name.startswith(("agent.", "runtime.")):
-            monkeypatch.delitem(sys.modules, name)
-    adapter = importlib.import_module("runtime.adapter")
-    agent = importlib.import_module("agent.agent")
+    adapter, agent = import_template(monkeypatch, template_path)
     saver = (
         InMemorySaver()
         if request.param == "memory"
@@ -81,9 +75,7 @@ def template(request, monkeypatch):
         return graph
 
     yield adapter, install_graph
-    for name in list(sys.modules):
-        if name in {"agent", "runtime"} or name.startswith(("agent.", "runtime.")):
-            sys.modules.pop(name, None)
+    forget_template()
 
 
 def context(invocation_id):
