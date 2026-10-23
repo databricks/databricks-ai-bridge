@@ -851,3 +851,43 @@ def test_prompt_only_cost_uses_traced_calls(override):
         {}, [], {}, rates, llm_calls=[{"model": "gpt-test", "input": 2000, "output": 2000}]
     )
     assert cost == pytest.approx(0.0042 if override else 0.008)
+
+
+def test_evaluate_records_raw_medians_and_a_failure_adds_no_latency_or_cost(mocker):
+    def predict(inputs):
+        if inputs["n"] == 3:
+            raise RuntimeError("boom")
+        return "ok"
+
+    et = _EndpointTarget(name="ep1", candidate_models=["m1"], initial_model="m1")
+    state = _state(
+        predict_fn=predict,
+        scorers=[lambda inputs, expected, answer: expected["q"]],
+        endpoint_targets=[et],
+        token_costs={"m1": {"input": 1.0, "output": 0.0}},  # 1M input tokens -> 0.07 USD
+    )
+    mocker.patch(f"{opt.__name__}._sync_destinations")
+    mocker.patch(
+        f"{opt.__name__}._extract_trace_summary",
+        return_value={"total_tokens": {"input": 1_000_000, "output": 0}, "spans": []},
+    )
+    batch = [
+        {"inputs": {"n": 1}, "expectations": {"q": 1.0}},
+        {"inputs": {"n": 2}, "expectations": {"q": 0.5}},
+        {"inputs": {"n": 3}, "expectations": {"q": 1.0}},
+    ]
+    candidate = {"model:ep1": "m1"}
+    adapter = _AgentAdapter(state)
+    adapter.evaluate(batch, candidate)
+
+    medians = opt._median_metrics(adapter, candidate, batch)
+    assert medians["quality"] == pytest.approx(0.5)  # 1.0, 0.5, and the failure's 0.0
+    assert medians["cost_usd"] == pytest.approx(1.0 * _DBU_TO_USD)
+    failed = adapter._raw_metrics[(opt._json_key(candidate), opt._json_key(batch[2]))]
+    assert failed == {"quality": 0.0, "latency_s": None, "cost_usd": None}
+    assert opt._median_metrics(adapter, {"model:ep1": "other"}, batch) is None
+
+
+def test_median_handles_even_counts_and_missing_values():
+    assert opt._median([3.0, 1.0, None, 2.0, 4.0]) == pytest.approx(2.5)
+    assert opt._median([None]) is None

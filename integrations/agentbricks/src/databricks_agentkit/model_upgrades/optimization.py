@@ -194,6 +194,9 @@ class Result:
         model_history: endpoint -> model -> per-record scores from every evaluation of that model,
             including the minibatch checks of candidates GEPA rejected. GEPA's own result only
             keeps candidates that won a minibatch, so this is the only record of the rest.
+        baseline_metrics / best_metrics: the seed's and the winner's medians over val_data, in raw
+            units: `quality` (scorer score), `latency_s` (seconds), and `cost_usd` (per record).
+            A value is None when no record measured it.
     """
 
     best_candidate: dict
@@ -205,6 +208,8 @@ class Result:
     endpoint_targets: List[_EndpointTarget] = field(repr=False)
     gepa_result: object = field(default=None, repr=False)
     model_history: dict = field(default_factory=dict, repr=False)
+    baseline_metrics: Optional[dict] = None
+    best_metrics: Optional[dict] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1085,6 +1090,46 @@ def _estimate_cost_usd(candidate, endpoint_targets, total_tokens, token_costs, l
 # ---------------------------------------------------------------------------
 
 
+def _json_key(value):
+    """A stable, hashable key for a candidate or eval record."""
+    return json.dumps(value, sort_keys=True, default=str)
+
+
+def _median(values):
+    values = sorted(v for v in values if v is not None)
+    if not values:
+        return None
+    mid = len(values) // 2
+    return values[mid] if len(values) % 2 else (values[mid - 1] + values[mid]) / 2
+
+
+def _median_metrics(adapter, candidate, records):
+    """``candidate``'s median quality, latency (s), and cost ($) over ``records``, or None."""
+    raw = getattr(adapter, "_raw_metrics", {})
+    key = _json_key(candidate)
+    measured = [raw[(key, _json_key(r))] for r in records if (key, _json_key(r)) in raw]
+    if not measured:
+        return None
+    return {
+        name: _median(m.get(name) for m in measured)
+        for name in ("quality", "latency_s", "cost_usd")
+    }
+
+
+def _format_metrics_change(baseline, best):
+    """One line: how the median quality, latency, and cost moved from the seed to the winner."""
+    parts = []
+    for name, label, fmt in (
+        ("quality", "quality", "{:.2f}"),
+        ("latency_s", "latency", "{:.1f}s"),
+        ("cost_usd", "cost", "${:.4f}"),
+    ):
+        before, after = baseline.get(name), best.get(name)
+        if before is not None and after is not None:
+            parts.append(f"{label} {fmt.format(before)} -> {fmt.format(after)}")
+    return "median " + ", ".join(parts) if parts else ""
+
+
 def _format_full_trace(spans):
     if not spans:
         return "(no spans captured)"
@@ -1100,6 +1145,10 @@ class _AgentAdapter(gepa.GEPAAdapter):
     def __init__(self, state):
         self.state = state
         self._model_history = {et.name: defaultdict(list) for et in state.endpoint_targets}
+        # (candidate, record) -> raw quality / latency / cost of its latest evaluation, so the
+        # result can report the seed's and winner's medians in units, not 0-1 objective scores.
+        self._raw_metrics = {}
+        self._last_metrics = {}
 
     def _validate(self, candidate):
         for pt in self.state.prompt_targets:
@@ -1159,6 +1208,8 @@ class _AgentAdapter(gepa.GEPAAdapter):
                 model = candidate.get(_model_key(et), "")
                 if model:
                     self._model_history[et.name][model].append(0.0)
+            # A fast failure is not a fast answer: it adds no latency or cost.
+            self._last_metrics = {"quality": 0.0, "latency_s": None, "cost_usd": None}
             return (
                 0.0,
                 {"quality": 0.0, "latency": 0.0, "cost": 0.0},
@@ -1175,6 +1226,7 @@ class _AgentAdapter(gepa.GEPAAdapter):
                 "so it scores 0 on every objective. Raise latency_hard_gate if the agent is "
                 "legitimately this slow.",
             )
+            self._last_metrics = {"quality": 0.0, "latency_s": latency, "cost_usd": None}
             return (
                 0.0,
                 {"quality": 0.0, "latency": 0.0, "cost": 0.0},
@@ -1212,6 +1264,7 @@ class _AgentAdapter(gepa.GEPAAdapter):
             llm_calls=trace.get("llm_calls"),
         )
         cost_score = max(0.0, 1.0 - cost_usd / state.cost_soft_gate)
+        self._last_metrics = {"quality": quality, "latency_s": latency, "cost_usd": cost_usd}
 
         score = (
             state.weight_quality * quality
@@ -1254,6 +1307,7 @@ class _AgentAdapter(gepa.GEPAAdapter):
                 scores.append(score)
                 outputs.append(answer)
                 all_obj.append(obj)
+                self._raw_metrics[(_json_key(candidate), _json_key(record))] = self._last_metrics
                 if capture_traces:
                     trajectories.append(
                         {
@@ -1756,6 +1810,12 @@ def optimize_prompts_and_models(
             f"baseline {baseline_score:.3f} -> best {best_score:.3f} "
             f"(delta {best_score - baseline_score:+.3f})"
         )
+        baseline_metrics = _median_metrics(adapter, seed, val_data)
+        best_metrics = _median_metrics(adapter, gepa_result.best_candidate, val_data)
+        if baseline_metrics and best_metrics:
+            line = _format_metrics_change(baseline_metrics, best_metrics)
+            if line:
+                print(line)
 
         attempted, succeeded = state.scorer_attempted, state.scorer_succeeded
         if scorers and attempted > 0 and (succeeded / attempted) < 0.10:
@@ -1782,6 +1842,8 @@ def optimize_prompts_and_models(
                 endpoint: {model: list(scores) for model, scores in models.items()}
                 for endpoint, models in getattr(adapter, "_model_history", {}).items()
             },
+            baseline_metrics=baseline_metrics,
+            best_metrics=best_metrics,
         )
     finally:
         print("Cleaning up experimental endpoints...")

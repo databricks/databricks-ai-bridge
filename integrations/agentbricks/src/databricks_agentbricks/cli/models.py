@@ -588,6 +588,23 @@ def _refresh_latest_run(obj, project, upgrade_id: Optional[str] = None) -> Optio
     return entry
 
 
+def _median_fields(report) -> dict[str, str]:
+    """``Median <metric>: before → after (change)`` for each metric both runs measured."""
+    before, after = report.baseline_metrics or {}, report.best_metrics or {}
+    fields = {}
+    for key, label, fmt in (
+        ("quality", "Median quality", "{:.2f}"),
+        ("latency_s", "Median latency", "{:.1f}s"),
+        ("cost_usd", "Median cost per request", "${:.4f}"),
+    ):
+        old, new = before.get(key), after.get(key)
+        if old is None or new is None:
+            continue
+        change = f" ({(new - old) / old:+.0%})" if old else ""
+        fields[label] = f"{fmt.format(old)} → {fmt.format(new)}{change}"
+    return fields
+
+
 def _render_report(report) -> None:
     """The upgrade's result: what would change per role, the score change, and what to do next."""
     # Every candidate is a system.ai model, so the tables drop the shared prefix to stay readable.
@@ -640,6 +657,7 @@ def _render_report(report) -> None:
         "Score (quality, latency, cost)": (
             f"{report.baseline_score:.3f} → {report.best_score:.3f} ({delta:+.3f})"
         ),
+        **_median_fields(report),
         "Models switched": str(sum(rec.changed for rec in report.recommendations.values())),
         "Prompts rewritten": ", ".join(report.prompt_changes) or "none",
     }
