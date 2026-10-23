@@ -1067,6 +1067,16 @@ def test_upgrade_summary_shows_how_the_medians_moved(tmp_path, stub_job, monkeyp
     assert "Median cost per request $0.0040 → $0.0010 (-75%)" in out
 
 
+def test_sub_cent_costs_keep_two_significant_figures():
+    from databricks_agentbricks.cli.models import _usd
+
+    assert _usd(0.004) == "$0.0040"
+    assert _usd(0.00012) == "$0.00012"
+    assert _usd(0.00004) == "$0.000040"
+    assert _usd(0.0) == "$0.0000"
+    assert _usd(1.5) == "$1.5000"
+
+
 def test_upgrade_summary_skips_medians_a_run_did_not_measure(tmp_path, stub_job):
     # stub_job's report has no medians (as from a job before they were recorded).
     project = _project(tmp_path)
