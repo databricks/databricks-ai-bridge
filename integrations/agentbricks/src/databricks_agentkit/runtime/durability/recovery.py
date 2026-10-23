@@ -21,7 +21,7 @@ class RecoverySchedulerTarget(Protocol):
 
 
 class RecoveryScheduler:
-    """Find stale active attempts when recovery is enabled."""
+    """Find stale active attempts and abandoned queued work when recovery is enabled."""
 
     def __init__(
         self,

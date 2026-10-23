@@ -101,6 +101,22 @@ cat /tmp/scratch-agent/.venv/lib/python*/site-packages/databricks_agentkit-*.dis
 agentbricks deployments logs agent-bricks-<name>
 ```
 
+## Runtime affinity tests
+
+The runtime affinity integration tests use real PostgreSQL with independent worker connections.
+They create a unique schema per test and remove it afterward. Point
+`AGENTKIT_TEST_POSTGRES_URL` at a disposable PostgreSQL database, using a
+`postgresql+psycopg://` SQLAlchemy URL, then run from `integrations/agentbricks`:
+
+```sh
+uv run pytest tests/integration_tests/runtime_store_affinity_test.py \
+  tests/integration_tests/runtime_affinity_test.py -q
+```
+
+These tests cover claim races, recovery groups, session promotion, attempt fencing, schema upgrades,
+and process-local request-auth lifetime. They skip when the database URL is unset and do not call
+workspace APIs or verify live Databricks Apps ingress.
+
 ## Deploy phase timings
 
 `agentbricks deploy` ends its text output with the total wall time (`Deployed in 2m05s`). To see

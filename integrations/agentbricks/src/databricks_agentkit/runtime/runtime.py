@@ -219,6 +219,12 @@ class Runtime:
         self.executor.ensure_scheduled(state)
         return state
 
+    def owns_invocation(self, state: Invocation) -> bool:
+        """Whether this worker owns the invocation, including legacy unassigned rows."""
+        return state.worker_id is None or state.worker_id == getattr(
+            self.runtime_store, "worker_id", None
+        )
+
     async def invoke(
         self,
         invocation_id: str,

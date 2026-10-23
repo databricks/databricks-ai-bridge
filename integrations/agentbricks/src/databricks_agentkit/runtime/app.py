@@ -80,6 +80,7 @@ class DurableAgentServer(FastAPI):
         self._invoke_hook: InvocationHook | None = None
         self._recovery_hook: InvocationHook | None = None
         self._request_auth: dict[str, RequestAuthContext] = {}
+        self._pending_auth_invocations: set[str] = set()
         self._stream_updates: dict[str, set[asyncio.Event]] = {}
         if runtime_store is None:
             self._runtime = Runtime.from_environment(
@@ -102,11 +103,21 @@ class DurableAgentServer(FastAPI):
                     "No @app.recover handler is registered; automatic crash recovery is disabled."
                 )
             await self._runtime.start()
+            auth_cleanup = (
+                asyncio.create_task(self._cleanup_request_auth_loop())
+                if self.auth_policy.requires_user
+                else None
+            )
             try:
                 yield
             finally:
-                await self._runtime.stop()
-                self._close_request_auth()
+                if auth_cleanup is not None:
+                    auth_cleanup.cancel()
+                    await asyncio.gather(auth_cleanup, return_exceptions=True)
+                try:
+                    await self._runtime.stop()
+                finally:
+                    self._close_request_auth()
 
         super().__init__(
             title="Databricks Agent Runtime",
@@ -164,6 +175,7 @@ class DurableAgentServer(FastAPI):
         request_auth = None
         if self.auth_policy.requires_user:
             request_auth = self._request_auth.pop(attempt_context.invocation_id, None)
+            self._pending_auth_invocations.discard(attempt_context.invocation_id)
             if attempt_context.is_recovery:
                 if request_auth is not None:
                     request_auth.close()
@@ -228,27 +240,32 @@ class DurableAgentServer(FastAPI):
         if self.auth_policy.requires_user:
             invocation_request["invocation_id"] = invocation_id
         try:
+            state = await self._runtime.submit(
+                runtime_invocation_id, invocation_request, session_id=session_id
+            )
+            # A retry can reach another replica while the original owner is still
+            # queued. Only that owner should retain credentials for later execution.
+            execution_owns_auth = (
+                registered_auth
+                and state.status == InvocationStatus.QUEUED
+                and self._runtime.owns_invocation(state)
+            )
+            if (
+                execution_owns_auth
+                and self._request_auth.get(runtime_invocation_id) is request_auth
+            ):
+                self._pending_auth_invocations.add(runtime_invocation_id)
             if body.background:
-                state = await self._runtime.submit(
-                    runtime_invocation_id, invocation_request, session_id=session_id
-                )
-                execution_owns_auth = registered_auth and state.status == InvocationStatus.QUEUED
                 return JSONResponse(
                     self._accepted_payload(state, stream=body.stream, invocation_id=invocation_id),
                     status_code=202,
                 )
             if body.stream:
-                state = await self._runtime.submit(
-                    runtime_invocation_id, invocation_request, session_id=session_id
-                )
-                execution_owns_auth = registered_auth and state.status == InvocationStatus.QUEUED
                 return StreamingResponse(
                     self._event_stream(runtime_invocation_id),
                     media_type="text/event-stream",
                 )
-            output = await self._runtime.invoke(
-                runtime_invocation_id, invocation_request, session_id=session_id
-            )
+            output = await self._runtime.wait(runtime_invocation_id)
             return JSONResponse({"id": invocation_id, "status": "completed", "output": output})
         except InvocationConflictError as exc:
             raise HTTPException(409, "id was already used for another request") from exc
@@ -375,11 +392,40 @@ class DurableAgentServer(FastAPI):
     def _discard_request_auth(self, invocation_id: str, request_auth: RequestAuthContext) -> None:
         if self._request_auth.get(invocation_id) is request_auth:
             self._request_auth.pop(invocation_id)
+            self._pending_auth_invocations.discard(invocation_id)
         request_auth.close()
+
+    async def _cleanup_request_auth_loop(self) -> None:
+        """Release pending credentials when a different worker recovers their invocation."""
+        while True:
+            # Only inspect admitted requests: a newly registered context may still
+            # be waiting for accept() to commit its row.
+            for invocation_id in tuple(self._pending_auth_invocations):
+                request_auth = self._request_auth.get(invocation_id)
+                if request_auth is None:
+                    continue
+                try:
+                    state = await self._runtime.runtime_store.get(invocation_id)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.warning("Pending request authentication cleanup failed", exc_info=True)
+                    continue
+                if self._request_auth.get(invocation_id) is not request_auth:
+                    continue  # Execution may have taken the context while the read was in flight.
+                if (
+                    state is None
+                    or state.is_terminal
+                    or state.attempt > 1
+                    or not self._runtime.owns_invocation(state)
+                ):
+                    self._discard_request_auth(invocation_id, request_auth)
+            await asyncio.sleep(self._runtime.poll_seconds)
 
     def _close_request_auth(self) -> None:
         request_auths = list(self._request_auth.values())
         self._request_auth.clear()
+        self._pending_auth_invocations.clear()
         for request_auth in request_auths:
             request_auth.close()
 
