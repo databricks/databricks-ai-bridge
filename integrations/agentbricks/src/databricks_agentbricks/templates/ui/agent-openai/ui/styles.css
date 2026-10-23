@@ -1704,6 +1704,7 @@ h2 {
 .tools-pane {
   flex: 1 1 auto;
   min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
 }
@@ -1837,9 +1838,11 @@ h2 {
   text-align: end;
 }
 
+/* Many entries scroll in place so the pipeline below stays in reach. */
 .memory-entries {
-  flex: 1;
-  min-height: 0;
+  flex: 0 1 auto;
+  min-height: 96px;
+  max-height: 320px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -1938,7 +1941,7 @@ h2 {
 
 .memory-pipeline {
   flex: 0 0 auto;
-  margin-bottom: 10px;
+  margin-top: 10px;
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius-small);
