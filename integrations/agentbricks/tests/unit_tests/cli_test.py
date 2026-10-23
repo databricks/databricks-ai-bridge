@@ -41,6 +41,7 @@ def test_root_registers_supported_commands():
         "deploy",
         "deployments",
         "endpoint",
+        "eval",
         "tools",
     } <= names
     assert "mcp" not in names

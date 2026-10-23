@@ -361,5 +361,5 @@ def test_help_exposes_only_low_level_options():
         assert removed not in result.output
 
 
-def test_endpoint_has_no_loadtest_command():
-    assert set(endpoint.commands) == {"invoke"}
+def test_endpoint_exposes_invoke_and_loadtest():
+    assert set(endpoint.commands) == {"invoke", "loadtest"}

@@ -489,6 +489,28 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
             "invoke a local or arbitrary HTTP server",
         ),
     ),
+    ("endpoint", "loadtest"): (
+        (
+            "agentbricks endpoint loadtest agent-bricks-my-agent --path /api/invocations "
+            "--requests requests.json --concurrency 5 --duration 60 --max-requests 200 "
+            "--report-dir results/loadtest --save-responses responses.json",
+            "load test with Locust and save sampled answers for evaluation",
+        ),
+    ),
+    ("eval",): (
+        (
+            "agentbricks eval run --data responses.json --experiment-id 123 "
+            "--scorer quality --traces --report-dir results/eval",
+            "evaluate saved answers with a registered MLflow scorer",
+        ),
+    ),
+    ("eval", "run"): (
+        (
+            "agentbricks eval run --data responses.json --experiment-id 123 "
+            "--scorer quality --traces --report-dir results/eval",
+            "evaluate saved answers with a registered MLflow scorer",
+        ),
+    ),
     ("tools",): (
         ("agentbricks tools add --help", "see all tool types you can add"),
         (
