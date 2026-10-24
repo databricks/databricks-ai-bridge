@@ -27,6 +27,9 @@ memory = [
   "langgraph-checkpoint-postgres>=2.0.5",
   "databricks-ai-bridge[memory]>=0.17.0",
 ]
+sandbox = [
+  "databricks-sdk[sandbox]>=0.153.0",
+]
 deepagents = [
   # deepagents requires Python >=3.11; databricks-langchain supports >=3.10, so
   # the extra simply omits it on 3.10 (DatabricksSandbox raises a clear ImportError there).

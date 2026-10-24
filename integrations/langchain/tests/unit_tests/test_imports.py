@@ -3,6 +3,8 @@ from databricks_langchain import (
     DatabricksEmbeddings,
     DatabricksFunctionClient,
     DatabricksSandbox,
+    DatabricksSandboxSession,
+    DatabricksSandboxTool,
     DatabricksVectorSearch,
     GenieAgent,
     UCFunctionToolkit,
@@ -15,6 +17,8 @@ assert ChatDatabricks
 assert DatabricksEmbeddings
 assert DatabricksFunctionClient
 assert DatabricksSandbox
+assert DatabricksSandboxSession
+assert DatabricksSandboxTool
 assert DatabricksVectorSearch
 assert GenieAgent
 assert UCFunctionToolkit
