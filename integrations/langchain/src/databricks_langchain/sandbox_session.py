@@ -116,9 +116,7 @@ class DatabricksSandboxSession:
             )
             self._created = True
         try:
-            if self._is_stopped(sandbox):
-                self._client.sandbox.start_sandbox(self._name)
-            self._wait_for_running()
+            self._ensure_running(sandbox)
         except BaseException:
             # Never leak a sandbox we just created if bring-up fails.
             if self._created:
@@ -147,27 +145,30 @@ class DatabricksSandboxSession:
     ) -> None:
         self.close()
 
-    def _wait_for_running(self) -> None:
+    def _ensure_running(self, sandbox: Sandbox) -> None:
+        state = self._state(sandbox)
+        # StartSandbox is only valid from STOPPED. ESM rejects it from STOPPING
+        # with ABORTED until the in-flight stop settles, so wait that out first.
+        if state == SandboxState.SANDBOX_STATE_STOPPING:
+            self._wait_for_state(SandboxState.SANDBOX_STATE_STOPPED)
+            state = SandboxState.SANDBOX_STATE_STOPPED
+        if state == SandboxState.SANDBOX_STATE_STOPPED:
+            self._client.sandbox.start_sandbox(self._name)
+        self._wait_for_state(SandboxState.SANDBOX_STATE_RUNNING)
+
+    def _wait_for_state(self, target: SandboxState) -> None:
         deadline = time.monotonic() + self._ready_timeout
         while time.monotonic() < deadline:
-            if self._is_running(self._client.sandbox.get_sandbox(self._name)):
+            if self._state(self._client.sandbox.get_sandbox(self._name)) == target:
                 return
             time.sleep(self._poll_interval)
-        msg = f"sandbox {self._name} did not reach RUNNING within {self._ready_timeout}s"
+        msg = f"sandbox {self._name} did not reach {target} within {self._ready_timeout}s"
         raise TimeoutError(msg)
 
     @staticmethod
-    def _is_stopped(sandbox: Sandbox) -> bool:
+    def _state(sandbox: Sandbox) -> SandboxState | None:
         status = sandbox.status
-        return status is not None and status.state in (
-            SandboxState.SANDBOX_STATE_STOPPED,
-            SandboxState.SANDBOX_STATE_STOPPING,
-        )
-
-    @staticmethod
-    def _is_running(sandbox: Sandbox) -> bool:
-        status = sandbox.status
-        return status is not None and status.state == SandboxState.SANDBOX_STATE_RUNNING
+        return status.state if status is not None else None
 
     def _safe_delete(self) -> None:
         try:

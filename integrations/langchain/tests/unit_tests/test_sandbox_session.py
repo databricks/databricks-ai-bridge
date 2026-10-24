@@ -22,6 +22,7 @@ from databricks_langchain import DatabricksSandboxSession, DatabricksSandboxTool
 
 RUNNING = SandboxState.SANDBOX_STATE_RUNNING
 STOPPED = SandboxState.SANDBOX_STATE_STOPPED
+STOPPING = SandboxState.SANDBOX_STATE_STOPPING
 
 
 def _sandbox(state: SandboxState) -> MagicMock:
@@ -80,6 +81,19 @@ def test_reuses_existing_without_creating() -> None:
 def test_starts_when_stopped() -> None:
     client = _client()
     client.sandbox.get_sandbox.side_effect = [_sandbox(STOPPED), _sandbox(RUNNING)]
+    _session(client).start()
+    client.sandbox.start_sandbox.assert_called_once_with("sandboxes/sb1")
+
+
+def test_waits_out_stopping_before_starting() -> None:
+    # ESM rejects StartSandbox on a STOPPING sandbox (ABORTED); the session must
+    # wait for it to settle to STOPPED before calling start_sandbox.
+    client = _client()
+    client.sandbox.get_sandbox.side_effect = [
+        _sandbox(STOPPING),
+        _sandbox(STOPPED),
+        _sandbox(RUNNING),
+    ]
     _session(client).start()
     client.sandbox.start_sandbox.assert_called_once_with("sandboxes/sb1")
 
