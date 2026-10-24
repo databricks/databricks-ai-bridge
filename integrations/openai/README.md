@@ -17,6 +17,7 @@ pip install git+https://git@github.com/databricks/databricks-ai-bridge.git#subdi
 ## Key Features
 
 - **Vector Search:** Store and query vector representations using `VectorSearchRetrieverTool`.
+- **Sandbox:** Run an [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) agent's shell and filesystem tools inside a [Databricks sandbox](https://docs.databricks.com/aws/en/compute/serverless/sandbox) with `DatabricksSandboxClient` (install `databricks-openai[sandbox]`).
 
 ## Getting Started
 
@@ -55,6 +56,32 @@ second_response = client.chat.completions.create(
     tools=tools
 )
 ```
+
+### Run an agent in a Databricks sandbox
+
+Install the extra:
+
+```sh
+pip install databricks-openai[sandbox]
+```
+
+Register `DatabricksSandboxClient` as the sandbox backend on a `RunConfig`. The client provisions a Databricks sandbox when the run starts and tears it down when it finishes, so the agent's shell and filesystem tools execute inside the sandbox:
+
+```python
+from agents.run_config import RunConfig, SandboxRunConfig
+from databricks_openai import DatabricksSandboxClient, DatabricksSandboxClientOptions
+
+run_config = RunConfig(
+    sandbox=SandboxRunConfig(
+        client=DatabricksSandboxClient(profile="DEFAULT"),
+        options=DatabricksSandboxClientOptions(),
+    )
+)
+
+# Pass run_config to your Runner, e.g. Runner.run(agent, input, run_config=run_config)
+```
+
+`DatabricksSandboxClient(profile=...)` builds a `WorkspaceClient` from the named Databricks CLI profile; to reuse an existing client, pass `DatabricksSandboxClient(client=...)` instead.
 
 ---
 
