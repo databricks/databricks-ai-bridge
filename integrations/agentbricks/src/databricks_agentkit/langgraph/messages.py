@@ -43,6 +43,24 @@ def delta_contents(content: Any) -> list[str | list[dict[str, Any]]]:
     return [part for part in (readable, text) if part]
 
 
+def gateway_messages(messages: list[Any]) -> list[Any]:
+    """Return ``messages`` with JSON-encoded Claude reasoning restored to gateway content blocks.
+
+    databricks-langchain 0.21.0 checkpoints Claude 5.x replies as one string. Sending that back as
+    text drops each reasoning signature, which Claude needs after a tool call. Call this on the
+    messages a chat model sends; other messages, and list content, pass through unchanged.
+    """
+    restored = []
+    for message in messages:
+        content = getattr(message, "content", None)
+        if getattr(message, "type", None) == "ai" and isinstance(content, str):
+            blocks = _parse_legacy_reasoning(content)
+            if isinstance(blocks, list):
+                message = message.model_copy(update={"content": blocks})
+        restored.append(message)
+    return restored
+
+
 def _is_text(block: Any) -> bool:
     return isinstance(block, str) or (isinstance(block, dict) and block.get("type") == "text")
 
@@ -87,9 +105,35 @@ def _parse_legacy_reasoning(content: str) -> str | list[Any]:
         if not isinstance(parsed, list) or not all(_is_claude_block(block) for block in parsed):
             return content
         blocks.extend(parsed)
+    blocks = _merge_reasoning(blocks)
     if position < len(content):
         blocks.append({"type": "text", "text": content[position:]})
     return blocks
+
+
+def _merge_reasoning(blocks: list[Any]) -> list[Any]:
+    """Join streamed reasoning fragments into one block per signature, as the gateway sent it."""
+    merged: list[Any] = []
+    text = ""
+    for block in blocks:
+        if block.get("type") != "reasoning":
+            merged.append(block)
+            continue
+        for part in block["summary"]:
+            text += part.get("text") or ""
+            if part.get("signature"):
+                merged.append(_reasoning_block(text, part["signature"]))
+                text = ""
+    if text:
+        merged.append(_reasoning_block(text, ""))
+    return merged
+
+
+def _reasoning_block(text: str, signature: str) -> dict[str, Any]:
+    return {
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": text, "signature": signature}],
+    }
 
 
 def _is_claude_block(block: Any) -> bool:
