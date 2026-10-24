@@ -138,6 +138,74 @@ def test_other_replies_are_unchanged(content):
     assert delta_contents(content) == ([expected] if expected else [])
 
 
+def test_legacy_reasoning_fragments_merge_into_one_block_per_signature():
+    pytest.importorskip("langchain_core")
+    from langchain_core.messages import AIMessage
+
+    from databricks_agentkit.langgraph.messages import message_items
+
+    # databricks-langchain 0.21.0 streaming a summarized reasoning block, then the answer.
+    fragments = [_reasoning("", ""), _reasoning("The user ", ""), _reasoning("greets me.", "")]
+    content = "".join(json.dumps([fragment]) for fragment in fragments)
+    content += json.dumps([_reasoning("", SIGNATURE)]) + ANSWER
+    reasoning, answer = message_items(AIMessage(content=content))
+    assert reasoning["content"] == [_reasoning("The user greets me.", SIGNATURE)]
+    assert answer["content"] == ANSWER
+
+
+def test_gateway_messages_restore_legacy_reasoning_for_the_next_request():
+    pytest.importorskip("langchain_core")
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    from databricks_agentkit.langgraph.messages import gateway_messages
+
+    call = AIMessage(
+        content=json.dumps([_reasoning("Look it up.", "")])
+        + json.dumps([_reasoning("", SIGNATURE)]),
+        tool_calls=[{"name": "lookup", "args": {}, "id": "t"}],
+    )
+    others = [
+        HumanMessage(content=CLAUDE5_LEGACY),
+        ToolMessage(content="12:00", tool_call_id="t"),
+        AIMessage(content=ANSWER),
+        AIMessage(content=CLAUDE5_BLOCKS),
+    ]
+    restored, *unchanged = gateway_messages([call, *others])
+    assert restored.content == [_reasoning("Look it up.", SIGNATURE)]
+    assert restored.tool_calls == call.tool_calls
+    assert unchanged == others
+    [answer] = gateway_messages([AIMessage(content=CLAUDE5_LEGACY)])
+    assert answer.content == [_reasoning("", SIGNATURE), {"type": "text", "text": ANSWER}]
+
+
+def test_langgraph_template_sends_reasoning_signature_after_a_tool_call(langgraph_template):
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    agent_module, _adapter = langgraph_template
+    model = agent_module._RoutedChatDatabricks.model_construct(
+        model="system.ai.claude-opus-5-5", extra_params={}
+    )
+    call = AIMessage(
+        content=json.dumps([_reasoning("", SIGNATURE)]),
+        tool_calls=[{"name": "get_current_time", "args": {}, "id": "toolu_1"}],
+    )
+    request = model._prepare_inputs(
+        [
+            HumanMessage(content="What time is it?"),
+            call,
+            ToolMessage("12:00", tool_call_id="toolu_1"),
+        ]
+    )
+    assistant = request["messages"][1]
+    assert assistant["role"] == "assistant"
+    assert assistant["content"] == [_reasoning("", SIGNATURE)]
+    assert assistant["tool_calls"][0]["id"] == "toolu_1"
+
+    # Claude 4.x and other models' string replies go back exactly as before.
+    request = model._prepare_inputs([HumanMessage(content="hi"), AIMessage(content=ANSWER)])
+    assert request["messages"][1] == {"role": "assistant", "content": ANSWER}
+
+
 @pytest.mark.asyncio
 async def test_langgraph_adapter_streams_text_and_returns_reasoning_item(langgraph_template):
     from langchain_core.messages import AIMessage, AIMessageChunk
