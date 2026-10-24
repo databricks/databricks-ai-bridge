@@ -5,7 +5,13 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    ToolMessage,
+)
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
 from databricks_langchain import ChatDatabricks
@@ -90,23 +96,20 @@ def _stream_chunks(deltas: list[Any]) -> list[ChatCompletionChunk]:
         if index == 0:
             delta["role"] = "assistant"
         last = index == len(deltas) - 1
-        chunks.append(
-            ChatCompletionChunk.construct(
-                **{
-                    "id": "chatcmpl_claude5",
-                    "object": "chat.completion.chunk",
-                    "created": 1761300000,
-                    "model": "claude-opus-5-5",
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": delta,
-                            "finish_reason": "stop" if last else None,
-                        }
-                    ],
+        fields: dict[str, Any] = {
+            "id": "chatcmpl_claude5",
+            "object": "chat.completion.chunk",
+            "created": 1761300000,
+            "model": "claude-opus-5-5",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": delta,
+                    "finish_reason": "stop" if last else None,
                 }
-            )
-        )
+            ],
+        }
+        chunks.append(ChatCompletionChunk.construct(**fields))
     return chunks
 
 
@@ -266,7 +269,7 @@ def test_string_content_models_are_unchanged(model: str) -> None:
     assert all(isinstance(chunk.content, str) for chunk in chunks)
     assert "".join(cast(str, chunk.content) for chunk in chunks) == _ANSWER
 
-    history = [HumanMessage("hi"), AIMessage(_ANSWER), HumanMessage("again")]
+    history: list[BaseMessage] = [HumanMessage("hi"), AIMessage(_ANSWER), HumanMessage("again")]
     assert llm._prepare_inputs(history)["messages"][1] == {
         "role": "assistant",
         "content": _ANSWER,
