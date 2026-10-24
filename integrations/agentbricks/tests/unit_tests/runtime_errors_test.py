@@ -7,6 +7,7 @@ from typing import Any, cast
 import httpx
 import openai
 import pytest
+import requests
 from databricks.sdk.errors import platform
 
 from databricks_agentkit.runtime.errors import (
@@ -116,6 +117,8 @@ def test_rate_limit_inside_exception_group_is_found():
         ),
         (openai.APITimeoutError(request=_OPENAI_REQUEST), 504, "UPSTREAM_TIMEOUT", None),
         (httpx.ReadTimeout("timed out", request=_REQUEST), 504, "UPSTREAM_TIMEOUT", None),
+        (httpx.ConnectTimeout("timed out", request=_REQUEST), 504, "UPSTREAM_TIMEOUT", None),
+        (requests.exceptions.ConnectTimeout("timed out"), 504, "UPSTREAM_TIMEOUT", None),
         (
             httpx.HTTPStatusError(
                 "Not Found",

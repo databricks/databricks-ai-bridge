@@ -35,8 +35,9 @@ _DATABRICKS_SDK_STATUS = {
     "TemporarilyUnavailable": 503,
     "DeadlineExceeded": 504,
 }
+# Matched against the whole MRO, so subclasses such as httpx.ConnectTimeout count too.
 _TIMEOUT_CLASS_NAMES = frozenset(
-    {"APITimeoutError", "TimeoutException", "ReadTimeout", "DeadlineExceeded"}
+    {"APITimeoutError", "TimeoutException", "Timeout", "ReadTimeout", "DeadlineExceeded"}
 )
 _TIMEOUT_STATUSES = frozenset({408, 504})
 _SECRET_PATTERNS = (
@@ -89,7 +90,7 @@ def describe_failure(exc: BaseException, secrets: Iterable[str | None] = ()) -> 
     timed_out = False
     for candidate in _exception_chain(exc):
         upstream_status = _http_status(candidate)
-        timed_out = type(candidate).__name__ in _TIMEOUT_CLASS_NAMES
+        timed_out = any(base.__name__ in _TIMEOUT_CLASS_NAMES for base in type(candidate).__mro__)
         if upstream_status is not None or timed_out or _is_databricks_sdk_error(candidate):
             upstream = candidate
             break
