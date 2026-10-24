@@ -1382,11 +1382,37 @@ elements.promptInput.addEventListener("keydown", (event) => {
   }
 });
 
-document.querySelectorAll(".mode-button").forEach((button) => {
+// At most one mode tip shows: the option last hovered or focused.
+const modeOptions = [...document.querySelectorAll(".mode-option")];
+const touchOnly = window.matchMedia("(hover: none)");
+
+function showModeTip(option) {
+  modeOptions.forEach((item) => item.classList.toggle("tip-visible", item === option));
+}
+
+modeOptions.forEach((option) => {
+  const button = option.querySelector(".mode-button");
   button.addEventListener("click", () => {
     state.mode = button.dataset.mode;
     document.querySelectorAll(".mode-button").forEach((item) => item.classList.toggle("active", item === button));
   });
+  // Touch fires pointerenter and pointerleave around every tap, so touch relies on focus.
+  option.addEventListener("pointerenter", (event) => {
+    if (event.pointerType !== "touch") showModeTip(option);
+  });
+  option.addEventListener("pointerleave", (event) => {
+    if (event.pointerType !== "touch" && option.classList.contains("tip-visible")) showModeTip(null);
+  });
+  button.addEventListener("focus", () => {
+    if (button.matches(":focus-visible") || touchOnly.matches) showModeTip(option);
+  });
+  button.addEventListener("blur", () => {
+    if (option.classList.contains("tip-visible")) showModeTip(null);
+  });
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") showModeTip(null);
 });
 
 elements.modelSelect.addEventListener("change", () => {
