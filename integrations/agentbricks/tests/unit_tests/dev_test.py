@@ -1,4 +1,4 @@
-"""Unit tests for `agentbricks dev`: wraps `databricks apps run-local` from the project dir."""
+"""Unit tests for `agentbricks dev`: runs the app.yaml command from the project dir on one port."""
 
 from __future__ import annotations
 
@@ -73,56 +73,112 @@ def _stub_free_port(monkeypatch):
     monkeypatch.setattr(dev_mod, "port_in_use", lambda port: False)
 
 
+def _write_uv_project(source: pathlib.Path, command: str = "[uv, run, start-server]") -> None:
+    (source / "app.yaml").write_text(f"command: {command}\n")
+    (source / "pyproject.toml").write_text('[project]\nname = "demo"\nversion = "0.1.0"\n')
+
+
+def _commands(run: mock.Mock) -> list[list[str]]:
+    return [call.args[0] for call in run.call_args_list]
+
+
 def test_dev_prepares_when_no_venv(tmp_path: pathlib.Path):
-    (tmp_path / "app.yaml").write_text("command: []\n")  # no .venv -> auto-prepare
-    with mock.patch.object(dev_mod, "_databricks") as db:
+    _write_uv_project(tmp_path)  # no .venv -> auto-prepare
+    with mock.patch.object(dev_mod, "_run_process", return_value=0) as run:
         result = CliRunner().invoke(
             dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx(profile="ml")
         )
     assert result.exit_code == 0, result.output
-    args, kwargs = db.call_args
-    assert args[0][:2] == ["apps", "run-local"]
-    assert "--env" not in args[0]
-    assert "--entry-point" in args[0]
-    assert args[0][args[0].index("--entry-point") + 1] == "app.agentbricksdev.yaml"
+    assert _commands(run) == [["uv", "sync"], ["uv", "run", "start-server"]]
+    assert all(call.kwargs["cwd"] == str(tmp_path) for call in run.call_args_list)
+    assert run.call_args.kwargs["env"]["DATABRICKS_CONFIG_PROFILE"] == "ml"
     assert not (tmp_path / "app.agentbricksdev.yaml").exists()
-    assert "--prepare-environment" in args[0]  # no venv yet -> build it
-    assert args[1] == "ml"  # profile passed through
-    assert kwargs["cwd"] == str(tmp_path)  # runs in the project dir
 
 
 def test_dev_reuses_existing_venv(tmp_path: pathlib.Path):
-    (tmp_path / "app.yaml").write_text("command: []\n")
+    _write_uv_project(tmp_path)
     (tmp_path / ".venv").mkdir()  # env already there -> don't rebuild
-    with mock.patch.object(dev_mod, "_databricks") as db:
+    with mock.patch.object(dev_mod, "_run_process", return_value=0) as run:
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
-    assert "--prepare-environment" not in db.call_args.args[0]
+    assert _commands(run) == [["uv", "run", "start-server"]]
+    env = run.call_args.kwargs["env"]
+    assert env["VIRTUAL_ENV"] == str((tmp_path / ".venv").resolve())
 
 
 def test_dev_force_prepare_overrides_existing_venv(tmp_path: pathlib.Path):
-    (tmp_path / "app.yaml").write_text("command: []\n")
+    _write_uv_project(tmp_path)
     (tmp_path / ".venv").mkdir()
-    with mock.patch.object(dev_mod, "_databricks") as db:
+    with mock.patch.object(dev_mod, "_run_process", return_value=0) as run:
         result = CliRunner().invoke(
             dev_mod.dev, ["--source", str(tmp_path), "--prepare-environment"], obj=_Ctx()
         )
     assert result.exit_code == 0, result.output
-    assert "--prepare-environment" in db.call_args.args[0]  # explicit flag forces rebuild
+    assert _commands(run)[0] == ["uv", "sync"]  # explicit flag forces rebuild
 
 
-def test_dev_no_prepare_and_custom_port(tmp_path: pathlib.Path):
-    (tmp_path / "app.yaml").write_text("command: []\n")
-    with mock.patch.object(dev_mod, "_databricks") as db:
+def test_dev_prepares_requirements_only_project(tmp_path: pathlib.Path):
+    (tmp_path / "app.yaml").write_text("command: [python, app.py]\n")
+    (tmp_path / "requirements.txt").write_text("fastapi\n")
+    with mock.patch.object(dev_mod, "_run_process", return_value=0) as run:
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code == 0, result.output
+    assert _commands(run) == [
+        ["uv", "venv", "--allow-existing"],
+        ["uv", "pip", "install", "-r", "requirements.txt"],
+        ["python", "app.py"],
+    ]
+
+
+def test_dev_custom_port_runs_only_on_that_port(tmp_path: pathlib.Path):
+    # FR-1: the selected port is the only one: no `apps run-local`, no proxy `--port`.
+    _write_uv_project(tmp_path)
+    with mock.patch.object(dev_mod, "_run_process", return_value=0) as run:
         result = CliRunner().invoke(
             dev_mod.dev,
             ["--source", str(tmp_path), "--no-prepare-environment", "--app-port", "9000"],
             obj=_Ctx(),
         )
     assert result.exit_code == 0, result.output
-    cmd = db.call_args.args[0]
-    assert "--prepare-environment" not in cmd
-    assert cmd[cmd.index("--app-port") : cmd.index("--app-port") + 2] == ["--app-port", "9000"]
+    assert _commands(run) == [["uv", "run", "start-server"]]
+    env = run.call_args.kwargs["env"]
+    assert env["PORT"] == env["DATABRICKS_APP_PORT"] == "9000"
+    assert env["DATABRICKS_APP_URL"] == "http://localhost:9000"
+    assert "8001" not in " ".join([*_commands(run)[0], *env.values()])
+
+
+def test_dev_prints_only_the_selected_port(tmp_path: pathlib.Path):
+    # FR-5: every URL shown is on the selected port; nothing mentions run-local's 8001 proxy.
+    _write_uv_project(tmp_path)
+    (tmp_path / "runtime").mkdir()
+    (tmp_path / "runtime" / "ui.py").write_text("")
+    with mock.patch.object(dev_mod, "_run_process", return_value=0):
+        result = CliRunner().invoke(
+            dev_mod.dev, ["--source", str(tmp_path), "--app-port", "8002"], obj=_Ctx()
+        )
+    assert result.exit_code == 0, result.output
+    assert "http://localhost:8002" in result.output
+    assert "8001" not in result.output
+    assert "localhost:8000" not in result.output
+
+
+def test_dev_failed_agent_exit_is_an_error(tmp_path: pathlib.Path):
+    _write_uv_project(tmp_path)
+    (tmp_path / ".venv").mkdir()
+    with mock.patch.object(dev_mod, "_run_process", return_value=3):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code != 0
+    assert "Could not start the agent locally." in result.output
+    assert not (tmp_path / "app.agentbricksdev.yaml").exists()
+
+
+def test_dev_rejects_manifest_without_command(tmp_path: pathlib.Path):
+    (tmp_path / "app.yaml").write_text("env: []\n")
+    with mock.patch.object(dev_mod, "_run_process", return_value=0) as run:
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code != 0
+    assert "No command in" in result.output
+    run.assert_not_called()
 
 
 def test_dev_filters_build_index_env_via_entry_point(tmp_path: pathlib.Path):
@@ -223,9 +279,9 @@ def test_dev_entry_point_rejects_non_object_manifest(tmp_path: pathlib.Path):
         dev_mod._dev_entry_point(tmp_path / "app.yaml")
 
 
-def test_dev_removes_local_entry_point_when_run_local_fails(tmp_path: pathlib.Path):
-    (tmp_path / "app.yaml").write_text("command: []\n")
-    with mock.patch.object(dev_mod, "_databricks", side_effect=RuntimeError("failed")):
+def test_dev_removes_local_entry_point_when_the_agent_fails(tmp_path: pathlib.Path):
+    (tmp_path / "app.yaml").write_text("command: [start-server]\n")
+    with mock.patch.object(dev_mod, "_run_process", side_effect=RuntimeError("failed")):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code != 0
     assert not (tmp_path / "app.agentbricksdev.yaml").exists()
@@ -242,13 +298,13 @@ def test_dev_does_not_wire_workspace_stores_when_bound(tmp_path: pathlib.Path, m
     (src / ".venv").mkdir()
     captured_dev: dict = {}
 
-    def _fake_databricks(args, *a, **kw):
+    def _fake_run(argv, **kw):
         # Read the dev manifest while it still exists (before finally-block cleanup).
         dev_yaml = pathlib.Path(kw["cwd"]) / "app.agentbricksdev.yaml"
         captured_dev.update(yaml.safe_load(dev_yaml.read_text()))
-        return types.SimpleNamespace(returncode=0)
+        return 0
 
-    monkeypatch.setattr(dev_mod, "_databricks", _fake_databricks)
+    monkeypatch.setattr(dev_mod, "_run_process", _fake_run)
     result = CliRunner().invoke(dev_mod.dev, ["--source", str(src)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     dev_env = {e["name"] for e in captured_dev.get("env", [])}
@@ -280,13 +336,13 @@ def test_dev_starts_local_tracing_and_wires_dev_manifest(tmp_path: pathlib.Path,
     )
     captured: dict = {}
 
-    def _fake_databricks(args, *a, **kw):
+    def _fake_run(argv, **kw):
         # Read the dev manifest while it still exists (before finally-block cleanup).
         dev_yaml = pathlib.Path(kw["cwd"]) / "app.agentbricksdev.yaml"
         captured.update(yaml.safe_load(dev_yaml.read_text()))
-        return types.SimpleNamespace(returncode=0)
+        return 0
 
-    monkeypatch.setattr(dev_mod, "_databricks", _fake_databricks)
+    monkeypatch.setattr(dev_mod, "_run_process", _fake_run)
     result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     dev_env = {e["name"]: e["value"] for e in captured.get("env", [])}
@@ -303,7 +359,7 @@ def test_dev_starts_local_tracing_and_wires_dev_manifest(tmp_path: pathlib.Path,
 
 
 def test_dev_stops_local_tracing_server_when_setup_fails(tmp_path: pathlib.Path, monkeypatch):
-    # A failure after the local server starts but before run-local (here a malformed app.yaml that
+    # A failure after the local server starts but before the agent runs (here a malformed app.yaml that
     # `_dev_entry_point` rejects) must still tear the server down, not orphan it — everything after the
     # server start runs under the try/finally.
     (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"], "env": "not-a-list"}))
@@ -319,10 +375,10 @@ def test_dev_stops_local_tracing_server_when_setup_fails(tmp_path: pathlib.Path,
             environment={"MLFLOW_TRACKING_URI": "http://127.0.0.1:5599"},
         ),
     )
-    with mock.patch.object(dev_mod, "_databricks") as db:
+    with mock.patch.object(dev_mod, "_run_process", return_value=0) as db:
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code != 0  # the bad app.yaml surfaced as an error
-    db.assert_not_called()  # failed before run-local was reached
+    db.assert_not_called()  # failed before the agent was started
     fake_server.terminate.assert_called_once()  # ...but the local server was still stopped
 
 
@@ -344,7 +400,7 @@ def test_dev_shows_local_traces_url_when_tracing_on(tmp_path: pathlib.Path, monk
             },
         ),
     )
-    with mock.patch.object(dev_mod, "_databricks"):
+    with mock.patch.object(dev_mod, "_run_process", return_value=0):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     output = " ".join(result.output.split())
@@ -357,7 +413,7 @@ def test_dev_omits_traces_line_when_local_tracing_unavailable(tmp_path: pathlib.
     (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     _write_agent_manifest(tmp_path, server="agentbricks")
     (tmp_path / ".venv").mkdir()
-    with mock.patch.object(dev_mod, "_databricks"):
+    with mock.patch.object(dev_mod, "_run_process", return_value=0):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     assert "Traces" not in result.output
@@ -368,7 +424,7 @@ def test_dev_runs_offline_when_client_unavailable(tmp_path: pathlib.Path):
     # local tracing needs no workspace), so dev still runs the agent locally offline.
     from databricks_agentbricks.errors import AgentCliError
 
-    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / "app.yaml").write_text("command: [start-server]\n")
     (tmp_path / ".venv").mkdir()
 
     class _OfflineCtx:
@@ -381,10 +437,10 @@ def test_dev_runs_offline_when_client_unavailable(tmp_path: pathlib.Path):
         def client(self):
             raise AgentCliError("no databricks auth configured")
 
-    with mock.patch.object(dev_mod, "_databricks") as db:
+    with mock.patch.object(dev_mod, "_run_process", return_value=0) as db:
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_OfflineCtx())
     assert result.exit_code == 0, result.output
-    assert db.call_args.args[0][:2] == ["apps", "run-local"]  # agent still ran
+    assert db.call_args.args[0] == ["start-server"]  # agent still ran
 
 
 def test_dev_runs_without_traces_when_local_tracing_unavailable(
@@ -397,20 +453,20 @@ def test_dev_runs_without_traces_when_local_tracing_unavailable(
     (tmp_path / ".venv").mkdir()
     captured: dict = {}
 
-    def _fake_databricks(args, *a, **kw):
+    def _fake_run(argv, **kw):
         captured.update(
             yaml.safe_load((pathlib.Path(kw["cwd"]) / "app.agentbricksdev.yaml").read_text())
         )
-        return types.SimpleNamespace(returncode=0)
+        return 0
 
-    monkeypatch.setattr(dev_mod, "_databricks", _fake_databricks)
+    monkeypatch.setattr(dev_mod, "_run_process", _fake_run)
     result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     assert not any(e["name"].startswith("MLFLOW") for e in captured.get("env", []))
 
 
 def test_dev_requires_app_yaml(tmp_path: pathlib.Path):
-    with mock.patch.object(dev_mod, "_databricks") as db:
+    with mock.patch.object(dev_mod, "_run_process", return_value=0) as db:
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code != 0
     assert "app.yaml" in result.output
@@ -418,10 +474,10 @@ def test_dev_requires_app_yaml(tmp_path: pathlib.Path):
 
 
 def test_dev_announces_chat_ui_when_overlay_present(tmp_path: pathlib.Path):
-    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / "app.yaml").write_text("command: [start-server]\n")
     (tmp_path / "runtime").mkdir()
     (tmp_path / "runtime" / "ui.py").write_text("# chat UI\n")
-    with mock.patch.object(dev_mod, "_databricks"):
+    with mock.patch.object(dev_mod, "_run_process", return_value=0):
         result = CliRunner().invoke(
             dev_mod.dev, ["--source", str(tmp_path), "--app-port", "9000"], obj=_Ctx()
         )
@@ -436,8 +492,8 @@ def test_dev_announces_chat_ui_when_overlay_present(tmp_path: pathlib.Path):
 
 
 def test_dev_announces_api_endpoint_when_no_ui(tmp_path: pathlib.Path):
-    (tmp_path / "app.yaml").write_text("command: []\n")  # API-only: no runtime/ui.py
-    with mock.patch.object(dev_mod, "_databricks"):
+    (tmp_path / "app.yaml").write_text("command: [start-server]\n")  # API-only: no runtime/ui.py
+    with mock.patch.object(dev_mod, "_run_process", return_value=0):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     assert "API-only" in result.output
@@ -455,12 +511,12 @@ def test_dev_announces_api_endpoint_when_no_ui(tmp_path: pathlib.Path):
     "server,chat_ui", [("agentbricks", True), ("agentbricks", False), ("custom", False)]
 )
 def test_dev_prints_invoke_inside_panel_for_each_template(tmp_path, framework, server, chat_ui):
-    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / "app.yaml").write_text("command: [start-server]\n")
     AgentProject.create(tmp_path, framework=framework, server=server).write()
     if chat_ui:
         (tmp_path / "runtime").mkdir()
         (tmp_path / "runtime" / "ui.py").write_text("# chat UI\n")
-    with mock.patch.object(dev_mod, "_databricks"):
+    with mock.patch.object(dev_mod, "_run_process", return_value=0):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
 
     assert result.exit_code == 0, result.output
@@ -492,10 +548,10 @@ def test_dev_custom_server_recommends_wiring_tools_in_agent_code(
     tmp_path: pathlib.Path,
     framework: str,
 ):
-    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / "app.yaml").write_text("command: [start-server]\n")
     AgentProject.create(tmp_path, framework=framework, server="custom").write()
 
-    with mock.patch.object(dev_mod, "_databricks"):
+    with mock.patch.object(dev_mod, "_run_process", return_value=0):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
 
     assert result.exit_code == 0, result.output
@@ -516,7 +572,7 @@ def test_dev_rejects_custom_server_manifest_tools_before_starting(
     framework: str,
     template: str,
 ):
-    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / "app.yaml").write_text("command: [start-server]\n")
     project = AgentProject.create(tmp_path, framework=framework, server="custom")
     project.add_tool(ToolSpec.mcp("web", service="system.ai.web_search"))
     project.write()
@@ -526,7 +582,7 @@ def test_dev_rejects_custom_server_manifest_tools_before_starting(
     ctx = _Ctx()
 
     with (
-        mock.patch.object(dev_mod, "_databricks") as db,
+        mock.patch.object(dev_mod, "_run_process", return_value=0) as db,
         mock.patch.object(ctx, "client") as client,
     ):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=ctx)
@@ -543,7 +599,7 @@ def test_dev_surfaces_invalid_custom_server_manifest_before_starting(
     tmp_path: pathlib.Path,
     framework: str,
 ):
-    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / "app.yaml").write_text("command: [start-server]\n")
     (tmp_path / "agent.toml").write_text(
         f'schema_version = 1\n\n[agent]\nframework = "{framework}"\nserver = "custom"\n'
         '\n[[tools]]\nid = "legacy"\nsource = { kind = "python", '
@@ -553,7 +609,7 @@ def test_dev_surfaces_invalid_custom_server_manifest_before_starting(
     ctx = _Ctx()
 
     with (
-        mock.patch.object(dev_mod, "_databricks") as db,
+        mock.patch.object(dev_mod, "_run_process", return_value=0) as db,
         mock.patch.object(ctx, "client") as client,
     ):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=ctx)
@@ -568,13 +624,13 @@ def test_dev_surfaces_invalid_custom_server_manifest_before_starting(
 
 
 def test_dev_standard_template_uses_runtime_api(tmp_path: pathlib.Path):
-    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / "app.yaml").write_text("command: [start-server]\n")
     AgentProject.create(
         tmp_path,
         framework="langgraph",
         server="agentbricks",
     ).write()
-    with mock.patch.object(dev_mod, "_databricks") as db:
+    with mock.patch.object(dev_mod, "_run_process", return_value=0) as db:
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
 
     assert result.exit_code == 0, result.output
@@ -584,13 +640,13 @@ def test_dev_standard_template_uses_runtime_api(tmp_path: pathlib.Path):
 def test_dev_runs_from_project_containing_directly_edited_agent_manifest(
     tmp_path: pathlib.Path,
 ):
-    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / "app.yaml").write_text("command: [start-server]\n")
     manifest = tmp_path / "agent.toml"
     manifest.write_text(
         'schema_version = 1\n\n[agent]\nframework = "langgraph"\nserver = "agentbricks"\n'
     )
 
-    with mock.patch.object(dev_mod, "_databricks") as db:
+    with mock.patch.object(dev_mod, "_run_process", return_value=0) as db:
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
 
     assert result.exit_code == 0, result.output
@@ -603,8 +659,8 @@ def test_dev_runs_from_project_containing_directly_edited_agent_manifest(
 def test_dev_quiet_about_unbound_stores(tmp_path: pathlib.Path):
     # Unbound stores are a `agentbricks deploy` concern; `agentbricks dev` doesn't warn about them, it just runs
     # locally (memory off, sessions in-process).
-    (tmp_path / "app.yaml").write_text("command: []\n")  # no agent.toml -> both unbound
-    with mock.patch.object(dev_mod, "_databricks"):
+    (tmp_path / "app.yaml").write_text("command: [start-server]\n")  # no agent.toml -> both unbound
+    with mock.patch.object(dev_mod, "_run_process", return_value=0):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     assert "No memory store bound" not in result.output
@@ -615,9 +671,9 @@ def test_dev_quiet_about_unbound_stores(tmp_path: pathlib.Path):
 def test_dev_notes_local_stores_when_bound(tmp_path: pathlib.Path):
     # With stores bound, dev notes they're bound but run locally here (used only once deployed). Dev
     # makes no workspace call (the _Ctx client would fail the run if used).
-    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / "app.yaml").write_text("command: [start-server]\n")
     _write_agent_manifest(tmp_path, memory="mem", session="sess")
-    with mock.patch.object(dev_mod, "_databricks"):
+    with mock.patch.object(dev_mod, "_run_process", return_value=0):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     out = " ".join(result.output.split())  # collapse rich line-wrapping
@@ -630,9 +686,9 @@ def test_dev_notes_bound_tracing_experiment(tmp_path: pathlib.Path):
     # A bound tracing experiment is a `agentbricks deploy` concern; dev always traces to its own local MLflow
     # server, so it notes the binding but explains the deployed agent is what uses it (mirrors the
     # memory/session store notices). Dev makes no workspace call.
-    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / "app.yaml").write_text("command: [start-server]\n")
     _write_agent_manifest(tmp_path, experiment_name="/Shared/agentbricks_traces/mine")
-    with mock.patch.object(dev_mod, "_databricks"):
+    with mock.patch.object(dev_mod, "_run_process", return_value=0):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     out = " ".join(result.output.split())  # collapse rich line-wrapping
@@ -641,12 +697,12 @@ def test_dev_notes_bound_tracing_experiment(tmp_path: pathlib.Path):
 
 
 def test_dev_reports_local_tracing_start_warning(tmp_path: pathlib.Path):
-    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / "app.yaml").write_text("command: [start-server]\n")
     failure = LocalTracingStart(None, None, warning="uvx not found", help="install uv")
     with (
         mock.patch.object(dev_mod.LocalTracingClient, "start_dev", return_value=failure),
         mock.patch.object(dev_mod.render, "diagnostic") as diagnostic,
-        mock.patch.object(dev_mod, "_databricks") as db,
+        mock.patch.object(dev_mod, "_run_process", return_value=0) as db,
     ):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
 
@@ -655,26 +711,26 @@ def test_dev_reports_local_tracing_start_warning(tmp_path: pathlib.Path):
     db.assert_called_once()
 
 
-def test_dev_hides_active_venv_and_port_from_run_local(tmp_path: pathlib.Path, monkeypatch):
-    # run-local's `uv pip install` targets $VIRTUAL_ENV, so an activated venv would get the app's packages;
-    # an exported PORT would keep run-local from pointing the app at --app-port.
-    (tmp_path / "app.yaml").write_text("command: []\n")
+def test_dev_replaces_active_venv_and_port(tmp_path: pathlib.Path, monkeypatch):
+    # An activated venv would get the app's packages, and an exported PORT would move the app off
+    # --app-port; both are replaced, the rest of our environment is kept.
+    (tmp_path / "app.yaml").write_text("command: [start-server]\n")
     monkeypatch.setenv("VIRTUAL_ENV", "/some/other/.venv")
     monkeypatch.setenv("PORT", "6969")
     monkeypatch.setenv("AGENTBRICKS_DEV_TEST_MARKER", "kept")
-    with mock.patch.object(dev_mod, "_databricks") as db:
+    with mock.patch.object(dev_mod, "_run_process", return_value=0) as db:
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     env = db.call_args.kwargs["env"]
     assert "VIRTUAL_ENV" not in env
-    assert "PORT" not in env
+    assert env["PORT"] == "8000"
     assert env["AGENTBRICKS_DEV_TEST_MARKER"] == "kept"
 
 
 def test_dev_busy_port_renders_error_and_hint(tmp_path: pathlib.Path, monkeypatch):
-    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / "app.yaml").write_text("command: [start-server]\n")
     monkeypatch.setattr(dev_mod, "port_in_use", lambda port: port == 9100)
-    with mock.patch.object(dev_mod, "_databricks") as db:
+    with mock.patch.object(dev_mod, "_run_process", return_value=0) as db:
         result = CliRunner().invoke(
             dev_mod.dev, ["--source", str(tmp_path), "--app-port", "9100"], obj=_Ctx()
         )

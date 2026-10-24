@@ -5,13 +5,9 @@
 
 from __future__ import annotations
 
-import pytest
 from harness.agentbricks_cli import AgentbricksCli, free_port
 from harness.project import Project
 from tool_definitions import Tool
-
-# Local dev servers share run-local's proxy port, so all dev runs stay on one worker, in order.
-pytestmark = pytest.mark.xdist_group("dev")
 
 
 def test_tools_remove(
@@ -26,9 +22,7 @@ def test_tools_remove(
         agentbricks_cli.run(f"tools remove {tool.tool_id} --source {project.path}")
 
     port = free_port()
-    with agentbricks_cli.start(
-        f"dev --source {project.path} --app-port {port}", env={"PORT": str(port)}
-    ) as server:
+    with agentbricks_cli.start(f"dev --source {project.path} --app-port {port}") as server:
         server.wait_until_serving(port)
         for tool in removed:
             with subtests.test(tool=tool.name):

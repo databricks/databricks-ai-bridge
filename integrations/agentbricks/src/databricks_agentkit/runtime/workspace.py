@@ -16,7 +16,7 @@ def workspace_headers() -> dict[str, str]:
 def workspace_client() -> WorkspaceClient:
     """Return the environment-authenticated client for the active workspace.
 
-    ``databricks apps run-local`` can authenticate through an account-level vanity host while
+    ``agentbricks dev`` can authenticate through an account-level vanity host while
     exposing the target workspace through ``DATABRICKS_WORKSPACE_ID``. The SDK needs the same
     routing header as the Databricks CLI for those profiles. Ordinary workspace hosts and deployed
     Apps continue to use the SDK's default authentication chain.
