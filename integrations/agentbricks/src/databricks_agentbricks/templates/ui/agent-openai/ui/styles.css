@@ -560,7 +560,8 @@ h2 {
   color: var(--ink-faint);
 }
 
-.capability-detail .cap-command {
+.capability-detail .cap-command,
+.memory-pipeline .cap-command {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -572,12 +573,14 @@ h2 {
   overflow-wrap: anywhere;
 }
 
-.capability-detail .cap-command code {
+.capability-detail .cap-command code,
+.memory-pipeline .cap-command code {
   flex: 1;
   min-width: 0;
 }
 
-.capability-detail .cap-command button {
+.capability-detail .cap-command button,
+.memory-pipeline .cap-command button {
   flex: 0 0 auto;
   display: grid;
   place-items: center;
@@ -590,12 +593,14 @@ h2 {
   cursor: pointer;
 }
 
-.capability-detail .cap-command button:hover {
+.capability-detail .cap-command button:hover,
+.memory-pipeline .cap-command button:hover {
   background: var(--hover);
   color: var(--ink);
 }
 
-.capability-detail .cap-command .icon {
+.capability-detail .cap-command .icon,
+.memory-pipeline .cap-command .icon {
   width: 13px;
   height: 13px;
 }
@@ -1691,6 +1696,7 @@ h2 {
 .memory-pane {
   flex: 1 1 auto;
   min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
 }
@@ -1821,9 +1827,11 @@ h2 {
   text-align: end;
 }
 
+/* Many entries scroll in place so the pipeline below stays in reach. */
 .memory-entries {
-  flex: 1;
-  min-height: 0;
+  flex: 0 1 auto;
+  min-height: 96px;
+  max-height: 320px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -1916,6 +1924,139 @@ h2 {
 
 .memory-error {
   color: var(--danger);
+}
+
+/* Memory pipeline block: settings and recent runs for the bound store pair. */
+
+.memory-pipeline {
+  flex: 0 0 auto;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: var(--surface-raised);
+  font-size: 12px;
+}
+
+.memory-pipeline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.memory-pipeline h3.memory-field-label,
+.memory-pipeline h4.memory-field-label {
+  margin: 0;
+}
+
+.memory-pipeline h4.memory-field-label {
+  margin-top: 8px;
+}
+
+.memory-pipeline-head .text-button[hidden] {
+  display: none;
+}
+
+.memory-pipeline-head .text-button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.memory-pipeline-confirm {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+  border-radius: var(--radius-small);
+  background: color-mix(in srgb, var(--danger) 6%, transparent);
+}
+
+.memory-pipeline-confirm[hidden] {
+  display: none;
+}
+
+.memory-pipeline-confirm p {
+  margin: 0 0 8px;
+  color: var(--ink);
+}
+
+.memory-pipeline-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+#memory-pipeline-start {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.memory-pipeline-body .memory-field-hint {
+  margin: 4px 0;
+}
+
+.memory-pipeline-body .memory-error {
+  padding: 0 0 6px;
+}
+
+.memory-pipeline-name {
+  margin: 0 0 4px;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-pipeline-setting {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.memory-pipeline-key {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+}
+
+.memory-pipeline-value {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.memory-pipeline-setting.expanded .memory-pipeline-value {
+  display: block;
+}
+
+.memory-pipeline-runs {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.memory-pipeline-runs li {
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 3px 0;
+}
+
+.memory-pipeline-state {
+  color: var(--ink);
+}
+
+.memory-pipeline-run-error {
+  grid-column: 2 / -1;
+  margin: 0;
+  color: var(--danger);
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }
 
 /* -------------------------------------------------------------------------- */

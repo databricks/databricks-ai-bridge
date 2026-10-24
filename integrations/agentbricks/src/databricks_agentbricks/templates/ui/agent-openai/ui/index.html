@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
     <title>Agent Bricks Workbench</title>
-    <link rel="stylesheet" href="/ui-assets/styles.css?v=5" />
+    <link rel="stylesheet" href="/ui-assets/styles.css?v=7" />
   </head>
   <body>
     <div class="app-shell">
@@ -123,6 +123,20 @@
               <div id="memory-entries" class="memory-entries" aria-live="polite">
                 <div class="state-empty">Loading memory…</div>
               </div>
+              <section id="memory-pipeline" class="memory-pipeline" aria-labelledby="memory-pipeline-title">
+                <div class="memory-pipeline-head">
+                  <h3 id="memory-pipeline-title" class="memory-field-label">Memory pipeline</h3>
+                  <button id="memory-pipeline-run" class="text-button" type="button" hidden>Run now</button>
+                </div>
+                <div id="memory-pipeline-confirm" class="memory-pipeline-confirm" role="alertdialog" aria-labelledby="memory-pipeline-confirm-text" hidden>
+                  <p id="memory-pipeline-confirm-text"></p>
+                  <div class="memory-pipeline-confirm-actions">
+                    <button id="memory-pipeline-cancel" class="text-button" type="button">Cancel</button>
+                    <button id="memory-pipeline-start" class="text-button" type="button">Run</button>
+                  </div>
+                </div>
+                <div id="memory-pipeline-body" class="memory-pipeline-body" aria-live="polite"></div>
+              </section>
             </div>
 
             <div class="card-block sessions-block">
@@ -286,6 +300,6 @@
     </div>
 
     <script src="/ui-assets/markdown-it-15.0.2.min.js" defer></script>
-    <script src="/ui-assets/app.js?v=5" defer></script>
+    <script src="/ui-assets/app.js?v=7" defer></script>
   </body>
 </html>

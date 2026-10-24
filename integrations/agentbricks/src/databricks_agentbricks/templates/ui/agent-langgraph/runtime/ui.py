@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import uuid
 from functools import lru_cache
 from pathlib import Path
@@ -22,6 +23,10 @@ from databricks_agentkit.runtime.store import runtime_store_is_persistent_enviro
 _UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
 _INSTANCE_ID = uuid.uuid4().hex[:12]  # identifies this process in the UI
 _AGENTS_API = "/api/2.0/agents"
+# Memory pipelines have no store filter, so the pane pages through the list up to this cap.
+_PIPELINE_LIST_PAGES = 10
+_PIPELINE_RUNS_SHOWN = 5
+_PIPELINES_UNAVAILABLE = "Memory pipelines need a deployed app with sessions and memory bound."
 _MESSAGE_ROLES = {
     "ai",
     "assistant",
@@ -274,10 +279,65 @@ class _ManagedStateClient:
             query={"order_by": "create_time asc", "page_size": 100},
         )
 
+    def find_memory_pipeline(self) -> dict | None:
+        """The pipeline for the bound session store + memory store pair (at most one exists)."""
+        token = None
+        for _ in range(_PIPELINE_LIST_PAGES):
+            query: dict[str, Any] = {"page_size": 100}
+            if token:
+                query["page_token"] = token
+            result = self._do("GET", f"{_AGENTS_API}/memory-pipelines", query=query)
+            for pipeline in result.get("memory_pipelines", []):
+                if isinstance(pipeline, dict) and _is_bound_pipeline(pipeline):
+                    return pipeline
+            token = result.get("next_page_token")
+            if not token:
+                break
+        return None
+
+    def list_memory_pipeline_runs(self, pipeline: str) -> dict:
+        return self._do(
+            "GET",
+            f"{_AGENTS_API}/{_pipeline_path(pipeline)}/runs",
+            query={"page_size": _PIPELINE_RUNS_SHOWN},
+        )
+
+    def run_memory_pipeline(self, pipeline: str) -> dict:
+        return self._do("POST", f"{_AGENTS_API}/{_pipeline_path(pipeline)}/run", body={})
+
+
+def _store_id(name: Any) -> str:
+    # Pipelines name their stores as resources ("memory-stores/<id>"); compare the trailing id.
+    return str(name or "").strip("/").split("/")[-1]
+
+
+def _is_bound_pipeline(pipeline: dict[str, Any]) -> bool:
+    return _store_id(pipeline.get("memory_store")) == _store_id(_memory_store()) and _store_id(
+        pipeline.get("session_store")
+    ) == _store_id(_session_store())
+
+
+def _pipeline_path(name: str) -> str:
+    if not re.fullmatch(r"memory-pipelines/[^/]+", name):
+        raise ValueError(f"Invalid memory pipeline name: {name!r}")
+    return name
+
+
+def _recent_runs(result: dict[str, Any]) -> list[dict[str, Any]]:
+    runs = [run for run in result.get("pipeline_runs", []) if isinstance(run, dict)]
+    runs.sort(key=lambda run: str(run.get("create_time") or ""), reverse=True)
+    return runs[:_PIPELINE_RUNS_SHOWN]
+
 
 @lru_cache(maxsize=1)
 def _state_client() -> _ManagedStateClient:
     return _ManagedStateClient()
+
+
+def _api_error(exc: Exception) -> HTTPException:
+    code = getattr(exc, "error_code", None)
+    detail = f"{code}: {exc}" if code else str(exc)
+    return HTTPException(status_code=502, detail=detail)
 
 
 async def _managed_call(operation, *args):
@@ -286,9 +346,7 @@ async def _managed_call(operation, *args):
     except HTTPException:
         raise
     except Exception as exc:
-        code = getattr(exc, "error_code", None)
-        detail = f"{code}: {exc}" if code else str(exc)
-        raise HTTPException(status_code=502, detail=detail) from exc
+        raise _api_error(exc) from exc
 
 
 def _require_memory() -> None:
@@ -304,6 +362,29 @@ def _require_session() -> None:
         raise HTTPException(
             status_code=503,
             detail="No session store configured. Run `agentbricks sessions bind <store>`.",
+        )
+
+
+def _require_pipeline_stores() -> None:
+    # A pipeline reads one session store and writes one memory store, so it needs both bound.
+    if not (_memory_store() and _session_store()):
+        raise HTTPException(status_code=503, detail=_PIPELINES_UNAVAILABLE)
+
+
+async def _run_memory_pipeline(pipeline: str) -> dict | JSONResponse:
+    try:
+        return await asyncio.to_thread(_state_client().run_memory_pipeline, pipeline)
+    except Exception as exc:
+        if str(getattr(exc, "error_code", "")).upper() != "ABORTED":
+            raise _api_error(exc) from exc
+        # One run at a time: ABORTED names the run already in progress.
+        active = re.search(r"memory-pipelines/[^/\s]+/runs/[0-9]+", str(exc))
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": "A run is already in progress.",
+                "active_run": active.group(0) if active else None,
+            },
         )
 
 
@@ -394,6 +475,8 @@ def install_ui(app: FastAPI) -> None:
                 "enabled": bool(memory_store),
                 "store": f"memory-stores/{memory_store}" if memory_store else None,
                 "actor": actor,
+                # Memory is off under `agentbricks dev`, so pipelines need a deployed app.
+                "pipelines": _is_deployed() and bool(memory_store and session_store),
             },
             "tracing": _tracing(),
         }
@@ -434,6 +517,23 @@ def install_ui(app: FastAPI) -> None:
         return await _managed_call(
             _state_client().search_memory_entries, payload.actor or _request_actor(request), payload
         )
+
+    @app.get("/api/demo/memory/pipeline", include_in_schema=False)
+    async def get_memory_pipeline() -> dict:
+        _require_pipeline_stores()
+        pipeline = await _managed_call(_state_client().find_memory_pipeline)
+        if pipeline is None:
+            return {"pipeline": None, "runs": []}
+        runs = await _managed_call(_state_client().list_memory_pipeline_runs, pipeline["name"])
+        return {"pipeline": pipeline, "runs": _recent_runs(runs)}
+
+    @app.post("/api/demo/memory/pipeline/run", include_in_schema=False, response_model=None)
+    async def run_memory_pipeline() -> dict | JSONResponse:
+        _require_pipeline_stores()
+        pipeline = await _managed_call(_state_client().find_memory_pipeline)
+        if pipeline is None:
+            raise HTTPException(status_code=404, detail="No pipeline for this store pair.")
+        return await _run_memory_pipeline(pipeline["name"])
 
     @app.post("/api/demo/sessions", include_in_schema=False)
     async def ensure_session(request: Request) -> dict:
