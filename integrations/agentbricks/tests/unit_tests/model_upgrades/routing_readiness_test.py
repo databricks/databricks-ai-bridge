@@ -1,5 +1,6 @@
 """Candidate scores must describe the backend that actually handled inference."""
 
+import time
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -8,6 +9,17 @@ import pytest
 from databricks_agentkit.model_upgrades import optimization as opt
 
 pytestmark = pytest.mark.route_readiness
+
+
+def _fake_time(monkeypatch, **overrides):
+    # Swap only this module's clock: patching the shared time module would let other threads'
+    # sleeps advance it (or drain it) mid-test.
+    clock = SimpleNamespace(
+        monotonic=time.monotonic, perf_counter=time.perf_counter, sleep=time.sleep
+    )
+    for name, fn in overrides.items():
+        setattr(clock, name, fn)
+    monkeypatch.setattr(opt, "time", clock)
 
 
 def _state():
@@ -29,9 +41,10 @@ def _state():
 @pytest.fixture
 def gateway(monkeypatch):
     elapsed = [0.0]
-    monkeypatch.setattr(opt.time, "monotonic", lambda: elapsed[0])
-    monkeypatch.setattr(
-        opt.time, "sleep", lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds)
+    _fake_time(
+        monkeypatch,
+        monotonic=lambda: elapsed[0],
+        sleep=lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds),
     )
     api = Mock()
     monkeypatch.setattr(opt, "_client", lambda: SimpleNamespace(api_client=api))
@@ -205,7 +218,7 @@ def test_stale_attempt_latency_is_excluded(monkeypatch):
     state = _state()
     state.expected_backends = {"main.agent.llm_exp_test": "haiku-id"}
     clock = iter([0.0, 100.0, 110.0, 111.0])
-    monkeypatch.setattr(opt.time, "perf_counter", lambda: next(clock))
+    _fake_time(monkeypatch, perf_counter=lambda: next(clock))
     monkeypatch.setattr(
         opt, "_get_active_trace", Mock(side_effect=[_trace("sonnet-id"), _trace("haiku-id")])
     )
