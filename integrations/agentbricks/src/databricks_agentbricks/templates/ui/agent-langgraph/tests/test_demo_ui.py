@@ -476,9 +476,7 @@ async def test_checkpoint_history_reads_messages_and_interrupts(monkeypatch):
         }
         return SimpleNamespace(
             checkpoint={"channel_values": {"messages": [message]}},
-            pending_writes=[
-                ("task", "__interrupt__", [_FakeInterrupt({"approval": True}, "int-1")])
-            ],
+            pending_writes=[("task", "__interrupt__", [_FakeInterrupt({"approval": True}, "int-1")])],
         )
 
     monkeypatch.setattr(session_store, "history_checkpoint", saved_checkpoint)

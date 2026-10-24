@@ -933,10 +933,7 @@ function renderPipeline(pipeline, runs, notice = "") {
   instructions.addEventListener("click", () => instructions.classList.toggle("expanded"));
   body.append(
     instructions,
-    pipelineText(
-      "memory-field-hint",
-      "Model and instruction changes apply to the next run. Change them with agentbricks memory pipeline update.",
-    ),
+    pipelineText("memory-field-hint", "Edit with agentbricks memory pipeline update. Applies to the next run."),
     pipelineText("memory-field-label", "Recent runs", "h4"),
   );
   if (!runs.length) {
