@@ -26,7 +26,12 @@ configuration and client examples; [AGENTS.md](AGENTS.md) provides the developme
 agentbricks dev
 ```
 
-The API is available at `http://localhost:8000/api/invocations`. Every request supplies a UUID `id`.
+The API is available at `http://localhost:8000/api/invocations`, or on the port you pass with
+`--app-port`. The `http://localhost:8001` URL that `databricks apps run-local` also prints is its
+proxy to the same app. Requests can fail for a few seconds while the server starts; wait for
+`Uvicorn running on ...` in the log.
+
+Every request supplies a UUID `id`.
 That ID is the invocation identifier and idempotency key. Supply the stable application session as
 the top-level `session_id`; agent-specific values live inside the opaque `input` object:
 
@@ -42,6 +47,31 @@ curl -sS http://localhost:8000/api/invocations \
 Reuse `SESSION_ID` for multi-turn conversation state. Generate a new `INVOCATION_ID` for each turn.
 Retrying the same request with the same invocation ID returns the persisted result; changing the
 request while reusing the ID returns `409`.
+
+## Long-term memory
+
+The Session Store keeps one conversation's state, keyed by the top-level `session_id`. The Memory Store
+keeps facts the agent recalls across conversations, keyed by `actor`: `runtime/adapter.py` reads
+`input.actor` and passes it to `memory_tools(actor)`. If you leave out `actor`, it defaults to the
+`session_id`, so long-term memory won't carry across sessions. For memory that persists, pass a stable
+`actor`, such as the end user's ID, from trusted application context. With a request-user
+(`auth = "user"`) tool bound, the adapter also namespaces a supplied `actor` to the signed-in user; see
+[Request-user authorization](#request-user-authorization).
+
+Memory is off under `agentbricks dev`, so try it against the deployed app: two invocations with
+different `session_id`s and the same `actor`.
+
+```bash
+ACTOR=user-123
+
+# Conversation 1: the agent saves a fact with its memory tool.
+agentbricks --profile <profile> endpoint invoke agent-bricks-<name> --path /api/invocations \
+  --json "{\"id\":\"$(uuidgen)\",\"session_id\":\"$(uuidgen)\",\"input\":{\"actor\":\"$ACTOR\",\"messages\":[{\"role\":\"user\",\"content\":\"Remember that I prefer answers as bullet points.\"}]}}"
+
+# Conversation 2: a new session_id, same actor, so the agent can recall it.
+agentbricks --profile <profile> endpoint invoke agent-bricks-<name> --path /api/invocations \
+  --json "{\"id\":\"$(uuidgen)\",\"session_id\":\"$(uuidgen)\",\"input\":{\"actor\":\"$ACTOR\",\"messages\":[{\"role\":\"user\",\"content\":\"How do I like my answers formatted?\"}]}}"
+```
 
 ## Invocation modes
 
@@ -83,6 +113,15 @@ application session:
 }
 ```
 
+For OBO tools (`auth = "user"`), the same signed-in user submits the approval as a new
+invocation. Keep the same `session_id` and, if supplied, `input.actor`. The new request supplies
+its own user credentials; the paused invocation's credentials are discarded. The browser normally
+uses its existing authenticated session, so approval does not require a page refresh or another
+login unless that session has expired. Automatic crash recovery still cannot recover OBO work.
+
+Malformed middleware decisions return `INVALID_APPROVAL` before the resume value is checkpointed,
+so the user can correct the decision and submit it with a new invocation ID.
+
 The default checkpointer is process-local. Bind a managed Session Store to preserve multi-turn and
 paused LangGraph state across restarts:
 
@@ -110,9 +149,9 @@ Use `agentbricks init --framework langgraph --disable-chat-app` for API-only out
 - Add MCP servers in `agent/mcps.py` or with `agentbricks tools add mcp`.
 - Bind long-term memory with `agentbricks memory bind <store>`.
 - Route the agent's model through a Unity Gateway model service you own with
-  `agentbricks experimental models bind`, then switch it without a redeploy with
-  `agentbricks experimental models set`. These commands are experimental, so their flags may
-  change between releases.
+  `agentbricks experimental models bind`, then search for a better model and prompt on your own
+  eval set with `agentbricks experimental models upgrade`. These commands are experimental, so
+  their flags may change between releases.
 
 ```bash
 agentbricks --profile <profile> deploy agent-langgraph --source .
@@ -142,7 +181,11 @@ to the framework-native agent. Internal session keys are never returned to clien
 User-policy invocations use the existing Runtime for synchronous, streaming, and background calls,
 including status polling, event replay, and invocation-ID idempotency. The Runtime Store persists no
 credential; request-user authentication remains process-local for the active first attempt. A
-replacement attempt fails with `MCP_USER_AUTH_RECOVERY_UNSUPPORTED` before agent code runs. Approval
-interruptions remain unsupported and fail with `MCP_USER_AUTH_HITL_UNSUPPORTED`. The agent's
-existing namespaced memory, conversation store, and checkpointer behavior is unchanged; OBO does not
-add another saver.
+replacement attempt fails with `MCP_USER_AUTH_RECOVERY_UNSUPPORTED` before agent code runs.
+Interactive approval uses a new authenticated invocation and rebuilds tools with that request's
+credentials. The agent's existing namespaced memory, conversation store, and checkpointer behavior
+is unchanged; OBO does not add another saver.
+
+Existing generated projects must update their copies of `agent/agent.py` and `runtime/adapter.py`
+to remove the OBO pause/resume rejection guards. Upgrading the installed package alone does not
+rewrite these files. Keep the runtime's automatic-recovery guard.

@@ -26,11 +26,11 @@ from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.reporting import Reporter
 from databricks_agentbricks.services import deploy_service as deploy_service_mod
 from databricks_agentbricks.services.deploy_service import DeployRequest, DeployService
+from databricks_agentbricks.services.deployment.app_provisioner import AppProvisioner
 from databricks_agentbricks.services.deployment.model_binding_provisioner import (
     ModelBindingProvisioner,
 )
 from databricks_agentbricks.services.deployment.provisioners import (
-    AppProvisioner,
     GrantOutcome,
     ManifestPatch,
     MemoryStoreProvisioner,
@@ -60,7 +60,7 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace
     resolver.resource_bindings.return_value = (None, None, None)
 
     apps = Mock(spec=AppsClient)
-    apps.exists.return_value = False
+    apps.app_state.return_value = None
     apps.get_app_url.return_value = "https://demo.example"
     apps.get_service_principal.return_value = "app-sp"
 
@@ -78,6 +78,7 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace
     app = Mock(spec=AppProvisioner)
     app.prepare_app_auth.return_value = AppAuthPlan(scope_update=None)
     app.resolve_workspace_path.return_value = "/Workspace/demo"
+    app.start_compute.return_value = True
     memory = Mock(spec=MemoryStoreProvisioner)
     memory.reconcile.return_value = MemoryStoreState(None, ManifestPatch({}))
     memory.grant.return_value = GrantOutcome.skipped()
@@ -89,7 +90,7 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace
     tracing.grant.return_value = GrantOutcome.skipped()
     runtime = Mock(spec=RuntimeStoreProvisioner)
     runtime.reconcile.return_value = RuntimeStoreState(False, None, ManifestPatch({}))
-    runtime.after_app_ready.return_value = ManifestPatch({})
+    runtime.after_app_created.return_value = ManifestPatch({})
 
     tool_access = ToolAccessProvisioner(apps, "selected", reporter)
     service = DeployService(
@@ -162,7 +163,7 @@ def test_concrete_provisioner_adds_grants_before_rollout_and_prunes_after_succes
         "add"
     )
     harness.apps.apply_tool_resources.side_effect = lambda app, resources: events.append("prune")
-    harness.app.deploy_source.side_effect = lambda *args: events.append("rollout")
+    harness.app.roll_out.side_effect = lambda *args: events.append("rollout")
 
     result = harness.service.deploy(_request(tmp_path))
 
@@ -190,7 +191,7 @@ def test_concrete_provisioner_forwards_uc_function_and_workspace_grant(
     events: list[str] = []
     workspace.update_permissions.side_effect = lambda *args, **kwargs: events.append("workspace")
     harness.apps.add_tool_resources_for_rollout.side_effect = lambda *args: events.append("apps")
-    harness.app.deploy_source.side_effect = lambda *args: events.append("rollout")
+    harness.app.roll_out.side_effect = lambda *args: events.append("rollout")
     harness.apps.apply_tool_resources.side_effect = lambda *args: events.append("prune")
 
     result = harness.service.deploy(_request(tmp_path))
@@ -242,7 +243,7 @@ def test_concrete_provisioner_workspace_grant_failure_stops_before_rollout(
 
     workspace.update_permissions.assert_called_once()
     harness.apps.add_tool_resources_for_rollout.assert_not_called()
-    harness.app.deploy_source.assert_not_called()
+    harness.app.roll_out.assert_not_called()
     harness.apps.apply_tool_resources.assert_not_called()
 
 
@@ -255,7 +256,7 @@ def test_concrete_provisioner_failure_stops_before_rollout_and_pruning(
     with pytest.raises(AgentCliError, match="explicit tool resources"):
         harness.service.deploy(_request(tmp_path))
 
-    harness.app.deploy_source.assert_not_called()
+    harness.app.roll_out.assert_not_called()
     harness.apps.apply_tool_resources.assert_not_called()
 
 
@@ -264,7 +265,7 @@ def test_rollout_failure_keeps_additive_resources_and_skips_pruning(
 ):
     harness = _harness(tmp_path, monkeypatch)
     harness.apps.add_tool_resources_for_rollout.return_value = None
-    harness.app.deploy_source.side_effect = AgentCliError("source rollout failed")
+    harness.app.roll_out.side_effect = AgentCliError("source rollout failed")
 
     with pytest.raises(AgentCliError, match="source rollout failed"):
         harness.service.deploy(_request(tmp_path))

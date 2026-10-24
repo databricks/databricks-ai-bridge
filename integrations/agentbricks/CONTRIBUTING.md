@@ -6,7 +6,7 @@ distribution is `databricks-agentbricks`; installing it provides the `agentbrick
 
 ## Architecture and placement
 
-Use the deploy, dev, and invoke decomposition as the reference for new work. A simple command can
+Use the deploy, dev, invoke, and tracing decomposition as the reference for new work. A simple command can
 call an existing client or project helper; multi-step operations belong in an injectable service.
 Place code by its primary responsibility:
 
@@ -22,10 +22,13 @@ Place code by its primary responsibility:
 Keep shared utilities at the top of `src/databricks_agentbricks/`: external adapters in `clients/`,
 local configuration in `projects/`, output rendering in `presentation/`, and the framework-neutral
 `Reporter` protocol in `reporting.py`. Keep Click command entry points in `cli/`. Workflow entry
-points belong directly in `services/` as `deploy_service.py`, `dev_service.py`, and
-`invoke_service.py`; put helpers used only by one workflow in `services/deployment/` or
-`services/invoke/`, not in new top-level feature packages. Services should not import Click or
-CLI presentation code.
+points belong directly in `services/` as `deploy_service.py`, `dev_service.py`,
+`invoke_service.py`, and `tracing_service.py`; tracing bind/unbind persist the project directly from
+the CLI, while `TracingService` coordinates list/get. Put helpers used only by one workflow in
+`services/deployment/`, `services/invoke/`, or `services/tracing/`, not in new top-level feature
+packages. Tracing's workspace MLflow reads and local server lifecycle live in `clients/`; its
+experiment naming rule is shared from `projects/`. Services should not import Click or CLI
+presentation code.
 
 ## Three kinds of change, and how each is sourced
 
@@ -97,6 +100,37 @@ cat /tmp/scratch-agent/.venv/lib/python*/site-packages/databricks_agentkit-*.dis
 # deployed: watch the build/install logs
 agentbricks deployments logs agent-bricks-<name>
 ```
+
+## Runtime affinity tests
+
+The runtime affinity integration tests use real PostgreSQL with independent worker connections.
+They create a unique schema per test and remove it afterward. Point
+`AGENTKIT_TEST_POSTGRES_URL` at a disposable PostgreSQL database, using a
+`postgresql+psycopg://` SQLAlchemy URL, then run from `integrations/agentbricks`:
+
+```sh
+uv run pytest tests/integration_tests/runtime_store_affinity_test.py \
+  tests/integration_tests/runtime_affinity_test.py -q
+```
+
+These tests cover claim races, recovery groups, session promotion, attempt fencing, schema upgrades,
+and process-local request-auth lifetime. They skip when the database URL is unset and do not call
+workspace APIs or verify live Databricks Apps ingress.
+
+## Deploy phase timings
+
+`agentbricks deploy` ends its text output with the total wall time (`Deployed in 2m05s`). To see
+where that time went, set `AGENTBRICKS_DEBUG_TIMINGS=1`; deploy then prints one
+`timing: <phase> <seconds>s` line per phase, plus `timing: total`, to stderr:
+
+```sh
+AGENTBRICKS_DEBUG_TIMINGS=1 agentbricks -p <profile> deploy my-agent
+```
+
+The phases are `preflight`, `app_start` (the `--no-wait` create or start), `reconcile`,
+`runtime_store`, `app_yaml`, `sync`, `compute_wait` (the join on ACTIVE compute), `app_update`,
+`rollout`, and `grants`; a request-user App reports `app_ready` instead of `app_start` and
+`compute_wait`. The switch is a debugging aid and is deliberately not shown in `--help`.
 
 ## CLI telemetry
 
@@ -222,5 +256,5 @@ on `main` to the next minor development version (for example, `0.5.0.dev0` after
 cutting `0.4`). That version identifies development builds; it is not a published
 release. The scaffolds continue to depend on the released package. A new minor
 series starts with a new release branch from `main`. Tagging does not publish the package. Arrange the separate
-secure public registry release and its approval to publish to PyPI. The live workspace tool-matrix tests run
+secure public registry release and its approval to publish to PyPI. The live workspace E2E suites run
 separately in the private integration runner and are not included in this gate.

@@ -17,6 +17,14 @@ uv run pytest
 agentbricks --profile <profile> deploy <name> --source .
 ```
 
+### Deploying from a coding agent
+
+A first deploy takes ~3 min (mostly starting app compute); redeploys are faster. Either run
+`agentbricks deploy` in the foreground with a long command timeout (for example, Claude Code's Bash
+`timeout: 600000`), or run `agentbricks deploy <name> --no-wait` and then
+`agentbricks deployments wait agent-bricks-<name>` until it exits 0. Exit 75 means it is still
+deploying; run the same command again. Don't poll with `sleep`.
+
 ## Code map
 
 | Change | File |

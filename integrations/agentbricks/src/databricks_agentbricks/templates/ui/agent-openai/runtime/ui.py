@@ -100,8 +100,13 @@ def _is_deployed() -> bool:
 _TRACING_DESTINATION_VARS = ("MLFLOW_TRACKING_URI", "MLFLOW_TRACING_DESTINATION")
 
 
+@lru_cache(maxsize=1)
 def _workspace_host() -> str:
-    """Best-effort workspace host for building MLflow links; never raises."""
+    """Best-effort workspace host for building MLflow links; never raises.
+
+    Cached because building a WorkspaceClient blocks on auth, and the async config route calls this
+    on every page load.
+    """
     try:
         host = workspace_client().config.host or ""
     except Exception:  # noqa: BLE001 - host is best-effort; a failure must not break the config route

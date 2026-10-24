@@ -53,7 +53,9 @@ binding change. The application state must be serializable by the selected saver
 
 Include `memory_tools(actor)` in model and execution wiring. It returns no tools when unconfigured.
 Its closures capture actor identity, so never reuse them across users. The application owns trusted
-actor/tenant authentication; a payload field alone does not establish identity.
+actor/tenant authentication; a payload field alone does not establish identity. The
+template adapter reads `input.actor` and defaults it to the session ID, so memory carries across
+sessions only when the client sends a stable actor.
 
 ### Tracing
 
@@ -110,6 +112,19 @@ the memory partition. Use object-form input for this check. With request-user au
 adapter namespaces an explicit actor by the authenticated principal. The actor field does not
 establish authentication; preserve the application's trusted identity mapping. Custom or migrated
 adapters may use a different input contract.
+
+### Interactive approval with user authentication
+
+A LangGraph interrupt ends the current invocation and checkpoints the pending action. Resume with
+`input.resume` in a new authenticated invocation (new UUID, same `session_id` and `input.actor`, if
+set). The runtime namespaces the session by the authenticated user; approval does not transfer a
+pending action to another user. Build a new graph and tool clients from the resume request's
+`workspace_client_for` resolver. Never persist the resolver, user credentials, or a graph holding
+those clients in checkpoint state. Browser approvals use the existing login session; obtain new
+authentication when it expires.
+
+This is a first attempt for a new invocation, not `@app.recover`. OBO automatic recovery remains
+unsupported because no new authenticated user request supplies credentials.
 
 ### Recovery and durability
 

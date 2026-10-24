@@ -229,6 +229,10 @@ def test_cli_posts_telemetry_to_local_receiver(
             }
         )
     else:
+        expected_parameters["agentbricks memory stores list.all_"] = {
+            "name": "agentbricks memory stores list.all_",
+            "bool_value": False,
+        }
         expected_parameters["agentbricks memory stores list.page_size"] = {
             "name": "agentbricks memory stores list.page_size",
             "int_value": 7,

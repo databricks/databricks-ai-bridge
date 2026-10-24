@@ -31,7 +31,7 @@ class MlflowTracingConfig:
 
     The agent enables tracing when it sees both a destination (the workspace tracking uri) and an
     experiment id; ``env`` renders them as the two env vars wired into app.yaml. (`agentbricks dev` builds
-    its own local tracing env instead - see ``cli.tracing.start_local_tracing_server``.)
+    its own local tracing env instead - see ``clients.local_tracing_client``.)
     """
 
     experiment_id: str

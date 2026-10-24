@@ -2,25 +2,26 @@
 
 ``DevService`` prepares a temporary, local-only Apps manifest and hands the resulting plan to
 the CLI for presentation and execution.  The service deliberately has no Click or presentation
-dependencies: local tracing and the Apps command are ports supplied by the command composition.
+dependencies: local tracing and the Apps command are clients supplied by the command composition.
 In particular, preparing a project never resolves a workspace client or provisions a resource.
 """
 
 from __future__ import annotations
 
+import json
 import pathlib
-import subprocess
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Protocol
 
 from databricks_agentbricks.clients.apps_client import AppsClient
+from databricks_agentbricks.clients.local_tracing_client import LocalTracingClient
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.app_manifest import AppManifest
 from databricks_agentbricks.projects.config import require_managed_tool_support
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.projects.types import AgentServer
+from databricks_agentkit.runtime.cors import CORS_ALLOWED_ORIGINS_ENV
 from databricks_agentkit.runtime.store import RUNTIME_STORE_LOCAL_ENV
 from databricks_agentkit.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
 
@@ -60,6 +61,8 @@ class DevPreview:
     server: AgentServer | None
     tracing_uri: str | None
     local_experiment_name: str | None
+    tracing_warning: str | None
+    tracing_help: str | None
     memory_store: str | None
     session_store: str | None
     trace_experiment: str | None
@@ -76,33 +79,26 @@ class DevPlan:
     requested_port: int | None
 
 
-class LocalTracing(Protocol):
-    """Port for the best-effort local tracing process used by a dev run."""
-
-    def start(self, source_dir: pathlib.Path) -> tuple[subprocess.Popen | None, dict[str, str]]:
-        """Start tracing for ``source_dir`` and return its process and manifest env."""
-
-    def stop(self, server: subprocess.Popen) -> None:
-        """Stop a process returned by :meth:`start`."""
-
-
 class DevService:
     """Prepare and run an Agent Bricks project locally.
 
     The service owns validation, project metadata, the local-only manifest, and lifecycle cleanup.
     It does not own output or a workspace client; those concerns are supplied by the CLI through
-    ``LocalTracing`` and ``AppsClient``.
+    ``LocalTracingClient`` and ``AppsClient``. ``port_in_use`` reports whether a local port is taken, so
+    tests can simulate a busy port without binding a real socket.
     """
 
     def __init__(
         self,
         project_resolver: ProjectResolver,
         apps_client: AppsClient,
-        local_tracing: LocalTracing,
+        local_tracing: LocalTracingClient,
+        port_in_use: Callable[[int], bool],
     ) -> None:
         self._project_resolver = project_resolver
         self._apps_client = apps_client
         self._local_tracing = local_tracing
+        self._port_in_use = port_in_use
 
     @contextmanager
     def prepare(self, request: DevRequest) -> Iterator[DevPlan]:
@@ -124,15 +120,23 @@ class DevService:
         if project is not None and project.tools:
             require_managed_tool_support(source_dir)
 
+        # Fail before starting tracing or writing the local manifest: `apps run-local` does not
+        # report a busy port clearly, and a stopped `agentbricks dev` can leave its server running.
+        port = request.app_port or _DEFAULT_APP_PORT
+        if self._port_in_use(port):
+            raise AgentCliError(
+                f"Port {port} is already in use (possibly a previous agentbricks dev run).",
+                hint="Stop that process, or run `agentbricks dev --app-port <port>` with a free port.",
+            )
+
         # Resource bindings are read only for the preview/presentation.  Dev is fully local and
         # deliberately does not provision, fetch, or otherwise contact any workspace resource.
         memory_store, session_store, trace_experiment = self._project_resolver.resource_bindings(
             source_dir
         )
 
-        # The adapter owns best-effort launch behavior (the CLI adapter delegates to the existing
-        # helper, which degrades to ``(None, {})`` when local tracing cannot start).
-        tracing_server, tracing_env = self._local_tracing.start(source_dir)
+        tracing = self._local_tracing.start_dev(source_dir)
+        tracing_server, tracing_env = tracing.server, tracing.environment
         entry_point: pathlib.Path | None = None
         try:
             # Repeat runs reuse an existing environment; an explicit request overrides that
@@ -141,15 +145,21 @@ class DevService:
             if prepare_environment is None:
                 prepare_environment = not (source_dir / ".venv").exists()
 
-            entry_point = _dev_entry_point(app_yaml, tracing_env or None)
+            entry_point = _dev_entry_point(
+                app_yaml,
+                tracing_env or None,
+                allowed_origins=project.allowed_origins if project is not None else None,
+            )
             preview = DevPreview(
                 source_dir=source_dir,
                 # Preserve the CLI's historical display/default behavior while retaining the
                 # caller's explicit value separately in ``requested_port``.
-                port=request.app_port or _DEFAULT_APP_PORT,
+                port=port,
                 server=project.server if project else None,
                 tracing_uri=tracing_env.get("MLFLOW_TRACKING_URI"),
                 local_experiment_name=tracing_env.get("MLFLOW_EXPERIMENT_NAME"),
+                tracing_warning=tracing.warning,
+                tracing_help=tracing.help,
                 memory_store=memory_store,
                 session_store=session_store,
                 trace_experiment=trace_experiment,
@@ -182,7 +192,10 @@ class DevService:
 
 
 def _dev_entry_point(
-    app_yaml: pathlib.Path, extra_env: dict[str, str] | None = None
+    app_yaml: pathlib.Path,
+    extra_env: dict[str, str] | None = None,
+    *,
+    allowed_origins: tuple[str, ...] | None = None,
 ) -> pathlib.Path:
     """Write the local-only manifest consumed by ``apps run-local``.
 
@@ -204,6 +217,16 @@ def _dev_entry_point(
     for name, value in (extra_env or {}).items():
         filtered = [e for e in filtered if not (isinstance(e, dict) and e.get("name") == name)]
         filtered.append({"name": name, "value": value})
+    if allowed_origins is not None:
+        filtered = [
+            e
+            for e in filtered
+            if not (isinstance(e, dict) and e.get("name") == CORS_ALLOWED_ORIGINS_ENV)
+        ]
+        if allowed_origins:
+            filtered.append(
+                {"name": CORS_ALLOWED_ORIGINS_ENV, "value": json.dumps(allowed_origins)}
+            )
     filtered.append({"name": RUNTIME_STORE_LOCAL_ENV, "value": "true"})
     manifest.set_env(filtered)
 

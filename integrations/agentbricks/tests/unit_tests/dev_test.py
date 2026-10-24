@@ -11,7 +11,9 @@ import yaml
 from click.testing import CliRunner
 
 from databricks_agentbricks.cli import dev as dev_mod
+from databricks_agentbricks.clients.local_tracing_client import LocalTracingStart
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.presentation.endpoint import agent_invoke_command
 from databricks_agentbricks.projects.agent_project import AgentProject, ToolSpec
 from databricks_agentbricks.projects.config import write_project_metadata
 
@@ -48,12 +50,27 @@ class _Ctx:
         return mock.Mock(current_user="me@example.com", host="https://my-workspace.databricks.com")
 
 
+def _panel_text(output: str) -> str:
+    """The success panel's rows joined back into text, without borders or padding."""
+    return " ".join(line.strip("│ ") for line in output.splitlines() if line.startswith("│"))
+
+
 @pytest.fixture(autouse=True)
 def _stub_local_tracing(monkeypatch):
-    """`agentbricks dev` starts a local MLflow tracking server (via cli.tracing) for Agent Bricks projects;
-    stub the name dev.py imported so ordinary dev tests neither spawn one nor need uv. Tracing tests
-    override this. The server helper's own behavior is tested in tracing_test.py."""
-    monkeypatch.setattr(dev_mod, "start_local_tracing_server", lambda source_dir: (None, {}))
+    """`agentbricks dev` starts a local MLflow tracking server for Agent Bricks projects;
+    stub the client so ordinary dev tests neither spawn one nor need uv. Tracing tests override
+    this. The client's own behavior is tested in tracing_test.py."""
+    monkeypatch.setattr(
+        dev_mod.LocalTracingClient,
+        "start_dev",
+        lambda _self, source_dir: LocalTracingStart(None, None),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _stub_free_port(monkeypatch):
+    """Treat the app port as free so dev tests never depend on what this machine is running."""
+    monkeypatch.setattr(dev_mod, "port_in_use", lambda port: False)
 
 
 def test_dev_prepares_when_no_venv(tmp_path: pathlib.Path):
@@ -250,11 +267,12 @@ def test_dev_starts_local_tracing_and_wires_dev_manifest(tmp_path: pathlib.Path,
     (tmp_path / ".venv").mkdir()
     fake_server = mock.Mock()
     monkeypatch.setattr(
-        dev_mod,
-        "start_local_tracing_server",
-        lambda source_dir: (
+        dev_mod.LocalTracingClient,
+        "start_dev",
+        lambda _self, source_dir: LocalTracingStart(
             fake_server,
-            {
+            "http://127.0.0.1:5599",
+            environment={
                 "MLFLOW_TRACKING_URI": "http://127.0.0.1:5599",
                 "MLFLOW_EXPERIMENT_NAME": source_dir.resolve().name,
             },
@@ -293,9 +311,13 @@ def test_dev_stops_local_tracing_server_when_setup_fails(tmp_path: pathlib.Path,
     (tmp_path / ".venv").mkdir()
     fake_server = mock.Mock()
     monkeypatch.setattr(
-        dev_mod,
-        "start_local_tracing_server",
-        lambda source_dir: (fake_server, {"MLFLOW_TRACKING_URI": "http://127.0.0.1:5599"}),
+        dev_mod.LocalTracingClient,
+        "start_dev",
+        lambda _self, source_dir: LocalTracingStart(
+            fake_server,
+            "http://127.0.0.1:5599",
+            environment={"MLFLOW_TRACKING_URI": "http://127.0.0.1:5599"},
+        ),
     )
     with mock.patch.object(dev_mod, "_databricks") as db:
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
@@ -311,11 +333,15 @@ def test_dev_shows_local_traces_url_when_tracing_on(tmp_path: pathlib.Path, monk
     _write_agent_manifest(tmp_path, server="agentbricks")
     (tmp_path / ".venv").mkdir()
     monkeypatch.setattr(
-        dev_mod,
-        "start_local_tracing_server",
-        lambda source_dir: (
+        dev_mod.LocalTracingClient,
+        "start_dev",
+        lambda _self, source_dir: LocalTracingStart(
             mock.Mock(),
-            {"MLFLOW_TRACKING_URI": "http://127.0.0.1:5599", "MLFLOW_EXPERIMENT_NAME": "my-agent"},
+            "http://127.0.0.1:5599",
+            environment={
+                "MLFLOW_TRACKING_URI": "http://127.0.0.1:5599",
+                "MLFLOW_EXPERIMENT_NAME": "my-agent",
+            },
         ),
     )
     with mock.patch.object(dev_mod, "_databricks"):
@@ -326,12 +352,11 @@ def test_dev_shows_local_traces_url_when_tracing_on(tmp_path: pathlib.Path, monk
     assert "experiment name: my-agent" in output
 
 
-def test_dev_omits_traces_line_when_local_tracing_unavailable(tmp_path: pathlib.Path, monkeypatch):
-    # Local tracing couldn't start (start_local_tracing_server returns none) -> no Traces line in the panel.
+def test_dev_omits_traces_line_when_local_tracing_unavailable(tmp_path: pathlib.Path):
+    # Local tracing couldn't start, so there is no Traces line in the panel.
     (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     _write_agent_manifest(tmp_path, server="agentbricks")
     (tmp_path / ".venv").mkdir()
-    monkeypatch.setattr(dev_mod, "start_local_tracing_server", lambda source_dir: (None, {}))
     with mock.patch.object(dev_mod, "_databricks"):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
@@ -365,12 +390,11 @@ def test_dev_runs_offline_when_client_unavailable(tmp_path: pathlib.Path):
 def test_dev_runs_without_traces_when_local_tracing_unavailable(
     tmp_path: pathlib.Path, monkeypatch
 ):
-    # Local tracing is best-effort: if the server can't start (start_local_tracing_server returns none),
+    # Local tracing is best-effort: if the server can't start,
     # dev still runs the agent and injects no MLflow env.
     (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"], "env": []}))
     _write_agent_manifest(tmp_path, server="agentbricks")
     (tmp_path / ".venv").mkdir()
-    monkeypatch.setattr(dev_mod, "start_local_tracing_server", lambda source_dir: (None, {}))
     captured: dict = {}
 
     def _fake_databricks(args, *a, **kw):
@@ -404,7 +428,7 @@ def test_dev_announces_chat_ui_when_overlay_present(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     assert "Chat UI" in result.output
     assert "http://localhost:9000" in result.output
-    output = " ".join(result.output.split())
+    output = _panel_text(result.output)
     assert "agentbricks endpoint invoke" in output
     assert "--url http://localhost:9000" in output
     assert "--path /api/invocations" in output
@@ -420,7 +444,7 @@ def test_dev_announces_api_endpoint_when_no_ui(tmp_path: pathlib.Path):
     assert "http://localhost:8000/invocations" in result.output
     # a copy-pasteable sample request, not just the bare endpoint
     assert "curl -X POST" in " ".join(result.output.split())
-    output = " ".join(result.output.split())
+    output = _panel_text(result.output)
     assert "agentbricks endpoint invoke" in output
     assert "--url http://localhost:8000" in output
     assert "--path /invocations" in output
@@ -430,7 +454,7 @@ def test_dev_announces_api_endpoint_when_no_ui(tmp_path: pathlib.Path):
 @pytest.mark.parametrize(
     "server,chat_ui", [("agentbricks", True), ("agentbricks", False), ("custom", False)]
 )
-def test_dev_prints_standalone_invoke_for_each_template(tmp_path, framework, server, chat_ui):
+def test_dev_prints_invoke_inside_panel_for_each_template(tmp_path, framework, server, chat_ui):
     (tmp_path / "app.yaml").write_text("command: []\n")
     AgentProject.create(tmp_path, framework=framework, server=server).write()
     if chat_ui:
@@ -440,25 +464,25 @@ def test_dev_prints_standalone_invoke_for_each_template(tmp_path, framework, ser
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
 
     assert result.exit_code == 0, result.output
-    commands = [
-        line for line in result.output.splitlines() if line.startswith("agentbricks endpoint")
-    ]
-    assert len(commands) == 1, result.output
-    command = commands[0]
-    path = "/api/invocations" if server == "agentbricks" else "/invocations"
-    assert (
-        f"agentbricks endpoint invoke --url http://localhost:8000 --path {path} --json " in command
+    lines = result.output.splitlines()
+    # The success output ends at the panel's bottom border; nothing trails it.
+    assert [line for line in lines if line.strip()][-1].startswith("╰"), result.output
+    label = next(i for i, line in enumerate(lines) if "Invoke with Agent Bricks" in line)
+    deploy = next(i for i, line in enumerate(lines) if "agentbricks deploy" in line)
+    assert lines[label].startswith("│") and lines[deploy].startswith("│")
+    assert deploy < label  # the invoke example is the last entry, after the other next steps
+    rows = [line.strip("│ ") for line in lines[label + 1 :] if line.startswith("│")]
+    assert all(line.startswith(("│", "╰")) for line in lines[label:] if line.strip())
+    command = agent_invoke_command(
+        "--url http://localhost:8000", uses_runtime_api=server == "agentbricks"
     )
-    assert "│" not in command
+    assert "".join("".join(rows).split()) == "".join(command.split()), result.output
+    path = "/api/invocations" if server == "agentbricks" else "/invocations"
+    assert f"--path {path} --json " in command
     assert ("$(uuidgen)" in command) is (server == "agentbricks")
-    panel, example = result.output.split("Invoke with Agent Bricks\n")
-    assert panel.splitlines()[-1].startswith("╰")
-    assert example.splitlines() == [command]
-    assert any(line.startswith("│") and "agentbricks deploy" in line for line in panel.splitlines())
+    panel = "\n".join(lines[:label])
     if server == "agentbricks":
-        assert any(
-            line.startswith("│") and "agentbricks tools add" in line for line in panel.splitlines()
-        )
+        assert "agentbricks tools add" in panel
     if not chat_ui:
         assert "curl -X POST" in panel  # preserve the existing API-only next step
 
@@ -616,6 +640,21 @@ def test_dev_notes_bound_tracing_experiment(tmp_path: pathlib.Path):
     assert "Run `agentbricks deploy` to trace to the bound experiment" in out
 
 
+def test_dev_reports_local_tracing_start_warning(tmp_path: pathlib.Path):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    failure = LocalTracingStart(None, None, warning="uvx not found", help="install uv")
+    with (
+        mock.patch.object(dev_mod.LocalTracingClient, "start_dev", return_value=failure),
+        mock.patch.object(dev_mod.render, "diagnostic") as diagnostic,
+        mock.patch.object(dev_mod, "_databricks") as db,
+    ):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    diagnostic.assert_called_once_with("warning", "uvx not found", help="install uv")
+    db.assert_called_once()
+
+
 def test_dev_hides_active_venv_and_port_from_run_local(tmp_path: pathlib.Path, monkeypatch):
     # run-local's `uv pip install` targets $VIRTUAL_ENV, so an activated venv would get the app's packages;
     # an exported PORT would keep run-local from pointing the app at --app-port.
@@ -630,3 +669,18 @@ def test_dev_hides_active_venv_and_port_from_run_local(tmp_path: pathlib.Path, m
     assert "VIRTUAL_ENV" not in env
     assert "PORT" not in env
     assert env["AGENTBRICKS_DEV_TEST_MARKER"] == "kept"
+
+
+def test_dev_busy_port_renders_error_and_hint(tmp_path: pathlib.Path, monkeypatch):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    monkeypatch.setattr(dev_mod, "port_in_use", lambda port: port == 9100)
+    with mock.patch.object(dev_mod, "_databricks") as db:
+        result = CliRunner().invoke(
+            dev_mod.dev, ["--source", str(tmp_path), "--app-port", "9100"], obj=_Ctx()
+        )
+    assert result.exit_code != 0
+    output = " ".join(result.output.split())
+    assert "Port 9100 is already in use (possibly a previous agentbricks dev run)." in output
+    assert "agentbricks dev --app-port <port>" in output
+    db.assert_not_called()
+    assert not (tmp_path / "app.agentbricksdev.yaml").exists()

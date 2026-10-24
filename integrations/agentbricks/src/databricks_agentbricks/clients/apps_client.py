@@ -17,6 +17,7 @@ import pathlib
 import subprocess
 import time
 from collections.abc import Collection, Sequence
+from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from databricks_agentbricks.clients.databricks_cli import _databricks
@@ -24,6 +25,13 @@ from databricks_agentbricks.clients.legacy_runtime_store import LakebaseBackend
 from databricks_agentbricks.errors import AgentCliError
 
 DatabricksRunner = Callable[..., subprocess.CompletedProcess]
+
+# Apps rejects a change while another operation (a create, an update, a deployment) is still running
+# on the App, and asks the caller to retry. Only that error is retried, and only for calls that
+# re-send the same idempotent request: a deploy, a scale update, and masked resource updates.
+_APP_BUSY_MARKER = "another operation is in progress"
+# Seconds to wait before each retry: about two minutes in total before giving up.
+_APP_BUSY_BACKOFF_S = (5, 10, 15, 20, 30, 30)
 
 _TOOL_RESOURCE_PREFIX = "agentbricks-tool-"
 _TOOL_PERMISSION_STRENGTH = {
@@ -94,12 +102,47 @@ def _instance_args(instance_count: Optional[int]) -> list[str]:
     ]
 
 
+def _is_app_busy(result: subprocess.CompletedProcess) -> bool:
+    """Whether a failed Apps call failed only because another operation is running on the App."""
+    if result.returncode == 0:
+        return False
+    return _APP_BUSY_MARKER in f"{result.stdout or ''}\n{result.stderr or ''}".lower()
+
+
+def _app_busy_hint(name: str) -> str:
+    """The next step once the busy-App retries are spent."""
+    return (
+        f"another operation is still running on {name}; run `agentbricks deployments wait {name}`, "
+        "then re-run `agentbricks deploy`"
+    )
+
+
+def _failure_detail(result: subprocess.CompletedProcess) -> str:
+    return (result.stderr or result.stdout or "").strip()
+
+
 def _field(payload: dict, name: str):
     """Read an Apps JSON field across snake_case and camelCase CLI versions."""
     if name in payload:
         return payload[name]
     parts = name.split("_")
     return payload.get(parts[0] + "".join(part.title() for part in parts[1:]))
+
+
+def _is_definitive_not_found(detail: str) -> bool:
+    """Whether `apps get` failed because the app is missing, not for some unrelated reason."""
+    # A generic "not found" would let an unrelated 404 masquerade as "the app is missing" and steer
+    # the caller into a create.
+    return any(marker in detail.lower() for marker in ("resource_does_not_exist", "does not exist"))
+
+
+@dataclass(frozen=True)
+class AppState:
+    """What deploy reads off an existing App before deciding how to start its compute."""
+
+    compute_state: Optional[str]  # e.g. ACTIVE, STARTING, STOPPED; None when the payload has none
+    has_active_deployment: bool  # False for an App that was created but never rolled out
+    service_principal_client_id: Optional[str]
 
 
 class AppsClient:
@@ -112,10 +155,58 @@ class AppsClient:
     supply a fake instead of monkeypatching a module-level function.
     """
 
-    def __init__(self, profile: Optional[str], *, runner: DatabricksRunner = _databricks) -> None:
+    def __init__(
+        self,
+        profile: Optional[str],
+        *,
+        runner: DatabricksRunner = _databricks,
+        on_busy: Optional[Callable[[str], None]] = None,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
         self._profile = profile
         self._run = runner
-        self._sp_cache: dict[str, Optional[str]] = {}
+        self._on_busy = on_busy
+        self._sleep = sleep
+        self._sp_cache: dict[str, str] = {}
+
+    def _run_app_change(self, args: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        """Run one App-modifying call, retrying while Apps reports another operation in progress.
+
+        Never raises for a failed exit: the caller inspects the final result. When the retries run
+        out, the last (busy) result is returned unchanged; :func:`_is_app_busy` still identifies it.
+        """
+        kwargs["check"] = False
+        result = self._run(args, self._profile, **kwargs)
+        for delay in _APP_BUSY_BACKOFF_S:
+            if not _is_app_busy(result):
+                return result
+            if self._on_busy is not None:
+                self._on_busy(f"App is busy (another operation in progress); retrying in {delay}s…")
+            self._sleep(delay)
+            result = self._run(args, self._profile, **kwargs)
+        return result
+
+    def _tool_resource_runner(
+        self, args: list[str], profile: Optional[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess:
+        """The runner handed to the tool-resource helpers: their masked updates retry when busy."""
+        if args[:2] == ["apps", "create-update"]:
+            return self._run_app_change(args, **kwargs)
+        return self._run(args, profile, **kwargs)
+
+    def _raise_app_change_failed(
+        self, name: str, action: str, result: subprocess.CompletedProcess, *, relayed: bool = False
+    ) -> None:
+        """Raise ``action`` for a failed App change, pointing a busy App at `deployments wait`.
+
+        ``relayed`` output was already shown live, so it isn't repeated in the hint.
+        """
+        if _is_app_busy(result):
+            detail = (
+                _failure_detail(result).splitlines()[-1:] if relayed else [_failure_detail(result)]
+            )
+            raise AgentCliError(action, hint="\n".join([*detail, _app_busy_hint(name)]))
+        raise AgentCliError(action, hint=None if relayed else (_failure_detail(result) or None))
 
     def _get_json(self, name: str) -> Optional[dict]:
         result = self._run(
@@ -138,19 +229,71 @@ class AppsClient:
         result = self._run(["apps", "get", name], self._profile, capture=True, check=False)
         if result.returncode == 0:
             return True
+        self._raise_unless_missing(name, result)
+        return False
+
+    def find(self, name: str) -> Optional[dict]:
+        """The app's `apps get` payload, or None on a definitive not-found (other failures raise)."""
+        result = self._run(
+            ["apps", "get", name, "-o", "json"], self._profile, capture=True, check=False
+        )
+        if result.returncode != 0:
+            self._raise_unless_missing(name, result)
+            return None
+        try:
+            data = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            raise AgentCliError(f"Could not parse deployment '{name}'.") from exc
+        if not isinstance(data, dict):
+            raise AgentCliError(f"Could not parse deployment '{name}'.")
+        return data
+
+    def _raise_unless_missing(self, name: str, result: subprocess.CompletedProcess) -> None:
+        """Return quietly when a failed `apps get` means the app is missing; raise otherwise."""
         detail = (result.stderr or result.stdout or "").strip()
-        # Only a definitive not-found counts; a generic "not found" would let an unrelated 404
-        # masquerade as "the app is missing" and steer the caller into a create.
-        if any(
-            marker in detail.lower() for marker in ("resource_does_not_exist", "does not exist")
-        ):
-            return False
+        if _is_definitive_not_found(detail):
+            return
+        raise self._existence_check_failed(name, detail)
+
+    def _existence_check_failed(self, name: str, detail: str) -> AgentCliError:
         login = f"agentbricks login --profile {self._profile or '<profile>'}"
-        raise AgentCliError(
+        return AgentCliError(
             f"Could not check whether deployment '{name}' exists.",
             hint=f"{detail or 'The `databricks apps get` command failed without a message.'}\n"
             f"If the profile isn't signed in, run `{login}`; otherwise check the network and "
             "the profile's host, then rerun the command.",
+        )
+
+    def app_state(self, name: str) -> Optional[AppState]:
+        """The App's compute and deployment state, or None only on a definitive not-found.
+
+        One `apps get -o json` read that stands in for :meth:`exists` on the deploy path, so the
+        caller learns both whether the App exists and whether its compute needs starting. As with
+        :meth:`exists`, any other failure is raised rather than read as "doesn't exist". A service
+        principal in the payload seeds the :meth:`get_service_principal` cache.
+        """
+        result = self._run(
+            ["apps", "get", name, "-o", "json"], self._profile, capture=True, check=False
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            if _is_definitive_not_found(detail):
+                return None
+            raise self._existence_check_failed(name, detail)
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError:
+            payload = None
+        if not isinstance(payload, dict):
+            raise self._existence_check_failed(name, "Unparseable `databricks apps get` output.")
+        status = _field(payload, "compute_status")
+        sp = _field(payload, "service_principal_client_id") or None
+        if sp:
+            self._sp_cache[name] = sp
+        return AppState(
+            compute_state=_field(status, "state") if isinstance(status, dict) else None,
+            has_active_deployment=bool(_field(payload, "active_deployment")),
+            service_principal_client_id=sp,
         )
 
     def list_all(self) -> list[dict]:
@@ -196,19 +339,37 @@ class AppsClient:
     def start(self, name: str) -> None:
         """Start the app's compute, raising if the command fails."""
         self._run(
-            ["apps", "start", name], self._profile, action=f"Could not start deployment '{name}'."
+            ["apps", "start", name],
+            self._profile,
+            to_stderr=True,
+            action=f"Could not start deployment '{name}'.",
+        )
+
+    def start_no_wait(self, name: str) -> None:
+        """Ask Apps to start the app's compute, returning before it is ACTIVE."""
+        self._run(
+            ["apps", "start", name, "--no-wait"],
+            self._profile,
+            capture=True,
+            action=f"Could not start deployment '{name}'.",
         )
 
     def stop(self, name: str) -> None:
         """Stop the app's compute, raising if the command fails. Its deployed source is kept."""
         self._run(
-            ["apps", "stop", name], self._profile, action=f"Could not stop deployment '{name}'."
+            ["apps", "stop", name],
+            self._profile,
+            to_stderr=True,
+            action=f"Could not stop deployment '{name}'.",
         )
 
     def delete(self, name: str) -> None:
         """Delete the app, raising if the command fails. Unconfirmed here - the caller owns that."""
         self._run(
-            ["apps", "delete", name], self._profile, action=f"Could not delete deployment '{name}'."
+            ["apps", "delete", name],
+            self._profile,
+            to_stderr=True,
+            action=f"Could not delete deployment '{name}'.",
         )
 
     def reconcile_resources(
@@ -245,7 +406,7 @@ class AppsClient:
         result = self._update_resources(name, [*preserved, *desired_resources])
         if result.returncode == 0:
             return None
-        return (result.stderr or result.stdout or "").strip() or "unknown error"
+        return _resource_update_error(name, result)
 
     def attach_postgres_backends(
         self, name: str, backends: Sequence[LakebaseBackend]
@@ -265,13 +426,17 @@ class AppsClient:
 
     def apply_tool_resources(self, name: str, resources: Sequence[dict[str, Any]]) -> Optional[str]:
         """Replace Agent Bricks-owned tool resources after a successful rollout."""
-        return _apply_tool_resources(name, resources, self._profile, runner=self._run)
+        return _apply_tool_resources(
+            name, resources, self._profile, runner=self._tool_resource_runner
+        )
 
     def add_tool_resources_for_rollout(
         self, name: str, resources: Sequence[dict[str, Any]]
     ) -> Optional[str]:
         """Add or upgrade tool resources before rollout without pruning or downgrading grants."""
-        return _add_tool_resources_for_rollout(name, resources, self._profile, runner=self._run)
+        return _add_tool_resources_for_rollout(
+            name, resources, self._profile, runner=self._tool_resource_runner
+        )
 
     def _read_resources(self, name: str) -> list[dict]:
         """Read an App's resources array without treating malformed data as empty."""
@@ -306,17 +471,24 @@ class AppsClient:
     ) -> subprocess.CompletedProcess:
         """Replace only an App's resources field with a masked Apps update."""
         payload = {"app": {"resources": list(resources)}, "update_mask": "resources"}
-        return self._run(
-            ["apps", "create-update", name, "--json", json.dumps(payload)],
-            self._profile,
-            capture=True,
-            check=False,
+        return self._run_app_change(
+            ["apps", "create-update", name, "--json", json.dumps(payload)], capture=True
         )
 
-    def create(self, name: str, instance_count: Optional[int]) -> str:
-        """Create the app at an optional fixed scale; return the raw command output."""
+    def create(self, name: str, instance_count: Optional[int], *, no_wait: bool = False) -> str:
+        """Create the app at an optional fixed scale; return the raw command output.
+
+        `apps create` blocks until the compute is ACTIVE unless ``no_wait`` is set, in which case it
+        returns once the App exists and leaves the compute booting server-side.
+        """
         result = self._run(
-            ["apps", "create", name, *_instance_args(instance_count)],
+            [
+                "apps",
+                "create",
+                name,
+                *_instance_args(instance_count),
+                *(["--no-wait"] if no_wait else []),
+            ],
             self._profile,
             capture=True,
             action=f"Could not create deployment '{name}'.",
@@ -332,12 +504,11 @@ class AppsClient:
             },
             "update_mask": "compute_min_instances,compute_max_instances",
         }
-        result = self._run(
-            ["apps", "create-update", name, "--json", json.dumps(update)],
-            self._profile,
-            capture=True,
-            action=f"Could not update deployment '{name}'.",
+        result = self._run_app_change(
+            ["apps", "create-update", name, "--json", json.dumps(update)], capture=True
         )
+        if result.returncode != 0:
+            self._raise_app_change_failed(name, f"Could not update deployment '{name}'.", result)
         return result.stdout or ""
 
     def sync_source(self, name: str, source_dir, ws_path: str) -> None:
@@ -345,19 +516,23 @@ class AppsClient:
         # Don't ship uv.lock: it pins exact package URLs from whatever index the developer's machine
         # resolved against (often an internal proxy). The Apps build must resolve against its own
         # configured index, so let it lock fresh in-sandbox instead of inheriting the local lock.
+        # `.agentbricks/` holds local state (the deploy log and state file among it), never source.
+        # Output is relayed to stderr so `-o json` stdout stays a single document.
         self._run(
-            ["sync", str(source_dir), ws_path, "--exclude", "uv.lock"],
+            ["sync", str(source_dir), ws_path, "--exclude", "uv.lock", "--exclude", ".agentbricks"],
             self._profile,
+            to_stderr=True,
             action=f"Could not upload the agent source for '{name}'.",
+            tee=True,
         )
 
     def deploy(self, name: str, ws_path: str) -> None:
         """Roll out the uploaded source as the app's active deployment."""
-        self._run(
-            ["apps", "deploy", name, "--source-code-path", ws_path],
-            self._profile,
-            action=f"Could not deploy '{name}'.",
+        result = self._run_app_change(
+            ["apps", "deploy", name, "--source-code-path", ws_path], to_stderr=True, tee=True
         )
+        if result.returncode != 0:
+            self._raise_app_change_failed(name, f"Could not deploy '{name}'.", result, relayed=True)
 
     def run_local(
         self,
@@ -389,11 +564,27 @@ class AppsClient:
         Resolved once per app name and cached: within a deploy the memory grant, the session grant, and
         the managed Runtime Store all need the same SP, and an app's SP is stable for the run - so this
         collapses their separate `apps get` calls into one, and no caller has to thread the value around.
+        A miss is never cached: right after a `--no-wait` create the SP can lag for a few seconds, and
+        a cached None would silently leave every later grant without a principal.
         """
         if app_name not in self._sp_cache:
             data = self._get_json(app_name)
-            self._sp_cache[app_name] = _field(data, "service_principal_client_id") if data else None
+            sp = (_field(data, "service_principal_client_id") or None) if data else None
+            if not sp:
+                return None
+            self._sp_cache[app_name] = sp
         return self._sp_cache[app_name]
+
+    def wait_for_service_principal(
+        self, app_name: str, timeout_s: int = 60, interval_s: int = 2
+    ) -> Optional[str]:
+        """Poll for the app's service principal until it appears; None if it doesn't in time."""
+        deadline = time.monotonic() + timeout_s
+        while True:
+            sp = self.get_service_principal(app_name)
+            if sp or time.monotonic() >= deadline:
+                return sp
+            time.sleep(interval_s)
 
     def get_app_url(self, name: str) -> Optional[str]:
         """The deployed app's browsable URL, or None if it can't be read."""
@@ -406,21 +597,56 @@ class AppsClient:
         status = _field(data, "compute_status") if data else None
         return _field(status, "state") if isinstance(status, dict) else None
 
-    def wait_for_active(self, name: str, timeout_s: int = 300) -> None:
-        """Block until a just-created app's compute is ACTIVE (or raise on timeout).
+    def wait_for_active(self, name: str, timeout_s: int = 300) -> bool:
+        """Block until the app's compute is ACTIVE (or raise on timeout).
 
-        `apps create` returns before compute is provisioned, but `apps deploy` requires the app to be
-        ACTIVE - so a first deploy races without this wait.
+        `apps create --no-wait` and `apps start --no-wait` return before compute is provisioned, but
+        `apps deploy` requires the app to be ACTIVE - so a deploy races without this wait. The
+        timeout counts from this call, not from the create.
+
+        Returns whether the read that found compute ACTIVE also showed a deployment in progress, so
+        a caller about to deploy can wait it out (see :meth:`wait_for_deployment`) without another
+        `apps get`.
         """
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
-            if self.get_compute_state(name) == "ACTIVE":
-                return
+            data = self._get_json(name)
+            status = _field(data, "compute_status") if data else None
+            if isinstance(status, dict) and _field(status, "state") == "ACTIVE":
+                return _deployment_in_progress(data)
             time.sleep(5)
         raise AgentCliError(
             f"App '{name}' did not reach a running state within {timeout_s}s.",
             hint=f"Check `agentbricks deployments get {name}`, then re-run deploy once it's running.",
         )
+
+    def deployment_in_progress(self, name: str) -> bool:
+        """Whether the app has a pending deployment still in progress; False if it can't be read."""
+        return _deployment_in_progress(self._get_json(name))
+
+    def wait_for_deployment(self, name: str, timeout_s: int = 600) -> None:
+        """Block until the app has no deployment in progress (or raise on timeout).
+
+        Apps accepts one deployment at a time, and `apps start` on a stopped app rolls out its last
+        active deployment again - so an `apps deploy` right after a start is rejected until that
+        deployment settles. Its outcome doesn't matter here: the caller's deploy replaces it.
+        """
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if not self.deployment_in_progress(name):
+                return
+            time.sleep(5)
+        raise AgentCliError(
+            f"App '{name}' still had a deployment in progress after {timeout_s}s.",
+            hint=f"Check `agentbricks deployments get {name}`, then re-run deploy once it finishes.",
+        )
+
+
+def _deployment_in_progress(payload: Optional[dict]) -> bool:
+    """Whether an `apps get` payload shows a pending deployment that hasn't settled yet."""
+    pending = _field(payload, "pending_deployment") if payload else None
+    status = _field(pending, "status") if isinstance(pending, dict) else None
+    return isinstance(status, dict) and _field(status, "state") == "IN_PROGRESS"
 
 
 def _read_app_resources_strict(
@@ -466,6 +692,12 @@ def _update_app_resources(
         capture=True,
         check=False,
     )
+
+
+def _resource_update_error(app: str, result: subprocess.CompletedProcess) -> str:
+    """The error text for a failed masked resource update, with the busy-App hint when it applies."""
+    detail = _failure_detail(result) or "unknown error"
+    return f"{detail}\n{_app_busy_hint(app)}" if _is_app_busy(result) else detail
 
 
 def _tool_resource_permission_strength(resource: dict[str, Any]) -> int | None:
@@ -530,7 +762,7 @@ def _apply_tool_resources(
     reconciled = [*preserved, *owned]
     update = _update_app_resources(app, reconciled, profile, runner=runner)
     if update.returncode != 0:
-        return (update.stderr or update.stdout or "").strip() or "unknown error"
+        return _resource_update_error(app, update)
 
     persisted, verify_error = _read_app_resources_strict(
         app,
@@ -627,7 +859,7 @@ def _add_tool_resources_for_rollout(
     reconciled = [*preserved, *owned]
     update = _update_app_resources(app, reconciled, profile, runner=runner)
     if update.returncode != 0:
-        return (update.stderr or update.stdout or "").strip() or "unknown error"
+        return _resource_update_error(app, update)
 
     persisted, verify_error = _read_app_resources_strict(
         app,
