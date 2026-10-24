@@ -512,6 +512,10 @@ class DeployService:
                     beat = Heartbeat(snap.phase, start=snap.phase_started, now=now)
                 elif line := beat.tick(now):
                     self._reporter.note(line)
+            elif local and snap.status == deploy_state.SUCCEEDED:
+                # A short last phase (the agent answering at once) can start and end between polls.
+                if beat is None or snap.phase != beat.phase:
+                    self._reporter.note(f"• {snap.phase}…")
             if snap.status != deploy_state.RUNNING or now >= deadline:
                 return WaitResult(
                     deployment=app,

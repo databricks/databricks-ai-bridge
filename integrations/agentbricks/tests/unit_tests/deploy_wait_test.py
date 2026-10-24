@@ -737,6 +737,21 @@ def test_wait_returns_75_while_a_local_deploy_waits_for_the_answer(project: path
     assert result.stdout.startswith("still deploying: Waiting for the agent to answer, ")
 
 
+def test_wait_shows_an_answer_phase_that_finished_between_polls(project: pathlib.Path):
+    _write_state(
+        project,
+        status="succeeded",
+        phase="Waiting for the agent to answer",
+        result={"url": "https://agent.example"},
+    )
+
+    result = _wait(project, _APP)
+
+    assert result.exit_code == 0, result.output
+    assert "• Waiting for the agent to answer…" in result.stderr
+    assert "Deployed agent 'agent-bricks-demo'" in result.stdout
+
+
 def test_deploy_help_and_reference_say_deploy_waits_for_the_answer():
     result = CliRunner().invoke(deploy_mod.deploy, ["--help"])
     reference = (_PACKAGE / "cli.md").read_text()
