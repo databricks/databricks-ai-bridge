@@ -129,7 +129,7 @@ AGENTBRICKS_DEBUG_TIMINGS=1 agentbricks -p <profile> deploy my-agent
 
 The phases are `preflight`, `app_start` (the `--no-wait` create or start), `reconcile`,
 `runtime_store`, `app_yaml`, `sync`, `compute_wait` (the join on ACTIVE compute), `app_update`,
-`rollout`, and `grants`; a request-user App reports `app_ready` instead of `app_start` and
+`rollout`, `grants`, and `ready` (waiting for the agent to answer); a request-user App reports `app_ready` instead of `app_start` and
 `compute_wait`. The switch is a debugging aid and is deliberately not shown in `--help`.
 
 ## CLI telemetry

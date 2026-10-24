@@ -28,6 +28,7 @@ from typing import Any, Callable, Optional
 
 import click
 
+from databricks_agentbricks.clients.app_probe import AppProbe
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.apps_user_auth_client import AppsUserAuthClient
 from databricks_agentbricks.clients.conversation_store_client import (
@@ -79,6 +80,7 @@ from databricks_agentbricks.services.deployment.provisioners import (
     TracingProvisioner,
 )
 from databricks_agentbricks.services.deployment.tool_access_provisioner import ToolAccessProvisioner
+from databricks_agentbricks.services.invoke.auth import WorkspaceOAuthAuthenticator
 
 # `deployments wait` returns before a coding agent's usual 120 s command timeout, and exits with
 # EX_TEMPFAIL from sysexits.h when the deploy is still running so the caller knows to wait again.
@@ -120,6 +122,7 @@ def build_deploy_service(obj, *, background: bool = False) -> DeployService:
         model_binding_provisioner=ModelBindingProvisioner(api_client_provider, reporter),
         reporter=reporter,
         state_tracker=state_tracker,
+        app_probe=AppProbe(WorkspaceOAuthAuthenticator(obj.profile).authorization_header),
     )
 
 
@@ -287,8 +290,9 @@ def deploy(
     not authentication and not the session id itself (send the session id in the request body):
       X-Routing-Key: <uuid>
 
-    A first deploy takes a few minutes (mostly starting app compute). From a coding agent or script
-    with a short command timeout, use --no-wait and then `agentbricks deployments wait`.
+    A first deploy takes a few minutes (mostly starting app compute). Deploy finishes once the
+    agent answers requests. From a coding agent or script with a short command timeout, use
+    --no-wait and then `agentbricks deployments wait`.
     """
     if allowed_origin and clear_allowed_origins:
         raise click.UsageError("Use --allowed-origin or --clear-allowed-origins, not both.")
@@ -369,8 +373,8 @@ def deployments_wait(ctx: click.Context, name, timeout_s, source) -> None:
     otherwise the App's state in the workspace. NAME defaults to the deployment recorded in
     agent.toml.
 
-    Exit status: 0 deployed and running; 1 failed; 75 still deploying at the timeout (run the same
-    command again).
+    Exit status: 0 deployed and answering; 1 failed; 75 still deploying at the timeout (run the
+    same command again).
     """
     obj = ctx.obj
     result = build_deploy_service(obj).wait(name, pathlib.Path(source), timeout_s)

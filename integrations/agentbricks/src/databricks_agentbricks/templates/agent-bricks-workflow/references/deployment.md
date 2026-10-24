@@ -27,7 +27,7 @@ Inspect `agentbricks deployments get <app-name>` or logs for a failed deployment
 A first deploy takes ~3 min (mostly starting app compute); redeploys are faster. Either run
 `agentbricks deploy` in the foreground with a long command timeout (for example, Claude Code's Bash
 `timeout: 600000`), or run `agentbricks deploy <name> --no-wait` and then
-`agentbricks deployments wait <app-name>` until it exits 0. Exit 75 means it is still deploying;
+`agentbricks deployments wait <app-name>` until it exits 0; the agent then answers requests. Exit 75 means it is still deploying;
 run the same command again. Exit 1 means it failed: the output carries the error and the log tail.
 Don't poll with `sleep`. A second `agentbricks deploy` of the same app is refused while one is still
 running from the project.
