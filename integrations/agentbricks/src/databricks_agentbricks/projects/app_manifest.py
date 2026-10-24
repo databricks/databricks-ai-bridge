@@ -70,6 +70,11 @@ class AppManifest:
         raw = self._doc.get("env")
         return raw if isinstance(raw, list) else []
 
+    def command(self) -> list[str]:
+        """The document's ``command`` argv, or ``[]`` if absent or not a list."""
+        raw = self._doc.get("command")
+        return [str(arg) for arg in raw] if isinstance(raw, list) else []
+
     def upsert_env(
         self,
         updates: Mapping[str, str],

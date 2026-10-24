@@ -12,8 +12,6 @@ functions.
 from __future__ import annotations
 
 import json
-import os
-import pathlib
 import subprocess
 import time
 from collections.abc import Collection, Sequence
@@ -534,30 +532,6 @@ class AppsClient:
         if result.returncode != 0:
             self._raise_app_change_failed(name, f"Could not deploy '{name}'.", result, relayed=True)
 
-    def run_local(
-        self,
-        source_dir: pathlib.Path,
-        entry_point_name: str,
-        *,
-        prepare_environment: bool,
-        app_port: Optional[int],
-    ) -> None:
-        """Run an app locally from a prepared manifest, streaming its output."""
-        args = ["apps", "run-local"]
-        if prepare_environment:
-            args.append("--prepare-environment")
-        if app_port is not None:
-            args += ["--app-port", str(app_port)]
-        # run-local resolves this relative to cwd and rejects an absolute alternate-manifest path.
-        args += ["--entry-point", entry_point_name]
-        self._run(
-            args,
-            self._profile,
-            cwd=str(source_dir),
-            action="Could not start the agent locally.",
-            env=_get_run_local_env(),
-        )
-
     def get_service_principal(self, app_name: str) -> Optional[str]:
         """The app's service principal client id (its Postgres role identity), or None if unavailable.
 
@@ -890,17 +864,3 @@ def add_tool_resources_for_rollout(
 ) -> Optional[str]:
     """Add or upgrade tool resources before rollout without pruning or downgrading grants."""
     return _add_tool_resources_for_rollout(app, resources, profile, runner=_databricks)
-
-
-def _get_run_local_env() -> dict[str, str]:
-    """Our environment without ``VIRTUAL_ENV`` or ``PORT``.
-
-    ``run-local --prepare-environment`` creates the project's ``.venv`` but installs the app's
-    requirements with ``uv pip``, which targets ``$VIRTUAL_ENV`` first: an activated venv would get
-    the app's packages (and downgrades) instead of the project's own.
-
-    ``run-local`` sets ``PORT`` to ``--app-port`` only when it isn't already set, and the templates
-    listen on ``PORT``: a ``PORT`` exported for something else would move the app off the port the
-    proxy forwards to.
-    """
-    return {key: value for key, value in os.environ.items() if key not in ("VIRTUAL_ENV", "PORT")}

@@ -27,8 +27,7 @@ agentbricks dev
 ```
 
 The API is available at `http://localhost:8000/api/invocations`, or on the port you pass with
-`--app-port`. The `http://localhost:8001` URL that `databricks apps run-local` also prints is its
-proxy to the same app. Requests can fail for a few seconds while the server starts; wait for
+`--app-port`. Requests can fail for a few seconds while the server starts; wait for
 `Uvicorn running on ...` in the log.
 
 Every request supplies a UUID `id`.
