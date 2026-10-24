@@ -5,7 +5,13 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from agents import Agent, Runner, function_tool, set_tracing_disabled
+from agents import (
+    Agent,
+    RawResponsesStreamEvent,
+    Runner,
+    function_tool,
+    set_tracing_disabled,
+)
 from agents.items import ReasoningItem
 from databricks.sdk import WorkspaceClient
 from openai.resources.chat.completions import AsyncCompletions, Completions
@@ -240,7 +246,8 @@ async def test_agent_streams_reply_and_replays_signature_after_tool_call(async_c
         text_deltas = [
             event.data.delta
             async for event in result.stream_events()
-            if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent)
+            if isinstance(event, RawResponsesStreamEvent)
+            and isinstance(event.data, ResponseTextDeltaEvent)
         ]
         assert result.final_output == _ANSWER
         assert "".join(text_deltas) == _ANSWER
