@@ -1,8 +1,10 @@
 """Tests for the SDK-provided agent application."""
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -512,6 +514,14 @@ async def test_stream_includes_events_committed_after_event_read(background, fai
         )
 
     terminal_type = "run.failed" if fail else "run.completed"
+    terminal_event: dict = {"type": terminal_type}
+    if fail:
+        terminal_event["error"] = {
+            "code": "AGENT_ERROR",
+            "type": "RuntimeError",
+            "message": "intentional execution failure",
+        }
+        assert completed["error"] == terminal_event["error"]
     assert completed["status"] == ("failed" if fail else "completed")
     if not fail:
         assert completed["output"] == "hello"
@@ -526,7 +536,7 @@ async def test_stream_includes_events_committed_after_event_read(background, fai
     ]
     assert replay.text == (
         f"id: {events[-1].sequence_number}\nevent: {terminal_type}\n"
-        f'data: {{"type": "{terminal_type}"}}\n\n'
+        f"data: {json.dumps(terminal_event)}\n\n"
     )
     assert past_terminal.text == ""
 
@@ -671,12 +681,146 @@ async def test_agent_failure_returns_500_and_failed_event() -> None:
         assert app._runtime is not None
         events = await app._runtime.get_events(_RUN_1)
 
+    error = {"code": "AGENT_ERROR", "type": "RuntimeError", "message": "boom"}
     assert response.status_code == 500
-    assert response.json() == {"detail": "agent invocation failed"}
+    assert response.json() == {"id": _RUN_1, "status": "failed", "error": error}
+    assert "retry-after" not in response.headers
     assert [event.event for event in events] == [
         {"type": "run.started"},
-        {"type": "run.failed"},
+        {"type": "run.failed", "error": error},
     ]
+
+
+def _rate_limit_error(headers: dict[str, str]):
+    import openai
+
+    request = httpx.Request("POST", "https://example.cloud.databricks.com/serving-endpoints")
+    body = {"error_code": "REQUEST_LIMIT_EXCEEDED", "message": "Exceeded workspace rate limit"}
+    # openai reads only status, headers, and request, whichever httpx distribution it was built on.
+    response = cast(Any, httpx.Response(429, headers=headers, request=request))
+    return openai.RateLimitError(f"Error code: 429 - {body}", response=response, body=body)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("headers", "retry_after"), [({"retry-after": "7"}, "7"), ({}, None)])
+async def test_model_rate_limit_returns_429_with_retry_after(headers, retry_after) -> None:
+    async def fail(input, context):
+        raise _rate_limit_error(headers)
+
+    app = make_app(fail)
+    async with running_client(app) as client:
+        response = await client.post("/api/invocations", json={"id": _RUN_1})
+
+    assert response.status_code == 429
+    assert response.headers.get("retry-after") == retry_after
+    error = response.json()["error"]
+    assert error["code"] == "UPSTREAM_RATE_LIMITED"
+    assert error["type"] == "openai.RateLimitError"
+    assert error["message"] == "Exceeded workspace rate limit"
+    assert error["upstream_status"] == 429
+    assert error["upstream_code"] == "REQUEST_LIMIT_EXCEEDED"
+    assert error.get("retry_after") == (int(retry_after) if retry_after else None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "status_code", "code"),
+    [
+        (
+            lambda: httpx.HTTPStatusError(
+                "Bad Gateway",
+                request=httpx.Request("GET", "https://tool.example"),
+                response=httpx.Response(503, request=httpx.Request("GET", "https://tool.example")),
+            ),
+            502,
+            "UPSTREAM_ERROR",
+        ),
+        (
+            lambda: httpx.ReadTimeout("timed out", request=httpx.Request("GET", "https://x")),
+            504,
+            "UPSTREAM_TIMEOUT",
+        ),
+        (lambda: KeyError("messages"), 500, "AGENT_ERROR"),
+    ],
+)
+async def test_upstream_and_agent_failures_use_fitting_status(failure, status_code, code) -> None:
+    async def fail(input, context):
+        raise failure()
+
+    app = make_app(fail)
+    async with running_client(app) as client:
+        response = await client.post("/api/invocations", json={"id": _RUN_1})
+
+    assert response.status_code == status_code
+    assert response.json()["error"]["code"] == code
+
+
+@pytest.mark.asyncio
+async def test_background_failure_status_and_events_carry_error() -> None:
+    async def fail(input, context):
+        raise RuntimeError("model endpoint missing")
+
+    app = make_app(fail)
+    async with running_client(app) as client:
+        accepted = await client.post(
+            "/api/invocations", json={"id": _RUN_1, "background": True, "stream": True}
+        )
+        state = await poll(client, _RUN_1)
+        replay = await client.get(f"/api/invocations/{_RUN_1}/events")
+
+    error = {"code": "AGENT_ERROR", "type": "RuntimeError", "message": "model endpoint missing"}
+    assert accepted.status_code == 202
+    assert state == {"id": _RUN_1, "status": "failed", "error": error}
+    assert replay.text.endswith(
+        f"event: run.failed\ndata: {json.dumps({'type': 'run.failed', 'error': error})}\n\n"
+    )
+
+
+@pytest.mark.asyncio
+async def test_failure_message_is_redacted_and_truncated(monkeypatch) -> None:
+    monkeypatch.setenv("DATABRICKS_TOKEN", "env-secret-token-value")
+
+    async def fail(input, context):
+        raise RuntimeError(
+            "upstream said Bearer abc123 env-secret-token-value "
+            + "y" * 2000
+            + "\nTraceback (most recent call last):"
+        )
+
+    app = make_app(fail)
+    async with running_client(app) as client:
+        response = await client.post("/api/invocations", json={"id": _RUN_1, "stream": True})
+        state = await client.get(f"/api/invocations/{_RUN_1}")
+
+    message = state.json()["error"]["message"]
+    assert len(message) <= 300
+    assert message.startswith("upstream said Bearer [REDACTED] [REDACTED] yyy")
+    for text in (response.text, state.text):
+        assert "abc123" not in text
+        assert "env-secret-token-value" not in text
+        assert "Traceback" not in text
+
+
+@pytest.mark.asyncio
+async def test_failed_row_without_stored_error_reports_generic_error() -> None:
+    store = InMemoryRuntimeStore()
+    store.states[_RUN_1] = Invocation(
+        invocation_id=_RUN_1,
+        status=InvocationStatus.FAILED,
+        attempt=1,
+        request={"input": []},
+        response=None,
+    )
+    app = DurableAgentServer(runtime_store=store)
+    app.invoke(echo)
+    async with running_client(app) as client:
+        state = await client.get(f"/api/invocations/{_RUN_1}")
+        response = await client.post("/api/invocations", json={"id": _RUN_1})
+
+    error = {"code": "AGENT_ERROR", "message": "agent invocation failed"}
+    assert state.json() == {"id": _RUN_1, "status": "failed", "error": error}
+    assert response.status_code == 500
+    assert response.json() == {"id": _RUN_1, "status": "failed", "error": error}
 
 
 @pytest.mark.asyncio

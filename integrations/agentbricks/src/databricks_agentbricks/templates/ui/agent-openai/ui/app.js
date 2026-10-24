@@ -627,7 +627,8 @@ function handleEvent(event) {
   if (event?.type === "delta") appendDelta(event.content);
   if (event?.type === "message") handleAgentMessage(event.message);
   if (event?.type === "interrupt") handleInterrupt(event);
-  if (event?.error) throw new Error(event.error);
+  if (event?.type === "run.failed") return;
+  if (event?.error) throw new Error(errorMessage(event.error) || "Agent error");
 }
 
 function handleOutput(output) {
@@ -663,9 +664,16 @@ function agentResult(result) {
   return result?.output && !Array.isArray(result.output) ? result.output : result;
 }
 
+function errorMessage(error) {
+  return typeof error === "string" ? error : error?.message;
+}
+
 async function jsonResponse(response) {
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.detail || body.error || `Request failed with ${response.status}`);
+  if (!response.ok) {
+    const message = errorMessage(body.error) || body.detail || `Request failed with ${response.status}`;
+    throw new Error(body.status === "failed" ? `Agent invocation failed: ${message}` : message);
+  }
   return body;
 }
 
@@ -1063,20 +1071,21 @@ async function invokeStreaming(payload) {
     buffer = frames.pop() || "";
     for (const frame of frames) {
       const event = parseSseFrame(frame);
-      if (["run.failed", "run.completed"].includes(event?.type)) terminal = event.type;
+      if (["run.failed", "run.completed"].includes(event?.type)) terminal = event;
       if (event) handleEvent(event);
     }
     if (done) break;
   }
   if (buffer.trim()) {
     const event = parseSseFrame(buffer);
-    if (["run.failed", "run.completed"].includes(event?.type)) terminal = event.type;
+    if (["run.failed", "run.completed"].includes(event?.type)) terminal = event;
     if (event) handleEvent(event);
   }
-  if (terminal === "run.failed") {
-    throw new Error(`Agent invocation ${invocation.id} failed. Check server logs for details.`);
+  if (terminal?.type === "run.failed") {
+    const message = errorMessage(terminal.error);
+    throw new Error(message ? `Agent invocation failed: ${message}` : `Agent invocation ${invocation.id} failed. Check server logs for details.`);
   }
-  if (terminal !== "run.completed") {
+  if (terminal?.type !== "run.completed") {
     throw new Error(`Stream disconnected before invocation ${invocation.id} completed. Check its status before retrying.`);
   }
   finishDraft();
@@ -1102,7 +1111,7 @@ async function pollBackground(invocationId) {
       handleOutput(output.output);
       return output;
     }
-    if (result.status === "failed") throw new Error(`Background invocation ${invocationId} failed. ${result.error?.message || result.error || "Check server logs for details."}`);
+    if (result.status === "failed") throw new Error(`Background invocation ${invocationId} failed. ${errorMessage(result.error) || "Check server logs for details."}`);
     setStatus(`Background · ${result.status}`, "busy");
     // Reduce polling load for long runs without imposing an execution deadline.
     delay = Math.min(delay * 1.5, 5000);

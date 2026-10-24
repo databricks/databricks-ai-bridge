@@ -35,6 +35,14 @@ def _validate_session_id(session_id: str | None) -> None:
         raise ValueError("session_id must not be empty")
 
 
+def failed_event(response: JsonValue) -> JsonObject:
+    """Build the terminal ``run.failed`` event, carrying the stored error object when present."""
+    event: JsonObject = {"type": "run.failed"}
+    if isinstance(response, dict) and isinstance(response.get("error"), dict):
+        event["error"] = copy.deepcopy(response["error"])
+    return event
+
+
 def _validate_read_scope(invocation_id: str | None, session_id: str | None) -> None:
     if (invocation_id is None) == (session_id is None):
         raise ValueError("exactly one of invocation_id or session_id must be provided")
@@ -259,7 +267,7 @@ class InMemoryRuntimeStore(RuntimeStore):
                 session_id=state.session_id,
                 session_sequence_number=state.session_sequence_number,
             )
-            self._append_event(invocation_id, attempt, {"type": "run.failed"})
+            self._append_event(invocation_id, attempt, failed_event(response))
             return True
 
     async def append_event(

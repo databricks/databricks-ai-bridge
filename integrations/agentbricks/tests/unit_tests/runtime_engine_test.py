@@ -887,7 +887,11 @@ async def test_executor_failure_is_persisted_as_terminal_state() -> None:
 
     assert state is not None
     assert state.status == InvocationStatus.FAILED
-    assert state.response is None
+    assert state.response == {
+        "error": {"code": "AGENT_ERROR", "type": "RuntimeError", "message": "boom"},
+        "status_code": 500,
+        "source": "agent",
+    }
 
 
 @pytest.mark.asyncio

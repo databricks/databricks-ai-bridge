@@ -23,6 +23,7 @@ from databricks_agentkit.runtime.cors import (
     allowed_origins_from_environment,
     validate_allowed_origins,
 )
+from databricks_agentkit.runtime.errors import InvocationError, describe_failure
 from databricks_agentkit.runtime.runtime import Runtime
 from databricks_agentkit.runtime.store import RuntimeStore
 from databricks_agentkit.runtime.types import (
@@ -40,6 +41,8 @@ from databricks_agentkit.runtime.types import (
 logger = logging.getLogger(__name__)
 
 _API_ROOT = "/api/invocations"
+# Failed rows stored before failures were described carry no error object.
+_UNKNOWN_FAILURE: JsonObject = {"code": "AGENT_ERROR", "message": "agent invocation failed"}
 
 
 class _InvocationRequest(BaseModel):
@@ -214,6 +217,13 @@ class DurableAgentServer(FastAPI):
                 handler = "@app.recover" if context.is_recovery else "@app.invoke"
                 raise RuntimeError(f"no {handler} handler is registered")
             return await function(copy.deepcopy(invocation_request["input"]), context)
+        except AuthError:
+            raise
+        except Exception as exc:
+            if request_auth is None:
+                raise
+            # Describe the failure while the request token is still known, so it can be redacted.
+            raise InvocationError(describe_failure(exc, request_auth.secrets())) from exc
         finally:
             if request_auth is not None:
                 request_auth.close()
@@ -269,16 +279,22 @@ class DurableAgentServer(FastAPI):
             return JSONResponse({"id": invocation_id, "status": "completed", "output": output})
         except InvocationConflictError as exc:
             raise HTTPException(409, "id was already used for another request") from exc
-        except InvocationFailedError as exc:
+        except InvocationFailedError:
             state = await self._runtime.get_invocation(runtime_invocation_id)
-            if state is not None:
-                auth_failure = self._auth_failure_response(state)
-                if auth_failure is not None:
-                    return JSONResponse(
-                        {"error": auth_failure[0]},
-                        status_code=auth_failure[1],
-                    )
-            raise HTTPException(500, "agent invocation failed") from exc
+            error, status_code, from_agent = self._failure_response(state)
+            if not from_agent:
+                return JSONResponse({"error": error}, status_code=status_code)
+            retry_after = error.get("retry_after")
+            headers = (
+                {"Retry-After": str(retry_after)}
+                if status_code == 429 and isinstance(retry_after, int)
+                else None
+            )
+            return JSONResponse(
+                {"id": invocation_id, "status": "failed", "error": error},
+                status_code=status_code,
+                headers=headers,
+            )
         finally:
             if registered_auth and not execution_owns_auth and request_auth is not None:
                 self._discard_request_auth(runtime_invocation_id, request_auth)
@@ -358,27 +374,29 @@ class DurableAgentServer(FastAPI):
         if state.status == InvocationStatus.COMPLETED:
             payload["output"] = copy.deepcopy(state.response)
         elif state.status == InvocationStatus.FAILED:
-            auth_failure = DurableAgentServer._auth_failure_response(state)
-            payload["error"] = (
-                copy.deepcopy(auth_failure[0])
-                if auth_failure is not None
-                else "agent invocation failed"
-            )
+            payload["error"] = DurableAgentServer._failure_response(state)[0]
         return payload
 
     @staticmethod
-    def _auth_failure_response(state: Invocation) -> tuple[JsonObject, int] | None:
-        if state.status != InvocationStatus.FAILED or not isinstance(state.response, dict):
-            return None
+    def _failure_response(state: Invocation | None) -> tuple[JsonObject, int, bool]:
+        """Return a failed invocation's error, HTTP status, and whether the agent raised it.
+
+        Auth failures (stored without ``source``) keep their original ``{"error": ...}`` body.
+        """
+        fallback: tuple[JsonObject, int, bool] = (dict(_UNKNOWN_FAILURE), 500, True)
+        if state is None or state.status != InvocationStatus.FAILED:
+            return fallback
+        if not isinstance(state.response, dict):
+            return fallback
         error = state.response.get("error")
         status_code = state.response.get("status_code")
         if not isinstance(error, dict) or not isinstance(status_code, int):
-            return None
+            return fallback
         if not isinstance(error.get("code"), str) or not isinstance(error.get("message"), str):
-            return None
+            return fallback
         if status_code < 400 or status_code > 599:
-            return None
-        return copy.deepcopy(error), status_code
+            return fallback
+        return copy.deepcopy(error), status_code, state.response.get("source") == "agent"
 
     def _runtime_invocation_id(self, request: Request, invocation_id: str) -> str:
         if not self.auth_policy.requires_user:
