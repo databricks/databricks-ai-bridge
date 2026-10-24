@@ -97,6 +97,9 @@ SSE records contain events translated by `runtime/adapter.py`: token `delta`s, c
 and HITL `interrupt`s. Replay from a cursor with
 `GET /api/invocations/{id}/events?after={sequence}`.
 
+A message's `content` is its answer text. Models that reason (Claude 5.x) add a separate
+`{"role": "assistant", "content": [{"type": "reasoning", ...}]}` message before the answer.
+
 ## Human approval
 
 `send_message` is gated by `HumanInTheLoopMiddleware`. Start a turn asking the agent to use that
