@@ -73,7 +73,7 @@ class AppProbe:
         except urllib.error.HTTPError as exc:
             status = exc.code
             exc.close()
-        except (OSError, urllib.error.URLError) as exc:
+        except OSError as exc:  # URLError, timeouts, and refused connections
             return ProbeResult("booting", str(getattr(exc, "reason", exc)))
         if status in BOOTING_STATUSES:
             return ProbeResult("booting", f"HTTP {status}")
