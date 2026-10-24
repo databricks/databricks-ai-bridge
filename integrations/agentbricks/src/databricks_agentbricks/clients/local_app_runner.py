@@ -149,11 +149,14 @@ class LocalAppRunner:
 
 
 def _prepare_steps(source_dir: pathlib.Path) -> list[list[str]]:
-    """The uv commands that build the project's ``.venv``."""
+    """The uv commands that build the project's ``.venv``, reusing one that already exists."""
     if (source_dir / "pyproject.toml").is_file():
         return [["uv", "sync"]]
     if (source_dir / "requirements.txt").is_file():
-        return [["uv", "venv"], ["uv", "pip", "install", "-r", "requirements.txt"]]
+        return [
+            ["uv", "venv", "--allow-existing"],
+            ["uv", "pip", "install", "-r", "requirements.txt"],
+        ]
     return []
 
 

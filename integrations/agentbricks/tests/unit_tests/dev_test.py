@@ -124,7 +124,7 @@ def test_dev_prepares_requirements_only_project(tmp_path: pathlib.Path):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     assert _commands(run) == [
-        ["uv", "venv"],
+        ["uv", "venv", "--allow-existing"],
         ["uv", "pip", "install", "-r", "requirements.txt"],
         ["python", "app.py"],
     ]
