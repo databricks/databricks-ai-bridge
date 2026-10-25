@@ -12,7 +12,6 @@ from contextvars import ContextVar
 from typing import Any, cast
 
 from agents.models import openai_chatcompletions
-from agents.models.chatcmpl_converter import Converter
 from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 
 _preserve_thinking_blocks: ContextVar[bool] = ContextVar(
@@ -20,7 +19,9 @@ _preserve_thinking_blocks: ContextVar[bool] = ContextVar(
 )
 
 
-class _ThinkingBlockConverter(Converter):
+# Extend the installed converter, not the SDK's base: newer databricks-openai releases install their
+# own (for DatabricksChatCompletionsModel), and replacing it would stop Claude signature replay.
+class _ThinkingBlockConverter(openai_chatcompletions.Converter):
     """Converter that replays thinking blocks while ``ReasoningChatCompletionsModel`` builds a request."""
 
     @classmethod
@@ -30,8 +31,7 @@ class _ThinkingBlockConverter(Converter):
         return super().items_to_messages(*args, **kwargs)
 
 
-if not issubclass(openai_chatcompletions.Converter, _ThinkingBlockConverter):
-    openai_chatcompletions.Converter = _ThinkingBlockConverter  # ty: ignore[invalid-assignment]
+openai_chatcompletions.Converter = _ThinkingBlockConverter  # ty: ignore[invalid-assignment]
 
 
 def _is_reasoning_content(content: Any) -> bool:
