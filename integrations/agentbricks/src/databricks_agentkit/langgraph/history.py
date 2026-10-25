@@ -30,7 +30,7 @@ async def read_history(session_id: str, actor: str) -> dict[str, Any]:
     for index, message in enumerate(messages):
         item_id = str(getattr(message, "id", None) or index)
         *reasoning, data = message_items(message)
-        # Claude reasoning is its own item, so the message's content is the answer text.
+        # Reasoning is its own item, so the message's content is the answer text.
         items.extend({"item_id": f"{item_id}:reasoning", "data": item} for item in reasoning)
         items.append(
             {

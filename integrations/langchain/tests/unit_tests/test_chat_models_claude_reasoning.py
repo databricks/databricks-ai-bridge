@@ -1,6 +1,7 @@
 """ChatDatabricks on Claude 5.x AI Gateway responses, whose content mixes reasoning and text parts."""
 
 import copy
+import json
 from typing import Any, cast
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -276,8 +277,85 @@ def test_string_content_models_are_unchanged(model: str) -> None:
     }
 
 
-def test_non_claude_list_content_is_still_json_encoded() -> None:
-    llm = _llm("databricks-gpt-oss-120b", _completion_client(_CLAUDE5_MESSAGE))
-    content = llm.invoke("hi").content
-    assert isinstance(content, str)
-    assert content.startswith('[{"type": "reasoning"')
+def _unsigned(text: str) -> list[dict[str, Any]]:
+    """Qwen / gpt-oss reasoning: summary text without a signature."""
+    return [{"type": "reasoning", "summary": [{"type": "summary_text", "text": text}]}]
+
+
+def _with_content(content: Any) -> dict[str, Any]:
+    message = copy.deepcopy(_CLAUDE5_MESSAGE)
+    message["choices"][0]["message"]["content"] = content
+    return message
+
+
+# `system.ai.qwen35-122b-a10b` (CAJ trial 20261025-165909-4af4): unsigned reasoning, then text.
+_QWEN_STREAM_DELTAS: list[Any] = [
+    "",
+    _unsigned("The user greets me, "),
+    _unsigned("so I greet them back."),
+    "Hello! ",
+    "How can I help?",
+]
+
+
+@pytest.mark.parametrize(
+    "model", ["system.ai.qwen35-122b-a10b", "databricks-gpt-oss-120b", "system.ai.gemini-3-pro"]
+)
+def test_unsigned_reasoning_invoke_returns_answer_text_and_reasoning_block(model: str) -> None:
+    content = [*_unsigned(_REASONING), {"type": "text", "text": _ANSWER}]
+    llm = _llm(model, _completion_client(_with_content(content)))
+
+    message = llm.invoke("hi")
+
+    assert message.text == _ANSWER
+    reasoning, text = _blocks(message)
+    assert reasoning == _unsigned(_REASONING)[0]
+    assert text == {"type": "text", "text": _ANSWER}
+
+
+def test_unsigned_reasoning_stream_merges_into_reasoning_and_text_blocks() -> None:
+    llm = _llm("system.ai.qwen35-122b-a10b", _stream_client(_QWEN_STREAM_DELTAS))
+
+    chunks = list(llm.stream("hi"))
+
+    assert "".join(chunk.text for chunk in chunks) == _ANSWER
+    merged = chunks[0]
+    for chunk in chunks[1:]:
+        merged += chunk
+    reasoning, text = _blocks(merged)
+    assert reasoning["summary"][0]["text"] == _REASONING
+    assert "signature" not in reasoning["summary"][0]
+    assert text["text"] == _ANSWER
+
+
+def test_text_parts_with_extra_keys_read_as_answer_text() -> None:
+    content = [{"type": "text", "text": _ANSWER, "thoughtSignature": "Z2VtaW5p"}]
+    llm = _llm("system.ai.gemini-3-pro-image", _completion_client(_with_content(content)))
+    assert llm.invoke("hi").text == _ANSWER
+
+
+def test_unsigned_reasoning_is_not_sent_back() -> None:
+    llm = _llm("system.ai.qwen35-122b-a10b", _stream_client(_QWEN_STREAM_DELTAS))
+    chunks = list(llm.stream("hi"))
+    merged = chunks[0]
+    for chunk in chunks[1:]:
+        merged += chunk
+    call = AIMessage(
+        content=cast(Any, _unsigned("Look it up.")),
+        tool_calls=[{"name": "get_weather", "args": {}, "id": "call_01"}],
+    )
+
+    sent = llm._prepare_inputs([HumanMessage("hi"), merged, call])["messages"]
+
+    assert sent[1] == {"role": "assistant", "content": _ANSWER}
+    assert sent[2]["content"] is None
+    assert sent[2]["tool_calls"][0]["id"] == "call_01"
+
+
+def test_other_list_content_is_still_json_encoded() -> None:
+    image = [{"type": "image_url", "image_url": {"url": "https://x/y.png"}}]
+    llm = _llm("system.ai.gemini-3-pro-image", _completion_client(_with_content(image)))
+    assert llm.invoke("hi").content == json.dumps(image)
+
+    llm = _llm("system.ai.gemini-3-pro-image", _stream_client(["", image]))
+    assert json.dumps(image) in [chunk.content for chunk in llm.stream("hi")]

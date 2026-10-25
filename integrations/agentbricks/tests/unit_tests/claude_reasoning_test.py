@@ -1,4 +1,4 @@
-"""Claude 5.x reasoning blocks stay out of both templates' reply text."""
+"""Reasoning blocks (Claude 5.x, Qwen, Gemini, gpt-oss) stay out of both templates' reply text."""
 
 import importlib
 import json
@@ -111,15 +111,9 @@ def test_delta_contents_stream_reasoning_and_text_separately():
     [
         ANSWER,
         "",
-        # gpt-oss: JSON-encoded reasoning without Claude signatures stays as today.
-        json.dumps(
-            [
-                {"type": "reasoning", "summary": [{"type": "summary_text", "text": "hmm"}]},
-                {"type": "text", "text": ANSWER},
-            ]
-        ),
         '[{"type": "reasoning" is how this answer starts',
-        [{"type": "text", "text": ANSWER}],
+        # Lists with other parts (images) are not reasoning content.
+        [{"type": "image_url", "image_url": {"url": "https://x/y.png"}}],
     ],
 )
 def test_other_replies_are_unchanged(content):
@@ -134,8 +128,7 @@ def test_other_replies_are_unchanged(content):
         ToolMessage(content=content, tool_call_id="t"),
     ):
         assert message_items(message) == [message.model_dump()]
-    expected = ANSWER if isinstance(content, list) else content
-    assert delta_contents(content) == ([expected] if expected else [])
+    assert delta_contents(content) == ([content] if content else [])
 
 
 def test_legacy_reasoning_fragments_merge_into_one_block_per_signature():
@@ -367,3 +360,164 @@ def test_openai_template_uses_databricks_chat_model(openai_template, monkeypatch
     monkeypatch.setitem(sys.modules, "databricks_openai.agents", types.SimpleNamespace())
     monkeypatch.setattr("agents.models._openai_shared.get_default_openai_client", lambda: client)
     assert chat_model("system.ai.claude-sonnet-4-5") == "system.ai.claude-sonnet-4-5"
+
+
+# Other models: unsigned reasoning, and text parts with extra keys.
+
+UNSIGNED_REASONING = "The user says hi."
+
+
+def _unsigned(text: str) -> dict[str, Any]:
+    """A Qwen / gpt-oss reasoning part: summary text, no signature."""
+    return {"type": "reasoning", "summary": [{"type": "summary_text", "text": text}]}
+
+
+# `system.ai.qwen35-122b-a10b` through databricks-langchain with list content kept as blocks.
+QWEN_BLOCKS: list[Any] = [_unsigned(UNSIGNED_REASONING), {"type": "text", "text": ANSWER}]
+# The same reply through databricks-langchain 0.21.0: one JSON list per streamed reasoning chunk.
+QWEN_LEGACY_STREAM = (
+    json.dumps([_unsigned("The user ")]) + json.dumps([_unsigned("says hi.")]) + ANSWER
+)
+# ... and non-streamed: the whole list content JSON-encoded.
+QWEN_LEGACY_MESSAGE = json.dumps(QWEN_BLOCKS)
+# `system.ai.gemini-3-pro-image`'s answer after a tool call: text parts with a thought signature.
+GEMINI_TEXT: list[Any] = [{"type": "text", "text": ANSWER, "thoughtSignature": "Z2VtaW5p"}]
+
+
+@pytest.mark.parametrize("content", [QWEN_BLOCKS, QWEN_LEGACY_STREAM, QWEN_LEGACY_MESSAGE])
+def test_unsigned_reasoning_is_a_separate_item_and_answer_is_text(content):
+    pytest.importorskip("langchain_core")
+    from langchain_core.messages import AIMessage
+
+    from databricks_agentkit.langgraph.messages import message_items
+
+    message = AIMessage(content=content, id="answer")
+    reasoning, answer = message_items(message)
+
+    assert answer == {**message.model_dump(), "content": ANSWER}
+    assert reasoning == {"role": "assistant", "content": [_unsigned(UNSIGNED_REASONING)]}
+
+
+def test_text_parts_with_extra_keys_are_answer_text():
+    pytest.importorskip("langchain_core")
+    from langchain_core.messages import AIMessage
+
+    from databricks_agentkit.langgraph.messages import delta_contents, message_items
+
+    [answer] = message_items(AIMessage(content=GEMINI_TEXT))
+    assert answer["content"] == ANSWER
+    assert delta_contents(GEMINI_TEXT) == [ANSWER]
+
+
+def test_unsigned_reasoning_deltas_stream_reasoning_then_text():
+    from databricks_agentkit.langgraph.messages import delta_contents
+
+    assert delta_contents(json.dumps([_unsigned("The user ")])) == [[_unsigned("The user ")]]
+    assert delta_contents([{**_unsigned(UNSIGNED_REASONING), "index": 0}]) == [
+        [_unsigned(UNSIGNED_REASONING)]
+    ]
+    assert delta_contents([{"type": "text", "text": "Hello", "index": 1}]) == ["Hello"]
+
+
+def test_unsigned_reasoning_is_not_sent_back():
+    pytest.importorskip("langchain_core")
+    from langchain_core.messages import AIMessage
+
+    from databricks_agentkit.langgraph.messages import gateway_messages
+
+    call = AIMessage(
+        content=json.dumps([_unsigned("Look it up.")]),
+        tool_calls=[{"name": "lookup", "args": {}, "id": "t"}],
+    )
+    replies = [AIMessage(content=QWEN_LEGACY_STREAM), AIMessage(content=QWEN_LEGACY_MESSAGE)]
+    restored_call, *restored = gateway_messages([call, *replies])
+    assert restored_call.content == ""
+    assert restored_call.tool_calls == call.tool_calls
+    assert [message.content for message in restored] == [ANSWER, ANSWER]
+
+
+def test_signed_reasoning_is_still_sent_back_next_to_unsigned():
+    pytest.importorskip("langchain_core")
+    from langchain_core.messages import AIMessage
+
+    from databricks_agentkit.langgraph.messages import gateway_messages
+
+    content = json.dumps([_reasoning("Signed.", SIGNATURE)]) + ANSWER
+    [message] = gateway_messages([AIMessage(content=content)])
+    assert message.content == [_reasoning("Signed.", SIGNATURE), {"type": "text", "text": ANSWER}]
+
+
+def test_langgraph_template_sends_qwen_history_as_answer_text(langgraph_template):
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    agent_module, _adapter = langgraph_template
+    model = agent_module._RoutedChatDatabricks.model_construct(
+        model="system.ai.qwen35-122b-a10b", extra_params={}
+    )
+    request = model._prepare_inputs(
+        [HumanMessage(content="hi"), AIMessage(content=QWEN_LEGACY_STREAM), HumanMessage("again")]
+    )
+    assert request["messages"][1] == {"role": "assistant", "content": ANSWER}
+
+
+@pytest.mark.asyncio
+async def test_langgraph_adapter_streams_qwen_reply(langgraph_template):
+    from langchain_core.messages import AIMessage, AIMessageChunk
+
+    _agent, adapter = langgraph_template
+
+    async def events():
+        yield (
+            "messages",
+            (AIMessageChunk(content=json.dumps([_unsigned(UNSIGNED_REASONING)]), id="r"), {}),
+        )
+        yield "messages", (AIMessageChunk(content=ANSWER, id="r"), {})
+        yield "updates", {"model": {"messages": [AIMessage(content=QWEN_LEGACY_STREAM, id="r")]}}
+
+    out = [event async for event in adapter._serialize_events(events())]
+
+    assert [event["content"] for event in out if event["type"] == "delta"] == [
+        [_unsigned(UNSIGNED_REASONING)],
+        ANSWER,
+    ]
+    reasoning, answer = [event["message"] for event in out if event["type"] == "message"]
+    assert reasoning == {"role": "assistant", "content": [_unsigned(UNSIGNED_REASONING)]}
+    assert answer["content"] == ANSWER
+
+
+@pytest.mark.asyncio
+async def test_openai_adapter_streams_unsigned_reasoning_reply(openai_template):
+    from agents import Agent, OpenAIChatCompletionsModel, Runner, set_tracing_disabled
+
+    _agent, adapter = openai_template
+    set_tracing_disabled(True)
+    # What AsyncDatabricksOpenAI passes on for Qwen: reasoning moved to unsigned thinking blocks.
+    completions = _FakeCompletions(
+        [
+            {"role": "assistant", "content": ""},
+            {"thinking_blocks": [{"type": "thinking", "thinking": "The user "}]},
+            {"thinking_blocks": [{"type": "thinking", "thinking": "says hi."}]},
+            {"content": "Hello! "},
+            {"content": "How can I help?"},
+        ]
+    )
+    client = cast(
+        Any,
+        types.SimpleNamespace(
+            chat=types.SimpleNamespace(completions=completions), base_url="https://gateway"
+        ),
+    )
+    agent = Agent(
+        name="Agent",
+        model=OpenAIChatCompletionsModel(model="system.ai.qwen35-122b-a10b", openai_client=client),
+    )
+
+    out = [event async for event in adapter._serialize_events(Runner.run_streamed(agent, "hi"))]
+
+    assert "".join(event["content"] for event in out if event["type"] == "delta") == ANSWER
+    reasoning, answer = [event["message"] for event in out if event["type"] == "message"]
+    assert answer == {"role": "assistant", "content": ANSWER}
+    [block] = reasoning["content"]
+    assert block["type"] == "reasoning"
+    assert block["content"][0]["text"] == UNSIGNED_REASONING
+    assert not block.get("encrypted_content")

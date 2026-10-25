@@ -482,9 +482,8 @@ class ChatDatabricks(BaseChatModel):
         else:
             # Chat completions API expects "messages" parameter
             data["messages"] = [_convert_message_to_dict(msg) for msg in messages]
-            if _is_claude_model(self.model):
-                for message_dict in data["messages"]:
-                    _to_gateway_content_blocks(message_dict)
+            for message_dict in data["messages"]:
+                _to_gateway_content_blocks(message_dict)
 
             if self.temperature is not None:
                 data["temperature"] = self.temperature
@@ -730,11 +729,7 @@ class ChatDatabricks(BaseChatModel):
 
             generations.append(
                 ChatGeneration(
-                    message=_convert_dict_to_message(
-                        message_dict,
-                        response.usage,
-                        keep_content_blocks=_is_claude_model(self.model),
-                    ),
+                    message=_convert_dict_to_message(message_dict, response.usage),
                     generation_info=generation_info,
                 )
             )
@@ -912,7 +907,7 @@ class ChatDatabricks(BaseChatModel):
                 usage_chunk_emitted = True
         else:
             first_chunk_role = None
-            content_blocks = _StreamContentBlocks() if _is_claude_model(self.model) else None
+            content_blocks = _StreamContentBlocks()
             stream: Stream[ChatCompletionChunk] = self.client.chat.completions.create(**data)
             for chunk in stream:
                 # Handle ChatAgent chunks that don't have choices but have delta
@@ -1024,7 +1019,7 @@ class ChatDatabricks(BaseChatModel):
                 usage_chunk_emitted = True
         else:
             first_chunk_role = None
-            content_blocks = _StreamContentBlocks() if _is_claude_model(self.model) else None
+            content_blocks = _StreamContentBlocks()
             stream = cast(
                 AsyncStream[ChatCompletionChunk],
                 await self.async_client.chat.completions.create(**data),
@@ -1631,27 +1626,49 @@ def _get_tool_calls_from_ai_message(message: AIMessage) -> List[Dict]:
     ]
 
 
-def _is_claude_model(model: str | None) -> bool:
-    """Returns True if the model is a Claude variant."""
-    if not model:
-        return False
-    return "claude" in model.lower()
+def _is_reasoning_content(content: Any) -> bool:
+    """Returns True if ``content`` is AI Gateway list content made only of text and reasoning parts.
+
+    Reasoning models (Claude 5.x, Qwen, Gemini, gpt-oss) return this shape instead of a string.
+    Other lists (e.g. image parts) are not matched.
+    """
+    return (
+        isinstance(content, list)
+        and bool(content)
+        and all(
+            isinstance(part, str)
+            or (isinstance(part, dict) and part.get("type") in ("text", "reasoning"))
+            for part in content
+        )
+    )
+
+
+def _is_signed(block: dict) -> bool:
+    summary = block.get("summary")
+    return isinstance(summary, list) and any(
+        isinstance(part, dict) and part.get("signature") for part in summary
+    )
 
 
 def _to_gateway_content_blocks(message_dict: dict) -> None:
     """Restore an assistant message's content blocks to the shape the AI Gateway returned.
 
-    Streamed Claude blocks carry LangChain merge ``index`` keys, and chunk merging can leave plain
-    strings in the list. The gateway accepts neither, so drop both before replaying the turn.
+    Streamed blocks carry LangChain merge ``index`` keys, and chunk merging can leave plain strings
+    in the list. The gateway accepts neither, so drop both before replaying the turn. Reasoning
+    without a signature (Qwen, gpt-oss) has nothing for the model to verify and is dropped too.
     """
     content = message_dict.get("content")
     if message_dict.get("role") != "assistant" or not isinstance(content, list):
         return
     blocks = []
+    dropped_reasoning = False
     for block in content:
         if isinstance(block, str):
             if block:
                 blocks.append({"type": "text", "text": block})
+            continue
+        if isinstance(block, dict) and block.get("type") == "reasoning" and not _is_signed(block):
+            dropped_reasoning = True
             continue
         if isinstance(block, dict) and block.get("type") in ("text", "reasoning"):
             block = {k: v for k, v in block.items() if k != "index"}
@@ -1663,16 +1680,25 @@ def _to_gateway_content_blocks(message_dict: dict) -> None:
                     for part in block["summary"]
                 ]
         blocks.append(block)
+    if dropped_reasoning and all(
+        isinstance(block, dict) and block.keys() == {"type", "text"} and block["type"] == "text"
+        for block in blocks
+    ):
+        # Only plain text is left: send it as a string, as for any other text reply.
+        text = "".join(block["text"] or "" for block in blocks)
+        message_dict["content"] = text or (None if message_dict.get("tool_calls") else "")
+        return
     message_dict["content"] = blocks
 
 
 class _StreamContentBlocks:
-    """Turn a Claude stream's list content deltas into LangChain content blocks.
+    """Turn a stream's reasoning list content deltas into LangChain content blocks.
 
-    Claude 5.x streams reasoning as ``reasoning`` parts, each closed by a ``signature``, followed by
-    the answer text. Giving each block a stable ``index`` lets ``AIMessageChunk`` merging rebuild one
-    reasoning block per signature and one text block, instead of concatenated fragments. Streams with
-    only string content (Claude 4.x) pass through unchanged.
+    Reasoning models stream ``reasoning`` parts (Claude 5.x closes each with a ``signature``),
+    followed by the answer text. Giving each block a stable ``index`` lets ``AIMessageChunk``
+    merging rebuild one reasoning block per signature and one text block, instead of concatenated
+    fragments. Streams with only string content (Claude 4.x, GPT-5.x) pass through unchanged, and
+    other list content is JSON-encoded as before.
     """
 
     def __init__(self) -> None:
@@ -1691,7 +1717,9 @@ class _StreamContentBlocks:
             if not content or not self._has_blocks:
                 return content or ""
             return [{"type": "text", "text": content, "index": self._index("text")}]
-        if not isinstance(content, list):
+        if not isinstance(content, list) or not (
+            self._has_blocks or _is_reasoning_content(content)
+        ):
             return json.dumps(content)
         self._has_blocks = True
         blocks: list = []
@@ -1722,13 +1750,13 @@ class _StreamContentBlocks:
 
 
 def _convert_dict_to_message(
-    _dict: dict, usage: Optional[CompletionUsage], keep_content_blocks: bool = False
+    _dict: dict, usage: Optional[CompletionUsage]
 ) -> HumanMessage | SystemMessage | ToolMessage | AIMessage | ChatMessage:
     role = _dict["role"]
     content = _dict.get("content") or ""
-    # Claude content blocks (reasoning with signatures, then text) stay structured so the answer
-    # reads as text and the reasoning round-trips on the next turn.
-    if not isinstance(content, str) and not (keep_content_blocks and isinstance(content, list)):
+    # Reasoning content blocks (reasoning, then text) stay structured so the answer reads as text
+    # and signed reasoning round-trips on the next turn.
+    if not isinstance(content, str) and not _is_reasoning_content(content):
         # for non-string content, serialize it into a string to maintain compatibility with downstream consumers
         # for example, output parsers expect a string
         content = json.dumps(content)
