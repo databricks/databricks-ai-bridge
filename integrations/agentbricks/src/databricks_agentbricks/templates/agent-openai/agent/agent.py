@@ -101,7 +101,7 @@ def create_agent(
     return Agent(
         name="Agent",
         instructions="You are a helpful assistant.",
-        # chat_model sends Claude reasoning signatures back on the next turn.
+        # chat_model streams reasoning models and sends reasoning signatures back next turn.
         model=chat_model(model or MODEL),
         tools=[
             *all_tools(),

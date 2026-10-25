@@ -1,4 +1,4 @@
-"""Agents SDK model for AI Gateway chat completions, with Claude reasoning round-trip."""
+"""Agents SDK model for AI Gateway chat completions, with reasoning signature round-trip."""
 
 from typing import Any
 
@@ -7,7 +7,7 @@ def chat_model(model: str) -> Any:
     """Return the Agents SDK model for ``model`` on the default OpenAI client.
 
     Pass the result to ``Agent(model=...)`` after ``set_default_openai_client``. With a
-    ``databricks-openai`` release that has ``DatabricksChatCompletionsModel``, Claude 5.x replies
+    ``databricks-openai`` release that has ``DatabricksChatCompletionsModel``, reasoning replies
     stream as text with reasoning as a separate item, and each reasoning signature is sent back on
     the next turn. Older releases get the model name, which the SDK resolves as before.
     """
