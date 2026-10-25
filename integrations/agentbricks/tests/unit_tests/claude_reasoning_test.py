@@ -1,5 +1,6 @@
 """Reasoning blocks (Claude 5.x, Qwen, Gemini, gpt-oss) stay out of both templates' reply text."""
 
+import copy
 import importlib
 import json
 import sys
@@ -354,12 +355,22 @@ def test_openai_template_uses_databricks_chat_model(openai_template, monkeypatch
     assert isinstance(model, DatabricksChatCompletionsModel)
     assert (model.model, model._client) == ("system.ai.claude-opus-5-5", client)
 
-    # Without a configured client, or on releases without the class, the SDK resolves the name.
+    # Without a configured client, the SDK resolves the name.
     monkeypatch.setattr("agents.models._openai_shared.get_default_openai_client", lambda: None)
     assert chat_model("system.ai.claude-opus-5-5") == "system.ai.claude-opus-5-5"
+
+
+def test_chat_model_falls_back_on_releases_without_the_class(monkeypatch):
+    pytest.importorskip("agents")
+    from databricks_agentkit.openai import chat_model
+    from databricks_agentkit.openai._reasoning import ReasoningChatCompletionsModel
+
     monkeypatch.setitem(sys.modules, "databricks_openai.agents", types.SimpleNamespace())
+    client: Any = types.SimpleNamespace(chat=types.SimpleNamespace(completions=None))
     monkeypatch.setattr("agents.models._openai_shared.get_default_openai_client", lambda: client)
-    assert chat_model("system.ai.claude-sonnet-4-5") == "system.ai.claude-sonnet-4-5"
+    model = chat_model("system.ai.qwen35-122b-a10b")
+    assert isinstance(model, ReasoningChatCompletionsModel)
+    assert model.model == "system.ai.qwen35-122b-a10b"
 
 
 # Other models: unsigned reasoning, and text parts with extra keys.
@@ -521,3 +532,173 @@ async def test_openai_adapter_streams_unsigned_reasoning_reply(openai_template):
     assert block["type"] == "reasoning"
     assert block["content"][0]["text"] == UNSIGNED_REASONING
     assert not block.get("encrypted_content")
+
+
+# databricks-openai releases without DatabricksChatCompletionsModel: chat_model's fallback model
+# gets the AI Gateway's raw list content.
+
+
+class _GatewayCompletions:
+    """Records each request and replies with raw gateway deltas (streamed) or a message."""
+
+    def __init__(self, deltas: list[dict[str, Any]] | None = None, message: Any = None):
+        self.deltas = deltas
+        self.message = message
+        self.requests: list[dict[str, Any]] = []
+
+    async def create(self, **kwargs):
+        from openai.types.chat import ChatCompletion
+        from openai.types.chat.chat_completion import Choice
+
+        self.requests.append(copy.deepcopy(kwargs))
+        if not kwargs.get("stream"):
+            return ChatCompletion.construct(
+                id="chatcmpl",
+                object="chat.completion",
+                created=0,
+                model="m",
+                choices=[
+                    Choice.construct(
+                        index=0, finish_reason="stop", message=self.message, logprobs=None
+                    )
+                ],
+            )
+
+        async def stream():
+            for chunk in _claude5_chunks(self.deltas or []):
+                yield chunk
+
+        return stream()
+
+
+def _fallback_agent(model: str, completions: Any):
+    from agents import Agent
+
+    from databricks_agentkit.openai._reasoning import ReasoningChatCompletionsModel
+
+    client: Any = types.SimpleNamespace(
+        chat=types.SimpleNamespace(completions=completions), base_url="https://gateway"
+    )
+    return Agent(
+        name="Agent", model=ReasoningChatCompletionsModel(model=model, openai_client=client)
+    )
+
+
+# `system.ai.qwen35-122b-a10b`'s stream: reasoning parts, then text parts or plain strings.
+QWEN_DELTAS: list[dict[str, Any]] = [
+    {"role": "assistant", "content": [_unsigned("The user ")]},
+    {"content": [_unsigned("says hi.")]},
+    {"content": [{"type": "text", "text": "Hello! "}]},
+    {"content": "How can I help?"},
+]
+# `system.ai.gemini-3-pro-image`'s stream: text parts carry a thought signature.
+GEMINI_DELTAS: list[dict[str, Any]] = [
+    {"role": "assistant", "content": [_unsigned(UNSIGNED_REASONING)]},
+    {"content": GEMINI_TEXT},
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deltas", [QWEN_DELTAS, GEMINI_DELTAS], ids=["qwen", "gemini"])
+async def test_openai_adapter_streams_raw_list_content_on_older_databricks_openai(
+    openai_template, deltas
+):
+    from agents import Runner, set_tracing_disabled
+
+    _agent, adapter = openai_template
+    set_tracing_disabled(True)
+    agent = _fallback_agent("system.ai.qwen35-122b-a10b", _GatewayCompletions(deltas))
+
+    out = [event async for event in adapter._serialize_events(Runner.run_streamed(agent, "hi"))]
+
+    text = [event["content"] for event in out if event["type"] == "delta"]
+    assert all(isinstance(delta, str) for delta in text)
+    assert "".join(text) == ANSWER
+    reasoning, answer = [event["message"] for event in out if event["type"] == "message"]
+    assert answer == {"role": "assistant", "content": ANSWER}
+    [block] = reasoning["content"]
+    assert block["content"][0]["text"] == UNSIGNED_REASONING
+    assert not block.get("encrypted_content")
+
+
+async def _two_turns(agent) -> None:
+    from agents import Runner
+
+    first = Runner.run_streamed(agent, "hi")
+    async for _ in first.stream_events():
+        pass
+    second = Runner.run_streamed(
+        agent, [*first.to_input_list(), {"role": "user", "content": "again"}]
+    )
+    async for _ in second.stream_events():
+        pass
+
+
+@pytest.mark.asyncio
+async def test_fallback_model_sends_back_only_signed_reasoning():
+    pytest.importorskip("agents")
+    from agents import set_tracing_disabled
+
+    set_tracing_disabled(True)
+    claude = _GatewayCompletions(
+        [
+            {"role": "assistant", "content": [_reasoning(REASONING, SIGNATURE)]},
+            {"content": [{"type": "text", "text": ANSWER}]},
+        ]
+    )
+    qwen = _GatewayCompletions(QWEN_DELTAS)
+    await _two_turns(_fallback_agent("system.ai.claude-opus-5-5", claude))
+    await _two_turns(_fallback_agent("system.ai.qwen35-122b-a10b", qwen))
+
+    claude_reply = claude.requests[1]["messages"][1]
+    assert claude_reply["content"] == [
+        _reasoning(REASONING, SIGNATURE),
+        {"type": "text", "text": ANSWER},
+    ]
+    assert "thinking_blocks" not in claude_reply
+    qwen_reply = qwen.requests[1]["messages"][1]
+    assert qwen_reply["content"] == ANSWER
+    assert "thinking_blocks" not in qwen_reply
+
+
+@pytest.mark.asyncio
+async def test_fallback_model_splits_non_streamed_list_content():
+    pytest.importorskip("agents")
+    from agents import Runner, set_tracing_disabled
+    from openai.types.chat import ChatCompletionMessage
+
+    set_tracing_disabled(True)
+    message = cast(
+        Any, ChatCompletionMessage.construct(role="assistant", content=copy.deepcopy(QWEN_BLOCKS))
+    )
+    agent = _fallback_agent("system.ai.qwen35-122b-a10b", _GatewayCompletions(message=message))
+
+    result = await Runner.run(agent, "hi")
+
+    assert result.final_output == ANSWER
+    assert message.thinking_blocks == [{"type": "thinking", "thinking": UNSIGNED_REASONING}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model", ["system.ai.claude-sonnet-4-5", "system.ai.gpt-5-2", "system.ai.llama-4-maverick"]
+)
+async def test_fallback_model_leaves_string_content_unchanged(openai_template, model):
+    from agents import Runner, set_tracing_disabled
+
+    _agent, adapter = openai_template
+    set_tracing_disabled(True)
+    completions = _GatewayCompletions(
+        [{"role": "assistant", "content": "Hello! "}, {"content": "How can I help?"}]
+    )
+    agent = _fallback_agent(model, completions)
+
+    out = [event async for event in adapter._serialize_events(Runner.run_streamed(agent, "hi"))]
+
+    assert [event["content"] for event in out if event["type"] == "delta"] == [
+        "Hello! ",
+        "How can I help?",
+    ]
+    assert [event["message"] for event in out if event["type"] == "message"] == [
+        {"role": "assistant", "content": ANSWER}
+    ]
