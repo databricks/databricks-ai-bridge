@@ -3,6 +3,7 @@
 import copy
 import importlib
 import json
+import subprocess
 import sys
 import types
 from pathlib import Path
@@ -673,6 +674,35 @@ async def test_fallback_model_sends_back_only_signed_reasoning():
     qwen_reply = qwen.requests[1]["messages"][1]
     assert qwen_reply["content"] == ANSWER
     assert "thinking_blocks" not in qwen_reply
+
+
+def test_fallback_converter_keeps_an_installed_converter():
+    """databricks-openai's own converter (imported first by McpServer) must keep working."""
+    pytest.importorskip("agents")
+    script = """
+from contextvars import ContextVar
+from agents.models import openai_chatcompletions
+from agents.models.chatcmpl_converter import Converter
+
+flag = ContextVar("flag", default=False)
+seen = []
+
+class Installed(Converter):
+    @classmethod
+    def items_to_messages(cls, *args, **kwargs):
+        if flag.get():
+            kwargs["preserve_thinking_blocks"] = True
+        seen.append(kwargs.get("preserve_thinking_blocks"))
+        return []
+
+openai_chatcompletions.Converter = Installed
+import databricks_agentkit.openai._reasoning  # noqa: E402,F401
+
+flag.set(True)
+openai_chatcompletions.Converter.items_to_messages([])
+assert seen == [True], seen
+"""
+    subprocess.run([sys.executable, "-c", script], check=True)
 
 
 @pytest.mark.asyncio
