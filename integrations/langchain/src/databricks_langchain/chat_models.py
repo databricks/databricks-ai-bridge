@@ -1459,6 +1459,38 @@ def _convert_message_to_dict(message: BaseMessage) -> dict:
         raise ValueError(f"Got unknown message type: {type(message)}")
 
 
+def _convert_input_content_block_to_responses_api(block: Any) -> Any:
+    """
+    Convert a single Chat Completions content block of an input message
+    (user/system/developer) to its Responses API equivalent.
+
+    The Responses API rejects Chat Completions block types such as
+    ``{"type": "text"}``; input content must use ``input_text`` /
+    ``input_image`` instead. Blocks that are already in Responses API
+    format, and block types without an input equivalent, pass through
+    unchanged.
+    """
+    if isinstance(block, str):
+        return {"type": "input_text", "text": block}
+    if not isinstance(block, dict):
+        return block
+    block_type = block.get("type")
+    if block_type == "text":
+        return {"type": "input_text", "text": block.get("text", "")}
+    if block_type == "image_url":
+        image_url = block.get("image_url")
+        if isinstance(image_url, dict):
+            converted: dict[str, Any] = {
+                "type": "input_image",
+                "image_url": image_url.get("url"),
+            }
+            if detail := image_url.get("detail"):
+                converted["detail"] = detail
+            return converted
+        return {"type": "input_image", "image_url": image_url}
+    return block
+
+
 def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[dict[str, Any]]:
     """
     Convert a LangChain message to a Responses API message.
@@ -1575,6 +1607,14 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
                 }
             )
         elif role in ("user", "system", "developer"):
+            if isinstance(cc_msg.get("content"), list):
+                cc_msg = {
+                    **cc_msg,
+                    "content": [
+                        _convert_input_content_block_to_responses_api(block)
+                        for block in cc_msg["content"]
+                    ],
+                }
             input_items.append(cc_msg)
         else:
             pass
