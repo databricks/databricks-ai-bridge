@@ -1,6 +1,6 @@
 """Agents SDK model for AI Gateway chat completions, with reasoning signature round-trip."""
 
-from typing import Any
+from typing import Any, cast
 
 
 def chat_model(model: str) -> Any:
@@ -17,13 +17,14 @@ def chat_model(model: str) -> Any:
     client = _openai_shared.get_default_openai_client()
     if client is None:
         return model
+    from databricks_agentkit.openai._reasoning import ReasoningChatCompletionsModel, _Client
+
     try:
         # Not in databricks-openai 0.17.1 and earlier.
         from databricks_openai.agents import (
             DatabricksChatCompletionsModel,  # ty: ignore[unresolved-import]
         )
     except ImportError:
-        from databricks_agentkit.openai._reasoning import ReasoningChatCompletionsModel
-
         return ReasoningChatCompletionsModel(model=model, openai_client=client)
-    return DatabricksChatCompletionsModel(model=model, openai_client=client)
+    # The client proxy also retries replies that stop after reasoning with no answer.
+    return DatabricksChatCompletionsModel(model=model, openai_client=cast(Any, _Client(client)))

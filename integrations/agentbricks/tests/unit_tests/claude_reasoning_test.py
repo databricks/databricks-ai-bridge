@@ -347,13 +347,16 @@ def test_openai_template_uses_databricks_chat_model(openai_template, monkeypatch
         "databricks_openai.agents",
         types.SimpleNamespace(DatabricksChatCompletionsModel=DatabricksChatCompletionsModel),
     )
-    client: Any = types.SimpleNamespace(base_url="https://gateway")
+    client: Any = types.SimpleNamespace(
+        chat=types.SimpleNamespace(completions=None), base_url="https://gateway"
+    )
     monkeypatch.setattr("agents.models._openai_shared.get_default_openai_client", lambda: client)
     for tools in ("all_tools", "memory_tools", "genie_tools"):
         monkeypatch.setattr(agent_module, tools, lambda *_args, **_kwargs: [])
     model = agent_module.create_agent("alice", model="system.ai.claude-opus-5-5").model
     assert isinstance(model, DatabricksChatCompletionsModel)
-    assert (model.model, model._client) == ("system.ai.claude-opus-5-5", client)
+    # Wrapped only to retry replies that stop after reasoning.
+    assert (model.model, model._client._client) == ("system.ai.claude-opus-5-5", client)
 
     # Without a configured client, the SDK resolves the name.
     monkeypatch.setattr("agents.models._openai_shared.get_default_openai_client", lambda: None)
@@ -539,17 +542,28 @@ async def test_openai_adapter_streams_unsigned_reasoning_reply(openai_template):
 
 
 class _GatewayCompletions:
-    """Records each request and replies with raw gateway deltas (streamed) or a message."""
+    """Records each request and replies with raw gateway deltas (streamed) or a message.
 
-    def __init__(self, deltas: list[dict[str, Any]] | None = None, message: Any = None):
+    ``retries`` are ``(deltas, message)`` replies for the following requests.
+    """
+
+    def __init__(
+        self,
+        deltas: list[dict[str, Any]] | None = None,
+        message: Any = None,
+        retries: list[tuple[Any, Any]] | None = None,
+    ):
         self.deltas = deltas
         self.message = message
+        self.retries = list(retries or [])
         self.requests: list[dict[str, Any]] = []
 
     async def create(self, **kwargs):
         from openai.types.chat import ChatCompletion
         from openai.types.chat.chat_completion import Choice
 
+        if self.requests and self.retries:
+            self.deltas, self.message = self.retries.pop(0)
         self.requests.append(copy.deepcopy(kwargs))
         if not kwargs.get("stream"):
             return ChatCompletion.construct(
@@ -677,6 +691,76 @@ async def test_fallback_model_splits_non_streamed_list_content():
 
     assert result.final_output == ANSWER
     assert message.thinking_blocks == [{"type": "thinking", "thinking": UNSIGNED_REASONING}]
+
+
+# Qwen after a tool call sometimes stops after reasoning: no answer text, no tool call.
+QWEN_REASONING_ONLY: list[dict[str, Any]] = [
+    {"role": "assistant", "content": [_unsigned("The user ")]},
+    {"content": [_unsigned("says hi.")]},
+    {"content": "\n\n"},
+]
+
+
+@pytest.mark.asyncio
+async def test_reply_with_only_reasoning_is_requested_again(openai_template):
+    from agents import Runner, set_tracing_disabled
+
+    _agent, adapter = openai_template
+    set_tracing_disabled(True)
+    completions = _GatewayCompletions(QWEN_REASONING_ONLY, retries=[(QWEN_DELTAS, None)])
+    agent = _fallback_agent("system.ai.qwen35-122b-a10b", completions)
+
+    out = [event async for event in adapter._serialize_events(Runner.run_streamed(agent, "hi"))]
+
+    assert len(completions.requests) == 2
+    assert completions.requests[1]["messages"] == completions.requests[0]["messages"]
+    assert "".join(e["content"] for e in out if e["type"] == "delta").strip() == ANSWER
+    reasoning, answer = [event["message"] for event in out if event["type"] == "message"]
+    assert answer["content"].strip() == ANSWER
+    assert reasoning["content"][0]["content"][0]["text"] == UNSIGNED_REASONING * 2
+
+
+@pytest.mark.asyncio
+async def test_non_streamed_reply_with_only_reasoning_is_requested_again():
+    pytest.importorskip("agents")
+    from agents import Runner, set_tracing_disabled
+    from openai.types.chat import ChatCompletionMessage
+
+    set_tracing_disabled(True)
+    empty = ChatCompletionMessage.construct(
+        role="assistant", content=[_unsigned(UNSIGNED_REASONING)]
+    )
+    answer = ChatCompletionMessage.construct(role="assistant", content=copy.deepcopy(QWEN_BLOCKS))
+    completions = _GatewayCompletions(message=empty, retries=[(None, answer)])
+    agent = _fallback_agent("system.ai.qwen35-122b-a10b", completions)
+
+    result = await Runner.run(agent, "hi")
+
+    assert len(completions.requests) == 2
+    assert result.final_output == ANSWER
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deltas",
+    [
+        QWEN_DELTAS,
+        [{"role": "assistant", "content": [_reasoning(REASONING, SIGNATURE)]}],
+        [{"role": "assistant", "content": ""}],
+    ],
+    ids=["answered", "signed", "no-reasoning"],
+)
+async def test_other_replies_are_not_requested_again(deltas):
+    pytest.importorskip("agents")
+    from agents import Runner, set_tracing_disabled
+
+    set_tracing_disabled(True)
+    completions = _GatewayCompletions(deltas, retries=[(QWEN_DELTAS, None)])
+    result = Runner.run_streamed(_fallback_agent("system.ai.qwen35-122b-a10b", completions), "hi")
+    async for _ in result.stream_events():
+        pass
+
+    assert len(completions.requests) == 1
 
 
 @pytest.mark.asyncio

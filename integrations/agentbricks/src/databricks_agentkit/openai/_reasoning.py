@@ -4,7 +4,8 @@ Reasoning models on the AI Gateway (Claude 5.x, Qwen, Gemini, gpt-oss) send ``co
 ``delta.content`` as a list of ``reasoning`` and ``text`` parts, which the Agents SDK rejects
 (``ResponseTextDeltaEvent.delta`` must be a string). This mirrors the newer release: the answer stays
 as text, reasoning moves to the SDK's thinking blocks, and signed blocks go back as reasoning parts.
-Drop it once the templates pin a ``databricks-openai`` that has the model.
+A reply that stops after unsigned reasoning, with no answer, is requested once more. On releases
+that have the model, ``chat_model`` still wraps its client for that retry.
 """
 
 from contextvars import ContextVar
@@ -108,11 +109,43 @@ def _restore_messages(messages: Any) -> None:
         message["content"] = parts
 
 
-class _SplitStream:
-    """Async stream that splits each chunk's reasoning out of ``delta.content``."""
+class _Reply:
+    """Tracks whether a reply so far is only unsigned reasoning, with no answer or tool call."""
 
-    def __init__(self, stream: Any):
+    def __init__(self) -> None:
+        self.reasoning = False
+        self.signed = False
+        self.answered = False
+
+    def add(self, response: Any) -> None:
+        for choice in getattr(response, "choices", None) or []:
+            message = getattr(choice, "message", None) or getattr(choice, "delta", None)
+            content = getattr(message, "content", None)
+            if (isinstance(content, str) and content.strip()) or getattr(
+                message, "tool_calls", None
+            ):
+                self.answered = True
+            for block in getattr(message, "thinking_blocks", None) or []:
+                self.reasoning = True
+                self.signed |= isinstance(block, dict) and bool(block.get("signature"))
+
+    @property
+    def unanswered(self) -> bool:
+        # Signed reasoning can't be stitched to a retry's, so only unsigned replies are retried.
+        return self.reasoning and not self.signed and not self.answered
+
+
+class _SplitStream:
+    """Async stream that splits each chunk's reasoning out of ``delta.content``.
+
+    Some models (Qwen after a tool call) sometimes stop after reasoning, with no answer. The
+    request is then sent once more and its chunks continue this stream.
+    """
+
+    def __init__(self, stream: Any, retry: Any = None):
         self._stream = stream
+        self._retry = retry
+        self._reply = _Reply()
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._stream, name)
@@ -121,9 +154,17 @@ class _SplitStream:
         return self
 
     async def __anext__(self):
-        chunk = await self._stream.__anext__()
-        _split_response(chunk)
-        return chunk
+        while True:
+            try:
+                chunk = await self._stream.__anext__()
+            except StopAsyncIteration:
+                if self._retry is None or not self._reply.unanswered:
+                    raise
+                self._stream, self._retry = await self._retry(), None
+                continue
+            _split_response(chunk)
+            self._reply.add(chunk)
+            return chunk
 
 
 class _Completions:
@@ -137,8 +178,13 @@ class _Completions:
         _restore_messages(kwargs.get("messages"))
         response = await self._completions.create(**kwargs)
         if kwargs.get("stream"):
-            return _SplitStream(response)
+            return _SplitStream(response, retry=lambda: self._completions.create(**kwargs))
         _split_response(response)
+        reply = _Reply()
+        reply.add(response)
+        if reply.unanswered:
+            response = await self._completions.create(**kwargs)
+            _split_response(response)
         return response
 
 
