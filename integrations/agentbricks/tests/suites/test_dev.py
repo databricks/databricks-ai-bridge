@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import pathlib
-import shutil
 
 import pytest
 from harness.agentbricks_cli import AgentbricksCli, free_port
@@ -46,8 +45,7 @@ def test_dev(
 
     port = free_port()
     with agentbricks_cli.start(
-        f"dev --source {project.path} --app-port {port}",
-        env={"PORT": str(port), **WIDE_CONSOLE},
+        f"dev --source {project.path} --app-port {port}", env={"PORT": str(port)}
     ) as server:
         server.wait_until_serving(port)
         for tool in tools:
@@ -56,7 +54,6 @@ def test_dev(
                     f"--url http://127.0.0.1:{port} --no-auth", tool.prompt
                 )
                 tool.check(output)
-        _check_printed_invoke_command(agentbricks_cli, server.log_path)
 
 
 @pytest.mark.parametrize("template", TEMPLATES)
@@ -76,14 +73,16 @@ def test_dev_templates(
     ) as server:
         server.wait_until_serving(port)
         # Each template serves its own path and request shape, so the printed command is the way in.
-        answer = FAKE_MODEL_REPLY if target_workspace.name is WorkspaceKind.FAKE else None
-        _check_printed_invoke_command(agentbricks_cli, server.log_path, answer)
+        output = _run_printed_invoke_command(agentbricks_cli, server.log_path)
+        if target_workspace.name is WorkspaceKind.FAKE:
+            assert FAKE_MODEL_REPLY in output, output
 
 
-def _check_printed_invoke_command(
-    cli: AgentbricksCli, dev_log: pathlib.Path, answer: str | None = None
-) -> None:
-    """The next step `dev` prints works when pasted into each available shell, and returns ``answer``."""
+def _run_printed_invoke_command(cli: AgentbricksCli, dev_log: pathlib.Path) -> str:
+    """Run the invoke command `dev` prints as its next step; returns its output.
+
+    How the printed command quotes in each shell is `endpoint_examples_test.py`'s job.
+    """
     lines = dev_log.read_text(encoding="utf-8").splitlines()
     commands = [
         line.removeprefix("│ ").removesuffix("│").strip()
@@ -91,12 +90,7 @@ def _check_printed_invoke_command(
         if line.startswith("│ agentbricks endpoint invoke")
     ]
     assert len(commands) == 1, "\n".join(lines)
-    shells = [path for name in ("bash", "zsh") if (path := shutil.which(name))]
-    assert shells and shutil.which("uuidgen"), "the printed command needs a shell and uuidgen"
-    for shell in shells:
-        result = cli.run_printed(commands[0], shell)
-        assert result.returncode == 0, result.stderr or result.stdout
-        body = json.loads(result.stdout)
-        assert body.get("status") in (None, "completed"), body
-        if answer is not None:
-            assert answer in result.stdout, result.stdout
+    result = cli.run_printed(commands[0], "bash")
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert json.loads(result.stdout).get("status") in (None, "completed"), result.stdout
+    return result.stdout
