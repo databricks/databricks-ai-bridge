@@ -1,10 +1,13 @@
 """ChatDatabricks on Claude 5.x AI Gateway responses, whose content mixes reasoning and text parts."""
 
 import copy
+import json
 from typing import Any, cast
 from unittest.mock import AsyncMock, Mock, patch
 
+import httpx
 import pytest
+from databricks_openai import DatabricksOpenAI
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -249,6 +252,87 @@ def test_claude5_streamed_turn_replays_gateway_blocks_without_merge_indexes() ->
     data = llm._prepare_inputs([HumanMessage("hi"), merged, HumanMessage("and again?")])
 
     assert data["messages"][1]["content"] == [
+        {
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": _REASONING, "signature": _SIGNATURE}],
+        },
+        {"type": "text", "text": _ANSWER},
+    ]
+
+
+class _Gateway:
+    """Serves recorded AI Gateway responses to a real ``DatabricksOpenAI`` client and keeps requests."""
+
+    def __init__(self, *responses: dict[str, Any] | list[Any]):
+        self._responses = list(responses)
+        self.requests: list[dict[str, Any]] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(json.loads(request.content))
+        response = self._responses.pop(0)
+        if isinstance(response, dict):
+            return httpx.Response(200, json=response)
+        events = "".join(
+            f"data: {json.dumps(chunk.model_dump(exclude_unset=True))}\n\n"
+            for chunk in _stream_chunks(response)
+        )
+        return httpx.Response(
+            200,
+            content=events + "data: [DONE]\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+
+def _gateway_llm(gateway: _Gateway) -> ChatDatabricks:
+    workspace_client = Mock()
+    workspace_client.config.host = "https://example.cloud.databricks.com"
+    workspace_client.config.authenticate.return_value = {"Authorization": "Bearer t"}
+    with patch(
+        "databricks_openai.utils.clients._get_authorized_http_client",
+        return_value=httpx.Client(transport=httpx.MockTransport(gateway)),
+    ):
+        client = DatabricksOpenAI(workspace_client=workspace_client, use_ai_gateway=True)
+    return _llm("system.ai.claude-opus-5-5", cast(Mock, client))
+
+
+def test_claude5_invoke_through_databricks_openai_keeps_signed_reasoning() -> None:
+    gateway = _Gateway(_CLAUDE5_TOOL_CALL_MESSAGE, _CLAUDE5_MESSAGE)
+    llm = _gateway_llm(gateway)
+
+    tool_turn = llm.invoke("weather in Paris?")
+    reasoning = _blocks(tool_turn)[0]
+    assert reasoning["summary"][0]["signature"] == _SIGNATURE
+    answer = llm.invoke(
+        [
+            HumanMessage("weather in Paris?"),
+            tool_turn,
+            ToolMessage("sunny", tool_call_id="toolu_01"),
+        ]
+    )
+
+    assert answer.text == _ANSWER
+    assert _blocks(answer)[0]["summary"][0]["signature"] == _SIGNATURE
+    assert gateway.requests[1]["messages"][1]["content"] == _reasoning_delta(
+        "I should look up the weather.", _SIGNATURE
+    )
+
+
+def test_claude5_stream_through_databricks_openai_keeps_signed_reasoning() -> None:
+    gateway = _Gateway(_CLAUDE5_STREAM_DELTAS, _CLAUDE5_MESSAGE)
+    llm = _gateway_llm(gateway)
+
+    chunks = list(llm.stream("hi"))
+    merged = chunks[0]
+    for chunk in chunks[1:]:
+        merged += chunk
+    assert merged.text == _ANSWER
+    reasoning, text = _blocks(cast(AIMessage, merged))
+    assert reasoning["summary"][0]["text"] == _REASONING
+    assert reasoning["summary"][0]["signature"] == _SIGNATURE
+    assert text["text"] == _ANSWER
+
+    llm.invoke([HumanMessage("hi"), merged, HumanMessage("and again?")])
+    assert gateway.requests[1]["messages"][1]["content"] == [
         {
             "type": "reasoning",
             "summary": [{"type": "summary_text", "text": _REASONING, "signature": _SIGNATURE}],

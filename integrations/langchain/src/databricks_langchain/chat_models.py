@@ -720,6 +720,8 @@ class ChatDatabricks(BaseChatModel):
         generations = []
         for choice in response.choices:
             message_dict = choice.message.model_dump(exclude_unset=True)
+            if _is_claude_model(self.model):
+                _from_thinking_blocks(message_dict)
             # Ensure content is not None
             if message_dict.get("content") is None:
                 message_dict["content"] = ""
@@ -947,6 +949,8 @@ class ChatDatabricks(BaseChatModel):
                         final_usage = usage  # store for usage chunk at end
                     # Use model_dump instead of manual dict reconstruction
                     chunk_delta_dict = chunk_delta.model_dump(exclude_unset=True)
+                    if content_blocks is not None:
+                        _from_thinking_blocks(chunk_delta_dict)
                     chunk_message = _convert_dict_to_message_chunk(
                         chunk_delta_dict,
                         first_chunk_role,
@@ -1062,6 +1066,8 @@ class ChatDatabricks(BaseChatModel):
                         final_usage = usage  # store for usage chunk at end
                     # Use model_dump instead of manual dict reconstruction
                     chunk_delta_dict = chunk_delta.model_dump(exclude_unset=True)
+                    if content_blocks is not None:
+                        _from_thinking_blocks(chunk_delta_dict)
                     chunk_message = _convert_dict_to_message_chunk(
                         chunk_delta_dict,
                         first_chunk_role,
@@ -1636,6 +1642,31 @@ def _is_claude_model(model: str | None) -> bool:
     if not model:
         return False
     return "claude" in model.lower()
+
+
+def _from_thinking_blocks(message_dict: dict) -> None:
+    """Rebuild the AI Gateway's reasoning content parts from ``thinking_blocks``.
+
+    ``DatabricksOpenAI`` moves Claude reasoning out of ``content`` into Anthropic-style
+    ``thinking_blocks``. Put it back as content blocks so the signature reaches the next turn.
+    """
+    thinking_blocks = message_dict.pop("thinking_blocks", None)
+    if not thinking_blocks:
+        return
+    content: list[Any] = []
+    for block in thinking_blocks:
+        if not isinstance(block, dict) or block.get("type") != "thinking":
+            continue
+        summary: dict[str, Any] = {"type": "summary_text", "text": block.get("thinking") or ""}
+        if block.get("signature"):
+            summary["signature"] = block["signature"]
+        content.append({"type": "reasoning", "summary": [summary]})
+    text = message_dict.get("content")
+    if isinstance(text, str) and text:
+        content.append({"type": "text", "text": text})
+    elif isinstance(text, list):
+        content.extend(text)
+    message_dict["content"] = content
 
 
 def _to_gateway_content_blocks(message_dict: dict) -> None:
