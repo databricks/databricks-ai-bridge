@@ -48,10 +48,14 @@ def identities():
         admin = any(group.display == "admins" for group in (user.groups or []))
         assert admin == (role == "admin"), f"{role} has unexpected workspace admin membership"
     assert users["grantee"].user_name == principal
-    principals = {
-        role: ("--user" if "@" in user.user_name else "--service-principal", user.user_name)
-        for role, user in users.items()
-    }
+    principals = {}
+    for role, user in users.items():
+        user_name = user.user_name
+        assert user_name, f"{role} identity is missing a username"
+        principals[role] = (
+            "--user" if "@" in user_name else "--service-principal",
+            user_name,
+        )
     assert principals["grantee"][0] == (
         "--user" if principal_type == "USER" else "--service-principal"
     )
