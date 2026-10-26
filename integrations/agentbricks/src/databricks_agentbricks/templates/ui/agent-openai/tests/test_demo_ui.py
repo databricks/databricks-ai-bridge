@@ -577,7 +577,7 @@ def test_demo_tools_route_lists_bindings_local_tools_and_add_commands(monkeypatc
         "agentbricks tools add uc-function catalog.schema.function",
         "agentbricks tools add genie-one",
         "agentbricks tools add genie-agent SPACE_ID",
-        "agentbricks tools add sandbox",
+        "agentbricks tools add sandbox --scope volume:catalog.schema.volume",
         "agentbricks tools list --kind mcp",
     ]
     assert payload["errors"] == []
