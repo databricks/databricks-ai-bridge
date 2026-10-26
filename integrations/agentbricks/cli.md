@@ -1511,7 +1511,7 @@ Wait for a deployment to finish, for up to --timeout seconds, then report it.
 
 Follows the deploy started by `agentbricks deploy` (including --no-wait) in this project, or otherwise the App's state in the workspace. NAME defaults to the deployment recorded in agent.toml.
 
-Exit status: 0 deployed and answering; 1 failed; 75 still deploying at the timeout (run the same command again).
+Exit status: 0 deployed and answering (or, with a note, deployed but not checkable); 1 failed; 75 still deploying at the timeout (run the same command again).
 
 ```
 agentbricks deployments wait [NAME] [options]
@@ -1531,7 +1531,7 @@ _Options_
 | `--timeout <TIMEOUT>` | integer range | `100` | no | Seconds to wait before returning exit 75. |
 | `--source <SOURCE>` | path | `.` | no | Project directory the deploy ran from. |
 
-On exit 0 it prints the URL and the invoke command; on exit 1, the error and the last 20 lines of the deploy log (or the App's status message); on exit 75, `still deploying: <phase>, M:SS elapsed — run the same command again`. A deploy whose app still returns 502/503/504 is in the `Waiting for the agent to answer` phase. Phase changes and heartbeats go to stderr. Under `-o json`, stdout is exactly one object `{deployment, status, phase, elapsed_s, url, error, log_tail}` with the same exit code.
+On exit 0 it prints the URL and the invoke command; on exit 1, the error and the last 20 lines of the deploy log (or the App's status message); on exit 75, `still deploying: <phase>, M:SS elapsed — run the same command again`. A deploy whose app still returns 502/503/504 is in the `Waiting for the agent to answer` phase. Phase changes and heartbeats go to stderr. When the profile can't call the app, exit 0 comes with `Couldn't check the agent answers` on stderr. Under `-o json`, stdout is exactly one object `{deployment, status, phase, elapsed_s, url, error, log_tail, ready}` with the same exit code; `ready` is `true` once the app answered and `null` otherwise.
 
 #### `agentbricks deployments logs`
 

@@ -394,6 +394,7 @@ def present_wait_result(result: WaitResult, *, output: Optional[str]) -> None:
                 "url": result.url,
                 "error": result.error,
                 "log_tail": result.log_tail,
+                "ready": result.ready,
             }
         )
         return

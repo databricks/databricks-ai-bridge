@@ -1713,7 +1713,7 @@ def test_wait_follows_the_local_record_until_it_succeeds(deployment_fixture, tmp
             state.update(phase="Deploying the agent source")
             state["phase_started_at"] = deploy_state.timestamp(start + 20)
         if elapsed >= 40:
-            state.update(status="succeeded", result={"url": "https://demo.example"})
+            state.update(status="succeeded", result={"url": "https://demo.example", "ready": True})
         deploy_state.write_state(path, state)
 
     clock = _Clock(start, on_sleep=advance)
@@ -1772,7 +1772,9 @@ def test_wait_follows_the_app_from_starting_to_active(deployment_fixture, tmp_pa
     deployment_fixture.apps.find.side_effect = payloads
     clock = _Clock()
 
-    result = _service_with(deployment_fixture, clock).wait("demo", tmp_path, timeout_s=100)
+    result = _service_with(deployment_fixture, clock, app_probe=_ScriptedProbe("answered")).wait(
+        "demo", tmp_path, timeout_s=100
+    )
 
     assert result.status == "succeeded"
     assert result.url == "https://demo.example"
@@ -1938,10 +1940,13 @@ def test_server_wait_times_out_in_the_answer_phase(deployment_fixture, tmp_path:
     assert (result.status, result.phase) == ("running", "Waiting for the agent to answer")
 
 
-def test_server_wait_treats_an_uncheckable_app_as_deployed(
+def test_server_wait_treats_an_uncheckable_app_as_deployed_and_says_so(
     deployment_fixture, tmp_path: pathlib.Path
 ):
     deployment_fixture.apps.find.return_value = _SUCCEEDED_APP
     service = _service_with(deployment_fixture, _Clock(), app_probe=_ScriptedProbe("unverifiable"))
 
-    assert service.wait("agent-bricks-demo", tmp_path, timeout_s=10).status == "succeeded"
+    result = service.wait("agent-bricks-demo", tmp_path, timeout_s=10)
+
+    assert (result.status, result.ready) == ("succeeded", None)
+    assert any(n.startswith("Couldn't check the agent answers") for n in _notes(deployment_fixture))

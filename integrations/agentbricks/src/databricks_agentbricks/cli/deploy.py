@@ -373,8 +373,8 @@ def deployments_wait(ctx: click.Context, name, timeout_s, source) -> None:
     otherwise the App's state in the workspace. NAME defaults to the deployment recorded in
     agent.toml.
 
-    Exit status: 0 deployed and answering; 1 failed; 75 still deploying at the timeout (run the
-    same command again).
+    Exit status: 0 deployed and answering (or, with a note, deployed but not checkable); 1 failed;
+    75 still deploying at the timeout (run the same command again).
     """
     obj = ctx.obj
     result = build_deploy_service(obj).wait(name, pathlib.Path(source), timeout_s)

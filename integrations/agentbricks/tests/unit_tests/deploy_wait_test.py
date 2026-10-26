@@ -508,6 +508,7 @@ def test_wait_json_prints_exactly_one_object_with_the_same_exit_code(
         "url",
         "error",
         "log_tail",
+        "ready",
     }
     assert payload["deployment"] == _APP
     assert payload["status"] == status
@@ -726,6 +727,35 @@ def test_wait_returns_75_until_a_succeeded_app_answers_then_0(
 
     assert answered.exit_code == 0, answered.output
     assert "Deployed agent 'agent-bricks-demo'" in answered.stdout
+    assert "Couldn't check" not in answered.stderr
+
+
+def test_wait_notes_a_succeeded_app_the_profile_cant_call(
+    project: pathlib.Path, monkeypatch: pytest.MonkeyPatch, json_mode
+):
+    monkeypatch.setattr(deploy_mod, "_databricks", _app_runner([_SUCCEEDED_APP], []))
+    _scripted_probe(monkeypatch, "unverifiable")
+
+    result = _wait(project, _APP, "--timeout", "0", output="json")
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "succeeded"
+    assert payload["ready"] is None
+    assert "Couldn't check the agent answers: HTTP 403." in result.stderr
+
+
+@pytest.mark.parametrize(("ready", "noted"), [(True, False), (None, True)])
+def test_wait_carries_a_local_deploys_readiness(project: pathlib.Path, json_mode, ready, noted):
+    _write_state(
+        project, status="succeeded", result={"url": "https://agent.example", "ready": ready}
+    )
+
+    result = _wait(project, _APP, output="json")
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["ready"] is ready
+    assert ("Couldn't check the agent answers." in result.stderr) is noted
 
 
 def test_wait_returns_75_while_a_local_deploy_waits_for_the_answer(project: pathlib.Path):

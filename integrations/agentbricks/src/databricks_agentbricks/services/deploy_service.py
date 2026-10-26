@@ -221,6 +221,8 @@ class WaitResult:
     log_tail: list[str]
     uses_runtime_api: bool
     log: Optional[str] = None
+    # For a succeeded deploy: True once the App answered; None when it couldn't be checked.
+    ready: Optional[bool] = None
 
 
 @dataclass(frozen=True)
@@ -235,6 +237,9 @@ class _WaitSnapshot:
     error: Optional[str] = None
     log_tail: tuple[str, ...] = ()
     log: Optional[str] = None
+    ready: Optional[bool] = None
+    # Why readiness couldn't be checked, when the probe said.
+    unverified_detail: Optional[str] = None
 
 
 # How often `deployments wait` re-reads a local deploy record, and the App when there is none.
@@ -317,6 +322,12 @@ def _partial_app_note(name: str) -> str:
         f"App '{name}' was created but has no deployment yet. Re-run `agentbricks deploy` to "
         f"resume (the app is reused), or remove it with `agentbricks deployments delete {name}`."
     )
+
+
+def _unverified_note(detail: Optional[str]) -> str:
+    """The note for an App that deployed but whose server this profile couldn't check."""
+    reason = f": {detail.rstrip('.')}" if detail else ""
+    return f"Couldn't check the agent answers{reason}. It may return 502 for a few seconds."
 
 
 def _not_answering(name: str, last: ProbeResult) -> AgentCliError:
@@ -516,6 +527,8 @@ class DeployService:
                 # A short last phase (the agent answering at once) can start and end between polls.
                 if beat is None or snap.phase != beat.phase:
                     self._reporter.note(f"• {snap.phase}…")
+            if snap.status == deploy_state.SUCCEEDED and snap.ready is None:
+                self._reporter.note(_unverified_note(snap.unverified_detail))
             if snap.status != deploy_state.RUNNING or now >= deadline:
                 return WaitResult(
                     deployment=app,
@@ -527,6 +540,7 @@ class DeployService:
                     log_tail=list(snap.log_tail),
                     uses_runtime_api=uses_runtime_api,
                     log=snap.log,
+                    ready=snap.ready if snap.status == deploy_state.SUCCEEDED else None,
                 )
             poll = _LOCAL_POLL_S if local else _SERVER_POLL_S
             self._sleep(max(0.0, min(poll, deadline - now)))
@@ -552,6 +566,7 @@ class DeployService:
             if status == deploy_state.FAILED and log
             else (),
             log=str(log) if log else None,
+            ready=result.get("ready") if isinstance(result, dict) else None,
         )
 
     def _server_snapshot(
@@ -559,16 +574,22 @@ class DeployService:
     ) -> _WaitSnapshot:
         """Classify the App's state; its phases are timed from when this wait first saw them."""
         outcome = deploy_state.classify_app(app, self._apps_client.find(app))
+        ready: Optional[bool] = None
+        unverified_detail: Optional[str] = None
         # A SUCCEEDED App is still starting until its server answers.
-        if (
-            outcome.status == deploy_state.SUCCEEDED
-            and outcome.url
-            and self._app_probe is not None
-            and self._app_probe.probe(outcome.url).outcome == "booting"
-        ):
-            outcome = dataclasses.replace(
-                outcome, status=deploy_state.RUNNING, phase=deploy_state.READY_PHASE
-            )
+        if outcome.status == deploy_state.SUCCEEDED and self._app_probe is not None:
+            if not outcome.url:
+                unverified_detail = "the App has no URL"
+            else:
+                probe = self._app_probe.probe(outcome.url)
+                if probe.outcome == "booting":
+                    outcome = dataclasses.replace(
+                        outcome, status=deploy_state.RUNNING, phase=deploy_state.READY_PHASE
+                    )
+                elif probe.outcome == "answered":
+                    ready = True
+                else:
+                    unverified_detail = probe.detail
         same_phase = beat is not None and outcome.phase == beat.phase
         return _WaitSnapshot(
             status=outcome.status,
@@ -580,6 +601,8 @@ class DeployService:
             log_tail=(outcome.message,)
             if outcome.status == deploy_state.FAILED and outcome.message
             else (),
+            ready=ready,
+            unverified_detail=unverified_detail,
         )
 
     # --- deploy -------------------------------------------------------------
@@ -799,10 +822,7 @@ class DeployService:
                 if result.outcome == "unverifiable":
                     raise _Unverifiable(result.detail)
         except _Unverifiable as exc:
-            reason = f": {exc.detail.rstrip('.')}" if exc.detail else ""
-            self._reporter.note(
-                f"Couldn't check the agent answers{reason}. It may return 502 for a few seconds."
-            )
+            self._reporter.note(_unverified_note(exc.detail))
             return None
         return True
 
