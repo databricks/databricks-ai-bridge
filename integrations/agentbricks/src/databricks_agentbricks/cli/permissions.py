@@ -62,12 +62,17 @@ def store_permissions(kind: str, *, resolve_get: Callable | None = None) -> clic
             data = get(store)
         except AgentCliError as exc:
             # Metadata GET may deny a caller with no access, so try the permission endpoint first.
-            if resolve_get is None or exc.error_code not in {
-                "NOT_FOUND",
-                "RESOURCE_DOES_NOT_EXIST",
-                "INVALID_PARAMETER_VALUE",
-                "BAD_REQUEST",
-            }:
+            if (
+                resolve_get is None
+                or store.strip().startswith(f"{kind}-stores/")
+                or exc.error_code
+                not in {
+                    "NOT_FOUND",
+                    "RESOURCE_DOES_NOT_EXIST",
+                    "INVALID_PARAMETER_VALUE",
+                    "BAD_REQUEST",
+                }
+            ):
                 raise
             data = get(field(resolve_get(obj, store), "name"))
         if obj.output == "json":

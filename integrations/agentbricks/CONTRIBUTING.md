@@ -134,9 +134,13 @@ AGENTBRICKS_PERMISSION_TEST_GRANTEE_PRINCIPAL=<application-id> \
 ```
 
 For a human grantee, set `AGENTBRICKS_PERMISSION_TEST_PRINCIPAL_TYPE=USER` and use its email for
-`AGENTBRICKS_PERMISSION_TEST_GRANTEE_PRINCIPAL`. Tests create isolated session/memory stores, cover
-creator/admin grant/list/revoke and the grantee's effective access and denied management operations,
-then revoke test grants and delete the stores. They do not provision identities or change flags.
+`AGENTBRICKS_PERMISSION_TEST_GRANTEE_PRINCIPAL`. Tests use the installed `agentbricks` executable
+on the test host and the workspace selected by those profiles. They create session/memory stores
+owned by both the admin and the non-admin creator, then exercise permission operations, actual
+data reads/writes through grant and revoke, denied non-admin management, pagination, store
+isolation, and invalid requests. They revoke test grants, delete synthetic data and stores, and
+verify store deletion. They do not provision identities or change flags. These opt-in tests are
+separate from the private runner's nightly Agent Bricks suites.
 
 ## Deploy phase timings
 

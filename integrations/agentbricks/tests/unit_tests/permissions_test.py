@@ -300,9 +300,10 @@ def test_cli_list_text_all_fetches_every_page_without_prompt(target, monkeypatch
 
 @pytest.mark.parametrize("code", ["PERMISSION_DENIED", "NOT_FOUND", "NOT_IMPLEMENTED"])
 @pytest.mark.parametrize("operation", ["get", "list", "grant", "revoke"])
-def test_cli_preserves_backend_errors_without_retrying(target, monkeypatch, code, operation):
+@pytest.mark.parametrize("store", ["test-store", "resource-name"])
+def test_cli_preserves_backend_errors_without_retrying(target, monkeypatch, code, operation, store):
     target.do.side_effect = AgentCliError("backend rejected request", error_code=code)
-    args = [operation, "test-store"]
+    args = [operation, target.resource if store == "resource-name" else store]
     if operation in {"grant", "revoke"}:
         args += ["--user", "reader@example.com"]
         args += ["--permission", "READ"] if operation == "grant" else ["--yes"]
@@ -310,7 +311,12 @@ def test_cli_preserves_backend_errors_without_retrying(target, monkeypatch, code
     assert result.exit_code != 0
     assert json.loads(result.output)["error"]["code"] == code
     # Memory Get preserves its existing display-name fallback on NOT_FOUND.
-    if target.kind == "memory" and operation == "get" and code == "NOT_FOUND":
+    if (
+        target.kind == "memory"
+        and operation == "get"
+        and code == "NOT_FOUND"
+        and store != "resource-name"
+    ):
         assert target.do.call_count == 3
     else:
         assert target.do.call_count == 1
