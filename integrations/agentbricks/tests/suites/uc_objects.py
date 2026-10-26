@@ -23,6 +23,11 @@ class UcFunction:
     volume_file_path: str
     volume_marker: str
 
+    @property
+    def tool_name(self) -> str:
+        """The name the MCP server exposes the function under, which the model calls."""
+        return self.function.replace(".", "__")
+
 
 def create_uc_function(workspace: Workspace, scratch_schema: str) -> UcFunction:
     """Create the marker function and volume in ``scratch_schema``, whose deletion removes them."""

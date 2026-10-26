@@ -133,9 +133,10 @@ def python_tool() -> Tool:
 def uc_function_tool(uc_function: UcFunction) -> Tool:
     return Tool(
         name="uc_function",
+        # Name the tool: its description matches the Python marker's, so the model may pick either.
         prompt=(
-            "You must call the Unity Catalog function tool that computes the Agent Bricks marker, "
-            "with value 'matrix'. Return the called tool's exact result."
+            f"You must call the {uc_function.tool_name} Unity Catalog function tool with value "
+            "'matrix'. Return its exact result."
         ),
         called=returned(UC_MARKER),
         add_command=f"uc-function {uc_function.function} --name agentbricks_uc_marker",
