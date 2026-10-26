@@ -22,7 +22,7 @@ concurrency:
   group: agentbricks-release
   cancel-in-progress: false
 env:
-  UV_VERSION: '0.9.11'
+  UV_VERSION: '0.13.5'
 
 jobs:
   plan:

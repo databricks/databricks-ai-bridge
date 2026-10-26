@@ -18,7 +18,7 @@ Session reflects checkpoint history; Memory requires `AGENT_MEMORY_STORE`; Trace
 tracing config (destination + experiment). Selecting Memory opens a pane for browsing the store's
 entries (searchable, filterable by actor, with a modal for each entry); the other indicators expand
 in place, and Traces links out to the MLflow experiment. The transport selector is the only manual
-capability choice.
+capability choice; hover or focus a mode to see what it does.
 
 The composer's model picker lists the workspace's Unity Catalog AI Gateway chat model services — the
 `system.ai.*` model services from `GET /api/2.1/unity-catalog/model-services?parent=schemas/system.ai`

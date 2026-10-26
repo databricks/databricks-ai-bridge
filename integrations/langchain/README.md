@@ -20,6 +20,9 @@ pip install git+https://git@github.com/databricks/databricks-ai-bridge.git#subdi
 - **Vector Search:** Store and query vector representations using `DatabricksVectorSearch`.
 - **Embeddings:** Generate embeddings with `DatabricksEmbeddings`.
 - **Genie:** Use [Genie](https://www.databricks.com/product/ai-bi/genie) in Langchain.
+- **Deep Agents Sandbox:** Run [Deep Agents](https://github.com/langchain-ai/deepagents) shell and filesystem tools inside a Databricks sandbox with `DatabricksSandbox` (install `databricks-langchain[deepagents]`).
+- **Sandbox Tool:** Run shell commands in a Databricks sandbox from any LangChain or LangGraph agent with `DatabricksSandboxTool` (install `databricks-langchain[sandbox]`).
+- **Sandbox Session:** Provision, wait for, and auto-delete a sandbox for that tool with the `DatabricksSandboxSession` context manager, keeping sandbox lifecycle in your application rather than the model.
 
 ## Getting Started
 

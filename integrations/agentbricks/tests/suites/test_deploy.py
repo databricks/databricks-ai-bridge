@@ -43,4 +43,4 @@ def test_deploy(
     for tool in tools:
         with subtests.test(tool=tool.name):
             output = agentbricks_cli.invoke(app, tool.prompt)
-            tool.check(output)
+            tool.assert_called(output)

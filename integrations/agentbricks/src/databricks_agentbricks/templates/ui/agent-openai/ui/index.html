@@ -197,9 +197,18 @@
             <textarea id="prompt-input" rows="1" placeholder="Ask your agent anything…"></textarea>
             <div class="composer-footer">
               <div class="mode-switcher" aria-label="Invocation mode">
-                <button class="mode-button active" data-mode="streaming" type="button" title="Show the answer as it is generated">Streaming</button>
-                <button class="mode-button" data-mode="background" type="button" title="Submit a run and wait for its result">Background</button>
-                <button class="mode-button" data-mode="sync" type="button" title="Return the complete response when finished">Foreground</button>
+                <span class="mode-option">
+                  <button class="mode-button active" data-mode="streaming" type="button" aria-describedby="mode-tip-streaming">Streaming</button>
+                  <span class="mode-tip" id="mode-tip-streaming" role="tooltip">Shows the answer as it's generated.</span>
+                </span>
+                <span class="mode-option">
+                  <button class="mode-button" data-mode="background" type="button" aria-describedby="mode-tip-background">Background</button>
+                  <span class="mode-tip" id="mode-tip-background" role="tooltip">Runs on the server, even if you close the tab.</span>
+                </span>
+                <span class="mode-option">
+                  <button class="mode-button" data-mode="sync" type="button" aria-describedby="mode-tip-sync">Foreground</button>
+                  <span class="mode-tip" id="mode-tip-sync" role="tooltip">Waits for the agent, then shows the full answer.</span>
+                </span>
               </div>
               <div class="composer-right">
                 <span class="composer-model">

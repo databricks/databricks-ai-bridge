@@ -395,9 +395,10 @@ while its record is retained; using the ID for a different request returns `409`
 
 `agentbricks dev` keeps execution state in process and loses it on restart. For projects with
 `[agent].server = "agentbricks"`, `agentbricks deploy` provisions a persistent Runtime Store for requests,
-status, events, and results. Register `@app.recover` to restart interrupted app-auth work after
-worker failures. Recovery is at-least-once, so external side effects must be idempotent. Session
-and Memory Stores separately preserve the state used by your agent.
+status, events, and results. Queued work is reserved for the worker that accepted it, so other
+replicas cannot start it through normal claims. Register `@app.recover` to restart interrupted
+app-auth work or take over abandoned queued work after worker failures. Recovery is at-least-once,
+so external side effects must be idempotent. Session and Memory Stores separately preserve agent state.
 
 The managed path uses the internal Runtime Store API to create a dedicated database in the
 workspace's shared Lakebase project and give the app SP ownership. The managed runtime initializes its schema and
@@ -409,8 +410,9 @@ The switch does not migrate existing deployments between backends. Managed clean
 the app for retry. Direct app deletion bypasses managed store cleanup.
 
 For a tool using `auth = "user"`, the Runtime Store still records token-free invocation state,
-events, and results. The forwarded user credential remains process-local for the active attempt and
-is never written to the Runtime Store. A replacement attempt after failure recovery stops with
+events, and results. The forwarded user credential remains in memory on the receiving worker while
+queued and during the first attempt; it is never written to the Runtime Store. A replacement attempt
+after failure recovery, including takeover before execution started, stops with
 `MCP_USER_AUTH_RECOVERY_UNSUPPORTED` because the original request credential is no longer present.
 
 Use `server = "custom"` to deploy your own HTTP server without provisioning a Runtime Store.
@@ -1050,10 +1052,15 @@ generated request-aware agent function.
 
 Request-user invocations use the same synchronous, streaming, background, status, event-replay,
 and idempotency APIs as app-auth invocations. The Runtime Store records only token-free request
-state, events, and results. The forwarded credential stays process-local for the active first
-attempt and closes when that attempt completes, fails, or is cancelled. A replacement attempt after
+state, events, and results. The forwarded credential stays process-local while queued and during
+the first attempt, and closes when that attempt completes, fails, or is cancelled. The store
+enforces affinity to the accepting worker. A replacement attempt after
 failure recovery stops with `MCP_USER_AUTH_RECOVERY_UNSUPPORTED` because no user credential is
 available; neither the invoke nor recovery handler runs for that attempt.
+
+Event reconnection does not resume execution. OBO approval/resume remains unsupported
+(`MCP_USER_AUTH_HITL_UNSUPPORTED`). Upgrade all replicas before relying on affinity; see the
+[runtime guide](src/databricks_agentkit/runtime/README.md#deployed-execution) for details.
 
 Before deploying user-auth tools from an older project, migrate its request handler and framework
 adapter to the current request-auth-aware `DurableAgentServer` template, then explicitly choose `user` or

@@ -42,6 +42,8 @@ class Invocation:
     response: JsonValue
     session_id: str | None = None
     session_sequence_number: int | None = None  # Immutable acceptance order, not an event cursor.
+    worker_id: str | None = None  # Submitting worker while queued; executing worker while active.
+    recovery_affinity: str | None = None
 
     @property
     def is_terminal(self) -> bool:

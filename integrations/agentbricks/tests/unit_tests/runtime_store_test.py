@@ -3,6 +3,7 @@
 import json
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
+from uuid import UUID
 
 import pytest
 
@@ -26,6 +27,8 @@ from databricks_agentkit.runtime.types import (
     InvocationConflictError,
     InvocationStatus,
 )
+
+RECOVERY_AFFINITY = "runtime-group-a"
 
 
 def mock_lakebase():
@@ -292,6 +295,8 @@ def invocation_row(**overrides):
         "session_sequence_number": None,
         "status": "QUEUED",
         "attempt": 0,
+        "worker_id": None,
+        "recovery_affinity": None,
         "request_json": '{"input": "hello"}',
         "response_json": None,
     }
@@ -311,6 +316,10 @@ async def test_initialize_creates_invocation_and_event_tables():
     assert "invocation_id TEXT PRIMARY KEY" in sql
     assert "ADD COLUMN IF NOT EXISTS session_id TEXT" in sql
     assert "ADD COLUMN IF NOT EXISTS session_sequence_number BIGINT" in sql
+    assert "worker_id UUID" in sql
+    assert "recovery_affinity TEXT" in sql
+    assert "ADD COLUMN IF NOT EXISTS worker_id UUID" in sql
+    assert "ADD COLUMN IF NOT EXISTS recovery_affinity TEXT" in sql
     assert "request JSONB NOT NULL" in sql
     assert "response JSONB" in sql
     assert "jsonb_typeof(request)" not in sql
@@ -321,6 +330,18 @@ async def test_initialize_creates_invocation_and_event_tables():
     assert "invocations_active_session_idx" in sql
     assert "WHERE session_id IS NOT NULL AND status='ACTIVE'" in sql
     lakebase.create_schema.assert_awaited_once()
+
+
+def test_store_generates_unique_worker_ids_and_rejects_an_empty_affinity():
+    lakebase, _ = mock_lakebase()
+    first = LakebaseDurableRuntimeStore(lakebase=lakebase)
+    second = LakebaseDurableRuntimeStore(lakebase=lakebase)
+
+    assert first.worker_id
+    assert first.worker_id != second.worker_id
+    assert str(UUID(first.worker_id)) == first.worker_id
+    with pytest.raises(ValueError, match="recovery_affinity must not be empty"):
+        LakebaseDurableRuntimeStore(lakebase=lakebase, recovery_affinity="")
 
 
 @pytest.mark.asyncio
@@ -361,7 +382,10 @@ async def test_accept_assigns_session_sequence_number_while_holding_the_session_
             )
         ),
     ]
-    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
+    store = LakebaseDurableRuntimeStore(
+        lakebase=lakebase,
+        recovery_affinity=RECOVERY_AFFINITY,
+    )
 
     state = await store.accept(
         "invocation-2",
@@ -378,6 +402,8 @@ async def test_accept_assigns_session_sequence_number_while_holding_the_session_
     assert "MAX(session_sequence_number)" in allocation_query
     assert insert_parameters["session_id"] == "session-1"
     assert insert_parameters["session_sequence_number"] == 4
+    assert insert_parameters["worker_id"] == store.worker_id
+    assert insert_parameters["recovery_affinity"] == RECOVERY_AFFINITY
     assert connection.execute.await_args_list[0].args[1] == {
         "session_lock_key": "databricks_agentkit_runtime.invocations:session-1"
     }
@@ -391,7 +417,10 @@ async def test_claim_returns_request_and_incremented_attempt():
         mapping_result(invocation_row(status="ACTIVE", attempt=2)),
         MagicMock(),
     ]
-    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
+    store = LakebaseDurableRuntimeStore(
+        lakebase=lakebase,
+        recovery_affinity=RECOVERY_AFFINITY,
+    )
 
     state = await store.claim_recoverable("session-1", 10)
 
@@ -399,7 +428,12 @@ async def test_claim_returns_request_and_incremented_attempt():
     assert state.attempt == 2
     assert state.request == {"input": "hello"}
     claim_parameters = connection.execute.await_args_list[1].args[1]
-    assert claim_parameters == {"invocation_id": "session-1", "stale": 10}
+    assert claim_parameters == {
+        "invocation_id": "session-1",
+        "stale": 10,
+        "worker_id": store.worker_id,
+        "recovery_affinity": RECOVERY_AFFINITY,
+    }
     event_parameters = connection.execute.await_args_list[2].args[1]
     assert event_parameters["event"] == '{"type": "run.started"}'
 
@@ -421,7 +455,10 @@ async def test_claim_serializes_session_work_and_rechecks_fifo_eligibility():
         ),
         MagicMock(),
     ]
-    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
+    store = LakebaseDurableRuntimeStore(
+        lakebase=lakebase,
+        recovery_affinity=RECOVERY_AFFINITY,
+    )
 
     state = await store.claim("invocation-2")
 
@@ -432,7 +469,10 @@ async def test_claim_serializes_session_work_and_rechecks_fifo_eligibility():
     claim_query = str(connection.execute.await_args_list[2].args[0])
     assert "active.status='ACTIVE'" in claim_query
     assert "earlier.status='QUEUED'" in claim_query
-    assert "earlier.session_sequence_number < target.session_sequence_number" in claim_query
+    assert "earlier.session_sequence_number, earlier.invocation_id" in claim_query
+    assert "target.session_sequence_number, target.invocation_id" in claim_query
+    assert "target.worker_id IS NULL" in claim_query
+    assert "target.recovery_affinity IS NOT DISTINCT FROM" in claim_query
 
 
 @pytest.mark.asyncio
@@ -452,7 +492,10 @@ async def test_recovery_preserves_session_and_session_sequence_number():
         ),
         MagicMock(),
     ]
-    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
+    store = LakebaseDurableRuntimeStore(
+        lakebase=lakebase,
+        recovery_affinity=RECOVERY_AFFINITY,
+    )
 
     state = await store.claim_recoverable("invocation-1", 10)
 
@@ -461,6 +504,9 @@ async def test_recovery_preserves_session_and_session_sequence_number():
     claim_query = str(connection.execute.await_args_list[2].args[0])
     assert "target.status='ACTIVE'" in claim_query
     assert "heartbeat_at <" in claim_query
+    assert "GREATEST(target.attempt + 1, 2)" in claim_query
+    assert "clock_timestamp()" in claim_query
+    assert "target.recovery_affinity IS NOT DISTINCT FROM" in claim_query
     assert (
         "session_id=" not in claim_query.split("SET", maxsplit=1)[1].split("WHERE", maxsplit=1)[0]
     )
@@ -476,7 +522,10 @@ async def test_queued_invocation_query_only_selects_queued_work():
     result = MagicMock()
     result.scalars.return_value.all.return_value = ["session-1"]
     connection.execute.return_value = result
-    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
+    store = LakebaseDurableRuntimeStore(
+        lakebase=lakebase,
+        recovery_affinity=RECOVERY_AFFINITY,
+    )
 
     assert await store.queued_invocation_ids() == ["session-1"]
 
@@ -485,7 +534,14 @@ async def test_queued_invocation_query_only_selects_queued_work():
     assert "heartbeat_at" not in query
     assert "active.status='ACTIVE'" in query
     assert "earlier.status='QUEUED'" in query
-    assert "earlier.session_sequence_number < candidate.session_sequence_number" in query
+    assert "earlier.session_sequence_number, earlier.invocation_id" in query
+    assert "candidate.session_sequence_number, candidate.invocation_id" in query
+    assert "candidate.worker_id IS NULL" in query
+    assert "candidate.recovery_affinity IS NOT DISTINCT FROM" in query
+    assert connection.execute.await_args.args[1] == {
+        "worker_id": store.worker_id,
+        "recovery_affinity": RECOVERY_AFFINITY,
+    }
 
 
 @pytest.mark.asyncio
@@ -494,15 +550,24 @@ async def test_stale_invocation_query_uses_durable_lease():
     result = MagicMock()
     result.scalars.return_value.all.return_value = ["session-1"]
     connection.execute.return_value = result
-    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
+    store = LakebaseDurableRuntimeStore(
+        lakebase=lakebase,
+        recovery_affinity=RECOVERY_AFFINITY,
+    )
 
     assert await store.stale_invocation_ids(10) == ["session-1"]
 
     query = str(connection.execute.await_args.args[0])
     assert "SELECT invocation_id" in query
     assert "heartbeat_at" in query
-    assert "status='QUEUED'" not in query
-    assert connection.execute.await_args.args[1] == {"stale": 10}
+    assert "candidate.status='ACTIVE'" in query
+    assert "candidate.status='QUEUED'" in query
+    assert "candidate.worker_id IS NOT NULL" in query
+    assert "candidate.recovery_affinity IS NOT DISTINCT FROM" in query
+    assert connection.execute.await_args.args[1] == {
+        "stale": 10,
+        "recovery_affinity": RECOVERY_AFFINITY,
+    }
 
 
 @pytest.mark.asyncio
@@ -515,7 +580,13 @@ async def test_heartbeat_is_fenced_by_invocation_and_attempt():
 
     query = str(connection.execute.await_args.args[0])
     assert "WHERE invocation_id=:invocation_id" in query
-    assert connection.execute.await_args.args[1] == {"invocation_id": "session-1", "attempt": 2}
+    assert "clock_timestamp()" in query
+    assert "worker_id IS NULL OR worker_id=CAST(:worker_id AS UUID)" in query
+    assert connection.execute.await_args.args[1] == {
+        "invocation_id": "session-1",
+        "attempt": 2,
+        "worker_id": store.worker_id,
+    }
 
 
 @pytest.mark.asyncio
@@ -581,31 +652,46 @@ async def test_reads_require_exactly_one_invocation_or_session_selector():
 @pytest.mark.asyncio
 async def test_complete_persists_response_and_lifecycle_event_atomically():
     lakebase, connection = mock_lakebase()
-    connection.execute.return_value = MagicMock(rowcount=1)
+    connection.execute.side_effect = [
+        scalar_result(None),
+        MagicMock(rowcount=1),
+        MagicMock(),
+    ]
     store = LakebaseDurableRuntimeStore(lakebase=lakebase)
 
     assert await store.complete("session-1", 2, ["done"]) is True
 
-    parameters = connection.execute.await_args_list[0].args[1]
+    lock_lookup = connection.execute.await_args_list[0].args[1]
+    assert lock_lookup == {"invocation_id": "session-1"}
+    parameters = connection.execute.await_args_list[1].args[1]
     assert parameters["invocation_id"] == "session-1"
     assert parameters["attempt"] == 2
+    assert parameters["worker_id"] == store.worker_id
     assert parameters["response"] == '["done"]'
-    event_parameters = connection.execute.await_args_list[1].args[1]
+    assert "worker_id IS NULL OR worker_id=CAST(:worker_id AS UUID)" in str(
+        connection.execute.await_args_list[1].args[0]
+    )
+    event_parameters = connection.execute.await_args_list[2].args[1]
     assert event_parameters["event"] == '{"type": "run.completed"}'
 
 
 @pytest.mark.asyncio
 async def test_fail_persists_response_and_lifecycle_event_atomically():
     lakebase, connection = mock_lakebase()
-    connection.execute.return_value = MagicMock(rowcount=1)
+    connection.execute.side_effect = [
+        scalar_result(None),
+        MagicMock(rowcount=1),
+        MagicMock(),
+    ]
     store = LakebaseDurableRuntimeStore(lakebase=lakebase)
 
     response = {"error": {"code": "MCP_AUTHORIZATION_REQUIRED"}, "status_code": 401}
     assert await store.fail("session-1", 2, response) is True
 
-    failure_parameters = connection.execute.await_args_list[0].args[1]
+    failure_parameters = connection.execute.await_args_list[1].args[1]
+    assert failure_parameters["worker_id"] == store.worker_id
     assert failure_parameters["response"] == json.dumps(response)
-    event_parameters = connection.execute.await_args_list[1].args[1]
+    event_parameters = connection.execute.await_args_list[2].args[1]
     assert event_parameters["event"] == '{"type": "run.failed"}'
 
 
@@ -628,11 +714,13 @@ async def test_append_event_returns_replay_cursor_for_owned_attempt():
     assert parameters == {
         "invocation_id": "session-1",
         "attempt": 2,
+        "worker_id": store.worker_id,
         "event": '{"type": "progress", "step": 1}',
     }
     query = str(connection.execute.await_args.args[0])
     assert "status='ACTIVE'" in query
     assert "attempt=:attempt" in query
+    assert "worker_id IS NULL OR worker_id=CAST(:worker_id AS UUID)" in query
     assert "FOR UPDATE" in query
 
 

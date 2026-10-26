@@ -37,4 +37,4 @@ def test_tools_remove(
                 output = agentbricks_cli.invoke(
                     f"--url http://127.0.0.1:{port} --no-auth", tool.prompt
                 )
-                tool.check_not_called(output)
+                tool.assert_not_called(output)

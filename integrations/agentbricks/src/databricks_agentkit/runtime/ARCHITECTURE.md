@@ -59,11 +59,35 @@ through the attempt context is the handler's source of truth; neither opaque inp
 All workers sharing a Runtime Store must support session-aware claims before callers start supplying
 session IDs. An older worker does not enforce session order and can claim a later queued invocation.
 
-The durable executor always scans for persisted `QUEUED` invocations, including after process
-restart, and starts their first attempt through `@app.invoke`. Reads also schedule queued work as a
-safety net when a request moves between replicas. `@app.recover` is optional: registering it enables
-a separate scanner to replace stale `ACTIVE` attempts. Recovery is at least once, so agent side
-effects must be idempotent.
+### Worker affinity and request auth
+
+Each Lakebase store generates a fresh worker UUID. Admission atomically saves it with an optional
+`recovery_affinity` and database heartbeat while leaving the invocation `QUEUED`. Idempotent retries
+preserve this reservation. Normal SQL claims require the owner (or an unassigned legacy row), exact
+nullable affinity equality, and session FIFO eligibility; queue scans and reads cannot bypass it.
+
+With `@app.recover`, stale `ACTIVE` attempts and abandoned owned `QUEUED` heads can transfer to another
+worker in the same affinity group. Recovery increments the attempt fence and starts at attempt 2 even
+if execution never began. Completion/failure refreshes the next queue head's heartbeat so its owner
+gets a full grace period after waiting. Without a recovery hook, abandoned reservations remain queued.
+Recovery is at least once; agent side effects must be idempotent.
+
+`DurableAgentServer` retains credentials in `_request_auth` while queued, then passes them to the first
+attempt and closes them when it ends. Foreground disconnects do not discard queued auth. A lifespan
+task releases pending credentials after terminal state or takeover, checking only admitted requests.
+Retries on other replicas cannot replace the owner's credentials. Credentials are never persisted.
+
+OBO recovery fails before agent code with `MCP_USER_AUTH_RECOVERY_UNSUPPORTED`, including takeover
+before the first attempt. Polling/event replay does not restore auth. New invocations get fresh auth,
+but generated LangGraph/OpenAI adapters still reject OBO approval/resume with
+`MCP_USER_AUTH_HITL_UNSUPPORTED`; checkpoint resume supports app-auth runs.
+
+Initialization adds nullable `worker_id UUID` and `recovery_affinity TEXT` columns. Legacy rows stay
+unassigned in the default group. Upgrade all replicas before relying on affinity: old SDKs issue SQL
+without these claim predicates. Named affinity groups never match the default (`None`) group.
+
+Follow-up: a lost response after a committed claim can leave an active row awaiting stale recovery.
+Same-worker reattachment for this pre-existing failure mode is not implemented here.
 
 ## Code map
 

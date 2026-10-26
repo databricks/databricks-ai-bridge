@@ -6,8 +6,8 @@ LangGraph or OpenAI Agents template, or bring an existing agent.
 - **Deployment:** Scaffold a project, run it locally, and deploy it to Databricks Apps. The CLI
   provisions the stores declared in your project, grants the app access, and configures tracing.
 - **Runtime:** `DurableAgentServer` provides synchronous, streaming, and background execution, with persistent
-  results and automatic crash recovery on deployment. Request-user authentication is attached only
-  to the active first attempt and is never persisted.
+  results and automatic crash recovery on deployment. Request-user authentication stays in memory
+  on the receiving worker while queued and throughout the first attempt; it is never persisted.
 
 ## Choose your server
 
@@ -19,7 +19,8 @@ can restart interrupted app-auth work and mark interrupted request-user work fai
 
 If any configured tool uses `auth = "user"`, trusted Databricks Apps ingress headers supply a
 process-local credential for the first execution attempt. Synchronous, streaming, and background
-requests continue through the normal Runtime queue and Runtime Store. The store contains token-free
+requests continue through the normal Runtime queue and Runtime Store. Admission reserves the receiving
+worker, so another replica cannot claim queued work through normal scheduling. The store contains token-free
 request state, events, and results; it never contains the forwarded credential. A replacement
 attempt after failure recovery stops before agent code runs because the original credential is no
 longer available.
@@ -211,11 +212,20 @@ restarted. Session and Memory Store persistence is separate from this local exec
 `agentbricks deploy` provisions a dedicated PostgreSQL database for each deployment with `server = "agentbricks"` and
 reuses it on redeployment. Results and events survive worker restarts, and any replica can serve
 polling and stream-reconnection requests. With a recovery handler registered, the runtime detects stale
-heartbeats and starts a replacement attempt on an available worker.
+heartbeats and starts a replacement attempt on an available worker in the same recovery group.
 
-App-auth replacement attempts call the registered recovery handler. Request-user replacement
-attempts fail with `MCP_USER_AUTH_RECOVERY_UNSUPPORTED` before agent code runs because the original
-forwarded credential was intentionally not persisted.
+Queued invocations stay on the accepting worker, which holds their user credentials in memory.
+Each session queue head gets fresh grace to start. With `@app.recover`, abandoned queued work and
+stale active attempts can transfer within the same recovery group; app-auth calls the recovery
+handler. OBO takeover fails with `MCP_USER_AUTH_RECOVERY_UNSUPPORTED`, even before the first attempt.
+
+Reconnecting replays saved events; it does not restore execution credentials. Fresh credentials on
+an idempotent retry do not authorize recovery. Generated adapters also reject OBO approval/resume
+with `MCP_USER_AUTH_HITL_UNSUPPORTED`.
+
+Schema additions are automatic. Upgrade every replica sharing the store before relying on affinity.
+See [worker affinity and request auth](ARCHITECTURE.md#worker-affinity-and-request-auth) for the
+ownership, recovery-group, and credential-lifetime rules.
 
 Recovery is **at-least-once**: an interrupted attempt may already have performed external side
 effects before its replacement starts. Make those operations idempotent. Request deduplication
