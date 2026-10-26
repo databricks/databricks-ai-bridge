@@ -1432,7 +1432,9 @@ def _make_litellm_reflection_lm(reflection_model):
 
     def _lm(prompt):
         messages = [{"role": "user", "content": prompt}] if isinstance(prompt, str) else prompt
-        completion = litellm.completion(model=model, messages=messages)
+        completion = cast(
+            litellm.ModelResponse, litellm.completion(model=model, messages=messages, stream=False)
+        )
         return completion.choices[0].message.content
 
     return _lm
