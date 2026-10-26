@@ -130,11 +130,11 @@ jobs:
 
       - name: Publish to PyPI
         if: inputs.production
-        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e{packages_dir_pypi}
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086{packages_dir_pypi}
 
       - name: Publish to Test PyPI
         if: github.event_name == 'push' || !inputs.production
-        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086
         with:
           repository-url: https://test.pypi.org/legacy/{packages_dir_testpypi}
 
