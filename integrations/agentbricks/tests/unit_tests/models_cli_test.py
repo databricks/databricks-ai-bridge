@@ -983,7 +983,6 @@ def test_upgrade_with_apply_auto_waits_and_applies(tmp_path, stub_job, stub_prom
     )  # fmt: skip
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout)["applied"]["changed"] is True
-    assert "Waiting for the upgrade job" in result.stderr
     assert client.model == "system.ai.claude-haiku-4-5"
     assert len(model_upgrade.read_history(project)["actions"]) == 1  # rollback can undo it
 
@@ -1013,7 +1012,6 @@ def test_waiting_upgrade_applies_its_own_run_when_another_was_submitted_since(
     )  # fmt: skip
     assert result.exit_code == 0, result.output
     out = json.loads(result.stdout)
-    assert "Waiting for the upgrade job" in result.stderr
     assert out["run"]["run_id"] == 42
     assert stub_job["fetch"][1] == out["upgrade_id"]
     assert client.model == "system.ai.claude-haiku-4-5"

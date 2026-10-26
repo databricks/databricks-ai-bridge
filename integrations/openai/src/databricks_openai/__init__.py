@@ -17,14 +17,26 @@ from unitycatalog.ai.core.databricks import DatabricksFunctionClient
 from unitycatalog.ai.openai.toolkit import UCFunctionToolkit
 
 from databricks_openai.mcp_server_toolkit import McpServerToolkit, ToolInfo
+from databricks_openai.sandbox import (
+    DEFAULT_DATABRICKS_WORKSPACE_ROOT,
+    DatabricksSandboxClient,
+    DatabricksSandboxClientOptions,
+    DatabricksSandboxSession,
+    DatabricksSandboxSessionState,
+)
 from databricks_openai.utils.clients import AsyncDatabricksOpenAI, DatabricksOpenAI
 from databricks_openai.vector_search_retriever_tool import VectorSearchRetrieverTool
 
 # Expose all integrations to users under databricks-openai
 __all__ = [
+    "DEFAULT_DATABRICKS_WORKSPACE_ROOT",
     "VectorSearchRetrieverTool",
     "UCFunctionToolkit",
     "DatabricksFunctionClient",
+    "DatabricksSandboxClient",
+    "DatabricksSandboxClientOptions",
+    "DatabricksSandboxSession",
+    "DatabricksSandboxSessionState",
     "set_uc_function_client",
     "DatabricksOpenAI",
     "AsyncDatabricksOpenAI",
