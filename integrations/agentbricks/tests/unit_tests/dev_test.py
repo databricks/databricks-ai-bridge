@@ -747,7 +747,7 @@ def test_dev_hides_success_panel_when_agent_fails_to_start(tmp_path: pathlib.Pat
 def test_dev_reports_agent_that_stops_after_starting(tmp_path: pathlib.Path):
     (tmp_path / "app.yaml").write_text("command: []\n")
 
-    def _starts_then_crashes(args, profile, *, on_ready=None, **kwargs):
+    def _starts_then_crashes(args, profile, *, on_ready, **kwargs):
         on_ready()
         return subprocess.CompletedProcess(["databricks", *args], 1)
 
