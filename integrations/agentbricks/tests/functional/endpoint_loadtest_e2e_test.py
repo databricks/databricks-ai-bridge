@@ -34,7 +34,7 @@ def _assert_final_csv_counts(report_dir, summary, case_counts=None):
     assert sum(int(row["Occurrences"]) for row in failures) == summary["counts"]["failed"]
 
 
-@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("streaming", [False, True, "runtime"])
 def test_loadtest_caps_cases_and_saves_a_complete_report(tmp_path, streaming):
     """Exercise the installed entrypoint, excluded warm-up, drain, and saved statistics."""
     if find_spec("locust") is None:
@@ -64,18 +64,26 @@ def test_loadtest_caps_cases_and_saves_a_complete_report(tmp_path, streaming):
                 )
                 self.end_headers()
                 if streaming:
-                    # A metadata event must not count as content. The request remains active
-                    # after the first actual text delta, so full latency must include the tail.
-                    self.wfile.write(b'data: {"type":"response.created"}\n\n')
+                    # Metadata and empty deltas cannot start answer TTFT; the tail stays in flight.
+                    self.wfile.write(
+                        b'event: run.started\ndata: {}\n\ndata: {"type":"delta","content":""}\n\n'
+                        if streaming == "runtime"
+                        else b'data: {"type":"response.created"}\n\n'
+                    )
                     self.wfile.flush()
                     time.sleep(0.06)
                     self.wfile.write(
-                        b'data: {"type":"response.output_text.delta","delta":"hello"}\n\n'
+                        b'data: {"type":"delta","content":"hello"}\n\n'
+                        if streaming == "runtime"
+                        else b'data: {"type":"response.output_text.delta","delta":"hello"}\n\n'
                     )
                     self.wfile.flush()
                     time.sleep(0.16)
                     self.wfile.write(
-                        b'data: {"type":"response.completed","response":'
+                        b'data: {"type":"message","message":{"usage_metadata":{"output_tokens":4}}}\n\n'
+                        b"event: run.completed\ndata: {}\n\n"
+                        if streaming == "runtime"
+                        else b'data: {"type":"response.completed","response":'
                         b'{"usage":{"output_tokens":4}}}\n\ndata: [DONE]\n\n'
                     )
                 else:
@@ -237,11 +245,14 @@ def test_interrupt_stops_dispatch_and_reports_drained_requests(tmp_path, stop_si
                 requests += 1
                 if requests == 4:  # Warm-up plus three in-flight load requests.
                     loading.set()
-            time.sleep(0.5)
             self.send_response(200)
-            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Type", "text/event-stream")
             self.end_headers()
-            self.wfile.write(b'{"text":"finished"}')
+            self.wfile.write(b'data: {"type":"run.started"}\n\n')
+            self.wfile.flush()
+            time.sleep(0.5)
+            self.wfile.write(b'data: {"type":"delta","content":"finished"}\n\n')
+            self.wfile.write(b'data: {"type":"run.completed"}\n\n')
 
     config = tmp_path / "empty.databrickscfg"
     config.write_text("")
@@ -301,7 +312,10 @@ def test_interrupt_stops_dispatch_and_reports_drained_requests(tmp_path, stop_si
     assert counts["incomplete"] == counts["failed"] == 0
     assert requests == counts["started"] + 1
     _assert_final_csv_counts(report_dir, summary)
-    assert len(json.loads(responses_file.read_text())["observations"]) == counts["succeeded"]
+    observations = json.loads(responses_file.read_text())["observations"]
+    assert len(observations) == counts["succeeded"]
+    assert all(row["outputs"] == "finished" for row in observations)
+    assert summary["ttft_ms"]["count"] == counts["succeeded"]
     assert responses_file.stat().st_mode & 0o777 == 0o600
     assert "cancelled" in stderr
     assert (report_dir / "index.html").is_file()
@@ -839,3 +853,127 @@ def test_response_capture_io_failure_stops_load_and_reports_a_content_free_error
     assert summary["counts"]["started"] == summary["counts"]["succeeded"]
     for private in ("private-answer", str(invalid_capture)):
         assert private not in summary_file.read_text() + result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    "failure", ["run.failed", "run.error", "run.cancelled", "incomplete", "malformed"]
+)
+def test_runtime_sse_failures_do_not_count_or_capture_partial_answers_as_success(tmp_path, failure):
+    """Observe runtime events in one HTTP call; explicit failure or a truncated run fails it."""
+    if find_spec("locust") is None:
+        pytest.skip("requires databricks-agentbricks[loadtest]")
+    agentbricks = Path(sys.executable).with_name("agentbricks")
+    if not agentbricks.is_file():
+        pytest.skip("requires the installed agentbricks CLI")
+    calls = []
+    get_calls = []
+
+    class Endpoint(BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            calls.append(body)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(b'data: {"type":"run.started"}\n\n')
+            self.wfile.flush()
+            time.sleep(0.04)
+            self.wfile.write(b'data: {"type":"delta","content":"private-answer"}\n\n')
+            self.wfile.flush()
+            time.sleep(0.04)
+            if body["case"] == "ok":
+                self.wfile.write(b'data: {"type":"run.completed"}\n\n')
+            elif failure == "malformed":
+                self.wfile.write(b"event: run.completed\ndata: private-malformed-event\n\n")
+            elif failure != "incomplete":
+                payload = json.dumps({"type": failure})
+                self.wfile.write(f"data: {payload}\n\n".encode())
+
+        def do_GET(self):
+            get_calls.append(self.path)
+            self.send_response(500)
+            self.end_headers()
+
+    requests_file = tmp_path / "requests.json"
+    requests_file.write_text('[{"case":"ok"},{"case":"bad"}]')
+    config = tmp_path / "empty.databrickscfg"
+    config.write_text("")
+    responses = tmp_path / "responses.json"
+    report = tmp_path / "report"
+    with ThreadingHTTPServer(("127.0.0.1", 0), Endpoint) as server:
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            result = subprocess.run(
+                [
+                    str(agentbricks),
+                    "--output",
+                    "json",
+                    "endpoint",
+                    "loadtest",
+                    "--url",
+                    f"http://127.0.0.1:{server.server_port}",
+                    "--path",
+                    "/run",
+                    "--requests",
+                    str(requests_file),
+                    "--no-warmup",
+                    "--sse",
+                    "--concurrency",
+                    "2",
+                    "--duration",
+                    "10",
+                    "--max-requests",
+                    "4",
+                    "--timeout",
+                    "3",
+                    "--report-dir",
+                    str(report),
+                    "--save-responses",
+                    str(responses),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=20,
+                cwd=tmp_path,
+                env={
+                    "PATH": f"{agentbricks.parent}:/usr/bin:/bin",
+                    "HOME": str(tmp_path),
+                    "DATABRICKS_CONFIG_FILE": str(config),
+                    "AGENTBRICKS_DISABLE_TELEMETRY": "1",
+                    "AGENTBRICKS_DISABLE_AGENT_HINT": "1",
+                },
+            )
+        finally:
+            server.shutdown()
+            worker.join(timeout=5)
+    assert result.returncode == 1, result.stdout + result.stderr
+    summary = json.loads(result.stdout)
+    assert summary["counts"] == {
+        "started": 4,
+        "completed": 4,
+        "succeeded": 2,
+        "failed": 2,
+        "incomplete": 0,
+    }
+    assert summary["ttft_ms"]["count"] == summary["ttft_coverage"]["measured"] == 2
+    assert summary["ttft_ms"]["min"] >= 30
+    assert summary["latency_ms"]["successful"]["min"] >= 65
+    expected_error = {
+        "incomplete": "Incomplete supported SSE response",
+        "malformed": "Invalid supported SSE event",
+    }.get(failure, "SSE response reported an error")
+    assert summary["errors"] == {expected_error: 2}
+    assert len(calls) == 4
+    assert not get_calls
+    observations = json.loads(responses.read_text())["observations"]
+    assert len(observations) == 2
+    assert all(
+        row["inputs"]["case"] == "ok" and row["outputs"] == "private-answer" for row in observations
+    )
+    _assert_final_csv_counts(report, summary)
+    assert all("private-answer" not in path.read_text() for path in report.iterdir())
+    assert "private-malformed-event" not in result.stdout + result.stderr

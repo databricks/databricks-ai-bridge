@@ -57,6 +57,21 @@ def test_responses_sse_preserves_answer_explicit_trace_and_usage():
     assert metrics.trace_id == "tr-explicit"
 
 
+def test_runtime_sse_preserves_answer_explicit_trace_usage_and_completion():
+    metrics = StreamMetrics(capture_output=True)
+    metrics.observe({}, event_type="run.started", elapsed_ms=5)
+    metrics.observe({"type": "delta", "content": ""}, elapsed_ms=20)
+    metrics.observe({"type": "delta", "content": "answer"}, elapsed_ms=75)
+    metrics.observe({"type": "delta", "content": " tail"}, elapsed_ms=90)
+    metrics.observe({"type": "message", "message": {"usage_metadata": {"output_tokens": 7}}})
+    metrics.observe({"trace_id": "tr-explicit"}, event_type="run.completed")
+    metrics.finish()
+    assert metrics.ttft_ms == 75
+    assert metrics.output_tokens == 7
+    assert metrics.answer == "answer tail"
+    assert metrics.trace_id == "tr-explicit"
+
+
 def test_generic_sse_preserves_content_but_does_not_invent_answer_timings():
     metrics = StreamMetrics(capture_output=True)
     metrics.observe({"text": "generic event"}, elapsed_ms=10)
@@ -73,6 +88,9 @@ def test_generic_sse_preserves_content_but_does_not_invent_answer_timings():
         {"error": {"message": "private failure"}},
         {"type": "response.failed"},
         {"type": "response.incomplete"},
+        {"type": "run.failed"},
+        {"type": "run.error"},
+        {"type": "run.cancelled"},
         {"choices": [{"delta": {}, "finish_reason": "length"}]},
         {"choices": [{"delta": {}, "finish_reason": "content_filter"}]},
         {"choices": ["invalid"]},
@@ -85,11 +103,23 @@ def test_supported_sse_errors_are_content_free(event):
     assert "private failure" not in str(raised.value)
 
 
-def test_supported_sse_requires_completion():
+@pytest.mark.parametrize("protocol", ["responses", "runtime"])
+def test_supported_sse_requires_completion(protocol):
     metrics = StreamMetrics()
-    metrics.observe({"type": "response.output_text.delta", "delta": "partial"}, elapsed_ms=50)
+    metrics.observe(
+        {"type": "response.output_text.delta", "delta": "partial"}
+        if protocol == "responses"
+        else {"type": "delta", "content": "partial"},
+        elapsed_ms=50,
+    )
     with pytest.raises(StreamError, match="Incomplete"):
         metrics.finish()
+
+
+@pytest.mark.parametrize("event_type", ["run.started", "response.created"])
+def test_malformed_named_supported_sse_is_rejected(event_type):
+    with pytest.raises(StreamError, match="Invalid supported SSE event"):
+        StreamMetrics().observe("private malformed event", event_type=event_type)
 
 
 @pytest.mark.parametrize("value", [None, "", "spaces in id", "../escape", "x" * 257, 123])

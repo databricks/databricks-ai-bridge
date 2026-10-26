@@ -26,7 +26,7 @@ def output_tokens(event):
 
 
 class StreamMetrics:
-    """Chat Completions and Responses answer-text TTFT observations."""
+    """Chat Completions, Responses, and runtime answer-text TTFT observations."""
 
     def __init__(self, *, capture_output=False):
         self.ttft_ms = None
@@ -75,7 +75,7 @@ class StreamMetrics:
             try:
                 data = json.loads(data)
             except ValueError:
-                if self.supported or event_type.startswith("response."):
+                if self.supported or event_type.startswith(("response.", "run.")):
                     raise StreamError("Invalid supported SSE event") from None
                 if self._events is not None:
                     self._events.append(data)
@@ -94,6 +94,9 @@ class StreamMetrics:
                 "error",
                 "response.failed",
                 "response.incomplete",
+                "run.failed",
+                "run.error",
+                "run.cancelled",
             }
         ):
             raise StreamError("SSE response reported an error")
@@ -112,11 +115,14 @@ class StreamMetrics:
             if reason in {"length", "content_filter"}:
                 raise StreamError("SSE response was truncated")
             self.completed |= reason is not None
-        elif isinstance(kind, str) and kind.startswith("response."):
+        elif isinstance(kind, str) and kind.startswith(("response.", "run.")):
             self.supported = True
             if kind == "response.output_text.delta":
                 text = data.get("delta")
-            self.completed |= kind == "response.completed"
+            self.completed |= kind in {"response.completed", "run.completed"}
+        elif kind == "delta" and isinstance(data.get("content"), str):
+            self.supported = True
+            text = data["content"]
         if isinstance(text, str) and text and self.ttft_ms is None:
             self.ttft_ms = elapsed_ms
         if isinstance(text, str) and self._text is not None:
