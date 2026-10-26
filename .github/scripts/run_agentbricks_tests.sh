@@ -24,9 +24,12 @@ case "${1:-}" in
     uv pip install --python .venv-suites/bin/python --no-sources \
       "$(ls dist/databricks_ai_bridge-*.whl)" \
       "$(ls dist/databricks_agentbricks-*.whl)" --group tests
-    .venv-suites/bin/pytest tests/suites --workspace fake -n auto --dist loadgroup \
-      --wheel "$(ls "$PWD"/dist/databricks_agentbricks-*.whl)" \
-      --bridge-wheel "$(ls "$PWD"/dist/databricks_ai_bridge-*.whl)"
+    # Scaffold projects next to the runner's uv cache: across filesystems uv copies every
+    # dependency into each project's venv instead of hardlinking, and that fills /tmp on CI.
+    TMPDIR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}" \
+      .venv-suites/bin/pytest tests/suites --workspace fake -n auto --dist loadgroup \
+        --wheel "$(ls "$PWD"/dist/databricks_agentbricks-*.whl)" \
+        --bridge-wheel "$(ls "$PWD"/dist/databricks_ai_bridge-*.whl)"
     ;;
   # Release branches cut before tests/suites ran against a fake workspace still carry
   # tests/functional; the release cut runs this script from main against them.
