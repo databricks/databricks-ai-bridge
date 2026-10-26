@@ -9,6 +9,8 @@ def test_public_surface() -> None:
 
     public_sdk_types = {
         "AgentKitClient",
+        "Principal",
+        "StorePermission",
         "Memory",
         "MemorySearchResult",
         "MemoryStore",

@@ -157,8 +157,8 @@ class MemoryStoreClient:
     def grant(self, resource_name: str, service_principal_id: str) -> Optional[str]:
         """Grant a service principal read/write on a resolved memory store.
 
-        The managed store API owns the SP's Lakebase role and runs the GRANT itself - no store
-        ownership or Lakebase MANAGE required of the deployer. A failure is returned, not raised,
+        The managed store API provisions the SP's Lakebase role and runs the GRANT. The deployer
+        must be the store creator or a workspace admin. A failure is returned, not raised,
         so a missing grant can be reported as a next step.
         """
         try:

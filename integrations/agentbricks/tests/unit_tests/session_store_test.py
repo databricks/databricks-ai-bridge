@@ -83,7 +83,7 @@ def test_grant_permission() -> None:
     store.grant_permission("sp-123")
 
     api.grant_session_store_permission.assert_called_once_with(
-        SESSION_STORE, "sp-123", permission="WRITE"
+        SESSION_STORE, "sp-123", permission="WRITE", principal_type="SERVICE_PRINCIPAL"
     )
 
 

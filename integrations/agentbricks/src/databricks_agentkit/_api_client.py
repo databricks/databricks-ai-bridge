@@ -17,6 +17,12 @@ from urllib.parse import quote
 
 from databricks_agentbricks.errors import TRANSIENT_ERROR_CODES, AgentCliError, wrap_api_error
 from databricks_agentkit import models
+from databricks_agentkit._pagination import validate_page_size
+from databricks_agentkit._permissions import (
+    MAX_PERMISSION_PAGE_SIZE,
+    principal_body,
+    validate_permission,
+)
 from databricks_agentkit.runtime import model_services, prompt_registry
 
 if TYPE_CHECKING:
@@ -728,37 +734,97 @@ class _AgentBricksApiClient:
     def get_memory_pipeline_run(self, name: str) -> dict:
         return self._do("GET", f"{_BASE}/{quote(name, safe='/')}")
 
-    # --- store permission grants --------------------------------------------
+    # --- store permissions --------------------------------------------------
 
     def grant_session_store_permission(
-        self, name: str, principal_client_id: str, permission: str = "WRITE"
+        self,
+        name: str,
+        principal_client_id: str,
+        permission: str = "WRITE",
+        *,
+        principal_type: str = "SERVICE_PRINCIPAL",
     ) -> dict:
-        """Grant a service principal READ/WRITE on a session store.
-
-        The store service performs the underlying Lakebase role provisioning and GRANTs itself, so
-        this succeeds without the caller owning the store or holding MANAGE on its Lakebase.
-        """
+        """Grant READ/WRITE as the store creator or a workspace admin."""
+        validate_permission(permission)
         return self._do(
             "POST",
             f"{_BASE}/{session_store_path(name)}/permissions:grant",
             body={
-                "principal": {"type": "SERVICE_PRINCIPAL", "name": principal_client_id},
+                "principal": principal_body(principal_client_id, principal_type),
                 "permission": permission,
             },
             safe_to_retry=True,
         )
 
     def grant_memory_store_permission(
-        self, name: str, principal_client_id: str, permission: str = "WRITE"
+        self,
+        name: str,
+        principal_client_id: str,
+        permission: str = "WRITE",
+        *,
+        principal_type: str = "SERVICE_PRINCIPAL",
     ) -> dict:
-        """Grant a service principal READ/WRITE on a memory store (``name`` is its resource id)."""
+        """Grant READ/WRITE as the store creator or a workspace admin."""
+        validate_permission(permission)
         return self._do(
             "POST",
             f"{_BASE}/{memory_store_path(name)}/permissions:grant",
             body={
-                "principal": {"type": "SERVICE_PRINCIPAL", "name": principal_client_id},
+                "principal": principal_body(principal_client_id, principal_type),
                 "permission": permission,
             },
+            safe_to_retry=True,
+        )
+
+    def get_session_store_permission(self, name: str) -> dict:
+        """Return the authenticated caller's effective permission."""
+        return self._do("GET", f"{_BASE}/{session_store_path(name)}/permissions/self")
+
+    def get_memory_store_permission(self, name: str) -> dict:
+        """Return the authenticated caller's effective permission."""
+        return self._do("GET", f"{_BASE}/{memory_store_path(name)}/permissions/self")
+
+    def list_session_store_permissions(
+        self, name: str, page_size: Optional[int] = None, page_token: Optional[str] = None
+    ) -> dict:
+        """List direct grants, excluding implicit ownership and inherited access."""
+        validate_page_size(page_size, maximum=MAX_PERMISSION_PAGE_SIZE)
+        return self._do(
+            "GET",
+            f"{_BASE}/{session_store_path(name)}/permissions",
+            query=_query(page_size=page_size, page_token=page_token),
+        )
+
+    def list_memory_store_permissions(
+        self, name: str, page_size: Optional[int] = None, page_token: Optional[str] = None
+    ) -> dict:
+        """List direct grants, excluding implicit ownership and inherited access."""
+        validate_page_size(page_size, maximum=MAX_PERMISSION_PAGE_SIZE)
+        return self._do(
+            "GET",
+            f"{_BASE}/{memory_store_path(name)}/permissions",
+            query=_query(page_size=page_size, page_token=page_token),
+        )
+
+    def revoke_session_store_permission(
+        self, name: str, principal_id: str, *, principal_type: str = "SERVICE_PRINCIPAL"
+    ) -> dict:
+        """Remove both READ and WRITE grants for a principal; safe to repeat."""
+        return self._do(
+            "POST",
+            f"{_BASE}/{session_store_path(name)}/permissions:revoke",
+            body={"principal": principal_body(principal_id, principal_type)},
+            safe_to_retry=True,
+        )
+
+    def revoke_memory_store_permission(
+        self, name: str, principal_id: str, *, principal_type: str = "SERVICE_PRINCIPAL"
+    ) -> dict:
+        """Remove both READ and WRITE grants for a principal; safe to repeat."""
+        return self._do(
+            "POST",
+            f"{_BASE}/{memory_store_path(name)}/permissions:revoke",
+            body={"principal": principal_body(principal_id, principal_type)},
             safe_to_retry=True,
         )
 

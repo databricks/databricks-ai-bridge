@@ -117,6 +117,27 @@ These tests cover claim races, recovery groups, session promotion, attempt fenci
 and process-local request-auth lifetime. They skip when the database URL is unset and do not call
 workspace APIs or verify live Databricks Apps ingress.
 
+## Store permission integration tests
+
+The opt-in permission tests run the installed CLI with three existing identities in the same
+workspace. The creator and grantee must be non-admins; the admin profile must be a workspace admin.
+The grantee principal is its user email or service-principal application/client ID. The workspace
+must have the store APIs and permission feature enabled. From `integrations/agentbricks`:
+
+```sh
+RUN_AGENTBRICKS_PERMISSION_INTEGRATION_TESTS=1 \
+AGENTBRICKS_PERMISSION_TEST_CREATOR_PROFILE=<creator-profile> \
+AGENTBRICKS_PERMISSION_TEST_ADMIN_PROFILE=<admin-profile> \
+AGENTBRICKS_PERMISSION_TEST_GRANTEE_PROFILE=<grantee-profile> \
+AGENTBRICKS_PERMISSION_TEST_GRANTEE_PRINCIPAL=<application-id> \
+  uv run pytest tests/integration_tests/store_permissions_test.py -q
+```
+
+For a human grantee, set `AGENTBRICKS_PERMISSION_TEST_PRINCIPAL_TYPE=USER` and use its email for
+`AGENTBRICKS_PERMISSION_TEST_GRANTEE_PRINCIPAL`. Tests create isolated session/memory stores, cover
+creator/admin grant/list/revoke and the grantee's effective access and denied management operations,
+then revoke test grants and delete the stores. They do not provision identities or change flags.
+
 ## Deploy phase timings
 
 `agentbricks deploy` ends its text output with the total wall time (`Deployed in 2m05s`). To see
@@ -180,6 +201,13 @@ Whenever you change the CLI surface, update `cli.md` in the same change. That in
 Check the tables against the actual `click` definitions in `src/databricks_agentbricks/cli/`; the quickest
 drift check is to compare against the CLI's own `--help` output. Purely internal changes that don't
 alter the command surface or help text need no `cli.md` update.
+
+For CLI behavior changes, review
+[`agent-bricks-workflow/SKILL.md`](src/databricks_agentbricks/templates/agent-bricks-workflow/SKILL.md)
+and its references. Update affected workflow guidance in the same PR. In the PR description,
+identify the skill updates or briefly explain why none are needed. Keep the complete command and
+option reference in `cli.md`; the skill explains workflows and uses installed command help for
+exact syntax.
 
 ## Adding a new agent framework
 

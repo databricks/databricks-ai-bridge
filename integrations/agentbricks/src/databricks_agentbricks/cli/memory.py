@@ -9,6 +9,7 @@ from typing import Any
 
 import click
 
+from databricks_agentbricks.cli.permissions import store_permissions
 from databricks_agentbricks.cli.pipeline import pipeline
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
@@ -394,6 +395,9 @@ def _get_store(obj, name: str) -> dict:
             ),
         )
     return matches[0]
+
+
+stores.add_command(store_permissions("memory", resolve_get=_get_store))
 
 
 @stores.command("get")

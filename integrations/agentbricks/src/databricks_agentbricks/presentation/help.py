@@ -89,6 +89,34 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("memory", "stores", "update"): (
         ('agentbricks memory stores update <store> --description "Agent memory"', "edit a store"),
     ),
+    ("memory", "stores", "permissions"): (
+        ("agentbricks memory stores permissions get <store-id>", "show your own effective access"),
+        (
+            "agentbricks memory stores permissions list <store-id> --all",
+            "list every explicit grant",
+        ),
+    ),
+    ("memory", "stores", "permissions", "get"): (
+        ("agentbricks memory stores permissions get <store-id>", "show your own effective access"),
+    ),
+    ("memory", "stores", "permissions", "list"): (
+        (
+            "agentbricks memory stores permissions list <store-id> --all",
+            "list every explicit grant",
+        ),
+    ),
+    ("memory", "stores", "permissions", "grant"): (
+        (
+            "agentbricks memory stores permissions grant <store-id> --user teammate@example.com --permission READ",
+            "grant a user read access",
+        ),
+    ),
+    ("memory", "stores", "permissions", "revoke"): (
+        (
+            "agentbricks memory stores permissions revoke <store-id> --service-principal <application-id>",
+            "revoke both READ and WRITE grants after confirmation",
+        ),
+    ),
     ("memory", "stores", "delete"): (
         ("agentbricks memory stores delete <store>", "delete a store"),
     ),
@@ -242,6 +270,40 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         (
             'agentbricks sessions stores update agent-sessions --description "Agent sessions"',
             "edit a store",
+        ),
+    ),
+    ("sessions", "stores", "permissions"): (
+        (
+            "agentbricks sessions stores permissions get agent-sessions",
+            "show your own effective access",
+        ),
+        (
+            "agentbricks sessions stores permissions list agent-sessions --all",
+            "list every explicit grant",
+        ),
+    ),
+    ("sessions", "stores", "permissions", "get"): (
+        (
+            "agentbricks sessions stores permissions get agent-sessions",
+            "show your own effective access",
+        ),
+    ),
+    ("sessions", "stores", "permissions", "list"): (
+        (
+            "agentbricks sessions stores permissions list agent-sessions --all",
+            "list every explicit grant",
+        ),
+    ),
+    ("sessions", "stores", "permissions", "grant"): (
+        (
+            "agentbricks sessions stores permissions grant agent-sessions --user teammate@example.com --permission READ",
+            "grant a user read access",
+        ),
+    ),
+    ("sessions", "stores", "permissions", "revoke"): (
+        (
+            "agentbricks sessions stores permissions revoke agent-sessions --service-principal <application-id>",
+            "revoke both READ and WRITE grants after confirmation",
         ),
     ),
     ("sessions", "stores", "delete"): (

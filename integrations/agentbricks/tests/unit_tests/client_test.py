@@ -729,7 +729,10 @@ def test_grant_session_store_permission(workspace_client):
         "POST",
         "/api/2.0/agents/session-stores/sess-1/permissions:grant",
         query=None,
-        body={"principal": {"type": "SERVICE_PRINCIPAL", "name": "sp-abc"}, "permission": "WRITE"},
+        body={
+            "principal": {"principal_type": "SERVICE_PRINCIPAL", "name": "sp-abc"},
+            "permission": "WRITE",
+        },
     )
 
 
@@ -741,7 +744,10 @@ def test_grant_memory_store_permission_takes_resource_id_and_level(workspace_cli
         "POST",
         "/api/2.0/agents/memory-stores/uuid-x/permissions:grant",
         query=None,
-        body={"principal": {"type": "SERVICE_PRINCIPAL", "name": "sp-abc"}, "permission": "READ"},
+        body={
+            "principal": {"principal_type": "SERVICE_PRINCIPAL", "name": "sp-abc"},
+            "permission": "READ",
+        },
     )
 
 

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, List, Optional
 
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentkit._pagination import validate_limit, validate_page_size
+from databricks_agentkit._permissions import MAX_PERMISSION_PAGE_SIZE, StorePermission
 from databricks_agentkit.timefmt import parse_timestamp
 
 if TYPE_CHECKING:
@@ -221,13 +222,45 @@ class MemoryStore:
             read_mask=read_mask,
         )
 
-    def grant_permission(self, principal_id: str, *, permission: str = "WRITE") -> None:
-        """Grant a service principal READ/WRITE access to this memory store.
+    def grant_permission(
+        self,
+        principal_id: str,
+        *,
+        permission: str = "WRITE",
+        principal_type: str = "SERVICE_PRINCIPAL",
+    ) -> None:
+        """Grant READ/WRITE as the store creator or a workspace admin.
 
-        ``principal_id`` is the service principal's application (client) id. The grant is applied
-        server-side, so the caller needs neither store ownership nor Lakebase MANAGE.
+        ``principal_id`` is an application (client) ID by default, or a user email with
+        ``principal_type="USER"``. WRITE includes READ; granting READ never downgrades WRITE.
         """
-        self._client._grant_permission(self, principal_id, permission=permission)
+        self._client._grant_permission(
+            self, principal_id, permission=permission, principal_type=principal_type
+        )
+
+    def get_permission(self) -> StorePermission:
+        """Return the authenticated caller's effective permission.
+
+        PERMISSION_LEVEL_UNSPECIFIED means the caller has no access.
+        """
+        return self._client._get_permission(self)
+
+    def list_permissions(self, *, page_size: Optional[int] = None) -> Iterator[StorePermission]:
+        """Iterate direct grants as the creator or a workspace admin, following all pages.
+
+        Excludes implicit ownership and inherited access. ``page_size`` may be 1–1000.
+        """
+        return self._client._list_permissions(self, page_size=page_size)
+
+    def revoke_permission(
+        self, principal_id: str, *, principal_type: str = "SERVICE_PRINCIPAL"
+    ) -> None:
+        """Revoke both READ and WRITE as the store creator or a workspace admin.
+
+        ``principal_id`` is an application (client) ID by default, or a user email with
+        ``principal_type="USER"``. Repeated revocations succeed; ownership cannot be revoked.
+        """
+        self._client._revoke_permission(self, principal_id, principal_type=principal_type)
 
 
 class MemoryStores:
@@ -284,8 +317,37 @@ class MemoryStores:
     def _delete_store(self, store: MemoryStore) -> None:
         self._api.delete_memory_store(store.id)
 
-    def _grant_permission(self, store: MemoryStore, principal_id: str, *, permission: str) -> None:
-        self._api.grant_memory_store_permission(store.id, principal_id, permission=permission)
+    def _grant_permission(
+        self, store: MemoryStore, principal_id: str, *, permission: str, principal_type: str
+    ) -> None:
+        self._api.grant_memory_store_permission(
+            store.id, principal_id, permission=permission, principal_type=principal_type
+        )
+
+    def _get_permission(self, store: MemoryStore) -> StorePermission:
+        return StorePermission._from_response(self._api.get_memory_store_permission(store.id))
+
+    def _list_permissions(
+        self, store: MemoryStore, *, page_size: Optional[int]
+    ) -> Iterator[StorePermission]:
+        validate_page_size(page_size, maximum=MAX_PERMISSION_PAGE_SIZE)
+        page_token = None
+        while True:
+            response = self._api.list_memory_store_permissions(
+                store.id, page_size=page_size, page_token=page_token
+            )
+            for permission in response.get("memory_store_permissions", []):
+                yield StorePermission._from_response(permission)
+            page_token = response.get("next_page_token")
+            if not page_token:
+                return
+
+    def _revoke_permission(
+        self, store: MemoryStore, principal_id: str, *, principal_type: str
+    ) -> None:
+        self._api.revoke_memory_store_permission(
+            store.id, principal_id, principal_type=principal_type
+        )
 
     def _add_memory(
         self,

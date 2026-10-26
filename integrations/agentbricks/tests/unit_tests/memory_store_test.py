@@ -96,7 +96,9 @@ def test_grant_permission() -> None:
 
     store.grant_permission("sp-123", permission="READ")
 
-    api.grant_memory_store_permission.assert_called_once_with(STORE_ID, "sp-123", permission="READ")
+    api.grant_memory_store_permission.assert_called_once_with(
+        STORE_ID, "sp-123", permission="READ", principal_type="SERVICE_PRINCIPAL"
+    )
 
 
 def test_bound_store_add_memory() -> None:

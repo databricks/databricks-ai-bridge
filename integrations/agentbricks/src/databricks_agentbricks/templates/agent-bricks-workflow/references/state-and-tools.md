@@ -11,6 +11,31 @@ Memory store display names are not unique identifiers. Use the store ID or resou
 by the CLI; session stores use their store name. Workspace-wide lists can include other projects'
 resources. Do not select a store solely because its display name resembles this project.
 
+## Store permissions
+
+Use `agentbricks sessions stores permissions` or `agentbricks memory stores permissions` for
+focused access checks and changes; inspect the relevant subcommand's `--help` for options.
+Session stores use their store name or resource name. Memory stores use an ID or resource name;
+permission `get` also supports the existing display-name lookup and rejects ambiguous matches.
+
+- `get STORE` reports the authenticated caller's effective permission, not the deployed app's.
+  To verify app access, authenticate as the app's service principal when authorized, or validate
+  its actual store operations. READ permits reads; WRITE includes reads and writes.
+  PERMISSION_LEVEL_UNSPECIFIED means no access and is shown as "No access" in text output.
+- `list STORE` shows explicit user and service-principal grants. Implicit ownership and inherited
+  access are excluded, so an empty list does not establish that nobody can access the store.
+  Use `--all` when the full grant inventory is needed.
+- `grant STORE` and `revoke STORE` take exactly one `--user` email or `--service-principal`
+  application/client ID. A numeric SCIM principal ID is not the application ID.
+  Grant requires `--permission READ` or `--permission WRITE`; granting READ preserves existing WRITE.
+- Grant, List, and Revoke require the store creator or a workspace admin; a WRITE grantee cannot
+  manage permissions. Revoke removes both READ and WRITE grants, is safe to repeat, and cannot
+  revoke ownership. Inherited access is not removed. Use `--yes` only when revocation is intended.
+
+Deployment reconciles the app's grants; a later deploy can restore access previously revoked from
+that app. Unbinding a store does not revoke existing access. Preview or disabled-feature errors
+require workspace enablement; changing the CLI or repeating the request will not enable an API.
+
 ## Actor, session, and authorization
 
 Derive `actor_id` from trusted application context, not a model-generated value or unvalidated caller
