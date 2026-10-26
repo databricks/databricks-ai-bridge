@@ -46,7 +46,7 @@ def announce_local_url(
     *,
     has_chat_ui: bool | None = None,
 ) -> None:
-    """Show the chat URL or an invocation example before the agent runs."""
+    """Show the chat URL or an invocation example before run-local blocks."""
     base = f"http://localhost:{port}"
     deploy_name = source_dir.resolve().name
     if has_chat_ui is None:

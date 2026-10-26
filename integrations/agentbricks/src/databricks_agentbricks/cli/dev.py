@@ -1,9 +1,10 @@
-"""`agentbricks dev` — run a scaffolded agent locally on the selected port.
+"""`agentbricks dev` — run a scaffolded agent locally, wrapping `databricks apps run-local`.
 
-Runs the app from its ``app.yaml`` the way the Databricks Apps runtime would: reads the manifest's
-command + env, and (with ``--prepare-environment``) builds the venv via uv. This is the local
-counterpart to ``agentbricks deploy`` — same source dir, same manifest — so what runs here matches
-what ships. The app listens only on ``--app-port``; there is no proxy port in front of it.
+Runs the app from its ``app.yaml`` exactly as the Databricks Apps runtime would locally: reads the
+manifest's command + env, and (with ``--prepare-environment``) builds the venv via uv. This is the
+local counterpart to ``agentbricks deploy`` — same source dir, same manifest — so what runs here matches
+what ships. Delegating to ``apps run-local`` means agentbricks inherits the Apps team's local-run behavior
+rather than re-implementing it.
 """
 
 from __future__ import annotations
@@ -12,8 +13,9 @@ from typing import Optional
 
 import click
 
-from databricks_agentbricks.clients.local_app_runner import LocalAppRunner, _run_process
-from databricks_agentbricks.clients.local_ports import port_in_use
+from databricks_agentbricks.clients.apps_client import AppsClient
+from databricks_agentbricks.clients.databricks_cli import _databricks
+from databricks_agentbricks.clients.local_ports import free_port, port_in_use
 from databricks_agentbricks.clients.local_tracing_client import LocalTracingClient
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.dev import (
@@ -35,13 +37,10 @@ def build_dev_service(obj) -> DevService:
     """Compose the local workflow without opening a workspace API client."""
     return DevService(
         project_resolver=ProjectResolver(),
-        app_runner=LocalAppRunner(
-            obj.profile,
-            run_process=_run_process,
-            warn=lambda message: render.diagnostic("warning", message),
-        ),
+        apps_client=AppsClient(obj.profile, runner=_databricks),
         local_tracing=LocalTracingClient(),
         port_in_use=port_in_use,
+        free_port=free_port,
     )
 
 
@@ -75,8 +74,9 @@ def dev(
     Auth uses your Databricks profile (`-p` / `agentbricks login`), and the agent reaches Databricks model
     serving through the AI Gateway on that profile — so there are no model keys to set up.
 
-    Runs the command and env from `app.yaml` the way the Apps runtime would, so local behavior
-    matches a deployment. The environment is built on the first run and reused after; pass
+    Under the hood this wraps `databricks apps run-local`: it reads the command + env from
+    `app.yaml` and runs the app the way the Apps runtime would, so local behavior matches a
+    deployment. The environment is built on the first run and reused after; pass
     `--prepare-environment` to force a rebuild (e.g. after changing dependencies).
 
     Everything runs locally: `agentbricks dev` is a local deployment that does not depend on a Databricks

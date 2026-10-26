@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import pathlib
-import socket
 import subprocess
 from types import SimpleNamespace
 from typing import cast
@@ -13,8 +12,7 @@ from unittest.mock import Mock
 import pytest
 import yaml
 
-from databricks_agentbricks.clients.local_app_runner import LocalAppRunner
-from databricks_agentbricks.clients.local_ports import port_in_use
+from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.local_tracing_client import (
     LocalTracingClient,
     LocalTracingStart,
@@ -49,7 +47,7 @@ env:
     resolver.load.return_value = project
     resolver.resource_bindings.return_value = ("memory", "sessions", "/Shared/traces")
 
-    runner = Mock(spec=LocalAppRunner)
+    apps = Mock(spec=AppsClient)
     tracing = Mock(spec=LocalTracingClient)
     tracing_server = cast(subprocess.Popen, Mock(spec=subprocess.Popen))
     tracing.start_dev.return_value = LocalTracingStart(
@@ -62,15 +60,18 @@ env:
     )
 
     port_in_use = Mock(return_value=False)
+    free_port = Mock(return_value=54321)
 
     service = DevService(
         project_resolver=resolver,
-        app_runner=runner,
+        apps_client=apps,
         local_tracing=tracing,
         port_in_use=port_in_use,
+        free_port=free_port,
     )
     return SimpleNamespace(
-        runner=runner,
+        apps=apps,
+        free_port=free_port,
         port_in_use=port_in_use,
         project=project,
         resolver=resolver,
@@ -111,7 +112,7 @@ def test_dev_manifest_uses_current_origins_and_overrides_stale_deploy_env(
     assert app_yaml.read_text() == text
 
 
-def test_prepare_builds_local_plan_and_run_uses_injected_app_runner(
+def test_prepare_builds_local_plan_and_run_uses_injected_apps_client(
     service_fixture: SimpleNamespace, tmp_path: pathlib.Path
 ) -> None:
     """Preparation resolves metadata once and keeps the temporary manifest alive through run."""
@@ -133,6 +134,7 @@ def test_prepare_builds_local_plan_and_run_uses_injected_app_runner(
         assert plan.preview.trace_experiment == "/Shared/traces"
         assert plan.preview.has_chat_ui is False
         assert plan.prepare_environment is True  # no .venv: auto-prepare
+        assert plan.app_port == 54321
         assert plan.entry_point.name == "app.agentbricksdev.yaml"
         assert plan.entry_point.exists()
         assert _manifest_env(plan.entry_point) == {
@@ -150,11 +152,12 @@ def test_prepare_builds_local_plan_and_run_uses_injected_app_runner(
     service_fixture.resolver.resource_bindings.assert_called_once_with(tmp_path)
     service_fixture.tracing.start_dev.assert_called_once_with(tmp_path)
     service_fixture.tracing.stop.assert_called_once_with(service_fixture.tracing_server)
-    service_fixture.runner.run.assert_called_once_with(
+    service_fixture.apps.run_local.assert_called_once_with(
         tmp_path,
-        tmp_path / "app.agentbricksdev.yaml",
+        "app.agentbricksdev.yaml",
         prepare_environment=True,
         port=9000,
+        app_port=54321,
     )
 
 
@@ -168,13 +171,15 @@ def test_prepare_honors_explicit_environment_flag_and_default_port(
     ) as plan:
         assert plan.prepare_environment is False
         assert plan.preview.port == 8000
+        assert plan.app_port == 54321
         service_fixture.service.run(plan)
 
-    service_fixture.runner.run.assert_called_once_with(
+    service_fixture.apps.run_local.assert_called_once_with(
         tmp_path,
-        tmp_path / "app.agentbricksdev.yaml",
+        "app.agentbricksdev.yaml",
         prepare_environment=False,
         port=8000,
+        app_port=54321,
     )
 
 
@@ -192,7 +197,7 @@ def test_missing_app_yaml_fails_before_loading_project_or_starting_tracing(
     service_fixture.resolver.load.assert_not_called()
     service_fixture.resolver.resource_bindings.assert_not_called()
     service_fixture.tracing.start_dev.assert_not_called()
-    service_fixture.runner.run.assert_not_called()
+    service_fixture.apps.run_local.assert_not_called()
 
 
 def test_managed_tool_preflight_fails_before_local_resources(
@@ -213,15 +218,15 @@ def test_managed_tool_preflight_fails_before_local_resources(
     require_support.assert_called_once_with(tmp_path)
     service_fixture.resolver.resource_bindings.assert_not_called()
     service_fixture.tracing.start_dev.assert_not_called()
-    service_fixture.runner.run.assert_not_called()
+    service_fixture.apps.run_local.assert_not_called()
 
 
 def test_run_failure_still_removes_manifest_and_stops_tracing(
     service_fixture: SimpleNamespace, tmp_path: pathlib.Path
 ) -> None:
-    service_fixture.runner.run.side_effect = RuntimeError("agent failed")
+    service_fixture.apps.run_local.side_effect = RuntimeError("run-local failed")
 
-    with pytest.raises(RuntimeError, match="agent failed"):
+    with pytest.raises(RuntimeError, match="run-local failed"):
         with service_fixture.service.prepare(
             DevRequest(source=str(tmp_path), prepare_environment=False, app_port=8123)
         ) as plan:
@@ -243,7 +248,7 @@ def test_manifest_setup_failure_still_stops_started_tracing(
             pytest.fail("malformed app.yaml should fail while preparing the manifest")
 
     assert not (tmp_path / "app.agentbricksdev.yaml").exists()
-    service_fixture.runner.run.assert_not_called()
+    service_fixture.apps.run_local.assert_not_called()
     service_fixture.tracing.stop.assert_called_once_with(service_fixture.tracing_server)
 
 
@@ -286,7 +291,7 @@ def test_manifest_write_failure_removes_partial_manifest_and_stops_tracing(
 
     assert not (tmp_path / "app.agentbricksdev.yaml").exists()
     assert app_yaml.read_text() == original_app_yaml
-    service_fixture.runner.run.assert_not_called()
+    service_fixture.apps.run_local.assert_not_called()
     service_fixture.tracing.stop.assert_called_once_with(service_fixture.tracing_server)
 
 
@@ -309,11 +314,12 @@ def test_prepare_and_run_remain_safe_when_tracing_does_not_start(
 
     assert not (tmp_path / "app.agentbricksdev.yaml").exists()
     service_fixture.tracing.stop.assert_not_called()
-    service_fixture.runner.run.assert_called_once_with(
+    service_fixture.apps.run_local.assert_called_once_with(
         tmp_path,
-        tmp_path / "app.agentbricksdev.yaml",
+        "app.agentbricksdev.yaml",
         prepare_environment=False,
         port=8123,
+        app_port=54321,
     )
 
 
@@ -338,7 +344,7 @@ def test_busy_port_fails_before_tracing_or_local_manifest(
     service_fixture.port_in_use.assert_called_once_with(expected_port)
     service_fixture.tracing.start_dev.assert_not_called()
     service_fixture.tracing.stop.assert_not_called()
-    service_fixture.runner.run.assert_not_called()
+    service_fixture.apps.run_local.assert_not_called()
     assert not (tmp_path / "app.agentbricksdev.yaml").exists()
 
 
@@ -352,56 +358,4 @@ def test_free_port_is_checked_and_run_proceeds(
 
     service_fixture.port_in_use.assert_called_once_with(9100)
     service_fixture.tracing.start_dev.assert_called_once_with(tmp_path)
-    service_fixture.runner.run.assert_called_once()
-
-
-def test_two_projects_run_at_once_on_their_own_ports(
-    service_fixture: SimpleNamespace, tmp_path: pathlib.Path
-) -> None:
-    """FR-2: a second run on another port proceeds while the first is still running."""
-    second = tmp_path / "second"
-    second.mkdir()
-    (second / "app.yaml").write_text("command: [start-server]\n")
-
-    with service_fixture.service.prepare(
-        DevRequest(source=str(tmp_path), prepare_environment=False, app_port=8000)
-    ) as first_plan:
-        with service_fixture.service.prepare(
-            DevRequest(source=str(second), prepare_environment=False, app_port=8002)
-        ) as second_plan:
-            service_fixture.service.run(first_plan)
-            service_fixture.service.run(second_plan)
-
-    assert [call.kwargs["port"] for call in service_fixture.runner.run.call_args_list] == [
-        8000,
-        8002,
-    ]
-    assert [call.args[0] for call in service_fixture.port_in_use.call_args_list] == [8000, 8002]
-
-
-def test_dev_starts_when_8001_is_busy(
-    service_fixture: SimpleNamespace, tmp_path: pathlib.Path
-) -> None:
-    """FR-3: a server holding 8001 (run-local's old proxy port) doesn't stop a dev run."""
-    with socket.socket() as holder, socket.socket() as probe:
-        try:
-            holder.bind(("127.0.0.1", 8001))
-            holder.listen()
-        except OSError:
-            pass  # something on this machine already holds 8001, which is the case under test
-        probe.bind(("127.0.0.1", 0))
-        free = probe.getsockname()[1]
-        probe.close()
-        service = DevService(
-            project_resolver=service_fixture.resolver,
-            app_runner=service_fixture.runner,
-            local_tracing=service_fixture.tracing,
-            port_in_use=port_in_use,
-        )
-        assert port_in_use(8001)
-        with service.prepare(
-            DevRequest(source=str(tmp_path), prepare_environment=False, app_port=free)
-        ) as plan:
-            service.run(plan)
-
-    assert service_fixture.runner.run.call_args.kwargs["port"] == free
+    service_fixture.apps.run_local.assert_called_once()

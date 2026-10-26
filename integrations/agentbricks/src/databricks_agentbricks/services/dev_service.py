@@ -2,7 +2,7 @@
 
 ``DevService`` prepares a temporary, local-only Apps manifest and hands the resulting plan to
 the CLI for presentation and execution.  The service deliberately has no Click or presentation
-dependencies: local tracing and the local app runner are clients supplied by the command composition.
+dependencies: local tracing and the Apps command are clients supplied by the command composition.
 In particular, preparing a project never resolves a workspace client or provisions a resource.
 """
 
@@ -14,7 +14,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-from databricks_agentbricks.clients.local_app_runner import LocalAppRunner
+from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.local_tracing_client import LocalTracingClient
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.app_manifest import AppManifest
@@ -25,7 +25,7 @@ from databricks_agentkit.runtime.cors import CORS_ALLOWED_ORIGINS_ENV
 from databricks_agentkit.runtime.store import RUNTIME_STORE_LOCAL_ENV
 from databricks_agentkit.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
 
-# Default local port; the agent listens here unless ``--app-port`` overrides it.
+# Default local port; run-local's proxy listens here unless ``--app-port`` overrides it.
 _DEFAULT_APP_PORT = 8000
 _LOCAL_APP_YAML = "app.agentbricksdev.yaml"
 
@@ -76,6 +76,7 @@ class DevPlan:
     preview: DevPreview
     entry_point: pathlib.Path
     prepare_environment: bool
+    app_port: int
 
 
 class DevService:
@@ -83,21 +84,23 @@ class DevService:
 
     The service owns validation, project metadata, the local-only manifest, and lifecycle cleanup.
     It does not own output or a workspace client; those concerns are supplied by the CLI through
-    ``LocalTracingClient`` and ``LocalAppRunner``. ``port_in_use`` reports whether a local port is taken, so
-    tests can simulate a busy port without binding a real socket.
+    ``LocalTracingClient`` and ``AppsClient``. ``port_in_use`` reports whether a local port is taken, and
+    ``free_port`` picks one for the app behind run-local's proxy, so tests need no real sockets.
     """
 
     def __init__(
         self,
         project_resolver: ProjectResolver,
-        app_runner: LocalAppRunner,
+        apps_client: AppsClient,
         local_tracing: LocalTracingClient,
         port_in_use: Callable[[int], bool],
+        free_port: Callable[[], int],
     ) -> None:
         self._project_resolver = project_resolver
-        self._app_runner = app_runner
+        self._apps_client = apps_client
         self._local_tracing = local_tracing
         self._port_in_use = port_in_use
+        self._free_port = free_port
 
     @contextmanager
     def prepare(self, request: DevRequest) -> Iterator[DevPlan]:
@@ -119,8 +122,8 @@ class DevService:
         if project is not None and project.tools:
             require_managed_tool_support(source_dir)
 
-        # Fail before starting tracing or writing the local manifest: the app does not report a
-        # busy port clearly, and a stopped `agentbricks dev` can leave its server running.
+        # Fail before starting tracing or writing the local manifest: `apps run-local` does not
+        # report a busy port clearly, and a stopped `agentbricks dev` can leave its server running.
         port = request.app_port or _DEFAULT_APP_PORT
         if self._port_in_use(port):
             raise AgentCliError(
@@ -166,6 +169,9 @@ class DevService:
                 preview=preview,
                 entry_point=entry_point,
                 prepare_environment=prepare_environment,
+                # The user-facing port is run-local's proxy; the app gets a free port behind it so
+                # concurrent runs don't collide on run-local's default app or proxy port.
+                app_port=self._free_port(),
             )
         finally:
             # Keep cleanup independent: a failure removing the manifest must not orphan the tracing
@@ -178,12 +184,13 @@ class DevService:
                     self._local_tracing.stop(tracing_server)
 
     def run(self, plan: DevPlan) -> None:
-        """Run a prepared plan on its port through the injected local app runner."""
-        self._app_runner.run(
+        """Run a prepared plan through the injected Apps local-run client."""
+        self._apps_client.run_local(
             plan.preview.source_dir,
-            plan.entry_point,
+            plan.entry_point.name,
             prepare_environment=plan.prepare_environment,
             port=plan.preview.port,
+            app_port=plan.app_port,
         )
 
 
@@ -193,7 +200,7 @@ def _dev_entry_point(
     *,
     allowed_origins: tuple[str, ...] | None = None,
 ) -> pathlib.Path:
-    """Write the local-only manifest that ``agentbricks dev`` runs.
+    """Write the local-only manifest consumed by ``apps run-local``.
 
     The deployable ``app.yaml`` is never mutated.  This copy forces the Runtime Store into local
     mode, removes deploy-only package-index overrides and workspace resource env, and merges local
@@ -226,6 +233,7 @@ def _dev_entry_point(
     filtered.append({"name": RUNTIME_STORE_LOCAL_ENV, "value": "true"})
     manifest.set_env(filtered)
 
+    # The Apps CLI rejects hidden or hyphenated entry-point filenames.
     dev_yaml = app_yaml.parent / _LOCAL_APP_YAML
     try:
         # Overwritten on purpose: the name is dev's own, and a run stopped by a signal (an IDE stop
@@ -233,7 +241,7 @@ def _dev_entry_point(
         with dev_yaml.open("w") as output:
             output.write(manifest.to_yaml())
     except OSError as exc:
-        # Don't leave a partial manifest behind.
+        # Don't leave a partial manifest for `apps run-local` to pick up.
         dev_yaml.unlink(missing_ok=True)
         raise AgentCliError(f"Could not write {dev_yaml}: {exc}") from exc
     return dev_yaml

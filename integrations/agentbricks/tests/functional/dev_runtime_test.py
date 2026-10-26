@@ -6,9 +6,9 @@ whose only Databricks target is an in-process fake model-serving endpoint. Copyi
 next-step command into a real shell must come back with the model's answer, for each template.
 No cloud, no auth, no workspace.
 
-It boots the entrypoint directly rather than through ``agentbricks dev``, which also starts a local
-MLflow server and passes the selected profile's auth. Booting the entrypoint runs the same server
-dev would, and stays hermetic.
+It boots the entrypoint directly rather than through ``databricks apps run-local``: run-local
+resolves a real workspace at startup (config discovery + SCIM user), so it can't run in an empty
+environment. Booting the entrypoint runs the same server run-local would, and stays hermetic.
 """
 
 from __future__ import annotations
