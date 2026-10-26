@@ -1,8 +1,9 @@
-"""Framework-agnostic workflow behind ``agentbricks endpoint invoke``."""
+"""Framework-agnostic workflows behind ``agentbricks endpoint``."""
 
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, replace
 from typing import Any, Callable
 from uuid import uuid4
@@ -17,29 +18,36 @@ from databricks_agentbricks.services.invoke.transport import (
     EndpointResponse,
     HttpSession,
 )
+from databricks_agentbricks.services.loadtest.plan import LoadTestPlan
+from databricks_agentbricks.services.loadtest.runner import (
+    LoadtestResult,
+    ensure_locust,
+    run_loadtest,
+)
 
 _ROUTING_KEY_HEADER = "X-Routing-Key"
 
 
 @dataclass(frozen=True)
-class InvokeRequest:
-    """The framework-independent inputs for one ``endpoint invoke`` operation.
-
-    ``json_value`` intentionally remains text at this boundary. ``build_request`` validates
-    and decodes it immediately before creating the wire request, which lets callers distinguish an
-    omitted body from an explicit JSON ``null``.
-    """
+class EndpointTarget:
+    """Shared HTTP target settings for single invocations and load tests."""
 
     path: str
     app: str | None = None
     url: str | None = None
     method: str = "POST"
     query: tuple[str, ...] = ()
-    json_value: str | None = None
     sse: bool = False
     routing_key: str | None = None
     timeout: float = 300.0
     auth: bool | None = None
+
+
+@dataclass(frozen=True)
+class InvokeRequest(EndpointTarget):
+    """One invocation; body text distinguishes an omitted body from JSON ``null``."""
+
+    json_value: str | None = None
 
 
 @dataclass(frozen=True)
@@ -50,8 +58,8 @@ class ResolvedEndpoint:
     is_app: bool
 
 
-class InvokeService:
-    """Resolve, authenticate, send, and validate one endpoint invocation.
+class EndpointService:
+    """Resolve and authenticate HTTP targets, then invoke or load test them.
 
     The service owns command policy and returns the raw response facts.  Click and output
     formatting stay in the CLI/presentation layer.  Each collaborator is an object so callers can
@@ -69,22 +77,23 @@ class InvokeService:
         self._authenticator = authenticator
         self._transport = transport
 
-    def prepare(self, request: InvokeRequest) -> EndpointRequest:
-        """Resolve and authenticate a request for invocation or load testing."""
-        endpoint = self._resolve_endpoint(request.app, request.url)
-        authenticate = endpoint.is_app if request.auth is None else request.auth
-        routing_key = request.routing_key or (str(uuid4()) if endpoint.is_app else None)
-        wire_request = build_request(
-            base_url=endpoint.url,
-            method=request.method,
-            path=request.path,
-            query=request.query,
-            json_value=request.json_value,
-            timeout=request.timeout,
-            sse=request.sse,
-        )
+    def _prepare(self, target: EndpointTarget, json_value: str | None = None) -> EndpointRequest:
+        # Validate local request inputs before an Apps lookup or OAuth interaction.
+        wire_request = self._local_request(target, json_value)
+        endpoint = self._resolve_endpoint(target.app, target.url)
+        authenticate = endpoint.is_app if target.auth is None else target.auth
+        routing_key = target.routing_key or (str(uuid4()) if endpoint.is_app else None)
         return replace(
             wire_request,
+            url=build_request(
+                base_url=endpoint.url,
+                method=target.method,
+                path=target.path,
+                query=target.query,
+                json_value=None,
+                timeout=target.timeout,
+                sse=target.sse,
+            ).url,
             headers={
                 **wire_request.headers,
                 **self._platform_headers(authenticate=authenticate, routing_key=routing_key),
@@ -98,7 +107,9 @@ class InvokeService:
         on_event: Callable[[dict[str, Any]], None] | None = None,
     ) -> EndpointResponse:
         """Execute an invocation and raise ``AgentCliError`` for transport/status failures."""
-        response = self._transport.send(self.prepare(request), on_event=on_event)
+        response = self._transport.send(
+            self._prepare(request, request.json_value), on_event=on_event
+        )
         if not 200 <= response.status_code < 300:
             raise AgentCliError(
                 f"Endpoint returned HTTP {response.status_code}.",
@@ -108,9 +119,46 @@ class InvokeService:
             )
         return response
 
-    def _resolve_endpoint(self, app: str | None, url: str | None) -> ResolvedEndpoint:
-        if app and url:
+    def loadtest(self, plan: LoadTestPlan) -> LoadtestResult:
+        """Validate the local plan before resolving and authenticating its target."""
+        self._local_request(plan.target)
+        plan.validate()
+        ensure_locust()
+        request = self._prepare(plan.target)
+        if plan.bodies is not None:
+            request = replace(
+                request,
+                body_set=True,
+                headers={**request.headers, "Content-Type": "application/json"},
+            )
+        return run_loadtest(
+            request,
+            plan=plan,
+            per_user_routing=bool(plan.target.app and not plan.target.routing_key),
+        )
+
+    @staticmethod
+    def _local_request(target: EndpointTarget, json_value: str | None = None) -> EndpointRequest:
+        if not math.isfinite(target.timeout) or target.timeout <= 0:
+            raise AgentCliError("--timeout must be a finite positive number.")
+        if target.app and target.url:
             raise AgentCliError("APP and --url are mutually exclusive.")
+        if not target.app and not target.url:
+            raise AgentCliError(
+                "Provide a Databricks App name or --url.",
+                hint="Use --url http://localhost:8000 when running the agent locally.",
+            )
+        return build_request(
+            base_url=target.url or "https://endpoint.invalid",
+            method=target.method,
+            path=target.path,
+            query=target.query,
+            json_value=json_value,
+            timeout=target.timeout,
+            sse=target.sse,
+        )
+
+    def _resolve_endpoint(self, app: str | None, url: str | None) -> ResolvedEndpoint:
         if url:
             return ResolvedEndpoint(url=url.rstrip("/"), is_app=False)
         if not app:
@@ -139,7 +187,8 @@ class InvokeService:
 
 
 __all__ = [
+    "EndpointTarget",
     "InvokeRequest",
-    "InvokeService",
+    "EndpointService",
     "ResolvedEndpoint",
 ]

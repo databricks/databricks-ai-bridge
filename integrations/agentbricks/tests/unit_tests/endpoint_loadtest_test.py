@@ -1,11 +1,14 @@
+"""Contracts for endpoint load-test plans, orchestration, and private response export."""
+
 from __future__ import annotations
 
 import json
 import signal
 import sys
 import uuid
-from dataclasses import asdict
+from dataclasses import FrozenInstanceError
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, Mock
 
 import pytest
@@ -14,13 +17,11 @@ from click.testing import CliRunner
 from databricks_agentbricks.cli import endpoint as endpoint_mod
 from databricks_agentbricks.cli.endpoint import endpoint
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.services.invoke import loadtest as loadtest_mod
-from databricks_agentbricks.services.invoke.loadtest_streaming import (
-    StreamError,
-    StreamMetrics,
-    output_tokens,
-)
+from databricks_agentbricks.services import endpoint_service as service_mod
+from databricks_agentbricks.services.endpoint_service import EndpointService, EndpointTarget
 from databricks_agentbricks.services.invoke.transport import EndpointRequest, EndpointResponse
+from databricks_agentbricks.services.loadtest import runner as loadtest_mod
+from databricks_agentbricks.services.loadtest.plan import LoadTestPlan
 
 
 class _Ctx:
@@ -28,288 +29,104 @@ class _Ctx:
     output = "json"
 
 
-def _capture_loadtest(monkeypatch):
+def _service():
+    apps, auth, transport = Mock(), Mock(), Mock()
+    apps.get_app_url.return_value = "https://app.example"
+    auth.authorization_header.return_value = "Bearer test-token"
+    return EndpointService(apps_client=apps, authenticator=auth, transport=transport), apps, auth
+
+
+def _plan(**changes: Any) -> LoadTestPlan:
+    values: dict[str, Any] = {"target": EndpointTarget(url="http://localhost:8000", path="/run")}
+    values.update(changes)
+    return LoadTestPlan(**values)
+
+
+def _request():
+    return EndpointRequest(
+        url="https://app.example/run",
+        method="POST",
+        headers={"Authorization": "Bearer test-token"},
+        body=None,
+        timeout=12.5,
+    )
+
+
+def _process(monkeypatch, *, returncode=0, summary=None, observations=()):
     captured = {}
+    process = MagicMock(returncode=returncode, pid=123)
+    process.__enter__.return_value = process
 
-    def run(request, **kwargs):
-        captured.update(request=request, **kwargs)
-        return loadtest_mod.LoadtestResult(0, {})
+    def communicate(input=None):
+        if input is not None:
+            config = captured["config"] = json.loads(input)
+            if summary is not None:
+                Path(config["summary_file"]).write_text(json.dumps(summary))
+            if config["observations_file"] is not None:
+                destination = Path(config["observations_file"])
+                captured["capture_mode"] = destination.stat().st_mode & 0o777
+                with destination.open("a") as stream:
+                    for observation in observations:
+                        stream.write(json.dumps(observation) + "\n")
+        return None, None
 
-    monkeypatch.setattr(endpoint_mod, "run_loadtest", run)
-    return captured
+    process.communicate.side_effect = communicate
+
+    def popen(command, **kwargs):
+        captured.update(command=command, **kwargs)
+        return process
+
+    monkeypatch.setattr(loadtest_mod.subprocess, "Popen", popen)
+    return process, captured
+
+
+def _capture_cli(monkeypatch, *, summary=None, returncode=0):
+    service = Mock()
+    service.loadtest.return_value = loadtest_mod.LoadtestResult(returncode, summary or {})
+    monkeypatch.setattr(endpoint_mod, "build_endpoint_service", lambda obj: service)
+    monkeypatch.setattr(endpoint_mod, "render_loadtest_summary", Mock())
+    return service
 
 
 @pytest.mark.parametrize("routing_key", [None, "chosen-session"])
-def test_loadtest_reuses_app_auth_and_request_with_per_user_routing(monkeypatch, routing_key):
-    captured = _capture_loadtest(monkeypatch)
-    apps = Mock()
-    apps.get_app_url.return_value = "https://app.example"
-    authenticator = Mock()
-    authenticator.authorization_header.return_value = "Bearer test-token"
-    transport = Mock()
-    transport.send.side_effect = AssertionError("CLI must delegate preflight and load to runner")
-    monkeypatch.setattr(endpoint_mod, "AppsClient", lambda profile: apps)
-    monkeypatch.setattr(endpoint_mod, "WorkspaceOAuthAuthenticator", lambda profile: authenticator)
-    monkeypatch.setattr(endpoint_mod, "HttpSession", lambda: transport)
-    args = (
-        "loadtest my-agent --path /events --method PATCH --query mode=fast "
-        "--json null --timeout 12.5 --sse"
-    ).split()
-    if routing_key:
-        args.extend(["--routing-key", routing_key])
-
-    result = CliRunner().invoke(endpoint, args, obj=_Ctx())
-
-    assert result.exit_code == 0, result.output
+def test_loadtest_resolves_shared_target_auth_and_one_body_source(monkeypatch, routing_key):
+    service, apps, auth = _service()
+    monkeypatch.setattr(loadtest_mod, "find_spec", lambda name: object())
+    run = Mock(return_value=loadtest_mod.LoadtestResult(0, {}))
+    monkeypatch.setattr(service_mod, "run_loadtest", run)
+    target = EndpointTarget(
+        app="my-agent",
+        path="/events",
+        method="PATCH",
+        query=("mode=fast",),
+        timeout=12.5,
+        sse=True,
+        routing_key=routing_key,
+    )
+    plan = _plan(target=target, bodies=("null", '{"prompt":"second"}'))
+    service.loadtest(plan)
     apps.get_app_url.assert_called_once_with("agent-bricks-my-agent")
-    request = captured.pop("request")
+    auth.authorization_header.assert_called_once_with()
+    request = run.call_args.args[0]
     assert request.url == "https://app.example/events?mode=fast"
-    assert request.method == "PATCH"
-    assert request.headers["Authorization"] == "Bearer test-token"
+    assert request.method == "PATCH" and request.timeout == 12.5 and request.sse is True
+    assert request.body is None and request.body_set is True
     assert request.headers["Content-Type"] == "application/json"
-    assert request.body is None
-    assert request.body_set is True
-    assert request.sse is True
-    assert request.timeout == 12.5
+    assert request.headers["Authorization"] == "Bearer test-token"
     if routing_key:
         assert request.headers["X-Routing-Key"] == routing_key
     else:
         assert uuid.UUID(request.headers["X-Routing-Key"])
-    assert captured == {
-        "concurrency": 1,
-        "duration": 60,
-        "output": "json",
-        "per_user_routing": not routing_key,
-        "max_requests": None,
-        "cases": None,
-        "report_dir": None,
-        "follow_events": False,
-        "responses_file": None,
-        "sample_requests": 20,
-    }
+    assert run.call_args.kwargs == {"plan": plan, "per_user_routing": routing_key is None}
 
 
-def test_invoke_sends_one_request_without_running_locust(monkeypatch):
-    service = Mock()
-    service.invoke.return_value = EndpointResponse(
-        url="http://localhost:8000/run",
-        status_code=200,
-        headers={},
-        body={"output": "answer"},
-        elapsed_seconds=0.1,
-    )
-    monkeypatch.setattr(endpoint_mod, "build_invoke_service", lambda obj: service)
-    monkeypatch.setattr(
-        endpoint_mod, "run_loadtest", lambda *a, **k: pytest.fail("Must not run Locust")
-    )
-    result = CliRunner().invoke(
-        endpoint,
-        [
-            "invoke",
-            "--url",
-            "http://localhost:8000",
-            "--path",
-            "/run",
-            "--json",
-            '{"input":"hello"}',
-        ],
-        obj=_Ctx(),
-    )
-    assert result.exit_code == 0, result.output
-    service.invoke.assert_called_once()
-    service.prepare.assert_not_called()
-    request = service.invoke.call_args.args[0]
-    assert request.json_value == '{"input":"hello"}'
-    assert request.method == "POST"
-    assert json.loads(result.output)["body"] == {"output": "answer"}
-
-
-def test_loadtest_url_uses_requested_settings_without_app_routing(monkeypatch):
-    captured = _capture_loadtest(monkeypatch)
-    context = _Ctx()
-    context.output = "text"
-    result = CliRunner().invoke(
-        endpoint,
-        (
-            "loadtest --url http://localhost:8000 --path /health --method GET "
-            "--concurrency 4 --duration 3 --max-requests 9"
-        ).split(),
-        obj=context,
-    )
-
-    assert result.exit_code == 0, result.output
-    request = captured.pop("request")
-    assert request.url == "http://localhost:8000/health"
-    assert request.headers == {}
-    assert request.body_set is False
-    assert captured == {
-        "concurrency": 4,
-        "duration": 3,
-        "output": "text",
-        "per_user_routing": False,
-        "max_requests": 9,
-        "cases": None,
-        "report_dir": None,
-        "follow_events": False,
-        "responses_file": None,
-        "sample_requests": 20,
-    }
-
-
-@pytest.mark.parametrize(
-    "option,value",
-    [
-        ("--concurrency", "2"),
-        ("--duration", "2"),
-        ("--max-requests", "2"),
-        ("--requests", "requests.json"),
-        ("--report-dir", "reports"),
-        ("--save-responses", "responses.json"),
-        ("--sample-requests", "5"),
-    ],
-)
-def test_load_options_are_not_accepted_by_invoke(monkeypatch, option, value):
-    monkeypatch.setattr(
-        endpoint_mod,
-        "build_invoke_service",
-        lambda *args: pytest.fail("Must reject before resolving"),
-    )
-    result = CliRunner().invoke(endpoint, ["invoke", "--path", "/run", option, value], obj=_Ctx())
-    assert result.exit_code == 2
-    assert "No such option" in result.output
-
-
-@pytest.mark.parametrize("command", ["invoke", "loadtest"])
-@pytest.mark.parametrize(
-    "option",
-    [
-        "--loadtest",
-        "--cases",
-        "--experiment-id",
-        "--scorer",
-        "--traces",
-        "--mlflow-max-requests",
-        "--expectations",
-        "--warehouse",
-    ],
-)
-def test_endpoint_commands_do_not_accept_removed_options(command, option):
-    result = CliRunner().invoke(endpoint, [command, "--path", "/run", option], obj=_Ctx())
-    assert result.exit_code == 2
-    assert "No such option" in result.output
-
-
-def test_sample_limit_requires_response_export_before_resolving_endpoint(monkeypatch):
-    monkeypatch.setattr(
-        endpoint_mod,
-        "build_invoke_service",
-        lambda *args: pytest.fail("Must reject before resolving"),
-    )
-    result = CliRunner().invoke(
-        endpoint, ["loadtest", "--path", "/run", "--sample-requests", "20"], obj=_Ctx()
-    )
-    assert result.exit_code != 0
-    assert "--sample-requests requires --save-responses" in result.output
-
-
-def test_response_export_and_explicit_sampling_limit_are_forwarded(monkeypatch, tmp_path):
-    captured = _capture_loadtest(monkeypatch)
-    responses = tmp_path / "responses.json"
-    result = CliRunner().invoke(
-        endpoint,
-        [
-            "loadtest",
-            "--url",
-            "http://localhost:8000",
-            "--path",
-            "/run",
-            "--save-responses",
-            str(responses),
-            "--sample-requests",
-            "3",
-            "--follow-events",
-        ],
-        obj=_Ctx(),
-    )
-    assert result.exit_code == 0, result.output
-    assert captured["responses_file"] == responses
-    assert captured["sample_requests"] == 3
-    assert captured["follow_events"] is True
-
-
-def test_loadtest_help_explains_stop_conditions_journey_protocol_and_report_artifacts():
-    result = CliRunner().invoke(endpoint, ["loadtest", "--help"])
-    assert result.exit_code == 0
-    help_text = " ".join(result.output.split())
-    assert "whichever comes first" in help_text
-    assert "drain in-flight requests" in help_text
-    assert "all HTML, CSV, and JSON reports together" in help_text
-    assert "202 response containing the same id, events_url, and status_url" in help_text
-    assert "DurableAgentServer or a compatible custom implementation" in help_text
-
-
-@pytest.mark.parametrize(
-    "option", ["--concurrency", "--duration", "--max-requests", "--sample-requests"]
-)
-@pytest.mark.parametrize("value", ["0", "-1"])
-def test_load_settings_must_be_positive(option, value):
-    result = CliRunner().invoke(
-        endpoint,
-        ["loadtest", "--path", "/run", option, value],
-        obj=_Ctx(),
-    )
-
-    assert result.exit_code == 2
-    assert option in result.output
-    assert "range" in result.output
-
-
-@pytest.mark.parametrize("contents", ["not json", "{}", "[]"])
-def test_invalid_cases_rejected_before_endpoint_resolution(monkeypatch, tmp_path, contents):
-    cases = tmp_path / "cases.json"
-    cases.write_text(contents)
-    monkeypatch.setattr(
-        endpoint_mod,
-        "build_invoke_service",
-        lambda *args: pytest.fail("Must reject before resolving"),
-    )
-
-    result = CliRunner().invoke(
-        endpoint,
-        ["loadtest", "--path", "/run", "--requests", str(cases)],
-        obj=_Ctx(),
-    )
-
-    assert result.exit_code != 0
-    assert "--requests" in result.output
-
-
-def test_cases_and_json_are_mutually_exclusive(monkeypatch, tmp_path):
-    cases = tmp_path / "cases.json"
-    cases.write_text('[{"prompt": "from file"}]')
-    monkeypatch.setattr(
-        endpoint_mod,
-        "build_invoke_service",
-        lambda *args: pytest.fail("Must reject before resolving"),
-    )
-
-    result = CliRunner().invoke(
-        endpoint,
-        ["loadtest", "--path", "/run", "--requests", str(cases), "--json", "null"],
-        obj=_Ctx(),
-    )
-
-    assert result.exit_code != 0
-    assert "--requests" in result.output and "--json" in result.output
-
-
-def test_cases_and_report_location_are_forwarded(monkeypatch, tmp_path):
-    captured = _capture_loadtest(monkeypatch)
-    cases = tmp_path / "cases.json"
-    payloads = [{"prompt": "first", "id": "{{uuid}}"}, None]
-    cases.write_text(json.dumps(payloads))
-    report_dir = tmp_path / "report"
-
+def test_cli_passes_immutable_plan_and_emits_only_summary(monkeypatch, tmp_path):
+    summary = {"schema_version": 1, "counts": {"succeeded": 5}}
+    service = _capture_cli(monkeypatch, summary=summary)
+    render = Mock()
+    monkeypatch.setattr(endpoint_mod, "render_loadtest_summary", render)
+    requests = tmp_path / "requests.json"
+    requests.write_text('[null,{"input":"hello"}]')
     result = CliRunner().invoke(
         endpoint,
         [
@@ -319,106 +136,164 @@ def test_cases_and_report_location_are_forwarded(monkeypatch, tmp_path):
             "--path",
             "/run",
             "--requests",
-            str(cases),
-            "--report-dir",
-            str(report_dir),
+            str(requests),
+            "--concurrency",
+            "4",
+            "--duration",
+            "3",
+            "--max-requests",
+            "5",
+            "--no-warmup",
+            "--save-responses",
+            str(tmp_path / "responses.json"),
         ],
         obj=_Ctx(),
     )
-
     assert result.exit_code == 0, result.output
-    assert captured["cases"] == payloads
-    assert Path(captured["report_dir"]) == report_dir
-    # Explicit JSON null is a body; cases may contain arbitrary JSON payloads.
-    assert captured["request"].body_set
+    assert json.loads(result.stdout) == summary
+    render.assert_called_once_with(summary, report_dir=None, output="json")
+    plan = service.loadtest.call_args.args[0]
+    assert plan.bodies == ("null", '{"input": "hello"}')
+    assert plan.concurrency == 4 and plan.duration == 3 and plan.max_requests == 5
+    assert plan.warmup is False and plan.responses_file == tmp_path / "responses.json"
+    with pytest.raises(FrozenInstanceError):
+        plan.duration = 100
 
 
-def _request(**changes) -> EndpointRequest:
-    values = {
-        "url": "https://app.example/events?mode=fast",
-        "method": "POST",
-        "headers": {"Authorization": "Bearer test-token", "Content-Type": "application/json"},
-        "body": None,
-        "timeout": 12.5,
-        "sse": True,
-        "body_set": True,
-    }
-    return EndpointRequest(**(values | changes))
+def test_omitted_requests_is_bodyless_and_warmup_defaults_on(monkeypatch):
+    service = _capture_cli(monkeypatch)
+    result = CliRunner().invoke(
+        endpoint,
+        ["loadtest", "--url", "http://localhost:8000", "--path", "/health", "--method", "GET"],
+        obj=_Ctx(),
+    )
+    assert result.exit_code == 0, result.output
+    plan = service.loadtest.call_args.args[0]
+    assert plan.bodies is None and plan.warmup is True
 
 
-def _preflight(monkeypatch, *, status=200, error=None, events=()):
-    transport = Mock()
-    transport.send.return_value = EndpointResponse(
-        url="https://app.example/events?mode=fast",
-        status_code=status,
+def test_invoke_keeps_single_json_body_without_load(monkeypatch):
+    service = _capture_cli(monkeypatch)
+    service.invoke.return_value = EndpointResponse(
+        url="http://localhost:8000/run",
+        status_code=200,
         headers={},
-        body={},
+        body={"output": "answer"},
         elapsed_seconds=0.1,
-        events=events,
     )
-    if error is not None:
-        transport.send.side_effect = error
-    monkeypatch.setattr(loadtest_mod, "HttpSession", lambda **kwargs: transport)
-    return transport
+    result = CliRunner().invoke(
+        endpoint,
+        ["invoke", "--url", "http://localhost:8000", "--path", "/run", "--json", "null"],
+        obj=_Ctx(),
+    )
+    assert result.exit_code == 0, result.output
+    assert service.invoke.call_args.args[0].json_value == "null"
+    service.loadtest.assert_not_called()
 
 
-def _process(monkeypatch, *, returncode=0, summary=None, observations=None):
-    captured = {}
-    process = MagicMock(returncode=returncode, pid=123)
-    process.__enter__.return_value = process
-
-    def communicate(input=None):
-        if input is not None:
-            captured["config"] = json.loads(input)
-            if summary is not None:
-                Path(captured["config"]["summary_file"]).write_text(json.dumps(summary))
-            if observations is not None:
-                Path(captured["config"]["observations_file"]).write_text(json.dumps(observations))
-        return None, None
-
-    process.communicate.side_effect = communicate
-
-    def popen(command, **kwargs):
-        captured.update(command=command, **kwargs)
-        return process
-
-    monkeypatch.setattr(loadtest_mod, "find_spec", lambda name: object())
-    monkeypatch.setattr(loadtest_mod.subprocess, "Popen", popen)
-    return process, captured
+@pytest.mark.parametrize(
+    "option", ["--json", "--follow-events", "--sample-requests", "--cases", "--scorer", "--traces"]
+)
+def test_loadtest_rejects_removed_or_invoke_only_options(option):
+    result = CliRunner().invoke(endpoint, ["loadtest", "--path", "/run", option], obj=_Ctx())
+    assert result.exit_code == 2 and "No such option" in result.output
 
 
-def test_missing_locust_gives_install_hint_without_starting_a_process(monkeypatch):
-    monkeypatch.setattr(loadtest_mod, "find_spec", lambda name: None)
+@pytest.mark.parametrize(
+    "option,value",
+    [
+        ("--concurrency", "2"),
+        ("--requests", "requests.json"),
+        ("--save-responses", "responses.json"),
+        ("--no-warmup", None),
+    ],
+)
+def test_load_options_are_not_accepted_by_invoke(option, value):
+    args = ["invoke", "--path", "/run", option] + ([value] if value else [])
+    result = CliRunner().invoke(endpoint, args, obj=_Ctx())
+    assert result.exit_code == 2 and "No such option" in result.output
+
+
+@pytest.mark.parametrize("option", ["--concurrency", "--duration", "--max-requests"])
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_load_settings_must_be_positive(option, value):
+    result = CliRunner().invoke(endpoint, ["loadtest", "--path", "/run", option, value], obj=_Ctx())
+    assert result.exit_code == 2 and "range" in result.output
+
+
+@pytest.mark.parametrize("contents", ["not json", "{}", "[]"])
+def test_invalid_requests_rejected_before_workspace_collaborators(monkeypatch, tmp_path, contents):
+    requests = tmp_path / "requests.json"
+    requests.write_text(contents)
     monkeypatch.setattr(
-        loadtest_mod.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("Must not spawn")
+        endpoint_mod, "build_endpoint_service", lambda *args: pytest.fail("Must not resolve")
     )
+    result = CliRunner().invoke(
+        endpoint, ["loadtest", "--path", "/run", "--requests", str(requests)], obj=_Ctx()
+    )
+    assert result.exit_code != 0 and "--requests" in result.output
 
-    with pytest.raises(AgentCliError) as exc:
-        loadtest_mod.run_loadtest(
-            _request(), concurrency=1, duration=60, output="text", per_user_routing=False
+
+def test_missing_locust_fails_before_app_lookup_or_oauth(monkeypatch):
+    service, apps, auth = _service()
+    monkeypatch.setattr(loadtest_mod, "find_spec", lambda name: None)
+    with pytest.raises(AgentCliError) as error:
+        service.loadtest(_plan(target=EndpointTarget(app="demo", path="/run")))
+    assert "databricks-agentbricks[loadtest]" in (error.value.hint or "")
+    apps.get_app_url.assert_not_called()
+    auth.authorization_header.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        EndpointTarget(app="demo", path="https://other.example/run"),
+        EndpointTarget(app="demo", path="/run", query=("invalid",)),
+        EndpointTarget(app="demo", path="/run", timeout=float("inf")),
+        EndpointTarget(app="demo", path="/run", timeout=float("nan")),
+    ],
+)
+def test_bad_target_fails_before_app_lookup_or_oauth(target):
+    service, apps, auth = _service()
+    with pytest.raises(AgentCliError):
+        service.loadtest(_plan(target=target))
+    apps.get_app_url.assert_not_called()
+    auth.authorization_header.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "failure", ["existing-response", "missing-parent", "inside-report", "nonempty-report"]
+)
+def test_bad_export_or_report_fails_before_app_lookup_or_oauth(tmp_path, failure):
+    service, apps, auth = _service()
+    report, responses = tmp_path / "report", tmp_path / "responses.json"
+    if failure == "existing-response":
+        responses.write_text("preserved")
+    elif failure == "missing-parent":
+        responses = tmp_path / "missing" / "responses.json"
+    elif failure == "inside-report":
+        responses = report / "responses.json"
+    else:
+        report.mkdir()
+        (report / "summary.json").write_text("preserved")
+    with pytest.raises(AgentCliError):
+        service.loadtest(
+            _plan(
+                target=EndpointTarget(app="demo", path="/run"),
+                report_dir=report,
+                responses_file=responses,
+            )
         )
+    apps.get_app_url.assert_not_called()
+    auth.authorization_header.assert_not_called()
 
-    assert "locust" in str(exc.value).lower()
-    assert "databricks-agentbricks[loadtest]" in (exc.value.hint or "")
 
-
-@pytest.mark.parametrize("output", ["text", "json"])
-def test_locust_receives_private_request_on_stdin_and_native_options(monkeypatch, output):
-    preflight = _preflight(monkeypatch)
-    _, captured = _process(monkeypatch, summary={"requests": 7})
-    request = _request()
-
-    result = loadtest_mod.run_loadtest(
-        request,
-        concurrency=4,
-        duration=3,
-        output=output,
-        per_user_routing=True,
-    )
-
+@pytest.mark.parametrize("warmup", [False, True])
+def test_locust_private_stdin_single_body_source_and_stderr_output(monkeypatch, warmup):
+    _, captured = _process(monkeypatch, summary={"counts": {"succeeded": 7}})
+    plan = _plan(concurrency=4, duration=3, bodies=("null",), warmup=warmup)
+    result = loadtest_mod.run_loadtest(_request(), plan=plan, per_user_routing=True)
     assert result.returncode == 0
-    assert result.summary["requests"] == 7
-    preflight.send.assert_called_once()
     command = captured["command"]
     assert command[:3] == [sys.executable, "-m", "locust"]
     assert Path(command[command.index("-f") + 1]).is_file()
@@ -429,260 +304,99 @@ def test_locust_receives_private_request_on_stdin_and_native_options(monkeypatch
         ("--stop-timeout", "13"),
     ):
         assert command[command.index(option) + 1] == expected
-    assert "--headless" in command
-    assert ("--json" in command) is (output == "json")
-    assert not any("test-token" in argument for argument in command)
-    assert captured["config"]["request"] == asdict(request)
-    assert captured["config"]["per_user_routing"] is True
-    assert captured["text"] is True
-    assert captured["stdin"] is loadtest_mod.subprocess.PIPE
-    assert captured["start_new_session"] is True
-    assert "stdout" not in captured and "stderr" not in captured
-
-
-@pytest.mark.parametrize(
-    "body,method", [({}, "POST"), ({"background": True, "stream": True}, "GET"), (None, "POST")]
-)
-def test_follow_events_rejects_invalid_invocation_bodies_before_traffic(monkeypatch, body, method):
-    monkeypatch.setattr(loadtest_mod, "find_spec", lambda name: object())
-    transport = _preflight(monkeypatch)
-    with pytest.raises(AgentCliError, match="background=true"):
-        loadtest_mod.run_loadtest(
-            _request(body=body, method=method),
-            concurrency=1,
-            duration=1,
-            output="text",
-            per_user_routing=False,
-            follow_events=True,
-        )
-    transport.send.assert_not_called()
+    assert "--json" not in command and "--headless" in command
+    assert "test-token" not in " ".join(command)
+    assert captured["stdout"] is sys.stderr and captured["stdin"] is loadtest_mod.subprocess.PIPE
+    config = captured["config"]
+    assert "body" not in config["request"] and config["bodies"] == ["null"]
+    assert config["warmup_requested"] is warmup and config["observations_file"] is None
+    assert "cases" not in config and "sample_requests" not in config
 
 
 @pytest.mark.parametrize("returncode,outcome", [(0, "completed"), (143, "cancelled")])
-def test_response_export_is_private_separate_and_preserved_after_draining(
-    monkeypatch, tmp_path, returncode, outcome
-):
-    _preflight(monkeypatch)
-    summary = {"counts": {"succeeded": 1}, "outcome": outcome}
+def test_exports_every_success_privately_after_drain(monkeypatch, tmp_path, returncode, outcome):
     observations = [
         {
-            "case_index": 0,
-            "inputs": {"input": "private-question"},
+            "case_index": i % 2,
+            "inputs": {"private-input": i},
             "outputs": "private-answer",
-            "trace_id": "tr-private-trace",
+            "trace_id": "tr-private",
         }
+        for i in range(45)
     ]
+    summary = {"counts": {"succeeded": 45}, "outcome": outcome}
     _, captured = _process(
         monkeypatch, returncode=returncode, summary=summary, observations=observations
     )
-    report = tmp_path / "report"
-    responses = tmp_path / "responses.json"
-    result = loadtest_mod.run_loadtest(
-        _request(),
-        concurrency=1,
-        duration=1,
-        output="text",
-        per_user_routing=False,
-        cases=[{"input": "private-question"}, {"input": "second-question"}],
-        report_dir=report,
-        responses_file=responses,
-        sample_requests=3,
-    )
+    report, responses = tmp_path / "report", tmp_path / "responses.json"
+    plan = _plan(bodies=("null", "{}"), report_dir=report, responses_file=responses)
+    plan.validate()
+    result = loadtest_mod.run_loadtest(_request(), plan=plan, per_user_routing=False)
     assert result.returncode == returncode
-    assert result.summary == summary
-    assert captured["config"]["sample_requests"] == 3
     assert json.loads(responses.read_text()) == {
         "schema_version": 1,
         "case_count": 2,
         "observations": observations,
     }
-    assert responses.stat().st_mode & 0o777 == 0o600
-    assert json.loads((report / "summary.json").read_text()) == summary
-    for private in ("private-question", "private-answer", "tr-private-trace", "test-token"):
-        assert private not in (report / "summary.json").read_text()
+    assert responses.stat().st_mode & 0o777 == 0o600 and captured["capture_mode"] == 0o600
     assert not Path(captured["config"]["observations_file"]).exists()
+    public = (report / "summary.json").read_text()
+    assert json.loads(public) == summary
+    assert all(
+        private not in public
+        for private in ("private-input", "private-answer", "tr-private", "test-token")
+    )
 
 
-def test_response_capture_is_disabled_without_export(monkeypatch):
-    _preflight(monkeypatch)
+def test_report_options_delegate_native_artifacts(monkeypatch, tmp_path):
     _, captured = _process(monkeypatch, summary={"outcome": "completed"})
-    result = loadtest_mod.run_loadtest(
-        _request(),
-        concurrency=1,
-        duration=1,
-        output="text",
-        per_user_routing=False,
-    )
-    assert result.returncode == 0
-    assert captured["config"]["sample_requests"] == 0
-
-
-@pytest.mark.parametrize("inside_report", [False, True])
-def test_response_export_rejects_overwrite_or_public_report_before_traffic(
-    monkeypatch, tmp_path, inside_report
-):
-    preflight = _preflight(monkeypatch)
-    _, captured = _process(monkeypatch)
     report = tmp_path / "report"
-    responses = (report if inside_report else tmp_path) / "responses.json"
-    if not inside_report:
-        responses.write_text("existing-private-data")
-    with pytest.raises(AgentCliError, match="--save-responses"):
-        loadtest_mod.run_loadtest(
-            _request(),
-            concurrency=1,
-            duration=1,
-            output="text",
-            per_user_routing=False,
-            report_dir=report,
-            responses_file=responses,
-        )
-    preflight.send.assert_not_called()
-    assert not captured
-    if not inside_report:
-        assert responses.read_text() == "existing-private-data"
-
-
-def test_report_options_save_summary_without_persisting_the_private_request(monkeypatch, tmp_path):
-    _preflight(monkeypatch)
-    summary = {"requests": 7, "outcome": "completed"}
-    _, captured = _process(monkeypatch, summary=summary)
-    report_dir = tmp_path / "report"
-
-    result = loadtest_mod.run_loadtest(
-        _request(),
-        concurrency=2,
-        duration=30,
-        output="text",
-        per_user_routing=False,
-        max_requests=7,
-        cases=[{"prompt": "private payload"}],
-        report_dir=report_dir,
-    )
-
+    plan = _plan(report_dir=report)
+    plan.validate()
+    loadtest_mod.run_loadtest(_request(), plan=plan, per_user_routing=False)
     command = captured["command"]
-    assert command[command.index("--html") + 1] == str(report_dir / "locust.html")
-    assert command[command.index("--csv") + 1] == str(report_dir / "locust")
+    assert command[command.index("--html") + 1] == str(report / "locust.html")
+    assert command[command.index("--csv") + 1] == str(report / "locust")
     assert "--csv-full-history" in command
-    assert captured["config"]["max_requests"] == 7
-    assert captured["config"]["cases"] == [{"prompt": "private payload"}]
-    assert result.summary == summary
-    assert json.loads((report_dir / "summary.json").read_text()) == summary
-    assert all("test-token" not in path.read_text() for path in report_dir.iterdir())
-    assert all("private payload" not in path.read_text() for path in report_dir.iterdir())
 
 
-@pytest.mark.parametrize("status", [302, 401, 404, 503])
-def test_failed_preflight_never_starts_load(monkeypatch, status):
-    _preflight(monkeypatch, status=status)
-    monkeypatch.setattr(loadtest_mod, "find_spec", lambda name: object())
-    monkeypatch.setattr(
-        loadtest_mod.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("Must not spawn")
+def test_warmup_error_is_actionable(monkeypatch):
+    _process(monkeypatch, returncode=1, summary={"warmup_error": "HTTP 401"})
+    with pytest.raises(AgentCliError, match="warm-up failed: HTTP 401.*No measured requests"):
+        loadtest_mod.run_loadtest(_request(), plan=_plan(), per_user_routing=False)
+
+
+def test_capture_failure_preserves_reports_and_captured_successes(monkeypatch, tmp_path):
+    _process(
+        monkeypatch,
+        returncode=1,
+        summary={"capture_error": "Response capture failed (OSError)"},
+        observations=[{"outputs": "answer"}],
     )
+    plan = _plan(report_dir=tmp_path / "report", responses_file=tmp_path / "responses.json")
+    plan.validate()
+    with pytest.raises(AgentCliError, match="Response capture failed"):
+        loadtest_mod.run_loadtest(_request(), plan=plan, per_user_routing=False)
+    assert plan.report_dir is not None and plan.responses_file is not None
+    assert (plan.report_dir / "summary.json").is_file()
+    assert json.loads(plan.responses_file.read_text())["observations"] == [{"outputs": "answer"}]
 
-    with pytest.raises(AgentCliError, match=str(status)):
-        loadtest_mod.run_loadtest(
-            _request(), concurrency=10, duration=60, output="text", per_user_routing=False
-        )
+
+def test_export_preserves_file_created_after_validation(monkeypatch, tmp_path):
+    _process(monkeypatch, summary={"outcome": "completed"})
+    responses = tmp_path / "responses.json"
+    plan = _plan(responses_file=responses)
+    plan.validate()
+    responses.write_text("preserved")
+    with pytest.raises(AgentCliError, match="Could not save responses"):
+        loadtest_mod.run_loadtest(_request(), plan=plan, per_user_routing=False)
+    assert responses.read_text() == "preserved"
 
 
-@pytest.mark.parametrize(
-    "data",
-    [
-        {"type": "run.failed", "error": {"message": "application failure"}},
-        {"type": "response.output_text.delta", "delta": "incomplete response"},
-        {"choices": [{"delta": {"content": "partial"}, "finish_reason": "length"}]},
-    ],
-)
-def test_failed_or_truncated_sse_preflight_never_starts_load(monkeypatch, data):
-    _preflight(monkeypatch, events=({"data": data},))
-    monkeypatch.setattr(loadtest_mod, "find_spec", lambda name: object())
-    monkeypatch.setattr(
-        loadtest_mod.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("Must not spawn")
+def test_interrupt_preserves_summary_and_export(monkeypatch, tmp_path):
+    process, _ = _process(
+        monkeypatch, summary={"counts": {"succeeded": 1}}, observations=[{"outputs": "answer"}]
     )
-
-    with pytest.raises(AgentCliError, match="preflight failed"):
-        loadtest_mod.run_loadtest(
-            _request(), concurrency=10, duration=60, output="text", per_user_routing=False
-        )
-
-
-def test_unreachable_preflight_never_starts_load(monkeypatch):
-    _preflight(monkeypatch, error=AgentCliError("Could not reach endpoint"))
-    monkeypatch.setattr(loadtest_mod, "find_spec", lambda name: object())
-    monkeypatch.setattr(
-        loadtest_mod.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("Must not spawn")
-    )
-
-    with pytest.raises(AgentCliError, match="Could not reach"):
-        loadtest_mod.run_loadtest(
-            _request(), concurrency=10, duration=60, output="text", per_user_routing=False
-        )
-
-
-def test_preflight_materializes_fresh_uuid_without_mutating_the_load_payload(monkeypatch):
-    preflight = _preflight(monkeypatch)
-    _, captured = _process(monkeypatch)
-    payload = {"id": "{{uuid}}", "nested": {"session_id": "{{uuid}}"}}
-    request = _request(body=payload)
-
-    loadtest_mod.run_loadtest(
-        request,
-        concurrency=1,
-        duration=1,
-        output="text",
-        per_user_routing=False,
-        cases=[payload, {"prompt": "second"}],
-    )
-
-    sent = preflight.send.call_args.args[0]
-    assert uuid.UUID(sent.body["id"])
-    assert sent.body["id"] == sent.body["nested"]["session_id"]
-    assert request.body == payload
-    assert captured["config"]["request"]["body"] == payload
-    assert captured["config"]["cases"] == [payload, {"prompt": "second"}]
-
-
-def test_report_directory_is_not_overwritten(monkeypatch, tmp_path):
-    directory = tmp_path / "existing"
-    directory.mkdir()
-    original = directory / "summary.json"
-    original.write_text("keep this")
-    _preflight(monkeypatch)
-    monkeypatch.setattr(loadtest_mod, "find_spec", lambda name: object())
-    monkeypatch.setattr(
-        loadtest_mod.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("Must not spawn")
-    )
-
-    with pytest.raises(AgentCliError):
-        loadtest_mod.run_loadtest(
-            _request(),
-            concurrency=1,
-            duration=1,
-            output="text",
-            per_user_routing=False,
-            report_dir=directory,
-        )
-
-    assert original.read_text() == "keep this"
-
-
-@pytest.mark.parametrize("returncode", [1, 2])
-def test_locust_failure_status_is_preserved(monkeypatch, returncode):
-    _preflight(monkeypatch)
-    _process(monkeypatch, returncode=returncode)
-
-    result = CliRunner().invoke(
-        endpoint,
-        "loadtest --url http://localhost:8000 --path /run".split(),
-        obj=_Ctx(),
-    )
-    assert result.exit_code == returncode
-
-
-def test_interrupt_forwards_signal_and_preserves_the_summary(monkeypatch):
-    _preflight(monkeypatch)
-    process, captured = _process(monkeypatch, summary={"requests": 2})
     communicate = process.communicate.side_effect
     interrupted = False
 
@@ -695,66 +409,74 @@ def test_interrupt_forwards_signal_and_preserves_the_summary(monkeypatch):
         return result
 
     process.communicate.side_effect = interrupt_once
-
+    responses = tmp_path / "responses.json"
     result = loadtest_mod.run_loadtest(
-        _request(), concurrency=1, duration=60, output="text", per_user_routing=False
+        _request(), plan=_plan(responses_file=responses), per_user_routing=False
     )
-
+    assert result.returncode == 130 and result.summary["outcome"] == "cancelled"
     process.send_signal.assert_called_once_with(signal.SIGINT)
-    assert process.communicate.call_count == 2
-    assert result.returncode == 130
-    assert result.summary["requests"] == 2
-    assert "test-token" not in " ".join(captured["command"])
+    assert json.loads(responses.read_text())["observations"] == [{"outputs": "answer"}]
 
 
-@pytest.mark.parametrize(
-    "event",
-    [
-        {"response": "hello"},
-        {"message": "hello"},
-        {"usage": {"output_tokens": True}},
-        {"usage": {"output_tokens": -1}},
-        {"usage": {"output_tokens": "3"}},
-    ],
-)
-def test_invalid_or_missing_token_usage_is_unknown(event):
-    assert output_tokens(event) is None
+def test_cli_preserves_runner_failure_status(monkeypatch):
+    _capture_cli(monkeypatch, returncode=2, summary={"outcome": "incomplete"})
+    result = CliRunner().invoke(
+        endpoint, ["loadtest", "--url", "http://localhost:8000", "--path", "/run"], obj=_Ctx()
+    )
+    assert result.exit_code == 2 and json.loads(result.stdout) == {"outcome": "incomplete"}
 
 
-def test_durable_sse_measures_first_answer_and_retains_explicit_usage():
-    metrics = StreamMetrics()
-    metrics.observe({"type": "run.started"}, elapsed_ms=5)
-    metrics.observe({"type": "delta", "content": ""}, elapsed_ms=20)
-    metrics.observe({"type": "delta", "content": "answer"}, elapsed_ms=75)
-    metrics.observe({"type": "delta", "content": "tail"}, elapsed_ms=90)
-    metrics.observe({"type": "message", "message": {"usage_metadata": {"output_tokens": 7}}})
-    metrics.observe({"type": "run.completed"})
-    metrics.finish()
-
-    assert metrics.ttft_ms == 75
-    assert metrics.output_tokens == 7
-
-
-def test_chat_sse_skips_role_metadata_and_preserves_zero_usage():
-    metrics = StreamMetrics()
-    metrics.observe({"choices": [{"delta": {"role": "assistant"}}]}, elapsed_ms=10)
-    metrics.observe({"choices": [{"delta": {"content": "answer"}}]}, elapsed_ms=80)
-    metrics.observe({"choices": [{"delta": {}, "finish_reason": "stop"}]}, elapsed_ms=200)
-    metrics.observe({"choices": [], "usage": {"completion_tokens": 0}})
-    metrics.finish()
-
-    assert metrics.ttft_ms == 80
-    assert metrics.output_tokens == 0
+def test_help_documents_loadtest_contract():
+    result = CliRunner().invoke(endpoint, ["loadtest", "--help"])
+    assert result.exit_code == 0
+    text = " ".join(result.output.split()).replace("- ", "-")
+    for contract in (
+        "whichever comes first",
+        "drain in-flight requests",
+        "all HTML, CSV, and JSON reports together",
+        "all successful inputs, outputs",
+        "excludes cold-start latency",
+        "--warmup / --no-warmup",
+    ):
+        assert contract in text
 
 
-def test_supported_sse_requires_completion_while_generic_sse_remains_unknown():
-    generic = StreamMetrics()
-    generic.observe({"text": "generic event"}, elapsed_ms=10)
-    generic.finish()
-    assert generic.ttft_ms is None
-    assert generic.output_tokens is None
+def test_capture_disk_failure_preserves_complete_records_before_partial_line(tmp_path):
+    source = tmp_path / "observations.jsonl"
+    source.write_text('{"outputs":"first answer"}\n{"outputs":"truncated')
+    destination = tmp_path / "responses.json"
+    loadtest_mod._save_responses(source, destination, 1, capture_failed=True)
+    assert json.loads(destination.read_text())["observations"] == [{"outputs": "first answer"}]
 
-    supported = StreamMetrics()
-    supported.observe({"type": "response.output_text.delta", "delta": "partial"}, elapsed_ms=50)
-    with pytest.raises(StreamError, match="Incomplete"):
-        supported.finish()
+
+def test_unexpected_corrupt_capture_is_reported_and_partial_export_removed(tmp_path):
+    source = tmp_path / "observations.jsonl"
+    source.write_text('{"outputs":"first answer"}\n{"outputs":"truncated')
+    destination = tmp_path / "responses.json"
+    with pytest.raises(AgentCliError, match="Could not save responses"):
+        loadtest_mod._save_responses(source, destination, 1)
+    assert not destination.exists()
+
+
+def test_sigterm_is_forwarded_and_returns_shell_cancellation_status(monkeypatch):
+    process, _ = _process(monkeypatch, returncode=-15, summary={"counts": {"succeeded": 1}})
+    handlers = {}
+
+    def signal_handler(signum, callback):
+        previous = handlers.get(signum)
+        handlers[signum] = callback
+        return previous
+
+    monkeypatch.setattr(loadtest_mod.signal, "signal", signal_handler)
+    communicate = process.communicate.side_effect
+
+    def terminate_during_load(input=None):
+        result = communicate(input)
+        handlers[signal.SIGTERM](signal.SIGTERM, None)
+        return result
+
+    process.communicate.side_effect = terminate_during_load
+    result = loadtest_mod.run_loadtest(_request(), plan=_plan(), per_user_routing=False)
+    assert result.returncode == 143
+    assert result.summary["outcome"] == "cancelled"
+    process.send_signal.assert_called_once_with(signal.SIGTERM)

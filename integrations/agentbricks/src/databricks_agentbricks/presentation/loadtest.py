@@ -1,4 +1,4 @@
-"""Human-readable load-test results without changing Locust's JSON stdout."""
+"""Human-readable overview of the Agent Bricks load-test summary."""
 
 from __future__ import annotations
 
@@ -40,8 +40,7 @@ def _rows(summary: dict) -> list[tuple[str, str]]:
     completed = counts["completed"]
     failure_rate = f"{counts['failed'] / completed:.2%}" if completed else "n/a"
     cases = workload["cases"]
-    if isinstance(cases, list):
-        cases = len(cases)
+    warmup = summary["workload"].get("warmup_requests", 0)
     rows = [
         ("Outcome", str(summary["outcome"])),
         (
@@ -50,9 +49,15 @@ def _rows(summary: dict) -> list[tuple[str, str]]:
             f"{workload['duration_seconds']}s requested, "
             f"{workload.get('max_requests') or 'unlimited'} requests, {cases} cases",
         ),
+        (
+            "Warm-up",
+            "1 real request excluded from counts and timings; cold-start latency excluded"
+            if warmup
+            else "Disabled; all requests measured, including any cold-start latency",
+        ),
         ("Observed peak in flight", str(summary.get("observed_peak_in_flight", "unknown"))),
         (
-            "Invocations" if workload.get("follow_events") else "Requests",
+            "Requests",
             f"{counts['started']} started, {completed} completed, "
             f"{counts['succeeded']} succeeded, {counts['failed']} failed "
             f"({failure_rate} of completed), {counts['incomplete']} incomplete",
@@ -78,15 +83,6 @@ def _rows(summary: dict) -> list[tuple[str, str]]:
             "successful responses)",
         ),
     ]
-    if workload.get("follow_events"):
-        rows.insert(
-            2,
-            (
-                "Invocation journey",
-                "POST submission → GET event stream → GET final status; one counted invocation. "
-                "Latency covers all three requests; answer-text TTFT starts at POST submission.",
-            ),
-        )
     return rows
 
 
@@ -100,23 +96,27 @@ def _table(rows: list[tuple[str, str]]) -> str:
     )
 
 
-def render_loadtest_summary(summary: dict, *, report_dir: Path | None = None) -> None:
-    """Print final metrics to stderr and optionally write an HTML report overview."""
+def render_loadtest_summary(
+    summary: dict, *, report_dir: Path | None = None, output: str = "text"
+) -> None:
+    """Write the HTML overview and print metrics when text output is selected."""
     if not summary:
         return
     rows = _rows(summary)
     errors = summary.get("errors", {})
-    click.echo("\nLoad test report", err=True)
-    for label, value in rows:
-        click.echo(f"  {label}: {value}", err=True)
-    if summary.get("generator_cpu_warning"):
-        click.echo(
-            "  Generator CPU exceeded Locust's limit; results may be generator-limited.", err=True
-        )
-    if errors:
-        click.echo("  Errors:", err=True)
-        for error, count in errors.items():
-            click.echo(f"    {count}: {error}", err=True)
+    if output == "text":
+        click.echo("\nLoad test report", err=True)
+        for label, value in rows:
+            click.echo(f"  {label}: {value}", err=True)
+        if summary.get("generator_cpu_warning"):
+            click.echo(
+                "  Generator CPU exceeded Locust's limit; results may be generator-limited.",
+                err=True,
+            )
+        if errors:
+            click.echo("  Errors:", err=True)
+            for error, count in errors.items():
+                click.echo(f"    {count}: {error}", err=True)
     if report_dir is None:
         return
 
@@ -142,8 +142,12 @@ def render_loadtest_summary(summary: dict, *, report_dir: Path | None = None) ->
         + _table(rows)
         + "<p>Latency measures the full response, including streaming completion. "
         "Throughput uses elapsed time including in-flight request drain. "
-        "One preflight request is excluded from counts and timings. "
-        "Locust histogram percentiles are rounded; all-completed timings include failures. "
+        + (
+            "The real warm-up request, including its cold-start latency, is excluded from counts and timings. "
+            if summary["workload"].get("warmup_requests", 0)
+            else "Warm-up is disabled; all requests are measured, including any cold-start latency. "
+        )
+        + "Locust histogram percentiles are rounded; all-completed timings include failures. "
         "Performance completion does not establish sustainable capacity or answer quality. "
         "Token totals include only usage reported by successful responses; "
         "unknown first-content times are not treated as zero.</p>"
@@ -154,4 +158,5 @@ def render_loadtest_summary(summary: dict, *, report_dir: Path | None = None) ->
         "<li><a href='summary.json'>Summary JSON</a></li></ul></html>",
         encoding="utf-8",
     )
-    click.echo(f"  Report: {report_dir / 'index.html'}", err=True)
+    if output == "text":
+        click.echo(f"  Report: {report_dir / 'index.html'}", err=True)

@@ -3,6 +3,7 @@
 import atexit
 import csv
 import json
+import logging
 import os
 import signal
 import sys
@@ -20,17 +21,33 @@ from locust.exception import StopUser
 from locust.html import get_html_report
 from locust.stats import PERCENTILES_TO_REPORT, RequestStats, StatsCSV, StatsEntry
 
-from databricks_agentbricks.services.invoke.loadtest_request import perform_request
-from databricks_agentbricks.services.invoke.loadtest_streaming import StreamError
+from databricks_agentbricks.services.loadtest.request import materialize_body, perform_request
+from databricks_agentbricks.services.loadtest.streaming import StreamError
 
 _CONFIG = json.load(sys.stdin)
 _REQUEST = _CONFIG["request"]
-_CASES = _CONFIG.get("cases")
-_BODIES = (
-    [json.dumps(case) for case in _CASES]
-    if _CASES is not None
-    else [json.dumps(_REQUEST["body"]) if _REQUEST["body_set"] else None]
-)
+_BODIES = _CONFIG["bodies"] if _CONFIG["bodies"] is not None else [None]
+_WARMUP_PERFORMED = False
+if _CONFIG.get("warmup_requested", False):
+    try:
+        with requests.Session() as warmup_session:
+            warmup_session.headers.update(_REQUEST["headers"])
+            warmup_user = str(uuid4())
+            if _CONFIG["per_user_routing"]:
+                warmup_session.headers["X-Routing-Key"] = warmup_user
+            with gevent.Timeout(_REQUEST["timeout"], TimeoutError("Request deadline exceeded")):
+                perform_request(
+                    warmup_session,
+                    _REQUEST,
+                    materialize_body(_BODIES[0], warmup_user),
+                    time.perf_counter(),
+                )
+        _WARMUP_PERFORMED = True
+    except Exception as error:
+        detail = str(error) if isinstance(error, StreamError) else type(error).__name__
+        Path(_CONFIG["summary_file"]).write_text(json.dumps({"warmup_error": detail}))
+        logging.error("Load test warm-up failed: %s", detail)
+        sys.exit(1)
 _STARTED = 0
 _COMPLETED = 0
 _PEAK = 0
@@ -43,7 +60,7 @@ _SUCCESSFUL = StatsEntry(RequestStats(), "successful latency", "METRIC")
 _TTFT = StatsEntry(RequestStats(), "answer-text TTFT", "METRIC")
 _USAGE_COUNT = 0
 _OUTPUT_TOKENS = 0
-_OBSERVATIONS = []
+_CAPTURE_ERROR = None
 
 
 @events.test_start.add_listener
@@ -65,17 +82,25 @@ def start(environment, **kwargs):
 
 @events.request.add_listener
 def record(response_time, exception, context, **kwargs):
-    global _COMPLETED, _USAGE_COUNT, _OUTPUT_TOKENS
+    global _COMPLETED, _USAGE_COUNT, _OUTPUT_TOKENS, _CAPTURE_ERROR
     observation = context.get("loadtest")
     if observation is None:
         return
-    observation["recorded"] = True
     _COMPLETED += 1
     if exception is not None:
         _ERRORS[observation.get("error") or type(exception).__name__] += 1
         return
-    if observation.get("sample") is not None:
-        _OBSERVATIONS.append(observation["sample"])
+    if observation.get("captured") is not None:
+        try:
+            # Append each completed success immediately; never retain the run's outputs in RAM.
+            descriptor = os.open(_CONFIG["observations_file"], os.O_WRONLY | os.O_APPEND)
+            with os.fdopen(descriptor, "a", encoding="utf-8") as stream:
+                stream.write(json.dumps(observation["captured"]) + "\n")
+        except OSError as error:
+            _CAPTURE_ERROR = f"Response capture failed ({type(error).__name__})"
+            environment = context["environment"]
+            environment.process_exit_code = 1
+            gevent.spawn(environment.runner.quit)
     _SUCCESSFUL.log(response_time, 0)
     if observation.get("ttft_ms") is not None:
         _TTFT.log(observation["ttft_ms"], 0)
@@ -115,8 +140,8 @@ def _save_final_csv(environment):
         content = StringIO(newline="")
         # Locust's writerow return annotation differs from stdlib csv.writer.
         write(csv.writer(content))  # ty: ignore[invalid-argument-type]
-        # Capture before native JSON output resets per-case stats; write after
-        # native handles close so their buffered snapshots cannot overwrite it.
+        # Save drained counts after native handles close so their buffered snapshots
+        # cannot overwrite the final CSV statistics.
         atexit.register(
             Path(environment.parsed_options.csv_prefix + suffix).write_text,
             content.getvalue(),
@@ -152,7 +177,7 @@ def finish(environment, **kwargs):
             "duration_seconds": _CONFIG["duration"],
             "max_requests": _CONFIG.get("max_requests"),
             "cases": len(_BODIES),
-            "follow_events": _CONFIG.get("follow_events", False),
+            "warmup_requests": int(_WARMUP_PERFORMED),
         },
         "outcome": outcome,
         "counts": {
@@ -185,13 +210,8 @@ def finish(environment, **kwargs):
         "errors": dict(_ERRORS),
         "generator_cpu_warning": environment.runner.cpu_warning_emitted,
     }
-    if _CONFIG.get("sample_requests", 0):
-        descriptor = os.open(
-            _CONFIG["observations_file"], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
-        )
-        os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(_OBSERVATIONS, stream)
+    if _CAPTURE_ERROR:
+        summary["capture_error"] = _CAPTURE_ERROR
     Path(_CONFIG["summary_file"]).write_text(json.dumps(summary, indent=2) + "\n")
     if environment.parsed_options.csv_prefix:
         _save_final_csv(environment)
@@ -211,8 +231,9 @@ class EndpointUser(HttpUser):
     def on_start(self):
         self._session = requests.Session()
         self._session.headers.update(_REQUEST["headers"])
+        self._user_id = str(uuid4())
         if _CONFIG["per_user_routing"]:
-            self._session.headers["X-Routing-Key"] = str(uuid4())
+            self._session.headers["X-Routing-Key"] = self._user_id
 
     def on_stop(self):
         self._session.close()
@@ -220,23 +241,23 @@ class EndpointUser(HttpUser):
     @task
     def invoke(self):
         global _STARTED, _ACTIVE, _PEAK
+        if _CAPTURE_ERROR:
+            raise StopUser()
         if _CONFIG.get("max_requests") is not None and _STARTED >= _CONFIG["max_requests"]:
             raise StopUser()
         # Assignment and admission happen before yielding to another user.
         case = _STARTED % len(_BODIES)
-        body = _BODIES[case]
-        body = body.replace("{{uuid}}", str(uuid4())) if body is not None else None
+        body = materialize_body(_BODIES[case], self._user_id)
         _STARTED += 1
         _ACTIVE += 1
         _PEAK = max(_PEAK, _ACTIVE)
-        # Reserve samples at admission, before yielding; failed samples are not replaced.
-        capture_output = _STARTED <= _CONFIG.get("sample_requests", 0)
+        capture_output = _CONFIG.get("observations_file") is not None
         observation = {}
         failure = None
         completed = False
         started = time.perf_counter()
         name = urlsplit(_REQUEST["url"]).path or "/"
-        if _CASES is not None:
+        if len(_BODIES) > 1:
             name += f" [case {case + 1}]"
         try:
             with gevent.Timeout(_REQUEST["timeout"], TimeoutError("Request deadline exceeded")):
@@ -245,14 +266,13 @@ class EndpointUser(HttpUser):
                     _REQUEST,
                     body,
                     started,
-                    follow_events=_CONFIG.get("follow_events", False),
                     capture_output=capture_output,
                 )
                 observation.update(
                     ttft_ms=measured.get("ttft_ms"), output_tokens=measured.get("output_tokens")
                 )
                 if capture_output:
-                    observation["sample"] = {
+                    observation["captured"] = {
                         "case_index": case,
                         "inputs": json.loads(body) if body is not None else None,
                         "outputs": measured.get("outputs"),
@@ -274,7 +294,7 @@ class EndpointUser(HttpUser):
                     response_time=(time.perf_counter() - started) * 1000,
                     response_length=0,
                     exception=failure,
-                    context={"loadtest": observation},
+                    context={"loadtest": observation, "environment": self.environment},
                 )
             _ACTIVE -= 1
             if (

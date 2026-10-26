@@ -36,7 +36,7 @@ def _assert_final_csv_counts(report_dir, summary, case_counts=None):
 
 @pytest.mark.parametrize("streaming", [False, True])
 def test_loadtest_caps_cases_and_saves_a_complete_report(tmp_path, streaming):
-    """Exercise the installed entrypoint, excluded preflight, drain, and saved statistics."""
+    """Exercise the installed entrypoint, excluded warm-up, drain, and saved statistics."""
     if find_spec("locust") is None:
         pytest.skip("requires databricks-agentbricks[loadtest]")
     agentbricks = Path(sys.executable).with_name("agentbricks")
@@ -89,11 +89,11 @@ def test_loadtest_caps_cases_and_saves_a_complete_report(tmp_path, streaming):
     cases.write_text(
         json.dumps(
             [
-                {"case": "ok", "id": "{{uuid}}", "session_id": "{{uuid}}"},
+                {"case": "ok", "id": "{{request_id}}", "session_id": "{{user_id}}"},
                 {
                     "case": "alternate" if streaming else "fail",
-                    "id": "{{uuid}}",
-                    "session_id": "{{uuid}}",
+                    "id": "{{request_id}}",
+                    "session_id": "{{user_id}}",
                 },
             ]
         )
@@ -121,7 +121,7 @@ def test_loadtest_caps_cases_and_saves_a_complete_report(tmp_path, streaming):
                 "--duration",
                 "20",
                 "--max-requests",
-                "8",
+                "48",
                 "--timeout",
                 "3",
                 "--requests",
@@ -130,8 +130,6 @@ def test_loadtest_caps_cases_and_saves_a_complete_report(tmp_path, streaming):
                 str(report_dir),
                 "--save-responses",
                 str(responses_file),
-                "--sample-requests",
-                "3",
             ]
             if streaming:
                 command.append("--sse")
@@ -159,42 +157,42 @@ def test_loadtest_caps_cases_and_saves_a_complete_report(tmp_path, streaming):
             worker.join(timeout=5)
 
     assert result.returncode == (0 if streaming else 1), result.stdout + result.stderr
-    assert "Load test report" in result.stderr
-    # Native JSON stdout remains parseable even though the friendly report is printed.
-    assert isinstance(json.loads(result.stdout), list)
+    # JSON stdout is the same complete, versioned summary saved in the report.
     summary = json.loads((report_dir / "summary.json").read_text())
+    assert json.loads(result.stdout) == summary
     assert summary["counts"] == {
-        "started": 8,
-        "completed": 8,
-        "succeeded": 8 if streaming else 4,
-        "failed": 0 if streaming else 4,
+        "started": 48,
+        "completed": 48,
+        "succeeded": 48 if streaming else 24,
+        "failed": 0 if streaming else 24,
         "incomplete": 0,
     }
-    assert len(seen) == 9  # One excluded preflight followed by exactly eight load requests.
+    assert len(seen) == 49  # One excluded warm-up followed by exactly forty-eight load requests.
     assert Counter(body["case"] for body in seen[1:]) == {
-        "ok": 4,
-        "alternate" if streaming else "fail": 4,
+        "ok": 24,
+        "alternate" if streaming else "fail": 24,
     }
-    _assert_final_csv_counts(report_dir, summary, {"/run [case 1]": 4, "/run [case 2]": 4})
+    _assert_final_csv_counts(report_dir, summary, {"/run [case 1]": 24, "/run [case 2]": 24})
     assert summary["observed_peak_in_flight"] == 3
     assert peak == 3
-    assert len({body["id"] for body in seen}) == 9
+    assert len({body["id"] for body in seen}) == 49
     for body in seen:
         assert uuid.UUID(body["id"])
-        assert body["id"] == body["session_id"]
-    assert summary["latency_ms"]["successful"]["count"] == (8 if streaming else 4)
+        assert uuid.UUID(body["session_id"])
+    assert 1 <= len({body["session_id"] for body in seen[1:]}) <= 3
+    assert summary["latency_ms"]["successful"]["count"] == (48 if streaming else 24)
     assert summary["latency_ms"]["all_completed"]["min"] >= 40
-    assert summary["usage"]["output_tokens"] == (32 if streaming else 16)
+    assert summary["usage"]["output_tokens"] == (192 if streaming else 96)
     assert summary["completed_rps"] > 0
     assert summary["elapsed_seconds_including_drain"] < 20
     if streaming:
-        assert summary["ttft_ms"]["count"] == 8
-        assert summary["ttft_coverage"]["measured"] == 8
+        assert summary["ttft_ms"]["count"] == 48
+        assert summary["ttft_coverage"]["measured"] == 48
         assert summary["ttft_ms"]["min"] >= 40
         assert summary["latency_ms"]["successful"]["min"] >= 190
         assert summary["latency_ms"]["successful"]["mean"] > summary["ttft_ms"]["mean"] + 100
     else:
-        assert sum(summary["errors"].values()) == 4
+        assert sum(summary["errors"].values()) == 24
     for artifact in ("index.html", "locust.html", "locust_stats.csv", "locust_stats_history.csv"):
         assert (report_dir / artifact).is_file(), artifact
 
@@ -202,7 +200,7 @@ def test_loadtest_caps_cases_and_saves_a_complete_report(tmp_path, streaming):
     assert responses["schema_version"] == 1
     assert responses["case_count"] == 2
     observations = responses["observations"]
-    assert len(observations) == (3 if streaming else 2)
+    assert len(observations) == (48 if streaming else 24)
     assert responses_file.stat().st_mode & 0o777 == 0o600
     assert {item["inputs"]["id"] for item in observations}.issubset(
         {body["id"] for body in seen[1:]}
@@ -225,6 +223,7 @@ def test_interrupt_stops_dispatch_and_reports_drained_requests(tmp_path, stop_si
         pytest.skip("requires the installed agentbricks CLI")
     loading = threading.Event()
     requests = 0
+    responses_file = tmp_path / "responses.json"
     lock = threading.Lock()
 
     class Endpoint(BaseHTTPRequestHandler):
@@ -236,7 +235,7 @@ def test_interrupt_stops_dispatch_and_reports_drained_requests(tmp_path, stop_si
             self.rfile.read(int(self.headers["Content-Length"]))
             with lock:
                 requests += 1
-                if requests == 4:  # Preflight plus three in-flight load requests.
+                if requests == 4:  # Warm-up plus three in-flight load requests.
                     loading.set()
             time.sleep(0.5)
             self.send_response(200)
@@ -259,8 +258,6 @@ def test_interrupt_stops_dispatch_and_reports_drained_requests(tmp_path, stop_si
                 f"http://127.0.0.1:{server.server_port}",
                 "--path",
                 "/run",
-                "--json",
-                "{}",
                 "--concurrency",
                 "3",
                 "--duration",
@@ -269,6 +266,8 @@ def test_interrupt_stops_dispatch_and_reports_drained_requests(tmp_path, stop_si
                 "3",
                 "--report-dir",
                 str(report_dir),
+                "--save-responses",
+                str(responses_file),
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -302,12 +301,14 @@ def test_interrupt_stops_dispatch_and_reports_drained_requests(tmp_path, stop_si
     assert counts["incomplete"] == counts["failed"] == 0
     assert requests == counts["started"] + 1
     _assert_final_csv_counts(report_dir, summary)
+    assert len(json.loads(responses_file.read_text())["observations"]) == counts["succeeded"]
+    assert responses_file.stat().st_mode & 0o777 == 0o600
     assert "cancelled" in stderr
     assert (report_dir / "index.html").is_file()
     assert (report_dir / "locust.html").is_file()
 
 
-def test_redirect_preflight_never_generates_load(tmp_path):
+def test_redirect_warmup_never_generates_load(tmp_path):
     if find_spec("locust") is None:
         pytest.skip("requires databricks-agentbricks[loadtest]")
     agentbricks = Path(sys.executable).with_name("agentbricks")
@@ -359,7 +360,7 @@ def test_redirect_preflight_never_generates_load(tmp_path):
             worker.join(timeout=5)
 
     assert result.returncode != 0
-    assert "preflight failed: HTTP 302" in result.stderr
+    assert "warm-up failed: HTTP 302" in result.stderr
     assert paths == ["/run"]
 
 
@@ -450,191 +451,19 @@ def test_natural_duration_drains_and_final_csv_matches_all_cases(tmp_path):
         {f"/run [case {case}]": count for case, count in case_counts.items()},
     )
     assert summary["latency_ms"]["all_completed"]["count"] == counts["completed"]
-    native = json.loads(result.stdout)
-    assert sum(row["num_requests"] for row in native) == counts["completed"]
-
-
-@pytest.mark.parametrize(
-    "failure", [None, "stream", "incomplete", "status", "id", "origin", "userinfo", "fragment"]
-)
-def test_follow_events_counts_one_complete_journey_and_rejects_failures(tmp_path, failure):
-    """The real CLI keeps routing and the original POST clock across all three requests."""
-    if find_spec("locust") is None:
-        pytest.skip("requires databricks-agentbricks[loadtest]")
-    agentbricks = Path(sys.executable).with_name("agentbricks")
-    if not agentbricks.is_file():
-        pytest.skip("requires the installed agentbricks CLI")
-    bodies, paths, routing = {}, {}, {}
-    lock = threading.Lock()
-
-    class Endpoint(BaseHTTPRequestHandler):
-        def log_message(self, format, *args):
-            pass
-
-        def _json(self, status, value):
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps(value).encode())
-
-        def do_POST(self):
-            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            identifier = body["id"]
-            with lock:
-                bodies[identifier] = body
-                paths[identifier] = ["POST"]
-                routing[identifier] = [self.headers.get("X-Routing-Key")]
-            time.sleep(0.06)
-            bad = body["case"] == "bad"
-            events = f"/api/invocations/{identifier}/events"
-            if bad and failure == "origin":
-                events = "https://example.invalid/events"
-            elif bad and failure == "userinfo":
-                events = f"http://intruder@127.0.0.1:{server.server_port}{events}"
-            elif bad and failure == "fragment":
-                events += "#fragment"
-            self._json(
-                202,
-                {
-                    "id": "mismatched" if bad and failure == "id" else identifier,
-                    "events_url": events,
-                    "status_url": f"/api/invocations/{identifier}",
-                },
-            )
-
-        def do_GET(self):
-            identifier = self.path.split("/")[3]
-            events = self.path.endswith("/events")
-            with lock:
-                body = bodies[identifier]
-                paths[identifier].append("events" if events else "status")
-                routing[identifier].append(self.headers.get("X-Routing-Key"))
-            bad = body["case"] == "bad"
-            if not events:
-                time.sleep(0.06)
-                self._json(
-                    200,
-                    {
-                        "id": identifier,
-                        "status": "running" if bad and failure == "status" else "completed",
-                        "output": {"text": "private-answer", "usage": {"output_tokens": 4}},
-                    },
-                )
-                return
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.end_headers()
-            self.wfile.write(b'data: {"type":"run.started"}\n\n')
-            self.wfile.flush()
-            time.sleep(0.06)
-            self.wfile.write(b'data: {"type":"delta","content":"private-answer"}\n\n')
-            self.wfile.flush()
-            time.sleep(0.09)
-            if not (bad and failure == "incomplete"):
-                terminal = "run.failed" if bad and failure == "stream" else "run.completed"
-                self.wfile.write(f'data: {{"type":"{terminal}"}}\n\n'.encode())
-
-    cases = tmp_path / "cases.json"
-    cases.write_text(
-        json.dumps(
-            [
-                {"id": "{{uuid}}", "case": "ok", "background": True, "stream": True},
-                {"id": "{{uuid}}", "case": "bad", "background": True, "stream": True},
-            ]
-        )
-    )
-    config = tmp_path / "empty.databrickscfg"
-    config.write_text("")
-    report_dir = tmp_path / "report"
-    with ThreadingHTTPServer(("127.0.0.1", 0), Endpoint) as server:
-        worker = threading.Thread(target=server.serve_forever, daemon=True)
-        worker.start()
-        try:
-            result = subprocess.run(
-                [
-                    str(agentbricks),
-                    "endpoint",
-                    "loadtest",
-                    "--url",
-                    f"http://127.0.0.1:{server.server_port}",
-                    "--path",
-                    "/api/invocations",
-                    "--routing-key",
-                    "local-test-route",
-                    "--follow-events",
-                    "--concurrency",
-                    "2",
-                    "--duration",
-                    "20",
-                    "--max-requests",
-                    "4",
-                    "--timeout",
-                    "3",
-                    "--requests",
-                    str(cases),
-                    "--report-dir",
-                    str(report_dir),
-                ],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                cwd=tmp_path,
-                env={
-                    "PATH": f"{agentbricks.parent}:/usr/bin:/bin",
-                    "HOME": str(tmp_path),
-                    "DATABRICKS_CONFIG_FILE": str(config),
-                    "AGENTBRICKS_DISABLE_TELEMETRY": "1",
-                },
-            )
-        finally:
-            server.shutdown()
-            worker.join(timeout=5)
-
-    assert result.returncode == (1 if failure else 0), result.stdout + result.stderr
-    summary_text = (report_dir / "summary.json").read_text()
-    summary = json.loads(summary_text)
-    assert summary["workload"]["follow_events"] is True
-    assert summary["counts"] == {
-        "started": 4,
-        "completed": 4,
-        "succeeded": 2 if failure else 4,
-        "failed": 2 if failure else 0,
-        "incomplete": 0,
-    }
-    assert len(bodies) == 5  # One excluded preflight, then four invocation journeys.
-    if failure:
-        error = {
-            "stream": "SSE response reported an error",
-            "incomplete": "Incomplete supported SSE response",
-            "status": "Invocation final state did not confirm successful completion",
-            "id": "Invocation response ID did not match the request",
-        }.get(failure, "Invocation follow-up URL must use the same origin")
-        assert summary["errors"] == {error: 2}
-    assert summary["ttft_ms"]["count"] == (2 if failure else 4)
-    assert summary["ttft_ms"]["min"] >= 100  # Includes POST acknowledgment, then stream delay.
-    assert summary["latency_ms"]["successful"]["mean"] > summary["ttft_ms"]["mean"] + 110
-    assert summary["usage"]["output_tokens"] == (8 if failure else 16)
-    _assert_final_csv_counts(report_dir, summary)
-    for identifier, body in bodies.items():
-        assert set(routing[identifier]) == {"local-test-route"}
-        if body["case"] == "bad" and failure in {"id", "origin", "userinfo", "fragment"}:
-            assert paths[identifier] == ["POST"]
-        elif body["case"] == "bad" and failure in {"stream", "incomplete"}:
-            assert paths[identifier] == ["POST", "events"]
-        else:
-            assert paths[identifier] == ["POST", "events", "status"]
-    assert "private-answer" not in summary_text
-    assert "private-answer" not in (report_dir / "index.html").read_text()
+    assert json.loads(result.stdout) == summary
+    assert summary["workload"]["warmup_requests"] == 1
 
 
 @pytest.mark.parametrize("streaming", [False, True])
-def test_worker_captures_only_reserved_successes_in_private_observation_file(tmp_path, streaming):
-    """Content is opt-in, first-N bounded, correlated from explicit IDs, and absent from reports."""
+def test_worker_captures_all_successes_in_private_observation_file(tmp_path, streaming):
+    """Capture exceeds twenty successes, writes incrementally, and keeps reports content-free."""
     if find_spec("locust") is None:
         pytest.skip("requires databricks-agentbricks[loadtest]")
-    from databricks_agentbricks.services.invoke import loadtest_streaming
+    from databricks_agentbricks.services.loadtest import streaming as loadtest_streaming
 
     seen = []
+    observed_incrementally = []
 
     class Endpoint(BaseHTTPRequestHandler):
         def log_message(self, format, *args):
@@ -643,7 +472,10 @@ def test_worker_captures_only_reserved_successes_in_private_observation_file(tmp
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             seen.append(body)
+            if observations_file.exists():
+                observed_incrementally.append(len(observations_file.read_text().splitlines()))
             assert self.headers.get("Authorization") == "Bearer private-token"
+            assert self.headers.get("X-Routing-Key") == body["user"]
             self.send_response(200 if body["case"] == "ok" else 503)
             self.send_header(
                 "Content-Type", "text/event-stream" if streaming else "application/json"
@@ -653,13 +485,16 @@ def test_worker_captures_only_reserved_successes_in_private_observation_file(tmp
             if not streaming:
                 self.wfile.write(b'{"output":"private-answer","trace_id":"tr-explicit-body-id"}')
                 return
-            self.wfile.write(b'data: {"type":"delta","content":"private-answer"}\n\n')
             self.wfile.write(
-                b'data: {"type":"run.completed","trace_id":"tr-explicit-stream-id"}\n\n'
+                b'data: {"type":"response.output_text.delta","delta":"private-answer"}\n\n'
+            )
+            self.wfile.write(
+                b'data: {"type":"response.completed","trace_id":"tr-explicit-stream-id"}\n\n'
             )
 
     summary_file = tmp_path / "summary.json"
-    observations_file = tmp_path / "observations.json"
+    observations_file = tmp_path / "observations.jsonl"
+    observations_file.touch(mode=0o600)
     with ThreadingHTTPServer(("127.0.0.1", 0), Endpoint) as server:
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
@@ -688,20 +523,32 @@ def test_worker_captures_only_reserved_successes_in_private_observation_file(tmp
                             "method": "POST",
                             "headers": {"Authorization": "Bearer private-token"},
                             "body_set": True,
-                            "body": {},
                             "timeout": 3,
                             "sse": True,
                         },
-                        "cases": [
-                            {"case": "ok", "id": "{{uuid}}", "input": "private-question"},
-                            {"case": "fail", "id": "{{uuid}}", "input": "private-question"},
+                        "bodies": [
+                            json.dumps(
+                                {
+                                    "case": "ok",
+                                    "id": "{{request_id}}",
+                                    "user": "{{user_id}}",
+                                    "input": "private-question",
+                                }
+                            ),
+                            json.dumps(
+                                {
+                                    "case": "fail",
+                                    "id": "{{request_id}}",
+                                    "user": "{{user_id}}",
+                                    "input": "private-question",
+                                }
+                            ),
                         ],
                         "per_user_routing": True,
                         "concurrency": 2,
                         "duration": 10,
-                        "max_requests": 6,
+                        "max_requests": 48,
                         "summary_file": str(summary_file),
-                        "sample_requests": 3,
                         "observations_file": str(observations_file),
                     }
                 ),
@@ -717,14 +564,17 @@ def test_worker_captures_only_reserved_successes_in_private_observation_file(tmp
     summary_text = summary_file.read_text()
     summary = json.loads(summary_text)
     assert summary["counts"] == {
-        "started": 6,
-        "completed": 6,
-        "succeeded": 3,
-        "failed": 3,
+        "started": 48,
+        "completed": 48,
+        "succeeded": 24,
+        "failed": 24,
         "incomplete": 0,
     }
-    observations = json.loads(observations_file.read_text())
-    assert len(observations) == 2  # First three admissions contain two successes, one failure.
+    observations = [json.loads(line) for line in observations_file.read_text().splitlines()]
+    assert len(observations) == 24
+    assert max(observed_incrementally) >= 20
+    assert len({body["id"] for body in seen}) == 48
+    assert 1 <= len({body["user"] for body in seen}) <= 2
     assert observations_file.stat().st_mode & 0o777 == 0o600
     for observation in observations:
         assert observation["case_index"] == 0
@@ -737,3 +587,255 @@ def test_worker_captures_only_reserved_successes_in_private_observation_file(tmp
     for private in ("private-question", "private-answer", "private-token", "tr-explicit"):
         assert private not in summary_text
         assert private not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("warmup", [False, True])
+@pytest.mark.parametrize("json_null", [False, True])
+def test_one_http_202_call_preserves_bodyless_or_json_null_and_excludes_only_warmup(
+    tmp_path, warmup, json_null
+):
+    """A 202 is an ordinary success; no background URL is followed and cold calls can count."""
+    if find_spec("locust") is None:
+        pytest.skip("requires databricks-agentbricks[loadtest]")
+    agentbricks = Path(sys.executable).with_name("agentbricks")
+    if not agentbricks.is_file():
+        pytest.skip("requires the installed agentbricks CLI")
+    seen = []
+    get_calls = []
+
+    class Endpoint(BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+        def do_POST(self):
+            seen.append(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+            sequence = len(seen)
+            if sequence == 1:
+                time.sleep(0.1)
+            self.send_response(202)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"sequence": sequence, "events_url": "/never"}).encode())
+
+        def do_GET(self):
+            get_calls.append(self.path)
+            self.send_response(500)
+            self.end_headers()
+
+    config = tmp_path / "empty.databrickscfg"
+    config.write_text("")
+    report = tmp_path / "report"
+    responses = tmp_path / "responses.json"
+    with ThreadingHTTPServer(("127.0.0.1", 0), Endpoint) as server:
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            command = [
+                str(agentbricks),
+                "--output",
+                "json",
+                "endpoint",
+                "loadtest",
+                "--url",
+                f"http://127.0.0.1:{server.server_port}",
+                "--path",
+                "/run",
+                "--concurrency",
+                "1",
+                "--duration",
+                "10",
+                "--max-requests",
+                "3",
+                "--report-dir",
+                str(report),
+                "--save-responses",
+                str(responses),
+            ]
+            if not warmup:
+                command.append("--no-warmup")
+            if json_null:
+                requests_file = tmp_path / "requests.json"
+                requests_file.write_text("[null]")
+                command.extend(["--requests", str(requests_file)])
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                cwd=tmp_path,
+                env={
+                    "PATH": f"{agentbricks.parent}:/usr/bin:/bin",
+                    "HOME": str(tmp_path),
+                    "DATABRICKS_CONFIG_FILE": str(config),
+                    "AGENTBRICKS_DISABLE_TELEMETRY": "1",
+                    "AGENTBRICKS_DISABLE_AGENT_HINT": "1",
+                },
+            )
+        finally:
+            server.shutdown()
+            worker.join(timeout=5)
+    assert result.returncode == 0, result.stdout + result.stderr
+    summary = json.loads(result.stdout)
+    assert summary == json.loads((report / "summary.json").read_text())
+    assert summary["workload"]["warmup_requests"] == int(warmup)
+    assert summary["counts"]["succeeded"] == summary["counts"]["completed"] == 3
+    assert len(seen) == 3 + int(warmup)
+    assert seen == ([b"null"] if json_null else [b""]) * len(seen)
+    assert not get_calls
+    observations = json.loads(responses.read_text())["observations"]
+    assert [row["outputs"]["sequence"] for row in observations] == (
+        [2, 3, 4] if warmup else [1, 2, 3]
+    )
+    assert all(row["inputs"] is None for row in observations)
+    if not warmup:
+        assert summary["latency_ms"]["successful"]["max"] >= 90
+
+
+def test_warmup_deadline_bounds_a_stream_that_never_completes_a_line(tmp_path):
+    """Socket activity cannot extend the warm-up beyond its total request deadline."""
+    if find_spec("locust") is None:
+        pytest.skip("requires databricks-agentbricks[loadtest]")
+    agentbricks = Path(sys.executable).with_name("agentbricks")
+    if not agentbricks.is_file():
+        pytest.skip("requires the installed agentbricks CLI")
+    calls = []
+
+    class Endpoint(BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+        def do_POST(self):
+            calls.append(self.path)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            try:
+                for _ in range(100):
+                    self.wfile.write(b"data: private-incomplete-event")
+                    self.wfile.flush()
+                    time.sleep(0.02)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+    config = tmp_path / "empty.databrickscfg"
+    config.write_text("")
+    with ThreadingHTTPServer(("127.0.0.1", 0), Endpoint) as server:
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        started = time.monotonic()
+        try:
+            result = subprocess.run(
+                [
+                    str(agentbricks),
+                    "endpoint",
+                    "loadtest",
+                    "--url",
+                    f"http://127.0.0.1:{server.server_port}",
+                    "--path",
+                    "/run",
+                    "--duration",
+                    "10",
+                    "--max-requests",
+                    "3",
+                    "--timeout",
+                    "0.2",
+                    "--sse",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=tmp_path,
+                env={
+                    "PATH": f"{agentbricks.parent}:/usr/bin:/bin",
+                    "HOME": str(tmp_path),
+                    "DATABRICKS_CONFIG_FILE": str(config),
+                    "AGENTBRICKS_DISABLE_TELEMETRY": "1",
+                    "AGENTBRICKS_DISABLE_AGENT_HINT": "1",
+                },
+            )
+        finally:
+            server.shutdown()
+            worker.join(timeout=5)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert time.monotonic() - started < 5
+    assert calls == ["/run"]
+    assert any(
+        f"warm-up failed: {name}" in result.stderr for name in ("TimeoutError", "ConnectionError")
+    )
+    assert "No measured requests were sent" in " ".join(result.stderr.split())
+    assert "private-incomplete-event" not in result.stderr + result.stdout
+
+
+def test_response_capture_io_failure_stops_load_and_reports_a_content_free_error(tmp_path):
+    if find_spec("locust") is None:
+        pytest.skip("requires databricks-agentbricks[loadtest]")
+    from databricks_agentbricks.services.loadtest import streaming
+
+    class Endpoint(BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+        def do_POST(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"output":"private-answer"}')
+
+    summary_file = tmp_path / "summary.json"
+    invalid_capture = tmp_path / "private-capture-directory"
+    invalid_capture.mkdir(mode=0o700)
+    with ThreadingHTTPServer(("127.0.0.1", 0), Endpoint) as server:
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "locust",
+                    "-f",
+                    str(Path(streaming.__file__).with_name("_locustfile.py")),
+                    "--headless",
+                    "--users",
+                    "1",
+                    "--spawn-rate",
+                    "1",
+                    "--run-time",
+                    "10s",
+                    "--stop-timeout",
+                    "3",
+                ],
+                input=json.dumps(
+                    {
+                        "request": {
+                            "url": f"http://127.0.0.1:{server.server_port}/run",
+                            "method": "POST",
+                            "headers": {},
+                            "body_set": False,
+                            "timeout": 3,
+                            "sse": False,
+                        },
+                        "bodies": None,
+                        "per_user_routing": False,
+                        "concurrency": 1,
+                        "duration": 10,
+                        "max_requests": 1000,
+                        "summary_file": str(summary_file),
+                        "observations_file": str(invalid_capture),
+                    }
+                ),
+                capture_output=True,
+                text=True,
+                timeout=15,
+                env={**os.environ, "AGENTBRICKS_DISABLE_TELEMETRY": "1"},
+            )
+        finally:
+            server.shutdown()
+            worker.join(timeout=5)
+    assert result.returncode == 1, result.stdout + result.stderr
+    summary = json.loads(summary_file.read_text())
+    assert summary["capture_error"] == "Response capture failed (IsADirectoryError)"
+    assert summary["counts"]["started"] < 1000
+    assert summary["counts"]["started"] == summary["counts"]["succeeded"]
+    for private in ("private-answer", str(invalid_capture)):
+        assert private not in summary_file.read_text() + result.stdout + result.stderr

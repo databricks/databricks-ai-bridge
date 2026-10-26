@@ -76,17 +76,26 @@ def test_missing_child_summary_does_not_replace_child_failure(tmp_path, capsys):
     assert not (tmp_path / "index.html").exists()
 
 
-def test_follow_events_report_counts_invocations_and_explains_full_journey(
-    summary, tmp_path, capsys
-):
-    summary["workload"]["follow_events"] = True
+def test_json_output_still_writes_html_without_printing_text(summary, tmp_path, capsys):
+    render_loadtest_summary(summary, report_dir=tmp_path, output="json")
+
+    captured = capsys.readouterr()
+    assert captured.out == captured.err == ""
+    assert "Load test report" in (tmp_path / "index.html").read_text()
+
+
+@pytest.mark.parametrize("warmup", [False, True])
+def test_report_explains_warmup_and_cold_start_accounting(summary, tmp_path, capsys, warmup):
+    summary["workload"]["warmup_requests"] = int(warmup)
 
     render_loadtest_summary(summary, report_dir=tmp_path)
 
     captured = capsys.readouterr()
-    assert "Invocations: 6 started, 5 completed" in captured.err
-    assert "one counted invocation" in captured.err
-    assert "answer-text TTFT starts at POST submission" in captured.err
+    assert "Requests: 6 started, 5 completed" in captured.err
     html = (tmp_path / "index.html").read_text()
-    assert "POST submission → GET event stream → GET final status" in html
-    assert "Latency covers all three requests" in html
+    if warmup:
+        assert "1 real request excluded" in captured.err
+        assert "warm-up request, including its cold-start latency, is excluded" in html
+    else:
+        assert "Disabled; all requests measured" in captured.err
+        assert "Warm-up is disabled; all requests are measured" in html

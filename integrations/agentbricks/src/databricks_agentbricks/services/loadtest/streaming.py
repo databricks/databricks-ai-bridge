@@ -1,4 +1,4 @@
-"""Observe supported SSE timings, optionally retaining a bounded evaluation sample."""
+"""Observe SSE timings and optional successful response content."""
 
 import json
 import time
@@ -26,23 +26,25 @@ def output_tokens(event):
 
 
 class StreamMetrics:
-    """Chat, Responses, and DurableAgentServer answer-text TTFT observations."""
+    """Chat Completions and Responses answer-text TTFT observations."""
 
     def __init__(self, *, capture_output=False):
         self.ttft_ms = None
         self.output_tokens = None
         self.supported = False
         self.completed = False
-        self.terminal_event = None
         self.trace_id = None
         self._text = [] if capture_output else None
+        self._events = [] if capture_output else None
 
     @property
     def answer(self):
-        return "".join(self._text) if self._text is not None else None
+        if self._text is None:
+            return None
+        return "".join(self._text) if self._text else self._events
 
     def read(self, response, started, *, timeout=None):
-        """Consume the complete stream; sample content only when explicitly requested."""
+        """Consume the complete stream; retain content only when explicitly requested."""
         data = []
         event_type = ""
         # One-byte reads avoid Requests buffering short text events until EOF.
@@ -65,7 +67,7 @@ class StreamMetrics:
         self.finish()
 
     def observe(self, data, event_type="", elapsed_ms=None):
-        """Observe parsed or raw SSE data; shared with the excluded readiness probe."""
+        """Observe parsed or raw SSE data; shared with the excluded warm-up request."""
         if data == "[DONE]":
             self.completed = True
             return
@@ -73,9 +75,13 @@ class StreamMetrics:
             try:
                 data = json.loads(data)
             except ValueError:
-                if self.supported or event_type.startswith(("response.", "run.")):
+                if self.supported or event_type.startswith("response."):
                     raise StreamError("Invalid supported SSE event") from None
+                if self._events is not None:
+                    self._events.append(data)
                 return
+        if self._events is not None:
+            self._events.append(data)
         if not isinstance(data, dict):
             return
         kind = data.get("type", event_type)
@@ -88,9 +94,6 @@ class StreamMetrics:
                 "error",
                 "response.failed",
                 "response.incomplete",
-                "run.failed",
-                "run.error",
-                "run.cancelled",
             }
         ):
             raise StreamError("SSE response reported an error")
@@ -109,16 +112,11 @@ class StreamMetrics:
             if reason in {"length", "content_filter"}:
                 raise StreamError("SSE response was truncated")
             self.completed |= reason is not None
-        elif isinstance(kind, str) and kind.startswith(("response.", "run.")):
+        elif isinstance(kind, str) and kind.startswith("response."):
             self.supported = True
             if kind == "response.output_text.delta":
                 text = data.get("delta")
-            self.completed |= kind in {"response.completed", "run.completed"}
-            if kind in {"response.completed", "run.completed"}:
-                self.terminal_event = kind
-        elif kind == "delta" and isinstance(data.get("content"), str):
-            self.supported = True
-            text = data.get("content")
+            self.completed |= kind == "response.completed"
         if isinstance(text, str) and text and self.ttft_ms is None:
             self.ttft_ms = elapsed_ms
         if isinstance(text, str) and self._text is not None:
