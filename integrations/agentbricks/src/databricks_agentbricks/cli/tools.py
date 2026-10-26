@@ -58,12 +58,22 @@ def _tool_record(spec: ToolSpec) -> dict[str, str]:
 def _emit_change(
     obj: Any, project: AgentProject, spec: ToolSpec, changed_files: list[pathlib.Path]
 ) -> None:
+    warnings = []
+    if spec.auth == "user":
+        warnings.append(
+            f"Tool {spec.id!r} uses the signed-in user's identity (auth = 'user'). "
+            "Request-user mode applies to every invocation: worker-failure recovery and "
+            "human approval are unsupported while any managed tool uses user auth. "
+            "Use --auth app only when the tool should use the App service principal's "
+            "permissions instead of the signed-in user's."
+        )
     payload = {
         "schema_version": 1,
         "changed": bool(changed_files),
         "changed_files": [str(path) for path in changed_files],
         "manifest": str(project.path),
         "tool": _tool_record(spec),
+        "warnings": warnings,
     }
     if getattr(obj, "output", "text") == "json":
         render.emit_json(payload)
@@ -75,6 +85,8 @@ def _emit_change(
         )
     else:
         click.echo(f"Tool {spec.id!r} is already configured in {project.path}")
+    for warning in warnings:
+        click.echo(warning)
     click.echo(f"Review {project.path} to check configured managed tools and MCP bindings.")
 
 
