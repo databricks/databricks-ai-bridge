@@ -363,6 +363,10 @@ jobs:
       # `agentbricks dev` runs the app through `databricks apps run-local`.
       - name: Install the Databricks CLI
         uses: databricks/setup-cli@e0f69d54c90e95ccad22d5ff17751da665e599a9
+        # The suites' fake workspace is verified against this CLI; with the action's default
+        # (0.295.0), `apps run-local` fails at startup with `strconv.ParseInt: parsing ""`.
+        with:
+          version: 1.22.1
       # Build the wheels and run the E2E suites against a fake workspace from a venv they are
       # installed into, so the tests exercise the shipped artifact (a packaging gap fails here)
       # rather than an editable source tree. `agentbricks` on PATH is the wheel's console script,

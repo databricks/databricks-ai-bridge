@@ -268,6 +268,10 @@ jobs:
           python-version: '3.12'
       - name: Install the Databricks CLI
         uses: databricks/setup-cli@e0f69d54c90e95ccad22d5ff17751da665e599a9
+        # The suites' fake workspace is verified against this CLI; with the action's default
+        # (0.295.0), `apps run-local` fails at startup with `strconv.ParseInt: parsing ""`.
+        with:
+          version: 1.22.1
       - name: Test the exact pushed release wheels (Python 3.12)
         env:
           BRANCH: ${{ needs.plan.outputs.branch }}
