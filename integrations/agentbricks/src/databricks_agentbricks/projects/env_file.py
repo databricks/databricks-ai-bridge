@@ -54,9 +54,9 @@ def read_env(path: pathlib.Path) -> dict[str, str]:
     return _parse_env(text)
 
 
-def _parse_env(text: str) -> dict[str, str]:
+def _parse_env(text: str, *, interpolate: bool = True) -> dict[str, str]:
     # Same parser and default interpolation as the agent's `load_dotenv`, so both resolve one value.
-    values = dotenv_values(stream=io.StringIO(text.removeprefix(_BOM)))
+    values = dotenv_values(stream=io.StringIO(text.removeprefix(_BOM)), interpolate=interpolate)
     return {key: value for key, value in values.items() if value is not None}
 
 
@@ -103,9 +103,10 @@ def update_env_profile(dest: pathlib.Path, profile: str) -> bool:
     if not env_path.exists():
         return write_env(dest, profile)
     before = _read_text(env_path)
-    if _parse_env(before).get("DATABRICKS_CONFIG_PROFILE") == profile:
+    if _parse_env(before, interpolate=False).get("DATABRICKS_CONFIG_PROFILE") == profile:
         # Compare the parsed profile, not the file text: a lone CRLF or trailing-newline
-        # difference must not count as a change.
+        # difference must not count as a change. The literal value is compared, not the
+        # interpolated one: `${VAR}` resolves to something else when the agent loads it.
         return False
     bom = _BOM if before.startswith(_BOM) else ""
     lines = _with_profile_line(_lines(before), profile)

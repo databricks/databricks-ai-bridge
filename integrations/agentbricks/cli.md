@@ -38,8 +38,9 @@ interactive terminal. Use `--profile` / `-p` to override the choice for one comm
 [Quickstart](README.md#quickstart) for the full journey.
 
 Inside an Agent Bricks project (a directory with `.agentbricks/project.toml` or `app.yaml`) every
-command uses that project's `.env` profile. Agent Bricks saves no separate default profile outside
-the project. The profile is resolved in this order, most to least specific:
+command uses that project's `.env` profile, and so does a command run from any folder inside it (the
+nearest parent with `.agentbricks/project.toml`). Agent Bricks saves no separate default profile
+outside the project. The profile is resolved in this order, most to least specific:
 
 1. `--profile` / `-p`
 2. the project `.env`'s `DATABRICKS_CONFIG_PROFILE` — only inside an Agent Bricks project; `dev` and

@@ -37,8 +37,16 @@ def _classify_validation_error(error: Exception) -> _ValidationFailure:
     )
     from requests.exceptions import ConnectionError as RequestsConnectionError
 
+    # A bounded-validation timeout is a stall, not a credential problem: a login wouldn't unstick it.
     if isinstance(
-        error, (RequestsConnectionError, InternalError, TemporarilyUnavailable, DeadlineExceeded)
+        error,
+        (
+            RequestsConnectionError,
+            InternalError,
+            TemporarilyUnavailable,
+            DeadlineExceeded,
+            TimeoutError,
+        ),
     ):
         return _ValidationFailure.UNREACHABLE
     # Client construction wraps every failure (e.g. an unknown profile) in AgentCliError.
@@ -76,6 +84,12 @@ def _not_signed_in_error(profile: Optional[str], source: str) -> AgentCliError:
 
 def _unreachable_error(profile: Optional[str], source: str, error: Exception) -> AgentCliError:
     target = f"profile {profile!r} (from {source})" if profile else "the default auth"
+    if isinstance(error, TimeoutError):
+        return AgentCliError(
+            f"The Databricks workspace for {target} didn't respond within "
+            f"{_PREFLIGHT_TIMEOUT_S:g}s.",
+            hint="Check the network (VPN/proxy) and the workspace, then rerun the command.",
+        )
     return AgentCliError(
         f"Could not reach the Databricks workspace for {target}: {error}",
         hint="Check the network (VPN/proxy) and the profile's host, then rerun the command.",
@@ -102,8 +116,8 @@ def _validate_bounded(
 ) -> tuple[Optional[tuple[_AgentBricksApiClient, str]], Optional[Exception]]:
     """`_validate_profile` on a daemon worker thread, giving up after `_PREFLIGHT_TIMEOUT_S`.
 
-    A browser-OAuth flow can block forever, so the call is bounded. Daemon because executor
-    threads are joined at interpreter exit and a hung flow must not block the CLI's exit too.
+    The SDK call can stall on an unresponsive workspace, so it is bounded. Daemon because executor
+    threads are joined at interpreter exit and a stalled call must not block the CLI's exit too.
     Returns (result, None) on success and (None, error) on failure or timeout.
     """
     outcome: list[tuple[Optional[tuple[_AgentBricksApiClient, str]], Optional[Exception]]] = []

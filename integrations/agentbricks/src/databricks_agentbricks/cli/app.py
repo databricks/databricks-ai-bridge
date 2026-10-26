@@ -30,7 +30,7 @@ from databricks_agentbricks.presentation.profile import (
     announce_workspace,
     warn_legacy_default_profile,
 )
-from databricks_agentbricks.projects.config import is_agentbricks_project
+from databricks_agentbricks.projects.config import find_project_root, is_agentbricks_project
 from databricks_agentbricks.projects.env_file import read_env
 from databricks_agentbricks.projects.profiles import (
     SOURCE_SDK_DEFAULT,
@@ -173,11 +173,11 @@ def agentbricks(ctx: click.Context, profile: Optional[str], output: str) -> None
     # Let errors render to match the selected output mode (JSON errors for -o json).
     errors.set_output_mode(output)
     ctx.obj = CliContext(profile=profile, output=output)
-    cwd = pathlib.Path.cwd()
-    if is_agentbricks_project(cwd):
-        # Every command run inside a project uses its `.env` profile, so e.g. `endpoint invoke`
-        # targets the same workspace that `deploy` just used.
-        ctx.obj.cwd_project = cwd
+    project = find_project_root(pathlib.Path.cwd())
+    if project is not None:
+        # Every command run inside a project (including its subfolders) uses its `.env` profile, so
+        # e.g. `endpoint invoke` targets the same workspace that `deploy` just used.
+        ctx.obj.cwd_project = project
 
 
 _REMOVED_COMMANDS = {

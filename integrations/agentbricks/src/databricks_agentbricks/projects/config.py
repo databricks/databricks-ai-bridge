@@ -6,7 +6,7 @@ import json
 import pathlib
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional
 
 import tomli
 
@@ -29,6 +29,20 @@ class ProjectMetadata:
 def is_agentbricks_project(path: pathlib.Path) -> bool:
     """Whether `path` is an Agent Bricks project root (scaffold metadata or an Apps manifest)."""
     return (path / _CONFIG_PATH).is_file() or (path / "app.yaml").is_file()
+
+
+def find_project_root(start: pathlib.Path) -> Optional[pathlib.Path]:
+    """The Agent Bricks project `start` is in, so commands run from a subfolder use its `.env`.
+
+    Only `start` itself may be an `app.yaml` project: an unrelated Databricks Apps folder above it
+    must not silently choose the profile, so ancestors count only with `init`'s metadata.
+    """
+    if is_agentbricks_project(start):
+        return start
+    for ancestor in start.resolve().parents:
+        if (ancestor / _CONFIG_PATH).is_file():
+            return ancestor
+    return None
 
 
 def write_project_metadata(

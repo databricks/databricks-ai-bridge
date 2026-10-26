@@ -57,6 +57,16 @@ def test_update_env_profile_adds_missing_line(tmp_path: pathlib.Path):
     assert (tmp_path / ".env").read_text() == "DATABRICKS_CONFIG_PROFILE=new\nA=1\n"
 
 
+def test_update_env_profile_rewrites_interpolated_value_to_literal(tmp_path: pathlib.Path):
+    (tmp_path / ".env").write_text(
+        "DATABRICKS_CONFIG_PROFILE=${CHOSEN_PROFILE}\nCHOSEN_PROFILE=first\n"
+    )
+
+    assert update_env_profile(tmp_path, "first") is True
+
+    assert "DATABRICKS_CONFIG_PROFILE=first\n" in (tmp_path / ".env").read_text()
+
+
 def test_update_env_profile_same_value_leaves_file_untouched(tmp_path: pathlib.Path):
     body = b"A=1\nDATABRICKS_CONFIG_PROFILE=ml\n"
     (tmp_path / ".env").write_bytes(body)

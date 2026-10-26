@@ -20,7 +20,7 @@ from databricks_agentbricks.presentation.profile import (
     warn_sign_in_failed,
     warn_unknown_profile,
 )
-from databricks_agentbricks.projects.config import is_agentbricks_project
+from databricks_agentbricks.projects.config import find_project_root
 from databricks_agentbricks.projects.env_file import read_env, update_env_profile
 from databricks_agentbricks.projects.profiles import (
     SOURCE_FLAG,
@@ -67,14 +67,16 @@ def sign_in_chosen_profile(obj, profile: str, source: str) -> Optional[str]:
 
 
 def _require_project(source: str) -> pathlib.Path:
+    """The project root containing `source`, which may be any folder inside the project."""
     directory = pathlib.Path(source).resolve()
-    if not is_agentbricks_project(directory):
+    project = find_project_root(directory)
+    if project is None:
         raise AgentCliError(
             f"'{directory}' isn't an Agent Bricks project.",
             hint="Run this from the project directory, pass --source <dir>, or create a project "
             "with `agentbricks init`.",
         )
-    return directory
+    return project
 
 
 def _resolve_for(obj, directory: pathlib.Path, in_project: bool) -> ProfileInfo:
@@ -135,10 +137,10 @@ def auth_describe(obj, source: str) -> None:
     authentication. Read-only; no workspace calls are made.
     """
     directory = pathlib.Path(source).resolve()
-    in_project = is_agentbricks_project(directory)
-    info = _resolve_for(obj, directory, in_project)
+    project_root = find_project_root(directory)
+    info = _resolve_for(obj, project_root or directory, project_root is not None)
     host, workspace = workspace_for_profile(info.name)
-    project = str(directory) if in_project else None
+    project = str(project_root) if project_root is not None else None
     show_profile_description(info.name, info.source, host, workspace, project, obj.output)
 
 
@@ -164,10 +166,10 @@ def auth_login(obj, name: Optional[str], source: str) -> None:
     required for that) and validated again; without a terminal, or in CI, it fails with a hint
     instead. Nothing is saved: use `agentbricks auth switch` to change the project's profile.
     """
-    directory = pathlib.Path(source).resolve()
+    project_root = find_project_root(pathlib.Path(source).resolve())
     env_profile = (
-        read_env(directory / ".env").get("DATABRICKS_CONFIG_PROFILE")
-        if is_agentbricks_project(directory)
+        read_env(project_root / ".env").get("DATABRICKS_CONFIG_PROFILE")
+        if project_root is not None
         else None
     )
     target = login_target(name, obj.profile_info, env_profile)

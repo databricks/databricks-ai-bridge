@@ -19,6 +19,7 @@ from databricks_agentbricks.cli import auth
 from databricks_agentbricks.cli.app import CliContext
 from databricks_agentbricks.clients import api_client_provider
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.projects.config import write_project_metadata
 from databricks_agentbricks.projects.env_file import read_env
 from databricks_agentbricks.projects.profiles import ProfileInfo
 from databricks_agentbricks.services import workspace_auth
@@ -239,6 +240,52 @@ def test_get_reports_profile_source_host_and_project_without_workspace_calls(
         "project": str(env_project),
     }
     validated_profile.assert_not_called()
+
+
+def test_commands_in_a_project_subfolder_use_the_root_env(
+    env_project, monkeypatch, write_databrickscfg, validated_profile
+):
+    write_databrickscfg("[proj]\nhost = https://proj.example\n")
+    write_project_metadata(env_project, framework="openai", template="agent-template")
+    subfolder = env_project / "agent"
+    subfolder.mkdir()
+    monkeypatch.chdir(subfolder)
+
+    assert _get_json(["auth", "describe"]) == {
+        "profile": "proj",
+        "source": ".env",
+        "workspace_host": "https://proj.example",
+        "project": str(env_project),
+    }
+
+
+def test_app_yaml_in_a_parent_does_not_make_a_subfolder_a_project(tmp_path, monkeypatch):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    _write_env(tmp_path, "proj")
+    subfolder = tmp_path / "agent"
+    subfolder.mkdir()
+    monkeypatch.chdir(subfolder)
+
+    payload = _get_json(["auth", "describe"])
+
+    assert (payload["profile"], payload["source"], payload["project"]) == (
+        None,
+        "Databricks SDK default",
+        None,
+    )
+
+
+def test_switch_from_a_subfolder_rewrites_the_root_env(env_project, monkeypatch):
+    write_project_metadata(env_project, framework="openai", template="agent-template")
+    subfolder = env_project / "agent"
+    subfolder.mkdir()
+    monkeypatch.chdir(subfolder)
+
+    result = _invoke_profile(["switch", "new"])
+
+    assert result.exit_code == 0, result.output
+    assert read_env(env_project / ".env")["DATABRICKS_CONFIG_PROFILE"] == "new"
+    assert not (subfolder / ".env").exists()
 
 
 def test_set_rewrites_profile_line_and_keeps_other_lines(project):

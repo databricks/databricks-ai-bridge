@@ -138,6 +138,16 @@ def test_preflight_failure_hints_at_login_and_retry(fail_validation):
     )
 
 
+def test_preflight_timeout_reports_an_unresponsive_workspace_not_a_sign_in(fail_validation):
+    fail_validation(TimeoutError("no response within 20s"))
+
+    with pytest.raises(AgentCliError) as raised:
+        workspace_auth.preflight_auth("prof", ".env")
+
+    assert "didn't respond within 20s" in str(raised.value)
+    assert "auth login" not in str(raised.value.hint or "")
+
+
 def test_validate_bounded_gives_up_after_the_timeout(monkeypatch):
     release = threading.Event()
     monkeypatch.setattr(workspace_auth, "_PREFLIGHT_TIMEOUT_S", 0.05)
@@ -211,6 +221,15 @@ def test_auth_service_logs_in_then_revalidates_through_supplied_collaborators():
     assert validate.call_args_list == [mock.call("prof"), mock.call("prof")]
     needs_browser_login.assert_called_once_with("prof")
     login.assert_called_once_with("prof")
+
+
+def test_authenticate_profile_timeout_does_not_start_a_login(fail_validation, databricks_login):
+    fail_validation(TimeoutError("no response within 20s"))
+
+    with pytest.raises(AgentCliError, match="didn't respond within 20s"):
+        workspace_auth.authenticate_profile("prof", ".env", interactive=True)
+
+    databricks_login.assert_not_called()
 
 
 def test_authenticate_profile_reports_a_missing_databricks_cli(fail_validation, databricks_login):
