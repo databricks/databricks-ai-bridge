@@ -112,6 +112,8 @@ def required_user_api_scopes(project: AgentProject | None) -> set[str]:
             scopes.add("sql")
         if tool.source.service == "system.ai.genie_one_mcp":
             scopes.add("genie")
+        if tool.source.kind == "sandbox":
+            scopes.add("sandbox")
         if tool.source.kind == "sandbox" and any(
             scope.kind == "volume" for scope in tool.policy.downscope
         ):

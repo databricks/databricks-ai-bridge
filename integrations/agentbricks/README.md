@@ -1078,10 +1078,11 @@ Deploy derives Apps user scopes from explicit `auth = "user"` bindings and union
 | `system.ai.dbsql` | `ai-gateway`, `sql` |
 | `system.ai.genie_one_mcp` | `ai-gateway`, `genie` |
 | UC function | `mcp.functions` |
-| Sandbox with a Volume downscope | `ai-gateway`, `files` |
+| Sandbox | `ai-gateway`, `sandbox` |
+| Sandbox with a Volume downscope | `ai-gateway`, `sandbox`, `files` |
 | First-class Genie One or Genie Agent | `genie` |
-| Sandbox with token injection | `ai-gateway`, `workspace.workspace` |
-| Sandbox with token injection disabled | `ai-gateway` |
+| Sandbox with token injection | `ai-gateway`, `sandbox`, `workspace.workspace` |
+| Sandbox with token injection disabled | `ai-gateway`, `sandbox` |
 
 For example, bind Genie tools in a current project with `server = "agentbricks"`:
 
@@ -1107,6 +1108,9 @@ agentbricks --profile my-workspace deploy my-agent --allow-user-scope-update
 The `system.ai.dbsql` managed MCP additionally requests the Apps `sql` user scope. This is full SQL
 API consent, not `sql:restricted-query`; read-only enforcement remains the service policy plus the
 requesting user's Unity Catalog grants. DBSQL does not use Databricks Connect.
+
+Every user-auth sandbox requests the Apps `sandbox` user scope so the forwarded user credential can
+create and run sandboxes as the requesting user.
 
 When a user-auth sandbox has `databricks_access_token_included = true`, it requests the Apps
 `workspace.workspace` user scope so the injected credential can call workspace APIs. A sandbox
