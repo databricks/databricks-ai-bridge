@@ -8,6 +8,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from harness.agentbricks_cli import excerpt, tool_results
+from harness.workspace import Workspace
 from uc_objects import UcFunction
 
 PYTHON_MARKER_FILE = "agent/tools/matrix_marker.py"
@@ -38,11 +39,11 @@ class Tool:
     # The id `tools add` binds it under, which `tools remove` takes.
     tool_id: str | None
 
-    def check(self, serialized: str) -> None:
+    def assert_called(self, serialized: str) -> None:
         """Assert the `endpoint invoke --output json` output shows the tool ran and returned its result."""
         assert self._calls(serialized), f"No successful {self.name} result: {excerpt(serialized)}"
 
-    def check_not_called(self, serialized: str) -> None:
+    def assert_not_called(self, serialized: str) -> None:
         """Assert the agent answered without the tool returning its result."""
         assert not self._calls(serialized), f"{self.name} still ran: {excerpt(serialized)}"
 
@@ -130,7 +131,7 @@ def python_tool() -> Tool:
     )
 
 
-def uc_function_tool(uc_function: UcFunction) -> Tool:
+def uc_function_tool(uc_function: UcFunction, workspace_client: Workspace) -> Tool:
     return Tool(
         name="uc_function",
         # Name the tool: its description matches the Python marker's, so the model may pick either.
@@ -138,8 +139,10 @@ def uc_function_tool(uc_function: UcFunction) -> Tool:
             f"You must call the {uc_function.tool_name} Unity Catalog function tool with value "
             "'matrix'. Return its exact result."
         ),
-        called=returned(UC_MARKER),
-        add_command=f"uc-function {uc_function.function} --name agentbricks_uc_marker",
+        # The function returns `current_user()`. Bound with `--auth user`, it runs as whoever
+        # invoked the agent, not the deployed App's service principal.
+        called=returned(f"{UC_MARKER}:{workspace_client.user_name}"),
+        add_command=f"uc-function {uc_function.function} --name agentbricks_uc_marker --auth user",
         files={},
         tool_id="agentbricks_uc_marker",
     )
@@ -165,6 +168,6 @@ TOOL_DEFINITIONS = (
     ToolDefinition("sandbox", ("uc_function",), sandbox_tool),
     ToolDefinition("mcp", ("workspace_client",), web_search_tool),
     ToolDefinition("python", (), python_tool),
-    ToolDefinition("uc_function", ("uc_function",), uc_function_tool),
+    ToolDefinition("uc_function", ("uc_function", "workspace_client"), uc_function_tool),
     ToolDefinition("genie", ("genie_space",), genie_tool),
 )
