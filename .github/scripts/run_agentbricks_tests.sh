@@ -18,6 +18,8 @@ case "${1:-}" in
     ;;
   suites-fake)
     # `agentbricks dev` runs the app through `databricks apps run-local`, so the CLI must be on PATH.
+    # Any further arguments select the tests to run (default: every suite).
+    shift
     uv build --wheel --out-dir dist ../..
     uv build --wheel --out-dir dist
     uv venv .venv-suites
@@ -27,7 +29,7 @@ case "${1:-}" in
     # Scaffold projects next to the runner's uv cache: across filesystems uv copies every
     # dependency into each project's venv instead of hardlinking, and that fills /tmp on CI.
     TMPDIR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}" \
-      .venv-suites/bin/pytest tests/suites --workspace fake -n auto --dist loadgroup \
+      .venv-suites/bin/pytest "${@:-tests/suites}" --workspace fake -n auto --dist loadgroup \
         --wheel "$(ls "$PWD"/dist/databricks_agentbricks-*.whl)" \
         --bridge-wheel "$(ls "$PWD"/dist/databricks_ai_bridge-*.whl)"
     ;;
@@ -45,7 +47,7 @@ case "${1:-}" in
       .venv-functional/bin/pytest tests/functional/
     ;;
   *)
-    echo 'Usage: run_agentbricks_tests.sh {unit {lowest-direct|highest}|framework|suites-fake|functional}' >&2
+    echo 'Usage: run_agentbricks_tests.sh {unit {lowest-direct|highest}|framework|suites-fake [tests...]|functional}' >&2
     exit 2
     ;;
 esac
