@@ -6,7 +6,7 @@ on:
       - main
 
 env:
-  UV_VERSION: "0.9.11"
+  UV_VERSION: "0.13.5"
   PYTHON_VERSION: "3.12"
 
 jobs:
