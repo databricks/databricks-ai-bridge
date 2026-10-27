@@ -957,6 +957,9 @@ agentbricks tools remove mcp system.ai.web_search
 agentbricks tools list
 ```
 
+`agentbricks tools list` shows integrations you can add. To see the tools an agent already has, open
+**Tools** under Capabilities in the chat app.
+
 ### Managed tool identity and migration
 
 `agentbricks tools add mcp`, `agentbricks tools add sandbox`, `agentbricks tools add uc-function`,

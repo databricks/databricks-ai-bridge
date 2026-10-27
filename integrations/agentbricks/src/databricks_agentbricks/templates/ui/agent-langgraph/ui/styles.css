@@ -329,7 +329,8 @@ h2 {
 
 /* Full-bleed divider under the top header of the left card (matches the chat header). */
 .capabilities-block > .panel-subhead,
-.memory-pane > .panel-subhead {
+.memory-pane > .panel-subhead,
+.tools-pane > .panel-subhead {
   margin: -12px -14px 10px;
   padding: 10px 14px;
   border-bottom: 1px solid var(--line);
@@ -554,13 +555,15 @@ h2 {
   color: var(--danger);
 }
 
-.capability-detail .cap-command-label {
+.capability-detail .cap-command-label,
+.tools-pane .cap-command-label {
   display: block;
   margin: 8px 0 4px;
   color: var(--ink-faint);
 }
 
-.capability-detail .cap-command {
+.capability-detail .cap-command,
+.tools-pane .cap-command {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -572,12 +575,14 @@ h2 {
   overflow-wrap: anywhere;
 }
 
-.capability-detail .cap-command code {
+.capability-detail .cap-command code,
+.tools-pane .cap-command code {
   flex: 1;
   min-width: 0;
 }
 
-.capability-detail .cap-command button {
+.capability-detail .cap-command button,
+.tools-pane .cap-command button {
   flex: 0 0 auto;
   display: grid;
   place-items: center;
@@ -590,12 +595,14 @@ h2 {
   cursor: pointer;
 }
 
-.capability-detail .cap-command button:hover {
+.capability-detail .cap-command button:hover,
+.tools-pane .cap-command button:hover {
   background: var(--hover);
   color: var(--ink);
 }
 
-.capability-detail .cap-command .icon {
+.capability-detail .cap-command .icon,
+.tools-pane .cap-command .icon {
   width: 13px;
   height: 13px;
 }
@@ -1688,7 +1695,8 @@ h2 {
 /* Memory pane (left rail sub-view)                                           */
 /* -------------------------------------------------------------------------- */
 
-.memory-pane {
+.memory-pane,
+.tools-pane {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
@@ -1696,16 +1704,19 @@ h2 {
 }
 
 /* `hidden` must win over the flex display above. */
-.memory-pane[hidden] {
+.memory-pane[hidden],
+.tools-pane[hidden] {
   display: none;
 }
 
 /* When the memory pane is open, keep the sessions list compact at the bottom. */
-.left-card.memory-open .sessions-block {
+.left-card.memory-open .sessions-block,
+.left-card.tools-open .sessions-block {
   flex: 0 0 auto;
 }
 
-.left-card.memory-open .sessions-block .session-list {
+.left-card.memory-open .sessions-block .session-list,
+.left-card.tools-open .sessions-block .session-list {
   max-height: 150px;
 }
 
@@ -1916,6 +1927,92 @@ h2 {
 
 .memory-error {
   color: var(--danger);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Tools pane (left rail sub-view)                                            */
+/* -------------------------------------------------------------------------- */
+
+.tools-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tools-heading {
+  margin: 8px 0 2px;
+  color: var(--ink-faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.tools-heading:first-child {
+  margin-top: 0;
+}
+
+.tool-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: var(--surface-raised);
+}
+
+.tool-badge {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  color: var(--accent-deep);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.tool-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+}
+
+.tool-detail {
+  flex: 1 1 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.tools-empty {
+  padding: 4px 2px;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.tools-pane .cap-command-label {
+  display: block;
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+
+.tools-hint {
+  margin: 6px 0 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.tools-hint code {
+  font-size: 11px;
 }
 
 /* -------------------------------------------------------------------------- */
