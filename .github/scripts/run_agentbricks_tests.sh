@@ -29,7 +29,7 @@ case "${1:-}" in
     # Scaffold projects next to the runner's uv cache: across filesystems uv copies every
     # dependency into each project's venv instead of hardlinking, and that fills /tmp on CI.
     TMPDIR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}" \
-      .venv-suites/bin/pytest "${@:-tests/suites}" --workspace fake -n auto --dist loadgroup \
+      .venv-suites/bin/pytest "${@:-tests/suites}" --workspace fake -n auto --dist loadgroup -v --durations=0 \
         --wheel "$(ls "$PWD"/dist/databricks_agentbricks-*.whl)" \
         --bridge-wheel "$(ls "$PWD"/dist/databricks_ai_bridge-*.whl)"
     ;;
