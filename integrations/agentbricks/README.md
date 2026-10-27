@@ -360,9 +360,8 @@ agentbricks dev
 agentbricks --profile <profile> deploy my-agent
 ```
 
-Use the URL `agentbricks dev` prints (port 8000, or `--app-port`). The `localhost:8001` line from the
-wrapped `databricks apps run-local` is its proxy to the same app. Requests can fail with HTTP 500 for
-a few seconds while the app starts.
+Use the URL `agentbricks dev` prints (port 8000, or `--app-port`). Agents on different ports can run
+side by side. Requests can fail with HTTP 500 for a few seconds while the app starts.
 
 Use `--framework openai` for OpenAI Agents. Templates keep agent code separate from the runtime
 adapter and declare default Session and Memory Store bindings in `agent.toml`.

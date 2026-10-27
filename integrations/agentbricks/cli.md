@@ -200,7 +200,7 @@ _Options_
 | --- | --- | --- | --- | --- |
 | `--source <SOURCE>` | path | `.` | no | Local source directory to run (containing app.yaml). Defaults to the current directory. |
 | `--prepare-environment`, `--no-prepare-environment` | flag | - | no | Build the app's environment with uv before running. Default: build only if no .venv exists yet, and reuse it otherwise. Requires uv. |
-| `--app-port <APP_PORT>` | integer | - | no | Port to run the app on (default 8000). |
+| `--app-port <APP_PORT>` | integer | - | no | Port to run the agent on (default 8000). |
 
 ### `agentbricks memory`
 

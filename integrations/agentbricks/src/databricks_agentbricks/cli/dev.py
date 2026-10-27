@@ -15,7 +15,7 @@ import click
 
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.databricks_cli import _databricks
-from databricks_agentbricks.clients.local_ports import port_in_use
+from databricks_agentbricks.clients.local_ports import free_port, port_in_use
 from databricks_agentbricks.clients.local_tracing_client import LocalTracingClient
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.dev import (
@@ -40,6 +40,7 @@ def build_dev_service(obj) -> DevService:
         apps_client=AppsClient(obj.profile, runner=_databricks),
         local_tracing=LocalTracingClient(),
         port_in_use=port_in_use,
+        free_port=free_port,
     )
 
 
@@ -56,7 +57,7 @@ def build_dev_service(obj) -> DevService:
     help="Build the app's environment with uv before running. Default: build only if no .venv "
     "exists yet, and reuse it otherwise. Requires uv.",
 )
-@click.option("--app-port", type=int, default=None, help="Port to run the app on (default 8000).")
+@click.option("--app-port", type=int, default=None, help="Port to run the agent on (default 8000).")
 @click.pass_obj
 def dev(
     obj,

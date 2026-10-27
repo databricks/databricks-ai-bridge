@@ -8,7 +8,7 @@ from contextlib import contextmanager
 
 import pytest
 
-from databricks_agentbricks.clients.local_ports import port_in_use
+from databricks_agentbricks.clients.local_ports import free_port, port_in_use
 
 
 @contextmanager
@@ -46,4 +46,10 @@ def test_ipv6_only_loopback_listener_is_in_use() -> None:
 def test_closed_port_is_free() -> None:
     with _listener(socket.AF_INET, "127.0.0.1") as port:
         pass
+    assert not port_in_use(port)
+
+
+def test_free_port_returns_a_bindable_port():
+    port = free_port()
+    assert 0 < port < 65536
     assert not port_in_use(port)
