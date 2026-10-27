@@ -370,7 +370,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            tests: tests/suites
+          # macOS runners are slower and have fewer cores, so macOS checks the platform (run-local,
+          # the printed command in its shell) on two templates; every template runs on ubuntu and
+          # on both platforms at the release cut.
+          - os: macos-latest
+            tests: >-
+              tests/suites/test_dev.py::test_dev
+              tests/suites/test_dev.py::test_dev_templates[openai-managed-ui]
     timeout-minutes: 15
     steps:
       - name: Checkout code
@@ -393,4 +402,4 @@ jobs:
       # and the suites pin every scaffolded agent to the same wheels.
       - name: Build the Agent Bricks wheels and run the suites
         working-directory: integrations/agentbricks
-        run: bash ../../.github/scripts/run_agentbricks_tests.sh suites-fake
+        run: bash ../../.github/scripts/run_agentbricks_tests.sh suites-fake ${{ matrix.tests }}

@@ -34,7 +34,8 @@ uv run pytest tests/suites -n 6 --dist loadgroup \
 CI runs the fake-workspace suites from built wheels: `.github/scripts/run_agentbricks_tests.sh suites-fake` builds both wheels,
 installs them into a fresh venv and runs `pytest tests/suites --workspace fake -n auto --dist loadgroup`
 from it, so every suite exercises the shipped console script and
-package data rather than the editable checkout. Run the same script from
+package data rather than the editable checkout. Pull requests run every suite on ubuntu and
+two dev boots on macOS; the release cut runs every suite on both. Run the same script from
 `integrations/agentbricks` to reproduce CI; any arguments after `suites-fake` select tests.
 
 The run id and output directory (logs, generated projects, `apps.jsonl`) are printed at the start:
