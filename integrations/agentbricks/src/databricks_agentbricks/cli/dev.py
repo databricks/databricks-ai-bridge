@@ -23,6 +23,7 @@ from databricks_agentbricks.presentation.dev import (
     announce_bound_resources,
     announce_starting,
     local_trace_label,
+    starting_status,
 )
 from databricks_agentbricks.presentation.dev import (
     announce_local_url as _announce_local_url,
@@ -112,6 +113,9 @@ def dev(
                     local_trace_label(plan.preview),
                     has_chat_ui=plan.preview.has_chat_ui,
                 ),
+                # A spinner in the quiet stretches before the agent answers (e.g. while it imports
+                # its libraries), so a long wait doesn't look like a hang.
+                quiet_status=starting_status,
             )
         except AgentCliError:
             # Separate the error from the run-local logs it follows.
