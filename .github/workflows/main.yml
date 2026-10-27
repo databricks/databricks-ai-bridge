@@ -398,3 +398,10 @@ jobs:
       - name: Build the Agent Bricks wheels and run the suites
         working-directory: integrations/agentbricks
         run: bash ../../.github/scripts/run_agentbricks_tests.sh suites-fake
+      - name: Upload the suites' command logs
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
+        with:
+          name: agentbricks-suites-logs-${{ matrix.os }}
+          path: ${{ runner.temp }}/agentbricks-e2e-*/logs
+          if-no-files-found: ignore
