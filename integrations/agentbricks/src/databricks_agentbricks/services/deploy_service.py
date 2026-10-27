@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Literal, Optional
 
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
+from databricks_agentbricks.clients.app_probe import AppProbe, ProbeResult
 from databricks_agentbricks.clients.apps_client import AppsClient, AppState
 from databricks_agentbricks.clients.apps_user_auth_client import AppAuthPlan
 from databricks_agentbricks.errors import AgentCliError
@@ -41,7 +42,7 @@ from databricks_agentbricks.projects.app_manifest import AppManifest
 from databricks_agentbricks.projects.config import require_managed_tool_support
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.projects.types import AgentServer
-from databricks_agentbricks.reporting import Heartbeat, Reporter
+from databricks_agentbricks.reporting import Heartbeat, Reporter, format_elapsed
 from databricks_agentbricks.services.deployment import deploy_state
 from databricks_agentbricks.services.deployment.app_provisioner import (
     AppProvisioner,
@@ -159,6 +160,8 @@ class DeployResult:
     prompts: dict[str, str] = field(default_factory=dict)
     model_service_grant_error: Optional[str] = None
     prompt_grant_error: Optional[str] = None
+    # True once the App's server answered; None when this profile couldn't check.
+    ready: Optional[bool] = None
 
 
 # What happened to the source folder: deleted; already gone; kept because --delete-source wasn't
@@ -218,6 +221,8 @@ class WaitResult:
     log_tail: list[str]
     uses_runtime_api: bool
     log: Optional[str] = None
+    # For a succeeded deploy: True once the App answered; None when it couldn't be checked.
+    ready: Optional[bool] = None
 
 
 @dataclass(frozen=True)
@@ -232,11 +237,25 @@ class _WaitSnapshot:
     error: Optional[str] = None
     log_tail: tuple[str, ...] = ()
     log: Optional[str] = None
+    ready: Optional[bool] = None
+    # Why readiness couldn't be checked, when the probe said.
+    unverified_detail: Optional[str] = None
 
 
 # How often `deployments wait` re-reads a local deploy record, and the App when there is none.
 _LOCAL_POLL_S = 2.0
 _SERVER_POLL_S = 5.0
+# How often and how long deploy probes a rolled-out App until its server answers.
+_READY_POLL_S = 2.0
+_READY_TIMEOUT_S = 300.0
+
+
+class _Unverifiable(Exception):
+    """Leaves the readiness wait, without its done message, when the App can't be checked."""
+
+    def __init__(self, detail: Optional[str]) -> None:
+        super().__init__(detail)
+        self.detail = detail
 
 
 @dataclass(frozen=True)
@@ -305,6 +324,22 @@ def _partial_app_note(name: str) -> str:
     )
 
 
+def _unverified_note(detail: Optional[str]) -> str:
+    """The note for an App that deployed but whose server this profile couldn't check."""
+    reason = f": {detail.rstrip('.')}" if detail else ""
+    return f"Couldn't check the agent answers{reason}. It may return 502 for a few seconds."
+
+
+def _not_answering(name: str, last: ProbeResult) -> AgentCliError:
+    """The error for an App whose server never answered within the readiness timeout."""
+    last_seen = f" (last: {last.detail})" if last.detail else ""
+    return AgentCliError(
+        f"Agent '{name}' didn't answer within {format_elapsed(_READY_TIMEOUT_S)}{last_seen}.",
+        hint=f"check `agentbricks deployments logs {name}`, fix the cause, then re-run "
+        "`agentbricks deploy`",
+    )
+
+
 class DeployService:
     """Owns the deployment verbs: `deploy` (pre-flight + auth, reconcile every bound resource, patch
     app.yaml, ensure the app, roll out, grant access) and the lifecycle verbs that list, read, tail,
@@ -326,6 +361,7 @@ class DeployService:
         model_binding_provisioner: ModelBindingProvisioner,
         reporter: Reporter,
         state_tracker: Optional[DeployStateTracker] = None,
+        app_probe: Optional[AppProbe] = None,
         clock: Callable[[], float] = time.time,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -341,6 +377,7 @@ class DeployService:
         self._model_binding_provisioner = model_binding_provisioner
         self._reporter = reporter
         self._state_tracker = state_tracker
+        self._app_probe = app_probe
         self._clock = clock
         self._sleep = sleep
 
@@ -486,6 +523,12 @@ class DeployService:
                     beat = Heartbeat(snap.phase, start=snap.phase_started, now=now)
                 elif line := beat.tick(now):
                     self._reporter.note(line)
+            elif local and snap.status == deploy_state.SUCCEEDED:
+                # A short last phase (the agent answering at once) can start and end between polls.
+                if beat is None or snap.phase != beat.phase:
+                    self._reporter.note(f"• {snap.phase}…")
+            if snap.status == deploy_state.SUCCEEDED and snap.ready is None:
+                self._reporter.note(_unverified_note(snap.unverified_detail))
             if snap.status != deploy_state.RUNNING or now >= deadline:
                 return WaitResult(
                     deployment=app,
@@ -497,6 +540,7 @@ class DeployService:
                     log_tail=list(snap.log_tail),
                     uses_runtime_api=uses_runtime_api,
                     log=snap.log,
+                    ready=snap.ready if snap.status == deploy_state.SUCCEEDED else None,
                 )
             poll = _LOCAL_POLL_S if local else _SERVER_POLL_S
             self._sleep(max(0.0, min(poll, deadline - now)))
@@ -522,6 +566,7 @@ class DeployService:
             if status == deploy_state.FAILED and log
             else (),
             log=str(log) if log else None,
+            ready=result.get("ready") if isinstance(result, dict) else None,
         )
 
     def _server_snapshot(
@@ -529,6 +574,22 @@ class DeployService:
     ) -> _WaitSnapshot:
         """Classify the App's state; its phases are timed from when this wait first saw them."""
         outcome = deploy_state.classify_app(app, self._apps_client.find(app))
+        ready: Optional[bool] = None
+        unverified_detail: Optional[str] = None
+        # A SUCCEEDED App is still starting until its server answers.
+        if outcome.status == deploy_state.SUCCEEDED and self._app_probe is not None:
+            if not outcome.url:
+                unverified_detail = "the App has no URL"
+            else:
+                probe = self._app_probe.probe(outcome.url)
+                if probe.outcome == "booting":
+                    outcome = dataclasses.replace(
+                        outcome, status=deploy_state.RUNNING, phase=deploy_state.READY_PHASE
+                    )
+                elif probe.outcome == "answered":
+                    ready = True
+                else:
+                    unverified_detail = probe.detail
         same_phase = beat is not None and outcome.phase == beat.phase
         return _WaitSnapshot(
             status=outcome.status,
@@ -540,6 +601,8 @@ class DeployService:
             log_tail=(outcome.message,)
             if outcome.status == deploy_state.FAILED and outcome.message
             else (),
+            ready=ready,
+            unverified_detail=unverified_detail,
         )
 
     # --- deploy -------------------------------------------------------------
@@ -576,6 +639,7 @@ class DeployService:
            the running version. Roll out the source, then remove stale App tool resources.
         6. Attempt store and tracing grants after rollout. Their failures are reported in the
            result rather than undoing a successful deployment.
+        7. Wait until the App's server answers requests, failing if it never does.
 
         A request-user App keeps the original order instead (see ``early_compute`` below). If a step
         fails after this run created the App, the error says the App was kept and how to resume or
@@ -688,6 +752,9 @@ class DeployService:
             )
             trace_grant = self._tracing_provisioner.grant(ctx, tracing)
             url = self._apps_client.get_app_url(name)
+        # 7. Finish only once the App's server answers, so the first call after deploy works.
+        with timer("ready"):
+            ready = self._wait_until_answering(name, url)
         for phase, seconds in timer.phases():
             self._reporter.timing(phase, seconds)
         self._reporter.timing("total", timer.total())
@@ -726,7 +793,38 @@ class DeployService:
             uses_runtime_api=bool(
                 prepared.agent_project and prepared.agent_project.server == AgentServer.AGENTBRICKS
             ),
+            ready=ready,
         )
+
+    def _wait_until_answering(self, name: DeploymentName, url: Optional[str]) -> Optional[bool]:
+        """Poll the rolled-out App until its server answers; None when it can't be checked.
+
+        Apps reports SUCCEEDED once the start command launches, and its proxy returns 502 while
+        the server installs packages and starts. Raises if the server never answers in time.
+        """
+        if self._app_probe is None:
+            return None
+        try:
+            if url is None:
+                raise _Unverifiable("the App has no URL")
+            result = self._app_probe.probe(url)
+            if result.outcome == "unverifiable":
+                raise _Unverifiable(result.detail)
+            started = self._clock()
+            with self._reporter.progress(
+                f"{deploy_state.READY_PHASE}…", done_message="Agent answered"
+            ):
+                while result.outcome == "booting":
+                    if self._clock() - started >= _READY_TIMEOUT_S:
+                        raise _not_answering(name, result)
+                    self._sleep(_READY_POLL_S)
+                    result = self._app_probe.probe(url)
+                if result.outcome == "unverifiable":
+                    raise _Unverifiable(result.detail)
+        except _Unverifiable as exc:
+            self._reporter.note(_unverified_note(exc.detail))
+            return None
+        return True
 
     def _provision_and_roll_out(
         self,

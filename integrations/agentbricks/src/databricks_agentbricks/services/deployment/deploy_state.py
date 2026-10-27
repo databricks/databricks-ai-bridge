@@ -40,6 +40,8 @@ SUCCEEDED = "succeeded"
 FAILED = "failed"
 # The phase a deploy reports before its first provisioning step.
 STARTING_PHASE = "Starting the deploy"
+# The phase after rollout while the App's server starts and the Apps proxy still returns 502.
+READY_PHASE = "Waiting for the agent to answer"
 EXITED_UNEXPECTEDLY = "deploy process exited unexpectedly"
 # A `running` record whose phase hasn't moved in this long is stale even if its pid is alive (the pid
 # may have been reused). The longest single phase is the 300 s compute wait plus busy-App retries.

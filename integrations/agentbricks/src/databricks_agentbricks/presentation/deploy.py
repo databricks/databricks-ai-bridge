@@ -162,6 +162,8 @@ def deploy_result_payload(result: DeployResult) -> dict[str, Any]:
     return {
         "deployment": result.deployment,
         "url": result.url,
+        # True once the App answered; None when the profile couldn't check.
+        "ready": result.ready,
         "workspace_path": result.workspace_path,
         "env": result.env,
         "memory_store": result.memory_store,
@@ -392,6 +394,7 @@ def present_wait_result(result: WaitResult, *, output: Optional[str]) -> None:
                 "url": result.url,
                 "error": result.error,
                 "log_tail": result.log_tail,
+                "ready": result.ready,
             }
         )
         return

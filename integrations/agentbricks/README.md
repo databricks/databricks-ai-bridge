@@ -191,10 +191,10 @@ agentbricks deployments wait agent-bricks-my-agent
 ```
 
 `deployments wait` returns within 100 seconds (`--timeout`). Exit 0 means the agent is deployed and
-running, and it prints the URL; exit 1 means the deploy failed, and it prints the error and the end
-of the deploy log; exit 75 means it is still deploying, so run the same command again. Don't poll
-with `sleep`. Progress lines with the elapsed time go to stderr, also under `-o json`, whose stdout
-is a single JSON document. A second `deploy` of the same app is refused while one is still running
+answering requests, and it prints the URL; exit 1 means the deploy failed, and it prints the error
+and the end of the deploy log; exit 75 means it is still deploying, so run the same command again.
+Don't poll with `sleep`. Progress lines with the elapsed time go to stderr, also under `-o json`,
+whose stdout is a single JSON document. A second `deploy` of the same app is refused while one is still running
 from the project; the deploy's state and background log are in `.agentbricks/deploy-<app>.json` and
 `.agentbricks/deploy-<app>.log`. If the App is busy with another operation, `deploy` retries for
 about two minutes before failing.
