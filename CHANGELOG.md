@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## databricks-langchain 0.22.0 databricks-openai 0.18.0 (2026-10-27)
+
+### New Features
+- databricks-langchain: `DatabricksSandbox` Deep Agents sandbox backend, available via the `deepagents` extra (#765)
+- databricks-langchain: `DatabricksSandboxTool` and `DatabricksSandboxSession` for running code in a Databricks sandbox directly from LangChain, available via the `sandbox` extra (#791)
+- databricks-openai: `DatabricksSandboxClient` sandbox backend for the OpenAI Agents SDK, available via the `sandbox` extra (#774)
+
+### Bug Fixes
+- databricks-openai: constrain `openai<3` and `openai-agents<0.21`, since OpenAI 3 moved to `httpx2` and is incompatible with the `httpx` clients this package supplies (#488)
+
 ## databricks-langchain 0.21.0 (2026-10-09)
 
 ### Bug Fixes
