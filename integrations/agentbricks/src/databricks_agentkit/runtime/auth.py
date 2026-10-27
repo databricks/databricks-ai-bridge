@@ -128,6 +128,10 @@ class RequestAuthContext:
         )
         return hashlib.sha256(material.encode()).hexdigest()
 
+    def secrets(self) -> tuple[str, ...]:
+        """Credential values to redact from caller-facing error messages."""
+        return (self._token,) if self._token else ()
+
     def client_for(self, mode: str) -> WorkspaceClient:
         if self._closed:
             raise AuthError(

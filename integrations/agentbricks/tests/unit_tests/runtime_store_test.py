@@ -692,6 +692,24 @@ async def test_fail_persists_response_and_lifecycle_event_atomically():
     assert failure_parameters["worker_id"] == store.worker_id
     assert failure_parameters["response"] == json.dumps(response)
     event_parameters = connection.execute.await_args_list[2].args[1]
+    assert event_parameters["event"] == (
+        '{"type": "run.failed", "error": {"code": "MCP_AUTHORIZATION_REQUIRED"}}'
+    )
+
+
+@pytest.mark.asyncio
+async def test_fail_without_error_emits_bare_failed_event():
+    lakebase, connection = mock_lakebase()
+    connection.execute.side_effect = [
+        scalar_result(None),
+        MagicMock(rowcount=1),
+        MagicMock(),
+    ]
+    store = LakebaseDurableRuntimeStore(lakebase=lakebase)
+
+    assert await store.fail("session-1", 2) is True
+
+    event_parameters = connection.execute.await_args_list[2].args[1]
     assert event_parameters["event"] == '{"type": "run.failed"}'
 
 

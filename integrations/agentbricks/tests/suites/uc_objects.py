@@ -23,6 +23,11 @@ class UcFunction:
     volume_file_path: str
     volume_marker: str
 
+    @property
+    def tool_name(self) -> str:
+        """The name the MCP server exposes the function under, which the model calls."""
+        return self.function.replace(".", "__")
+
 
 def create_uc_function(workspace: Workspace, scratch_schema: str) -> UcFunction:
     """Create the marker function and volume in ``scratch_schema``, whose deletion removes them."""
@@ -37,7 +42,7 @@ def create_uc_function(workspace: Workspace, scratch_schema: str) -> UcFunction:
         f"CREATE FUNCTION `{catalog}`.`{schema}`.`{FUNCTION}`"
         "(value STRING) RETURNS STRING "
         "COMMENT 'Deterministic Agent Bricks E2E marker tool' "
-        "RETURN concat('AGENTBRICKS_UC_OK:', value)"
+        "RETURN concat('AGENTBRICKS_UC_OK:', value, ':', current_user())"
     )
     workspace.create_volume(catalog, schema, VOLUME)
     marker = f"AGENTBRICKS_VOLUME_{uuid.uuid4().hex}"

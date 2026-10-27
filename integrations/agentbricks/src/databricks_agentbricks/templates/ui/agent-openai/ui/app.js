@@ -12,6 +12,8 @@ const elements = {
   eventLog: document.querySelector("#event-log"),
   memoryMode: document.querySelector("#memory-mode-value"),
   memoryStatus: document.querySelector("#memory-status"),
+  toolsMode: document.querySelector("#tools-mode-value"),
+  toolsStatus: document.querySelector("#tools-status"),
   tracingMode: document.querySelector("#tracing-mode-value"),
   tracingStatus: document.querySelector("#tracing-status"),
   modelSelect: document.querySelector("#model-select"),
@@ -58,6 +60,10 @@ const elements = {
   memoryModalBody: document.querySelector("#memory-modal-body"),
   memoryModalFoot: document.querySelector("#memory-modal-foot"),
   memoryModalClose: document.querySelector("#memory-modal-close"),
+  toolsPane: document.querySelector("#tools-pane"),
+  toolsBack: document.querySelector("#tools-back"),
+  toolsRefresh: document.querySelector("#tools-refresh"),
+  toolsBody: document.querySelector("#tools-body"),
 };
 
 // The framework label shown in the header subtitle, next to the host.
@@ -175,21 +181,7 @@ function setCapability(element, state, detail, command, link) {
     const label = document.createElement("span");
     label.className = "cap-command-label";
     label.textContent = "Connect by running:";
-    const row = document.createElement("div");
-    row.className = "cap-command";
-    const code = document.createElement("code");
-    code.textContent = command;
-    const copy = document.createElement("button");
-    copy.type = "button";
-    copy.setAttribute("aria-label", `Copy command: ${command}`);
-    copy.innerHTML =
-      '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
-    copy.addEventListener("click", (event) => {
-      event.stopPropagation();
-      void navigator.clipboard.writeText(command).catch(() => {});
-    });
-    row.append(code, copy);
-    panel.append(label, row);
+    panel.append(label, commandRow(command));
   }
   if (link) {
     const anchor = document.createElement("a");
@@ -208,6 +200,25 @@ function setCapability(element, state, detail, command, link) {
     anchor.append(label);
     panel.append(anchor);
   }
+}
+
+// A CLI command with a copy button, used by capability details and the Tools pane.
+function commandRow(command) {
+  const row = document.createElement("div");
+  row.className = "cap-command";
+  const code = document.createElement("code");
+  code.textContent = command;
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.setAttribute("aria-label", `Copy command: ${command}`);
+  copy.innerHTML =
+    '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+  copy.addEventListener("click", (event) => {
+    event.stopPropagation();
+    void navigator.clipboard.writeText(command).catch(() => {});
+  });
+  row.append(code, copy);
+  return row;
 }
 
 function formatJson(value) {
@@ -627,7 +638,8 @@ function handleEvent(event) {
   if (event?.type === "delta") appendDelta(event.content);
   if (event?.type === "message") handleAgentMessage(event.message);
   if (event?.type === "interrupt") handleInterrupt(event);
-  if (event?.error) throw new Error(event.error);
+  if (event?.type === "run.failed") return;
+  if (event?.error) throw new Error(errorMessage(event.error) || "Agent error");
 }
 
 function handleOutput(output) {
@@ -663,9 +675,16 @@ function agentResult(result) {
   return result?.output && !Array.isArray(result.output) ? result.output : result;
 }
 
+function errorMessage(error) {
+  return typeof error === "string" ? error : error?.message;
+}
+
 async function jsonResponse(response) {
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.detail || body.error || `Request failed with ${response.status}`);
+  if (!response.ok) {
+    const message = errorMessage(body.error) || body.detail || `Request failed with ${response.status}`;
+    throw new Error(body.status === "failed" ? `Agent invocation failed: ${message}` : message);
+  }
   return body;
 }
 
@@ -860,6 +879,126 @@ function openMemoryModal(entry) {
 
 function closeMemoryModal() {
   elements.memoryModal.hidden = true;
+}
+
+// ---- Tools pane ------------------------------------------------------------
+
+function toolsSection(title) {
+  const heading = document.createElement("h3");
+  heading.className = "tools-heading";
+  heading.textContent = title;
+  elements.toolsBody.append(heading);
+}
+
+function toolRow(badge, name, detail) {
+  const row = document.createElement("div");
+  row.className = "tool-row";
+  if (badge) {
+    const label = document.createElement("span");
+    label.className = "tool-badge";
+    label.textContent = badge;
+    row.append(label);
+  }
+  const id = document.createElement("span");
+  id.className = "tool-name";
+  id.textContent = name;
+  row.append(id);
+  if (detail) {
+    const source = document.createElement("span");
+    source.className = "tool-detail";
+    source.textContent = detail;
+    row.append(source);
+  }
+  return row;
+}
+
+// Render /api/demo/tools into the Tools row (subtitle and orb) and the Tools pane.
+// The orb is green once a managed (agent.toml) tool is bound; the sample Python tools don't count.
+function renderTools(payload) {
+  const connected = payload?.connected || [];
+  const local = payload?.local || [];
+  const errors = payload?.errors || [];
+  elements.toolsMode.textContent = `${connected.length ? `${connected.length} connected` : "None connected"} · ${local.length} in code`;
+  setCapability(
+    elements.toolsStatus,
+    connected.length ? true : "degraded",
+    connected.length
+      ? `${connected.length} managed tool${connected.length === 1 ? "" : "s"} bound in agent.toml.`
+      : "No managed tools are bound in agent.toml.",
+  );
+
+  elements.toolsBody.replaceChildren();
+  for (const error of errors) {
+    const message = document.createElement("div");
+    message.className = "state-error";
+    message.textContent = error.message;
+    elements.toolsBody.append(message);
+  }
+
+  toolsSection("Connected");
+  if (!connected.length) {
+    const empty = document.createElement("div");
+    empty.className = "tools-empty";
+    empty.textContent = "No managed tools connected yet.";
+    elements.toolsBody.append(empty);
+  }
+  for (const tool of connected) elements.toolsBody.append(toolRow(tool.label, tool.id, tool.source));
+
+  toolsSection("Defined in code");
+  if (!local.length) {
+    const empty = document.createElement("div");
+    empty.className = "tools-empty";
+    empty.textContent = "No Python tools found in agent/tools.";
+    elements.toolsBody.append(empty);
+  }
+  for (const tool of local) elements.toolsBody.append(toolRow(null, tool.name, tool.description));
+
+  toolsSection("Add a tool");
+  for (const entry of payload?.add_commands || []) {
+    const label = document.createElement("span");
+    label.className = "cap-command-label";
+    label.textContent = entry.label;
+    elements.toolsBody.append(label, commandRow(entry.command));
+  }
+  const hint = document.createElement("p");
+  hint.className = "tools-hint";
+  const dev = document.createElement("code");
+  dev.textContent = "agentbricks dev";
+  const deploy = document.createElement("code");
+  deploy.textContent = "agentbricks deploy";
+  hint.append("Run in your project directory, then restart ", dev, " or run ", deploy, ".");
+  elements.toolsBody.append(hint);
+}
+
+async function loadTools() {
+  try {
+    const response = await fetch(demoUrl("/api/demo/tools"), { cache: "no-store" });
+    const payload = await jsonResponse(response);
+    renderTools(payload);
+    addEvent("tools.list", {
+      connected: payload.connected.length,
+      local: payload.local.length,
+      errors: payload.errors,
+    });
+  } catch (error) {
+    elements.toolsMode.textContent = "Unavailable";
+    setCapability(elements.toolsStatus, false, "The tools list could not be loaded.");
+    stateMessage(elements.toolsBody, error instanceof Error ? error.message : String(error), "error");
+    addEvent("tools.error", { message: String(error) });
+  }
+}
+
+function openToolsPane() {
+  elements.leftCard.classList.add("tools-open");
+  elements.capabilitiesBlock.hidden = true;
+  elements.toolsPane.hidden = false;
+  void loadTools();
+}
+
+function closeToolsPane() {
+  elements.leftCard.classList.remove("tools-open");
+  elements.toolsPane.hidden = true;
+  elements.capabilitiesBlock.hidden = false;
 }
 
 function renderSessionItems(items) {
@@ -1063,20 +1202,21 @@ async function invokeStreaming(payload) {
     buffer = frames.pop() || "";
     for (const frame of frames) {
       const event = parseSseFrame(frame);
-      if (["run.failed", "run.completed"].includes(event?.type)) terminal = event.type;
+      if (["run.failed", "run.completed"].includes(event?.type)) terminal = event;
       if (event) handleEvent(event);
     }
     if (done) break;
   }
   if (buffer.trim()) {
     const event = parseSseFrame(buffer);
-    if (["run.failed", "run.completed"].includes(event?.type)) terminal = event.type;
+    if (["run.failed", "run.completed"].includes(event?.type)) terminal = event;
     if (event) handleEvent(event);
   }
-  if (terminal === "run.failed") {
-    throw new Error(`Agent invocation ${invocation.id} failed. Check server logs for details.`);
+  if (terminal?.type === "run.failed") {
+    const message = errorMessage(terminal.error);
+    throw new Error(message ? `Agent invocation failed: ${message}` : `Agent invocation ${invocation.id} failed. Check server logs for details.`);
   }
-  if (terminal !== "run.completed") {
+  if (terminal?.type !== "run.completed") {
     throw new Error(`Stream disconnected before invocation ${invocation.id} completed. Check its status before retrying.`);
   }
   finishDraft();
@@ -1102,7 +1242,7 @@ async function pollBackground(invocationId) {
       handleOutput(output.output);
       return output;
     }
-    if (result.status === "failed") throw new Error(`Background invocation ${invocationId} failed. ${result.error?.message || result.error || "Check server logs for details."}`);
+    if (result.status === "failed") throw new Error(`Background invocation ${invocationId} failed. ${errorMessage(result.error) || "Check server logs for details."}`);
     setStatus(`Background · ${result.status}`, "busy");
     // Reduce polling load for long runs without imposing an execution deadline.
     delay = Math.min(delay * 1.5, 5000);
@@ -1349,6 +1489,8 @@ async function loadConfig() {
     void refreshSessionView({ hydrateChat: true });
     // The memory pane loads lazily when opened; refresh it if it is already open.
     if (!elements.memoryPane.hidden) void loadMemory();
+    // Tools re-read agent.toml on every fetch, so refreshing picks up `agentbricks tools add/remove`.
+    void loadTools();
     return config;
   } catch (error) {
     throw error;
@@ -1445,12 +1587,16 @@ elements.clearEvents.addEventListener("click", () => {
   renderEvents();
 });
 
-// Capabilities expand inline on click; Memory instead opens its own pane.
+// Capabilities expand inline on click; Memory and Tools instead open their own panes.
 document.querySelectorAll(".capability").forEach((button) => {
   button.addEventListener("click", () => {
     const item = button.closest(".capability-item");
     if (item?.dataset.capability === "memory") {
       openMemoryPane();
+      return;
+    }
+    if (item?.dataset.capability === "tools") {
+      openToolsPane();
       return;
     }
     const panel = item?.querySelector(".capability-detail");
@@ -1472,6 +1618,10 @@ elements.memorySearch.addEventListener("input", () => {
   window.clearTimeout(memoryState.searchTimer);
   memoryState.searchTimer = window.setTimeout(() => void loadMemory(), 300);
 });
+
+// Tools pane controls.
+elements.toolsBack.addEventListener("click", closeToolsPane);
+elements.toolsRefresh.addEventListener("click", () => loadTools());
 
 // Memory modal: close on ×, backdrop click, or Escape.
 elements.memoryModalClose.addEventListener("click", closeMemoryModal);
@@ -1526,4 +1676,6 @@ loadConfig().catch((error) => {
   elements.sessionMode.textContent = "Unavailable";
   elements.memoryMode.textContent = "Unavailable";
   elements.tracingMode.textContent = "Unavailable";
+  // The Tools row doesn't depend on the runtime config, so load it even when config fails.
+  void loadTools();
 });

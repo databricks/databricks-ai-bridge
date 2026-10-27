@@ -97,3 +97,23 @@ def no_telemetry(monkeypatch):
     """Every command sends telemetry through a real client built from the developer's ambient
     Databricks auth, which shells out and makes network calls; telemetry tests opt back in."""
     monkeypatch.setenv("AGENTBRICKS_DISABLE_TELEMETRY", "1")
+
+
+class _AnsweringAppProbe:
+    """An App probe that sees the server answer at once, without credentials or network."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        self.urls: list[str] = []
+
+    def probe(self, url: str):
+        from databricks_agentbricks.clients.app_probe import ProbeResult
+
+        self.urls.append(url)
+        return ProbeResult("answered", "HTTP 200")
+
+
+@pytest.fixture(autouse=True)
+def answering_app_probe(monkeypatch):
+    """CLI deploy tests build a real service; its readiness probe would fetch an OAuth token and
+    call the App, so it answers at once here. Readiness tests replace it or inject their own."""
+    monkeypatch.setattr("databricks_agentbricks.cli.deploy.AppProbe", _AnsweringAppProbe)

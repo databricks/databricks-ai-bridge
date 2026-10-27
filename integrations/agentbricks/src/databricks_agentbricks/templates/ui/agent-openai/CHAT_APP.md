@@ -7,7 +7,7 @@ post-generation mutation command.
 ## Installed files
 
 - `ui/` contains the zero-build chat client (shared in shape with the LangGraph template's UI).
-- `runtime/ui.py` serves the assets and exposes demo APIs for memory and sessions.
+- `runtime/ui.py` serves the assets and exposes demo APIs for tools, memory, and sessions.
 - `runtime/main.py` installs the chat routes on the base FastAPI runtime.
 - `tests/test_demo_ui.py` verifies the browser-facing routes.
 
@@ -19,6 +19,11 @@ tracing config (destination + experiment). Selecting Memory opens a pane for bro
 entries (searchable, filterable by actor, with a modal for each entry); the other indicators expand
 in place, and Traces links out to the MLflow experiment. The transport selector is the only manual
 capability choice; hover or focus a mode to see what it does.
+
+Tools opens a pane listing the `agent.toml` bindings, the Python tools from `agent.tools.all_tools()`,
+and the `agentbricks tools add …` commands to copy. It reads `GET /api/demo/tools`, which re-reads
+`agent.toml` on each request, so `tools add`/`remove` show up after a refresh. A bad `agent.toml` or
+`agent.tools` import shows as an error in the pane. MCP servers from `agent/mcps.py` are not listed.
 
 The composer's model picker lists the workspace's Unity Catalog AI Gateway chat model services — the
 `system.ai.*` model services from `GET /api/2.1/unity-catalog/model-services?parent=schemas/system.ai`

@@ -136,6 +136,23 @@ output, and application event payloads are defined by your agent or framework ad
 | `POST /api/invocations` | `{"id":"550e8400-e29b-41d4-a716-446655440000","session_id":"support-case-123","input":{"messages":[{"role":"user","content":"Hello"}]},"background":true,"stream":true}` | `202`<br>`{"id":"550e8400-e29b-41d4-a716-446655440000","status":"queued","status_url":"/api/invocations/550e8400-e29b-41d4-a716-446655440000","events_url":"/api/invocations/550e8400-e29b-41d4-a716-446655440000/events"}` |
 | `GET /api/invocations/550e8400-e29b-41d4-a716-446655440000` | — | `200`<br>`{"id":"550e8400-e29b-41d4-a716-446655440000","status":"completed","output":{"answer":"Hello"}}` |
 | `GET /api/invocations/550e8400-e29b-41d4-a716-446655440000/events?after=1` | — | `200 text/event-stream`<br>`id: 2`<br>`event: delta`<br>`data: {"type":"delta","content":"Hello"}`<br><br>`id: 3`<br>`event: run.completed`<br>`data: {"type":"run.completed"}` |
+| `POST /api/invocations` (the model rate-limited the agent) | `{"id":"550e8400-e29b-41d4-a716-446655440000","input":{"messages":[{"role":"user","content":"Hello"}]}}` | `429`, `Retry-After: 7`<br>`{"id":"550e8400-e29b-41d4-a716-446655440000","status":"failed","error":{"code":"UPSTREAM_RATE_LIMITED","type":"openai.RateLimitError","message":"Exceeded workspace input tokens per minute rate limit","upstream_status":429,"upstream_code":"REQUEST_LIMIT_EXCEEDED","retry_after":7}}` |
+
+### Failures
+
+When the agent raises, the synchronous response, `GET /api/invocations/{id}`, and the `run.failed`
+event carry the same `error` object. The full traceback stays in the server log.
+
+| `error.code` | Status | Cause |
+| --- | --- | --- |
+| `UPSTREAM_RATE_LIMITED` | `429` | An upstream call returned 429. `Retry-After` is set when the upstream sent one. |
+| `UPSTREAM_TIMEOUT` | `504` | An upstream call timed out. |
+| `UPSTREAM_ERROR` | `502` | An upstream call returned another HTTP error. |
+| `AGENT_ERROR` | `500` | Any other exception in agent code. |
+
+`type` is the exception class. `message` has credentials and tracebacks removed and is at most 300
+characters. `upstream_status`, `upstream_code`, and `retry_after` appear only when known.
+Request-user auth failures (`MCP_*` codes) keep their status and `{"error": {...}}` body.
 
 ### External browser clients
 

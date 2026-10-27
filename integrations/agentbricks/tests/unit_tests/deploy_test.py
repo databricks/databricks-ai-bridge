@@ -1245,6 +1245,7 @@ def test_real_cli_json_deploy_keeps_payload_and_omits_text_summary(
     assert set(payload) == {
         "deployment",
         "url",
+        "ready",
         "workspace_path",
         "env",
         "memory_store",
@@ -1300,6 +1301,7 @@ def test_debug_timings_go_to_stderr_only_when_enabled(
             "app_update",
             "rollout",
             "grants",
+            "ready",
             "total",
         ]
         assert all(line.endswith("s") for line in timing_lines)
