@@ -762,7 +762,7 @@ and declares the Prompt Registry prompts it loads so the search can rewrite them
 
 ```sh
 agentbricks experimental models bind main.my_agent.router_llm --role router --default system.ai.claude-haiku-4-5
-agentbricks experimental models bind main.my_agent.writer_llm --role writer --default system.ai.claude-sonnet-4-5
+agentbricks experimental models bind main.my_agent.writer_llm --role writer --default system.ai.claude-sonnet-5-5
 agentbricks experimental prompts bind main.my_agent.writer
 agentbricks deploy my-agent      # creates the services and grants the app access to them and the prompt
 agentbricks experimental models upgrade -c router=claude-haiku-4-5,gpt-5-4-nano -c writer=claude-haiku-4-5 \
@@ -804,7 +804,7 @@ result = optimize_prompts_and_models(
     prompt_uris=["prompts:/main.my_agent.router@production"],
     gateway_endpoints={
         "main.my_agent.router_llm": ["claude-haiku-4-5", "gpt-5-4-mini"],
-        "main.my_agent.writer_llm": ["claude-sonnet-4-5", "claude-haiku-4-5"],
+        "main.my_agent.writer_llm": ["claude-sonnet-5-5", "claude-haiku-4-5"],
     },
     scorers=scorers,  # MLflow scorers, or (inputs, expectations, answer) -> float
     max_metric_calls=200,
