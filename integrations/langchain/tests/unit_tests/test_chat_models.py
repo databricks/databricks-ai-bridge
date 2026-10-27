@@ -1000,6 +1000,80 @@ def test_convert_lc_messages_to_responses_api_with_complex_content():
     assert result == expected
 
 
+def test_convert_lc_messages_to_responses_api_with_input_content_blocks():
+    """Input messages must convert Chat Completions content blocks to Responses API types.
+
+    Regression test: system/user messages built from multiple text blocks
+    (e.g. by LangChain middleware) were passed through with
+    ``type: "text"``, which the Responses API rejects.
+    """
+    messages: list[BaseMessage] = [
+        SystemMessage(
+            content=[
+                {"type": "text", "text": "Part 1 of system prompt"},
+                {"type": "text", "text": "Part 2 of system prompt"},
+            ]
+        ),
+        ChatMessage(
+            role="developer",
+            content=[{"type": "text", "text": "Developer instructions"}],
+        ),
+        HumanMessage(content="Hello!"),
+    ]
+
+    result = _convert_lc_messages_to_responses_api(messages)
+    expected = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "input_text", "text": "Part 1 of system prompt"},
+                {"type": "input_text", "text": "Part 2 of system prompt"},
+            ],
+        },
+        {
+            "role": "developer",
+            "content": [{"type": "input_text", "text": "Developer instructions"}],
+        },
+        {"role": "user", "content": "Hello!"},
+    ]
+    assert result == expected
+
+
+def test_convert_lc_messages_to_responses_api_with_mixed_input_content():
+    """Mixed input content: text, image_url, bare strings, and Responses blocks."""
+    messages: list[BaseMessage] = [
+        HumanMessage(
+            content=[
+                {"type": "text", "text": "What is in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://example.com/cat.png", "detail": "high"},
+                },
+                "A bare string block",
+                {"type": "input_text", "text": "Already in Responses format"},
+            ]
+        ),
+    ]
+
+    result = _convert_lc_messages_to_responses_api(messages)
+    expected = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "What is in this image?"},
+                {
+                    "type": "input_image",
+                    "image_url": "https://example.com/cat.png",
+                    "detail": "high",
+                },
+                {"type": "input_text", "text": "A bare string block"},
+                {"type": "input_text", "text": "Already in Responses format"},
+            ],
+        },
+    ]
+    assert result == expected
+
+
 def test_convert_responses_api_chunk_to_lc_chunk_text_delta():
     """Test _convert_responses_api_chunk_to_lc_chunk with text delta."""
     chunk = ResponseTextDeltaEvent.model_construct(
