@@ -370,16 +370,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            tests: tests/suites
-          # macOS runners are slower and have fewer cores, so macOS checks the platform (run-local,
-          # the printed command in its shell) on two templates; every template runs on ubuntu and
-          # on both platforms at the release cut.
-          - os: macos-latest
-            tests: >-
-              tests/suites/test_dev.py::test_dev
-              tests/suites/test_dev.py::test_dev_templates[openai-managed-ui]
+        os: [ubuntu-latest, macos-latest]
     timeout-minutes: 15
     steps:
       - name: Checkout code
@@ -389,6 +380,10 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           python-version: "3.12"
+          # Every dev boot syncs a scaffolded agent's dependencies; keeping the downloaded wheels
+          # (unpruned, under this job's own key) spares each run re-downloading them per template.
+          cache-suffix: agentbricks-suites
+          prune-cache: false
       # `agentbricks dev` runs the app through `databricks apps run-local`.
       - name: Install the Databricks CLI
         uses: databricks/setup-cli@e0f69d54c90e95ccad22d5ff17751da665e599a9
@@ -402,4 +397,4 @@ jobs:
       # and the suites pin every scaffolded agent to the same wheels.
       - name: Build the Agent Bricks wheels and run the suites
         working-directory: integrations/agentbricks
-        run: bash ../../.github/scripts/run_agentbricks_tests.sh suites-fake ${{ matrix.tests }}
+        run: bash ../../.github/scripts/run_agentbricks_tests.sh suites-fake
