@@ -1,6 +1,6 @@
 [project]
 name = "databricks-openai"
-version = "0.18.0"
+version = "0.17.1"
 description = "Support for Databricks AI support with OpenAI"
 authors = [
     { name="Databricks", email="agent-feedback@databricks.com" },
@@ -26,9 +26,9 @@ dependencies = [
 [project.optional-dependencies]
 autolog = [
     # until openai autolog works on mlflow-skinny
-        "mlflow>=3.10.1",
-        ]
-        memory = [
+    "mlflow>=3.10.1",
+]
+memory = [
     "databricks-ai-bridge[memory]>=0.17.0",
 ]
 sandbox = [
