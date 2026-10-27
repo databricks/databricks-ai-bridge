@@ -1,4 +1,5 @@
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from uuid import uuid4
@@ -278,13 +279,16 @@ async def test_missing_request_user_auth_fails_before_stream_starts(deployed):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "failure",
+    ("failure", "expected_code"),
     [
-        AuthError("MCP_PERMISSION_DENIED", "Permission denied", 403, "sandbox"),
-        RuntimeError("token-sentinel"),
+        (
+            AuthError("MCP_PERMISSION_DENIED", "Permission denied", 403, "sandbox"),
+            "MCP_PERMISSION_DENIED",
+        ),
+        (RuntimeError("token-sentinel"), "AGENT_ERROR"),
     ],
 )
-async def test_request_user_stream_failure_is_credential_free(deployed, failure):
+async def test_request_user_stream_failure_is_credential_free(deployed, failure, expected_code):
     contexts = []
 
     async def handler(value, context):
@@ -303,10 +307,56 @@ async def test_request_user_stream_failure_is_credential_free(deployed, failure)
     assert response.status_code == 200
     assert len(frames) == 2
     assert frames[0].endswith('data: {"type": "run.started"}')
-    assert frames[1].endswith('data: {"type": "run.failed"}')
+    assert "event: run.failed" in frames[1]
+    assert json.loads(frames[1].split("data: ", 1)[1])["error"]["code"] == expected_code
     assert "token-sentinel" not in response.text
     with pytest.raises(AuthError):
         contexts[0].request_auth.client_for("user")
+
+
+@pytest.mark.asyncio
+async def test_request_user_sync_failure_redacts_request_token(deployed):
+    async def handler(value, context):
+        raise RuntimeError("upstream rejected token-sentinel")
+
+    app = make_app(handler)
+    invocation_id = str(uuid4())
+    async with running_client(app) as client:
+        response = await client.post(
+            "/api/invocations", json={"id": invocation_id}, headers=headers()
+        )
+        state = await client.get(f"/api/invocations/{invocation_id}", headers=headers())
+
+    error = {
+        "code": "AGENT_ERROR",
+        "type": "RuntimeError",
+        "message": "upstream rejected [REDACTED]",
+    }
+    assert response.status_code == 500
+    assert response.json() == {"id": invocation_id, "status": "failed", "error": error}
+    assert state.json()["error"] == error
+    assert_auth_not_persisted(app._runtime.runtime_store)
+
+
+@pytest.mark.asyncio
+async def test_request_user_auth_failure_keeps_status_and_body(deployed):
+    async def handler(value, context):
+        raise AuthError("MCP_PERMISSION_DENIED", "Permission denied", 403, "sandbox")
+
+    app = make_app(handler)
+    async with running_client(app) as client:
+        response = await client.post(
+            "/api/invocations", json={"id": str(uuid4())}, headers=headers()
+        )
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "error": {
+            "code": "MCP_PERMISSION_DENIED",
+            "message": "Permission denied",
+            "integration_id": "sandbox",
+        }
+    }
 
 
 @pytest.mark.asyncio

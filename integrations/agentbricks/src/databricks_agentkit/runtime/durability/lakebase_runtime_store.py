@@ -16,7 +16,7 @@ from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from databricks_agentkit.runtime.durability.store import DurableRuntimeStore
-from databricks_agentkit.runtime.store import DEFAULT_RUNTIME_STORE_SCHEMA
+from databricks_agentkit.runtime.store import DEFAULT_RUNTIME_STORE_SCHEMA, failed_event
 from databricks_agentkit.runtime.types import (
     Invocation,
     InvocationConflictError,
@@ -792,7 +792,7 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
                     {
                         "invocation_id": invocation_id,
                         "attempt": attempt,
-                        "event": _serialize_json_value({"type": "run.failed"}),
+                        "event": _serialize_json_value(failed_event(response)),
                     },
                 )
                 if session_id is not None:
