@@ -166,7 +166,7 @@ def test_help_examples_recommend_the_default_happy_path():
     runner = CliRunner()
     expected_examples = {
         (): (
-            "agentbricks login --profile <profile>",
+            "agentbricks login --profile my-workspace",
             "agentbricks init my-agent",
             "cd my-agent",
             "agentbricks dev",

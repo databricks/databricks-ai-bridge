@@ -29,13 +29,13 @@ Example = str | tuple[str, str]
 
 _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     (): (
-        ("agentbricks login --profile <profile>", "authenticate and save a default profile"),
+        ("agentbricks login --profile my-workspace", "authenticate and save a default profile"),
         ("agentbricks init my-agent", "scaffold a new agent project"),
         ("cd my-agent", "enter the project directory"),
         ("agentbricks dev", "run the agent locally with a chat UI"),
         ("agentbricks deploy", "deploy the agent to Databricks Apps"),
     ),
-    ("login",): (("agentbricks login --profile <profile>", "save a profile as your default"),),
+    ("login",): (("agentbricks login --profile my-workspace", "save a profile as your default"),),
     ("logout",): (("agentbricks logout", "forget the saved default profile"),),
     ("init",): (
         ("agentbricks init my-agent", "scaffold a new agent project"),
@@ -650,8 +650,8 @@ def _root_epilog() -> str:
         [
             "\b",
             "Not authenticated yet? Create a profile with the Databricks CLI first:",
-            "  databricks auth login --profile <profile>",
-            "Then `agentbricks login --profile <profile>` saves it as your default.",
+            "  databricks auth login --profile my-workspace",
+            "Then `agentbricks login --profile my-workspace` saves it as your default.",
         ]
     )
     links = "\n".join(["\b", f"Docs:   {_DOCS_URL}", f"Issues: {_ISSUES_URL}"])
