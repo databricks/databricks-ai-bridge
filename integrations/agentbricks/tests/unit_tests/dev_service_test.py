@@ -60,15 +60,18 @@ env:
     )
 
     port_in_use = Mock(return_value=False)
+    free_port = Mock(return_value=54321)
 
     service = DevService(
         project_resolver=resolver,
         apps_client=apps,
         local_tracing=tracing,
         port_in_use=port_in_use,
+        free_port=free_port,
     )
     return SimpleNamespace(
         apps=apps,
+        free_port=free_port,
         port_in_use=port_in_use,
         project=project,
         resolver=resolver,
@@ -131,7 +134,7 @@ def test_prepare_builds_local_plan_and_run_uses_injected_apps_client(
         assert plan.preview.trace_experiment == "/Shared/traces"
         assert plan.preview.has_chat_ui is False
         assert plan.prepare_environment is True  # no .venv: auto-prepare
-        assert plan.requested_port == 9000
+        assert plan.app_port == 54321
         assert plan.entry_point.name == "app.agentbricksdev.yaml"
         assert plan.entry_point.exists()
         assert _manifest_env(plan.entry_point) == {
@@ -153,7 +156,8 @@ def test_prepare_builds_local_plan_and_run_uses_injected_apps_client(
         tmp_path,
         "app.agentbricksdev.yaml",
         prepare_environment=True,
-        app_port=9000,
+        port=9000,
+        app_port=54321,
     )
 
 
@@ -167,14 +171,15 @@ def test_prepare_honors_explicit_environment_flag_and_default_port(
     ) as plan:
         assert plan.prepare_environment is False
         assert plan.preview.port == 8000
-        assert plan.requested_port is None
+        assert plan.app_port == 54321
         service_fixture.service.run(plan)
 
     service_fixture.apps.run_local.assert_called_once_with(
         tmp_path,
         "app.agentbricksdev.yaml",
         prepare_environment=False,
-        app_port=None,
+        port=8000,
+        app_port=54321,
     )
 
 
@@ -313,7 +318,8 @@ def test_prepare_and_run_remain_safe_when_tracing_does_not_start(
         tmp_path,
         "app.agentbricksdev.yaml",
         prepare_environment=False,
-        app_port=8123,
+        port=8123,
+        app_port=54321,
     )
 
 

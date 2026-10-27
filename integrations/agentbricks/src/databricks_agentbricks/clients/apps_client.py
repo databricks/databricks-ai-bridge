@@ -540,14 +540,18 @@ class AppsClient:
         entry_point_name: str,
         *,
         prepare_environment: bool,
-        app_port: Optional[int],
+        port: int,
+        app_port: int,
     ) -> None:
-        """Run an app locally from a prepared manifest, streaming its output."""
+        """Run an app locally from a prepared manifest, streaming its output.
+
+        run-local's proxy listens on ``port`` and forwards to the app on ``app_port``. Both are
+        passed so no run falls back to the proxy's fixed default port.
+        """
         args = ["apps", "run-local"]
         if prepare_environment:
             args.append("--prepare-environment")
-        if app_port is not None:
-            args += ["--app-port", str(app_port)]
+        args += ["--port", str(port), "--app-port", str(app_port)]
         # run-local resolves this relative to cwd and rejects an absolute alternate-manifest path.
         args += ["--entry-point", entry_point_name]
         self._run(

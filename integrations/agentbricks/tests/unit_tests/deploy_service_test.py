@@ -26,6 +26,7 @@ from databricks.sdk.service.apps import App, AppDeployment
 from delete_test_fixtures import fake_workspace_client
 
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
+from databricks_agentbricks.clients.app_probe import ProbeOutcome, ProbeResult
 from databricks_agentbricks.clients.apps_client import AppsClient, AppState
 from databricks_agentbricks.clients.apps_user_auth_client import (
     AppAuthPlan,
@@ -1181,6 +1182,7 @@ def test_deploy_reports_one_timing_per_phase_plus_total(deployment_fixture, tmp_
         "app_update",
         "rollout",
         "grants",
+        "ready",
         "total",
     ]
     assert all(
@@ -1711,7 +1713,7 @@ def test_wait_follows_the_local_record_until_it_succeeds(deployment_fixture, tmp
             state.update(phase="Deploying the agent source")
             state["phase_started_at"] = deploy_state.timestamp(start + 20)
         if elapsed >= 40:
-            state.update(status="succeeded", result={"url": "https://demo.example"})
+            state.update(status="succeeded", result={"url": "https://demo.example", "ready": True})
         deploy_state.write_state(path, state)
 
     clock = _Clock(start, on_sleep=advance)
@@ -1770,7 +1772,9 @@ def test_wait_follows_the_app_from_starting_to_active(deployment_fixture, tmp_pa
     deployment_fixture.apps.find.side_effect = payloads
     clock = _Clock()
 
-    result = _service_with(deployment_fixture, clock).wait("demo", tmp_path, timeout_s=100)
+    result = _service_with(deployment_fixture, clock, app_probe=_ScriptedProbe("answered")).wait(
+        "demo", tmp_path, timeout_s=100
+    )
 
     assert result.status == "succeeded"
     assert result.url == "https://demo.example"
@@ -1794,3 +1798,155 @@ def test_wait_reports_the_apps_failure_message(deployment_fixture, tmp_path):
     assert result.status == "failed"
     assert result.error == "Could not deploy 'agent-bricks-demo'."
     assert result.log_tail == ["build failed"]
+
+
+# --- readiness: wait until the App answers ---------------------------------------------------
+
+_PROBE_DETAIL = {"answered": "HTTP 200", "booting": "HTTP 502", "unverifiable": "HTTP 403"}
+_SUCCEEDED_APP = {
+    "url": "https://demo.example",
+    "compute_status": {"state": "ACTIVE"},
+    "active_deployment": {"status": {"state": "SUCCEEDED"}},
+}
+
+
+class _ScriptedProbe:
+    """An App probe that returns the scripted outcomes in order, then repeats the last."""
+
+    def __init__(self, *outcomes: ProbeOutcome, on_probe=None) -> None:
+        self._outcomes = list(outcomes)
+        self.urls: list[str] = []
+        self._on_probe = on_probe
+
+    def probe(self, url: str) -> ProbeResult:
+        self.urls.append(url)
+        if self._on_probe is not None:
+            self._on_probe()
+        outcome = self._outcomes.pop(0) if len(self._outcomes) > 1 else self._outcomes[0]
+        return ProbeResult(outcome, _PROBE_DETAIL[outcome])
+
+
+def test_deploy_waits_for_the_app_to_answer_after_rollout_and_grants(
+    deployment_fixture, tmp_path: pathlib.Path
+):
+    order: list[str] = []
+    deployment_fixture.app.roll_out.side_effect = lambda *a: order.append("rollout")
+    deployment_fixture.apps.get_app_url.side_effect = lambda name: (
+        order.append("url") or "https://demo.example"
+    )
+    probe = _ScriptedProbe(
+        "booting", "booting", "booting", "answered", on_probe=lambda: order.append("probe")
+    )
+    clock = _Clock()
+    service = _service_with(deployment_fixture, clock, app_probe=probe)
+
+    result = service.deploy(_request(tmp_path))
+
+    assert result.ready is True
+    assert probe.urls == ["https://demo.example"] * 4
+    assert order == ["rollout", "url", "probe", "probe", "probe", "probe"]
+    assert clock.sleeps == [2.0, 2.0, 2.0]
+    deployment_fixture.reporter.progress.assert_any_call(
+        "Waiting for the agent to answer…", done_message="Agent answered"
+    )
+
+
+def test_deploy_records_the_answer_phase_while_the_app_boots(
+    deployment_fixture, tmp_path: pathlib.Path
+):
+    path = deploy_state.state_path(tmp_path, "agent-bricks-demo")
+    seen: list[tuple] = []
+
+    def record() -> None:
+        state = deploy_state.read_state(path) or {}
+        seen.append((state.get("status"), state.get("phase")))
+
+    tracker = DeployStateTracker(result_payload=lambda result: {"ready": result.ready})
+    deployment_fixture.reporter = deploy_state.DeployStateReporter(
+        deployment_fixture.reporter, tracker
+    )
+    probe = _ScriptedProbe("booting", "answered", on_probe=record)
+    service = _service_with(deployment_fixture, _Clock(), state_tracker=tracker, app_probe=probe)
+
+    service.deploy(_request(tmp_path))
+
+    # The second probe runs inside the answer phase, with the deploy still running.
+    assert seen[1] == ("running", "Waiting for the agent to answer")
+    state = deploy_state.read_state(path)
+    assert state is not None
+    assert (state["status"], state["result"]) == ("succeeded", {"ready": True})
+
+
+def test_deploy_fails_when_the_app_never_answers(deployment_fixture, tmp_path: pathlib.Path):
+    clock = _Clock()
+    tracker = DeployStateTracker(result_payload=lambda result: {})
+    service = _service_with(
+        deployment_fixture, clock, state_tracker=tracker, app_probe=_ScriptedProbe("booting")
+    )
+
+    with pytest.raises(AgentCliError) as raised:
+        service.deploy(_request(tmp_path))
+
+    assert raised.value.message == (
+        "Agent 'agent-bricks-demo' didn't answer within 5:00 (last: HTTP 502)."
+    )
+    assert "agentbricks deployments logs agent-bricks-demo" in (raised.value.hint or "")
+    assert sum(clock.sleeps) == 300.0
+    state = deploy_state.read_state(deploy_state.state_path(tmp_path, "agent-bricks-demo"))
+    assert state is not None and state["status"] == "failed"
+
+
+@pytest.mark.parametrize("cause", ["forbidden", "no_url"])
+def test_deploy_succeeds_with_a_note_when_the_app_cant_be_checked(
+    deployment_fixture, tmp_path: pathlib.Path, cause: str
+):
+    probe = _ScriptedProbe("unverifiable" if cause == "forbidden" else "answered")
+    if cause == "no_url":
+        deployment_fixture.apps.get_app_url.return_value = None
+    service = _service_with(deployment_fixture, _Clock(), app_probe=probe)
+
+    result = service.deploy(_request(tmp_path))
+
+    assert result.ready is None
+    (note,) = [n for n in _notes(deployment_fixture) if n.startswith("Couldn't check")]
+    assert note.startswith("Couldn't check the agent answers: ")
+    assert note.endswith(". It may return 502 for a few seconds.")
+    assert not any(
+        c.args[0].startswith("Waiting for the agent")
+        for c in deployment_fixture.reporter.progress.call_args_list
+    )
+
+
+def test_server_wait_keeps_a_succeeded_app_running_until_it_answers(
+    deployment_fixture, tmp_path: pathlib.Path
+):
+    deployment_fixture.apps.find.return_value = _SUCCEEDED_APP
+    probe = _ScriptedProbe("booting", "booting", "answered")
+    service = _service_with(deployment_fixture, _Clock(), app_probe=probe)
+
+    result = service.wait("agent-bricks-demo", tmp_path, timeout_s=100)
+
+    assert result.status == "succeeded"
+    assert len(probe.urls) == 3
+    assert "• Waiting for the agent to answer…" in _notes(deployment_fixture)
+
+
+def test_server_wait_times_out_in_the_answer_phase(deployment_fixture, tmp_path: pathlib.Path):
+    deployment_fixture.apps.find.return_value = _SUCCEEDED_APP
+    service = _service_with(deployment_fixture, _Clock(), app_probe=_ScriptedProbe("booting"))
+
+    result = service.wait("agent-bricks-demo", tmp_path, timeout_s=10)
+
+    assert (result.status, result.phase) == ("running", "Waiting for the agent to answer")
+
+
+def test_server_wait_treats_an_uncheckable_app_as_deployed_and_says_so(
+    deployment_fixture, tmp_path: pathlib.Path
+):
+    deployment_fixture.apps.find.return_value = _SUCCEEDED_APP
+    service = _service_with(deployment_fixture, _Clock(), app_probe=_ScriptedProbe("unverifiable"))
+
+    result = service.wait("agent-bricks-demo", tmp_path, timeout_s=10)
+
+    assert (result.status, result.ready) == ("succeeded", None)
+    assert any(n.startswith("Couldn't check the agent answers") for n in _notes(deployment_fixture))

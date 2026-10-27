@@ -9,6 +9,7 @@ import logging
 from typing import Protocol, cast
 
 from databricks_agentkit.runtime.auth import AuthError
+from databricks_agentkit.runtime.errors import describe_failure
 from databricks_agentkit.runtime.store import RuntimeStore
 from databricks_agentkit.runtime.types import (
     Invocation,
@@ -35,6 +36,15 @@ def _copy_json_object(value: JsonObject, name: str) -> JsonObject:
     if not isinstance(copied, dict):
         raise TypeError(f"{name} must be a JSON object")
     return copied
+
+
+def _describe(error: Exception) -> JsonValue:
+    """Describe a failure, never letting a describe bug leave the invocation running."""
+    try:
+        return describe_failure(error).response()
+    except Exception:
+        logger.exception("Failed to describe invocation failure")
+        return None
 
 
 class InvocationExecutor(Protocol):
@@ -106,12 +116,14 @@ class AttemptExecution:
                 claimed.attempt,
             )
             try:
-                failure_response: JsonValue = None
+                failure_response: JsonValue
                 if isinstance(error, AuthError):
                     failure_response = {
                         "error": error.payload(),
                         "status_code": error.status_code,
                     }
+                else:
+                    failure_response = _describe(error)
                 await self._runtime_store.fail(
                     invocation_id,
                     claimed.attempt,

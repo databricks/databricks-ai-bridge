@@ -71,6 +71,7 @@ def _stub_local_tracing(monkeypatch):
 def _stub_free_port(monkeypatch):
     """Treat the app port as free so dev tests never depend on what this machine is running."""
     monkeypatch.setattr(dev_mod, "port_in_use", lambda port: False)
+    monkeypatch.setattr(dev_mod, "free_port", lambda: 54321)
 
 
 def test_dev_prepares_when_no_venv(tmp_path: pathlib.Path):
@@ -122,7 +123,20 @@ def test_dev_no_prepare_and_custom_port(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     cmd = db.call_args.args[0]
     assert "--prepare-environment" not in cmd
-    assert cmd[cmd.index("--app-port") : cmd.index("--app-port") + 2] == ["--app-port", "9000"]
+    # The selected port is run-local's proxy; the app runs behind it on a free port.
+    assert cmd[cmd.index("--port") : cmd.index("--port") + 2] == ["--port", "9000"]
+    assert cmd[cmd.index("--app-port") : cmd.index("--app-port") + 2] == ["--app-port", "54321"]
+
+
+def test_dev_default_port_never_leaves_run_local_on_its_fixed_proxy_port(tmp_path: pathlib.Path):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    with mock.patch.object(dev_mod, "_databricks") as db:
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code == 0, result.output
+    cmd = db.call_args.args[0]
+    assert cmd[cmd.index("--port") : cmd.index("--port") + 2] == ["--port", "8000"]
+    assert cmd[cmd.index("--app-port") : cmd.index("--app-port") + 2] == ["--app-port", "54321"]
+    assert "8001" not in cmd
 
 
 def test_dev_filters_build_index_env_via_entry_point(tmp_path: pathlib.Path):

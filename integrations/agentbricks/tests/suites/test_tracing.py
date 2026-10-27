@@ -44,8 +44,6 @@ def test_tracing(agentbricks_cli: AgentbricksCli, project: Project, cleanup: Cle
     assert traces, "No trace in the project's experiment after invoking the App"
 
 
-# Local dev servers share run-local's proxy port, so all dev runs stay on one worker, in order.
-@pytest.mark.xdist_group("dev")
 def test_tracing_reads_local_dev_traces(agentbricks_cli: AgentbricksCli, project: Project) -> None:
     """With tracing unbound, `agentbricks dev` still traces locally and `tracing list`/`get` read it."""
     agentbricks_cli.run(f"init --framework langgraph {project.path}", timeout=600)

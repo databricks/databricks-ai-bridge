@@ -200,7 +200,7 @@ _Options_
 | --- | --- | --- | --- | --- |
 | `--source <SOURCE>` | path | `.` | no | Local source directory to run (containing app.yaml). Defaults to the current directory. |
 | `--prepare-environment`, `--no-prepare-environment` | flag | - | no | Build the app's environment with uv before running. Default: build only if no .venv exists yet, and reuse it otherwise. Requires uv. |
-| `--app-port <APP_PORT>` | integer | - | no | Port to run the app on (default 8000). |
+| `--app-port <APP_PORT>` | integer | - | no | Port to run the agent on (default 8000). |
 
 ### `agentbricks memory`
 
@@ -1440,7 +1440,7 @@ Scaling to multiple instances (--instances) uses best-effort sticky routing, so 
 
 To keep a session on one app replica (sticky routing), API clients must resend a stable UUID (for example, their session id) in the `X-Routing-Key` request header on every request. The header is a routing hint only - non-blank, no more than 128 UTF-8 bytes, used verbatim - not authentication and not the session id itself (send the session id in the request body). Example: `X-Routing-Key: <uuid>`
 
-A first deploy takes a few minutes (mostly starting app compute). From a coding agent or script with a short command timeout, use --no-wait and then `agentbricks deployments wait`.
+A first deploy takes a few minutes (mostly starting app compute). Deploy finishes once the agent answers requests. From a coding agent or script with a short command timeout, use --no-wait and then `agentbricks deployments wait`.
 
 ```
 agentbricks deploy [NAME] [options]
@@ -1466,7 +1466,7 @@ _Options_
 | `--allow-user-scope-update` | flag | - | no | Allow Agent Bricks to add missing user API scopes to an existing App from managed-tool inference and `[auth.user]` additions. Once added, later deploys do not need this flag. |
 | `--no-wait` | flag | - | no | Run the quick checks, then finish the deploy in a background process and exit. Follow it with `agentbricks deployments wait`. |
 
-`deploy` refuses to start while another deploy of the same app is still running from the project. It records its progress in `.agentbricks/deploy-<app>.json`, and a `--no-wait` deploy logs to `.agentbricks/deploy-<app>.log`. Long steps print `• <step>… M:SS` every 15 seconds: on stderr when output isn't a terminal or under `-o json` (whose stdout is exactly one JSON document), and in the spinner on a terminal. With `--no-wait`, text output is `Deploy of <app> started in the background. Next: agentbricks deployments wait <app>` and `-o json` output is `{"deployment", "status": "started", "log", "state_file"}`.
+`deploy` refuses to start while another deploy of the same app is still running from the project. It records its progress in `.agentbricks/deploy-<app>.json`, and a `--no-wait` deploy logs to `.agentbricks/deploy-<app>.log`. Long steps print `• <step>… M:SS` every 15 seconds: on stderr when output isn't a terminal or under `-o json` (whose stdout is exactly one JSON document), and in the spinner on a terminal. After rollout, `deploy` waits up to 5 minutes for the app to stop returning 502/503/504 (`• Waiting for the agent to answer…`), then prints `Deployed`; if it never answers, it exits 1 and points at `agentbricks deployments logs <app>`. When the profile can't call the app (a PAT, or 401/403), it prints `Couldn't check the agent answers: <reason>.` on stderr and still succeeds. The `-o json` result includes `"ready"`: `true` once the app answered, `null` when it couldn't be checked. With `--no-wait`, text output is `Deploy of <app> started in the background. Next: agentbricks deployments wait <app>` and `-o json` output is `{"deployment", "status": "started", "log", "state_file"}`.
 
 ### `agentbricks deployments`
 
@@ -1511,7 +1511,7 @@ Wait for a deployment to finish, for up to --timeout seconds, then report it.
 
 Follows the deploy started by `agentbricks deploy` (including --no-wait) in this project, or otherwise the App's state in the workspace. NAME defaults to the deployment recorded in agent.toml.
 
-Exit status: 0 deployed and running; 1 failed; 75 still deploying at the timeout (run the same command again).
+Exit status: 0 deployed and answering (or, with a note, deployed but not checkable); 1 failed; 75 still deploying at the timeout (run the same command again).
 
 ```
 agentbricks deployments wait [NAME] [options]
@@ -1531,7 +1531,7 @@ _Options_
 | `--timeout <TIMEOUT>` | integer range | `100` | no | Seconds to wait before returning exit 75. |
 | `--source <SOURCE>` | path | `.` | no | Project directory the deploy ran from. |
 
-On exit 0 it prints the URL and the invoke command; on exit 1, the error and the last 20 lines of the deploy log (or the App's status message); on exit 75, `still deploying: <phase>, M:SS elapsed — run the same command again`. Phase changes and heartbeats go to stderr. Under `-o json`, stdout is exactly one object `{deployment, status, phase, elapsed_s, url, error, log_tail}` with the same exit code.
+On exit 0 it prints the URL and the invoke command; on exit 1, the error and the last 20 lines of the deploy log (or the App's status message); on exit 75, `still deploying: <phase>, M:SS elapsed — run the same command again`. A deploy whose app still returns 502/503/504 is in the `Waiting for the agent to answer` phase. Phase changes and heartbeats go to stderr. When the profile can't call the app, exit 0 comes with `Couldn't check the agent answers` on stderr. Under `-o json`, stdout is exactly one object `{deployment, status, phase, elapsed_s, url, error, log_tail, ready}` with the same exit code; `ready` is `true` once the app answered and `null` otherwise.
 
 #### `agentbricks deployments logs`
 

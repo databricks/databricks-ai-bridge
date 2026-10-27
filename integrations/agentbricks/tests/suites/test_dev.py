@@ -1,8 +1,7 @@
 """`agentbricks dev`: every tool added with `tools add` works on the local dev server, and every
 `init` template boots and answers.
 
-Each dev server gets a free port, passed as both --app-port and PORT: the template server binds
-$PORT, so an inherited PORT would override --app-port.
+Each dev server gets its own free port, so dev runs can go in parallel.
 """
 
 from __future__ import annotations
@@ -16,9 +15,6 @@ from harness.fake_workspace import FAKE_MODEL_REPLY
 from harness.project import Project
 from harness.target import TargetWorkspace, WorkspaceKind
 from tool_definitions import Tool
-
-# Local dev servers share run-local's proxy port, so all dev runs stay on one worker, in order.
-pytestmark = pytest.mark.xdist_group("dev")
 
 # The console wraps the box at its width, which would split the printed command over lines.
 WIDE_CONSOLE = {"COLUMNS": "250"}
@@ -44,9 +40,7 @@ def test_dev(
         project.write_files(tool.files)
 
     port = free_port()
-    with agentbricks_cli.start(
-        f"dev --source {project.path} --app-port {port}", env={"PORT": str(port)}
-    ) as server:
+    with agentbricks_cli.start(f"dev --source {project.path} --app-port {port}") as server:
         server.wait_until_serving(port)
         for tool in tools:
             with subtests.test(tool=tool.name):

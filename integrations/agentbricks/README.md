@@ -191,10 +191,10 @@ agentbricks deployments wait agent-bricks-my-agent
 ```
 
 `deployments wait` returns within 100 seconds (`--timeout`). Exit 0 means the agent is deployed and
-running, and it prints the URL; exit 1 means the deploy failed, and it prints the error and the end
-of the deploy log; exit 75 means it is still deploying, so run the same command again. Don't poll
-with `sleep`. Progress lines with the elapsed time go to stderr, also under `-o json`, whose stdout
-is a single JSON document. A second `deploy` of the same app is refused while one is still running
+answering requests, and it prints the URL; exit 1 means the deploy failed, and it prints the error
+and the end of the deploy log; exit 75 means it is still deploying, so run the same command again.
+Don't poll with `sleep`. Progress lines with the elapsed time go to stderr, also under `-o json`,
+whose stdout is a single JSON document. A second `deploy` of the same app is refused while one is still running
 from the project; the deploy's state and background log are in `.agentbricks/deploy-<app>.json` and
 `.agentbricks/deploy-<app>.log`. If the App is busy with another operation, `deploy` retries for
 about two minutes before failing.
@@ -360,9 +360,8 @@ agentbricks dev
 agentbricks --profile <profile> deploy my-agent
 ```
 
-Use the URL `agentbricks dev` prints (port 8000, or `--app-port`). The `localhost:8001` line from the
-wrapped `databricks apps run-local` is its proxy to the same app. Requests can fail with HTTP 500 for
-a few seconds while the app starts.
+Use the URL `agentbricks dev` prints (port 8000, or `--app-port`). Agents on different ports can run
+side by side. Requests can fail with HTTP 500 for a few seconds while the app starts.
 
 Use `--framework openai` for OpenAI Agents. Templates keep agent code separate from the runtime
 adapter and declare default Session and Memory Store bindings in `agent.toml`.
@@ -956,6 +955,9 @@ agentbricks tools add genie-agent SPACE_ID
 agentbricks tools remove mcp system.ai.web_search
 agentbricks tools list
 ```
+
+`agentbricks tools list` shows integrations you can add. To see the tools an agent already has, open
+**Tools** under Capabilities in the chat app.
 
 ### Managed tool identity and migration
 

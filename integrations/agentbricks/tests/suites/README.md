@@ -14,8 +14,7 @@ uv run pytest tests/suites -n 6 --dist loadgroup \
 ```
 
 - Narrow it to a file (`tests/suites/test_deploy.py`) or a test.
-- `-n 6 --dist loadgroup` runs tests in parallel; `loadgroup` keeps the dev tests on one worker,
-  because local dev servers share a proxy port.
+- `-n 6 --dist loadgroup` runs tests in parallel; each dev server gets its own ports.
 - Workspace resources the suite borrows but never creates are flags: `--catalog`,
   `--warehouse-id`, and `--genie-space-id` (without one the Genie tool is skipped).
 - To set flags once for a shell or a CI job, use pytest's own `PYTEST_ADDOPTS`, e.g.
@@ -35,8 +34,7 @@ uv run pytest tests/suites -n 6 --dist loadgroup \
 CI runs the fake-workspace suites from built wheels: `.github/scripts/run_agentbricks_tests.sh suites-fake` builds both wheels,
 installs them into a fresh venv and runs `pytest tests/suites --workspace fake -n auto --dist loadgroup`
 from it, so every suite exercises the shipped console script and
-package data rather than the editable checkout. Pull requests run every suite on ubuntu and
-two dev boots on macOS; the release cut runs every suite on both. Run the same script from
+package data rather than the editable checkout. Run the same script from
 `integrations/agentbricks` to reproduce CI; any arguments after `suites-fake` select tests.
 
 The run id and output directory (logs, generated projects, `apps.jsonl`) are printed at the start:

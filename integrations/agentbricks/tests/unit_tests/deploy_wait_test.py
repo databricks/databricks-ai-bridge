@@ -16,7 +16,9 @@ from deploy_test import _DeployApi, _DeployRunner, _real_deploy_context
 
 from databricks_agentbricks import errors
 from databricks_agentbricks.cli import deploy as deploy_mod
+from databricks_agentbricks.clients.app_probe import ProbeOutcome, ProbeResult
 from databricks_agentbricks.projects.agent_project import AgentProject
+from databricks_agentbricks.services import deploy_service as deploy_service_mod
 from databricks_agentbricks.services.deployment import deploy_state
 
 _APP = "agent-bricks-demo"
@@ -506,6 +508,7 @@ def test_wait_json_prints_exactly_one_object_with_the_same_exit_code(
         "url",
         "error",
         "log_tail",
+        "ready",
     }
     assert payload["deployment"] == _APP
     assert payload["status"] == status
@@ -596,4 +599,193 @@ def test_wait_help_lists_exit_codes_and_examples():
     result = CliRunner().invoke(deploy_mod.deployments, ["wait", "--help"])
     assert result.exit_code == 0
     assert "75 still deploying" in result.output
+    assert "0 deployed and answering" in result.output
     assert "--timeout" in result.output and "100" in result.output
+
+
+# --- readiness: deploy and wait finish only once the App answers ---------------------------------
+
+_PROBE_DETAIL = {"answered": "HTTP 200", "booting": "HTTP 502", "unverifiable": "HTTP 403"}
+_SUCCEEDED_APP = {
+    "url": "https://agent.example",
+    "compute_status": {"state": "ACTIVE"},
+    "active_deployment": {"status": {"state": "SUCCEEDED"}},
+}
+
+
+def _scripted_probe(
+    monkeypatch: pytest.MonkeyPatch, *outcomes: ProbeOutcome, on_probe=None
+) -> list[str]:
+    """Replace the CLI's App probe with one returning ``outcomes`` in order; return its URLs."""
+    script = list(outcomes)
+    urls: list[str] = []
+
+    class Probe:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def probe(self, url: str) -> ProbeResult:
+            urls.append(url)
+            if on_probe is not None:
+                on_probe()
+            outcome = script.pop(0) if len(script) > 1 else script[0]
+            return ProbeResult(outcome, _PROBE_DETAIL[outcome])
+
+    monkeypatch.setattr(deploy_mod, "AppProbe", Probe)
+    monkeypatch.setattr(deploy_service_mod, "_READY_POLL_S", 0.0)
+    return urls
+
+
+def _deploy(project: pathlib.Path, monkeypatch: pytest.MonkeyPatch, *, output: str = "text"):
+    events: list[tuple] = []
+    monkeypatch.setattr(deploy_mod, "_databricks", _DeployRunner(events))
+    return CliRunner().invoke(
+        deploy_mod.deploy,
+        ["demo", "--source", str(project), "--pip-index-url", ""],
+        obj=_real_deploy_context(_DeployApi(events), output=output),
+    )
+
+
+def test_deploy_prints_deployed_only_after_the_agent_answers(
+    project: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    phases: list[tuple] = []
+
+    def record() -> None:
+        state = _state(project)
+        phases.append((state["status"], state["phase"]))
+
+    urls = _scripted_probe(monkeypatch, "booting", "booting", "answered", on_probe=record)
+
+    result = _deploy(project, monkeypatch)
+
+    assert result.exit_code == 0, result.output
+    assert len(urls) == 3
+    out = result.stdout
+    waiting = out.index("• Waiting for the agent to answer…")
+    assert waiting < out.index("Agent answered") < out.index("Deployed agent 'agent-bricks-demo'")
+    # While it boots, the state file says it's still deploying, in the answer phase.
+    assert phases[-1] == ("running", "Waiting for the agent to answer")
+    assert _state(project)["status"] == "succeeded"
+
+
+def test_json_deploy_reports_ready_after_the_agent_answers(
+    project: pathlib.Path, monkeypatch: pytest.MonkeyPatch, json_mode
+):
+    _scripted_probe(monkeypatch, "booting", "answered")
+
+    result = _deploy(project, monkeypatch, output="json")
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["ready"] is True
+    assert "• Waiting for the agent to answer…" in result.stderr
+    assert _state(project)["result"]["ready"] is True
+
+
+def test_deploy_fails_with_a_logs_pointer_when_the_agent_never_answers(
+    project: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    _scripted_probe(monkeypatch, "booting")
+    monkeypatch.setattr(deploy_service_mod, "_READY_TIMEOUT_S", 0.0)
+
+    result = _deploy(project, monkeypatch)
+
+    assert result.exit_code == 1
+    assert "Deployed agent" not in result.stdout
+    assert f"error: Agent '{_APP}' didn't answer within 0:00 (last: HTTP 502)." in result.stderr
+    assert f"agentbricks deployments logs {_APP}" in result.stderr
+    assert _state(project)["status"] == "failed"
+
+
+def test_deploy_notes_and_succeeds_when_the_profile_cant_call_the_app(
+    project: pathlib.Path, monkeypatch: pytest.MonkeyPatch, json_mode
+):
+    _scripted_probe(monkeypatch, "unverifiable")
+
+    result = _deploy(project, monkeypatch, output="json")
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["ready"] is None
+    assert "Couldn't check the agent answers: HTTP 403." in result.stderr
+
+
+def test_wait_returns_75_until_a_succeeded_app_answers_then_0(
+    project: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(deploy_mod, "_databricks", _app_runner([_SUCCEEDED_APP], []))
+    _scripted_probe(monkeypatch, "booting")
+
+    booting = _wait(project, _APP, "--timeout", "0")
+
+    assert booting.exit_code == 75
+    assert booting.stdout.startswith("still deploying: Waiting for the agent to answer, ")
+
+    _scripted_probe(monkeypatch, "answered")
+
+    answered = _wait(project, _APP, "--timeout", "0")
+
+    assert answered.exit_code == 0, answered.output
+    assert "Deployed agent 'agent-bricks-demo'" in answered.stdout
+    assert "Couldn't check" not in answered.stderr
+
+
+def test_wait_notes_a_succeeded_app_the_profile_cant_call(
+    project: pathlib.Path, monkeypatch: pytest.MonkeyPatch, json_mode
+):
+    monkeypatch.setattr(deploy_mod, "_databricks", _app_runner([_SUCCEEDED_APP], []))
+    _scripted_probe(monkeypatch, "unverifiable")
+
+    result = _wait(project, _APP, "--timeout", "0", output="json")
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "succeeded"
+    assert payload["ready"] is None
+    assert "Couldn't check the agent answers: HTTP 403." in result.stderr
+
+
+@pytest.mark.parametrize(("ready", "noted"), [(True, False), (None, True)])
+def test_wait_carries_a_local_deploys_readiness(project: pathlib.Path, json_mode, ready, noted):
+    _write_state(
+        project, status="succeeded", result={"url": "https://agent.example", "ready": ready}
+    )
+
+    result = _wait(project, _APP, output="json")
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["ready"] is ready
+    assert ("Couldn't check the agent answers." in result.stderr) is noted
+
+
+def test_wait_returns_75_while_a_local_deploy_waits_for_the_answer(project: pathlib.Path):
+    _write_state(project, pid=os.getppid(), phase="Waiting for the agent to answer")
+
+    result = _wait(project, _APP, "--timeout", "0")
+
+    assert result.exit_code == 75
+    assert result.stdout.startswith("still deploying: Waiting for the agent to answer, ")
+
+
+def test_wait_shows_an_answer_phase_that_finished_between_polls(project: pathlib.Path):
+    _write_state(
+        project,
+        status="succeeded",
+        phase="Waiting for the agent to answer",
+        result={"url": "https://agent.example"},
+    )
+
+    result = _wait(project, _APP)
+
+    assert result.exit_code == 0, result.output
+    assert "• Waiting for the agent to answer…" in result.stderr
+    assert "Deployed agent 'agent-bricks-demo'" in result.stdout
+
+
+def test_deploy_help_and_reference_say_deploy_waits_for_the_answer():
+    result = CliRunner().invoke(deploy_mod.deploy, ["--help"])
+    reference = (_PACKAGE / "cli.md").read_text()
+
+    assert "Deploy finishes once the agent answers requests." in " ".join(result.output.split())
+    assert "Deploy finishes once the agent answers requests." in reference
+    assert "0 deployed and answering" in reference

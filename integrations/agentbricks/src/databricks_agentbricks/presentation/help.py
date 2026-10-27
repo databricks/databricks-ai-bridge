@@ -51,7 +51,10 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("doctor",): (
         ("agentbricks doctor .", "check an existing repository's Agent Bricks onboarding"),
     ),
-    ("dev",): (("agentbricks dev", "run the agent locally with a chat UI"),),
+    ("dev",): (
+        ("agentbricks dev", "run the agent locally with a chat UI"),
+        ("agentbricks dev --app-port 8002", "run a second agent alongside it"),
+    ),
     ("memory",): (
         ("agentbricks memory stores create --display-name agent-memory", "create a memory store"),
         ("agentbricks memory bind agent-memory", "bind it to the agent (wired in on dev / deploy)"),
