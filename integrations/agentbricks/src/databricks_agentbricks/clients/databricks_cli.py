@@ -16,6 +16,7 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Optional
 
+from databricks_agentbricks.clients import terminal_relay
 from databricks_agentbricks.errors import AgentCliError
 
 # Lines of relayed output a `tee` run keeps for callers that inspect a failure.
@@ -39,6 +40,7 @@ def _databricks(
     tee: bool = False,
     ready_probe: Optional[Callable[[], bool]] = None,
     on_ready: Optional[Callable[[], None]] = None,
+    quiet_status: Optional[Callable[[float], str]] = None,
 ) -> subprocess.CompletedProcess:
     """Run one ``databricks`` command.
 
@@ -50,12 +52,19 @@ def _databricks(
     ``ready_probe`` is for a long-running server command such as ``apps run-local``: its output
     streams as usual, the probe is polled while the command runs, and ``on_ready`` is called once
     the probe first succeeds. A command that exits before it is ready never triggers ``on_ready``,
-    so the caller can hold back a success message until the server actually answers.
+    so the caller can hold back a success message until the server actually answers. With
+    ``quiet_status`` too, on a terminal that supports it, the output is relayed through a
+    pseudo-terminal and that status line is drawn whenever the output goes quiet before then (see
+    ``terminal_relay``); otherwise the output streams as usual.
     """
     cmd = ["databricks", *args]
     if profile:
         cmd += ["--profile", profile]
-    if ready_probe is not None:
+    if ready_probe is not None and quiet_status is not None and terminal_relay.supported():
+        result = terminal_relay.run(
+            cmd, cwd=cwd, env=env, probe=ready_probe, on_ready=on_ready, quiet_status=quiet_status
+        )
+    elif ready_probe is not None:
         result = _run_until_ready(cmd, cwd=cwd, env=env, probe=ready_probe, on_ready=on_ready)
     elif tee:
         result = _run_tee(cmd, cwd=cwd, env=env)

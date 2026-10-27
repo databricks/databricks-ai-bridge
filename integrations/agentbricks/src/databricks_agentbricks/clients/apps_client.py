@@ -544,6 +544,7 @@ class AppsClient:
         port: int,
         app_port: int,
         on_ready: Optional[Callable[[], None]] = None,
+        quiet_status: Optional[Callable[[float], str]] = None,
     ) -> None:
         """Run an app locally from a prepared manifest, streaming its output.
 
@@ -553,7 +554,8 @@ class AppsClient:
         With ``on_ready``, it is called once the app itself answers on ``app_port`` (the proxy on
         ``port`` listens before the app is up), so the caller can report success only when the app
         is actually up. A failure is then reported as "could not start" or "stopped" depending on
-        whether it got that far.
+        whether it got that far. ``quiet_status`` (given the seconds since start) is the line to
+        show while the output is quiet before then, where the terminal supports it.
         """
         args = ["apps", "run-local"]
         if prepare_environment:
@@ -586,6 +588,7 @@ class AppsClient:
             env=_get_run_local_env(),
             ready_probe=lambda: accepts_connections(app_port),
             on_ready=_on_ready,
+            quiet_status=quiet_status,
         )
         if result.returncode != 0:
             if started:
