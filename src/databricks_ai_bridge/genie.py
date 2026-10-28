@@ -1,3 +1,4 @@
+import asyncio
 import bisect
 import logging
 import time
@@ -472,6 +473,230 @@ class Genie:
         else:
             resp = self.create_message(conversation_id, question)
         genie_response = self.poll_for_result(resp["conversation_id"], resp["message_id"])
+        if not genie_response.conversation_id:
+            genie_response.conversation_id = resp["conversation_id"]
+        return genie_response
+
+
+class AsyncGenie(Genie):
+    """Async variant of :class:`Genie` — all public methods are coroutines.
+
+    The Databricks SDK client is synchronous; every API call is dispatched to a
+    thread pool via :func:`asyncio.to_thread` so the event loop is never blocked
+    during network I/O or polling waits.  MLflow tracing is preserved unchanged.
+
+    Usage::
+
+        genie = AsyncGenie(space_id="abc123")
+        response = await genie.ask_question("What were Q3 sales by region?")
+
+        # Multi-turn conversation
+        first = await genie.ask_question("Show total revenue by region")
+        follow = await genie.ask_question(
+            "Break that down by quarter",
+            conversation_id=first.conversation_id,
+        )
+    """
+
+    @mlflow_trace
+    async def start_conversation(self, content: str) -> Dict[str, Any]:
+        return await asyncio.to_thread(
+            self.genie._api.do,
+            "POST",
+            f"/api/2.0/genie/spaces/{self.space_id}/start-conversation",
+            body={"content": content},
+            headers=self.headers,
+        )
+
+    @mlflow_trace
+    async def create_message(self, conversation_id: str, content: str) -> Dict[str, Any]:
+        return await asyncio.to_thread(
+            self.genie._api.do,
+            "POST",
+            f"/api/2.0/genie/spaces/{self.space_id}/conversations/{conversation_id}/messages",
+            body={"content": content},
+            headers=self.headers,
+        )
+
+    @mlflow_trace
+    async def poll_for_result(self, conversation_id: str, message_id: str) -> GenieResponse:
+        @mlflow_trace
+        async def poll_query_results(
+            attachment_id: str,
+            query_str: str,
+            description: str,
+            conversation_id: str = conversation_id,
+            suggested_questions: Optional[List[str]] = None,
+            text_attachment_content: Optional[str] = None,
+        ) -> GenieResponse:
+            iteration_count = 0
+            while iteration_count < MAX_ITERATIONS:
+                iteration_count += 1
+                resp = (
+                    await asyncio.to_thread(
+                        self.genie._api.do,
+                        "GET",
+                        f"/api/2.0/genie/spaces/{self.space_id}/conversations/{conversation_id}/messages/{message_id}/attachments/{attachment_id}/query-result",
+                        headers=self.headers,
+                    )
+                )["statement_response"]
+                state = resp["status"]["state"]
+                returned_conversation_id = resp.get("conversation_id", None)
+                if state == "SUCCEEDED":
+                    result = _parse_query_result(resp, self.truncate_results, self.return_pandas)
+                    return GenieResponse(
+                        result,
+                        query_str,
+                        description,
+                        returned_conversation_id,
+                        suggested_questions,
+                        text_attachment_content,
+                    )
+                elif state in ["RUNNING", "PENDING"]:
+                    logging.debug("Waiting for query result...")
+                    await asyncio.sleep(ITERATION_FREQUENCY)
+                else:
+                    return GenieResponse(
+                        f"No query result: {resp['state']}",
+                        query_str,
+                        description,
+                        returned_conversation_id,
+                        suggested_questions,
+                        text_attachment_content,
+                    )
+            return GenieResponse(
+                f"Genie query for result timed out after {MAX_ITERATIONS} iterations of 5 seconds",
+                query_str,
+                description,
+                conversation_id,
+                suggested_questions,
+                text_attachment_content,
+            )
+
+        @mlflow_trace
+        async def poll_result() -> GenieResponse:
+            import mlflow
+
+            iteration_count = 0
+
+            # use MLflow client to get parent of any new spans we create from the current active span
+            # (parenting keeps spans in the same trace)
+            client = mlflow.tracking.MlflowClient()
+            with mlflow.start_span(name="genie_timeline", span_type="CHAIN") as parent:
+                parent_trace_id = parent.trace_id if parent else None
+                parent_span_id = parent.span_id if parent else None
+
+                # Track last status from API and the current child span
+                last_status = None
+                current_span = None
+
+                while iteration_count < MAX_ITERATIONS:
+                    iteration_count += 1
+                    resp = await asyncio.to_thread(
+                        self.genie._api.do,
+                        "GET",
+                        f"/api/2.0/genie/spaces/{self.space_id}/conversations/{conversation_id}/messages/{message_id}",
+                        headers=self.headers,
+                    )
+                    returned_conversation_id = resp.get("conversation_id", None)
+
+                    # get current status from API response
+                    current_status = resp["status"]
+
+                    # On status change: end previous span, start a new one (excluding terminal states)
+                    if current_status != last_status:
+                        # END previous span
+                        current_span = _end_current_span(
+                            client, parent_trace_id, current_span, last_status
+                        )
+
+                        # START new span for non-terminal states
+                        if current_status not in TERMINAL_STATES:
+                            try:
+                                current_span = client.start_span(
+                                    name=current_status.lower(),
+                                    trace_id=parent_trace_id,
+                                    parent_id=parent_span_id,
+                                    span_type="CHAIN",
+                                    attributes={
+                                        "state": current_status,
+                                        "conversation_id": conversation_id,
+                                        "message_id": message_id,
+                                    },
+                                )
+                            except mlflow.exceptions.MlflowTracingException as e:
+                                logging.warning(f"Failed to create span for {current_status}: {e}")
+                                current_span = None
+
+                        logging.debug(f"Status: {last_status} → {current_status}")
+                        last_status = current_status
+
+                    if current_status == "COMPLETED":
+                        parsed = _parse_attachments(resp)
+                        suggested_questions = _extract_suggested_questions_from_attachment(
+                            parsed["suggested_questions_attachment"]
+                        )
+                        text_attachment_content = _extract_text_attachment_content_from_attachments(
+                            parsed["text_attachments"]
+                        )
+
+                        if parsed["query_attachment"]:
+                            query_obj = parsed["query_attachment"].get("query") or {}
+                            attachment_id = parsed["query_attachment"].get("attachment_id")
+
+                            if attachment_id:
+                                return await poll_query_results(
+                                    attachment_id=attachment_id,
+                                    query_str=query_obj.get("query", ""),
+                                    description=query_obj.get("description", ""),
+                                    suggested_questions=suggested_questions,
+                                    conversation_id=returned_conversation_id,
+                                    text_attachment_content=text_attachment_content,
+                                )
+
+                        # if there is no query attachment, use text attachment as result
+                        return GenieResponse(
+                            result=text_attachment_content or "",
+                            suggested_questions=suggested_questions,
+                            conversation_id=returned_conversation_id,
+                            text_attachment_content=text_attachment_content,
+                        )
+
+                    elif current_status in {"CANCELLED", "QUERY_RESULT_EXPIRED"}:
+                        return GenieResponse(result=f"Genie query {current_status.lower()}.")
+
+                    elif current_status == "FAILED":
+                        return GenieResponse(
+                            result=f"Genie query failed with error: {resp.get('error', 'Unknown error')}"
+                        )
+                    # includes EXECUTING_QUERY, Genie can retry after this status
+                    else:
+                        logging.debug(f"Status: {current_status}")
+                        await asyncio.sleep(ITERATION_FREQUENCY)
+
+                # timeout path / end of while loop — close any open spans
+                current_span = _end_current_span(
+                    client,
+                    parent_trace_id,
+                    current_span,
+                    last_status,
+                )
+                return GenieResponse(
+                    f"Genie query timed out after {MAX_ITERATIONS} iterations of {ITERATION_FREQUENCY} seconds (total {MAX_ITERATIONS * ITERATION_FREQUENCY} seconds)",
+                    conversation_id=conversation_id,
+                )
+
+        return await poll_result()
+
+    @mlflow_trace
+    async def ask_question(
+        self, question: str, conversation_id: Optional[str] = None
+    ) -> GenieResponse:
+        if not conversation_id:
+            resp = await self.start_conversation(question)
+        else:
+            resp = await self.create_message(conversation_id, question)
+        genie_response = await self.poll_for_result(resp["conversation_id"], resp["message_id"])
         if not genie_response.conversation_id:
             genie_response.conversation_id = resp["conversation_id"]
         return genie_response

@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from databricks_ai_bridge.genie import (
+    AsyncGenie,
     Genie,
     _count_tokens,
     _extract_suggested_questions_from_attachment,
@@ -1101,3 +1102,196 @@ def test_poll_null_attachments(genie, mock_workspace_client):
     result = genie.poll_for_result("conv_123", "msg_456")
     assert result.suggested_questions is None
     assert result.text_attachment_content == ""
+
+
+# ---------------------------------------------------------------------------
+# AsyncGenie tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def async_genie(mock_workspace_client):
+    return AsyncGenie(space_id="test_space_id")
+
+
+@pytest.mark.asyncio
+async def test_async_start_conversation(async_genie, mock_workspace_client):
+    mock_workspace_client.genie._api.do.return_value = {"conversation_id": "123"}
+    response = await async_genie.start_conversation("Hello")
+    assert response == {"conversation_id": "123"}
+
+
+@pytest.mark.asyncio
+async def test_async_create_message(async_genie, mock_workspace_client):
+    mock_workspace_client.genie._api.do.return_value = {
+        "conversation_id": "123",
+        "message_id": "456",
+    }
+    response = await async_genie.create_message("123", "Follow-up question")
+    assert response == {"conversation_id": "123", "message_id": "456"}
+
+
+@pytest.mark.asyncio
+async def test_async_ask_question_new_conversation(async_genie, mock_workspace_client):
+    mock_workspace_client.genie._api.do.side_effect = [
+        # start_conversation
+        {"conversation_id": "conv_1", "message_id": "msg_1"},
+        # poll_for_result → COMPLETED immediately
+        {"status": "COMPLETED", "attachments": [{"text": {"content": "Q3 revenue was $5M."}}]},
+    ]
+    result = await async_genie.ask_question("What was Q3 revenue?")
+    assert result.result == "Q3 revenue was $5M."
+    assert result.conversation_id == "conv_1"
+
+
+@pytest.mark.asyncio
+async def test_async_ask_question_continues_existing_conversation(
+    async_genie, mock_workspace_client
+):
+    mock_workspace_client.genie._api.do.side_effect = [
+        # create_message (not start_conversation — conversation_id supplied)
+        {"conversation_id": "conv_existing", "message_id": "msg_2"},
+        # poll_for_result → COMPLETED
+        {"status": "COMPLETED", "attachments": [{"text": {"content": "Broken down by quarter."}}]},
+    ]
+    result = await async_genie.ask_question(
+        "Break that down by quarter", conversation_id="conv_existing"
+    )
+    assert result.result == "Broken down by quarter."
+    assert result.conversation_id == "conv_existing"
+
+
+@pytest.mark.asyncio
+async def test_async_poll_for_result_completed_text(async_genie, mock_workspace_client):
+    mock_workspace_client.genie._api.do.side_effect = [
+        {"status": "COMPLETED", "attachments": [{"text": {"content": "Sales were up 12%."}}]},
+    ]
+    result = await async_genie.poll_for_result("conv_1", "msg_1")
+    assert result.result == "Sales were up 12%."
+    assert result.conversation_id is None
+
+
+@pytest.mark.asyncio
+async def test_async_poll_for_result_waits_then_completes(async_genie, mock_workspace_client):
+    with patch("asyncio.sleep", return_value=None):
+        mock_workspace_client.genie._api.do.side_effect = [
+            {"status": "EXECUTING_QUERY"},
+            {"status": "EXECUTING_QUERY"},
+            {"status": "COMPLETED", "attachments": [{"text": {"content": "Done."}}]},
+        ]
+        result = await async_genie.poll_for_result("conv_1", "msg_1")
+    assert result.result == "Done."
+
+
+@pytest.mark.asyncio
+async def test_async_poll_for_result_failed(async_genie, mock_workspace_client):
+    mock_workspace_client.genie._api.do.side_effect = [
+        {"status": "FAILED", "error": "Timeout on backend."},
+    ]
+    result = await async_genie.poll_for_result("conv_1", "msg_1")
+    assert "failed" in result.result.lower()
+
+
+@pytest.mark.asyncio
+async def test_async_poll_for_result_cancelled(async_genie, mock_workspace_client):
+    mock_workspace_client.genie._api.do.side_effect = [
+        {"status": "CANCELLED"},
+    ]
+    result = await async_genie.poll_for_result("conv_1", "msg_1")
+    assert result.result == "Genie query cancelled."
+
+
+@pytest.mark.asyncio
+async def test_async_poll_for_result_query_result_expired(async_genie, mock_workspace_client):
+    mock_workspace_client.genie._api.do.side_effect = [
+        {"status": "QUERY_RESULT_EXPIRED"},
+    ]
+    result = await async_genie.poll_for_result("conv_1", "msg_1")
+    assert result.result == "Genie query query_result_expired."
+
+
+@pytest.mark.asyncio
+async def test_async_poll_for_result_max_iterations(async_genie, mock_workspace_client):
+    with (
+        patch("databricks_ai_bridge.genie.MAX_ITERATIONS", 2),
+        patch("databricks_ai_bridge.genie.ITERATION_FREQUENCY", 0.1),
+        patch("asyncio.sleep", return_value=None),
+    ):
+        mock_workspace_client.genie._api.do.side_effect = [
+            {"status": "EXECUTING_QUERY"},
+            {"status": "EXECUTING_QUERY"},
+            {"status": "EXECUTING_QUERY"},
+        ]
+        result = await async_genie.poll_for_result("conv_1", "msg_1")
+    assert (
+        result.result
+        == "Genie query timed out after 2 iterations of 0.1 seconds (total 0.2 seconds)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_poll_for_result_with_query_attachment(async_genie, mock_workspace_client):
+    mock_workspace_client.genie._api.do.side_effect = [
+        # poll_result → COMPLETED with query attachment
+        {
+            "status": "COMPLETED",
+            "attachments": [
+                {
+                    "attachment_id": "att_1",
+                    "query": {"query": "SELECT * FROM sales", "description": "All sales"},
+                }
+            ],
+        },
+        # poll_query_results → SUCCEEDED
+        {
+            "statement_response": {
+                "status": {"state": "SUCCEEDED"},
+                "manifest": {"schema": {"columns": [{"name": "revenue", "type_name": "STRING"}]}},
+                "result": {"data_array": [["5000000"]]},
+            }
+        },
+    ]
+    result = await async_genie.poll_for_result("conv_1", "msg_1")
+    assert result.query == "SELECT * FROM sales"
+    assert result.description == "All sales"
+    assert "5000000" in str(result.result)
+
+
+@pytest.mark.asyncio
+async def test_async_poll_for_result_suggested_questions(async_genie, mock_workspace_client):
+    mock_workspace_client.genie._api.do.side_effect = [
+        {
+            "status": "COMPLETED",
+            "attachments": [
+                {"text": {"content": "Revenue was $5M."}},
+                {
+                    "suggested_questions": {
+                        "questions": ["Break down by region?", "Compare to last quarter?"]
+                    }
+                },
+            ],
+        }
+    ]
+    result = await async_genie.poll_for_result("conv_1", "msg_1")
+    assert result.suggested_questions == ["Break down by region?", "Compare to last quarter?"]
+    assert result.result == "Revenue was $5M."
+
+
+@pytest.mark.asyncio
+async def test_async_genie_uses_asyncio_sleep_not_time_sleep(
+    async_genie, mock_workspace_client
+):
+    """Verify the async path uses asyncio.sleep, not time.sleep (event loop safe)."""
+    sleep_calls = []
+
+    async def fake_async_sleep(secs):
+        sleep_calls.append(secs)
+
+    with patch("asyncio.sleep", side_effect=fake_async_sleep):
+        mock_workspace_client.genie._api.do.side_effect = [
+            {"status": "EXECUTING_QUERY"},
+            {"status": "COMPLETED", "attachments": [{"text": {"content": "Done."}}]},
+        ]
+        await async_genie.poll_for_result("conv_1", "msg_1")
+
+    assert len(sleep_calls) == 1
