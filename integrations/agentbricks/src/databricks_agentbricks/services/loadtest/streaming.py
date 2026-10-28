@@ -4,6 +4,24 @@ import json
 import time
 
 
+def _lines(response):
+    pending = bytearray()
+    after_cr = False
+    for chunk in response.iter_content(chunk_size=1):
+        for value in chunk:
+            if value == 10 and after_cr:
+                after_cr = False
+                continue
+            after_cr = value == 13
+            if value in (10, 13):
+                yield pending.decode("utf-8", errors="replace")
+                pending.clear()
+            else:
+                pending.append(value)
+    if pending:
+        yield pending.decode("utf-8", errors="replace")
+
+
 class StreamError(ValueError):
     """A content-free supported-protocol failure suitable for the final report."""
 
@@ -36,6 +54,8 @@ class StreamMetrics:
         self.trace_id = None
         self._text = [] if capture_output else None
         self._events = [] if capture_output else None
+        self._message_tokens = {}
+        self._runtime_tokens = 0
 
     @property
     def answer(self):
@@ -47,11 +67,9 @@ class StreamMetrics:
         """Consume the complete stream; retain content only when explicitly requested."""
         data = []
         event_type = ""
-        # One-byte reads avoid Requests buffering short text events until EOF.
-        for raw in response.iter_lines(chunk_size=1):
+        for line in _lines(response):
             if timeout is not None and time.perf_counter() - started >= timeout:
                 raise TimeoutError("Request deadline exceeded")
-            line = raw.decode("utf-8", errors="replace")
             if not line:
                 if data:
                     self.observe(
@@ -129,7 +147,16 @@ class StreamMetrics:
             self._text.append(text)
         tokens = output_tokens(data)
         if tokens is not None:
-            self.output_tokens = tokens
+            if kind == "message" and isinstance(data.get("message"), dict):
+                identifier = data["message"].get("id")
+                previous = 0
+                if isinstance(identifier, str) and identifier:
+                    previous = self._message_tokens.get(identifier, 0)
+                    self._message_tokens[identifier] = tokens
+                self._runtime_tokens += tokens - previous
+                self.output_tokens = self._runtime_tokens
+            else:
+                self.output_tokens = tokens
 
     def finish(self):
         """Require terminal completion only for protocols we recognize."""

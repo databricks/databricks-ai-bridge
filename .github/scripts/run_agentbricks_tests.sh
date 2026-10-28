@@ -22,7 +22,8 @@ case "${1:-}" in
     uv venv .venv-functional
     uv pip install --python .venv-functional/bin/python --no-sources \
       "$(ls dist/databricks_ai_bridge-*.whl)" \
-      "$(ls dist/databricks_agentbricks-*.whl)" --group tests
+      "$(ls dist/databricks_agentbricks-*.whl)[loadtest]" --group tests
+    .venv-functional/bin/python -c 'import locust'
     AI_BRIDGE_WHEEL="$(ls "$PWD"/dist/databricks_ai_bridge-*.whl)" \
     AGENTBRICKS_WHEEL="$(ls "$PWD"/dist/databricks_agentbricks-*.whl)" \
       .venv-functional/bin/pytest tests/functional/

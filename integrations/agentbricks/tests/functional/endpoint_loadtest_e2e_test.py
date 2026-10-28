@@ -34,7 +34,7 @@ def _assert_final_csv_counts(report_dir, summary, case_counts=None):
     assert sum(int(row["Occurrences"]) for row in failures) == summary["counts"]["failed"]
 
 
-@pytest.mark.parametrize("streaming", [False, True, "runtime"])
+@pytest.mark.parametrize("streaming", [False, True, "runtime", "runtime-crlf"])
 def test_loadtest_caps_cases_and_saves_a_complete_report(tmp_path, streaming):
     """Exercise the installed entrypoint, excluded warm-up, drain, and saved statistics."""
     if find_spec("locust") is None:
@@ -67,24 +67,34 @@ def test_loadtest_caps_cases_and_saves_a_complete_report(tmp_path, streaming):
                     # Metadata and empty deltas cannot start answer TTFT; the tail stays in flight.
                     self.wfile.write(
                         b'event: run.started\ndata: {}\n\ndata: {"type":"delta","content":""}\n\n'
-                        if streaming == "runtime"
+                        if streaming in ("runtime", "runtime-crlf")
                         else b'data: {"type":"response.created"}\n\n'
                     )
                     self.wfile.flush()
                     time.sleep(0.06)
-                    self.wfile.write(
-                        b'data: {"type":"delta","content":"hello"}\n\n'
-                        if streaming == "runtime"
+                    content = (
+                        b'data: {"type":"delta",\ndata: "content":"hello"}\n\n'
+                        if streaming in ("runtime", "runtime-crlf")
                         else b'data: {"type":"response.output_text.delta","delta":"hello"}\n\n'
+                    )
+                    self.wfile.write(
+                        content.replace(b"\n", b"\r\n") if streaming == "runtime-crlf" else content
                     )
                     self.wfile.flush()
                     time.sleep(0.16)
-                    self.wfile.write(
-                        b'data: {"type":"message","message":{"usage_metadata":{"output_tokens":4}}}\n\n'
+                    completion = (
+                        b'data: {"type":"message","message":{"id":"first","usage_metadata":{"output_tokens":7}}}\n\n'
+                        b'data: {"type":"message","message":{"id":"second","usage_metadata":{"output_tokens":11}}}\n\n'
+                        b'data: {"type":"message","message":{"id":"second","usage_metadata":{"output_tokens":11}}}\n\n'
                         b"event: run.completed\ndata: {}\n\n"
-                        if streaming == "runtime"
+                        if streaming in ("runtime", "runtime-crlf")
                         else b'data: {"type":"response.completed","response":'
                         b'{"usage":{"output_tokens":4}}}\n\ndata: [DONE]\n\n'
+                    )
+                    self.wfile.write(
+                        completion.replace(b"\n", b"\r\n")
+                        if streaming == "runtime-crlf"
+                        else completion
                     )
                 else:
                     time.sleep(0.06)
@@ -126,7 +136,7 @@ def test_loadtest_caps_cases_and_saves_a_complete_report(tmp_path, streaming):
                 "/run",
                 "--concurrency",
                 "3",
-                "--duration",
+                "--max-duration",
                 "20",
                 "--max-requests",
                 "48",
@@ -190,7 +200,8 @@ def test_loadtest_caps_cases_and_saves_a_complete_report(tmp_path, streaming):
     assert 1 <= len({body["session_id"] for body in seen[1:]}) <= 3
     assert summary["latency_ms"]["successful"]["count"] == (48 if streaming else 24)
     assert summary["latency_ms"]["all_completed"]["min"] >= 40
-    assert summary["usage"]["output_tokens"] == (192 if streaming else 96)
+    tokens_per_request = 18 if streaming in ("runtime", "runtime-crlf") else 4
+    assert summary["usage"]["output_tokens"] == tokens_per_request * summary["counts"]["succeeded"]
     assert summary["completed_rps"] > 0
     assert summary["elapsed_seconds_including_drain"] < 20
     if streaming:
@@ -271,7 +282,7 @@ def test_interrupt_stops_dispatch_and_reports_drained_requests(tmp_path, stop_si
                 "/run",
                 "--concurrency",
                 "3",
-                "--duration",
+                "--max-duration",
                 "60",
                 "--timeout",
                 "3",
@@ -355,7 +366,7 @@ def test_redirect_warmup_never_generates_load(tmp_path):
                     f"http://127.0.0.1:{server.server_port}",
                     "--path",
                     "/run",
-                    "--duration",
+                    "--max-duration",
                     "2",
                 ],
                 capture_output=True,
@@ -424,7 +435,7 @@ def test_natural_duration_drains_and_final_csv_matches_all_cases(tmp_path):
                     "/run",
                     "--concurrency",
                     "2",
-                    "--duration",
+                    "--max-duration",
                     "2",
                     "--max-requests",
                     "1000",
@@ -656,7 +667,7 @@ def test_one_http_202_call_preserves_bodyless_or_json_null_and_excludes_only_war
                 "/run",
                 "--concurrency",
                 "1",
-                "--duration",
+                "--max-duration",
                 "10",
                 "--max-requests",
                 "3",
@@ -747,7 +758,7 @@ def test_warmup_deadline_bounds_a_stream_that_never_completes_a_line(tmp_path):
                     f"http://127.0.0.1:{server.server_port}",
                     "--path",
                     "/run",
-                    "--duration",
+                    "--max-duration",
                     "10",
                     "--max-requests",
                     "3",
@@ -924,7 +935,7 @@ def test_runtime_sse_failures_do_not_count_or_capture_partial_answers_as_success
                     "--sse",
                     "--concurrency",
                     "2",
-                    "--duration",
+                    "--max-duration",
                     "10",
                     "--max-requests",
                     "4",

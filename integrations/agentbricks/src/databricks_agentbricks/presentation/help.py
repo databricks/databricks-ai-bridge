@@ -492,7 +492,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("endpoint", "loadtest"): (
         (
             "agentbricks endpoint loadtest agent-bricks-my-agent --path /api/invocations "
-            "--requests requests.json --concurrency 5 --duration 60 --max-requests 200 "
+            "--requests requests.json --concurrency 5 --max-duration 60 --max-requests 200 "
             "--report-dir results/loadtest --save-responses responses.json",
             "load test with Locust and optionally save all successful responses",
         ),

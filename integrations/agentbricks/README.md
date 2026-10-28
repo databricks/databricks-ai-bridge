@@ -796,7 +796,7 @@ agentbricks [-p <profile>] [-o text|json]
   endpoint
     invoke      [APP] --path PATH [--url URL] [--json JSON] [--sse]
     loadtest    [APP] --path PATH [--url URL] [--requests FILE] [--sse]
-                [--concurrency N] [--duration SECONDS] [--max-requests N] [--no-warmup]
+                [--concurrency N] [--max-duration SECONDS] [--max-requests N] [--no-warmup]
                 [--report-dir PATH] [--save-responses FILE]
 ```
 
@@ -923,11 +923,11 @@ cat > requests.json <<'JSON'
 JSON
 agentbricks --profile <profile> endpoint loadtest agent-bricks-my-agent \
   --path /api/invocations --requests requests.json --sse \
-  --concurrency 5 --duration 60 --max-requests 200 --report-dir results/loadtest
+  --concurrency 5 --max-duration 60 --max-requests 200 --report-dir results/loadtest
 ```
 
 `--concurrency` sets simultaneous users (default: 1). Each sends another request after its previous
-request finishes. `--duration` is in seconds (default: 60); `--max-requests` optionally caps measured
+request finishes. `--max-duration` is in seconds (default: 60); `--max-requests` optionally caps measured
 requests. Whichever limit is reached first stops dispatch, then in-flight requests drain for up to
 `--timeout` seconds. Ctrl-C also drains and preserves a partial report. Failed or incomplete
 requests make the command exit nonzero; cancellation exits 130 or 143 for SIGINT or SIGTERM.
@@ -967,6 +967,8 @@ answer content or credentials. Review the target host before sharing a report.
 For SSE responses, latency includes stream completion. Answer-text TTFT recognizes supported
 DurableAgentServer, OpenAI Chat Completions, and Responses SSE events, ignoring metadata and tool
 events. Missing text/token usage is unknown, with coverage reported; token counts are never inferred.
+Runtime model-message usage is summed across distinct messages; repeated message IDs update that
+message's total. Chat Completions and Responses usage snapshots replace earlier totals.
 Recognized error events and truncated supported streams fail the request. This command does not
 perform background polling, reconnect, or stream replay.
 

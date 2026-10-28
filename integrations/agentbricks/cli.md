@@ -1675,7 +1675,7 @@ _Options_
 | `--timeout <TIMEOUT>` | float range | `300.0` | no | Maximum request duration and drain time in seconds. |
 | `--auth`, `--no-auth` | flag | - | no | Inject Databricks OAuth authentication. |
 | `--concurrency <CONCURRENCY>` | integer range | `1` | no | Concurrent simulated users. Each starts another request when its previous request finishes. |
-| `--duration <DURATION>` | integer range | `60` | no | Stop dispatch after this many seconds, or earlier if `--max-requests` is reached. |
+| `--max-duration <DURATION>` | integer range | `60` | no | Stop dispatch after this many seconds, or earlier if `--max-requests` is reached. |
 | `--max-requests <MAX_REQUESTS>` | integer range | - | no | Cap measured requests, excluding warm-up; dispatch stops at this cap or duration, whichever comes first. |
 | `--requests <REQUESTS_FILE>` | file path | - | no | Nonempty JSON array of complete request bodies, cycled in order. Omit for bodyless requests; an array containing null sends JSON null. A one-element array repeats one body. |
 | `--warmup`, `--no-warmup` | flag | `true` | no | Send one excluded real warm-up request before measurement. Disable to include any cold-start latency and avoid the extra request. |
@@ -1699,6 +1699,8 @@ fixed invocation ID can replay cached results. App routing defaults to the same 
 With `--output json` before `endpoint`, stdout is the Agent Bricks summary object, identical to
 `summary.json`. Progress stays on stderr. The summary includes
 successful-only latency, all-completed latency, TTFT/usage coverage, and incomplete counts.
+Runtime usage sums distinct model messages, updating rather than recounting repeated message IDs.
+Chat Completions and Responses usage snapshots replace earlier totals.
 `--report-dir` writes `index.html`, `locust.html`, `locust_*.csv`, and `summary.json` together;
 there is no format selector. Reports contain metrics and the target host without raw request/answer
 content. These bounded results do not establish sustainable capacity or answer quality.
@@ -1714,7 +1716,7 @@ MLflow evaluation. Use native MLflow tooling for subsequent analysis.
 ```sh
 agentbricks --profile <profile> --output json endpoint loadtest agent-bricks-my-agent \
   --path /api/invocations --requests requests.json --sse \
-  --concurrency 5 --duration 60 --max-requests 200 --report-dir results/loadtest \
+  --concurrency 5 --max-duration 60 --max-requests 200 --report-dir results/loadtest \
   --save-responses responses.json
 ```
 

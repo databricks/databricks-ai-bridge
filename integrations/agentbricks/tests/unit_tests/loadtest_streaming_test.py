@@ -1,6 +1,7 @@
 """Content-free SSE metrics for ordinary streaming HTTP responses."""
 
 import pytest
+from requests import Response
 
 from databricks_agentbricks.services.loadtest.streaming import (
     StreamError,
@@ -70,6 +71,67 @@ def test_runtime_sse_preserves_answer_explicit_trace_usage_and_completion():
     assert metrics.output_tokens == 7
     assert metrics.answer == "answer tail"
     assert metrics.trace_id == "tr-explicit"
+
+
+@pytest.mark.parametrize("identified", [False, True])
+def test_runtime_usage_sums_distinct_model_messages(identified):
+    metrics = StreamMetrics()
+    for identifier, tokens in (("first", 7), ("second", 11)):
+        message = {
+            "usage_metadata": {"output_tokens": tokens},
+            **({"id": identifier} if identified else {}),
+        }
+        metrics.observe({"type": "message", "message": message})
+    assert metrics.output_tokens == 18
+    if identified:
+        metrics.observe(
+            {"type": "message", "message": {"id": "first", "usage_metadata": {"output_tokens": 7}}}
+        )
+        assert metrics.output_tokens == 18
+        metrics.observe(
+            {
+                "type": "message",
+                "message": {"id": "second", "usage_metadata": {"output_tokens": 12}},
+            }
+        )
+        assert metrics.output_tokens == 19
+
+
+@pytest.mark.parametrize("protocol", ["chat", "responses"])
+def test_provider_usage_snapshots_replace_rather_than_sum(protocol):
+    metrics = StreamMetrics()
+    for tokens in (7, 11, 11):
+        metrics.observe(
+            {"choices": [], "usage": {"completion_tokens": tokens}}
+            if protocol == "chat"
+            else {"type": "response.completed", "response": {"usage": {"output_tokens": tokens}}}
+        )
+    assert metrics.output_tokens == 11
+
+
+@pytest.mark.parametrize("newline", [b"\n", b"\r\n", b"\r"])
+def test_real_response_bytes_preserve_named_multiline_events(newline):
+    response = Response()
+    response._content = newline.join(
+        [
+            b"event: run.started",
+            b"data: {}",
+            b"",
+            b'data: {"type":"delta",',
+            b'data: "content":"caf\xc3\xa9"}',
+            b"",
+            b"event: run.completed",
+            b"data: {}",
+            b"",
+            b"",
+        ]
+    )
+    response._content_consumed = True
+    metrics = StreamMetrics(capture_output=True)
+    metrics.read(response, 0)
+    assert metrics.completed
+    assert metrics.answer == "caf\u00e9"
+    assert metrics.ttft_ms is not None
 
 
 def test_generic_sse_preserves_content_but_does_not_invent_answer_timings():

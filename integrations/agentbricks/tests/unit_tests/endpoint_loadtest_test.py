@@ -91,7 +91,7 @@ def _capture_cli(monkeypatch, *, summary=None, returncode=0):
 @pytest.mark.parametrize("routing_key", [None, "chosen-session"])
 def test_loadtest_resolves_shared_target_auth_and_one_body_source(monkeypatch, routing_key):
     service, apps, auth = _service()
-    monkeypatch.setattr(loadtest_mod, "find_spec", lambda name: object())
+    monkeypatch.setattr(service_mod, "find_spec", lambda name: object())
     run = Mock(return_value=loadtest_mod.LoadtestResult(0, {}))
     monkeypatch.setattr(service_mod, "run_loadtest", run)
     target = EndpointTarget(
@@ -139,7 +139,7 @@ def test_cli_passes_immutable_plan_and_emits_only_summary(monkeypatch, tmp_path)
             str(requests),
             "--concurrency",
             "4",
-            "--duration",
+            "--max-duration",
             "3",
             "--max-requests",
             "5",
@@ -214,11 +214,21 @@ def test_load_options_are_not_accepted_by_invoke(option, value):
     assert result.exit_code == 2 and "No such option" in result.output
 
 
-@pytest.mark.parametrize("option", ["--concurrency", "--duration", "--max-requests"])
+@pytest.mark.parametrize("option", ["--concurrency", "--max-duration", "--max-requests"])
 @pytest.mark.parametrize("value", ["0", "-1"])
 def test_load_settings_must_be_positive(option, value):
     result = CliRunner().invoke(endpoint, ["loadtest", "--path", "/run", option, value], obj=_Ctx())
     assert result.exit_code == 2 and "range" in result.output
+
+
+@pytest.mark.parametrize("field", ["concurrency", "duration", "max_requests"])
+@pytest.mark.parametrize("value", [0, -1])
+def test_service_rejects_nonpositive_plan_limits_before_workspace_access(field, value):
+    service, apps, auth = _service()
+    with pytest.raises(AgentCliError, match="must be positive"):
+        service.loadtest(_plan(target=EndpointTarget(app="demo", path="/run"), **{field: value}))
+    apps.get_app_url.assert_not_called()
+    auth.authorization_header.assert_not_called()
 
 
 @pytest.mark.parametrize("contents", ["not json", "{}", "[]"])
@@ -236,7 +246,7 @@ def test_invalid_requests_rejected_before_workspace_collaborators(monkeypatch, t
 
 def test_missing_locust_fails_before_app_lookup_or_oauth(monkeypatch):
     service, apps, auth = _service()
-    monkeypatch.setattr(loadtest_mod, "find_spec", lambda name: None)
+    monkeypatch.setattr(service_mod, "find_spec", lambda name: None)
     with pytest.raises(AgentCliError) as error:
         service.loadtest(_plan(target=EndpointTarget(app="demo", path="/run")))
     assert "databricks-agentbricks[loadtest]" in (error.value.hint or "")

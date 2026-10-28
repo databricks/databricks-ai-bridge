@@ -9,7 +9,6 @@ import signal
 import subprocess
 import sys
 from dataclasses import asdict, dataclass
-from importlib.util import find_spec
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -23,15 +22,6 @@ from databricks_agentbricks.services.loadtest.plan import LoadTestPlan
 class LoadtestResult:
     returncode: int
     summary: dict[str, Any]
-
-
-def ensure_locust() -> None:
-    """Check the optional dependency before workspace resolution or authentication."""
-    if find_spec("locust") is None:
-        raise AgentCliError(
-            "Locust is required for endpoint loadtest.",
-            hint="Install the loadtest extra: pip install 'databricks-agentbricks[loadtest]'",
-        )
 
 
 def _save_responses(

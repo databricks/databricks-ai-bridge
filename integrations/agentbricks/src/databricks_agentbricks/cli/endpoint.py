@@ -116,7 +116,8 @@ def invoke(
     help="Concurrent users.",
 )
 @click.option(
-    "--duration",
+    "--max-duration",
+    "duration",
     type=click.IntRange(min=1),
     default=60,
     show_default=True,
@@ -126,7 +127,7 @@ def invoke(
     "--max-requests",
     type=click.IntRange(min=1),
     default=None,
-    help="Stop dispatching after this many requests or --duration, whichever comes first; excludes warm-up and drains in-flight requests.",
+    help="Stop dispatching after this many requests or --max-duration, whichever comes first; excludes warm-up and drains in-flight requests.",
 )
 @click.option(
     "--requests",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass, replace
+from importlib.util import find_spec
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -21,7 +22,6 @@ from databricks_agentbricks.services.invoke.transport import (
 from databricks_agentbricks.services.loadtest.plan import LoadTestPlan
 from databricks_agentbricks.services.loadtest.runner import (
     LoadtestResult,
-    ensure_locust,
     run_loadtest,
 )
 
@@ -123,7 +123,11 @@ class EndpointService:
         """Validate the local plan before resolving and authenticating its target."""
         self._local_request(plan.target)
         plan.validate()
-        ensure_locust()
+        if find_spec("locust") is None:
+            raise AgentCliError(
+                "Locust is required for endpoint loadtest.",
+                hint="Install the loadtest extra: pip install 'databricks-agentbricks[loadtest]'",
+            )
         request = self._prepare(plan.target)
         if plan.bodies is not None:
             request = replace(
