@@ -104,11 +104,15 @@ def _authenticate_profile(profile: str) -> tuple[_AgentBricksApiClient, str]:
     "--profile",
     "-p",
     default=None,
-    help="Profile to authenticate with and remember as the default.",
+    help="Name of a saved Databricks workspace sign-in to use by default. Run "
+    "`databricks auth profiles` to list yours.",
 )
 @click.pass_obj
 def login(obj, profile) -> None:
-    """Authenticate a profile and save it as the default, so later commands can omit -p."""
+    """Save a Databricks workspace sign-in as your default, so later commands can omit -p.
+
+    Create the sign-in first with `databricks auth login --profile <name>`.
+    """
     profile = profile or obj.profile
     if not profile:
         raise AgentCliError(

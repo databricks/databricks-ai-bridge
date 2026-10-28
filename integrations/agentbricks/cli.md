@@ -38,7 +38,7 @@ These options apply to every command. Pass them before the command name, for exa
 
 | Option | Values | Default | Description |
 | --- | --- | --- | --- |
-| `--profile <PROFILE>` (`-p`) | string | - | `~/.databrickscfg` profile to authenticate with. |
+| `--profile <PROFILE>` (`-p`) | string | - | Name of a saved Databricks workspace sign-in. Run `databricks auth profiles` to list yours. |
 | `--output <text\|json>` (`-o`) | `text` \| `json` | `text` | Output format. Use `json` for scripting. |
 | `--version` | flag | - | Show the version and exit. |
 | `--help` (`-h`) | flag | - | Show help for the command and exit. Works at every level. |
@@ -76,7 +76,9 @@ These options apply to every command. Pass them before the command name, for exa
 
 ### `agentbricks login`
 
-Authenticate a profile and save it as the default, so later commands can omit -p.
+Save a Databricks workspace sign-in as your default, so later commands can omit -p.
+
+Create the sign-in first with `databricks auth login --profile <name>`.
 
 ```
 agentbricks login [options]
@@ -87,7 +89,7 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
-| `--profile <PROFILE>` (`-p`) | string | - | no | Profile to authenticate with and remember as the default. |
+| `--profile <PROFILE>` (`-p`) | string | - | no | Name of a saved Databricks workspace sign-in to use by default. Run `databricks auth profiles` to list yours. |
 
 ### `agentbricks logout`
 
