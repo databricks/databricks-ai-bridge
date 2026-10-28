@@ -65,7 +65,6 @@ Every resource a run creates carries its run id, and is deleted at three points:
 | `tests/harness/logs.py` | Test-log output; every command is echoed so a run's log replays it |
 | `tests/suites/test_<group>.py` | One file per CLI command group: `test_tools`, `test_dev`, `test_deploy`, `test_memory`, `test_sessions`, `test_tracing` |
 | `tests/suites/tool_definitions.py`, `uc_objects.py` | The tools `test_tools`, `test_dev` and `test_deploy` add, and the UC objects they use |
-| `tests/suites/test_genie_one.py`, `genie_one_conversation.py` | Genie One through both frameworks' adapters: the script runs in the generated project's venv and drives ask, poll and query result |
 
 `conftest.py` files are the only code pytest calls by name. `tests/harness/` sits next to `tests/suites/`
 rather than inside it: it is plain Python the suites import as `harness` (via `pythonpath` in
