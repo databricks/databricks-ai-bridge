@@ -356,8 +356,8 @@ _Options_
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--store <STORE>` | string | - | yes | Store id or resource name. |
-| `--actor-id <ACTOR_ID>` | string | - | yes | Actor (partition) this entry belongs to. |
-| `--path <PATH>` | string | - | yes | Absolute path, e.g. /preferences/style.md. |
+| `--actor-id <ACTOR_ID>` | string | - | yes | Who the memory belongs to, usually a user. The deployed chat app uses the signed-in user's email. |
+| `--path <PATH>` | string | - | yes | Key for the entry inside the store, written like a path (e.g. /preferences/style.md). Not a file on your machine. |
 | `--content <CONTENT>` | string | - | no | Entry content (inline). Use --content-file for large content. |
 | `--content-file <CONTENT_FILE>` | path | - | no | Read entry content from a file (avoids shell arg-length limits on large content). |
 | `--description <DESCRIPTION>` | string | - | no | Optional human-readable description. |
