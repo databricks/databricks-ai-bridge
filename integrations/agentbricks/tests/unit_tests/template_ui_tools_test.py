@@ -35,17 +35,20 @@ EXPECTED_ADD_COMMANDS = [
         "kind": "uc-function",
         "label": "Unity Catalog function",
         "command": "agentbricks tools add uc-function catalog.schema.function",
+        "placeholder": "catalog.schema.function",
     },
     {"kind": "genie-one", "label": "Genie One", "command": "agentbricks tools add genie-one"},
     {
         "kind": "genie-agent",
         "label": "Genie Agent",
         "command": "agentbricks tools add genie-agent SPACE_ID",
+        "placeholder": "SPACE_ID",
     },
     {
         "kind": "sandbox",
         "label": "Sandbox",
         "command": "agentbricks tools add sandbox --scope volume:catalog.schema.volume",
+        "placeholder": "catalog.schema.volume",
     },
     {
         "kind": "discover",
@@ -409,19 +412,32 @@ assert.equal(elements.toolsMode.textContent, 'None connected · 2 in code');
 assert.equal(elements.toolsStatus.classList.contains('degraded'), true);
 assert.equal(elements.toolsStatus.classList.contains('enabled'), false);
 assert.deepEqual(texts('tools-heading'), ['Connected', 'Defined in code', 'Add a tool']);
-assert.deepEqual(texts('tools-empty'), ['No managed tools connected yet.']);
-assert.deepEqual(texts('tool-badge'), []);
+// Only non-empty sections show a count.
+assert.deepEqual(texts('tools-count'), ['2']);
+assert.deepEqual(texts('tools-empty'), ['No managed tools yet. Add one below.']);
 assert.deepEqual(texts('tool-name'), ['get_current_time', 'send_message']);
+assert.deepEqual(texts('tools-note'), [
+  'From agent/tools/',
+  'Run in your project directory, then restart agentbricks dev or run agentbricks deploy.',
+]);
+// Rows sit in one grouped card per section, and the run-where hint comes before the add commands.
+const body = elements.toolsBody.children;
+assert.deepEqual(body.filter((child) => child.className === 'tools-group').length, 3);
+assert.equal(body[body.length - 2].className, 'tools-note tools-hint');
+assert.equal(body[body.length - 1].className, 'tools-group');
 assert.deepEqual(texts('tools-hint'), [
   'Run in your project directory, then restart agentbricks dev or run agentbricks deploy.',
 ]);
 assert.deepEqual(elements.toolsBody.findAll('tools-hint')[0].children.filter((c) => typeof c !== 'string')
   .map((c) => [c.tag, c.textContent]), [['code', 'agentbricks dev'], ['code', 'agentbricks deploy']]);
 
-// Every add command is a labeled code row whose copy button copies the exact command.
+// Every add command is a labeled code row whose copy button copies the exact command; the part to
+// replace is set off, and the command still reads (and copies) as one string.
 assert.deepEqual(texts('cap-command-label'), addCommands.map((entry) => entry.label));
 const rows = elements.toolsBody.findAll('cap-command');
 assert.deepEqual(rows.map((row) => row.children[0].textContent), addCommands.map((entry) => entry.command));
+assert.deepEqual(texts('cap-placeholder'), addCommands.filter((entry) => entry.placeholder).map((entry) => entry.placeholder));
+assert.ok(texts('cap-token').every((word) => !word.includes(' ')));
 for (const row of rows) {
   let stopped = false;
   row.children[1].listeners.click({ stopPropagation: () => { stopped = true; } });
@@ -430,7 +446,7 @@ for (const row of rows) {
 await Promise.resolve();
 assert.deepEqual(copied, addCommands.map((entry) => entry.command));
 
-// One binding: green orb, a badge row per tool, and no empty state.
+// Two bindings: green orb, a row per tool (name and source, no type label), and no empty state.
 renderTools(payload([
   { id: 'web_search', kind: 'mcp', label: 'MCP service', source: 'system.ai.web_search', auth: 'user' },
   { id: 'genie_one', kind: 'genie_one', label: 'Genie One', source: '', auth: 'user' },
@@ -439,7 +455,7 @@ assert.equal(elements.toolsMode.textContent, '2 connected · 2 in code');
 assert.equal(elements.toolsStatus.classList.contains('enabled'), true);
 assert.equal(elements.toolsStatus.classList.contains('degraded'), false);
 assert.deepEqual(texts('tools-empty'), []);
-assert.deepEqual(texts('tool-badge'), ['MCP service', 'Genie One']);
+assert.deepEqual(texts('tools-count'), ['2', '2']);
 assert.deepEqual(texts('tool-name').slice(0, 2), ['web_search', 'genie_one']);
 assert.deepEqual(texts('tool-detail').slice(0, 1), ['system.ai.web_search']);
 
@@ -447,7 +463,7 @@ assert.deepEqual(texts('tool-detail').slice(0, 1), ['system.ai.web_search']);
 renderTools(payload([], [{ section: 'connected', message: 'Unsupported agent.toml tool kind' }]));
 assert.equal(elements.toolsBody.children[0].className, 'state-error');
 assert.equal(elements.toolsBody.children[0].textContent, 'Unsupported agent.toml tool kind');
-assert.deepEqual(texts('tools-empty'), ['No managed tools connected yet.']);
+assert.deepEqual(texts('tools-empty'), ['No managed tools yet. Add one below.']);
 """
 
 
@@ -458,7 +474,15 @@ def test_render_tools_row_and_pane(framework):
         pytest.skip("Node.js is required to exercise the shipped JavaScript")
     source = (TEMPLATES / f"ui/agent-{framework}/ui/app.js").read_text()
     functions = []
-    for name in ("setCapability", "commandRow", "toolsSection", "toolRow", "renderTools"):
+    for name in (
+        "setCapability",
+        "commandRow",
+        "toolsSection",
+        "toolsEmpty",
+        "toolRow",
+        "addCommandRow",
+        "renderTools",
+    ):
         match = re.search(rf"^function {name}\(.*?^\}}", source, re.M | re.S)
         assert match, f"Missing shipped UI function: {name}"
         functions.append(match.group())

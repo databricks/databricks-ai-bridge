@@ -184,7 +184,8 @@ _TOOL_LABELS = {
     "sandbox": "Sandbox",
 }
 # The `agentbricks tools add` recipes the Tools pane offers to copy (the ones
-# `agentbricks tools list` prints), plus the command that discovers more MCP services.
+# `agentbricks tools list` prints), plus the command that discovers more MCP services. `placeholder`
+# marks the part of a command the user replaces, so the pane can set it off.
 _ADD_COMMANDS = (
     {
         "kind": "mcp",
@@ -195,17 +196,20 @@ _ADD_COMMANDS = (
         "kind": "uc-function",
         "label": "Unity Catalog function",
         "command": "agentbricks tools add uc-function catalog.schema.function",
+        "placeholder": "catalog.schema.function",
     },
     {"kind": "genie-one", "label": "Genie One", "command": "agentbricks tools add genie-one"},
     {
         "kind": "genie-agent",
         "label": "Genie Agent",
         "command": "agentbricks tools add genie-agent SPACE_ID",
+        "placeholder": "SPACE_ID",
     },
     {
         "kind": "sandbox",
         "label": "Sandbox",
         "command": "agentbricks tools add sandbox --scope volume:catalog.schema.volume",
+        "placeholder": "catalog.schema.volume",
     },
     {
         "kind": "discover",
