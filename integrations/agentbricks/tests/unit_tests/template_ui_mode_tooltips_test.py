@@ -93,6 +93,7 @@ def test_mode_tooltip_visibility_is_driven_by_one_class(template):
     assert [selector.strip() for selector in reveals] == [
         ".viewer-chip.tip-visible > .viewer-tip",
         ".mode-option.tip-visible > .mode-tip",
+        ".memory-actor-icon.tip-visible > .memory-actor-tip",
     ]
     assert ":hover > .mode-tip" not in css
     assert ":focus-visible + .mode-tip" not in css

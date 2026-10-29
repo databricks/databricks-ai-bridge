@@ -112,26 +112,31 @@
                   </button>
                 </div>
               </div>
-              <div class="memory-store">
-                <span class="memory-store-icon" aria-hidden="true">
-                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 0 0-3 3 3 3 0 0 0-1 5.8V17a2 2 0 0 0 4 0"/><path d="M12 5a3 3 0 0 1 3 3 3 3 0 0 1 1 5.8V17a2 2 0 0 1-4 0"/></svg>
-                </span>
-                <div class="memory-store-copy">
+              <div id="memory-setup" class="memory-setup" hidden></div>
+              <div id="memory-browse" class="memory-browse">
+                <div class="memory-store" id="memory-store">
+                  <span class="memory-store-icon" aria-hidden="true">
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 0 0-3 3 3 3 0 0 0-1 5.8V17a2 2 0 0 0 4 0"/><path d="M12 5a3 3 0 0 1 3 3 3 3 0 0 1 1 5.8V17a2 2 0 0 1-4 0"/></svg>
+                  </span>
                   <strong id="memory-store-name">Memory store</strong>
-                  <span id="memory-store-resource"></span>
                 </div>
-              </div>
-              <label class="memory-field-label" for="memory-actor-input">Actor ID</label>
-              <p class="memory-field-hint">Memories are scoped to an actor. Change this to browse another actor's entries.</p>
-              <input id="memory-actor-input" class="memory-actor" type="text" placeholder="Actor ID" autocomplete="off" spellcheck="false" />
-              <div class="memory-search">
-                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-                <label class="sr-only" for="memory-search-input">Search entries</label>
-                <input id="memory-search-input" type="search" placeholder="Search entries" autocomplete="off" />
-              </div>
-              <div id="memory-count" class="memory-count"></div>
-              <div id="memory-entries" class="memory-entries" aria-live="polite">
-                <div class="state-empty">Loading memory…</div>
+                <div class="memory-search memory-actor-field">
+                  <span class="memory-actor-icon" tabindex="0" aria-describedby="memory-actor-tip">
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+                    <span class="memory-actor-tip" id="memory-actor-tip" role="tooltip">Memories are kept per actor, usually a user&#39;s email. Enter another actor ID to browse theirs.</span>
+                  </span>
+                  <label class="sr-only" for="memory-actor-input">Actor ID</label>
+                  <input id="memory-actor-input" type="text" placeholder="Actor ID, usually a user's email" autocomplete="off" spellcheck="false" />
+                </div>
+                <div class="memory-search">
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+                  <label class="sr-only" for="memory-search-input">Search entries</label>
+                  <input id="memory-search-input" type="search" placeholder="Search entries" autocomplete="off" />
+                </div>
+                <div id="memory-count" class="memory-count"></div>
+                <div id="memory-entries" class="memory-entries" aria-live="polite">
+                  <div class="state-empty">Loading memory…</div>
+                </div>
               </div>
             </div>
 

@@ -49,8 +49,10 @@ const elements = {
   memoryPane: document.querySelector("#memory-pane"),
   memoryBack: document.querySelector("#memory-back"),
   memoryRefresh: document.querySelector("#memory-refresh"),
+  memorySetup: document.querySelector("#memory-setup"),
+  memoryBrowse: document.querySelector("#memory-browse"),
+  memoryStore: document.querySelector("#memory-store"),
   memoryStoreName: document.querySelector("#memory-store-name"),
-  memoryStoreResource: document.querySelector("#memory-store-resource"),
   memoryActor: document.querySelector("#memory-actor-input"),
   memorySearch: document.querySelector("#memory-search-input"),
   memoryCount: document.querySelector("#memory-count"),
@@ -803,10 +805,11 @@ function renderMemoryCards(entries, query) {
   elements.memoryCount.textContent = entries.length
     ? query
       ? `${entries.length} matching`
-      : `${entries.length} of ${entries.length} entries`
+      : `${entries.length} ${entries.length === 1 ? "entry" : "entries"}`
     : "";
   if (!entries.length) {
-    memoryMessage(query ? "No entries match your search." : "No memory entries for this actor yet.");
+    if (query) memoryMessage("No entries match your search.");
+    else renderMemoryEmpty();
     return;
   }
   for (const entry of entries) {
@@ -822,31 +825,100 @@ function renderMemoryCards(entries, query) {
     const preview = document.createElement("p");
     preview.className = "memory-entry-preview";
     preview.textContent = extractText(entry.content) || entry.description || "";
+    // The actor is already in the field above, so the foot shows only when the entry changed.
     const foot = document.createElement("div");
     foot.className = "memory-entry-foot";
-    const actor = document.createElement("span");
-    actor.className = "memory-entry-actor";
-    actor.textContent = entry.actor_id || "";
     const time = document.createElement("span");
     time.className = "memory-entry-time";
     time.textContent = prettyDate(entry.update_time || entry.create_time);
-    foot.append(actor, time);
+    foot.append(time);
     card.append(top, preview, foot);
     card.addEventListener("click", () => openMemoryModal(entry));
     elements.memoryEntries.append(card);
   }
 }
 
-async function loadMemory() {
-  if (!state.config?.memory.enabled) {
-    const bound = state.config?.memory.bound_store;
-    memoryMessage(
-      bound && !state.config.deployed
-        ? `Memory store "${bound}" is bound. Memory is off in agentbricks dev, so its entries show here after you deploy: agentbricks deploy`
-        : "Connect a Memory Store to browse entries: agentbricks memory bind <store-name>",
-    );
+// Quote a value for the shell only when it needs it, so commands stay readable.
+function shellWord(value) {
+  return /^[\w@.+\-/:]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function codeText(text) {
+  const code = document.createElement("code");
+  code.textContent = text;
+  return code;
+}
+
+// The centered icon that leads each Memory empty state.
+function memoryEmptyIcon() {
+  const badge = document.createElement("span");
+  badge.className = "memory-empty-icon";
+  badge.setAttribute("aria-hidden", "true");
+  badge.append(
+    iconSvg(
+      "icon",
+      '<rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/>',
+    ),
+  );
+  return badge;
+}
+
+// A connected store with nothing for this actor: say how entries appear, and how to add one.
+function renderMemoryEmpty() {
+  const actor = currentMemoryActor();
+  const empty = document.createElement("div");
+  empty.className = "memory-empty-state";
+  const title = document.createElement("strong");
+  title.className = "memory-setup-title";
+  title.textContent = actor ? `No memories for ${actor} yet` : "No memories yet";
+  const body = document.createElement("p");
+  body.textContent = "The agent saves them as you chat. To add one yourself, run:";
+  const command = [
+    "agentbricks memory entries create",
+    `--store ${shellWord(state.config?.memory.store || "")}`,
+    `--actor-id ${shellWord(actor)}`,
+    "--path /preferences/style.md",
+    '--content "Prefers concise answers with code examples."',
+  ].join(" ");
+  empty.append(memoryEmptyIcon(), title, body, placeholderCommandRow(command));
+  elements.memoryEntries.append(empty);
+}
+
+// No store to browse: say why and give the command that fixes it, instead of controls that can't work.
+function renderMemorySetup() {
+  const bound = state.config?.memory.bound_store;
+  elements.memoryBrowse.hidden = true;
+  elements.memorySetup.hidden = false;
+  const title = document.createElement("strong");
+  title.className = "memory-setup-title";
+  const body = document.createElement("p");
+  if (bound && !state.config.deployed) {
+    title.textContent = `${bound} is bound`;
+    body.append("Memory is off in ", codeText("agentbricks dev"), ", so entries show here after you deploy.");
+    elements.memorySetup.replaceChildren(memoryEmptyIcon(), title, body, placeholderCommandRow("agentbricks deploy"));
     return;
   }
+  title.textContent = "No memory store yet";
+  body.textContent = "Memory lets the agent remember facts and preferences about each user across conversations.";
+  const note = document.createElement("p");
+  note.className = "memory-setup-note";
+  note.append("Run in your project directory, then run ", codeText("agentbricks deploy"), ". It creates the store for you.");
+  elements.memorySetup.replaceChildren(
+    memoryEmptyIcon(),
+    title,
+    body,
+    placeholderCommandRow("agentbricks memory bind agent-memory", "agent-memory"),
+    note,
+  );
+}
+
+async function loadMemory() {
+  if (!state.config?.memory.enabled) {
+    renderMemorySetup();
+    return;
+  }
+  elements.memorySetup.hidden = true;
+  elements.memoryBrowse.hidden = false;
   const query = memoryState.query.trim();
   const actor = currentMemoryActor();
   memoryMessage(query ? "Searching…" : "Loading memory…", "loading");
@@ -881,7 +953,7 @@ function openMemoryPane() {
   elements.capabilitiesBlock.hidden = true;
   elements.memoryPane.hidden = false;
   elements.memoryStoreName.textContent = memoryStoreName();
-  elements.memoryStoreResource.textContent = state.config?.memory.store || "";
+  elements.memoryStore.title = state.config?.memory.store || "";
   if (!elements.memoryActor.value) elements.memoryActor.value = state.config?.memory.actor || "";
   void loadMemory();
 }
@@ -954,6 +1026,30 @@ function toolRow(name, detail) {
   return row;
 }
 
+// A copyable command that wraps only between words, never at a hyphen inside one (`uc-function`),
+// with the part to replace (if any) set off.
+function placeholderCommandRow(command, placeholder) {
+  const row = commandRow(command);
+  const code = row.children[0];
+  code.textContent = "";
+  command.split(" ").forEach((word, index) => {
+    if (index) code.append(" ");
+    const token = document.createElement("span");
+    token.className = "cap-token";
+    const at = placeholder ? word.indexOf(placeholder) : -1;
+    if (at >= 0) {
+      const part = document.createElement("em");
+      part.className = "cap-placeholder";
+      part.textContent = placeholder;
+      token.append(word.slice(0, at), part, word.slice(at + placeholder.length));
+    } else {
+      token.textContent = word;
+    }
+    code.append(token);
+  });
+  return row;
+}
+
 // An add recipe: its label, then the command with the part to replace (if any) set off.
 function addCommandRow(entry) {
   const row = document.createElement("div");
@@ -961,26 +1057,7 @@ function addCommandRow(entry) {
   const label = document.createElement("span");
   label.className = "cap-command-label";
   label.textContent = entry.label;
-  const command = commandRow(entry.command);
-  const code = command.children[0];
-  code.textContent = "";
-  // Wrap only between words, never at a hyphen inside one (`uc-function`).
-  entry.command.split(" ").forEach((word, index) => {
-    if (index) code.append(" ");
-    const token = document.createElement("span");
-    token.className = "cap-token";
-    const at = entry.placeholder ? word.indexOf(entry.placeholder) : -1;
-    if (at >= 0) {
-      const placeholder = document.createElement("em");
-      placeholder.className = "cap-placeholder";
-      placeholder.textContent = entry.placeholder;
-      token.append(word.slice(0, at), placeholder, word.slice(at + entry.placeholder.length));
-    } else {
-      token.textContent = word;
-    }
-    code.append(token);
-  });
-  row.append(label, command);
+  row.append(label, placeholderCommandRow(entry.command, entry.placeholder));
   return row;
 }
 
@@ -1646,6 +1723,27 @@ modeOptions.forEach((option) => {
 });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") showViewerTip(false);
+});
+
+// The actor field's icon explains what an actor is, on hover or keyboard focus.
+const memoryActorIcon = document.querySelector(".memory-actor-icon");
+
+function showMemoryActorTip(on) {
+  memoryActorIcon?.classList.toggle("tip-visible", Boolean(on));
+}
+
+memoryActorIcon?.addEventListener("pointerenter", (event) => {
+  if (event.pointerType !== "touch") showMemoryActorTip(true);
+});
+memoryActorIcon?.addEventListener("pointerleave", (event) => {
+  if (event.pointerType !== "touch") showMemoryActorTip(false);
+});
+memoryActorIcon?.addEventListener("focus", () => {
+  if (memoryActorIcon.matches(":focus-visible") || touchOnly.matches) showMemoryActorTip(true);
+});
+memoryActorIcon?.addEventListener("blur", () => showMemoryActorTip(false));
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") showMemoryActorTip(false);
 });
 
 elements.modelSelect.addEventListener("change", () => {

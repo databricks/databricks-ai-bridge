@@ -1748,20 +1748,30 @@ h2 {
   flex: 1;
 }
 
+.memory-browse {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.memory-browse[hidden],
+.memory-setup[hidden] {
+  display: none;
+}
+
 .memory-store {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   margin-bottom: 10px;
-  padding: 10px 12px;
+  padding: 8px 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius-small);
   background: var(--surface-muted);
 }
 
 .memory-store-icon {
-  width: 26px;
-  height: 26px;
   flex: 0 0 auto;
   display: grid;
   place-items: center;
@@ -1769,58 +1779,17 @@ h2 {
 }
 
 .memory-store-icon .icon {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
 }
 
-.memory-store-copy {
+.memory-store strong {
   min-width: 0;
-}
-
-.memory-store-copy strong {
-  display: block;
   overflow: hidden;
   font-size: 13px;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.memory-store-copy span {
-  display: block;
-  overflow: hidden;
-  color: var(--ink-faint);
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.memory-field-label {
-  display: block;
-  margin-bottom: 2px;
-  color: var(--ink);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.memory-field-hint {
-  margin: 0 0 6px;
-  color: var(--ink-soft);
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.memory-actor {
-  width: 100%;
-  margin-bottom: 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-small);
-  background: var(--surface-muted);
-  color: var(--ink);
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 12px;
 }
 
 .memory-search {
@@ -1837,6 +1806,52 @@ h2 {
   height: 15px;
   color: var(--ink-faint);
   pointer-events: none;
+}
+
+/* The actor icon is the tooltip's hover and focus target, so it sits above the input. */
+.memory-actor-icon {
+  position: absolute;
+  left: 5px;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  color: var(--ink-faint);
+  cursor: help;
+}
+
+.memory-actor-icon:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.memory-search .memory-actor-icon .icon {
+  position: static;
+}
+
+.memory-actor-tip {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 10;
+  width: 220px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  background: var(--ink);
+  color: var(--surface-raised);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.18);
+  visibility: hidden;
+  cursor: default;
+}
+
+/* app.js sets tip-visible on hover or keyboard focus. */
+.memory-actor-icon.tip-visible > .memory-actor-tip {
+  visibility: visible;
 }
 
 .memory-search input {
@@ -1919,25 +1934,118 @@ h2 {
 
 .memory-entry-foot {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
+  justify-content: flex-end;
   margin-top: 8px;
-}
-
-.memory-entry-actor {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--ink-faint);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .memory-entry-time {
   flex: 0 0 auto;
   color: var(--ink-faint);
   font-size: 11px;
+}
+
+/* Setup (no store) and empty (no entries) states: a centered icon, title, sentence, and the
+   command to run. */
+.memory-setup,
+.memory-empty-state {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px 6px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.memory-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 6px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  color: var(--ink-faint);
+}
+
+.memory-empty-icon .icon {
+  width: 22px;
+  height: 22px;
+}
+
+/* The command keeps the panel's width and reads left to right, like everywhere else. */
+.memory-setup .cap-command,
+.memory-empty-state .cap-command {
+  align-self: stretch;
+  margin-top: 6px;
+  text-align: start;
+}
+
+.memory-setup p,
+.memory-empty-state p {
+  margin: 0;
+}
+
+.memory-setup code,
+.memory-empty-state p code {
+  font-size: 11px;
+}
+
+.memory-setup-title {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.memory-setup-note {
+  margin-top: 2px;
+}
+
+.memory-pane .cap-command {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--surface-muted);
+  color: var(--ink);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.memory-pane .cap-command code {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.memory-pane .cap-command button {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.memory-pane .cap-command button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.memory-pane .cap-command .icon {
+  width: 13px;
+  height: 13px;
 }
 
 .memory-empty,

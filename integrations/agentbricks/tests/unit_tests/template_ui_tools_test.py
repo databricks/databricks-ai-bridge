@@ -477,6 +477,7 @@ def test_render_tools_row_and_pane(framework):
     for name in (
         "setCapability",
         "commandRow",
+        "placeholderCommandRow",
         "toolsSection",
         "toolsEmpty",
         "toolRow",
