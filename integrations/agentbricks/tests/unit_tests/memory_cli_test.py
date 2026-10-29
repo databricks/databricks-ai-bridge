@@ -128,6 +128,22 @@ def test_store_create_and_delete_confirmation():
     assert r3.exit_code == 0 and ("delete_store", STORE) in c3.calls
 
 
+def test_store_create_suggests_a_complete_copy_pasteable_entry_command():
+    # The next step after creating a store must be runnable as pasted: it includes --content, uses a
+    # real-looking actor and path (no `<...>` placeholders, which the shell reads as redirection),
+    # and says that --path is a key inside the store rather than a file.
+    r, _ = _run(stores, ["create", "--display-name", "cli-mem"])
+    assert r.exit_code == 0, r.output
+    panel = " ".join(line.strip("│ ") for line in r.output.splitlines() if line.startswith("│"))
+    command = " ".join(panel.split())
+    assert f"agentbricks memory entries create --store {STORE}" in command
+    assert "--actor-id you@example.com" in command
+    assert "--path /preferences/style.md" in command
+    assert '--content "Prefers concise answers with code examples."' in command
+    assert "<" not in command and ">" not in command
+    assert "--path is a key inside the store, not a file" in command
+
+
 # ---- entries ----
 def test_entry_create_text_and_json():
     r, c = _run(

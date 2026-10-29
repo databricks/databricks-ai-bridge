@@ -1299,18 +1299,6 @@ The effective caller needs access to the data, the SQL warehouse, and the select
 where applicable. Agent Bricks CLI does not grant permissions or promise a service-principal fallback when
 caller credentials lack access. An offline add succeeding does not establish runtime access.
 
-The opt-in live tests exercise both frameworks against the configured workspace and an existing
-Genie space. From `integrations/agentbricks`, with both framework extras installed:
-
-```sh
-DATABRICKS_CONFIG_PROFILE=my-workspace RUN_AGENTBRICKS_GENIE_TESTS=1 \
-  AGENTBRICKS_GENIE_SPACE_ID=SPACE_ID \
-  uv run pytest tests/integration_tests/genie_tools_test.py
-```
-
-By default they ask for the row count of `samples.nyctaxi.trips`. Set `AGENTBRICKS_GENIE_QUESTION` for
-another dataset and `AGENTBRICKS_GENIE_EXPECTED_VALUE` to assert a known result cell.
-
 ## Initialize the chat app demo
 
 The chat app is a LangGraph-specific init overlay, not a command that mutates an existing project.

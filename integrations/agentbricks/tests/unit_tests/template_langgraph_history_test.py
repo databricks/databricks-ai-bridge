@@ -3,17 +3,14 @@
 import asyncio
 import importlib
 import importlib.util
-import sys
 from contextlib import nullcontext
-from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
 import httpx
 import pytest
+from template_fixtures import TEMPLATES, forget_template, import_template
 from template_history_fixtures import SessionStoreTransport
-
-TEMPLATES = Path(__file__).parents[2] / "src/databricks_agentbricks/templates"
 
 
 @pytest.fixture(params=["memory", "managed"])
@@ -24,12 +21,7 @@ def template(request, monkeypatch):
 
     from databricks_agentkit.langgraph import session_store
 
-    monkeypatch.syspath_prepend(str(TEMPLATES / "agent-langgraph"))
-    for name in list(sys.modules):
-        if name in {"agent", "runtime"} or name.startswith(("agent.", "runtime.")):
-            monkeypatch.delitem(sys.modules, name)
-    agent = importlib.import_module("agent.agent")
-    adapter = importlib.import_module("runtime.adapter")
+    adapter, agent = import_template(monkeypatch, TEMPLATES / "agent-langgraph")
     spec = importlib.util.spec_from_file_location(
         "history_ui", TEMPLATES / "ui/agent-langgraph/runtime/ui.py"
     )
@@ -54,9 +46,7 @@ def template(request, monkeypatch):
 
     monkeypatch.setattr(agent, "create_agent_graph", unavailable)
     yield ui, agent, adapter, saver
-    for name in list(sys.modules):
-        if name in {"agent", "runtime"} or name.startswith(("agent.", "runtime.")):
-            sys.modules.pop(name, None)
+    forget_template()
 
 
 def graph_builder():

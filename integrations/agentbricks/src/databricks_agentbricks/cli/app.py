@@ -43,7 +43,11 @@ class CliContext:
 
 @click.group(name="agentbricks", context_settings={"help_option_names": ["-h", "--help"]})
 @click.option(
-    "--profile", "-p", default=None, help="~/.databrickscfg profile to authenticate with."
+    "--profile",
+    "-p",
+    default=None,
+    help="Name of a saved Databricks workspace sign-in. Run `databricks auth profiles` to list "
+    "yours.",
 )
 @click.option(
     "--output",

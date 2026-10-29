@@ -237,8 +237,10 @@ def stores_create(obj, display_name, description) -> None:
         fields={"Store ID": store_id, "Name": field(data, "name")},
         next_steps=[
             (
-                f"agentbricks memory entries create --store {store_id} --actor-id <id> --path </p>",
-                "Add a memory entry for an actor",
+                f"agentbricks memory entries create --store {store_id} "
+                "--actor-id you@example.com --path /preferences/style.md "
+                '--content "Prefers concise answers with code examples."',
+                "Add a starting memory for a user (--path is a key inside the store, not a file)",
             ),
             (f"agentbricks memory stores get {store_id}", "View this store's details"),
             (
@@ -462,8 +464,18 @@ def _render_entry_detail(entry: dict) -> None:
 
 @entries.command("create")
 @click.option("--store", required=True, help="Store id or resource name.")
-@click.option("--actor-id", required=True, help="Actor (partition) this entry belongs to.")
-@click.option("--path", required=True, help="Absolute path, e.g. /preferences/style.md.")
+@click.option(
+    "--actor-id",
+    required=True,
+    help="Who the memory belongs to, usually a user. The deployed chat app uses the signed-in "
+    "user's email.",
+)
+@click.option(
+    "--path",
+    required=True,
+    help="Key for the entry inside the store, written like a path (e.g. /preferences/style.md). "
+    "Not a file on your machine.",
+)
 @click.option(
     "--content", default=None, help="Entry content (inline). Use --content-file for large content."
 )
