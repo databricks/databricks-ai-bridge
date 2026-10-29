@@ -57,6 +57,9 @@ class SessionItemsRequest(BaseModel):
 
 
 _USER_HEADERS = ("x-forwarded-email", "x-forwarded-user")
+# Set by `agentbricks dev` (display only; memory stays off locally). Spelled out rather than imported
+# from databricks_agentkit so the chat app still loads against an older SDK, which just never sets it.
+_DEV_BOUND_MEMORY_STORE_ENV = "AGENTBRICKS_DEV_BOUND_MEMORY_STORE"
 
 
 def _memory_store() -> str:
@@ -551,8 +554,11 @@ def install_ui(app: FastAPI) -> None:
         return {
             "session_id": _request_session_id(request),
             "instance_id": _INSTANCE_ID,
-            "viewer": actor if actor != "agent" else "Local developer",
+            # None when there is no signed-in identity; the page then shows a generic label.
+            "viewer": actor if actor != "agent" else None,
             "deployed": _is_deployed(),
+            # The Databricks profile the agent signs in with locally (same setting it reads).
+            "profile": os.getenv("DATABRICKS_CONFIG_PROFILE") or None,
             "models": {"default": default_model, "available": [default_model]},
             "streaming": {
                 "enabled": True,
@@ -579,6 +585,8 @@ def install_ui(app: FastAPI) -> None:
                 "actor": actor,
                 # Memory is off under `agentbricks dev`, so pipelines need a deployed app.
                 "pipelines": _is_deployed() and bool(memory_store and session_store),
+                # Under `agentbricks dev`, the store bound in agent.toml that connects on deploy.
+                "bound_store": os.getenv(_DEV_BOUND_MEMORY_STORE_ENV) or None,
             },
             "tracing": _tracing(),
         }

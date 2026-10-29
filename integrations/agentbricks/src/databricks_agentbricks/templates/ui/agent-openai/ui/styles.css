@@ -171,10 +171,34 @@ code {
 }
 
 .viewer-chip {
+  position: relative;
   min-width: 0;
   display: flex;
   align-items: center;
   gap: 9px;
+}
+
+/* Local-run tooltip under the viewer chip (app.js fills it in and shows it). */
+.viewer-tip {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 10;
+  padding: 5px 9px;
+  border-radius: 6px;
+  background: var(--ink);
+  color: var(--surface-raised);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.18);
+  visibility: hidden;
+}
+
+/* app.js sets tip-visible on hover or keyboard focus, and never alongside a mode tip. */
+.viewer-chip.tip-visible > .viewer-tip {
+  visibility: visible;
 }
 
 #viewer-value {

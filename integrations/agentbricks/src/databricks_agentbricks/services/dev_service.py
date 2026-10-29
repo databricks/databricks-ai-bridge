@@ -23,7 +23,11 @@ from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.projects.types import AgentServer
 from databricks_agentkit.runtime.cors import CORS_ALLOWED_ORIGINS_ENV
 from databricks_agentkit.runtime.store import RUNTIME_STORE_LOCAL_ENV
-from databricks_agentkit.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
+from databricks_agentkit.runtime.tool_manifest import (
+    DEV_BOUND_MEMORY_STORE_ENV,
+    MEMORY_STORE_ENV,
+    SESSION_STORE_ENV,
+)
 
 # Default local port; run-local's proxy listens here unless ``--app-port`` overrides it.
 _DEFAULT_APP_PORT = 8000
@@ -147,9 +151,14 @@ class DevService:
             if prepare_environment is None:
                 prepare_environment = not (source_dir / ".venv").exists()
 
+            local_env = dict(tracing_env)
+            if memory_store:
+                # Display-only: lets the chat app say the bound store connects on deploy. Memory
+                # itself stays off locally; nothing resolves a store from this.
+                local_env[DEV_BOUND_MEMORY_STORE_ENV] = memory_store
             entry_point = _dev_entry_point(
                 app_yaml,
-                tracing_env or None,
+                local_env or None,
                 allowed_origins=project.allowed_origins if project is not None else None,
             )
             preview = DevPreview(
