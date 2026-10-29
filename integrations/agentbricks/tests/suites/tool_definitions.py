@@ -124,7 +124,7 @@ def sandbox_tool(uc_function: UcFunction) -> Tool:
             "do not fabricate them."
         ),
         called=returned(uc_function.volume_marker),
-        add_command=f"sandbox --scope volume:{uc_function.volume}",
+        add_command="sandbox",
         files={},
         tool_id="sandbox",
     )

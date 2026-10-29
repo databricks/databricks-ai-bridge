@@ -18,6 +18,9 @@ from databricks_agentbricks.cli import sandbox as sandbox_mod
 from databricks_agentbricks.cli.sandbox import add_sandbox
 from databricks_agentkit.runtime import tool_manifest
 
+# The scoped sandbox path is retained behind a disabled gate; these tests cover it with the gate on.
+pytestmark = pytest.mark.usefixtures("sandbox_downscope_enabled")
+
 _EMPTY_MCPS = '''"""MCP servers to offer the agent."""
 
 from agents.mcp import MCPServer

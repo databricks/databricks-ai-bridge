@@ -22,6 +22,9 @@ from databricks_agentbricks.cli.tools import tools as tools_group
 from databricks_agentbricks.projects.agent_project import AgentProject
 from databricks_agentbricks.projects.config import write_project_metadata
 
+# The scoped sandbox path is retained behind a disabled gate; these tests cover it with the gate on.
+pytestmark = pytest.mark.usefixtures("sandbox_downscope_enabled")
+
 TEMPLATES = Path(__file__).parents[2] / "src/databricks_agentbricks/templates"
 FRAMEWORKS = ["openai", "langgraph"]
 
@@ -45,7 +48,7 @@ EXPECTED_ADD_COMMANDS = [
     {
         "kind": "sandbox",
         "label": "Sandbox",
-        "command": "agentbricks tools add sandbox --scope volume:catalog.schema.volume",
+        "command": "agentbricks tools add sandbox",
     },
     {
         "kind": "discover",

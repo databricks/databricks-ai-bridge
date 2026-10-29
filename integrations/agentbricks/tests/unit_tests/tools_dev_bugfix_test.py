@@ -39,7 +39,7 @@ def test_add_mcp_empty_service_is_rejected_clearly(tmp_path):
 # --- ML-69258: sandbox bindings retain their configured scopes --------------
 
 
-def test_sandbox_manifest_retains_scopes(tmp_path):
+def test_sandbox_manifest_retains_scopes(tmp_path, sandbox_downscope_enabled):
     project = _project(tmp_path)
     result = CliRunner().invoke(
         tools,

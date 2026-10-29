@@ -22,6 +22,9 @@ from databricks_agentbricks.projects.types import AgentFramework, AgentServer
 from databricks_agentkit.runtime import tool_manifest
 from databricks_agentkit.runtime.tool_manifest import ToolManifestError, load_tools
 
+# The scoped sandbox path is retained behind a disabled gate; these tests cover it with the gate on.
+pytestmark = pytest.mark.usefixtures("sandbox_downscope_enabled")
+
 
 @pytest.mark.parametrize("kind", ["mcp", "sandbox", "uc_function", "genie_one", "genie_agent"])
 @pytest.mark.parametrize("auth", [None, "app", "user"])
@@ -132,6 +135,77 @@ policy = {{ downscope = [{{ resource = "{resource}", permission = "read_only" }}
             load_tools(expected_framework=framework)
 
     assert manifest.read_bytes() == before
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("reader", ["project", "runtime"])
+@pytest.mark.parametrize("kind", ["sandbox", "mcp"])
+def test_manifest_downscope_fails_with_removal_action_when_disabled(
+    tmp_path, monkeypatch, framework, reader, kind
+):
+    monkeypatch.setattr(tool_manifest, "SANDBOX_DOWNSCOPE_ENABLED", False)
+    service = "system.ai.sandbox" if kind == "sandbox" else "system.ai.web_search"
+    manifest = _write_manifest(
+        tmp_path,
+        f"""schema_version = 1
+
+[agent]
+framework = "{framework}"
+server = "agentbricks"
+
+[[tools]]
+id = "files"
+source = {{ kind = "{kind}", service = "{service}" }}
+policy = {{ downscope = [{{ resource = "volume:main.data.files", permission = "read_only" }}] }}
+""",
+    )
+    before = manifest.read_bytes()
+    monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
+    error_type = AgentCliError if reader == "project" else ToolManifestError
+
+    with pytest.raises(error_type) as raised:
+        if reader == "project":
+            AgentProject.load(tmp_path)
+        else:
+            load_tools(expected_framework=framework)
+
+    message = str(raised.value)
+    assert (
+        "Tool 'files' declares policy.downscope, which system.ai.sandbox does not support"
+        in message
+    )
+    assert (
+        "Remove policy.downscope from the [[tools]] entry with id = 'files' in agent.toml."
+        in message
+    )
+    assert manifest.read_bytes() == before
+
+
+def test_scope_is_rejected_when_downscope_is_disabled(monkeypatch):
+    monkeypatch.setattr(tool_manifest, "SANDBOX_DOWNSCOPE_ENABLED", False)
+    with pytest.raises(AgentCliError, match="Sandbox scopes are not supported"):
+        Scope.volume("main.data.files")
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("token_included", [True, False])
+def test_unscoped_sandbox_round_trips_and_sends_empty_downscope(
+    tmp_path, monkeypatch, framework, token_included
+):
+    monkeypatch.setattr(tool_manifest, "SANDBOX_DOWNSCOPE_ENABLED", False)
+    project = AgentProject.create(tmp_path, framework=framework, server="agentbricks")
+    project.add_tool(ToolSpec.sandbox("sandbox", databricks_access_token_included=token_included))
+    manifest = project.write()
+    monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
+
+    assert "downscope" not in manifest.read_text()
+    loaded = AgentProject.load(tmp_path).tools[0]
+    assert loaded.policy == ToolPolicy(databricks_access_token_included=token_included)
+    record = load_tools(expected_framework=framework)[0]
+    assert tool_manifest.sandbox_meta(record) == {
+        "downscope": {},
+        "databricks_access_token_included": token_included,
+    }
 
 
 def test_scope_rejects_unsupported_table_resource():
@@ -524,7 +598,6 @@ def test_add_conflicting_tool_id_fails_without_writing(tmp_path: pathlib.Path):
     [
         (lambda: ToolSpec.mcp("web", service="not-three-parts"), "MCP service"),
         (lambda: ToolSpec.uc_function("lookup", function="catalog.schema"), "UC function"),
-        (lambda: ToolSpec.sandbox("sandbox", scopes=[]), "scope"),
         (
             lambda: ToolSpec.sandbox("sandbox", scopes=[Scope(kind="unknown", value="c.s.t")]),
             "scope kind",
