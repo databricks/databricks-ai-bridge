@@ -1942,50 +1942,93 @@ h2 {
   gap: 6px;
 }
 
-.tools-heading {
-  margin: 8px 0 2px;
-  color: var(--ink-faint);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+.tools-section-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 14px 0 0;
 }
 
-.tools-heading:first-child {
+.tools-section-head:first-child {
   margin-top: 0;
+}
+
+.tools-heading {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tools-count {
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+
+.tools-note {
+  margin: -2px 0 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.tools-note code {
+  font-size: 11px;
+}
+
+/* One card per section; rows are separated by dividers instead of boxed one by one. */
+.tools-group {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: var(--surface-raised);
+  overflow: hidden;
 }
 
 .tool-row {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-small);
-  background: var(--surface-raised);
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 10px;
 }
 
-.tool-badge {
-  flex: 0 0 auto;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: var(--surface-muted);
-  color: var(--accent-deep);
-  font-size: 11px;
-  font-weight: 600;
+.tool-row + .tool-row {
+  border-top: 1px solid var(--line);
+}
+
+.tool-row:hover {
+  background: var(--hover);
+}
+
+/* Keep the command box distinct from the hovered row behind it. */
+.tools-pane .tool-add:hover .cap-command {
+  background: var(--surface);
 }
 
 .tool-name {
   min-width: 0;
   overflow-wrap: anywhere;
+  color: var(--ink);
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 12px;
 }
 
 .tool-detail {
-  flex: 1 1 100%;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   min-width: 0;
+  overflow: hidden;
   overflow-wrap: anywhere;
   color: var(--ink-soft);
   font-size: 12px;
@@ -1993,26 +2036,29 @@ h2 {
 }
 
 .tools-empty {
-  padding: 4px 2px;
+  padding: 9px 10px;
   color: var(--ink-soft);
   font-size: 12px;
 }
 
-.tools-pane .cap-command-label {
-  display: block;
-  margin: 4px 0 0;
-  font-size: 12px;
-}
-
-.tools-hint {
-  margin: 6px 0 0;
+.tools-pane .tool-add .cap-command-label {
+  margin: 0;
   color: var(--ink-soft);
   font-size: 12px;
-  line-height: 1.45;
 }
 
-.tools-hint code {
-  font-size: 11px;
+.tools-pane .tool-add .cap-command {
+  margin-top: 2px;
+  font-size: 12px;
+}
+
+.cap-token {
+  white-space: nowrap;
+}
+
+.cap-placeholder {
+  color: var(--accent);
+  font-style: italic;
 }
 
 /* -------------------------------------------------------------------------- */

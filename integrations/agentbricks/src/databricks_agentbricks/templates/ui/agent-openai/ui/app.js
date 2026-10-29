@@ -883,22 +883,38 @@ function closeMemoryModal() {
 
 // ---- Tools pane ------------------------------------------------------------
 
-function toolsSection(title) {
+// A section heading with its item count, then the grouped card its rows go in.
+function toolsSection(title, count, note) {
+  const head = document.createElement("div");
+  head.className = "tools-section-head";
   const heading = document.createElement("h3");
   heading.className = "tools-heading";
   heading.textContent = title;
-  elements.toolsBody.append(heading);
+  head.append(heading);
+  if (count) {
+    const badge = document.createElement("span");
+    badge.className = "tools-count";
+    badge.textContent = String(count);
+    head.append(badge);
+  }
+  elements.toolsBody.append(head);
+  if (note) elements.toolsBody.append(note);
+  const group = document.createElement("div");
+  group.className = "tools-group";
+  elements.toolsBody.append(group);
+  return group;
 }
 
-function toolRow(badge, name, detail) {
+function toolsEmpty(text) {
+  const empty = document.createElement("div");
+  empty.className = "tools-empty";
+  empty.textContent = text;
+  return empty;
+}
+
+function toolRow(name, detail) {
   const row = document.createElement("div");
   row.className = "tool-row";
-  if (badge) {
-    const label = document.createElement("span");
-    label.className = "tool-badge";
-    label.textContent = badge;
-    row.append(label);
-  }
   const id = document.createElement("span");
   id.className = "tool-name";
   id.textContent = name;
@@ -906,9 +922,41 @@ function toolRow(badge, name, detail) {
   if (detail) {
     const source = document.createElement("span");
     source.className = "tool-detail";
+    // Long descriptions clamp to two lines; the full text stays in the tooltip.
+    source.title = detail;
     source.textContent = detail;
     row.append(source);
   }
+  return row;
+}
+
+// An add recipe: its label, then the command with the part to replace (if any) set off.
+function addCommandRow(entry) {
+  const row = document.createElement("div");
+  row.className = "tool-row tool-add";
+  const label = document.createElement("span");
+  label.className = "cap-command-label";
+  label.textContent = entry.label;
+  const command = commandRow(entry.command);
+  const code = command.children[0];
+  code.textContent = "";
+  // Wrap only between words, never at a hyphen inside one (`uc-function`).
+  entry.command.split(" ").forEach((word, index) => {
+    if (index) code.append(" ");
+    const token = document.createElement("span");
+    token.className = "cap-token";
+    const at = entry.placeholder ? word.indexOf(entry.placeholder) : -1;
+    if (at >= 0) {
+      const placeholder = document.createElement("em");
+      placeholder.className = "cap-placeholder";
+      placeholder.textContent = entry.placeholder;
+      token.append(word.slice(0, at), placeholder, word.slice(at + entry.placeholder.length));
+    } else {
+      token.textContent = word;
+    }
+    code.append(token);
+  });
+  row.append(label, command);
   return row;
 }
 
@@ -935,39 +983,29 @@ function renderTools(payload) {
     elements.toolsBody.append(message);
   }
 
-  toolsSection("Connected");
-  if (!connected.length) {
-    const empty = document.createElement("div");
-    empty.className = "tools-empty";
-    empty.textContent = "No managed tools connected yet.";
-    elements.toolsBody.append(empty);
-  }
-  for (const tool of connected) elements.toolsBody.append(toolRow(tool.label, tool.id, tool.source));
+  const connectedGroup = toolsSection("Connected", connected.length);
+  if (!connected.length) connectedGroup.append(toolsEmpty("No managed tools yet. Add one below."));
+  for (const tool of connected) connectedGroup.append(toolRow(tool.id, tool.source));
 
-  toolsSection("Defined in code");
-  if (!local.length) {
-    const empty = document.createElement("div");
-    empty.className = "tools-empty";
-    empty.textContent = "No Python tools found in agent/tools.";
-    elements.toolsBody.append(empty);
-  }
-  for (const tool of local) elements.toolsBody.append(toolRow(null, tool.name, tool.description));
+  const from = document.createElement("p");
+  from.className = "tools-note";
+  const folder = document.createElement("code");
+  folder.textContent = "agent/tools/";
+  from.append("From ", folder);
+  const localGroup = toolsSection("Defined in code", local.length, from);
+  if (!local.length) localGroup.append(toolsEmpty("No Python tools found in agent/tools."));
+  for (const tool of local) localGroup.append(toolRow(tool.name, tool.description));
 
-  toolsSection("Add a tool");
-  for (const entry of payload?.add_commands || []) {
-    const label = document.createElement("span");
-    label.className = "cap-command-label";
-    label.textContent = entry.label;
-    elements.toolsBody.append(label, commandRow(entry.command));
-  }
+  // Where to run the commands comes before them, not after.
   const hint = document.createElement("p");
-  hint.className = "tools-hint";
+  hint.className = "tools-note tools-hint";
   const dev = document.createElement("code");
   dev.textContent = "agentbricks dev";
   const deploy = document.createElement("code");
   deploy.textContent = "agentbricks deploy";
   hint.append("Run in your project directory, then restart ", dev, " or run ", deploy, ".");
-  elements.toolsBody.append(hint);
+  const addGroup = toolsSection("Add a tool", 0, hint);
+  for (const entry of payload?.add_commands || []) addGroup.append(addCommandRow(entry));
 }
 
 async function loadTools() {
