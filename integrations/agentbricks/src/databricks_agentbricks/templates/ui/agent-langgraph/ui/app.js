@@ -2,8 +2,6 @@ const elements = {
   approvalPanel: document.querySelector("#approval-panel"),
   approvalSummary: document.querySelector("#approval-summary"),
   approveAction: document.querySelector("#approve-action"),
-  backgroundMode: document.querySelector("#background-mode-value"),
-  backgroundStatus: document.querySelector("#background-status"),
   chatLog: document.querySelector("#chat-log"),
   clearEvents: document.querySelector("#clear-events"),
   composer: document.querySelector("#composer"),
@@ -32,8 +30,6 @@ const elements = {
   sessionMode: document.querySelector("#session-mode-value"),
   sessionStatus: document.querySelector("#session-status"),
   sessionStoreLabel: document.querySelector("#session-store-label"),
-  streamingMode: document.querySelector("#streaming-mode-value"),
-  streamingStatus: document.querySelector("#streaming-status"),
   viewerValue: document.querySelector("#viewer-value"),
   viewerAvatar: document.querySelector("#viewer-avatar"),
   brandSub: document.querySelector("#brand-sub"),
@@ -1418,24 +1414,8 @@ async function loadConfig() {
     renderModels(config.models);
     void loadModels().catch((error) => addEvent("models.error", { message: String(error) }));
     setViewer(config.viewer);
-    elements.streamingMode.textContent = config.streaming.mode;
-    elements.backgroundMode.textContent = config.background.mode;
     elements.sessionMode.textContent = config.session.mode;
     elements.memoryMode.textContent = config.memory.enabled ? `Managed · actor ${config.memory.actor}` : "Not connected";
-    setCapability(
-      elements.streamingStatus,
-      config.streaming.enabled,
-      config.streaming.enabled
-        ? `Streaming responses over ${config.streaming.transport} use ${config.streaming.persistent ? "the Runtime Store." : "an in-process Runtime Store."}`
-        : "Streaming is disabled for this deployment.",
-    );
-    setCapability(
-      elements.backgroundStatus,
-      config.background.enabled,
-      config.background.enabled
-        ? `Background invocations use ${config.background.persistent ? "the Runtime Store." : "an in-process Runtime Store."}`
-        : "Background invocations are disabled.",
-    );
     setCapability(
       elements.sessionStatus,
       config.session.managed ? true : config.session.history ? "degraded" : false,
@@ -1659,8 +1639,6 @@ elements.rejectSession.addEventListener("click", () => resume("reject"));
 
 loadConfig().catch((error) => {
   appendError(error);
-  elements.streamingMode.textContent = "Unavailable";
-  elements.backgroundMode.textContent = "Unavailable";
   elements.sessionMode.textContent = "Unavailable";
   elements.memoryMode.textContent = "Unavailable";
   elements.tracingMode.textContent = "Unavailable";
