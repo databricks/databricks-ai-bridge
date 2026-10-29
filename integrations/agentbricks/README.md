@@ -574,6 +574,36 @@ agent = create_agent(model=..., tools=[...], checkpointer=checkpointer())
 result = await agent.ainvoke(inputs, config=thread_config(session_id))
 ```
 
+#### External customers behind one service principal
+
+A B2C backend can authenticate customers through its own identity provider and invoke the App
+through one Databricks service principal. For the bundled agents, pass the backend's verified
+customer identifier as `input.actor` and a backend-issued conversation identifier as the top-level
+`session_id`:
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "session_id": "customer-123:conversation-456",
+  "input": {
+    "actor": "customer-123",
+    "messages": [{"role": "user", "content": "Remember that I prefer email updates."}]
+  }
+}
+```
+
+The actor selects the customer's long-term memory partition. Omitting it makes the bundled agents
+fall back to the session identifier, so memory does not follow the customer into a new session.
+The session identifier selects conversation history and the runtime's per-session queue. Reuse it
+only for turns in the same customer's conversation; issue a new identifier for each new conversation.
+
+The App identity scopes runtime sessions; `input.actor` does not add another boundary to the
+runtime session key. The trusted backend must enforce customer ownership of both identifiers before
+calling the App, and must not accept an arbitrary actor or session identifier from a client.
+Databricks request-user auth is a separate choice: use `auth = "app"` for managed tools when they
+should run as the service principal. Actor partitions are not Databricks authorization boundaries;
+use separate stores where a stronger tenant boundary is required.
+
 ### Memory
 
 A **memory store** holds **memory entries**. Each entry is a free-form `content` string plus a short
