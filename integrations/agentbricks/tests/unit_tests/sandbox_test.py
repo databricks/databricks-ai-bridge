@@ -338,15 +338,28 @@ def test_add_sandbox_generates_fixed_volume_downscope(tmp_path: pathlib.Path):
     assert '"permission": "read_only"' in generated
     assert "/ai-gateway/mcp-services/system.ai.sandbox" in generated
     assert "from_uc_function" not in generated
-    assert 'tool_filter={"allowed_tool_names": ["sandbox", "run_code"]}' in generated
+    assert (
+        '"allowed_tool_names": ["sandbox", "run_code", "create_sandbox", "delete_sandbox"]'
+        in generated
+    )
     assert "return [\n        _build_sandbox_mcp_server(),\n    ]" in generated
     assert 'meta["downscope"] = _SANDBOX_DOWNSCOPE' in generated
     assert "super().call_tool(tool_name, arguments, meta=meta, **kwargs)" in generated
     assert "arguments[" not in generated
 
 
+@pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    [
+        ("sandbox", {"code": 'print("hello")'}),
+        ("run_code", {"code": 'print("hello")'}),
+        ("create_sandbox", {"home_volume_persisted": False, "replace_existing_if_inactive": True}),
+        ("create_sandbox", {"home_volume_persisted": True, "replace_existing_if_inactive": False}),
+        ("delete_sandbox", {"sandbox_id": "my-sandbox"}),
+    ],
+)
 def test_generated_server_overrides_caller_downscope_without_changing_arguments(
-    tmp_path: pathlib.Path, monkeypatch
+    tmp_path: pathlib.Path, monkeypatch, tool_name, arguments
 ):
     project, mcps = _project(tmp_path)
     result = CliRunner().invoke(
@@ -386,15 +399,15 @@ def test_generated_server_overrides_caller_downscope_without_changing_arguments(
     namespace: dict[str, Any] = {}
     exec(compile(mcps.read_text(), str(mcps), "exec"), namespace)
     server = namespace["build_mcp_servers"]()[0]
-    arguments = {"code": 'print("hello")'}
-    _, forwarded_arguments, kwargs = asyncio.run(
+    forwarded_name, forwarded_arguments, kwargs = asyncio.run(
         server.call_tool(
-            "sandbox",
+            tool_name,
             arguments,
             meta={"downscope": {"volumes": []}, "trace_id": "123"},
         )
     )
 
+    assert forwarded_name == tool_name
     assert forwarded_arguments is arguments
     assert kwargs["meta"] == {
         "downscope": {
@@ -409,7 +422,9 @@ def test_generated_server_overrides_caller_downscope_without_changing_arguments(
     )
     assert isinstance(server.connection["workspace_client"], FakeWorkspaceClient)
     assert server.connection["timeout"] == 120.0
-    assert server.connection["tool_filter"] == {"allowed_tool_names": ["sandbox", "run_code"]}
+    assert server.connection["tool_filter"] == {
+        "allowed_tool_names": ["sandbox", "run_code", "create_sandbox", "delete_sandbox"]
+    }
 
 
 def test_add_sandbox_supports_multiple_volumes_and_read_write_scopes(tmp_path: pathlib.Path):
@@ -596,6 +611,35 @@ def test_add_sandbox_is_idempotent(tmp_path: pathlib.Path):
     assert second.exit_code == 0, second.output
     assert "already configured" in second.output
     assert mcps.read_text() == first_content
+
+
+@pytest.mark.parametrize("tampered", [False, True])
+def test_add_sandbox_upgrades_legacy_tool_filter_only_for_intact_wrapper(tmp_path, tampered):
+    policy = {"volumes": [{"name": "catalog.schema.volume", "permission": "read_only"}]}
+    source = sandbox_mod._add_sandbox_to_source(_EMPTY_MCPS, policy)
+    legacy = source.replace(
+        '["sandbox", "run_code", "create_sandbox", "delete_sandbox"]',
+        '["sandbox", "run_code"]',
+    )
+    assert legacy != source
+    if tampered:
+        legacy = legacy.replace('meta["downscope"] = _SANDBOX_DOWNSCOPE', 'meta["downscope"] = {}')
+    project, mcps = _project(tmp_path, legacy)
+    runner = CliRunner()
+    args = ["--source", str(project), "--scope", "catalog.schema.volume"]
+
+    result = runner.invoke(add_sandbox, args, obj=_TextCtx())
+
+    if tampered:
+        assert result.exit_code != 0
+        assert mcps.read_text() == legacy
+    else:
+        assert result.exit_code == 0, result.output
+        assert mcps.read_text() == source
+        second = runner.invoke(add_sandbox, args, obj=_TextCtx())
+        assert second.exit_code == 0, second.output
+        assert "already configured" in second.output
+        assert mcps.read_text() == source
 
 
 def test_add_sandbox_rejects_policy_change_instead_of_reporting_stale_values(

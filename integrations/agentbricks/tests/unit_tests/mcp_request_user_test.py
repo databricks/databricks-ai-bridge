@@ -209,7 +209,17 @@ def test_sandbox_reconnect_captures_resolver_and_manifest(adapter, monkeypatch):
 
 
 @pytest.mark.parametrize("auth", ["app", "user"])
-def test_sandbox_metadata_protects_token_env_policy_for_both_identities(adapter, monkeypatch, auth):
+@pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    [
+        ("run_code", {"code": "print('ok')"}),
+        ("create_sandbox", {"home_volume_persisted": False, "replace_existing_if_inactive": True}),
+        ("create_sandbox", {"home_volume_persisted": True, "replace_existing_if_inactive": False}),
+    ],
+)
+def test_sandbox_metadata_protects_token_env_policy_for_both_identities(
+    adapter, monkeypatch, auth, tool_name, arguments
+):
     app = SimpleNamespace(config=SimpleNamespace(host="https://workspace"))
     user = SimpleNamespace(config=SimpleNamespace(host="https://workspace"))
     resolver = Mock(side_effect=lambda mode: user if mode == "user" else app)
@@ -236,14 +246,16 @@ def test_sandbox_metadata_protects_token_env_policy_for_both_identities(adapter,
         assert (
             asyncio.run(
                 server.call_tool(
-                    "run_code",
-                    {"code": "print('ok')"},
+                    tool_name,
+                    arguments,
                     meta={"databricks_access_token_included": False},
                 )
             )
             is result
         )
         assert call_tool.call_args.kwargs["meta"] == expected_meta
+        expected_args = (server, tool_name, arguments) if auth == "user" else (tool_name, arguments)
+        assert call_tool.call_args.args == expected_args
     else:
         session = SimpleNamespace(
             initialize=AsyncMock(), call_tool=AsyncMock(return_value="sandbox-result")
@@ -254,9 +266,7 @@ def test_sandbox_metadata_protects_token_env_policy_for_both_identities(adapter,
             yield session
 
         monkeypatch.setattr(adapter, "create_session", create_session)
-        request = SimpleNamespace(
-            server_name="sandbox", name="run_code", args={"code": "print('ok')"}
-        )
+        request = SimpleNamespace(server_name="sandbox", name=tool_name, args=arguments)
         result = asyncio.run(
             adapter._sandbox_interceptor((sandbox,), workspace_client_for=resolver)(
                 request, AsyncMock()
@@ -264,6 +274,7 @@ def test_sandbox_metadata_protects_token_env_policy_for_both_identities(adapter,
         )
         assert result == "sandbox-result"
         assert session.call_tool.call_args.kwargs["meta"] == expected_meta
+        assert session.call_tool.call_args.args == (tool_name, arguments)
 
 
 @pytest.mark.parametrize("operation", ["connect", "list_tools", "call_tool"])
