@@ -57,7 +57,7 @@ server = "agentbricks"
 [[tools]]
 id = "sandbox"
 source = { kind = "sandbox", service = "system.ai.sandbox" }
-policy = { downscope = [{ resource = "volume:main.data.files", permission = "read_only" }], databricks_access_token_included = true }
+policy = { databricks_access_token_included = true }
 
 [[tools]]
 id = "web"
@@ -190,7 +190,7 @@ def test_langgraph_runtime_loads_direct_manifest_and_protects_sandbox_meta(
     assert client is not None
     assert len(client.kwargs["tool_interceptors"]) == 1
 
-    # the interceptor downscopes sandbox calls with the fixed meta from the manifest policy.
+    # the interceptor adds the fixed protected meta from the manifest policy to sandbox calls.
     interceptor = client.kwargs["tool_interceptors"][0]
     request = SimpleNamespace(
         server_name="sandbox",
@@ -205,7 +205,7 @@ def test_langgraph_runtime_loads_direct_manifest_and_protects_sandbox_meta(
     assert name == "sandbox"
     assert arguments == {"code": 'print("ok")'}
     assert kwargs["meta"] == {
-        "downscope": {"volumes": [{"name": "main.data.files", "permission": "read_only"}]},
+        "downscope": {},
         "databricks_access_token_included": True,
     }
 
@@ -218,7 +218,7 @@ def test_runtime_manifest_defaults_sandbox_token_policy_to_false(
     _write_direct_manifest(project)
     manifest = project / "agent.toml"
     manifest.write_text(
-        manifest.read_text().replace(", databricks_access_token_included = true", "")
+        manifest.read_text().replace("policy = { databricks_access_token_included = true }\n", "")
     )
     monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(project))
 

@@ -45,7 +45,7 @@ EXPECTED_ADD_COMMANDS = [
     {
         "kind": "sandbox",
         "label": "Sandbox",
-        "command": "agentbricks tools add sandbox --scope volume:catalog.schema.volume",
+        "command": "agentbricks tools add sandbox",
     },
     {
         "kind": "discover",
@@ -79,10 +79,7 @@ source = {{ kind = "genie_agent", space_id = "{SPACE_ID}" }}
 id = "sandbox"
 auth = "user"
 source = {{ kind = "sandbox", service = "system.ai.sandbox" }}
-policy = {{ downscope = [
-  {{ resource = "volume:main.data.files", permission = "read_only" }},
-  {{ resource = "volume:main.data.more", permission = "read_write" }},
-] }}
+policy = {{ databricks_access_token_included = true }}
 """
 
 
@@ -177,7 +174,7 @@ def test_connected_lists_every_binding_kind_in_manifest_order(overlay):
             "id": "sandbox",
             "kind": "sandbox",
             "label": "Sandbox",
-            "source": "volume:main.data.files, volume:main.data.more",
+            "source": "system.ai.sandbox",
             "auth": "user",
         },
     ]

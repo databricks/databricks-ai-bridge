@@ -29,7 +29,7 @@ from databricks_agentbricks.clients.apps_user_auth_client import (
     wait_for_app_user_scopes,
 )
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.projects.agent_project import AgentProject, Scope, ToolSpec
+from databricks_agentbricks.projects.agent_project import AgentProject, ToolSpec
 from databricks_agentbricks.projects.resolver import ProjectResolver
 from databricks_agentbricks.reporting import Reporter
 from databricks_agentbricks.services.deploy_service import DeployRequest, DeployService
@@ -248,22 +248,19 @@ def test_scope_update_plan_uses_exact_required_scopes(monkeypatch):
     ("binding", "expected"),
     [
         (
-            ToolSpec.sandbox("volume", scopes=[Scope.volume("cat.sch.vol")], auth="user"),
-            {"ai-gateway", "files", "workspace.workspace"},
+            ToolSpec.sandbox("sandbox", auth="user"),
+            {"ai-gateway", "workspace.workspace"},
         ),
         (
             ToolSpec.sandbox(
-                "volume-no-token",
-                scopes=[Scope.volume("cat.sch.vol")],
-                auth="user",
-                databricks_access_token_included=False,
+                "sandbox-no-token", auth="user", databricks_access_token_included=False
             ),
-            {"ai-gateway", "files"},
+            {"ai-gateway"},
         ),
-        (ToolSpec.sandbox("volume-app", scopes=[Scope.volume("cat.sch.vol")], auth="app"), set()),
+        (ToolSpec.sandbox("sandbox-app", auth="app"), set()),
     ],
 )
-def test_sandbox_policy_requests_resource_and_token_scopes(tmp_path, binding, expected):
+def test_sandbox_policy_requests_gateway_and_token_scopes(tmp_path, binding, expected):
     project = AgentProject.create(tmp_path, framework="langgraph", server="agentbricks")
     project.add_tool(binding)
 

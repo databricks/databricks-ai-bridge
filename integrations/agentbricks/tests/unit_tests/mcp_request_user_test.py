@@ -73,16 +73,13 @@ def adapter(request, monkeypatch):
     sys.modules.pop(module_name, None)
 
 
-def tool(
-    auth=None, kind="mcp", name="search", *, downscope=(), databricks_access_token_included=False
-):
+def tool(auth=None, kind="mcp", name="search", *, databricks_access_token_included=False):
     return SimpleNamespace(
         id=name,
         kind=kind,
         auth=auth,
         service="system.ai.search",
         function="main.tools.lookup",
-        downscope=downscope,
         databricks_access_token_included=databricks_access_token_included,
     )
 
@@ -213,17 +210,9 @@ def test_sandbox_metadata_protects_token_env_policy_for_both_identities(adapter,
     app = SimpleNamespace(config=SimpleNamespace(host="https://workspace"))
     user = SimpleNamespace(config=SimpleNamespace(host="https://workspace"))
     resolver = Mock(side_effect=lambda mode: user if mode == "user" else app)
-    sandbox = tool(
-        auth,
-        "sandbox",
-        "sandbox",
-        downscope=(
-            SimpleNamespace(kind="volume", value="main.data.files", permission="read_only"),
-        ),
-        databricks_access_token_included=True,
-    )
+    sandbox = tool(auth, "sandbox", "sandbox", databricks_access_token_included=True)
     expected_meta = {
-        "downscope": {"volumes": [{"name": "main.data.files", "permission": "read_only"}]},
+        "downscope": {},
         "databricks_access_token_included": True,
     }
     server = adapter._server_from_tool(sandbox, workspace_client_for=resolver)

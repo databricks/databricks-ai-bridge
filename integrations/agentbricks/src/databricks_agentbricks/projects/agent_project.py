@@ -6,7 +6,7 @@ import os
 import pathlib
 import re
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
@@ -53,8 +53,6 @@ MODEL_SERVICES_PATH = f"{EXPERIMENTAL_TABLE}.{MODEL_SERVICES_TABLE}"
 PROMPTS_PATH = f"{EXPERIMENTAL_TABLE}.{PROMPTS_TABLE}"
 
 _SCHEMA_VERSION = 1
-_SUPPORTED_SCOPE_KINDS = {"volume"}
-_SUPPORTED_PERMISSIONS = {"read_only", "read_write"}
 _TOOL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
@@ -92,64 +90,6 @@ class ModelServiceBinding:
 
 
 @dataclass(frozen=True)
-class Scope:
-    """One sandbox downscope resource."""
-
-    kind: str
-    value: str
-    permission: str = "read_only"
-
-    def __post_init__(self) -> None:
-        if self.kind == "table" and not tool_manifest.SANDBOX_TABLE_SCOPES_ENABLED:
-            raise AgentCliError(
-                "Table sandbox scopes are not supported yet.",
-                hint="Databricks Connect does not support table downscoping. "
-                "Use volume:<name> instead.",
-            )
-        if self.kind == "workspace":
-            raise AgentCliError(
-                "Workspace sandbox scopes are not supported yet.",
-                hint="Use volume:<name> instead.",
-            )
-        supported_kinds = _SUPPORTED_SCOPE_KINDS
-        if tool_manifest.SANDBOX_TABLE_SCOPES_ENABLED:
-            supported_kinds = supported_kinds | {"table"}
-        if self.kind not in supported_kinds:
-            raise AgentCliError(
-                f"Unsupported sandbox scope kind {self.kind!r}.",
-                hint=f"Supported scope kinds: {', '.join(sorted(supported_kinds))}.",
-            )
-        if self.permission not in _SUPPORTED_PERMISSIONS:
-            raise AgentCliError(f"Unsupported sandbox permission {self.permission!r}.")
-        _three_part_name(self.value, f"{self.kind} scope")
-
-    @classmethod
-    def table(cls, value: str, permission: str = "read_only") -> "Scope":
-        return cls(kind="table", value=value, permission=permission)
-
-    @classmethod
-    def volume(cls, value: str, permission: str = "read_only") -> "Scope":
-        return cls(kind="volume", value=value, permission=permission)
-
-    @classmethod
-    def parse(cls, value: str, permission: str = "read_only") -> "Scope":
-        """Parse ``kind:value`` CLI form, defaulting dotted names to volumes."""
-        original = value.strip()
-        if not original:
-            raise AgentCliError("Sandbox scopes cannot be empty.")
-        if original.startswith("/Workspace/"):
-            return cls("workspace", original, permission)
-        prefix, separator, remainder = original.partition(":")
-        if separator:
-            return cls(prefix, remainder.strip(), permission)
-        return cls.volume(original, permission)
-
-    @property
-    def resource(self) -> str:
-        return f"{self.kind}:{self.value}"
-
-
-@dataclass(frozen=True)
 class ToolSource:
     """Discriminated source for one tool binding."""
 
@@ -163,7 +103,6 @@ class ToolSource:
 class ToolPolicy:
     """Protected runtime policy for a tool binding."""
 
-    downscope: tuple[Scope, ...] = ()
     databricks_access_token_included: bool = False
 
 
@@ -183,9 +122,7 @@ class ToolSpec:
             if value is not None:
                 source_values[key] = value
         try:
-            tool_manifest.validate_genie_source(
-                self.id, source_values, has_downscope=bool(self.policy.downscope)
-            )
+            tool_manifest.validate_genie_source(self.id, source_values)
         except tool_manifest.ToolManifestError as exc:
             raise AgentCliError(str(exc)) from exc
         kind = self.source.kind
@@ -202,20 +139,14 @@ class ToolSpec:
         if kind == "sandbox":
             if self.source.service != "system.ai.sandbox":
                 raise AgentCliError("Sandbox tools must bind system.ai.sandbox.")
-            if not self.policy.downscope:
-                raise AgentCliError("Sandbox tools require at least one scope.")
         elif kind == "mcp":
             if self.source.service is None:
                 raise AgentCliError("MCP tools require a service.")
             _three_part_name(self.source.service, "MCP service")
-            if self.policy.downscope:
-                raise AgentCliError("Generic MCP tools do not accept sandbox scopes.")
         elif kind == "uc_function":
             if self.source.function is None:
                 raise AgentCliError("UC function tools require a function name.")
             _three_part_name(self.source.function, "UC function")
-            if self.policy.downscope:
-                raise AgentCliError("UC function tools do not accept sandbox scopes.")
         elif kind == "python":
             raise AgentCliError(
                 "Python tools are code-first and cannot be declared in agent.toml.",
@@ -229,14 +160,13 @@ class ToolSpec:
         cls,
         tool_id: str,
         *,
-        scopes: Sequence[Scope],
         auth: Literal["user", "app"] | None = None,
         databricks_access_token_included: bool = True,
     ) -> "ToolSpec":
         return cls(
             id=tool_id,
             source=ToolSource(kind="sandbox", service="system.ai.sandbox"),
-            policy=ToolPolicy(tuple(scopes), databricks_access_token_included),
+            policy=ToolPolicy(databricks_access_token_included),
             auth=auth,
         )
 
@@ -367,23 +297,6 @@ def _store_id_from_manifest(value: object) -> str | None:
     return store_id if isinstance(store_id, str) and store_id else None
 
 
-def _scope_from_manifest(value: object) -> Scope:
-    if not isinstance(value, Mapping):
-        raise AgentCliError("Sandbox downscope entries must be TOML tables.")
-    value = cast(Mapping[str, Any], value)
-    resource = _required_string(value.get("resource"), "a downscope resource")
-    permission = value.get("permission", "read_only")
-    if not isinstance(permission, str):
-        raise AgentCliError("Sandbox downscope permission must be a string.")
-    prefix, separator, name = resource.partition(":")
-    if not separator:
-        raise AgentCliError(
-            f"Invalid sandbox downscope resource {resource!r}.",
-            hint="Use volume:<name>.",
-        )
-    return Scope(prefix, name, permission)
-
-
 def _tool_from_manifest(value: object) -> ToolSpec:
     if not isinstance(value, Mapping):
         raise AgentCliError("Each agent.toml tool must be a TOML table.")
@@ -398,15 +311,12 @@ def _tool_from_manifest(value: object) -> ToolSpec:
         raise AgentCliError("Tool policy must be a TOML table.")
     policy_value = cast(Mapping[str, Any], policy_value)
     tool_id = _required_string(value.get("id"), "an id")
+    if "downscope" in policy_value:
+        raise AgentCliError(tool_manifest.downscope_unsupported_message(tool_id))
     try:
-        tool_manifest.validate_genie_source(
-            tool_id, source, has_downscope="downscope" in policy_value
-        )
+        tool_manifest.validate_genie_source(tool_id, source)
     except tool_manifest.ToolManifestError as exc:
         raise AgentCliError(str(exc)) from exc
-    downscope_value = policy_value.get("downscope", [])
-    if not isinstance(downscope_value, list):
-        raise AgentCliError("Tool policy downscope must be an array.")
     databricks_access_token_included = policy_value.get("databricks_access_token_included", False)
     if not isinstance(databricks_access_token_included, bool):
         raise AgentCliError("Tool policy databricks_access_token_included must be a boolean.")
@@ -420,10 +330,7 @@ def _tool_from_manifest(value: object) -> ToolSpec:
             function=source.get("function") if isinstance(source.get("function"), str) else None,
             space_id=source.get("space_id") if isinstance(source.get("space_id"), str) else None,
         ),
-        policy=ToolPolicy(
-            tuple(_scope_from_manifest(item) for item in downscope_value),
-            databricks_access_token_included,
-        ),
+        policy=ToolPolicy(databricks_access_token_included),
         auth=value.get("auth"),
     )
 
@@ -446,14 +353,8 @@ def _tool_table(spec: ToolSpec) -> Any:
         if value is not None:
             source_values[key] = value
     table.add("source", _inline_table(source_values))
-    if spec.policy.downscope:
-        downscope = tomlkit.array()
-        for scope in spec.policy.downscope:
-            downscope.append(
-                _inline_table({"resource": scope.resource, "permission": scope.permission})
-            )
+    if spec.source.kind == "sandbox":
         policy = tomlkit.inline_table()
-        policy["downscope"] = downscope
         policy["databricks_access_token_included"] = spec.policy.databricks_access_token_included
         table.add("policy", policy)
     return table

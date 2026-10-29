@@ -24,7 +24,7 @@ from databricks.sdk.service.workspace import (
 )
 
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.projects.agent_project import Scope, ToolSpec
+from databricks_agentbricks.projects.agent_project import ToolSpec
 from databricks_agentbricks.services.deployment import tool_access as ta
 from databricks_agentbricks.services.deployment.tool_access import (
     UcGrant,
@@ -34,7 +34,6 @@ from databricks_agentbricks.services.deployment.tool_access import (
     plan_tool_access,
     reconcile_tool_access,
 )
-from databricks_agentkit.runtime import tool_manifest
 
 
 def test_plan_maps_only_explicit_app_auth_resources_to_least_privilege():
@@ -42,13 +41,7 @@ def test_plan_maps_only_explicit_app_auth_resources_to_least_privilege():
         [
             ToolSpec.uc_function("search", function="supervisor_agent.tools.search"),
             ToolSpec.genie_agent("genie", space_id="0" * 32, auth="app"),
-            ToolSpec.sandbox(
-                "sandbox",
-                scopes=[
-                    Scope.volume("main.data.files"),
-                    Scope.volume("main.data.input", "read_write"),
-                ],
-            ),
+            ToolSpec.sandbox("sandbox"),
             ToolSpec.mcp("search", service="supervisor_agent.tools.search"),
             ToolSpec.mcp("user-search", service="system.ai.docs", auth="user"),
         ]
@@ -65,8 +58,6 @@ def test_plan_maps_only_explicit_app_auth_resources_to_least_privilege():
     }
     assert uc_resources == {
         ("supervisor_agent.tools.search", "FUNCTION", "EXECUTE"),
-        ("main.data.files", "VOLUME", "READ_VOLUME"),
-        ("main.data.input", "VOLUME", "WRITE_VOLUME"),
     }
     assert [
         resource["genie_space"] for resource in plan.app_resources if "genie_space" in resource
@@ -82,64 +73,11 @@ def test_plan_maps_only_explicit_app_auth_resources_to_least_privilege():
     )
 
 
-@pytest.mark.parametrize(("kind", "expected"), [("volume", "WRITE_VOLUME"), ("table", "MODIFY")])
-def test_plan_deduplicates_targets_and_keeps_strongest_permission(monkeypatch, kind, expected):
-    if kind == "table":
-        monkeypatch.setattr(tool_manifest, "SANDBOX_TABLE_SCOPES_ENABLED", True)
-    tools = [
-        ToolSpec.sandbox(
-            "read",
-            scopes=[
-                Scope(kind, "main.data.files"),
-            ],
-        ),
-        ToolSpec.sandbox(
-            "write",
-            scopes=[
-                Scope(kind, "main.data.files", "read_write"),
-            ],
-        ),
-    ]
-
-    first = plan_tool_access(tools)
-    second = plan_tool_access(list(reversed(tools)))
-
-    assert first == second
-    assert {
-        resource["uc_securable"]["permission"]
-        for resource in first.app_resources
-        if "uc_securable" in resource
-    } == {expected}
-    assert len(first.app_resources) == 1
-    assert first.workspace_grants == ()
-    assert first.uc_grants == ()
-
-
-@pytest.mark.parametrize(
-    ("permission", "expected"), [("read_only", "SELECT"), ("read_write", "MODIFY")]
-)
 @pytest.mark.parametrize("auth", [None, "app", "user"])
-def test_plan_table_resource_when_gate_is_enabled(monkeypatch, permission, expected, auth):
-    monkeypatch.setattr(tool_manifest, "SANDBOX_TABLE_SCOPES_ENABLED", True)
-    plan = plan_tool_access(
-        [
-            ToolSpec.sandbox(
-                "sandbox", scopes=[Scope("table", "main.data.rows", permission)], auth=auth
-            )
-        ]
-    )
+def test_plan_requests_no_resources_or_grants_for_sandbox(auth):
+    plan = plan_tool_access([ToolSpec.sandbox("sandbox", auth=auth)])
 
-    assert [resource["uc_securable"] for resource in plan.app_resources] == (
-        []
-        if auth == "user"
-        else [
-            {
-                "securable_full_name": "main.data.rows",
-                "securable_type": "TABLE",
-                "permission": expected,
-            }
-        ]
-    )
+    assert plan.app_resources == ()
     assert plan.uc_grants == ()
     assert plan.workspace_grants == ()
 
@@ -149,11 +87,7 @@ def test_plan_ignores_user_auth_and_genie_one_without_an_explicit_resource():
         [
             ToolSpec.mcp("search", service="system.ai.web_search", auth="user"),
             ToolSpec.uc_function("lookup", function="main.tools.lookup", auth="user"),
-            ToolSpec.sandbox(
-                "sandbox",
-                scopes=[Scope.volume("main.data.files")],
-                auth="user",
-            ),
+            ToolSpec.sandbox("sandbox", auth="user"),
             ToolSpec.genie_agent("genie", space_id="0" * 32, auth="user"),
             ToolSpec.genie_one("workspace_genie", auth="app"),
         ]
@@ -168,10 +102,7 @@ def test_plan_uses_platform_defaults_for_system_mcp_services():
     plan = plan_tool_access(
         [
             ToolSpec.mcp("search", service="system.ai.web_search"),
-            ToolSpec.sandbox(
-                "sandbox",
-                scopes=[Scope.volume("supervisor_agent.tools.files")],
-            ),
+            ToolSpec.sandbox("sandbox"),
         ]
     )
 
