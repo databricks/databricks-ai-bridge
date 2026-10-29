@@ -332,7 +332,7 @@ def test_cli_add_and_remove_show_up_without_restarting(overlay):
 def test_tools_row_sits_right_before_memory_and_pane_exists(framework):
     html = (TEMPLATES / f"ui/agent-{framework}/ui/index.html").read_text()
     order = re.findall(r'data-capability="(\w+)"', html)
-    assert order == ["streaming", "background", "session", "tools", "memory", "traces"]
+    assert order == ["session", "tools", "memory", "traces"]
     assert 'id="tools-mode-value"' in html
     assert 'id="tools-status"' in html
     for element in ("tools-pane", "tools-back", "tools-refresh", "tools-body"):
