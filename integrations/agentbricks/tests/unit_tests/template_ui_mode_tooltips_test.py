@@ -88,10 +88,16 @@ def test_mode_tooltips_match_across_templates():
 def test_mode_tooltip_visibility_is_driven_by_one_class(template):
     css = (UI_ROOT / template / "ui/styles.css").read_text()
     reveals = re.findall(r"([^{}/]*)\{\s*visibility:\s*visible;\s*\}", css)
-    # Stacked :hover/:focus reveal rules let two tips show at once, so JS owns visibility.
-    assert [selector.strip() for selector in reveals] == [".mode-option.tip-visible > .mode-tip"]
+    # Stacked :hover/:focus reveal rules let two tips show at once, so JS owns visibility — for the
+    # mode tips and the local-run viewer tip alike.
+    assert [selector.strip() for selector in reveals] == [
+        ".viewer-chip.tip-visible > .viewer-tip",
+        ".mode-option.tip-visible > .mode-tip",
+    ]
     assert ":hover > .mode-tip" not in css
     assert ":focus-visible + .mode-tip" not in css
+    assert ":hover > .viewer-tip" not in css
+    assert ":focus-visible > .viewer-tip" not in css
 
 
 @pytest.mark.parametrize("template", TEMPLATES)

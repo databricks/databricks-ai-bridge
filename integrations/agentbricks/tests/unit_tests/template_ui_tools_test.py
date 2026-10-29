@@ -472,3 +472,13 @@ def test_render_tools_row_and_pane(framework):
         timeout=10,
     )
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+def test_chat_app_reads_the_bound_memory_store_setting_dev_writes(framework: str):
+    # The chat app spells the setting name out (so it loads against an older SDK); keep it in sync with
+    # the name `agentbricks dev` writes.
+    from databricks_agentkit.runtime.tool_manifest import DEV_BOUND_MEMORY_STORE_ENV
+
+    source = (TEMPLATES / f"ui/agent-{framework}/runtime/ui.py").read_text()
+    assert f'_DEV_BOUND_MEMORY_STORE_ENV = "{DEV_BOUND_MEMORY_STORE_ENV}"' in source
