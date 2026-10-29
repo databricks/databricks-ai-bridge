@@ -231,6 +231,7 @@ Workspace-scoped managed memory stores.
 | [`memory stores get`](#agentbricks-memory-stores-get) | Get a memory store by id, resource name (memory-stores/<id>), or display name. |
 | [`memory stores update`](#agentbricks-memory-stores-update) | Update a store's display name and/or description. |
 | [`memory stores delete`](#agentbricks-memory-stores-delete) | Delete (soft-delete) a memory store. |
+| [`memory stores permissions`](#agentbricks-memory-stores-permissions) | Inspect and manage store access. |
 
 ##### `agentbricks memory stores create`
 
@@ -329,6 +330,116 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
+| `--yes`, `-y` | flag | - | no | Skip the confirmation prompt. |
+
+##### `agentbricks memory stores permissions`
+
+Inspect and manage store access.
+
+Get returns your effective permission. List shows direct grants, excluding implicit
+ownership and inherited access. Grant, List, and Revoke require the creator or a
+workspace admin. STORE uses the same identifiers as the store commands.
+
+| Subcommand | Description |
+| --- | --- |
+| [`memory stores permissions get`](#agentbricks-memory-stores-permissions-get) | Show the authenticated caller's effective permission on STORE. |
+| [`memory stores permissions list`](#agentbricks-memory-stores-permissions-list) | List explicit grants on STORE as its creator or a workspace admin. |
+| [`memory stores permissions grant`](#agentbricks-memory-stores-permissions-grant) | Grant access on STORE as its creator or a workspace admin. |
+| [`memory stores permissions revoke`](#agentbricks-memory-stores-permissions-revoke) | Revoke both READ and WRITE on STORE as its creator or a workspace admin. |
+
+###### `agentbricks memory stores permissions get`
+
+Show the authenticated caller's effective permission on STORE.
+
+Session stores accept a store name or resource name. Memory stores accept an ID,
+resource name, or display name; ambiguous display names fail. No access is reported as
+PERMISSION_LEVEL_UNSPECIFIED in JSON.
+
+```
+agentbricks memory stores permissions get STORE
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `STORE` | yes | Store identifier; see command description. |
+
+###### `agentbricks memory stores permissions list`
+
+List explicit grants on STORE as its creator or a workspace admin.
+
+Accepts a session store name or memory store ID, or a resource name. Implicit ownership
+and inherited access are excluded. Text output offers subsequent pages on a terminal;
+JSON and piped output return one page unless --all is supplied.
+
+```
+agentbricks memory stores permissions list STORE [options]
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `STORE` | yes | Store identifier; see command description. |
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--page-size <PAGE_SIZE>` | integer [1–1000] | `25` | no | Grants per page. |
+| `--page-token <PAGE_TOKEN>` | string | - | no | Resume from a previous page (not with --all). |
+| `--all` | flag | - | no | Fetch every page of direct grants. |
+
+###### `agentbricks memory stores permissions grant`
+
+Grant access on STORE as its creator or a workspace admin.
+
+Specify exactly one of --user or --service-principal.
+Accepts a session store name or memory store ID, or a resource name.
+
+```
+agentbricks memory stores permissions grant STORE [options]
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `STORE` | yes | Store identifier; see command description. |
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--service-principal <SERVICE_PRINCIPAL>` | string | - | no | Service principal application/client ID, not a numeric SCIM ID (not with --user). |
+| `--user <USER>` | string | - | no | User email (not with --service-principal). |
+| `--permission <READ\|WRITE>` | `READ` \| `WRITE` | - | yes | Access to grant. WRITE includes READ; READ preserves an existing WRITE grant. |
+
+###### `agentbricks memory stores permissions revoke`
+
+Revoke both READ and WRITE on STORE as its creator or a workspace admin.
+
+Specify exactly one of --user or --service-principal.
+Accepts a session store name or memory store ID, or a resource name. Repeating a revoke
+succeeds. Ownership cannot be revoked; inherited access is not removed.
+
+```
+agentbricks memory stores permissions revoke STORE [options]
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `STORE` | yes | Store identifier; see command description. |
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--service-principal <SERVICE_PRINCIPAL>` | string | - | no | Service principal application/client ID, not a numeric SCIM ID (not with --user). |
+| `--user <USER>` | string | - | no | User email (not with --service-principal). |
 | `--yes`, `-y` | flag | - | no | Skip the confirmation prompt. |
 
 #### `agentbricks memory entries`
@@ -732,6 +843,7 @@ Workspace-scoped session stores.
 | [`sessions stores get`](#agentbricks-sessions-stores-get) | Get a session store by name (the name in agent.toml) or resource name (session-stores/<name>). |
 | [`sessions stores update`](#agentbricks-sessions-stores-update) | Update a store's description and/or metadata. |
 | [`sessions stores delete`](#agentbricks-sessions-stores-delete) | Delete a session store. |
+| [`sessions stores permissions`](#agentbricks-sessions-stores-permissions) | Inspect and manage store access. |
 
 ##### `agentbricks sessions stores create`
 
@@ -828,6 +940,116 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
+| `--yes`, `-y` | flag | - | no | Skip the confirmation prompt. |
+
+##### `agentbricks sessions stores permissions`
+
+Inspect and manage store access.
+
+Get returns your effective permission. List shows direct grants, excluding implicit
+ownership and inherited access. Grant, List, and Revoke require the creator or a
+workspace admin. STORE uses the same identifiers as the store commands.
+
+| Subcommand | Description |
+| --- | --- |
+| [`sessions stores permissions get`](#agentbricks-sessions-stores-permissions-get) | Show the authenticated caller's effective permission on STORE. |
+| [`sessions stores permissions list`](#agentbricks-sessions-stores-permissions-list) | List explicit grants on STORE as its creator or a workspace admin. |
+| [`sessions stores permissions grant`](#agentbricks-sessions-stores-permissions-grant) | Grant access on STORE as its creator or a workspace admin. |
+| [`sessions stores permissions revoke`](#agentbricks-sessions-stores-permissions-revoke) | Revoke both READ and WRITE on STORE as its creator or a workspace admin. |
+
+###### `agentbricks sessions stores permissions get`
+
+Show the authenticated caller's effective permission on STORE.
+
+Session stores accept a store name or resource name. Memory stores accept an ID,
+resource name, or display name; ambiguous display names fail. No access is reported as
+PERMISSION_LEVEL_UNSPECIFIED in JSON.
+
+```
+agentbricks sessions stores permissions get STORE
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `STORE` | yes | Store identifier; see command description. |
+
+###### `agentbricks sessions stores permissions list`
+
+List explicit grants on STORE as its creator or a workspace admin.
+
+Accepts a session store name or memory store ID, or a resource name. Implicit ownership
+and inherited access are excluded. Text output offers subsequent pages on a terminal;
+JSON and piped output return one page unless --all is supplied.
+
+```
+agentbricks sessions stores permissions list STORE [options]
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `STORE` | yes | Store identifier; see command description. |
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--page-size <PAGE_SIZE>` | integer [1–1000] | `25` | no | Grants per page. |
+| `--page-token <PAGE_TOKEN>` | string | - | no | Resume from a previous page (not with --all). |
+| `--all` | flag | - | no | Fetch every page of direct grants. |
+
+###### `agentbricks sessions stores permissions grant`
+
+Grant access on STORE as its creator or a workspace admin.
+
+Specify exactly one of --user or --service-principal.
+Accepts a session store name or memory store ID, or a resource name.
+
+```
+agentbricks sessions stores permissions grant STORE [options]
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `STORE` | yes | Store identifier; see command description. |
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--service-principal <SERVICE_PRINCIPAL>` | string | - | no | Service principal application/client ID, not a numeric SCIM ID (not with --user). |
+| `--user <USER>` | string | - | no | User email (not with --service-principal). |
+| `--permission <READ\|WRITE>` | `READ` \| `WRITE` | - | yes | Access to grant. WRITE includes READ; READ preserves an existing WRITE grant. |
+
+###### `agentbricks sessions stores permissions revoke`
+
+Revoke both READ and WRITE on STORE as its creator or a workspace admin.
+
+Specify exactly one of --user or --service-principal.
+Accepts a session store name or memory store ID, or a resource name. Repeating a revoke
+succeeds. Ownership cannot be revoked; inherited access is not removed.
+
+```
+agentbricks sessions stores permissions revoke STORE [options]
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `STORE` | yes | Store identifier; see command description. |
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--service-principal <SERVICE_PRINCIPAL>` | string | - | no | Service principal application/client ID, not a numeric SCIM ID (not with --user). |
+| `--user <USER>` | string | - | no | User email (not with --service-principal). |
 | `--yes`, `-y` | flag | - | no | Skip the confirmation prompt. |
 
 #### `agentbricks sessions items`

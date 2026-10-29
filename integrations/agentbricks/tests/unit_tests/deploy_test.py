@@ -109,12 +109,20 @@ class _DeployApi:
         self.events.append(("session.create", name, retry_transient))
         return {"name": name}
 
-    def grant_memory_store_permission(self, resource_name, principal):
+    def grant_memory_store_permission(
+        self, resource_name, principal, *, permission, principal_type
+    ):
+        assert permission == "WRITE"
+        assert principal_type == "SERVICE_PRINCIPAL"
         self.events.append(("memory.grant", resource_name, principal))
         if self.fail_memory_grant:
             raise AgentCliError("memory grant denied")
 
-    def grant_session_store_permission(self, resource_name, principal):
+    def grant_session_store_permission(
+        self, resource_name, principal, *, permission, principal_type
+    ):
+        assert permission == "WRITE"
+        assert principal_type == "SERVICE_PRINCIPAL"
         self.events.append(("session.grant", resource_name, principal))
 
     def create_runtime_store(self, app, principal, *, app_name, retry_transient=False):

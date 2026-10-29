@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 import click
 
+from databricks_agentbricks.cli.permissions import store_permissions
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.render import field
@@ -43,6 +44,9 @@ def sessions() -> None:
 @sessions.group()
 def stores() -> None:
     """Workspace-scoped session stores."""
+
+
+stores.add_command(store_permissions("session"))
 
 
 @sessions.group()

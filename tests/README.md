@@ -226,6 +226,7 @@ The fundamental assertion: when SP-A calls the agent, it sees SP-A's identity; w
 | Layer | File | What it tests |
 |-------|------|---------------|
 | Agent Bricks | `integrations/agentbricks/tests/suites/` | One happy-path scenario per command group (`deploy`, `dev`, `tools`, `memory`, `sessions`, tracing), each running the real CLI against a workspace and invoking the agent it produces. The private integration runner runs them nightly. See `integrations/agentbricks/tests/suites/README.md` for how to run them and how they clean up. |
+| Store permissions | `integrations/agentbricks/tests/integration_tests/store_permissions_test.py` | Opt-in installed-CLI tests using three profiles in one workspace: admin/non-admin store ownership, Grant/Get/List/Revoke, real data reads/writes, denied non-admin management, pagination, isolation, validation, and cleanup. See `integrations/agentbricks/CONTRIBUTING.md` for configuration. |
 
 **Key regressions these tests guard against:**
 - A deployed agent that won't boot — durable-runtime store resolution against real Lakebase (the class of bug that shipped in #550)
@@ -364,6 +365,9 @@ integrations/langchain/tests/integration_tests/
   test_langchain_mcp.py                 # DatabricksMCPServer + DatabricksMultiServerMCPClient
   test_fmapi_tool_calling.py            # ChatDatabricks tool calling via LangGraph
   test_langchain_lakebase.py            # DatabricksStore + CheckpointSaver
+
+integrations/agentbricks/tests/integration_tests/
+  store_permissions_test.py             # Installed CLI permission and data-access matrix (opt-in)
 
 integrations/openai/tests/integration_tests/
   test_openai_vectorsearch.py           # VectorSearchRetrieverTool (OpenAI schema)

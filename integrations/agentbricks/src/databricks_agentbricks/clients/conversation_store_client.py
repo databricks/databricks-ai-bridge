@@ -157,13 +157,16 @@ class MemoryStoreClient:
     def grant(self, resource_name: str, service_principal_id: str) -> Optional[str]:
         """Grant a service principal read/write on a resolved memory store.
 
-        The managed store API owns the SP's Lakebase role and runs the GRANT itself - no store
-        ownership or Lakebase MANAGE required of the deployer. A failure is returned, not raised,
+        The managed store API provisions the SP's Lakebase role and runs the GRANT. The deployer
+        must be the store creator or a workspace admin. A failure is returned, not raised,
         so a missing grant can be reported as a next step.
         """
         try:
             self._api_client_provider.get().grant_memory_store_permission(
-                resource_name, service_principal_id
+                resource_name,
+                service_principal_id,
+                permission="WRITE",
+                principal_type="SERVICE_PRINCIPAL",
             )
         except AgentCliError as exc:
             return exc.hint or str(exc)
@@ -222,7 +225,10 @@ class SessionStoreClient:
         """
         try:
             self._api_client_provider.get().grant_session_store_permission(
-                store_name, service_principal_id
+                store_name,
+                service_principal_id,
+                permission="WRITE",
+                principal_type="SERVICE_PRINCIPAL",
             )
         except AgentCliError as exc:
             return exc.hint or str(exc)
