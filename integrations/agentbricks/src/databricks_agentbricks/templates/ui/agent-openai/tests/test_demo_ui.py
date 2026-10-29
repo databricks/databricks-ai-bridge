@@ -305,6 +305,28 @@ def test_demo_config_distinguishes_run_local_from_a_deployed_app(monkeypatch):
     assert _client(monkeypatch).get("/api/ui/config").json()["deployed"] is True
 
 
+def test_demo_config_reports_the_local_profile_and_no_viewer_without_an_identity(monkeypatch):
+    # Locally the chip says which Databricks profile the agent signs in with; with no forwarded
+    # identity there is no viewer name to show.
+    monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "my-workspace")
+    config = _client(monkeypatch).get("/api/ui/config").json()
+    assert config["profile"] == "my-workspace"
+    assert config["viewer"] is None
+    monkeypatch.delenv("DATABRICKS_CONFIG_PROFILE")
+    assert _client(monkeypatch).get("/api/ui/config").json()["profile"] is None
+
+
+def test_demo_config_reports_a_bound_memory_store_that_connects_on_deploy(monkeypatch):
+    # `agentbricks dev` keeps memory off but names the bound store, so the card can say it connects
+    # on deploy instead of reading as missing.
+    monkeypatch.setenv("AGENTBRICKS_DEV_BOUND_MEMORY_STORE", "agent-memory")
+    memory = _client(monkeypatch).get("/api/ui/config").json()["memory"]
+    assert memory["enabled"] is False
+    assert memory["bound_store"] == "agent-memory"
+    monkeypatch.delenv("AGENTBRICKS_DEV_BOUND_MEMORY_STORE")
+    assert _client(monkeypatch).get("/api/ui/config").json()["memory"]["bound_store"] is None
+
+
 def test_demo_config_does_not_wait_for_model_discovery(monkeypatch):
     client = _client(monkeypatch)
     calls = []
@@ -466,6 +488,7 @@ def test_managed_memory_and_session_routes(monkeypatch):
         "enabled": True,
         "store": "memory-stores/store",
         "actor": "alice",
+        "bound_store": None,
     }
     assert config["session"]["store"] == "sessions"
     assert config["session"]["actor"] == "alice"
