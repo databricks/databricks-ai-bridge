@@ -34,6 +34,8 @@ from harness.target import TargetWorkspace
 # `endpoint invoke`'s error for a 5xx answer: the App restarting after a redeploy, a new App's
 # session store coming up, or a model call failing on the server.
 _SERVER_ERROR = re.compile(r"HTTP 5\d\d\b")
+# A cold agent's first request can take minutes on a slow runner.
+_INVOKE_TIMEOUT = 360
 _NOT_FOUND = re.compile(
     r"NOT_FOUND|RESOURCE_DOES_NOT_EXIST|does not exist|not found", re.IGNORECASE
 )
@@ -156,7 +158,7 @@ class AgentbricksCli:
         return self.run(
             f"--output json endpoint invoke {target} --path /api/invocations "
             f"--json {shlex.quote(json.dumps(body))}",
-            timeout=360,
+            timeout=_INVOKE_TIMEOUT,
             retry_server_errors=True,
         ).stdout
 
@@ -165,7 +167,9 @@ class AgentbricksCli:
         bin_dir = pathlib.Path(_agentbricks_bin()).parent
         path = os.pathsep.join([str(bin_dir), self._env.get("PATH", "")])
         label = self._label(f"printed {pathlib.Path(shell).name}")
-        return self._run_once([shell, "-f", "-c", command_line], label, 60, {"PATH": path})
+        return self._run_once(
+            [shell, "-f", "-c", command_line], label, _INVOKE_TIMEOUT, {"PATH": path}
+        )
 
     @contextlib.contextmanager
     def start(
