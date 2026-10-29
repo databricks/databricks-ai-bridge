@@ -73,7 +73,7 @@ def web_search_called(r: dict[str, Any]) -> bool:
 
 def genie_called(r: dict[str, Any]) -> bool:
     # Genie reports a failed or timed-out answer inside a successful tool step, as its status.
-    if r.get("name") not in ("genie_ask", "genie_poll"):
+    if r.get("name") not in ("genie_agent_ask", "genie_agent_poll"):
         return False
     content = r.get("content")
     try:
@@ -85,6 +85,34 @@ def genie_called(r: dict[str, Any]) -> bool:
         and message.get("status") == "COMPLETED"
         and bool(message.get("attachments"))
     )
+
+
+def genie_one_called(r: dict[str, Any]) -> bool:
+    # Like Genie Agent, Genie One reports an unfinished or failed answer as its status.
+    if r.get("name") not in ("genie_ask", "genie_poll_response"):
+        return False
+    return any(
+        isinstance(result, dict) and result.get("status") == "completed"
+        for result in _mcp_json_results(r)
+    )
+
+
+def _mcp_json_results(r: dict[str, Any]) -> list[Any]:
+    """An MCP tool step's JSON results: its structured content and any JSON text blocks."""
+    artifact = r.get("artifact")
+    results: list[Any] = []
+    if isinstance(artifact, dict) and artifact.get("structured_content"):
+        results.append(artifact["structured_content"])
+    content = r.get("content")
+    blocks = content if isinstance(content, list) else [content]
+    for block in blocks:
+        text = block.get("text") if isinstance(block, dict) else block
+        if isinstance(text, str):
+            try:
+                results.append(json.loads(text))
+            except ValueError:
+                continue
+    return results
 
 
 def sandbox_tool(uc_function: UcFunction) -> Tool:
@@ -152,22 +180,40 @@ def genie_tool(genie_space: str) -> Tool:
     return Tool(
         name="genie",
         prompt=(
-            "You must call the genie_ask tool and ask what data is available in the "
+            "You must call the genie_agent_ask tool and ask what data is available in the "
             "configured Genie space. Return a one-sentence summary based only on the tool "
             "response."
         ),
         called=genie_called,
-        add_command=f"genie-agent {genie_space} --name genie --auth app",
+        # Not `genie`: its tools would be genie_ask and so on, which Genie One's tools are named.
+        add_command=f"genie-agent {genie_space} --name genie_agent --auth app",
         files={},
-        tool_id="genie",
+        tool_id="genie_agent",
     )
 
 
-# MCP needs a workspace that serves system.ai.web_search; Python needs nothing.
+def genie_one_tool(**_resources: object) -> Tool:
+    return Tool(
+        name="genie_one",
+        prompt=(
+            "You must call the genie_ask tool and ask how many rows are in "
+            "samples.nyctaxi.trips. If it is still in progress, call genie_poll_response until "
+            "it completes. Return the row count from the tool response."
+        ),
+        called=genie_one_called,
+        add_command="genie-one",
+        files={},
+        tool_id="genie_one",
+    )
+
+
+# MCP needs a workspace that serves system.ai.web_search, and Genie One one with the Managed MCP
+# Servers preview; Python needs nothing.
 TOOL_DEFINITIONS = (
     ToolDefinition("sandbox", ("uc_function",), sandbox_tool),
     ToolDefinition("mcp", ("workspace_client",), web_search_tool),
     ToolDefinition("python", (), python_tool),
     ToolDefinition("uc_function", ("uc_function", "workspace_client"), uc_function_tool),
     ToolDefinition("genie", ("genie_space",), genie_tool),
+    ToolDefinition("genie_one", ("workspace_client",), genie_one_tool),
 )

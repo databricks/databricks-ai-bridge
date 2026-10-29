@@ -4,15 +4,19 @@ import importlib
 import importlib.util
 import json
 import re
-import sys
 from contextlib import asynccontextmanager
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-
-TEMPLATES = Path(__file__).parents[2] / "src/databricks_agentbricks/templates"
+from template_fixtures import (
+    TEMPLATES,
+    durable_app,
+    forget_template,
+    import_template,
+    runtime_client,
+    scripted_model,
+)
 
 
 @pytest.fixture(params=["langgraph", "openai"])
@@ -25,16 +29,9 @@ def template(request, monkeypatch):
     )
     for dependency in dependencies:
         pytest.importorskip(dependency, reason=f"Requires databricks-agentbricks[{framework}]")
-    monkeypatch.syspath_prepend(str(TEMPLATES / f"agent-{framework}"))
-    for name in list(sys.modules):
-        if name in {"agent", "runtime"} or name.startswith(("agent.", "runtime.")):
-            monkeypatch.delitem(sys.modules, name)
-    adapter = importlib.import_module("runtime.adapter")
-    agent = importlib.import_module("agent.agent")
+    adapter, agent = import_template(monkeypatch, TEMPLATES / f"agent-{framework}")
     yield framework, adapter, agent
-    for name in list(sys.modules):
-        if name in {"agent", "runtime"} or name.startswith(("agent.", "runtime.")):
-            sys.modules.pop(name, None)
+    forget_template()
 
 
 class RequestAuth:
@@ -228,12 +225,10 @@ def hitl_app(template, monkeypatch):
 
     from langchain.agents import create_agent
     from langchain.agents.middleware import HumanInTheLoopMiddleware
-    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
     from langchain_core.messages import AIMessage
     from langchain_core.tools import tool
     from langgraph.checkpoint.memory import InMemorySaver
 
-    from databricks_agentkit import DurableAgentServer
     from databricks_agentkit.runtime.auth import InvocationAuthPolicy
     from databricks_agentkit.runtime.store import InMemoryRuntimeStore
 
@@ -250,14 +245,6 @@ def hitl_app(template, monkeypatch):
     writes = []
     credentials = []
 
-    class Model(FakeMessagesListChatModel):
-        def bind_tools(self, tools, **kwargs):
-            return self
-
-        async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
-            self.i = int(any(message.type == "tool" for message in messages))
-            return self._generate(messages, stop, run_manager, **kwargs)
-
     async def create_graph(actor, model=None, *, workspace_client_for=None):
         assert workspace_client_for is not None
         credentials.append(workspace_client_for.__self__)
@@ -270,21 +257,19 @@ def hitl_app(template, monkeypatch):
             return "Action recorded"
 
         return create_agent(
-            Model(
-                responses=[
-                    AIMessage(
-                        content="",
-                        tool_calls=[
-                            {
-                                "name": "record_action",
-                                "args": {"text": "original"},
-                                "id": "action-call",
-                                "type": "tool_call",
-                            }
-                        ],
-                    ),
-                    AIMessage(content="Review handled"),
-                ]
+            scripted_model(
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "record_action",
+                            "args": {"text": "original"},
+                            "id": "action-call",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessage(content="Review handled"),
             ),
             [record_action],
             middleware=[HumanInTheLoopMiddleware(interrupt_on={"record_action": True})],
@@ -294,28 +279,12 @@ def hitl_app(template, monkeypatch):
     monkeypatch.setattr(agent, "create_agent_graph", create_graph)
     monkeypatch.setattr(agent, "start_trace", lambda **kwargs: nullcontext())
     store = InMemoryRuntimeStore()
-    app = DurableAgentServer(
-        runtime_store=store, auth_policy=InvocationAuthPolicy(user_required=True)
+    app = durable_app(
+        adapter, runtime_store=store, auth_policy=InvocationAuthPolicy(user_required=True)
     )
-    app.invoke(adapter.invoke)
-    app.recover(adapter.recover)
     return SimpleNamespace(
         app=app, store=store, saver=saver, writes=writes, credentials=credentials
     )
-
-
-@asynccontextmanager
-async def hitl_client(app):
-    import httpx
-
-    await app._runtime.start()
-    try:
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app), base_url="https://test"
-        ) as client:
-            yield client
-    finally:
-        await app._runtime.stop()
 
 
 def hitl_headers(token, user="alice"):
@@ -338,7 +307,7 @@ async def test_langgraph_user_hitl_resumes_with_current_request_credentials(
     from databricks_agentkit.runtime.auth import AuthError
 
     state = hitl_app
-    async with hitl_client(state.app) as client:
+    async with runtime_client(state.app) as client:
         pause = await client.post(
             "/api/invocations",
             json=hitl_request(
@@ -396,7 +365,7 @@ async def test_langgraph_user_hitl_resumes_with_current_request_credentials(
 @pytest.mark.parametrize("template", ["langgraph"], indirect=True)
 async def test_langgraph_user_hitl_requires_authenticated_session_owner(hitl_app):
     state = hitl_app
-    async with hitl_client(state.app) as client:
+    async with runtime_client(state.app) as client:
         pause = await client.post(
             "/api/invocations",
             json=hitl_request({"messages": [{"role": "user", "content": "Record an action"}]}),
@@ -439,7 +408,7 @@ async def test_langgraph_user_hitl_invalid_decision_does_not_execute_or_consume_
     hitl_app, decisions
 ):
     state = hitl_app
-    async with hitl_client(state.app) as client:
+    async with runtime_client(state.app) as client:
         pause = await client.post(
             "/api/invocations",
             json=hitl_request({"messages": [{"role": "user", "content": "Record an action"}]}),
@@ -480,7 +449,6 @@ def openai_hitl_app(template, request, monkeypatch):
     )
     from template_history_fixtures import SessionStoreTransport
 
-    from databricks_agentkit import DurableAgentServer
     from databricks_agentkit.openai import sessions
     from databricks_agentkit.runtime.auth import InvocationAuthPolicy
     from databricks_agentkit.runtime.store import InMemoryRuntimeStore
@@ -628,11 +596,9 @@ def openai_hitl_app(template, request, monkeypatch):
         ),
     )
     runtime = InMemoryRuntimeStore()
-    app = DurableAgentServer(
-        runtime_store=runtime, auth_policy=InvocationAuthPolicy(user_required=True)
+    app = durable_app(
+        adapter, runtime_store=runtime, auth_policy=InvocationAuthPolicy(user_required=True)
     )
-    app.invoke(adapter.invoke)
-    app.recover(adapter.recover)
     yield SimpleNamespace(
         app=app,
         store=runtime,
@@ -658,7 +624,7 @@ async def test_openai_user_hitl_resumes_with_current_request_credentials(
     from databricks_agentkit.runtime.auth import AuthError
 
     state = openai_hitl_app
-    async with hitl_client(state.app) as client:
+    async with runtime_client(state.app) as client:
         pause = await client.post(
             "/api/invocations",
             headers=hitl_headers("before-approval-token"),
@@ -733,7 +699,7 @@ async def test_openai_user_hitl_resumes_with_current_request_credentials(
 @pytest.mark.parametrize("template", ["openai"], indirect=True)
 async def test_openai_user_hitl_requires_authenticated_session_owner(openai_hitl_app):
     state = openai_hitl_app
-    async with hitl_client(state.app) as client:
+    async with runtime_client(state.app) as client:
         pause = await client.post(
             "/api/invocations",
             headers=hitl_headers("owner-token"),
@@ -775,7 +741,7 @@ async def test_openai_user_hitl_requires_authenticated_session_owner(openai_hitl
 )
 async def test_openai_user_hitl_invalid_decision_keeps_approval(openai_hitl_app, decisions):
     state = openai_hitl_app
-    async with hitl_client(state.app) as client:
+    async with runtime_client(state.app) as client:
         pause = await client.post(
             "/api/invocations",
             headers=hitl_headers("pause-token"),
