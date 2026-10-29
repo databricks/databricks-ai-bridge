@@ -1188,8 +1188,8 @@ with TOML inspection. Replace `agentbricks mcp list [--schema catalog.schema]` w
 `agentbricks tools list --kind mcp [--schema catalog.schema]`; the former command is removed. Use
 `agentbricks tools list --help` for the new discovery contract.
 
-The installed CLI's local add/review/remove flows and all updated help pages are covered by
-`tests/functional/cli_smoke_test.py`.
+The local add/review/remove flows and all updated help pages are covered by the unit tests
+(`tools_test.py`, `tools_discovery_test.py`, `cli_test.py`).
 
 In managed-server templates, custom Python tools are code-first. Write them with the framework's native
 decorator in `agent/tools/`: LangGraph uses `@tool`, while OpenAI Agents uses `@function_tool`. The

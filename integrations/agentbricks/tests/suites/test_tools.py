@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import pytest
 from harness.agentbricks_cli import AgentbricksCli, free_port
 from harness.project import Project
 from tool_definitions import Tool
@@ -16,6 +17,8 @@ def test_tools_remove(
     agentbricks_cli.run(f"init --framework langgraph {project.path}", timeout=600)
     project.pin_runtime()
     removed = [tool for tool in tools if tool.add_command and tool.tool_id]
+    if not removed:
+        pytest.skip("no available tool is added by `tools add`")
     for tool in removed:
         agentbricks_cli.run(f"tools add {tool.add_command} --source {project.path}")
     for tool in removed:
