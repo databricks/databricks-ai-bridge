@@ -36,6 +36,9 @@ from databricks_agentbricks.services.deployment.tool_access import (
 )
 from databricks_agentkit.runtime import tool_manifest
 
+# The scoped sandbox path is retained behind a disabled gate; these tests cover it with the gate on.
+pytestmark = pytest.mark.usefixtures("sandbox_downscope_enabled")
+
 
 def test_plan_maps_only_explicit_app_auth_resources_to_least_privilege():
     plan = plan_tool_access(

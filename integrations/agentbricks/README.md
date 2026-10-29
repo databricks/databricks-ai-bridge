@@ -796,7 +796,7 @@ agentbricks [-p <profile>] [-o text|json]
     unbind     [--source PATH]
     list | get [--experiment-name NAME | --experiment-id ID] [--source PATH]
   tools
-    add sandbox      --scope SCOPE [--scope SCOPE ...]
+    add sandbox      [--name NAME] [--auth user|app]
                      [--no-databricks-access-token-included] [--source PATH]
     add mcp          SERVICE [--name NAME] [--source PATH]
     add uc-function  FUNCTION [--name NAME] [--auth user|app] [--source PATH]
@@ -946,7 +946,7 @@ add` updates only this file; direct TOML edits have the same behavior. Both mana
 adapters read the managed bindings at runtime without generating or patching agent source:
 
 ```sh
-agentbricks tools add sandbox --scope volume:main.data.files
+agentbricks tools add sandbox
 agentbricks tools add mcp system.ai.web_search
 agentbricks tools add uc-function catalog.schema.lookup_ticket
 agentbricks tools add genie-one
@@ -1143,9 +1143,9 @@ points to that project's file. JSON add output includes its path in `manifest`.
 
 `agentbricks tools list` discovers **available integrations to add**, not configured bindings. By default
 it shows built-in add recipes and caller-visible MCP Services in `system.ai`. A recipe may still
-need your resources: sandbox scopes, a concrete UC function name, or a Genie Space ID. Genie One
-needs no additional argument. `system.ai.sandbox` is represented by its scoped recipe rather than
-a second unscoped add command. The list does not enumerate every workspace schema, individual
+need your resources: a concrete UC function name or a Genie Space ID. Sandbox and Genie One need no
+additional argument. `system.ai.sandbox` is represented by the `tools add sandbox` recipe rather
+than a generic `tools add mcp` command. The list does not enumerate every workspace schema, individual
 operations inside MCP services, or custom Python tools.
 
 `agentbricks tools add mcp` looks up the service in the selected workspace before writing `agent.toml`.
@@ -1205,22 +1205,41 @@ If a manifest with `server = "agentbricks"` contains `source = { kind = "python"
 `[[tools]]` entry; the decorated tool in `agent/tools/` remains active. `agentbricks dev` and `agentbricks deploy`
 do not generate or patch Python tool code, and do not alter the manifest's `[[tools]]` bindings.
 
-Sandbox scopes support volumes only and default to read-only access. Repeat `--scope` to allow more
-than one volume, use `volume:catalog.schema.volume`, and use `--permission read_write` only when the
-agent needs writes. Every sandbox call carries this fixed downscope in MCP `_meta`, outside the tool
-arguments controlled by the model. New sandbox bindings also expose the selected Databricks
-credential to sandbox code by default:
+Sandbox code runs with the selected identity's own Unity Catalog access: the request user for
+`auth = "user"` (the default) or the App service principal for `auth = "app"`. Grant that identity
+only the data the agent needs. New sandbox bindings also expose the selected Databricks credential to
+sandbox code by default:
 
 ```toml
 [[tools]]
 id = "sandbox"
 auth = "user"
 source = { kind = "sandbox", service = "system.ai.sandbox" }
-policy = { downscope = [{ resource = "volume:main.data.files", permission = "read_only" }], databricks_access_token_included = true }
+policy = { databricks_access_token_included = true }
 ```
 
-Table sandbox scopes are not supported yet because Databricks Connect does not support table
-downscoping. Workspace sandbox scopes are also not supported yet; they have not been validated
+Every sandbox call carries this fixed policy in MCP `_meta`, outside the tool arguments controlled
+by the model, with an empty `downscope`.
+
+Sandbox resource scopes are not supported: the Sandbox API backend of `system.ai.sandbox` rejects any
+non-empty `_meta.downscope`. The scoping implementation (`--scope`, `--permission`, and
+`policy.downscope`) is retained behind a disabled code-level gate, `SANDBOX_DOWNSCOPE_ENABLED`, so it
+can be enabled when the backend supports resource policies. There is no CLI option to bypass that
+gate. While it is disabled, `agentbricks tools add sandbox --scope ...` fails without changing the
+project, and `agentbricks dev`, `agentbricks deploy`, and the runtime reject a manifest that still
+declares `policy.downscope`:
+
+```text
+Tool 'sandbox' declares policy.downscope, which system.ai.sandbox does not support: sandbox code
+runs with the selected identity's own Unity Catalog access. Remove policy.downscope from the
+[[tools]] entry with id = 'sandbox' in agent.toml.
+```
+
+To fix an existing project, delete the `downscope = [...]` entry from that tool's `policy` table and
+keep `databricks_access_token_included`. Then grant the sandbox identity access to the data it needs.
+
+When scopes are enabled, table sandbox scopes remain unsupported because Databricks Connect does not
+support table downscoping. Workspace sandbox scopes are also not supported yet; they have not been validated
 against a live workspace. Use a volume instead. Existing `table:` and `workspace:` entries must be
 removed from `agent.toml` before using `agentbricks dev` or `agentbricks deploy`.
 

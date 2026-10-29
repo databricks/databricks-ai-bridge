@@ -15,6 +15,9 @@ from databricks_agentbricks.projects.agent_project import AgentProject, ToolSpec
 from databricks_agentbricks.projects.config import write_project_metadata
 from databricks_agentkit.runtime import tool_manifest
 
+# The scoped sandbox path is retained behind a disabled gate; these tests cover it with the gate on.
+pytestmark = pytest.mark.usefixtures("sandbox_downscope_enabled")
+
 
 class _Ctx:
     def __init__(self, output: str = "text", *, client=None):
@@ -92,6 +95,57 @@ def _project(
     server = "custom" if (template or "").startswith("custom-agent-") else "agentbricks"
     AgentProject.create(project, framework=framework, server=server).write()
     return project
+
+
+def _disable_downscope(monkeypatch):
+    monkeypatch.setattr(tool_manifest, "SANDBOX_DOWNSCOPE_ENABLED", False)
+
+
+@pytest.mark.parametrize("auth", ["user", "app"])
+def test_add_unscoped_sandbox_by_default(tmp_path, monkeypatch, auth):
+    _disable_downscope(monkeypatch)
+    project = _project(tmp_path)
+
+    result = CliRunner().invoke(
+        tools, ["add", "sandbox", "--auth", auth, "--source", str(project)], obj=_Ctx()
+    )
+
+    assert result.exit_code == 0, result.output
+    loaded = AgentProject.load(project).tools[0]
+    assert (loaded.source.kind, loaded.auth, loaded.policy.downscope) == ("sandbox", auth, ())
+    manifest = (project / "agent.toml").read_text()
+    assert "policy = {databricks_access_token_included = true}" in manifest
+    assert "downscope" not in manifest
+
+
+@pytest.mark.parametrize(
+    "option",
+    [["--scope", "volume:main.data.files"], ["--permission", "read_only"]],
+)
+def test_add_sandbox_rejects_disabled_scope_options_without_project_changes(
+    tmp_path, monkeypatch, option
+):
+    _disable_downscope(monkeypatch)
+    project = _project(tmp_path)
+    before = {path: path.read_bytes() for path in project.rglob("*") if path.is_file()}
+
+    result = CliRunner().invoke(
+        tools, ["add", "sandbox", *option, "--source", str(project)], obj=_Ctx()
+    )
+
+    assert result.exit_code != 0
+    assert "--scope and --permission are not supported for sandbox tools." in result.output
+    assert "without --scope or --permission" in result.output
+    assert {path: path.read_bytes() for path in project.rglob("*") if path.is_file()} == before
+
+
+def test_add_sandbox_help_hides_disabled_scope_options(monkeypatch):
+    # `hidden` is fixed when the command is defined, with the shipped gate off.
+    result = CliRunner().invoke(tools, ["add", "sandbox", "--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "--scope" not in result.output
+    assert "--permission" not in result.output
 
 
 def test_add_sandbox_only_updates_manifest(tmp_path: pathlib.Path):
