@@ -14,6 +14,7 @@ from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.help import _example_epilog
 from databricks_agentbricks.projects.agent_project import AgentProject, Scope, ToolSpec
 from databricks_agentbricks.projects.config import require_managed_tool_support
+from databricks_agentkit.runtime import tool_manifest
 
 
 def _identifier(value: str) -> str:
@@ -104,13 +105,21 @@ def add_sandbox_to_manifest(
     obj: Any,
     source: pathlib.Path,
     scopes: tuple[str, ...],
-    permission: str,
+    permission: str | None,
     *,
     tool_id: str = "sandbox",
     auth: Literal["user", "app"] = "user",
     databricks_access_token_included: bool = True,
 ) -> None:
     """Shared implementation for the nested command and compatibility alias."""
+    if not tool_manifest.SANDBOX_DOWNSCOPE_ENABLED and (scopes or permission is not None):
+        raise AgentCliError(
+            "--scope and --permission are not supported for sandbox tools.",
+            hint="system.ai.sandbox does not accept resource scopes; sandbox code runs with the "
+            "selected identity's own Unity Catalog access. Run `agentbricks tools add sandbox` "
+            "without --scope or --permission.",
+        )
+    permission = permission or "read_only"
     parsed: list[Scope] = []
     seen: set[tuple[str, str]] = set()
     for value in scopes:
@@ -140,8 +149,8 @@ def tools() -> None:
     wire it in. `agentbricks tools add` manages these Databricks-managed tool types:
 
     \b
-      sandbox       Query Unity Catalog data via system.ai.sandbox, scoped
-                    to the volumes you choose.
+      sandbox       Run code in a Databricks sandbox (system.ai.sandbox) with
+                    the selected identity's Unity Catalog access.
       mcp           A Databricks-managed MCP service (see `agentbricks tools list --kind mcp`),
                     e.g. system.ai.web_search.
       uc-function   An existing Unity Catalog function (catalog.schema.function).
@@ -183,14 +192,15 @@ def _source_option(function):
     "--scope",
     "scopes",
     multiple=True,
-    required=True,
+    hidden=not tool_manifest.SANDBOX_DOWNSCOPE_ENABLED,
     help="Allowed volume: resource. Repeat for multiple scopes.",
 )
 @click.option(
     "--permission",
     type=click.Choice(["read_only", "read_write"]),
-    default="read_only",
-    show_default=True,
+    default=None,
+    hidden=not tool_manifest.SANDBOX_DOWNSCOPE_ENABLED,
+    help="Access for every --scope resource (default: read_only).",
 )
 @click.option("--name", "tool_id", default="sandbox", show_default=True)
 @click.option("--auth", type=click.Choice(["user", "app"]), default="user", show_default=True)
@@ -205,15 +215,17 @@ def _source_option(function):
 def add_sandbox(
     obj: Any,
     scopes: tuple[str, ...],
-    permission: str,
+    permission: str | None,
     tool_id: str,
     source: pathlib.Path,
     auth: Literal["user", "app"],
     databricks_access_token_included: bool,
 ) -> None:
-    """Add a data sandbox tool (system.ai.sandbox), scoped to specific Unity Catalog resources.
+    """Add a sandbox tool (system.ai.sandbox) that runs code with the selected identity's access.
 
-    Review the target project's agent.toml to check configured managed tools and MCP bindings.
+    Sandbox code can read and write whatever Unity Catalog data the user (--auth user) or the App
+    service principal (--auth app) can. Review the target project's agent.toml to check configured
+    managed tools and MCP bindings.
     """
     add_sandbox_to_manifest(
         obj,
@@ -338,8 +350,8 @@ def list_tools(obj: Any, kind: str | None, schema: str | None) -> None:
 
     By default, show built-in add recipes plus caller-visible MCP Services in system.ai.
     --kind mcp limits discovery to MCP Services; --schema catalog.schema replaces system.ai.
-    Sandbox recipes require scopes; UC-function and Genie Agent recipes require concrete resource
-    identifiers. Genie One needs no additional argument.
+    UC-function and Genie Agent recipes require concrete resource identifiers. Sandbox and Genie
+    One recipes need no additional argument.
 
     No agent project is required. MCP discovery uses your Databricks profile; local recipes do
     not authenticate. This does not scan every workspace schema or list individual MCP operations.

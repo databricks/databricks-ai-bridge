@@ -100,6 +100,12 @@ class Scope:
     permission: str = "read_only"
 
     def __post_init__(self) -> None:
+        if not tool_manifest.SANDBOX_DOWNSCOPE_ENABLED:
+            raise AgentCliError(
+                "Sandbox scopes are not supported.",
+                hint="system.ai.sandbox does not accept resource scopes; sandbox code runs with "
+                "the selected identity's own Unity Catalog access.",
+            )
         if self.kind == "table" and not tool_manifest.SANDBOX_TABLE_SCOPES_ENABLED:
             raise AgentCliError(
                 "Table sandbox scopes are not supported yet.",
@@ -202,8 +208,6 @@ class ToolSpec:
         if kind == "sandbox":
             if self.source.service != "system.ai.sandbox":
                 raise AgentCliError("Sandbox tools must bind system.ai.sandbox.")
-            if not self.policy.downscope:
-                raise AgentCliError("Sandbox tools require at least one scope.")
         elif kind == "mcp":
             if self.source.service is None:
                 raise AgentCliError("MCP tools require a service.")
@@ -229,7 +233,7 @@ class ToolSpec:
         cls,
         tool_id: str,
         *,
-        scopes: Sequence[Scope],
+        scopes: Sequence[Scope] = (),
         auth: Literal["user", "app"] | None = None,
         databricks_access_token_included: bool = True,
     ) -> "ToolSpec":
@@ -407,6 +411,8 @@ def _tool_from_manifest(value: object) -> ToolSpec:
     downscope_value = policy_value.get("downscope", [])
     if not isinstance(downscope_value, list):
         raise AgentCliError("Tool policy downscope must be an array.")
+    if downscope_value and not tool_manifest.SANDBOX_DOWNSCOPE_ENABLED:
+        raise AgentCliError(tool_manifest.downscope_unsupported_message(tool_id))
     databricks_access_token_included = policy_value.get("databricks_access_token_included", False)
     if not isinstance(databricks_access_token_included, bool):
         raise AgentCliError("Tool policy databricks_access_token_included must be a boolean.")
@@ -446,14 +452,15 @@ def _tool_table(spec: ToolSpec) -> Any:
         if value is not None:
             source_values[key] = value
     table.add("source", _inline_table(source_values))
-    if spec.policy.downscope:
-        downscope = tomlkit.array()
-        for scope in spec.policy.downscope:
-            downscope.append(
-                _inline_table({"resource": scope.resource, "permission": scope.permission})
-            )
+    if spec.source.kind == "sandbox":
         policy = tomlkit.inline_table()
-        policy["downscope"] = downscope
+        if spec.policy.downscope:
+            downscope = tomlkit.array()
+            for scope in spec.policy.downscope:
+                downscope.append(
+                    _inline_table({"resource": scope.resource, "permission": scope.permission})
+                )
+            policy["downscope"] = downscope
         policy["databricks_access_token_included"] = spec.policy.databricks_access_token_included
         table.add("policy", policy)
     return table

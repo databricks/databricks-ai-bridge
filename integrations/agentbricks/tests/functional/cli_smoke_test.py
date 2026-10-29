@@ -358,7 +358,7 @@ def test_existing_init_includes_migration_skill_from_wheel(
 @pytest.mark.parametrize(
     "args",
     [
-        ["sandbox", "--scope", "volume:catalog.schema.volume"],
+        ["sandbox"],
         ["uc-function", "catalog.schema.function"],
         ["uc-function", "catalog.schema.function", "--auth", "user"],
         ["uc-function", "catalog.schema.function", "--auth", "app"],
@@ -416,15 +416,13 @@ def test_tools_local_discovery_without_project_or_auth(run_agentbricks, kind):
 
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
 @pytest.mark.parametrize(
-    ("scope", "message"),
-    [
-        ("table:main.data.rows", "Table sandbox scopes are not supported"),
-        ("workspace:/Workspace/Shared", "Workspace sandbox scopes are not supported"),
-    ],
+    "scope", ["volume:catalog.schema.volume", "table:main.data.rows", "workspace:/Workspace/Shared"]
 )
-def test_sandbox_unsupported_scope_is_rejected_without_manifest_change(
-    run_agentbricks, tmp_path, framework, scope, message
+def test_sandbox_scope_is_rejected_without_manifest_change(
+    run_agentbricks, tmp_path, framework, scope
 ):
+    # Sandbox scopes are gated off: system.ai.sandbox rejects any non-empty downscope.
+    message = "--scope and --permission are not supported for sandbox tools."
     project = tmp_path / "agent"
     run_agentbricks("init", "--framework", framework, str(project))
     manifest = project / "agent.toml"
