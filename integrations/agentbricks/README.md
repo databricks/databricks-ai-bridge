@@ -697,7 +697,10 @@ If access must be revoked, coordinate that separately with the store owner or wo
 ## Model and prompt upgrades (experimental)
 
 `agentbricks experimental models` and `agentbricks experimental prompts` find the best model and
-prompt for each LLM call in your agent and swap them in. They live under `experimental` because
+prompt for each LLM call in your agent and swap them in. Use them when a new model launches, or when
+you want the same quality for less: you supply an eval set and how much quality, latency, and cost
+matter, and the search tries each candidate model per LLM call, rewrites the prompts for it, and
+recommends the combination that scores best on your whole agent. They live under `experimental` because
 their flags and output may still change between releases without a deprecation period. The
 agent.toml tables they write live under `[experimental]` too.
 
@@ -718,6 +721,40 @@ agentbricks experimental models status        # the job's state, then its recomm
 agentbricks experimental models apply         # switch to it
 ```
 
+The `agent.eval:...` references name things in your project. A minimal `agent/eval.py`:
+
+```python
+import mlflow
+
+from agent.agent import answer  # your agent's own entry point, called synchronously
+
+mlflow.langchain.autolog()  # traces token usage, which cost scoring needs; use your framework's autolog
+
+
+def predict(inputs):
+    return answer(inputs["question"])  # wrap an async agent in asyncio.run(...)
+
+
+TRAIN = [
+    {
+        "inputs": {"question": "Plan 3 days in Tokyo in late March"},
+        "expectations": {"expected_response": "..."},
+    },
+    # ... a few dozen records that look like real traffic
+]
+VAL = [...]  # same shape, held out; the winner and the summary's medians come from these
+
+
+def mentions_expected(inputs, expectations, answer):
+    return float(expectations["expected_response"].lower() in str(answer).lower())
+
+
+SCORERS = [mentions_expected]  # or MLflow scorers, e.g. mlflow.genai.scorers.Correctness()
+```
+
+Each of the agent's LLM calls must call its role's model service, `resolve_model_service("<role>")`
+from `databricks_agentkit.runtime.tool_manifest`, so the search can route it to each candidate.
+
 By default `models upgrade` uploads the project to your workspace and runs the search as a
 serverless Databricks job, because a search can take hours. `--run-on local` runs it in your
 terminal instead, which needs the `upgrade` extra and the agent's dependencies installed. Each call
@@ -727,8 +764,11 @@ eval data, and scorers you name from the project (the same inputs `optimize_prom
 takes, below) and runs each eval record once per candidate, against a temporary `<service>_exp_<id>`
 clone. Each LLM call must use its role's service, `resolve_model_service("<role>")`, which reads the
 `AGENT_MODEL_SERVICE_<ROLE>` env var that deploy (and the job, before importing your code) sets.
-GEPA also rewrites every prompt bound with `prompts bind` for each candidate model. Pass
-`--prompt` to pick specific prompts instead, or `--models-only` to leave prompts alone. `models apply` switches
+GEPA also rewrites every prompt bound with `prompts bind` for each candidate model, so you don't
+pass prompt URIs unless you want a different set. Pass `--prompt` to pick specific prompts instead,
+or `--models-only` to leave prompts alone. A `--prompt` URI must name an alias
+(`prompts:/main.my_agent.writer@production`), not a version (`.../writer/3`): apply moves the
+alias to the rewritten version, so an agent that loads a fixed version would never see it. `models apply` switches
 to the best quality / latency / cost trade-off and registers any rewritten prompts (prior versions
 keep `@production_previous`). `models rollback` undoes the whole last apply: it switches every
 model back and moves each prompt's alias back to its prior version. Apply refuses recommendations
@@ -736,6 +776,11 @@ whose prompt aliases changed during the search; rollback checks those aliases ag
 recorded when the recommendation was applied. If rollback fails partway through, run it again
 to finish the remaining changes. Each search owns its temporary clones, so overlapping jobs can
 evaluate different models independently.
+
+When the search finishes, the summary shows each role's current and recommended model, the change in
+the combined score, and how the median quality, latency, and cost per request moved from the
+current setup to the recommendation on the validation records, for example
+`Median cost per request $0.0040 → $0.0010 (-75%)`. `models status` shows the same summary later.
 
 The search is `databricks_agentkit.model_upgrades`, which you can also call directly (for example
 from a notebook) to tune several model services and MLflow Prompt Registry prompts together:

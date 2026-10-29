@@ -1257,7 +1257,7 @@ agentbricks experimental models list
 
 #### `agentbricks experimental models status`
 
-Show each bound model service and the model it routes to now, the last recorded switch, and the latest upgrade run: the job's state and, once it has finished, each role's per-model scores and recommendation.
+Show each bound model service and the model it routes to now, the last recorded switch, and the latest upgrade run: the job's state and, once it has finished, each role's per-model scores and recommendation, and how the median quality, latency, and cost moved.
 
 ```
 agentbricks experimental models status [options]
@@ -1309,13 +1309,13 @@ _Options_
 
 #### `agentbricks experimental models upgrade`
 
-Search candidate models for every bound role together, and with `--prompt` rewritten versions of the agent's MLflow Prompt Registry prompts, as a serverless Databricks job. Every combination is scored on the whole agent, so a cheaper router that hurts the writer's answers loses. The search never runs on your machine (it can take hours), so this command uploads the project to `/Workspace/Users/<you>/agentbricks_model_upgrades/<name>` (its own folder, separate from the deployed app's source), submits a one-time run, and returns. The job's environment installs the uploaded project from its `pyproject.toml` plus `databricks-agentbricks[upgrade]`.
+Search candidate models for every bound role together, along with rewritten versions of the agent's MLflow Prompt Registry prompts (those bound with `prompts bind`, or the ones `--prompt` names). Every combination is scored on the whole agent, so a cheaper router that hurts the writer's answers loses. By default the search runs as a serverless Databricks job, because it can take hours: this command uploads the project to `/Workspace/Users/<you>/agentbricks_model_upgrades/<name>` (its own folder, separate from the deployed app's source), submits a one-time run, and returns. The job's environment installs the uploaded project from its `pyproject.toml` plus `databricks-agentbricks[upgrade]`.
 
 The job imports the `predict_fn`, eval data, and scorers you name from the project (`module:attr` references, the same inputs `optimize_prompts_and_models` takes) and runs the whole agent on each eval record per candidate combination, against temporary `<service>_exp_<id>` copies of the model services (production traffic is untouched). Each search uses its own copies and deletes only those copies when it exits, so overlapping jobs can evaluate independently. It sets each `AGENT_MODEL_SERVICE_<ROLE>` before importing your code, so every LLM call that uses `resolve_model_service("<role>")` hits its copy. The winner balances quality, latency, and cost (`--quality-weight`, `--latency-weight`, `--cost-weight`); at equal quality the cheaper models win. The run logs to the MLflow experiment `<trace experiment>-model-upgrades`, never to the agent's own trace experiment.
 
 Nothing changes until the recommendation is applied. By default the command returns once the job is submitted: check on it with `agentbricks experimental models status`, then run `agentbricks experimental models apply`. `--apply ask` waits for the result and asks before changing anything, and `--apply auto` applies it without asking. `--run-on local` runs the search in this process instead of a job, which needs the `upgrade` extra and the project's dependencies installed locally.
 
-When the run finishes, the command prints a summary: a table of each role's current and recommended model, each role's candidate scores, the change in the combined quality, latency, and cost score, the prompts that were rewritten, and the MLflow run that recorded it.
+When the run finishes, the command prints a summary: a table of each role's current and recommended model, each role's candidate scores, the change in the combined quality, latency, and cost score, the median quality, latency, and cost per request of the current setup and of the recommendation on the validation records, the prompts that were rewritten, and the MLflow run that recorded it. Under `-o json` the medians are `baseline_metrics` and `best_metrics` (`quality`, `latency_s`, `cost_usd`) on the report.
 
 ```
 agentbricks experimental models upgrade --candidates MODEL --predict REF --train-data REF --val-data REF --scorer REF [options]
@@ -1326,7 +1326,7 @@ _Options_
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--candidates <ROLE=MODEL,...>` (`-c`) | string | - | for a model search | `system.ai.*` models to evaluate for one role, e.g. `router=claude-haiku-4-5,gpt-5-4-nano`. Repeat per role; the `ROLE=` prefix is optional when only one role is bound. Roles you don't list keep their current model. Each role's current model is always its baseline. Omit to optimize the agent's prompts only. |
-| `--prompt <URI>` | `prompts:/` URI | prompts bound in agent.toml | no | Prompt Registry prompt to optimize alongside the models (e.g. `prompts:/main.my_agent.system@production`). Repeat for more. Defaults to the prompts bound with `prompts bind`, at `@production`. The agent must load it with `load_prompt` and call `.format()` on every call. |
+| `--prompt <URI>` | `prompts:/` URI | prompts bound in agent.toml | no | Prompt Registry prompt to optimize alongside the models (e.g. `prompts:/main.my_agent.system@production`). Repeat for more. Defaults to the prompts bound with `prompts bind`, at `@production`. Must name an alias, not a version (`.../name/3` is rejected): apply moves the alias. The agent must load it with `load_prompt` and call `.format()` on every call. |
 | `--models-only` | flag | - | no | Search models only, leaving the agent's prompts as they are. |
 | `--predict <REF>` | `module:attr` | - | yes | Your agent's `predict_fn`: a sync callable taking one eval record's `inputs` dict. |
 | `--train-data <REF>` | `module:attr` | - | yes | Training records: a list of `{"inputs": ..., "expectations": ...}`. |
