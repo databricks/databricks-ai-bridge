@@ -467,10 +467,29 @@ function initials(name) {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
-function setViewer(name) {
-  const label = name || "Local developer";
-  elements.viewerValue.textContent = label;
-  if (elements.viewerAvatar) elements.viewerAvatar.textContent = initials(label);
+const LAPTOP_ICON = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45L4 16"/></svg>';
+
+// A local run (`agentbricks dev`) looks like a deployment otherwise, so mark it and explain on hover.
+function setViewer(name, { deployed = true, profile = null } = {}) {
+  const chip = elements.viewerValue.closest(".viewer-chip");
+  const tip = chip?.querySelector(".viewer-tip");
+  if (deployed) {
+    const label = name || "Local developer";
+    elements.viewerValue.textContent = label;
+    if (elements.viewerAvatar) elements.viewerAvatar.textContent = initials(label);
+    if (tip) tip.hidden = true;
+    chip?.removeAttribute("tabindex");
+    return;
+  }
+  elements.viewerValue.textContent = name ? `Local run · ${name}` : "Local run";
+  if (elements.viewerAvatar) elements.viewerAvatar.innerHTML = LAPTOP_ICON;
+  if (tip) {
+    const signIn = profile ? `your Databricks profile '${profile}'` : "your default Databricks profile";
+    tip.textContent = `Running on your machine, signed in with ${signIn}.`;
+    tip.hidden = false;
+  }
+  // Focusable so keyboard users can reach the tooltip too.
+  chip?.setAttribute("tabindex", "0");
 }
 
 function formatClock(date = new Date()) {
@@ -820,7 +839,12 @@ function renderMemoryCards(entries, query) {
 
 async function loadMemory() {
   if (!state.config?.memory.enabled) {
-    memoryMessage("Connect a Memory Store to browse entries: agentbricks memory bind <store-name>");
+    const bound = state.config?.memory.bound_store;
+    memoryMessage(
+      bound && !state.config.deployed
+        ? `Memory store "${bound}" is bound. Memory is off in agentbricks dev, so its entries show here after you deploy: agentbricks deploy`
+        : "Connect a Memory Store to browse entries: agentbricks memory bind <store-name>",
+    );
     return;
   }
   const query = memoryState.query.trim();
@@ -1417,11 +1441,21 @@ async function loadConfig() {
     state.instanceId = config.instance_id;
     renderModels(config.models);
     void loadModels().catch((error) => addEvent("models.error", { message: String(error) }));
-    setViewer(config.viewer);
+    setViewer(config.viewer, { deployed: config.deployed, profile: config.profile });
     elements.streamingMode.textContent = config.streaming.mode;
     elements.backgroundMode.textContent = config.background.mode;
     elements.sessionMode.textContent = config.session.mode;
-    elements.memoryMode.textContent = config.memory.enabled ? `Managed · actor ${config.memory.actor}` : "Not connected";
+    // Memory is off under `agentbricks dev`, so a bound store reads as active after deploy, not missing.
+    const memoryState = config.memory.enabled
+      ? "connected"
+      : config.memory.bound_store && !config.deployed
+        ? "on-deploy"
+        : "off";
+    elements.memoryMode.textContent = {
+      connected: "Connected",
+      "on-deploy": "Bound · active after deploy",
+      off: "Not connected",
+    }[memoryState];
     setCapability(
       elements.streamingStatus,
       config.streaming.enabled,
@@ -1446,11 +1480,15 @@ async function loadConfig() {
     );
     setCapability(
       elements.memoryStatus,
-      config.memory.enabled,
-      config.memory.enabled
-        ? `Connected to ${config.memory.store} for actor ${config.memory.actor}.`
-        : "No long-term memory is connected.",
-      config.memory.enabled ? null : "agentbricks memory bind <store-name>",
+      memoryState === "connected" ? true : memoryState === "on-deploy" ? "degraded" : false,
+      {
+        connected: `Connected to ${config.memory.store} for actor ${config.memory.actor}.`,
+        "on-deploy": `Memory store "${config.memory.bound_store}" is bound. Memory is off in agentbricks dev and connects when you deploy.`,
+        off: "No long-term memory is connected.",
+      }[memoryState],
+      { connected: null, "on-deploy": "agentbricks deploy", off: "agentbricks memory bind <store-name>" }[
+        memoryState
+      ],
     );
     elements.tracingMode.textContent = config.tracing?.enabled ? "Connected" : "Not configured";
     setCapability(
@@ -1543,6 +1581,33 @@ modeOptions.forEach((option) => {
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") showModeTip(null);
+});
+
+// The local-run viewer tip follows the same rule: JS owns visibility, and it never shows with a mode tip.
+const viewerChip = elements.viewerValue.closest(".viewer-chip");
+
+function showViewerTip(on) {
+  const tip = viewerChip?.querySelector(".viewer-tip");
+  viewerChip?.classList.toggle("tip-visible", Boolean(on && tip && !tip.hidden));
+  if (on) showModeTip(null);
+}
+
+viewerChip?.addEventListener("pointerenter", (event) => {
+  if (event.pointerType !== "touch") showViewerTip(true);
+});
+viewerChip?.addEventListener("pointerleave", (event) => {
+  if (event.pointerType !== "touch") showViewerTip(false);
+});
+viewerChip?.addEventListener("focus", () => {
+  if (viewerChip.matches(":focus-visible") || touchOnly.matches) showViewerTip(true);
+});
+viewerChip?.addEventListener("blur", () => showViewerTip(false));
+modeOptions.forEach((option) => {
+  option.addEventListener("pointerenter", () => showViewerTip(false));
+  option.querySelector(".mode-button").addEventListener("focus", () => showViewerTip(false));
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") showViewerTip(false);
 });
 
 elements.modelSelect.addEventListener("change", () => {
