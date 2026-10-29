@@ -8,10 +8,15 @@ import pathlib
 import pytest
 from click.testing import CliRunner
 
+from databricks_agentbricks.cli.sandbox import add_sandbox
 from databricks_agentbricks.cli.tools import tools
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.agent_project import AgentProject, ToolSpec
 from databricks_agentbricks.projects.config import write_project_metadata
+from databricks_agentkit.runtime import tool_manifest
+
+# The scoped sandbox path is retained behind a disabled gate; these tests cover it with the gate on.
+pytestmark = pytest.mark.usefixtures("sandbox_downscope_enabled")
 
 
 class _Ctx:
@@ -43,7 +48,7 @@ class _Client:
     "arguments",
     [
         ["mcp", "system.ai.web_search"],
-        ["sandbox"],
+        ["sandbox", "--scope", "volume:main.data.files"],
         ["uc-function", "main.tools.lookup"],
     ],
 )
@@ -92,42 +97,152 @@ def _project(
     return project
 
 
+def _disable_downscope(monkeypatch):
+    monkeypatch.setattr(tool_manifest, "SANDBOX_DOWNSCOPE_ENABLED", False)
+
+
+@pytest.mark.parametrize("auth", ["user", "app"])
+def test_add_unscoped_sandbox_by_default(tmp_path, monkeypatch, auth):
+    _disable_downscope(monkeypatch)
+    project = _project(tmp_path)
+
+    result = CliRunner().invoke(
+        tools, ["add", "sandbox", "--auth", auth, "--source", str(project)], obj=_Ctx()
+    )
+
+    assert result.exit_code == 0, result.output
+    loaded = AgentProject.load(project).tools[0]
+    assert (loaded.source.kind, loaded.auth, loaded.policy.downscope) == ("sandbox", auth, ())
+    manifest = (project / "agent.toml").read_text()
+    assert "policy = {databricks_access_token_included = true}" in manifest
+    assert "downscope" not in manifest
+
+
+@pytest.mark.parametrize(
+    "option",
+    [["--scope", "volume:main.data.files"], ["--permission", "read_only"]],
+)
+def test_add_sandbox_rejects_disabled_scope_options_without_project_changes(
+    tmp_path, monkeypatch, option
+):
+    _disable_downscope(monkeypatch)
+    project = _project(tmp_path)
+    before = {path: path.read_bytes() for path in project.rglob("*") if path.is_file()}
+
+    result = CliRunner().invoke(
+        tools, ["add", "sandbox", *option, "--source", str(project)], obj=_Ctx()
+    )
+
+    assert result.exit_code != 0
+    assert "--scope and --permission are not supported for sandbox tools." in result.output
+    assert "without --scope or --permission" in result.output
+    assert {path: path.read_bytes() for path in project.rglob("*") if path.is_file()} == before
+
+
+def test_add_sandbox_help_hides_disabled_scope_options(monkeypatch):
+    # `hidden` is fixed when the command is defined, with the shipped gate off.
+    result = CliRunner().invoke(tools, ["add", "sandbox", "--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "--scope" not in result.output
+    assert "--permission" not in result.output
+
+
 def test_add_sandbox_only_updates_manifest(tmp_path: pathlib.Path):
     project = _project(tmp_path)
 
     result = CliRunner().invoke(
         tools,
-        ["add", "sandbox", "--source", str(project)],
+        ["add", "sandbox", "--scope", "volume:main.data.files", "--source", str(project)],
         obj=_Ctx(),
     )
 
     assert result.exit_code == 0, result.output
     loaded = AgentProject.load(project)
     assert loaded.tools[0].source.kind == "sandbox"
+    assert loaded.tools[0].policy.downscope[0].resource == "volume:main.data.files"
     assert loaded.tools[0].policy.databricks_access_token_included is True
-    manifest = (project / "agent.toml").read_text()
-    assert "policy = {databricks_access_token_included = true}" in manifest
-    assert "downscope" not in manifest
+    assert "databricks_access_token_included = true" in (project / "agent.toml").read_text()
     assert (project / "agent" / "mcps.py").read_text(encoding="utf-8") == "ORIGINAL = True\n"
 
 
-@pytest.mark.parametrize(
-    "removed_option",
-    [["--scope", "volume:main.data.files"], ["--permission", "read_only"]],
-)
-def test_add_sandbox_rejects_removed_scope_options_without_project_changes(
-    tmp_path, removed_option
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("permission", ["read_only", "read_write"])
+def test_add_table_sandbox_when_gate_is_enabled(
+    tmp_path, monkeypatch, framework, legacy, permission
 ):
-    project = _project(tmp_path)
-    before = {path: path.read_bytes() for path in project.rglob("*") if path.is_file()}
+    monkeypatch.setattr(tool_manifest, "SANDBOX_TABLE_SCOPES_ENABLED", True)
+    project = _project(tmp_path, framework)
+    args = [
+        "--scope",
+        "table:main.data.rows",
+        "--scope",
+        "volume:main.data.files",
+        "--scope",
+        "table:main.data.rows",
+        "--permission",
+        permission,
+        "--source",
+        str(project),
+    ]
+    command = add_sandbox if legacy else tools
+    if not legacy:
+        args = ["add", "sandbox", *args]
 
-    result = CliRunner().invoke(
-        tools, ["add", "sandbox", *removed_option, "--source", str(project)], obj=_Ctx()
-    )
+    result = CliRunner().invoke(command, args, obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    loaded = AgentProject.load(project)
+    assert [(scope.resource, scope.permission) for scope in loaded.tools[0].policy.downscope] == [
+        ("table:main.data.rows", permission),
+        ("volume:main.data.files", permission),
+    ]
+    assert (project / "agent" / "mcps.py").read_text() == "ORIGINAL = True\n"
+    before = (project / "agent.toml").read_bytes()
+    repeated = CliRunner().invoke(command, args, obj=_Ctx())
+    assert repeated.exit_code == 0, repeated.output
+    assert (project / "agent.toml").read_bytes() == before
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("auth", ["user", "app"])
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("permission", ["read_only", "read_write"])
+@pytest.mark.parametrize(
+    ("scope", "message"),
+    [
+        ("table:main.data.rows", "Table sandbox scopes are not supported"),
+        ("workspace:/Workspace/Shared", "Workspace sandbox scopes are not supported"),
+        ("/Workspace/Shared", "Workspace sandbox scopes are not supported"),
+        ("/Workspace/Shared/report:2026", "Workspace sandbox scopes are not supported"),
+    ],
+)
+def test_add_sandbox_rejects_unsupported_scope_without_project_changes(
+    tmp_path, framework, auth, legacy, permission, scope, message
+):
+    project = _project(tmp_path, framework)
+    before = {path: path.read_bytes() for path in project.rglob("*") if path.is_file()}
+    args = [
+        "--scope",
+        "volume:main.data.files",
+        "--scope",
+        scope,
+        "--permission",
+        permission,
+        "--source",
+        str(project),
+    ]
+    if legacy:
+        command = add_sandbox
+    else:
+        command = tools
+        args = ["add", "sandbox", *args, "--auth", auth]
+
+    result = CliRunner().invoke(command, args, obj=_Ctx())
 
     assert result.exit_code != 0
-    assert "No such option" in result.output
-    assert removed_option[0] in result.output
+    assert message in result.output
     assert {path: path.read_bytes() for path in project.rglob("*") if path.is_file()} == before
 
 
@@ -139,6 +254,8 @@ def test_add_sandbox_can_disable_databricks_token_env(tmp_path: pathlib.Path):
         [
             "add",
             "sandbox",
+            "--scope",
+            "volume:main.data.files",
             "--no-databricks-access-token-included",
             "--source",
             str(project),
@@ -208,7 +325,7 @@ def test_add_mcp_and_uc_function_write_typed_manifest_records(tmp_path: pathlib.
 @pytest.mark.parametrize(
     "command",
     [
-        ["add", "sandbox"],
+        ["add", "sandbox", "--scope", "volume:main.data.files"],
         ["add", "mcp", "system.ai.web_search"],
         ["add", "uc-function", "main.tools.lookup_ticket"],
         ["add", "genie-one"],
@@ -240,7 +357,7 @@ def test_add_manifest_tool_works_for_any_framework(tmp_path: pathlib.Path, comma
 @pytest.mark.parametrize(
     "command",
     [
-        ["add", "sandbox"],
+        ["add", "sandbox", "--scope", "volume:main.data.files"],
         ["add", "mcp", "system.ai.web_search"],
         ["add", "uc-function", "main.tools.lookup_ticket"],
         ["add", "genie-one"],
@@ -595,7 +712,7 @@ def test_configured_tools_are_inspected_in_manifest(tmp_path: pathlib.Path):
     "args",
     [
         ["mcp", "system.ai.web_search"],
-        ["sandbox"],
+        ["sandbox", "--scope", "volume:catalog.schema.volume"],
         ["uc-function", "catalog.schema.function"],
     ],
 )

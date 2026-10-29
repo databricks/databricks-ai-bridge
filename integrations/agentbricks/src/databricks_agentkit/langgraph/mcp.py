@@ -1,7 +1,7 @@
 """Build MCP tools for the agent from the servers declared in ``agent.toml`` (plus any the agent adds).
 
 ``mcp_tools()`` is the entry point: it reads the MCP servers declared in ``agent.toml``
-(sandbox/mcp + uc_function), fetches their LangChain tools with protected sandbox metadata applied, and
+(sandbox/mcp + uc_function), fetches their LangChain tools with sandbox downscoping applied, and
 returns them. An agent with its own hand-built servers passes them as ``extra_servers``; leaving
 ``agent.toml`` empty simply yields no declared servers. Typical agent use::
 
@@ -133,11 +133,11 @@ def mcp_client(
     workspace_client_for: mcp_auth.WorkspaceClientResolver | None = None,
     tools: tuple[ToolRecord, ...] | None = None,
 ) -> DatabricksMultiServerMCPClient:
-    """A multi-server MCP client over ``servers`` with the sandbox metadata interceptor attached.
+    """A multi-server MCP client over ``servers`` with the sandbox downscoping interceptor attached.
 
-    The interceptor is derived from the ``agent.toml`` manifest, so sandbox calls carry the protected
-    ``_meta`` regardless of how the caller drives the returned client (``get_tools`` or otherwise).
-    Callers who build their own client instead take on applying that metadata themselves.
+    The interceptor is derived from the ``agent.toml`` manifest, so sandbox tools run downscoped
+    regardless of how the caller drives the returned client (``get_tools`` or otherwise). Callers who
+    build their own client instead take on applying downscoping themselves.
     """
     snapshot = tuple(load_tools(expected_framework="langgraph")) if tools is None else tools
     interceptors = (
@@ -157,7 +157,7 @@ async def mcp_tools(
     *,
     workspace_client_for: mcp_auth.WorkspaceClientResolver | None = None,
 ) -> list:
-    """Fetch declared tools with request identity and protected sandbox metadata.
+    """Fetch declared tools with request identity and protected sandbox downscoping.
 
     Includes the MCP servers declared in ``agent.toml``; pass ``extra_servers`` to add servers the
     agent builds itself. Request-user failures propagate; App, legacy, and optional customer

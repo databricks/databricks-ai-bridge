@@ -12,8 +12,9 @@ from databricks_agentbricks.cli.mcp import _add_command, _list_services, _valida
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.help import _example_epilog
-from databricks_agentbricks.projects.agent_project import AgentProject, ToolSpec
+from databricks_agentbricks.projects.agent_project import AgentProject, Scope, ToolSpec
 from databricks_agentbricks.projects.config import require_managed_tool_support
+from databricks_agentkit.runtime import tool_manifest
 
 
 def _identifier(value: str) -> str:
@@ -35,6 +36,10 @@ def _require_arg(value: str, label: str) -> str:
 
 
 def _source_value(spec: ToolSpec) -> str:
+    # For a sandbox tool, the useful detail is the allowed scopes, not the (constant)
+    # 'system.ai.sandbox' service name that duplicates the KIND column.
+    if spec.source.kind == "sandbox" and spec.policy.downscope:
+        return ", ".join(s.resource for s in spec.policy.downscope)
     return spec.source.service or spec.source.function or spec.source.space_id or spec.source.kind
 
 
@@ -96,6 +101,45 @@ def _add_spec(obj: Any, source: pathlib.Path, spec: ToolSpec) -> None:
     _emit_change(obj, project, spec, changed_files)
 
 
+def add_sandbox_to_manifest(
+    obj: Any,
+    source: pathlib.Path,
+    scopes: tuple[str, ...],
+    permission: str | None,
+    *,
+    tool_id: str = "sandbox",
+    auth: Literal["user", "app"] = "user",
+    databricks_access_token_included: bool = True,
+) -> None:
+    """Shared implementation for the nested command and compatibility alias."""
+    if not tool_manifest.SANDBOX_DOWNSCOPE_ENABLED and (scopes or permission is not None):
+        raise AgentCliError(
+            "--scope and --permission are not supported for sandbox tools.",
+            hint="system.ai.sandbox does not accept resource scopes; sandbox code runs with the "
+            "selected identity's own Unity Catalog access. Run `agentbricks tools add sandbox` "
+            "without --scope or --permission.",
+        )
+    permission = permission or "read_only"
+    parsed: list[Scope] = []
+    seen: set[tuple[str, str]] = set()
+    for value in scopes:
+        scope = Scope.parse(value, permission)
+        identity = (scope.kind, scope.value)
+        if identity not in seen:
+            parsed.append(scope)
+            seen.add(identity)
+    _add_spec(
+        obj,
+        source,
+        ToolSpec.sandbox(
+            tool_id,
+            scopes=parsed,
+            auth=auth,
+            databricks_access_token_included=databricks_access_token_included,
+        ),
+    )
+
+
 @click.group()
 def tools() -> None:
     """Discover available integrations and manage an agent's tool bindings.
@@ -144,6 +188,20 @@ def _source_option(function):
 
 
 @add.command("sandbox")
+@click.option(
+    "--scope",
+    "scopes",
+    multiple=True,
+    hidden=not tool_manifest.SANDBOX_DOWNSCOPE_ENABLED,
+    help="Allowed volume: resource. Repeat for multiple scopes.",
+)
+@click.option(
+    "--permission",
+    type=click.Choice(["read_only", "read_write"]),
+    default=None,
+    hidden=not tool_manifest.SANDBOX_DOWNSCOPE_ENABLED,
+    help="Access for every --scope resource (default: read_only).",
+)
 @click.option("--name", "tool_id", default="sandbox", show_default=True)
 @click.option("--auth", type=click.Choice(["user", "app"]), default="user", show_default=True)
 @click.option(
@@ -156,6 +214,8 @@ def _source_option(function):
 @click.pass_obj
 def add_sandbox(
     obj: Any,
+    scopes: tuple[str, ...],
+    permission: str | None,
     tool_id: str,
     source: pathlib.Path,
     auth: Literal["user", "app"],
@@ -167,14 +227,14 @@ def add_sandbox(
     service principal (--auth app) can. Review the target project's agent.toml to check configured
     managed tools and MCP bindings.
     """
-    _add_spec(
+    add_sandbox_to_manifest(
         obj,
         source.resolve(),
-        ToolSpec.sandbox(
-            tool_id,
-            auth=auth,
-            databricks_access_token_included=databricks_access_token_included,
-        ),
+        scopes,
+        permission,
+        tool_id=tool_id,
+        auth=auth,
+        databricks_access_token_included=databricks_access_token_included,
     )
 
 

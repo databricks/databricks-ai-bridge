@@ -43,7 +43,7 @@ from the app.
 ### Tools
 
 Use `databricks_agentkit.openai.mcp_servers()` for MCP, UC function, and sandbox bindings, combining
-them with agent-owned servers without duplicates. It adds the protected sandbox `_meta` to every sandbox call. Genie Agent
+them with agent-owned servers without duplicates. It applies sandbox downscoping. Genie Agent
 bindings arrive as tools from `genie_tools()`. Local Python tools belong in source; the template
 discovers `@function_tool` functions through [agent/tools/__init__.py](agent/tools/__init__.py).
 

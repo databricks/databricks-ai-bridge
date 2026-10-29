@@ -1,8 +1,8 @@
 """Build MCP servers for the agent from the ones declared in ``agent.toml`` (plus any the agent adds).
 
 ``mcp_servers()`` is the entry point: it reads the MCP servers declared in ``agent.toml``
-(sandbox/mcp + uc_function) and returns Agents SDK ``McpServer`` objects, with protected sandbox
-metadata applied. Hand them to ``Agent(mcp_servers=...)``; the Agents SDK connects and lists their tools
+(sandbox/mcp + uc_function) and returns Agents SDK ``McpServer`` objects, with sandbox downscoping
+applied. Hand them to ``Agent(mcp_servers=...)``; the Agents SDK connects and lists their tools
 lazily inside ``Runner.run``. An agent with its own hand-built servers passes them as
 ``extra_servers``; leaving ``agent.toml`` empty simply yields no declared servers. Typical use::
 
@@ -85,7 +85,7 @@ class _ConfiguredMcpServer(McpServer):
         return result
 
 
-class _SandboxMcpServer(_ConfiguredMcpServer):
+class _DownscopedMcpServer(_ConfiguredMcpServer):
     """An ``McpServer`` that injects protected sandbox policy into every ``call_tool``.
 
     The Databricks sandbox MCP applies policy from the call's ``_meta``; the Agents SDK does not
@@ -125,7 +125,7 @@ def _server_from_tool(
             else f"{host}/ai-gateway/mcp-services/{tool.service}"
         )
         if tool.kind == "sandbox":
-            return _SandboxMcpServer(
+            return _DownscopedMcpServer(
                 url=url,
                 name=tool.id,
                 workspace_client=client,
@@ -191,7 +191,7 @@ async def mcp_servers(
     workspace_client_for: mcp_auth.WorkspaceClientResolver | None = None,
     require_approval: dict[str, bool] | None = None,
 ) -> list[McpServer]:
-    """Build the agent's configured servers with request identity and protected sandbox metadata.
+    """Build the agent's configured servers with request identity and sandbox downscoping.
 
     Includes the MCP servers declared in ``agent.toml``; pass ``extra_servers`` to add servers the
     agent builds itself. ``require_approval`` maps exposed tool names to approval requirements for

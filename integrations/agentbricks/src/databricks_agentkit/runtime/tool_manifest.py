@@ -30,12 +30,19 @@ def model_service_env(role: str = DEFAULT_MODEL_ROLE) -> str:
     return f"{MODEL_SERVICE_ENV_PREFIX}{role.upper()}"
 
 
+# Enable only once Databricks Connect supports table downscoping.
+SANDBOX_TABLE_SCOPES_ENABLED = False
+# Enable only once the Sandbox API backend of system.ai.sandbox accepts resource policies; it
+# currently rejects any non-empty `_meta.downscope`, so sandbox calls must send an empty one.
+SANDBOX_DOWNSCOPE_ENABLED = False
+
+
 def downscope_unsupported_message(tool_id: str) -> str:
-    """Explain why a manifest's ``policy.downscope`` must be removed."""
+    """The action-oriented error for a manifest that declares a downscope while it is disabled."""
     return (
-        f"Tool {tool_id!r} declares policy.downscope, which is no longer supported: "
-        "system.ai.sandbox runs code with the selected identity's own Unity Catalog access. "
-        "Remove policy.downscope from that tool in agent.toml."
+        f"Tool {tool_id!r} declares policy.downscope, which system.ai.sandbox does not support: "
+        "sandbox code runs with the selected identity's own Unity Catalog access. "
+        f"Remove policy.downscope from the [[tools]] entry with id = {tool_id!r} in agent.toml."
     )
 
 
@@ -52,17 +59,27 @@ class UserAuthConfig:
 
 
 @dataclass(frozen=True)
+class ScopeRecord:
+    kind: str
+    value: str
+    permission: str
+
+
+@dataclass(frozen=True)
 class ToolRecord:
     id: str
     kind: str
     service: str | None = None
     function: str | None = None
+    downscope: tuple[ScopeRecord, ...] = ()
     databricks_access_token_included: bool = False
     space_id: str | None = None
     auth: str | None = None
 
 
-def validate_genie_source(tool_id: str, source: Mapping[str, Any]) -> None:
+def validate_genie_source(
+    tool_id: str, source: Mapping[str, Any], *, has_downscope: bool = False
+) -> None:
     """Validate Genie bindings consistently for CLI models and direct manifest reads."""
     kind = source.get("kind")
     if kind not in {"genie_one", "genie_agent"}:
@@ -80,6 +97,8 @@ def validate_genie_source(tool_id: str, source: Mapping[str, Any]) -> None:
         raise ToolManifestError(
             f"{kind} bindings do not accept source fields: {', '.join(sorted(unexpected))}."
         )
+    if has_downscope:
+        raise ToolManifestError("Genie bindings do not accept policy.downscope.")
     if kind == "genie_agent":
         space_id = source.get("space_id")
         if not isinstance(space_id, str) or not re.fullmatch(r"[0-9a-f]{32}", space_id):
@@ -186,6 +205,30 @@ def _required_string(value: object, description: str) -> str:
     return value
 
 
+def _scope(value: object) -> ScopeRecord:
+    if not isinstance(value, dict):
+        raise RuntimeError("agent.toml downscope entries must be tables.")
+    value = cast(dict[str, Any], value)
+    resource = _required_string(value.get("resource"), "a downscope resource")
+    kind, separator, resource_value = resource.partition(":")
+    if kind == "table" and separator and not SANDBOX_TABLE_SCOPES_ENABLED:
+        raise ToolManifestError(
+            "Table sandbox scopes are not supported yet. "
+            "Databricks Connect does not support table downscoping. "
+            "Use volume:<name> instead."
+        )
+    if kind == "workspace" and separator:
+        raise ToolManifestError(
+            "Workspace sandbox scopes are not supported yet. Use volume:<name> instead."
+        )
+    if not separator or kind not in {"table", "volume"} or not resource_value:
+        raise RuntimeError(f"Invalid agent.toml downscope resource: {resource!r}.")
+    permission = _required_string(value.get("permission", "read_only"), "a permission")
+    if permission not in {"read_only", "read_write"}:
+        raise RuntimeError(f"Invalid agent.toml downscope permission: {permission!r}.")
+    return ScopeRecord(kind=kind, value=resource_value, permission=permission)
+
+
 def _tool(value: object) -> ToolRecord:
     if not isinstance(value, dict):
         raise RuntimeError("agent.toml tools must be tables.")
@@ -198,6 +241,9 @@ def _tool(value: object) -> ToolRecord:
     if not isinstance(policy, dict):
         raise RuntimeError("agent.toml tool policy must be a table.")
     policy = cast(dict[str, Any], policy)
+    raw_downscope = policy.get("downscope", [])
+    if not isinstance(raw_downscope, list):
+        raise RuntimeError("agent.toml policy.downscope must be an array.")
     kind = _required_string(source.get("kind"), "a tool source kind")
     databricks_access_token_included = policy.get("databricks_access_token_included", False)
     if not isinstance(databricks_access_token_included, bool):
@@ -205,9 +251,9 @@ def _tool(value: object) -> ToolRecord:
     if kind != "sandbox" and "databricks_access_token_included" in policy:
         raise RuntimeError("Only sandbox bindings accept policy.databricks_access_token_included.")
     tool_id = _required_string(value.get("id"), "a tool id")
-    if "downscope" in policy:
+    validate_genie_source(tool_id, source, has_downscope="downscope" in policy)
+    if raw_downscope and not SANDBOX_DOWNSCOPE_ENABLED:
         raise ToolManifestError(downscope_unsupported_message(tool_id))
-    validate_genie_source(tool_id, source)
     auth = value.get("auth")
     if auth is not None and auth not in ("user", "app"):
         raise ToolManifestError("Tool auth must be 'user' or 'app'.")
@@ -222,6 +268,7 @@ def _tool(value: object) -> ToolRecord:
         service=source.get("service") if isinstance(source.get("service"), str) else None,
         function=source.get("function") if isinstance(source.get("function"), str) else None,
         space_id=source.get("space_id") if isinstance(source.get("space_id"), str) else None,
+        downscope=tuple(_scope(item) for item in raw_downscope),
         databricks_access_token_included=databricks_access_token_included,
         auth=auth,
     )
@@ -233,6 +280,8 @@ def _tool(value: object) -> ToolRecord:
         raise RuntimeError("UC function bindings require source.function.")
     if record.kind not in {"sandbox", "mcp", "uc_function", "genie_one", "genie_agent"}:
         raise RuntimeError(f"Unsupported agent.toml tool kind: {record.kind!r}.")
+    if record.kind != "sandbox" and record.downscope:
+        raise RuntimeError("Only sandbox bindings accept policy.downscope.")
     return record
 
 
@@ -298,14 +347,22 @@ def resolve_model_service(
     return explicit or os.getenv(model_service_env(role)) or None
 
 
-def sandbox_meta(tool: ToolRecord) -> dict[str, Any]:
-    """Build the protected MCP metadata for a configured sandbox binding.
+def downscope_wire(tool: ToolRecord) -> dict[str, list[dict[str, str]]]:
+    """Convert protected policy into the system.ai.sandbox MCP ``_meta`` shape."""
+    fields = {
+        "table": ("tables", "name"),
+        "volume": ("volumes", "name"),
+    }
+    result: dict[str, list[dict[str, str]]] = {}
+    for scope in tool.downscope:
+        group, field = fields[scope.kind]
+        result.setdefault(group, []).append({field: scope.value, "permission": scope.permission})
+    return result
 
-    The Sandbox API backend of system.ai.sandbox accepts only an absent or empty downscope, so
-    every call sends an explicit empty policy and sandbox code keeps the selected identity's own
-    Unity Catalog access.
-    """
+
+def sandbox_meta(tool: ToolRecord) -> dict[str, Any]:
+    """Build the protected MCP metadata for a configured sandbox binding."""
     return {
-        "downscope": {},
+        "downscope": downscope_wire(tool),
         "databricks_access_token_included": tool.databricks_access_token_included,
     }

@@ -225,7 +225,11 @@ def _connected_tools() -> list[dict[str, str]]:
 
     connected = []
     for tool in load_tools(expected_framework=_FRAMEWORK):
-        source = tool.service or tool.function or tool.space_id or ""
+        if tool.kind == "sandbox":
+            source = ", ".join(f"{scope.kind}:{scope.value}" for scope in tool.downscope)
+            source = source or tool.service or ""
+        else:
+            source = tool.service or tool.function or tool.space_id or ""
         connected.append(
             {
                 "id": tool.id,

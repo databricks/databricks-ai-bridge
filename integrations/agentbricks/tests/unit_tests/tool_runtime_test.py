@@ -190,7 +190,7 @@ def test_langgraph_runtime_loads_direct_manifest_and_protects_sandbox_meta(
     assert client is not None
     assert len(client.kwargs["tool_interceptors"]) == 1
 
-    # the interceptor adds the fixed protected meta from the manifest policy to sandbox calls.
+    # the interceptor downscopes sandbox calls with the fixed meta from the manifest policy.
     interceptor = client.kwargs["tool_interceptors"][0]
     request = SimpleNamespace(
         server_name="sandbox",

@@ -12,6 +12,7 @@ import tomli
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.agent_project import (
     AgentProject,
+    Scope,
     ToolPolicy,
     ToolSource,
     ToolSpec,
@@ -21,6 +22,9 @@ from databricks_agentbricks.projects.types import AgentFramework, AgentServer
 from databricks_agentkit.runtime import tool_manifest
 from databricks_agentkit.runtime.tool_manifest import ToolManifestError, load_tools
 
+# The scoped sandbox path is retained behind a disabled gate; these tests cover it with the gate on.
+pytestmark = pytest.mark.usefixtures("sandbox_downscope_enabled")
+
 
 @pytest.mark.parametrize("kind", ["mcp", "sandbox", "uc_function", "genie_one", "genie_agent"])
 @pytest.mark.parametrize("auth", [None, "app", "user"])
@@ -28,7 +32,7 @@ def test_auth_round_trip_through_both_manifest_parsers(tmp_path, monkeypatch, ki
     _write_manifest(tmp_path)
     project = AgentProject.load(tmp_path)
     if kind == "sandbox":
-        spec = ToolSpec.sandbox("tool", auth=auth)
+        spec = ToolSpec.sandbox("tool", scopes=[Scope.volume("main.data.files")], auth=auth)
     elif kind == "mcp":
         spec = ToolSpec.mcp("tool", service="system.ai.web_search", auth=auth)
     elif kind == "genie_one":
@@ -97,19 +101,14 @@ def _write_manifest(root: pathlib.Path, body: str | None = None) -> pathlib.Path
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
 @pytest.mark.parametrize("reader", ["project", "runtime"])
 @pytest.mark.parametrize(
-    ("source", "downscope"),
+    ("resource", "message"),
     [
-        (
-            'kind = "sandbox", service = "system.ai.sandbox"',
-            '[{ resource = "volume:main.data.files", permission = "read_only" }]',
-        ),
-        ('kind = "sandbox", service = "system.ai.sandbox"', "[]"),
-        ('kind = "mcp", service = "system.ai.web_search"', "[]"),
-        ('kind = "genie_one"', "[]"),
+        ("table:main.data.rows", "Table sandbox scopes are not supported"),
+        ("workspace:/Workspace/Shared", "Workspace sandbox scopes are not supported"),
     ],
 )
-def test_manifest_rejects_downscope_without_writes(
-    tmp_path, monkeypatch, framework, reader, source, downscope
+def test_manifest_rejects_unsupported_downscope_without_writes(
+    tmp_path, monkeypatch, framework, reader, resource, message
 ):
     manifest = _write_manifest(
         tmp_path,
@@ -121,15 +120,15 @@ server = "agentbricks"
 
 [[tools]]
 id = "sandbox"
-source = {{ {source} }}
-policy = {{ downscope = {downscope} }}
+source = {{ kind = "sandbox", service = "system.ai.sandbox" }}
+policy = {{ downscope = [{{ resource = "{resource}", permission = "read_only" }}] }}
 """,
     )
     before = manifest.read_bytes()
     monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
-    error_type = AgentCliError if reader == "project" else ToolManifestError
+    error_type = AgentCliError if reader == "project" else RuntimeError
 
-    with pytest.raises(error_type, match="policy.downscope, which is no longer supported"):
+    with pytest.raises(error_type, match=message):
         if reader == "project":
             AgentProject.load(tmp_path)
         else:
@@ -139,10 +138,61 @@ policy = {{ downscope = {downscope} }}
 
 
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("reader", ["project", "runtime"])
+@pytest.mark.parametrize("kind", ["sandbox", "mcp"])
+def test_manifest_downscope_fails_with_removal_action_when_disabled(
+    tmp_path, monkeypatch, framework, reader, kind
+):
+    monkeypatch.setattr(tool_manifest, "SANDBOX_DOWNSCOPE_ENABLED", False)
+    service = "system.ai.sandbox" if kind == "sandbox" else "system.ai.web_search"
+    manifest = _write_manifest(
+        tmp_path,
+        f"""schema_version = 1
+
+[agent]
+framework = "{framework}"
+server = "agentbricks"
+
+[[tools]]
+id = "files"
+source = {{ kind = "{kind}", service = "{service}" }}
+policy = {{ downscope = [{{ resource = "volume:main.data.files", permission = "read_only" }}] }}
+""",
+    )
+    before = manifest.read_bytes()
+    monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
+    error_type = AgentCliError if reader == "project" else ToolManifestError
+
+    with pytest.raises(error_type) as raised:
+        if reader == "project":
+            AgentProject.load(tmp_path)
+        else:
+            load_tools(expected_framework=framework)
+
+    message = str(raised.value)
+    assert (
+        "Tool 'files' declares policy.downscope, which system.ai.sandbox does not support"
+        in message
+    )
+    assert (
+        "Remove policy.downscope from the [[tools]] entry with id = 'files' in agent.toml."
+        in message
+    )
+    assert manifest.read_bytes() == before
+
+
+def test_scope_is_rejected_when_downscope_is_disabled(monkeypatch):
+    monkeypatch.setattr(tool_manifest, "SANDBOX_DOWNSCOPE_ENABLED", False)
+    with pytest.raises(AgentCliError, match="Sandbox scopes are not supported"):
+        Scope.volume("main.data.files")
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
 @pytest.mark.parametrize("token_included", [True, False])
-def test_sandbox_round_trips_without_downscope_and_sends_an_empty_one(
+def test_unscoped_sandbox_round_trips_and_sends_empty_downscope(
     tmp_path, monkeypatch, framework, token_included
 ):
+    monkeypatch.setattr(tool_manifest, "SANDBOX_DOWNSCOPE_ENABLED", False)
     project = AgentProject.create(tmp_path, framework=framework, server="agentbricks")
     project.add_tool(ToolSpec.sandbox("sandbox", databricks_access_token_included=token_included))
     manifest = project.write()
@@ -156,6 +206,62 @@ def test_sandbox_round_trips_without_downscope_and_sends_an_empty_one(
         "downscope": {},
         "databricks_access_token_included": token_included,
     }
+
+
+def test_scope_rejects_unsupported_table_resource():
+    with pytest.raises(AgentCliError, match="Table sandbox scopes are not supported"):
+        Scope(kind="table", value="main.data.rows")
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("permission", ["read_only", "read_write"])
+def test_table_scopes_round_trip_when_gate_is_enabled(tmp_path, monkeypatch, framework, permission):
+    monkeypatch.setattr(tool_manifest, "SANDBOX_TABLE_SCOPES_ENABLED", True)
+    project = AgentProject.create(tmp_path, framework=framework, server="agentbricks")
+    project.add_tool(
+        ToolSpec.sandbox(
+            "sandbox",
+            scopes=[
+                Scope.parse("table:main.data.rows", permission),
+                Scope.volume("main.data.files"),
+            ],
+        )
+    )
+    manifest = project.write()
+    before = manifest.read_bytes()
+    monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
+
+    assert (
+        AgentProject.load(tmp_path).tools[0].policy.downscope[0].resource == "table:main.data.rows"
+    )
+    record = load_tools(expected_framework=framework)[0]
+    assert tool_manifest.sandbox_meta(record) == {
+        "downscope": {
+            "tables": [{"name": "main.data.rows", "permission": permission}],
+            "volumes": [{"name": "main.data.files", "permission": "read_only"}],
+        },
+        "databricks_access_token_included": True,
+    }
+
+    monkeypatch.setattr(tool_manifest, "SANDBOX_TABLE_SCOPES_ENABLED", False)
+    with pytest.raises(AgentCliError, match="Table sandbox scopes are not supported"):
+        AgentProject.load(tmp_path)
+    with pytest.raises(ToolManifestError, match="Table sandbox scopes are not supported"):
+        load_tools(expected_framework=framework)
+    assert manifest.read_bytes() == before
+
+
+def test_scope_rejects_unsupported_workspace_resource():
+    with pytest.raises(AgentCliError, match="Workspace sandbox scopes are not supported"):
+        Scope(kind="workspace", value="/Workspace/Shared")
+
+
+@pytest.mark.parametrize(
+    "value", ["/Workspace/Shared/report:2026", "workspace:/Workspace/Shared/report:2026"]
+)
+def test_scope_parse_rejects_workspace_paths_containing_colons(value):
+    with pytest.raises(AgentCliError, match="Workspace sandbox scopes are not supported"):
+        Scope.parse(value)
 
 
 def test_user_auth_defaults_match_across_cli_and_runtime(tmp_path, monkeypatch):
@@ -252,7 +358,9 @@ def test_agent_project_round_trips_tool_specs_without_losing_comments(tmp_path: 
     path = _write_manifest(tmp_path)
     project = AgentProject.load(tmp_path)
 
-    changed = project.add_tool(ToolSpec.sandbox("sandbox"))
+    changed = project.add_tool(
+        ToolSpec.sandbox("sandbox", scopes=[Scope.volume("main.data.files")])
+    )
     project.write()
 
     assert changed is True
@@ -261,7 +369,10 @@ def test_agent_project_round_trips_tool_specs_without_losing_comments(tmp_path: 
     assert loaded.framework == "langgraph"
     assert loaded.server == "agentbricks"
     assert loaded.tools[0].source.kind == "sandbox"
-    assert loaded.tools[0].policy == ToolPolicy(databricks_access_token_included=True)
+    assert loaded.tools[0].policy.downscope == (
+        Scope(kind="volume", value="main.data.files", permission="read_only"),
+    )
+    assert loaded.tools[0].policy.databricks_access_token_included is True
     assert (
         tomli.loads(path.read_text())["tools"][0]["policy"]["databricks_access_token_included"]
         is True
@@ -280,6 +391,7 @@ server = "agentbricks"
 [[tools]]
 id = "sandbox"
 source = { kind = "sandbox", service = "system.ai.sandbox" }
+policy = { downscope = [{ resource = "volume:main.data.files" }] }
 """,
     )
 
@@ -301,7 +413,7 @@ server = "agentbricks"
 [[tools]]
 id = "sandbox"
 source = {{ kind = "sandbox", service = "system.ai.sandbox" }}
-policy = {{ databricks_access_token_included = {value} }}
+policy = {{ downscope = [{{ resource = "volume:main.data.files" }}], databricks_access_token_included = {value} }}
 """,
     )
 
@@ -389,6 +501,13 @@ def test_genie_specs_reject_unrelated_sources(kind, field):
     values[field] = ""
     with pytest.raises(AgentCliError, match=field):
         ToolSpec("sales", ToolSource(kind=kind, **values))
+
+
+@pytest.mark.parametrize("kind", ["genie_one", "genie_agent"])
+def test_genie_specs_reject_downscope(kind):
+    values = {"space_id": "a" * 32} if kind == "genie_agent" else {}
+    with pytest.raises(AgentCliError, match="downscope"):
+        ToolSpec("sales", ToolSource(kind=kind, **values), ToolPolicy((Scope.volume("c.s.v"),)))
 
 
 @pytest.mark.parametrize("kind", ["genie_one", "mcp", "uc_function", "sandbox"])
@@ -479,6 +598,10 @@ def test_add_conflicting_tool_id_fails_without_writing(tmp_path: pathlib.Path):
     [
         (lambda: ToolSpec.mcp("web", service="not-three-parts"), "MCP service"),
         (lambda: ToolSpec.uc_function("lookup", function="catalog.schema"), "UC function"),
+        (
+            lambda: ToolSpec.sandbox("sandbox", scopes=[Scope(kind="unknown", value="c.s.t")]),
+            "scope kind",
+        ),
     ],
 )
 def test_tool_spec_rejects_invalid_resources(factory, message: str):

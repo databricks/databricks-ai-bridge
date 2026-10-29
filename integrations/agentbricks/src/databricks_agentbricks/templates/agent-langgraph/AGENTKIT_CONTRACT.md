@@ -36,7 +36,7 @@ that make later bindings ineffective.
 ### Tools
 
 Use `databricks_agentkit.langgraph.mcp_tools()` for MCP, UC function, and sandbox bindings, combining
-them with existing servers without duplicates. It adds the protected sandbox `_meta` to every sandbox call. Local Python tools
+them with existing servers without duplicates. It applies sandbox downscoping. Local Python tools
 belong in source; the template discovers `BaseTool` objects through
 [agent/tools/__init__.py](agent/tools/__init__.py).
 

@@ -22,6 +22,9 @@ from databricks_agentbricks.cli.tools import tools as tools_group
 from databricks_agentbricks.projects.agent_project import AgentProject
 from databricks_agentbricks.projects.config import write_project_metadata
 
+# The scoped sandbox path is retained behind a disabled gate; these tests cover it with the gate on.
+pytestmark = pytest.mark.usefixtures("sandbox_downscope_enabled")
+
 TEMPLATES = Path(__file__).parents[2] / "src/databricks_agentbricks/templates"
 FRAMEWORKS = ["openai", "langgraph"]
 
@@ -79,7 +82,10 @@ source = {{ kind = "genie_agent", space_id = "{SPACE_ID}" }}
 id = "sandbox"
 auth = "user"
 source = {{ kind = "sandbox", service = "system.ai.sandbox" }}
-policy = {{ databricks_access_token_included = true }}
+policy = {{ downscope = [
+  {{ resource = "volume:main.data.files", permission = "read_only" }},
+  {{ resource = "volume:main.data.more", permission = "read_write" }},
+] }}
 """
 
 
@@ -174,7 +180,7 @@ def test_connected_lists_every_binding_kind_in_manifest_order(overlay):
             "id": "sandbox",
             "kind": "sandbox",
             "label": "Sandbox",
-            "source": "system.ai.sandbox",
+            "source": "volume:main.data.files, volume:main.data.more",
             "auth": "user",
         },
     ]

@@ -1080,6 +1080,7 @@ Deploy derives Apps user scopes from explicit `auth = "user"` bindings and union
 | `system.ai.dbsql` | `ai-gateway`, `sql` |
 | `system.ai.genie_one_mcp` | `ai-gateway`, `genie` |
 | UC function | `mcp.functions` |
+| Sandbox with a Volume downscope | `ai-gateway`, `files` |
 | First-class Genie One or Genie Agent | `genie` |
 | Sandbox with token injection | `ai-gateway`, `workspace.workspace` |
 | Sandbox with token injection disabled | `ai-gateway` |
@@ -1110,10 +1111,12 @@ API consent, not `sql:restricted-query`; read-only enforcement remains the servi
 requesting user's Unity Catalog grants. DBSQL does not use Databricks Connect.
 
 When a user-auth sandbox has `databricks_access_token_included = true`, it requests the Apps
-`workspace.workspace` user scope so the injected credential can call workspace APIs. OAuth consent
-does not grant data access: sandbox code reaches only the Unity Catalog data the requesting user
-can already access. A sandbox binding with token injection disabled does not request
-`workspace.workspace`. Databricks Apps rejects the legacy bare `workspace` scope, so Agent Bricks requests
+`workspace.workspace` user scope so the injected credential can call workspace APIs. A sandbox
+binding with a Volume downscope additionally requests the Apps `files` user scope.
+OAuth consent does not grant Volume access: the requesting user still needs the corresponding
+Unity Catalog privileges, and the sandbox downscope remains authoritative. A sandbox binding with
+token injection disabled does not request `workspace.workspace`; its other resource-derived scopes
+still apply. Databricks Apps rejects the legacy bare `workspace` scope, so Agent Bricks requests
 `workspace.workspace`. These scopes are requested only for `auth = "user"`; `auth = "app"` uses
 the App service principal's permissions instead.
 
@@ -1204,9 +1207,9 @@ If a manifest with `server = "agentbricks"` contains `source = { kind = "python"
 do not generate or patch Python tool code, and do not alter the manifest's `[[tools]]` bindings.
 
 Sandbox code runs with the selected identity's own Unity Catalog access: the request user for
-`auth = "user"` (the default) or the App service principal for `auth = "app"`. Sandbox bindings
-take no resource scopes, so grant that identity only the data the agent needs. New sandbox bindings
-also expose the selected Databricks credential to sandbox code by default:
+`auth = "user"` (the default) or the App service principal for `auth = "app"`. Grant that identity
+only the data the agent needs. New sandbox bindings also expose the selected Databricks credential to
+sandbox code by default:
 
 ```toml
 [[tools]]
@@ -1217,10 +1220,32 @@ policy = { databricks_access_token_included = true }
 ```
 
 Every sandbox call carries this fixed policy in MCP `_meta`, outside the tool arguments controlled
-by the model, with an empty `downscope`. Earlier versions wrote a `policy.downscope` list for
-`--scope`; the Sandbox API does not support resource policies, so `agentbricks dev`,
-`agentbricks deploy`, and the runtime reject a manifest that still declares `policy.downscope`.
-Remove that key from the tool's `policy` table.
+by the model, with an empty `downscope`.
+
+Sandbox resource scopes are not supported: the Sandbox API backend of `system.ai.sandbox` rejects any
+non-empty `_meta.downscope`. The scoping implementation (`--scope`, `--permission`, and
+`policy.downscope`) is retained behind a disabled code-level gate, `SANDBOX_DOWNSCOPE_ENABLED`, so it
+can be enabled when the backend supports resource policies. There is no CLI option to bypass that
+gate. While it is disabled, `agentbricks tools add sandbox --scope ...` fails without changing the
+project, and `agentbricks dev`, `agentbricks deploy`, and the runtime reject a manifest that still
+declares `policy.downscope`:
+
+```text
+Tool 'sandbox' declares policy.downscope, which system.ai.sandbox does not support: sandbox code
+runs with the selected identity's own Unity Catalog access. Remove policy.downscope from the
+[[tools]] entry with id = 'sandbox' in agent.toml.
+```
+
+To fix an existing project, delete the `downscope = [...]` entry from that tool's `policy` table and
+keep `databricks_access_token_included`. Then grant the sandbox identity access to the data it needs.
+
+When scopes are enabled, table sandbox scopes remain unsupported because Databricks Connect does not
+support table downscoping. Workspace sandbox scopes are also not supported yet; they have not been validated
+against a live workspace. Use a volume instead. Existing `table:` and `workspace:` entries must be
+removed from `agent.toml` before using `agentbricks dev` or `agentbricks deploy`.
+
+The table implementation is retained behind a disabled code-level gate so it can be enabled when
+Databricks Connect supports table downscoping. There is no CLI option to bypass that gate.
 
 With `databricks_access_token_included = true`, the sandbox receives `DATABRICKS_HOST`, a short-lived
 `DATABRICKS_TOKEN`, and `DATABRICKS_AUTH_TYPE`, so code such as
