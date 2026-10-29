@@ -740,9 +740,9 @@ class _AgentBricksApiClient:
         self,
         name: str,
         principal_client_id: str,
-        permission: str = "WRITE",
+        permission: str,
         *,
-        principal_type: str = "SERVICE_PRINCIPAL",
+        principal_type: str,
     ) -> dict:
         """Grant READ/WRITE as the store creator or a workspace admin."""
         validate_permission(permission)
@@ -760,9 +760,9 @@ class _AgentBricksApiClient:
         self,
         name: str,
         principal_client_id: str,
-        permission: str = "WRITE",
+        permission: str,
         *,
-        principal_type: str = "SERVICE_PRINCIPAL",
+        principal_type: str,
     ) -> dict:
         """Grant READ/WRITE as the store creator or a workspace admin."""
         validate_permission(permission)

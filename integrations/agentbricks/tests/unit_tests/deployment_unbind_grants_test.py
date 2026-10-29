@@ -141,7 +141,12 @@ def test_memory_grant_returns_api_error() -> None:
     error = MemoryStoreClient(provider).grant("memory-stores/memory-id", "sp-123")
 
     assert error == "memory grant denied"
-    api.grant_memory_store_permission.assert_called_once_with("memory-stores/memory-id", "sp-123")
+    api.grant_memory_store_permission.assert_called_once_with(
+        "memory-stores/memory-id",
+        "sp-123",
+        permission="WRITE",
+        principal_type="SERVICE_PRINCIPAL",
+    )
 
 
 @pytest.mark.parametrize(

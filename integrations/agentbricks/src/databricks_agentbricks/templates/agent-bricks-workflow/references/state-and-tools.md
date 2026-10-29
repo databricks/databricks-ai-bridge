@@ -28,6 +28,8 @@ permission `get` also supports the existing display-name lookup and rejects ambi
 - `grant STORE` and `revoke STORE` take exactly one `--user` email or `--service-principal`
   application/client ID. A numeric SCIM principal ID is not the application ID.
   Grant requires `--permission READ` or `--permission WRITE`; granting READ preserves existing WRITE.
+  To downgrade WRITE to READ, revoke the principal and then grant READ. This is not atomic: the
+  principal has no access between those two commands.
 - Grant, List, and Revoke require the store creator or a workspace admin; a WRITE grantee cannot
   manage permissions. Revoke removes both READ and WRITE grants, is safe to repeat, and cannot
   revoke ownership. Inherited access is not removed. Use `--yes` only when revocation is intended.

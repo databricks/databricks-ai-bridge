@@ -163,7 +163,10 @@ class MemoryStoreClient:
         """
         try:
             self._api_client_provider.get().grant_memory_store_permission(
-                resource_name, service_principal_id
+                resource_name,
+                service_principal_id,
+                permission="WRITE",
+                principal_type="SERVICE_PRINCIPAL",
             )
         except AgentCliError as exc:
             return exc.hint or str(exc)
@@ -222,7 +225,10 @@ class SessionStoreClient:
         """
         try:
             self._api_client_provider.get().grant_session_store_permission(
-                store_name, service_principal_id
+                store_name,
+                service_principal_id,
+                permission="WRITE",
+                principal_type="SERVICE_PRINCIPAL",
             )
         except AgentCliError as exc:
             return exc.hint or str(exc)
