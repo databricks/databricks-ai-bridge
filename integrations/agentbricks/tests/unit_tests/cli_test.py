@@ -43,6 +43,7 @@ def test_root_registers_supported_commands():
         "endpoint",
         "tools",
     } <= names
+    assert "eval" not in names
     assert "mcp" not in names
     assert "pipeline" not in names
     assert "durability" not in names

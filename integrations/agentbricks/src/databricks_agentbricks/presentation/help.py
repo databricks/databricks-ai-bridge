@@ -554,6 +554,14 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
             "invoke a local or arbitrary HTTP server",
         ),
     ),
+    ("endpoint", "loadtest"): (
+        (
+            "agentbricks endpoint loadtest agent-bricks-my-agent --path /api/invocations "
+            "--requests requests.json --concurrency 5 --max-duration 60 --max-requests 200 "
+            "--report-dir results/loadtest --save-responses responses.json",
+            "load test with Locust and optionally save all successful responses",
+        ),
+    ),
     ("tools",): (
         ("agentbricks tools add --help", "see all tool types you can add"),
         ("agentbricks tools add sandbox", "add a sandbox tool"),

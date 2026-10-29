@@ -68,7 +68,7 @@ These options apply to every command. Pass them before the command name, for exa
 | [`tracing`](#agentbricks-tracing) | Set up and inspect agent tracing |
 | [`deploy`](#agentbricks-deploy) | Deploy an agent to Databricks Apps |
 | [`deployments`](#agentbricks-deployments) | Manage deployed agents |
-| [`endpoint`](#agentbricks-endpoint) | Invoke arbitrary HTTP endpoints. |
+| [`endpoint`](#agentbricks-endpoint) | Invoke or load test HTTP endpoints |
 | [`tools`](#agentbricks-tools) | Manage an agent's tools |
 | [`experimental`](#agentbricks-experimental) | Commands whose interface is still being designed: `experimental models`, `experimental prompts` |
 
@@ -1832,11 +1832,12 @@ _Options_
 
 ### `agentbricks endpoint`
 
-Invoke arbitrary HTTP endpoints.
+Invoke or load test Databricks Apps and arbitrary HTTP endpoints.
 
 | Subcommand | Description |
 | --- | --- |
 | [`endpoint invoke`](#agentbricks-endpoint-invoke) | Send one HTTP request to a Databricks App or arbitrary URL. |
+| [`endpoint loadtest`](#agentbricks-endpoint-loadtest) | Repeat HTTP requests with Locust and report performance. |
 
 #### `agentbricks endpoint invoke`
 
@@ -1863,9 +1864,85 @@ _Options_
 | `--query <QUERY>` | string | - | no | Query parameter as 'name=value'. |
 | `--json <JSON_VALUE>` | string | - | no | Complete JSON request body. |
 | `--sse` | flag | - | no | Consume the response as Server-Sent Events. |
-| `--routing-key <ROUTING_KEY>` | string | - | no | Sticky-routing key; set it to your stable session id to keep a session on one app replica. Sent verbatim as the X-Routing-Key header (default: generated for a Databricks App). Routing only: while session_id is a natural routing key, it is recommended to pass the session id in the --json body for session continuity. |
+| `--routing-key <ROUTING_KEY>` | string | - | no | Sticky-routing key; set it to your stable session id to keep a session on one app replica. Sent verbatim as the X-Routing-Key header (default: generated for a Databricks App). Routing only: for session continuity, also include the session id in the request body. |
 | `--timeout <TIMEOUT>` | float range | `300.0` | no | - |
 | `--auth`, `--no-auth` | flag | - | no | Inject Databricks OAuth authentication. |
+
+#### `agentbricks endpoint loadtest`
+
+Repeat HTTP requests with Locust and report performance. Requires
+`pip install 'databricks-agentbricks[loadtest]'`. The load generator runs on the machine executing
+the command; the target can be a deployed Databricks App, localhost, or another HTTP server.
+Each measured request is one HTTP exchange through complete body or SSE consumption. A `202`
+measures submission only; it does not follow background event or status URLs.
+
+```
+agentbricks endpoint loadtest [APP] --path PATH [options]
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `APP` | no | Databricks App name; use `--url` for an arbitrary server. |
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--url <URL>` | string | - | no | Base URL for localhost or an arbitrary HTTP server. |
+| `--method <METHOD>` | string | `POST` | no | HTTP method. |
+| `--path <PATH>` | string | - | yes | Request path, such as /api/invocations. |
+| `--query <QUERY>` | string | - | no | Query parameter as 'name=value'; repeat for more. |
+| `--sse` | flag | - | no | Consume responses as Server-Sent Events. |
+| `--routing-key <ROUTING_KEY>` | string | - | no | Sticky-routing key sent as X-Routing-Key. By default, each App user gets a key matching its generated user identity. Include session_id in the request body for session continuity. |
+| `--timeout <TIMEOUT>` | float range | `300.0` | no | Maximum request duration and drain time in seconds. |
+| `--auth`, `--no-auth` | flag | - | no | Inject Databricks OAuth authentication. |
+| `--concurrency <CONCURRENCY>` | integer range | `1` | no | Concurrent simulated users. Each starts another request when its previous request finishes. |
+| `--max-duration <DURATION>` | integer range | `60` | no | Stop dispatch after this many seconds, or earlier if `--max-requests` is reached. |
+| `--max-requests <MAX_REQUESTS>` | integer range | - | no | Cap measured requests, excluding warm-up; dispatch stops at this cap or duration, whichever comes first. |
+| `--requests <REQUESTS_FILE>` | file path | - | no | Nonempty JSON array of complete request bodies, cycled in order. Omit for bodyless requests; an array containing null sends JSON null. A one-element array repeats one body. |
+| `--warmup`, `--no-warmup` | flag | `true` | no | Send one excluded real warm-up request before measurement. Disable to include any cold-start latency and avoid the extra request. |
+| `--report-dir <REPORT_DIR>` | path | - | no | Write all HTML, CSV, and JSON formats together in a new or empty directory. |
+| `--save-responses <FILE>` | file path | - | no | Export all successful measured request inputs, outputs, and returned trace IDs to a new private JSON file outside the report directory. Parent directory must exist. |
+
+`--requests` is the only load-test body input. `endpoint invoke` retains `--json` for one request.
+
+The optional warm-up uses the first body, makes a real call, may warm the endpoint or mutate state,
+and can incur model/tool costs. Its latency, including cold-start latency, is excluded from measured
+statistics, caps, and response exports. A failed warm-up stops the test. `--no-warmup` measures every
+request, including any cold start. Reports record the excluded warm-up count separately.
+Duration and request cap have equal priority: reaching either stops dispatch, then in-flight requests
+drain for up to `--timeout` seconds. Ctrl-C drains and preserves a partial report.
+
+`{{request_id}}` expands to a fresh UUID per request; `{{user_id}}` stays stable per simulated user.
+Warm-up has its own user identity. `{{uuid}}` is an alias for the current request UUID. For durable
+agents, use request_id as the invocation idempotency key and user_id as the session ID: reusing a
+fixed invocation ID can replay cached results. App routing defaults to the same per-user identity.
+
+With `--output json` before `endpoint`, stdout is the Agent Bricks summary object, identical to
+`summary.json`. Progress stays on stderr. The summary includes
+successful-only latency, all-completed latency, TTFT/usage coverage, and incomplete counts.
+Runtime usage sums distinct model messages, updating rather than recounting repeated message IDs.
+Chat Completions and Responses usage snapshots replace earlier totals.
+`--report-dir` writes `index.html`, `locust.html`, `locust_*.csv`, and `summary.json` together;
+there is no format selector. Reports contain metrics and the target host without raw request/answer
+content. These bounded results do not establish sustainable capacity or answer quality.
+
+`--save-responses` exports every successful measured response, without sampling. The separate mode
+0600 file may contain sensitive inputs and answers; keep it out of shared report bundles. Disk usage
+grows with the load, while results are streamed rather than retained in memory. Its schema is
+`{"schema_version":1,"case_count":N,"observations":[{"case_index":0,"inputs":{},"outputs":"...","trace_id":null}]}`.
+`case_index` is zero-based. Failed/incomplete requests and warm-up are excluded. Explicit trace IDs
+are saved when returned by the server; load testing does not enable tracing, retrieve traces, or run
+MLflow evaluation. Use native MLflow tooling for subsequent analysis.
+
+```sh
+agentbricks --profile <profile> --output json endpoint loadtest agent-bricks-my-agent \
+  --path /api/invocations --requests requests.json --sse \
+  --concurrency 5 --max-duration 60 --max-requests 200 --report-dir results/loadtest \
+  --save-responses responses.json
+```
 
 ### `agentbricks tools`
 

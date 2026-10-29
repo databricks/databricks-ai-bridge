@@ -881,6 +881,9 @@ agentbricks [-p <profile>] [-o text|json]
     list | get | logs | start | stop | delete
   endpoint
     invoke      [APP] --path PATH [--url URL] [--json JSON] [--sse]
+    loadtest    [APP] --path PATH [--url URL] [--requests FILE] [--sse]
+                [--concurrency N] [--max-duration SECONDS] [--max-requests N] [--no-warmup]
+                [--report-dir PATH] [--save-responses FILE]
 ```
 
 ## Bring an existing agent
@@ -980,6 +983,96 @@ and it is sent verbatim in the `X-Routing-Key` request header. It is routing onl
 as the session id - put the session id at the top level of the `--json` body for session continuity. This
 also works with a direct App URL and with the generated runtime on localhost. OAuth and session headers are managed by
 the runtime; arbitrary custom request headers are intentionally not exposed by this command.
+
+## Load test HTTP endpoints
+
+`agentbricks endpoint loadtest` repeats HTTP requests with Locust. The load generator runs on the
+machine where you execute the command; the target can be a deployed Databricks App, localhost, or
+another HTTP server. Each measured request is one HTTP exchange, including the complete response
+body or SSE stream. A `202 Accepted` response measures submission, not eventual background work.
+
+Install the optional dependency and create a JSON array of complete request bodies. A one-element
+array repeats one body; multiple bodies cycle in order. Omit `--requests` for a bodyless request.
+`endpoint invoke` retains `--json` for a single request; load testing uses only `--requests`.
+
+```sh
+pip install 'databricks-agentbricks[loadtest]'
+cat > requests.json <<'JSON'
+[
+  {
+    "id": "{{request_id}}",
+    "session_id": "{{user_id}}",
+    "input": [{"role": "user", "content": "Hello"}],
+    "stream": true
+  }
+]
+JSON
+agentbricks --profile <profile> endpoint loadtest agent-bricks-my-agent \
+  --path /api/invocations --requests requests.json --sse \
+  --concurrency 5 --max-duration 60 --max-requests 200 --report-dir results/loadtest
+```
+
+`--concurrency` sets simultaneous users (default: 1). Each sends another request after its previous
+request finishes. `--max-duration` is in seconds (default: 60); `--max-requests` optionally caps measured
+requests. Whichever limit is reached first stops dispatch, then in-flight requests drain for up to
+`--timeout` seconds. Ctrl-C also drains and preserves a partial report. Failed or incomplete
+requests make the command exit nonzero; cancellation exits 130 or 143 for SIGINT or SIGTERM.
+
+By default, one real **warm-up** request runs before measurement using the first body. It can incur
+model/tool costs, mutate state, and warm the endpoint. Its request and latency, including cold-start
+latency, are excluded from the cap, report counts, and timings. A failed warm-up stops the test.
+Use `--no-warmup` to send only measured requests, including any cold-start latency. Reports state
+whether the excluded warm-up ran. Set a suitable `--timeout` for the complete response.
+
+Request bodies support two identity lifetimes:
+
+| Placeholder | Lifetime | Example use |
+| --- | --- | --- |
+| `{{request_id}}` | Fresh UUID per request, including the excluded warm-up | Agent invocation/idempotency ID |
+| `{{user_id}}` | Stable UUID per simulated user; warm-up uses its own identity | Agent session ID |
+| `{{uuid}}` | Alias of the current `{{request_id}}` | Existing request datasets |
+
+Durable agents need a fresh invocation `id` for every request; a fixed ID can replay cached output.
+Use `{{request_id}}` for `id` and `{{user_id}}` for a session that should persist across one user's
+requests. By default, each App user's `X-Routing-Key` matches its generated user identity; an explicit
+`--routing-key` pins all users to that routing key. Routing and session contents are separate: include
+`session_id` in the body when the server requires it. Tests run closed-loop, without a think-time pause.
+
+The final summary includes counts, throughput including drain, successful-only and all-completed
+latency percentiles, answer-text TTFT, token usage, coverage, incomplete attempts, and generator CPU
+warnings. With `--output json` before `endpoint`, stdout contains one Agent Bricks summary object;
+progress stays on stderr. This is the same object saved as `summary.json`.
+Locust's rounded histogram buckets are used for percentiles; all-completed timings include failures.
+These bounded tests measure the selected workload and do not establish sustainable capacity or answer quality.
+
+`--report-dir` writes **all HTML, CSV, and JSON formats together**: `index.html`, native `locust.html`
+charts, `locust_*.csv` statistics/history/errors, and `summary.json`. There is no format selector.
+Use a new or empty directory. Reports contain metrics and the target host, without raw request or
+answer content or credentials. Review the target host before sharing a report.
+
+For SSE responses, latency includes stream completion. Answer-text TTFT recognizes supported
+DurableAgentServer, OpenAI Chat Completions, and Responses SSE events, ignoring metadata and tool
+events. Missing text/token usage is unknown, with coverage reported; token counts are never inferred.
+Runtime model-message usage is summed across distinct messages; repeated message IDs update that
+message's total. Chat Completions and Responses usage snapshots replace earlier totals.
+Recognized error events and truncated supported streams fail the request. This command does not
+perform background polling, reconnect, or stream replay.
+
+To save responses, add `--save-responses responses.json`. This exports **every successful measured
+request**, without sampling; it excludes warm-up, failed requests, and incomplete responses.
+The new file has mode 0600 and must be outside `--report-dir`, in an existing parent directory.
+It contains raw request inputs, outputs, and explicit trace IDs returned by an already instrumented
+agent (`X-MLflow-Trace-ID` or top-level `trace_id`). Keep it private and out of shared report bundles.
+The export is streamed to disk rather than retaining all results in memory; size grows with the load.
+
+```json
+{"schema_version":1,"case_count":1,"observations":[{"case_index":0,"inputs":{},"outputs":"...","trace_id":null}]}
+```
+
+`case_index` is zero-based. Supported SSE outputs contain accumulated answer text; JSON outputs use
+its `output` value when present, otherwise the response body. Bodyless inputs are `null`.
+Use native MLflow APIs separately for evaluation; load testing does not run scorers, fetch traces,
+or enable server tracing.
 
 ## Command help
 
