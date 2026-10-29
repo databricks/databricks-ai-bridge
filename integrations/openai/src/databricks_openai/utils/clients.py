@@ -151,6 +151,20 @@ def _get_authorized_async_http_client(
     return AsyncClient(auth=databricks_token_auth, follow_redirects=follow_redirects)
 
 
+def _get_app_client_options(parent: OpenAI | AsyncOpenAI) -> dict[str, Any]:
+    """Client options to carry over from the parent client to per-app clients.
+
+    Keeps user-provided ``timeout``, ``max_retries``, ``default_headers`` and
+    ``default_query`` in effect for requests routed via ``apps/``.
+    """
+    return {
+        "timeout": parent.timeout,
+        "max_retries": parent.max_retries,
+        "default_headers": parent._custom_headers,
+        "default_query": parent._custom_query,
+    }
+
+
 def _validate_oauth_for_apps(workspace_client: WorkspaceClient) -> None:
     """Validate that workspace_client uses OAuth (required for Apps)."""
     try:
@@ -301,7 +315,10 @@ class DatabricksResponses(Responses):
             self._app_clients_cache[app_name] = OpenAI(
                 base_url=app_url,
                 api_key=_get_openai_api_key(),
-                http_client=_get_authorized_http_client(self._workspace_client),
+                http_client=_get_authorized_http_client(
+                    self._workspace_client, self._client._client.follow_redirects
+                ),
+                **_get_app_client_options(self._client),
             )
         return self._app_clients_cache[app_name]
 
@@ -469,7 +486,10 @@ class AsyncDatabricksResponses(AsyncResponses):
             self._app_clients_cache[app_name] = AsyncOpenAI(
                 base_url=app_url,
                 api_key=_get_openai_api_key(),
-                http_client=_get_authorized_async_http_client(self._workspace_client),
+                http_client=_get_authorized_async_http_client(
+                    self._workspace_client, self._client._client.follow_redirects
+                ),
+                **_get_app_client_options(self._client),
             )
         return self._app_clients_cache[app_name]
 
