@@ -631,6 +631,34 @@ class AppsClient:
         data = self._get_json(name)
         return (_field(data, "url") or None) if data else None
 
+    def app_url(self, name: str) -> str:
+        """The app's URL for a request to it; raises saying why when there is none.
+
+        Unlike :meth:`get_app_url`, a failed `apps get` never reads as a missing URL: a missing app
+        names the profile it was looked up with (the usual cause is the wrong workspace), and any
+        other failure carries the CLI's own message (see :meth:`find`).
+        """
+        data = self.find(name)
+        if data is None:
+            where = (
+                f"profile '{self._profile}'"
+                if self._profile
+                else "the Databricks SDK's default authentication"
+            )
+            raise AgentCliError(
+                f"No Databricks App named '{name}' in the workspace for {where}.",
+                hint="If it's deployed to another workspace, pass that workspace's profile with "
+                "`agentbricks -p <profile> ...`. `agentbricks deployments list` shows the deployments "
+                "in this one.",
+            )
+        url = _field(data, "url")
+        if not url:
+            raise AgentCliError(
+                f"Databricks App '{name}' has no URL yet.",
+                hint=f"It may still be starting; check `agentbricks deployments get {name}`.",
+            )
+        return url
+
     def get_compute_state(self, name: str) -> Optional[str]:
         """The app's compute state (e.g. RUNNING), or None if it can't be read."""
         data = self._get_json(name)

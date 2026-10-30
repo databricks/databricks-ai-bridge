@@ -31,7 +31,7 @@ class _Ctx:
 
 def _service():
     apps, auth, transport = Mock(), Mock(), Mock()
-    apps.get_app_url.return_value = "https://app.example"
+    apps.app_url.return_value = "https://app.example"
     auth.authorization_header.return_value = "Bearer test-token"
     return EndpointService(apps_client=apps, authenticator=auth, transport=transport), apps, auth
 
@@ -105,7 +105,7 @@ def test_loadtest_resolves_shared_target_auth_and_one_body_source(monkeypatch, r
     )
     plan = _plan(target=target, bodies=("null", '{"prompt":"second"}'))
     service.loadtest(plan)
-    apps.get_app_url.assert_called_once_with("agent-bricks-my-agent")
+    apps.app_url.assert_called_once_with("agent-bricks-my-agent")
     auth.authorization_header.assert_called_once_with()
     request = run.call_args.args[0]
     assert request.url == "https://app.example/events?mode=fast"
@@ -227,7 +227,7 @@ def test_service_rejects_nonpositive_plan_limits_before_workspace_access(field, 
     service, apps, auth = _service()
     with pytest.raises(AgentCliError, match="must be positive"):
         service.loadtest(_plan(target=EndpointTarget(app="demo", path="/run"), **{field: value}))
-    apps.get_app_url.assert_not_called()
+    apps.app_url.assert_not_called()
     auth.authorization_header.assert_not_called()
 
 
@@ -250,7 +250,7 @@ def test_missing_locust_fails_before_app_lookup_or_oauth(monkeypatch):
     with pytest.raises(AgentCliError) as error:
         service.loadtest(_plan(target=EndpointTarget(app="demo", path="/run")))
     assert "databricks-agentbricks[loadtest]" in (error.value.hint or "")
-    apps.get_app_url.assert_not_called()
+    apps.app_url.assert_not_called()
     auth.authorization_header.assert_not_called()
 
 
@@ -267,7 +267,7 @@ def test_bad_target_fails_before_app_lookup_or_oauth(target):
     service, apps, auth = _service()
     with pytest.raises(AgentCliError):
         service.loadtest(_plan(target=target))
-    apps.get_app_url.assert_not_called()
+    apps.app_url.assert_not_called()
     auth.authorization_header.assert_not_called()
 
 
@@ -294,7 +294,7 @@ def test_bad_export_or_report_fails_before_app_lookup_or_oauth(tmp_path, failure
                 responses_file=responses,
             )
         )
-    apps.get_app_url.assert_not_called()
+    apps.app_url.assert_not_called()
     auth.authorization_header.assert_not_called()
 
 
