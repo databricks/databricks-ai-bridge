@@ -111,6 +111,7 @@ def dev(
                     plan.preview.server,
                     local_trace_label(plan.preview),
                     has_chat_ui=plan.preview.has_chat_ui,
+                    deployment_name=plan.preview.deployment_name,
                 ),
             )
         except AgentCliError:
