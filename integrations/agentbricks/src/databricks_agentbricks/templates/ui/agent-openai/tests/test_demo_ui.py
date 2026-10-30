@@ -247,6 +247,99 @@ def test_demo_ui_routes(monkeypatch):
     assert client.post("/api/demo/sessions", json={"session_id": "ignored"}).status_code == 503
 
 
+def _declare_stores(monkeypatch, tmp_path, manifest):
+    """Point the runtime at a project whose agent.toml is ``manifest`` (None = no agent.toml)."""
+    if manifest is not None:
+        (tmp_path / "agent.toml").write_text(manifest)
+    monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
+    if manifest is None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("AGENTBRICKS_PROJECT_ROOT")
+
+
+_DECLARED = (
+    'schema_version = 1\n[memory_store]\nname = "my-memory"\n[session_store]\nname = "my-sessions"\n'
+)
+
+
+def test_demo_config_reports_declared_stores_without_connecting_them(monkeypatch, tmp_path):
+    _declare_stores(monkeypatch, tmp_path, _DECLARED)
+    config = _client(monkeypatch).get("/api/ui/config").json()
+
+    # `agentbricks dev` leaves the env unset: declared, but not connected.
+    assert config["memory"]["declared"] == "my-memory"
+    assert config["memory"]["enabled"] is False
+    assert config["memory"]["store"] is None
+    assert config["session"]["declared"] == "my-sessions"
+    assert config["session"]["managed"] is False
+    assert config["session"]["mode"] != "Managed Session Store"
+
+
+def test_demo_config_declared_is_independent_of_the_connected_store(monkeypatch, tmp_path):
+    _declare_stores(monkeypatch, tmp_path, _DECLARED)
+    config = _client(monkeypatch, configured=True).get("/api/ui/config").json()
+
+    assert config["memory"]["enabled"] is True
+    assert config["memory"]["declared"] == "my-memory"
+    assert config["session"]["managed"] is True
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        None,
+        "schema_version = 1\n",
+        "schema_version = 1\n[memory_store]\nid = 'abc'\n",
+        "schema_version = 1\nmemory_store = 3\nsession_store = 'x'\n",
+        "schema_version = 1\n[memory_store]\nname = ''\n[session_store]\nname = 7\n",
+        "this is = = not toml",
+    ],
+)
+def test_demo_config_declared_is_null_when_nothing_usable_is_declared(
+    monkeypatch, tmp_path, manifest
+):
+    _declare_stores(monkeypatch, tmp_path, manifest)
+    response = _client(monkeypatch).get("/api/ui/config")
+
+    assert response.status_code == 200
+    config = response.json()
+    assert config["memory"]["declared"] is None
+    assert config["session"]["declared"] is None
+
+
+def test_store_503_names_the_declared_store_instead_of_a_bind_command(monkeypatch, tmp_path):
+    _declare_stores(monkeypatch, tmp_path, _DECLARED)
+    client = _client(monkeypatch)
+
+    memory = client.post("/api/demo/memory/search", json={"query": "profile"})
+    sessions = client.post("/api/demo/sessions", json={"session_id": "ignored"})
+    assert (memory.status_code, sessions.status_code) == (503, 503)
+    for response, kind, name, env in (
+        (memory, "memory", "my-memory", "AGENT_MEMORY_STORE"),
+        (sessions, "session", "my-sessions", "AGENT_SESSION_STORE"),
+    ):
+        detail = response.json()["detail"]
+        assert f"'{name}' is declared in agent.toml but not connected" in detail
+        assert "agentbricks dev" in detail and "agentbricks deploy" in detail
+        assert env in detail
+        assert "bind" not in detail
+
+
+def test_store_503_keeps_the_bind_command_when_nothing_is_declared(monkeypatch, tmp_path):
+    _declare_stores(monkeypatch, tmp_path, "schema_version = 1\n")
+    client = _client(monkeypatch)
+
+    memory = client.post("/api/demo/memory/search", json={"query": "profile"})
+    sessions = client.post("/api/demo/sessions", json={"session_id": "ignored"})
+    assert memory.status_code == sessions.status_code == 503
+    assert memory.json()["detail"] == (
+        "No memory store configured. Run `agentbricks memory bind <store>`."
+    )
+    assert sessions.json()["detail"] == (
+        "No session store configured. Run `agentbricks sessions bind <store>`."
+    )
+
+
 @pytest.mark.parametrize(
     ("local", "endpoint", "schema", "persistent"),
     [
@@ -465,6 +558,7 @@ def test_managed_memory_and_session_routes(monkeypatch):
     assert config["memory"] == {
         "enabled": True,
         "store": "memory-stores/store",
+        "declared": None,
         "actor": "alice",
     }
     assert config["session"]["store"] == "sessions"

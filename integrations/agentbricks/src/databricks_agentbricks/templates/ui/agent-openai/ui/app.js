@@ -816,7 +816,10 @@ function renderMemoryCards(entries, query) {
 
 async function loadMemory() {
   if (!state.config?.memory.enabled) {
-    memoryMessage("Connect a Memory Store to browse entries: agentbricks memory bind <store-name>");
+    const connection = memoryConnection(state.config);
+    memoryMessage(
+      connection.detail || "Connect a Memory Store to browse entries: agentbricks memory bind <store-name>",
+    );
     return;
   }
   const query = memoryState.query.trim();
@@ -1417,6 +1420,51 @@ async function loadModels() {
   renderModels(await jsonResponse(response));
 }
 
+// ---- Store connection state ------------------------------------------------
+// `agentbricks dev` strips AGENT_MEMORY_STORE / AGENT_SESSION_STORE, so a store that agent.toml
+// declares (for example after `agentbricks memory bind`) is not connected locally until deploy.
+// `info` is config.memory / config.session: `enabled`/`managed` means connected, `declared` is the
+// store name agent.toml declares (or null).
+const DEV_STORES_NOTE = "Memory and session stores are off by default in `agentbricks dev`.";
+
+function storeConnection(kind, info, deployed, bindCommand, envVar) {
+  if (info.enabled || info.managed) return { phase: "connected", detail: null, command: null };
+  const declared = info.declared;
+  if (!declared) return { phase: "unbound", detail: null, command: bindCommand };
+  if (deployed) {
+    return {
+      phase: "redeploy",
+      detail: `The ${kind} store "${declared}" is declared in agent.toml but this deployment is not connected to it. Redeploy to connect it.`,
+      command: "agentbricks deploy",
+    };
+  }
+  return {
+    phase: "on-deploy",
+    detail: `${DEV_STORES_NOTE} The ${kind} store "${declared}" declared in agent.toml connects after \`agentbricks deploy\`; to use it locally, set ${envVar} in .env.`,
+    command: null,
+  };
+}
+
+function memoryConnection(config) {
+  return storeConnection("memory", config.memory, Boolean(config.deployed), "agentbricks memory bind <store-name>", "AGENT_MEMORY_STORE");
+}
+
+function sessionConnection(config) {
+  return storeConnection("session", config.session, Boolean(config.deployed), "agentbricks sessions bind <store-name>", "AGENT_SESSION_STORE");
+}
+
+// The Memory orb: connected, "degraded" while a declared store waits for deploy, else off.
+function memoryCapabilityState(connection) {
+  if (connection.phase === "connected") return true;
+  return connection.phase === "on-deploy" ? "degraded" : false;
+}
+
+// The Memory card's one-line label.
+function memoryModeLabel(config, connection) {
+  if (connection.phase === "connected") return `Connected · actor ${config.memory.actor}`;
+  return connection.phase === "on-deploy" ? "Connects on deploy" : "Not connected";
+}
+
 async function loadConfig() {
   try {
     const response = await fetch(demoUrl("/api/ui/config"), { cache: "no-store" });
@@ -1427,22 +1475,28 @@ async function loadConfig() {
     void loadModels().catch((error) => addEvent("models.error", { message: String(error) }));
     setViewer(config.viewer);
     elements.sessionMode.textContent = config.session.mode;
-    elements.memoryMode.textContent = config.memory.enabled ? `Managed · actor ${config.memory.actor}` : "Not connected";
+    const sessionConnectionState = sessionConnection(config);
+    const memoryConnectionState = memoryConnection(config);
+    elements.memoryMode.textContent = memoryModeLabel(config, memoryConnectionState);
+    if (memoryConnectionState.detail) elements.memoryMode.setAttribute("title", memoryConnectionState.detail);
+    else elements.memoryMode.removeAttribute("title");
     setCapability(
       elements.sessionStatus,
       config.session.managed ? true : config.session.history ? "degraded" : false,
       config.session.managed
         ? `Connected to Session Store "${config.session.store}" for actor ${config.session.actor}. State is durable and shareable.`
-        : "Session state is kept in process and resets when the app restarts.",
-      config.session.managed ? null : "agentbricks sessions bind <store-name>",
+        : ["Session state is kept in process and resets when the app restarts.", sessionConnectionState.detail]
+            .filter(Boolean)
+            .join(" "),
+      sessionConnectionState.command,
     );
     setCapability(
       elements.memoryStatus,
-      config.memory.enabled,
+      memoryCapabilityState(memoryConnectionState),
       config.memory.enabled
         ? `Connected to ${config.memory.store} for actor ${config.memory.actor}.`
-        : "No long-term memory is connected.",
-      config.memory.enabled ? null : "agentbricks memory bind <store-name>",
+        : ["No long-term memory is connected.", memoryConnectionState.detail].filter(Boolean).join(" "),
+      memoryConnectionState.command,
     );
     elements.tracingMode.textContent = config.tracing?.enabled ? "Connected" : "Not configured";
     setCapability(
