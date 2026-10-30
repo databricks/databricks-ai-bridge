@@ -482,6 +482,9 @@ class ChatDatabricks(BaseChatModel):
         else:
             # Chat completions API expects "messages" parameter
             data["messages"] = [_convert_message_to_dict(msg) for msg in messages]
+            if _is_claude_model(self.model):
+                for message_dict in data["messages"]:
+                    _to_gateway_content_blocks(message_dict)
 
             if self.temperature is not None:
                 data["temperature"] = self.temperature
@@ -717,6 +720,8 @@ class ChatDatabricks(BaseChatModel):
         generations = []
         for choice in response.choices:
             message_dict = choice.message.model_dump(exclude_unset=True)
+            if _is_claude_model(self.model):
+                _from_thinking_blocks(message_dict)
             # Ensure content is not None
             if message_dict.get("content") is None:
                 message_dict["content"] = ""
@@ -727,7 +732,11 @@ class ChatDatabricks(BaseChatModel):
 
             generations.append(
                 ChatGeneration(
-                    message=_convert_dict_to_message(message_dict, response.usage),
+                    message=_convert_dict_to_message(
+                        message_dict,
+                        response.usage,
+                        keep_content_blocks=_is_claude_model(self.model),
+                    ),
                     generation_info=generation_info,
                 )
             )
@@ -905,6 +914,7 @@ class ChatDatabricks(BaseChatModel):
                 usage_chunk_emitted = True
         else:
             first_chunk_role = None
+            content_blocks = _StreamContentBlocks() if _is_claude_model(self.model) else None
             stream: Stream[ChatCompletionChunk] = self.client.chat.completions.create(**data)
             for chunk in stream:
                 # Handle ChatAgent chunks that don't have choices but have delta
@@ -939,8 +949,13 @@ class ChatDatabricks(BaseChatModel):
                         final_usage = usage  # store for usage chunk at end
                     # Use model_dump instead of manual dict reconstruction
                     chunk_delta_dict = chunk_delta.model_dump(exclude_unset=True)
+                    if content_blocks is not None:
+                        _from_thinking_blocks(chunk_delta_dict)
                     chunk_message = _convert_dict_to_message_chunk(
-                        chunk_delta_dict, first_chunk_role, usage=usage
+                        chunk_delta_dict,
+                        first_chunk_role,
+                        usage=usage,
+                        content_blocks=content_blocks,
                     )
                     generation_info = {}
                     if choice.finish_reason:
@@ -1013,6 +1028,7 @@ class ChatDatabricks(BaseChatModel):
                 usage_chunk_emitted = True
         else:
             first_chunk_role = None
+            content_blocks = _StreamContentBlocks() if _is_claude_model(self.model) else None
             stream = cast(
                 AsyncStream[ChatCompletionChunk],
                 await self.async_client.chat.completions.create(**data),
@@ -1050,8 +1066,13 @@ class ChatDatabricks(BaseChatModel):
                         final_usage = usage  # store for usage chunk at end
                     # Use model_dump instead of manual dict reconstruction
                     chunk_delta_dict = chunk_delta.model_dump(exclude_unset=True)
+                    if content_blocks is not None:
+                        _from_thinking_blocks(chunk_delta_dict)
                     chunk_message = _convert_dict_to_message_chunk(
-                        chunk_delta_dict, first_chunk_role, usage=usage
+                        chunk_delta_dict,
+                        first_chunk_role,
+                        usage=usage,
+                        content_blocks=content_blocks,
                     )
                     generation_info = {}
                     if choice.finish_reason:
@@ -1616,12 +1637,129 @@ def _get_tool_calls_from_ai_message(message: AIMessage) -> List[Dict]:
     ]
 
 
+def _is_claude_model(model: str | None) -> bool:
+    """Returns True if the model is a Claude variant."""
+    if not model:
+        return False
+    return "claude" in model.lower()
+
+
+def _from_thinking_blocks(message_dict: dict) -> None:
+    """Rebuild the AI Gateway's reasoning content parts from ``thinking_blocks``.
+
+    ``DatabricksOpenAI`` moves Claude reasoning out of ``content`` into Anthropic-style
+    ``thinking_blocks``. Put it back as content blocks so the signature reaches the next turn.
+    """
+    thinking_blocks = message_dict.pop("thinking_blocks", None)
+    if not thinking_blocks:
+        return
+    content: list[Any] = []
+    for block in thinking_blocks:
+        if not isinstance(block, dict) or block.get("type") != "thinking":
+            continue
+        summary: dict[str, Any] = {"type": "summary_text", "text": block.get("thinking") or ""}
+        if block.get("signature"):
+            summary["signature"] = block["signature"]
+        content.append({"type": "reasoning", "summary": [summary]})
+    text = message_dict.get("content")
+    if isinstance(text, str) and text:
+        content.append({"type": "text", "text": text})
+    elif isinstance(text, list):
+        content.extend(text)
+    message_dict["content"] = content
+
+
+def _to_gateway_content_blocks(message_dict: dict) -> None:
+    """Restore an assistant message's content blocks to the shape the AI Gateway returned.
+
+    Streamed Claude blocks carry LangChain merge ``index`` keys, and chunk merging can leave plain
+    strings in the list. The gateway accepts neither, so drop both before replaying the turn.
+    """
+    content = message_dict.get("content")
+    if message_dict.get("role") != "assistant" or not isinstance(content, list):
+        return
+    blocks = []
+    for block in content:
+        if isinstance(block, str):
+            if block:
+                blocks.append({"type": "text", "text": block})
+            continue
+        if isinstance(block, dict) and block.get("type") in ("text", "reasoning"):
+            block = {k: v for k, v in block.items() if k != "index"}
+            if isinstance(block.get("summary"), list):
+                block["summary"] = [
+                    {k: v for k, v in part.items() if k != "index"}
+                    if isinstance(part, dict)
+                    else part
+                    for part in block["summary"]
+                ]
+        blocks.append(block)
+    message_dict["content"] = blocks
+
+
+class _StreamContentBlocks:
+    """Turn a Claude stream's list content deltas into LangChain content blocks.
+
+    Claude 5.x streams reasoning as ``reasoning`` parts, each closed by a ``signature``, followed by
+    the answer text. Giving each block a stable ``index`` lets ``AIMessageChunk`` merging rebuild one
+    reasoning block per signature and one text block, instead of concatenated fragments. Streams with
+    only string content (Claude 4.x) pass through unchanged.
+    """
+
+    def __init__(self) -> None:
+        self._next_index = 0
+        self._open: tuple[str, int] | None = None
+        self._has_blocks = False
+
+    def _index(self, block_type: str) -> int:
+        if self._open is None or self._open[0] != block_type:
+            self._open = (block_type, self._next_index)
+            self._next_index += 1
+        return self._open[1]
+
+    def convert(self, content: Any) -> str | list:
+        if isinstance(content, str) or content is None:
+            if not content or not self._has_blocks:
+                return content or ""
+            return [{"type": "text", "text": content, "index": self._index("text")}]
+        if not isinstance(content, list):
+            return json.dumps(content)
+        self._has_blocks = True
+        blocks: list = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                blocks.append(
+                    {"type": "text", "text": part.get("text") or "", "index": self._index("text")}
+                )
+            elif isinstance(part, dict) and part.get("type") == "reasoning":
+                summary = part.get("summary") or []
+                index = self._index("reasoning")
+                blocks.append(
+                    {
+                        **part,
+                        "summary": [
+                            {**item, "index": 0} if isinstance(item, dict) else item
+                            for item in summary
+                        ],
+                        "index": index,
+                    }
+                )
+                if any(isinstance(item, dict) and item.get("signature") for item in summary):
+                    # A signature closes the block; later reasoning starts a new one.
+                    self._open = None
+            else:
+                blocks.append(part)
+        return blocks
+
+
 def _convert_dict_to_message(
-    _dict: dict, usage: Optional[CompletionUsage]
+    _dict: dict, usage: Optional[CompletionUsage], keep_content_blocks: bool = False
 ) -> HumanMessage | SystemMessage | ToolMessage | AIMessage | ChatMessage:
     role = _dict["role"]
     content = _dict.get("content") or ""
-    if not isinstance(content, str):
+    # Claude content blocks (reasoning with signatures, then text) stay structured so the answer
+    # reads as text and the reasoning round-trips on the next turn.
+    if not isinstance(content, str) and not (keep_content_blocks and isinstance(content, list)):
         # for non-string content, serialize it into a string to maintain compatibility with downstream consumers
         # for example, output parsers expect a string
         content = json.dumps(content)
@@ -1669,10 +1807,13 @@ def _convert_dict_to_message_chunk(
     _dict: Mapping[str, Any],
     default_role: str | None,
     usage: CompletionUsage | dict[str, Any] | None = None,
+    content_blocks: _StreamContentBlocks | None = None,
 ) -> BaseMessageChunk:
     role = _dict.get("role", default_role)
     content = _dict.get("content") or ""
-    if not isinstance(content, str):
+    if content_blocks is not None:
+        content = content_blocks.convert(content)
+    elif not isinstance(content, str):
         # for non-string content, serialize it into a string to maintain compatibility with downstream consumers
         # for example, output parsers expect a string
         content = json.dumps(content)
