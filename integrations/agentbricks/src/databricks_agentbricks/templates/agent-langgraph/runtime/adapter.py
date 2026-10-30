@@ -9,6 +9,7 @@ from langchain.messages import AIMessageChunk
 from langgraph.types import Command
 
 from databricks_agentkit import InvocationContext
+from databricks_agentkit.langgraph.messages import delta_contents, message_items
 from databricks_agentkit.langgraph.responses import checkpointed_messages
 from databricks_agentkit.langgraph.session_store import thread_config
 from databricks_agentkit.runtime.auth import AuthError
@@ -87,10 +88,11 @@ async def _invoke_agent(
     if agent_input is None:
         graph = await agent_module.create_agent_graph(actor, model, **run_kwargs)
         outputs = [
-            {"type": "message", "message": message.model_dump()}
+            {"type": "message", "message": item}
             for message in await checkpointed_messages(
                 graph, thread_config(session_id, actor), context.invocation_id
             )
+            for item in message_items(message)
         ]
         run_kwargs["graph"] = graph
     async for event in _serialize_events(
@@ -124,11 +126,14 @@ async def _serialize_events(async_stream: AsyncIterator[Any]) -> AsyncGenerator[
             for node_data in payload.values():
                 messages = node_data.get("messages", []) if isinstance(node_data, dict) else []
                 for message in messages:
-                    yield {"type": "message", "message": message.model_dump()}
+                    # Reasoning comes out as its own item, before the answer message.
+                    for item in message_items(message):
+                        yield {"type": "message", "message": item}
         elif mode == "messages":
             try:
                 chunk = payload[0]
-                if isinstance(chunk, AIMessageChunk) and (content := chunk.content):
-                    yield {"type": "delta", "content": content, "id": chunk.id}
+                if isinstance(chunk, AIMessageChunk):
+                    for content in delta_contents(chunk.content):
+                        yield {"type": "delta", "content": content, "id": chunk.id}
             except (KeyError, IndexError, TypeError):
                 continue

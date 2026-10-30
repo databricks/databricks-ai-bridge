@@ -17,6 +17,7 @@ from agent.mcps import build_mcp_servers
 from agent.tools import all_tools
 from databricks_agentkit import workspace_client, workspace_headers
 from databricks_agentkit.openai import (
+    chat_model,
     configure_tracing,
     genie_tools,
     mcp_servers,
@@ -100,7 +101,8 @@ def create_agent(
     return Agent(
         name="Agent",
         instructions="You are a helpful assistant.",
-        model=model or MODEL,
+        # chat_model streams reasoning models and sends reasoning signatures back next turn.
+        model=chat_model(model or MODEL),
         tools=[
             *all_tools(),
             *memory_tools(actor),

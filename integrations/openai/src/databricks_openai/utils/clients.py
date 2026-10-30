@@ -108,6 +108,152 @@ def _fix_empty_assistant_content_in_messages(messages: Any) -> None:
                 message["content"] = " "
 
 
+def _split_reasoning_content(content: list) -> tuple[str | None, list[dict[str, Any]]]:
+    """Split AI Gateway reasoning content parts into answer text and thinking blocks.
+
+    Reasoning models (Claude 5.x, Qwen, Gemini, gpt-oss) return ``reasoning`` parts (summary text,
+    plus a ``signature`` on Claude) before the answer's ``text`` parts. The thinking blocks use the
+    Anthropic shape the OpenAI Agents SDK reads.
+    """
+    texts = []
+    thinking_blocks: list[dict[str, Any]] = []
+    for part in content:
+        if isinstance(part, str):
+            texts.append(part)
+        elif isinstance(part, dict) and part.get("type") == "text":
+            texts.append(part.get("text") or "")
+        elif isinstance(part, dict) and part.get("type") == "reasoning":
+            for summary in part.get("summary") or []:
+                if not isinstance(summary, dict):
+                    continue
+                block: dict[str, Any] = {"type": "thinking", "thinking": summary.get("text") or ""}
+                if summary.get("signature"):
+                    block["signature"] = summary["signature"]
+                thinking_blocks.append(block)
+    return ("".join(texts) if texts else None), thinking_blocks
+
+
+def _is_reasoning_content(content: Any) -> bool:
+    """Return True for list content made only of text and reasoning parts, whatever the model.
+
+    Other lists (e.g. image parts) are left as the gateway sent them.
+    """
+    return (
+        isinstance(content, list)
+        and bool(content)
+        and all(
+            isinstance(part, str)
+            or (isinstance(part, dict) and part.get("type") in ("text", "reasoning"))
+            for part in content
+        )
+    )
+
+
+def _split_reasoning_in_message(message: Any) -> None:
+    """Move list content's reasoning onto ``thinking_blocks`` and leave the answer as a string."""
+    content = getattr(message, "content", None)
+    if not isinstance(content, list) or not _is_reasoning_content(content):
+        return
+    text, thinking_blocks = _split_reasoning_content(content)
+    message.content = text
+    if thinking_blocks:
+        message.thinking_blocks = thinking_blocks
+
+
+def _split_reasoning_in_response(response: Any) -> None:
+    for choice in getattr(response, "choices", None) or []:
+        _split_reasoning_in_message(
+            getattr(choice, "message", None) or getattr(choice, "delta", None)
+        )
+
+
+def _restore_reasoning_in_messages(messages: Any) -> None:
+    """Send assistant ``thinking_blocks`` back as the AI Gateway's ``reasoning`` content parts.
+
+    Claude requires each reasoning signature on the next turn, notably after a tool call. Blocks
+    without a signature (Qwen, gpt-oss) have nothing to verify and are not sent back.
+    """
+    if not messages:
+        return
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        thinking_blocks = message.pop("thinking_blocks", None)
+        if not thinking_blocks:
+            continue
+        parts: list[Any] = [
+            {
+                "type": "reasoning",
+                "summary": [
+                    {
+                        "type": "summary_text",
+                        "text": block.get("thinking") or "",
+                        "signature": block["signature"],
+                    }
+                ],
+            }
+            for block in thinking_blocks
+            if isinstance(block, dict)
+            and block.get("type") == "thinking"
+            and block.get("signature")
+        ]
+        if not parts:
+            continue
+        content = message.get("content")
+        if isinstance(content, str) and content:
+            parts.append({"type": "text", "text": content})
+        elif isinstance(content, list):
+            parts.extend(content)
+        message["content"] = parts
+
+
+class _ReasoningSplittingStream:
+    """Stream wrapper that splits each chunk's reasoning out of ``delta.content``.
+
+    Chunks with string content pass through unchanged.
+    """
+
+    def __init__(self, stream: Any):
+        self._stream = stream
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stream, name)
+
+    def __next__(self):
+        chunk = next(self._stream)
+        _split_reasoning_in_response(chunk)
+        return chunk
+
+    async def __anext__(self):
+        chunk = await self._stream.__anext__()
+        _split_reasoning_in_response(chunk)
+        return chunk
+
+    def __iter__(self):
+        for chunk in self._stream:
+            _split_reasoning_in_response(chunk)
+            yield chunk
+
+    async def __aiter__(self):
+        async for chunk in self._stream:
+            _split_reasoning_in_response(chunk)
+            yield chunk
+
+    def __enter__(self):
+        self._stream.__enter__()
+        return self
+
+    def __exit__(self, *args: Any):
+        return self._stream.__exit__(*args)
+
+    async def __aenter__(self):
+        await self._stream.__aenter__()
+        return self
+
+    async def __aexit__(self, *args: Any):
+        return await self._stream.__aexit__(*args)
+
+
 def _resolve_base_url(
     workspace_client: WorkspaceClient,
     base_url: str | None,
@@ -236,10 +382,14 @@ class DatabricksCompletions(Completions):
         model = kwargs.get("model")
         if _should_strip_strict(model):
             _strip_strict_from_tools(kwargs.get("tools"))
+        _restore_reasoning_in_messages(kwargs.get("messages"))
         if _is_claude_model(model):
             _fix_empty_assistant_content_in_messages(kwargs.get("messages"))
-        kwargs = _strip_strict_from_kwargs(kwargs)
-        return super().create(**kwargs)
+        response = super().create(**_strip_strict_from_kwargs(kwargs))
+        if kwargs.get("stream"):
+            return _ReasoningSplittingStream(response)
+        _split_reasoning_in_response(response)
+        return response
 
 
 class DatabricksChat(Chat):
@@ -440,10 +590,14 @@ class AsyncDatabricksCompletions(AsyncCompletions):
         model = kwargs.get("model")
         if _should_strip_strict(model):
             _strip_strict_from_tools(kwargs.get("tools"))
+        _restore_reasoning_in_messages(kwargs.get("messages"))
         if _is_claude_model(model):
             _fix_empty_assistant_content_in_messages(kwargs.get("messages"))
-        kwargs = _strip_strict_from_kwargs(kwargs)
-        return await super().create(**kwargs)
+        response = await super().create(**_strip_strict_from_kwargs(kwargs))
+        if kwargs.get("stream"):
+            return _ReasoningSplittingStream(response)
+        _split_reasoning_in_response(response)
+        return response
 
 
 class AsyncDatabricksChat(AsyncChat):

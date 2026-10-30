@@ -12,6 +12,7 @@ async def read_history(session_id: str, actor: str) -> dict[str, Any]:
     """
     from langgraph.graph.message import add_messages
 
+    from databricks_agentkit.langgraph.messages import message_items
     from databricks_agentkit.langgraph.session_store import history_checkpoint, thread_config
 
     saved = await history_checkpoint(thread_config(session_id, actor))
@@ -27,10 +28,13 @@ async def read_history(session_id: str, actor: str) -> dict[str, Any]:
                 interrupts.extend({"id": item.id, "value": item.value} for item in value)
     items = []
     for index, message in enumerate(messages):
-        data = message.model_dump() if hasattr(message, "model_dump") else message
+        item_id = str(getattr(message, "id", None) or index)
+        *reasoning, data = message_items(message)
+        # Reasoning is its own item, so the message's content is the answer text.
+        items.extend({"item_id": f"{item_id}:reasoning", "data": item} for item in reasoning)
         items.append(
             {
-                "item_id": str(getattr(message, "id", None) or index),
+                "item_id": item_id,
                 "data": data if isinstance(data, dict) else {"content": str(data)},
             }
         )

@@ -1480,20 +1480,19 @@ def test_prepare_inputs_with_extra_params():
 
 
 def test_convert_dict_to_message_with_non_string_content():
-    """Test _convert_dict_to_message handles non-string content by JSON encoding it."""
-    # Test with list of dict content (matching gpt oss)
-    message_dict = {
-        "role": "assistant",
-        "content": [
-            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "asdf"}]},
-            {"type": "text", "text": "asdf"},
-        ],
-    }
-    result = _convert_dict_to_message(message_dict, None)
-    expected = AIMessage(
-        content='[{"type": "reasoning", "summary": [{"type": "summary_text", "text": "asdf"}]}, {"type": "text", "text": "asdf"}]'
-    )
-    assert result == expected
+    """Test _convert_dict_to_message JSON-encodes non-string content other than reasoning."""
+    # Reasoning content (matching gpt oss) stays as content blocks
+    reasoning_content: list[Any] = [
+        {"type": "reasoning", "summary": [{"type": "summary_text", "text": "asdf"}]},
+        {"type": "text", "text": "asdf"},
+    ]
+    result = _convert_dict_to_message({"role": "assistant", "content": reasoning_content}, None)
+    assert result == AIMessage(content=reasoning_content)
+    assert result.text == "asdf"
+
+    image_content = [{"type": "image_url", "image_url": {"url": "https://x/y.png"}}]
+    result = _convert_dict_to_message({"role": "assistant", "content": image_content}, None)
+    assert result == AIMessage(content=json.dumps(image_content))
 
 
 ### Test custom_inputs and custom_outputs functionality ###

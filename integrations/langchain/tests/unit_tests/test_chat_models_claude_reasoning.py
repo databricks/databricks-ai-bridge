@@ -1,0 +1,361 @@
+"""ChatDatabricks on Claude 5.x AI Gateway responses, whose content mixes reasoning and text parts."""
+
+import copy
+import json
+from typing import Any, cast
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    ToolMessage,
+)
+from openai.types.chat import ChatCompletion, ChatCompletionChunk
+
+from databricks_langchain import ChatDatabricks
+
+_SIGNATURE = "CAQSqwUKDAgBEAEYAiIEdGVzdA=="
+_REASONING = "The user greets me, so I greet them back."
+_ANSWER = "Hello! How can I help?"
+
+# Recorded shapes from `system.ai.claude-opus-5-5` through the AI Gateway's chat completions API.
+_CLAUDE5_MESSAGE: dict[str, Any] = {
+    "id": "chatcmpl_claude5",
+    "object": "chat.completion",
+    "created": 1761300000,
+    "model": "claude-opus-5-5",
+    "choices": [
+        {
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "reasoning",
+                        "summary": [
+                            {"type": "summary_text", "text": _REASONING, "signature": _SIGNATURE}
+                        ],
+                    },
+                    {"type": "text", "text": _ANSWER},
+                ],
+            },
+            "finish_reason": "stop",
+        }
+    ],
+    "usage": {"prompt_tokens": 12, "completion_tokens": 30, "total_tokens": 42},
+}
+
+
+def _reasoning_delta(text: str, signature: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": text, "signature": signature}],
+        }
+    ]
+
+
+_CLAUDE5_STREAM_DELTAS: list[Any] = [
+    "",
+    _reasoning_delta("", ""),
+    _reasoning_delta("The user greets me, ", ""),
+    _reasoning_delta("so I greet them back.", ""),
+    _reasoning_delta("", _SIGNATURE),
+    "Hello! ",
+    "How can I help?",
+]
+
+_CLAUDE5_TOOL_CALL_MESSAGE: dict[str, Any] = {
+    **_CLAUDE5_MESSAGE,
+    "choices": [
+        {
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": _reasoning_delta("I should look up the weather.", _SIGNATURE),
+                "tool_calls": [
+                    {
+                        "id": "toolu_01",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                    }
+                ],
+            },
+            "finish_reason": "tool_calls",
+        }
+    ],
+}
+
+
+def _stream_chunks(deltas: list[Any]) -> list[ChatCompletionChunk]:
+    chunks = []
+    for index, content in enumerate(deltas):
+        delta: dict[str, Any] = {"content": content}
+        if index == 0:
+            delta["role"] = "assistant"
+        last = index == len(deltas) - 1
+        fields: dict[str, Any] = {
+            "id": "chatcmpl_claude5",
+            "object": "chat.completion.chunk",
+            "created": 1761300000,
+            "model": "claude-opus-5-5",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": delta,
+                    "finish_reason": "stop" if last else None,
+                }
+            ],
+        }
+        chunks.append(ChatCompletionChunk.construct(**fields))
+    return chunks
+
+
+def _llm(model: str, client: Mock) -> ChatDatabricks:
+    with patch("databricks_langchain.chat_models.get_openai_client", return_value=client):
+        llm = ChatDatabricks(model=model)
+        _ = llm.client
+    return llm
+
+
+def _completion_client(*responses: dict[str, Any]) -> Mock:
+    client = Mock()
+    client.chat.completions.create.side_effect = [
+        ChatCompletion.construct(**copy.deepcopy(response)) for response in responses
+    ]
+    return client
+
+
+def _stream_client(deltas: list[Any]) -> Mock:
+    client = Mock()
+    client.chat.completions.create.side_effect = lambda **_: iter(_stream_chunks(deltas))
+    return client
+
+
+def _blocks(message: AIMessage) -> list[dict[str, Any]]:
+    assert isinstance(message.content, list)
+    return [block for block in message.content if isinstance(block, dict)]
+
+
+def test_claude5_invoke_returns_answer_text_and_one_reasoning_block() -> None:
+    llm = _llm("system.ai.claude-opus-5-5", _completion_client(_CLAUDE5_MESSAGE))
+
+    message = llm.invoke("hi")
+
+    assert message.text == _ANSWER
+    reasoning, text = _blocks(message)
+    assert reasoning["type"] == "reasoning"
+    assert reasoning["summary"][0]["text"] == _REASONING
+    assert reasoning["summary"][0]["signature"] == _SIGNATURE
+    assert text == {"type": "text", "text": _ANSWER}
+
+
+def test_claude5_stream_merges_into_one_reasoning_block_and_one_text_block() -> None:
+    llm = _llm("system.ai.claude-opus-5-5", _stream_client(_CLAUDE5_STREAM_DELTAS))
+
+    chunks = list(llm.stream("hi"))
+
+    assert "".join(chunk.text for chunk in chunks) == _ANSWER
+    assert not any("signature" in chunk.text for chunk in chunks)
+    merged = chunks[0]
+    for chunk in chunks[1:]:
+        merged += chunk
+    assert isinstance(merged, AIMessageChunk)
+    assert merged.text == _ANSWER
+    reasoning, text = _blocks(merged)
+    assert reasoning["type"] == "reasoning"
+    assert reasoning["summary"][0]["text"] == _REASONING
+    assert reasoning["summary"][0]["signature"] == _SIGNATURE
+    assert reasoning["summary"][0]["type"] == "summary_text"
+    assert text["type"] == "text"
+    assert text["text"] == _ANSWER
+
+
+@pytest.mark.asyncio
+async def test_claude5_astream_merges_into_one_reasoning_block_and_one_text_block() -> None:
+    async def _astream(**_: Any):
+        for chunk in _stream_chunks(_CLAUDE5_STREAM_DELTAS):
+            yield chunk
+
+    client = Mock()
+    client.chat.completions.create = AsyncMock(side_effect=lambda **_: _astream())
+    with patch("databricks_langchain.chat_models.get_async_openai_client", return_value=client):
+        llm = ChatDatabricks(model="system.ai.claude-opus-5-5")
+        _ = llm.async_client
+        chunks = [chunk async for chunk in llm.astream("hi")]
+
+    assert "".join(chunk.text for chunk in chunks) == _ANSWER
+    merged = chunks[0]
+    for chunk in chunks[1:]:
+        merged += chunk
+    reasoning, text = _blocks(merged)
+    assert reasoning["summary"][0]["signature"] == _SIGNATURE
+    assert text["text"] == _ANSWER
+
+
+def test_claude5_stream_starts_a_new_reasoning_block_after_each_signature() -> None:
+    deltas = [
+        _reasoning_delta("first", ""),
+        _reasoning_delta("", "sig-1"),
+        _reasoning_delta("second", ""),
+        _reasoning_delta("", "sig-2"),
+        "answer",
+    ]
+    llm = _llm("system.ai.claude-sonnet-5-5", _stream_client(deltas))
+
+    chunks = list(llm.stream("hi"))
+    merged = chunks[0]
+    for chunk in chunks[1:]:
+        merged += chunk
+
+    first, second, text = _blocks(merged)
+    assert first["summary"][0]["text"] == "first"
+    assert first["summary"][0]["signature"] == "sig-1"
+    assert second["summary"][0]["text"] == "second"
+    assert second["summary"][0]["signature"] == "sig-2"
+    assert text["text"] == "answer"
+
+
+def test_claude5_reasoning_signature_round_trips_on_tool_call_turn() -> None:
+    client = _completion_client(_CLAUDE5_TOOL_CALL_MESSAGE, _CLAUDE5_MESSAGE)
+    llm = _llm("system.ai.claude-opus-5-5", client)
+
+    tool_turn = llm.invoke("weather in Paris?")
+    assert tool_turn.tool_calls[0]["name"] == "get_weather"
+    llm.invoke(
+        [
+            HumanMessage("weather in Paris?"),
+            tool_turn,
+            ToolMessage("sunny", tool_call_id="toolu_01"),
+        ]
+    )
+
+    sent = client.chat.completions.create.call_args.kwargs["messages"]
+    assistant = sent[1]
+    assert assistant["role"] == "assistant"
+    assert assistant["content"] == _reasoning_delta("I should look up the weather.", _SIGNATURE)
+    assert assistant["tool_calls"][0]["id"] == "toolu_01"
+
+
+def test_claude5_streamed_turn_replays_gateway_blocks_without_merge_indexes() -> None:
+    llm = _llm("system.ai.claude-opus-5-5", _stream_client(_CLAUDE5_STREAM_DELTAS))
+    chunks = list(llm.stream("hi"))
+    merged = chunks[0]
+    for chunk in chunks[1:]:
+        merged += chunk
+
+    data = llm._prepare_inputs([HumanMessage("hi"), merged, HumanMessage("and again?")])
+
+    assert data["messages"][1]["content"] == [
+        {
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": _REASONING, "signature": _SIGNATURE}],
+        },
+        {"type": "text", "text": _ANSWER},
+    ]
+
+
+@pytest.mark.parametrize("model", ["system.ai.claude-sonnet-4-5", "databricks-gpt-5-2"])
+def test_string_content_models_are_unchanged(model: str) -> None:
+    string_message = copy.deepcopy(_CLAUDE5_MESSAGE)
+    string_message["choices"][0]["message"]["content"] = _ANSWER
+    llm = _llm(model, _completion_client(string_message))
+    assert llm.invoke("hi").content == _ANSWER
+
+    llm = _llm(model, _stream_client(["", "Hello! ", "How can I help?"]))
+    chunks = list(llm.stream("hi"))
+    assert all(isinstance(chunk.content, str) for chunk in chunks)
+    assert "".join(cast(str, chunk.content) for chunk in chunks) == _ANSWER
+
+    history: list[BaseMessage] = [HumanMessage("hi"), AIMessage(_ANSWER), HumanMessage("again")]
+    assert llm._prepare_inputs(history)["messages"][1] == {
+        "role": "assistant",
+        "content": _ANSWER,
+    }
+
+
+def _unsigned(text: str) -> list[dict[str, Any]]:
+    """Qwen / gpt-oss reasoning: summary text without a signature."""
+    return [{"type": "reasoning", "summary": [{"type": "summary_text", "text": text}]}]
+
+
+def _with_content(content: Any) -> dict[str, Any]:
+    message = copy.deepcopy(_CLAUDE5_MESSAGE)
+    message["choices"][0]["message"]["content"] = content
+    return message
+
+
+# `system.ai.qwen35-122b-a10b` (CAJ trial 20261025-165909-4af4): unsigned reasoning, then text.
+_QWEN_STREAM_DELTAS: list[Any] = [
+    "",
+    _unsigned("The user greets me, "),
+    _unsigned("so I greet them back."),
+    "Hello! ",
+    "How can I help?",
+]
+
+
+@pytest.mark.parametrize(
+    "model", ["system.ai.qwen35-122b-a10b", "databricks-gpt-oss-120b", "system.ai.gemini-3-pro"]
+)
+def test_unsigned_reasoning_invoke_returns_answer_text_and_reasoning_block(model: str) -> None:
+    content = [*_unsigned(_REASONING), {"type": "text", "text": _ANSWER}]
+    llm = _llm(model, _completion_client(_with_content(content)))
+
+    message = llm.invoke("hi")
+
+    assert message.text == _ANSWER
+    reasoning, text = _blocks(message)
+    assert reasoning == _unsigned(_REASONING)[0]
+    assert text == {"type": "text", "text": _ANSWER}
+
+
+def test_unsigned_reasoning_stream_merges_into_reasoning_and_text_blocks() -> None:
+    llm = _llm("system.ai.qwen35-122b-a10b", _stream_client(_QWEN_STREAM_DELTAS))
+
+    chunks = list(llm.stream("hi"))
+
+    assert "".join(chunk.text for chunk in chunks) == _ANSWER
+    merged = chunks[0]
+    for chunk in chunks[1:]:
+        merged += chunk
+    reasoning, text = _blocks(merged)
+    assert reasoning["summary"][0]["text"] == _REASONING
+    assert "signature" not in reasoning["summary"][0]
+    assert text["text"] == _ANSWER
+
+
+def test_text_parts_with_extra_keys_read_as_answer_text() -> None:
+    content = [{"type": "text", "text": _ANSWER, "thoughtSignature": "Z2VtaW5p"}]
+    llm = _llm("system.ai.gemini-3-pro-image", _completion_client(_with_content(content)))
+    assert llm.invoke("hi").text == _ANSWER
+
+
+def test_unsigned_reasoning_is_not_sent_back() -> None:
+    llm = _llm("system.ai.qwen35-122b-a10b", _stream_client(_QWEN_STREAM_DELTAS))
+    chunks = list(llm.stream("hi"))
+    merged = chunks[0]
+    for chunk in chunks[1:]:
+        merged += chunk
+    call = AIMessage(
+        content=cast(Any, _unsigned("Look it up.")),
+        tool_calls=[{"name": "get_weather", "args": {}, "id": "call_01"}],
+    )
+
+    sent = llm._prepare_inputs([HumanMessage("hi"), merged, call])["messages"]
+
+    assert sent[1] == {"role": "assistant", "content": _ANSWER}
+    assert sent[2]["content"] is None
+    assert sent[2]["tool_calls"][0]["id"] == "call_01"
+
+
+def test_other_list_content_is_still_json_encoded() -> None:
+    image = [{"type": "image_url", "image_url": {"url": "https://x/y.png"}}]
+    llm = _llm("system.ai.gemini-3-pro-image", _completion_client(_with_content(image)))
+    assert llm.invoke("hi").content == json.dumps(image)
+
+    llm = _llm("system.ai.gemini-3-pro-image", _stream_client(["", image]))
+    assert json.dumps(image) in [chunk.content for chunk in llm.stream("hi")]
