@@ -7,10 +7,10 @@ Each dev server gets its own free port, so dev runs can go in parallel.
 from __future__ import annotations
 
 import json
-import pathlib
+import time
 
 import pytest
-from harness.agentbricks_cli import AgentbricksCli, free_port
+from harness.agentbricks_cli import AgentbricksCli, BackgroundCommand, free_port
 from harness.fake_workspace import FAKE_MODEL_REPLY
 from harness.project import Project
 from harness.target import TargetWorkspace, WorkspaceKind
@@ -18,6 +18,8 @@ from tool_definitions import Tool
 
 # The console wraps the box at its width, which would split the printed command over lines.
 WIDE_CONSOLE = {"COLUMNS": "250"}
+# Seconds `dev` gets to print its next steps after the agent first answers.
+_NEXT_STEPS_TIMEOUT = 30
 
 # The managed server with its chat UI on and the LangGraph framework is `test_dev`'s template.
 TEMPLATES = {
@@ -67,22 +69,29 @@ def test_dev_templates(
     ) as server:
         server.wait_until_serving(port)
         # Each template serves its own path and request shape, so the printed command is the way in.
-        output = _run_printed_invoke_command(agentbricks_cli, server.log_path)
+        output = _run_printed_invoke_command(agentbricks_cli, server)
         if target_workspace.name is WorkspaceKind.FAKE:
             assert FAKE_MODEL_REPLY in output, output
 
 
-def _run_printed_invoke_command(cli: AgentbricksCli, dev_log: pathlib.Path) -> str:
+def _run_printed_invoke_command(cli: AgentbricksCli, server: BackgroundCommand) -> str:
     """Run the invoke command `dev` prints as its next step; returns its output.
 
     How the printed command quotes in each shell is `endpoint_examples_test.py`'s job.
     """
-    lines = dev_log.read_text(encoding="utf-8").splitlines()
-    commands = [
-        line.removeprefix("│ ").removesuffix("│").strip()
-        for line in lines
-        if line.startswith("│ agentbricks endpoint invoke")
-    ]
+    # `dev` prints its next steps once its own readiness poll sees the agent answering, which can
+    # be a moment after `wait_until_serving` returns.
+    deadline = time.monotonic() + _NEXT_STEPS_TIMEOUT
+    while True:
+        lines = server.log_path.read_text(encoding="utf-8").splitlines()
+        commands = [
+            line.removeprefix("│ ").removesuffix("│").strip()
+            for line in lines
+            if line.startswith("│ agentbricks endpoint invoke")
+        ]
+        if commands or server.process.poll() is not None or time.monotonic() > deadline:
+            break
+        time.sleep(0.5)
     assert len(commands) == 1, "\n".join(lines)
     result = cli.run_printed(commands[0], "bash")
     assert result.returncode == 0, result.stderr or result.stdout
