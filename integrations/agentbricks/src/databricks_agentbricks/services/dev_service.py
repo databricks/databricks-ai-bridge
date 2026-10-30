@@ -25,7 +25,7 @@ from databricks_agentkit.runtime.cors import CORS_ALLOWED_ORIGINS_ENV
 from databricks_agentkit.runtime.store import RUNTIME_STORE_LOCAL_ENV
 from databricks_agentkit.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
 
-# Default local port; ``databricks apps run-local`` listens here unless ``--app-port`` overrides it.
+# Default local port; run-local's proxy listens here unless ``--app-port`` overrides it.
 _DEFAULT_APP_PORT = 8000
 _LOCAL_APP_YAML = "app.agentbricksdev.yaml"
 
@@ -78,7 +78,7 @@ class DevPlan:
     preview: DevPreview
     entry_point: pathlib.Path
     prepare_environment: bool
-    requested_port: int | None
+    app_port: int
 
 
 class DevService:
@@ -86,8 +86,8 @@ class DevService:
 
     The service owns validation, project metadata, the local-only manifest, and lifecycle cleanup.
     It does not own output or a workspace client; those concerns are supplied by the CLI through
-    ``LocalTracingClient`` and ``AppsClient``. ``port_in_use`` reports whether a local port is taken, so
-    tests can simulate a busy port without binding a real socket.
+    ``LocalTracingClient`` and ``AppsClient``. ``port_in_use`` reports whether a local port is taken, and
+    ``free_port`` picks one for the app behind run-local's proxy, so tests need no real sockets.
     """
 
     def __init__(
@@ -96,11 +96,13 @@ class DevService:
         apps_client: AppsClient,
         local_tracing: LocalTracingClient,
         port_in_use: Callable[[int], bool],
+        free_port: Callable[[], int],
     ) -> None:
         self._project_resolver = project_resolver
         self._apps_client = apps_client
         self._local_tracing = local_tracing
         self._port_in_use = port_in_use
+        self._free_port = free_port
 
     def check_project(self, source: str) -> pathlib.Path:
         """Fail unless ``source`` has an ``app.yaml`` to run; returns that path. Local only."""
@@ -160,8 +162,6 @@ class DevService:
             )
             preview = DevPreview(
                 source_dir=source_dir,
-                # Preserve the CLI's historical display/default behavior while retaining the
-                # caller's explicit value separately in ``requested_port``.
                 port=port,
                 server=project.server if project else None,
                 tracing_uri=tracing_env.get("MLFLOW_TRACKING_URI"),
@@ -177,7 +177,9 @@ class DevService:
                 preview=preview,
                 entry_point=entry_point,
                 prepare_environment=prepare_environment,
-                requested_port=request.app_port,
+                # The user-facing port is run-local's proxy; the app gets a free port behind it so
+                # concurrent runs don't collide on run-local's default app or proxy port.
+                app_port=self._free_port(),
             )
         finally:
             # Keep cleanup independent: a failure removing the manifest must not orphan the tracing
@@ -189,13 +191,18 @@ class DevService:
                 if tracing_server is not None:
                     self._local_tracing.stop(tracing_server)
 
-    def run(self, plan: DevPlan) -> None:
-        """Run a prepared plan through the injected Apps local-run client."""
+    def run(self, plan: DevPlan, on_ready: Callable[[], None] | None = None) -> None:
+        """Run a prepared plan through the injected Apps local-run client.
+
+        ``on_ready`` is called once the agent answers on its port, not when the command starts.
+        """
         self._apps_client.run_local(
             plan.preview.source_dir,
             plan.entry_point.name,
             prepare_environment=plan.prepare_environment,
-            app_port=plan.requested_port,
+            port=plan.preview.port,
+            app_port=plan.app_port,
+            on_ready=on_ready,
         )
 
 

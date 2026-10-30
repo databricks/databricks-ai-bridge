@@ -117,3 +117,17 @@ def answering_app_probe(monkeypatch):
     """CLI deploy tests build a real service; its readiness probe would fetch an OAuth token and
     call the App, so it answers at once here. Readiness tests replace it or inject their own."""
     monkeypatch.setattr("databricks_agentbricks.cli.deploy.AppProbe", _AnsweringAppProbe)
+
+
+@pytest.fixture
+def sandbox_downscope_enabled(monkeypatch):
+    """Turn on the disabled sandbox downscope gate to cover the retained scoped path."""
+    # Some runtime tests re-import tool_manifest, so the CLI's module object and the one a fresh
+    # import returns can differ; patch both so every reader sees the gate.
+    import importlib
+
+    from databricks_agentbricks.projects import agent_project
+
+    current = importlib.import_module("databricks_agentkit.runtime.tool_manifest")
+    for module in {id(m): m for m in (agent_project.tool_manifest, current)}.values():
+        monkeypatch.setattr(module, "SANDBOX_DOWNSCOPE_ENABLED", True)

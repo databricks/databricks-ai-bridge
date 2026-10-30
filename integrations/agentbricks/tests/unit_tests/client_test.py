@@ -734,24 +734,37 @@ def test_delete_session_with_force(workspace_client):
 @mock.patch("databricks.sdk.WorkspaceClient")
 def test_grant_session_store_permission(workspace_client):
     c, do = _client(workspace_client)
-    c.grant_session_store_permission("sess-1", "sp-abc")
+    c.grant_session_store_permission(
+        "sess-1", "sp-abc", permission="WRITE", principal_type="SERVICE_PRINCIPAL"
+    )
     do.assert_called_once_with(
         "POST",
         "/api/2.0/agents/session-stores/sess-1/permissions:grant",
         query=None,
-        body={"principal": {"type": "SERVICE_PRINCIPAL", "name": "sp-abc"}, "permission": "WRITE"},
+        body={
+            "principal": {"principal_type": "SERVICE_PRINCIPAL", "name": "sp-abc"},
+            "permission": "WRITE",
+        },
     )
 
 
 @mock.patch("databricks.sdk.WorkspaceClient")
 def test_grant_memory_store_permission_takes_resource_id_and_level(workspace_client):
     c, do = _client(workspace_client)
-    c.grant_memory_store_permission("memory-stores/uuid-x", "sp-abc", permission="READ")
+    c.grant_memory_store_permission(
+        "memory-stores/uuid-x",
+        "sp-abc",
+        permission="READ",
+        principal_type="SERVICE_PRINCIPAL",
+    )
     do.assert_called_once_with(
         "POST",
         "/api/2.0/agents/memory-stores/uuid-x/permissions:grant",
         query=None,
-        body={"principal": {"type": "SERVICE_PRINCIPAL", "name": "sp-abc"}, "permission": "READ"},
+        body={
+            "principal": {"principal_type": "SERVICE_PRINCIPAL", "name": "sp-abc"},
+            "permission": "READ",
+        },
     )
 
 

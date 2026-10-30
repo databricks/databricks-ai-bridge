@@ -1,4 +1,4 @@
-"""Check whether a local TCP port is free before ``agentbricks dev`` starts a server on it."""
+"""Local TCP port checks and picks for the servers ``agentbricks dev`` starts, and readiness."""
 
 from __future__ import annotations
 
@@ -29,7 +29,19 @@ def port_in_use(port: int) -> bool:
     Only "address in use" counts as busy. Any other bind error (for example a privileged port) is
     left for the app to report.
     """
-    return not _can_bind(port) or any(_accepts_connections(host, port) for host in _LOOPBACK_HOSTS)
+    return not _can_bind(port) or accepts_connections(port)
+
+
+def accepts_connections(port: int) -> bool:
+    """Whether a server is answering on ``port`` over IPv4 or IPv6 loopback (i.e. at ``localhost``)."""
+    return any(_accepts_connections(host, port) for host in _LOOPBACK_HOSTS)
+
+
+def free_port() -> int:
+    """A port the OS reports free on the app's bind address, for the app behind run-local's proxy."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((_APP_BIND_HOST, 0))
+        return sock.getsockname()[1]
 
 
 def _can_bind(port: int) -> bool:

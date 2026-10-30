@@ -25,6 +25,7 @@ class Project:
     app_name: str
     # The runtime under test: the wheel built from this checkout, or the one --wheel gives.
     wheel: pathlib.Path
+    bridge_wheel: pathlib.Path | None
 
     @classmethod
     def allocate(cls, run_config: RunConfig) -> Project:
@@ -35,11 +36,11 @@ class Project:
         if run_config.wheel is None:
             # Only the run_config fixture builds it; the bare run config is for cleanup.
             raise E2EError("The run has no runtime wheel to pin projects to.")
-        return cls(path, f"{APP_PREFIX}{name}", run_config.wheel)
+        return cls(path, f"{APP_PREFIX}{name}", run_config.wheel, run_config.bridge_wheel)
 
     def pin_runtime(self) -> None:
         """Point the project's databricks-agentbricks dependency at the runtime under test."""
-        _pin_project_wheel(self.path, self.wheel)
+        _pin_project_wheels(self.path, self.wheel, self.bridge_wheel)
 
     def is_pinned(self) -> bool:
         pyproject = self.path / "pyproject.toml"
@@ -59,19 +60,25 @@ class Project:
             self.write_file(relative_path, content)
 
 
-def _pin_project_wheel(project: pathlib.Path, wheel: pathlib.Path) -> None:
+def _pin_project_wheels(
+    project: pathlib.Path, wheel: pathlib.Path, bridge_wheel: pathlib.Path | None
+) -> None:
     vendor_dir = project / "agentbricks_e2e_wheels"
     vendor_dir.mkdir()
-    vendored_wheel = vendor_dir / wheel.name
-    shutil.copy2(wheel, vendored_wheel)
     pyproject = project / "pyproject.toml"
     document = tomlkit.parse(pyproject.read_text(encoding="utf-8"))
-    tool = document.setdefault("tool", {})
-    uv = tool.setdefault("uv", {})
-    sources = uv.setdefault("sources", {})
-    sources["databricks-agentbricks"] = {"path": vendored_wheel.relative_to(project).as_posix()}
-    log(
-        f"# write {pyproject}: "
-        f"pin databricks-agentbricks runtime to {vendored_wheel.relative_to(project)}"
-    )
+    sources = document.setdefault("tool", {}).setdefault("uv", {}).setdefault("sources", {})
+    for package, source in (
+        ("databricks-agentbricks", wheel),
+        ("databricks-ai-bridge", bridge_wheel),
+    ):
+        if source is None:
+            continue
+        vendored = vendor_dir / source.name
+        shutil.copy2(source, vendored)
+        sources[package] = {"path": vendored.relative_to(project).as_posix()}
+        log(f"# write {pyproject}: pin {package} runtime to {vendored.relative_to(project)}")
+    if bridge_wheel is not None:
+        # A source only applies to a direct dependency; the bridge otherwise arrives transitively.
+        document["project"]["dependencies"].append("databricks-ai-bridge[memory]")
     pyproject.write_text(tomlkit.dumps(document), encoding="utf-8")

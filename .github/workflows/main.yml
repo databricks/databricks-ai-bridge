@@ -371,7 +371,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -380,10 +380,28 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           python-version: "3.12"
-      # Build the wheel and run the functional tier from a venv it's installed into, so the tests
-      # exercise the shipped artifact (a packaging gap fails here) rather than an editable source
-      # tree. `agentbricks` on PATH is the wheel's console script; AGENTBRICKS_WHEEL pins the scaffolded agent's
-      # databricks-agentbricks at the same wheel.
-      - name: Build and test the Agent Bricks wheel
+          # Every dev boot syncs a scaffolded agent's dependencies; keeping the downloaded wheels
+          # (unpruned, under this job's own key) spares each run re-downloading them per template.
+          cache-suffix: agentbricks-suites
+          prune-cache: false
+      # `agentbricks dev` runs the app through `databricks apps run-local`.
+      - name: Install the Databricks CLI
+        uses: databricks/setup-cli@e0f69d54c90e95ccad22d5ff17751da665e599a9
+        # The suites' fake workspace is verified against this CLI; with the action's default
+        # (0.295.0), `apps run-local` fails at startup with `strconv.ParseInt: parsing ""`.
+        with:
+          version: 1.22.1
+      # Build the wheels and run the E2E suites against a fake workspace from a venv they are
+      # installed into, so the tests exercise the shipped artifact (a packaging gap fails here)
+      # rather than an editable source tree. `agentbricks` on PATH is the wheel's console script,
+      # and the suites pin every scaffolded agent to the same wheels.
+      - name: Build the Agent Bricks wheels and run the suites
         working-directory: integrations/agentbricks
-        run: bash ../../.github/scripts/run_agentbricks_tests.sh functional
+        run: bash ../../.github/scripts/run_agentbricks_tests.sh suites-fake
+      - name: Upload the suites' command logs
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
+        with:
+          name: agentbricks-suites-logs-${{ matrix.os }}
+          path: ${{ runner.temp }}/agentbricks-e2e-*/logs
+          if-no-files-found: ignore

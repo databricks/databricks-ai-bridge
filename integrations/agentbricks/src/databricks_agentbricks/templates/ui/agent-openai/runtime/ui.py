@@ -205,7 +205,7 @@ _ADD_COMMANDS = (
     {
         "kind": "sandbox",
         "label": "Sandbox",
-        "command": "agentbricks tools add sandbox --scope volume:catalog.schema.volume",
+        "command": "agentbricks tools add sandbox",
     },
     {
         "kind": "discover",
@@ -227,6 +227,7 @@ def _connected_tools() -> list[dict[str, str]]:
     for tool in load_tools(expected_framework=_FRAMEWORK):
         if tool.kind == "sandbox":
             source = ", ".join(f"{scope.kind}:{scope.value}" for scope in tool.downscope)
+            source = source or tool.service or ""
         else:
             source = tool.service or tool.function or tool.space_id or ""
         connected.append(

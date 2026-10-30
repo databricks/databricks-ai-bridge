@@ -72,7 +72,10 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("doctor",): (
         ("agentbricks doctor .", "check an existing repository's Agent Bricks onboarding"),
     ),
-    ("dev",): (("agentbricks dev", "run the agent locally with a chat UI"),),
+    ("dev",): (
+        ("agentbricks dev", "run the agent locally with a chat UI"),
+        ("agentbricks dev --app-port 8002", "run a second agent alongside it"),
+    ),
     ("memory",): (
         ("agentbricks memory stores create --display-name agent-memory", "create a memory store"),
         ("agentbricks memory bind agent-memory", "bind it to the agent (wired in on dev / deploy)"),
@@ -106,6 +109,34 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("memory", "stores", "update"): (
         ('agentbricks memory stores update <store> --description "Agent memory"', "edit a store"),
+    ),
+    ("memory", "stores", "permissions"): (
+        ("agentbricks memory stores permissions get <store-id>", "show your own effective access"),
+        (
+            "agentbricks memory stores permissions list <store-id> --all",
+            "list every explicit grant",
+        ),
+    ),
+    ("memory", "stores", "permissions", "get"): (
+        ("agentbricks memory stores permissions get <store-id>", "show your own effective access"),
+    ),
+    ("memory", "stores", "permissions", "list"): (
+        (
+            "agentbricks memory stores permissions list <store-id> --all",
+            "list every explicit grant",
+        ),
+    ),
+    ("memory", "stores", "permissions", "grant"): (
+        (
+            "agentbricks memory stores permissions grant <store-id> --user teammate@example.com --permission READ",
+            "grant a user read access",
+        ),
+    ),
+    ("memory", "stores", "permissions", "revoke"): (
+        (
+            "agentbricks memory stores permissions revoke <store-id> --service-principal <application-id>",
+            "revoke both READ and WRITE grants after confirmation",
+        ),
     ),
     ("memory", "stores", "delete"): (
         ("agentbricks memory stores delete <store>", "delete a store"),
@@ -260,6 +291,40 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         (
             'agentbricks sessions stores update agent-sessions --description "Agent sessions"',
             "edit a store",
+        ),
+    ),
+    ("sessions", "stores", "permissions"): (
+        (
+            "agentbricks sessions stores permissions get agent-sessions",
+            "show your own effective access",
+        ),
+        (
+            "agentbricks sessions stores permissions list agent-sessions --all",
+            "list every explicit grant",
+        ),
+    ),
+    ("sessions", "stores", "permissions", "get"): (
+        (
+            "agentbricks sessions stores permissions get agent-sessions",
+            "show your own effective access",
+        ),
+    ),
+    ("sessions", "stores", "permissions", "list"): (
+        (
+            "agentbricks sessions stores permissions list agent-sessions --all",
+            "list every explicit grant",
+        ),
+    ),
+    ("sessions", "stores", "permissions", "grant"): (
+        (
+            "agentbricks sessions stores permissions grant agent-sessions --user teammate@example.com --permission READ",
+            "grant a user read access",
+        ),
+    ),
+    ("sessions", "stores", "permissions", "revoke"): (
+        (
+            "agentbricks sessions stores permissions revoke agent-sessions --service-principal <application-id>",
+            "revoke both READ and WRITE grants after confirmation",
         ),
     ),
     ("sessions", "stores", "delete"): (
@@ -510,21 +575,23 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
             "invoke a local or arbitrary HTTP server",
         ),
     ),
+    ("endpoint", "loadtest"): (
+        (
+            "agentbricks endpoint loadtest agent-bricks-my-agent --path /api/invocations "
+            "--requests requests.json --concurrency 5 --max-duration 60 --max-requests 200 "
+            "--report-dir results/loadtest --save-responses responses.json",
+            "load test with Locust and optionally save all successful responses",
+        ),
+    ),
     ("tools",): (
         ("agentbricks tools add --help", "see all tool types you can add"),
-        (
-            "agentbricks tools add sandbox --scope volume:main.data.files",
-            "add a data sandbox tool",
-        ),
+        ("agentbricks tools add sandbox", "add a sandbox tool"),
         ("agentbricks tools add mcp system.ai.web_search", "add a managed MCP tool"),
         ("agentbricks tools remove mcp system.ai.web_search", "remove a tool binding"),
         ("agentbricks tools list", "browse available integrations to add"),
     ),
     ("tools", "add"): (
-        (
-            "agentbricks tools add sandbox --scope volume:main.data.files",
-            "add a data sandbox tool",
-        ),
+        ("agentbricks tools add sandbox", "add a sandbox tool"),
         ("agentbricks tools add mcp system.ai.web_search", "add a managed MCP tool"),
         (
             "agentbricks tools add uc-function catalog.schema.lookup_ticket",
@@ -534,9 +601,10 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("agentbricks tools add genie-agent SPACE_ID", "add tools for one Genie Space"),
     ),
     ("tools", "add", "sandbox"): (
+        ("agentbricks tools add sandbox", "add a sandbox tool that runs as the calling user"),
         (
-            "agentbricks tools add sandbox --scope volume:main.data.files",
-            "add a data sandbox tool",
+            "agentbricks tools add sandbox --auth app",
+            "run sandbox code as the App service principal",
         ),
     ),
     ("tools", "add", "mcp"): (

@@ -71,7 +71,7 @@ A trailing `-p` goes after the full subcommand, not after a group name — `agen
 
 | Option | Values | Default | Description |
 | --- | --- | --- | --- |
-| `--profile <PROFILE>` (`-p`) | string | - | Databricks config profile to authenticate with. Highest-precedence input to the resolution described under [Authentication](#authentication). |
+| `--profile <PROFILE>` (`-p`) | string | - | Name of a saved Databricks workspace sign-in. Run `databricks auth profiles` to list yours. |
 | `--output <text\|json>` (`-o`) | `text` \| `json` | `text` | Output format. Use `json` for scripting. |
 | `--version` | flag | - | Show the version and exit. |
 | `--help` (`-h`) | flag | - | Show help for the command and exit. Works at every level. |
@@ -104,7 +104,7 @@ A trailing `-p` goes after the full subcommand, not after a group name — `agen
 | [`tracing`](#agentbricks-tracing) | Set up and inspect agent tracing |
 | [`deploy`](#agentbricks-deploy) | Deploy an agent to Databricks Apps |
 | [`deployments`](#agentbricks-deployments) | Manage deployed agents |
-| [`endpoint`](#agentbricks-endpoint) | Invoke arbitrary HTTP endpoints. |
+| [`endpoint`](#agentbricks-endpoint) | Invoke or load test HTTP endpoints |
 | [`tools`](#agentbricks-tools) | Manage an agent's tools |
 | [`experimental`](#agentbricks-experimental) | Commands whose interface is still being designed: `experimental models`, `experimental prompts` |
 
@@ -272,7 +272,7 @@ _Arguments_
 
 Run your agent locally so you can try it before deploying.
 
-Starts the agent on a local server - by default http://localhost:8000 - and prints where to reach it: the chat UI if the project has one, otherwise a sample request against the agent's API.
+Starts the agent on a local server - by default http://localhost:8000 - and, once it answers, prints where to reach it: the chat UI if the project has one, otherwise a sample request against the agent's API. If the agent fails to start, you get an error instead.
 
 Auth uses your Databricks profile, resolved in this order: `-p`, the project's `.env`, then `DATABRICKS_CONFIG_PROFILE`. The agent reaches Databricks model serving through the AI Gateway on that profile - so there are no model keys to set up.
 
@@ -293,7 +293,7 @@ _Options_
 | --- | --- | --- | --- | --- |
 | `--source <SOURCE>` | path | `.` | no | Local source directory to run (containing app.yaml). Defaults to the current directory. |
 | `--prepare-environment`, `--no-prepare-environment` | flag | - | no | Build the app's environment with uv before running. Default: build only if no .venv exists yet, and reuse it otherwise. Requires uv. |
-| `--app-port <APP_PORT>` | integer | - | no | Port to run the app on (default 8000). |
+| `--app-port <APP_PORT>` | integer | - | no | Port to run the agent on (default 8000). |
 
 ### `agentbricks memory`
 
@@ -322,6 +322,7 @@ Workspace-scoped managed memory stores.
 | [`memory stores get`](#agentbricks-memory-stores-get) | Get a memory store by id, resource name (memory-stores/<id>), or display name. |
 | [`memory stores update`](#agentbricks-memory-stores-update) | Update a store's display name and/or description. |
 | [`memory stores delete`](#agentbricks-memory-stores-delete) | Delete (soft-delete) a memory store. |
+| [`memory stores permissions`](#agentbricks-memory-stores-permissions) | Inspect and manage store access. |
 
 ##### `agentbricks memory stores create`
 
@@ -422,6 +423,116 @@ _Options_
 | --- | --- | --- | --- | --- |
 | `--yes`, `-y` | flag | - | no | Skip the confirmation prompt. |
 
+##### `agentbricks memory stores permissions`
+
+Inspect and manage store access.
+
+Get returns your effective permission. List shows direct grants, excluding implicit
+ownership and inherited access. Grant, List, and Revoke require the creator or a
+workspace admin. STORE uses the same identifiers as the store commands.
+
+| Subcommand | Description |
+| --- | --- |
+| [`memory stores permissions get`](#agentbricks-memory-stores-permissions-get) | Show the authenticated caller's effective permission on STORE. |
+| [`memory stores permissions list`](#agentbricks-memory-stores-permissions-list) | List explicit grants on STORE as its creator or a workspace admin. |
+| [`memory stores permissions grant`](#agentbricks-memory-stores-permissions-grant) | Grant access on STORE as its creator or a workspace admin. |
+| [`memory stores permissions revoke`](#agentbricks-memory-stores-permissions-revoke) | Revoke both READ and WRITE on STORE as its creator or a workspace admin. |
+
+###### `agentbricks memory stores permissions get`
+
+Show the authenticated caller's effective permission on STORE.
+
+Session stores accept a store name or resource name. Memory stores accept an ID,
+resource name, or display name; ambiguous display names fail. No access is reported as
+PERMISSION_LEVEL_UNSPECIFIED in JSON.
+
+```
+agentbricks memory stores permissions get STORE
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `STORE` | yes | Store identifier; see command description. |
+
+###### `agentbricks memory stores permissions list`
+
+List explicit grants on STORE as its creator or a workspace admin.
+
+Accepts a session store name or memory store ID, or a resource name. Implicit ownership
+and inherited access are excluded. Text output offers subsequent pages on a terminal;
+JSON and piped output return one page unless --all is supplied.
+
+```
+agentbricks memory stores permissions list STORE [options]
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `STORE` | yes | Store identifier; see command description. |
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--page-size <PAGE_SIZE>` | integer [1–1000] | `25` | no | Grants per page. |
+| `--page-token <PAGE_TOKEN>` | string | - | no | Resume from a previous page (not with --all). |
+| `--all` | flag | - | no | Fetch every page of direct grants. |
+
+###### `agentbricks memory stores permissions grant`
+
+Grant access on STORE as its creator or a workspace admin.
+
+Specify exactly one of --user or --service-principal.
+Accepts a session store name or memory store ID, or a resource name.
+
+```
+agentbricks memory stores permissions grant STORE [options]
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `STORE` | yes | Store identifier; see command description. |
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--service-principal <SERVICE_PRINCIPAL>` | string | - | no | Service principal application/client ID, not a numeric SCIM ID (not with --user). |
+| `--user <USER>` | string | - | no | User email (not with --service-principal). |
+| `--permission <READ\|WRITE>` | `READ` \| `WRITE` | - | yes | Access to grant. WRITE includes READ; READ preserves an existing WRITE grant. |
+
+###### `agentbricks memory stores permissions revoke`
+
+Revoke both READ and WRITE on STORE as its creator or a workspace admin.
+
+Specify exactly one of --user or --service-principal.
+Accepts a session store name or memory store ID, or a resource name. Repeating a revoke
+succeeds. Ownership cannot be revoked; inherited access is not removed.
+
+```
+agentbricks memory stores permissions revoke STORE [options]
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `STORE` | yes | Store identifier; see command description. |
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--service-principal <SERVICE_PRINCIPAL>` | string | - | no | Service principal application/client ID, not a numeric SCIM ID (not with --user). |
+| `--user <USER>` | string | - | no | User email (not with --service-principal). |
+| `--yes`, `-y` | flag | - | no | Skip the confirmation prompt. |
+
 #### `agentbricks memory entries`
 
 Memory entries within a store, partitioned by actor.
@@ -449,8 +560,8 @@ _Options_
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
 | `--store <STORE>` | string | - | yes | Store id or resource name. |
-| `--actor-id <ACTOR_ID>` | string | - | yes | Actor (partition) this entry belongs to. |
-| `--path <PATH>` | string | - | yes | Absolute path, e.g. /preferences/style.md. |
+| `--actor-id <ACTOR_ID>` | string | - | yes | Who the memory belongs to, usually a user. The deployed chat app uses the signed-in user's email. |
+| `--path <PATH>` | string | - | yes | Key for the entry inside the store, written like a path (e.g. /preferences/style.md). Not a file on your machine. |
 | `--content <CONTENT>` | string | - | no | Entry content (inline). Use --content-file for large content. |
 | `--content-file <CONTENT_FILE>` | path | - | no | Read entry content from a file (avoids shell arg-length limits on large content). |
 | `--description <DESCRIPTION>` | string | - | no | Optional human-readable description. |
@@ -823,6 +934,7 @@ Workspace-scoped session stores.
 | [`sessions stores get`](#agentbricks-sessions-stores-get) | Get a session store by name (the name in agent.toml) or resource name (session-stores/<name>). |
 | [`sessions stores update`](#agentbricks-sessions-stores-update) | Update a store's description and/or metadata. |
 | [`sessions stores delete`](#agentbricks-sessions-stores-delete) | Delete a session store. |
+| [`sessions stores permissions`](#agentbricks-sessions-stores-permissions) | Inspect and manage store access. |
 
 ##### `agentbricks sessions stores create`
 
@@ -919,6 +1031,116 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
+| `--yes`, `-y` | flag | - | no | Skip the confirmation prompt. |
+
+##### `agentbricks sessions stores permissions`
+
+Inspect and manage store access.
+
+Get returns your effective permission. List shows direct grants, excluding implicit
+ownership and inherited access. Grant, List, and Revoke require the creator or a
+workspace admin. STORE uses the same identifiers as the store commands.
+
+| Subcommand | Description |
+| --- | --- |
+| [`sessions stores permissions get`](#agentbricks-sessions-stores-permissions-get) | Show the authenticated caller's effective permission on STORE. |
+| [`sessions stores permissions list`](#agentbricks-sessions-stores-permissions-list) | List explicit grants on STORE as its creator or a workspace admin. |
+| [`sessions stores permissions grant`](#agentbricks-sessions-stores-permissions-grant) | Grant access on STORE as its creator or a workspace admin. |
+| [`sessions stores permissions revoke`](#agentbricks-sessions-stores-permissions-revoke) | Revoke both READ and WRITE on STORE as its creator or a workspace admin. |
+
+###### `agentbricks sessions stores permissions get`
+
+Show the authenticated caller's effective permission on STORE.
+
+Session stores accept a store name or resource name. Memory stores accept an ID,
+resource name, or display name; ambiguous display names fail. No access is reported as
+PERMISSION_LEVEL_UNSPECIFIED in JSON.
+
+```
+agentbricks sessions stores permissions get STORE
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `STORE` | yes | Store identifier; see command description. |
+
+###### `agentbricks sessions stores permissions list`
+
+List explicit grants on STORE as its creator or a workspace admin.
+
+Accepts a session store name or memory store ID, or a resource name. Implicit ownership
+and inherited access are excluded. Text output offers subsequent pages on a terminal;
+JSON and piped output return one page unless --all is supplied.
+
+```
+agentbricks sessions stores permissions list STORE [options]
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `STORE` | yes | Store identifier; see command description. |
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--page-size <PAGE_SIZE>` | integer [1–1000] | `25` | no | Grants per page. |
+| `--page-token <PAGE_TOKEN>` | string | - | no | Resume from a previous page (not with --all). |
+| `--all` | flag | - | no | Fetch every page of direct grants. |
+
+###### `agentbricks sessions stores permissions grant`
+
+Grant access on STORE as its creator or a workspace admin.
+
+Specify exactly one of --user or --service-principal.
+Accepts a session store name or memory store ID, or a resource name.
+
+```
+agentbricks sessions stores permissions grant STORE [options]
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `STORE` | yes | Store identifier; see command description. |
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--service-principal <SERVICE_PRINCIPAL>` | string | - | no | Service principal application/client ID, not a numeric SCIM ID (not with --user). |
+| `--user <USER>` | string | - | no | User email (not with --service-principal). |
+| `--permission <READ\|WRITE>` | `READ` \| `WRITE` | - | yes | Access to grant. WRITE includes READ; READ preserves an existing WRITE grant. |
+
+###### `agentbricks sessions stores permissions revoke`
+
+Revoke both READ and WRITE on STORE as its creator or a workspace admin.
+
+Specify exactly one of --user or --service-principal.
+Accepts a session store name or memory store ID, or a resource name. Repeating a revoke
+succeeds. Ownership cannot be revoked; inherited access is not removed.
+
+```
+agentbricks sessions stores permissions revoke STORE [options]
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `STORE` | yes | Store identifier; see command description. |
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--service-principal <SERVICE_PRINCIPAL>` | string | - | no | Service principal application/client ID, not a numeric SCIM ID (not with --user). |
+| `--user <USER>` | string | - | no | User email (not with --service-principal). |
 | `--yes`, `-y` | flag | - | no | Skip the confirmation prompt. |
 
 #### `agentbricks sessions items`
@@ -1701,11 +1923,12 @@ _Options_
 
 ### `agentbricks endpoint`
 
-Invoke arbitrary HTTP endpoints.
+Invoke or load test Databricks Apps and arbitrary HTTP endpoints.
 
 | Subcommand | Description |
 | --- | --- |
 | [`endpoint invoke`](#agentbricks-endpoint-invoke) | Send one HTTP request to a Databricks App or arbitrary URL. |
+| [`endpoint loadtest`](#agentbricks-endpoint-loadtest) | Repeat HTTP requests with Locust and report performance. |
 
 #### `agentbricks endpoint invoke`
 
@@ -1732,9 +1955,85 @@ _Options_
 | `--query <QUERY>` | string | - | no | Query parameter as 'name=value'. |
 | `--json <JSON_VALUE>` | string | - | no | Complete JSON request body. |
 | `--sse` | flag | - | no | Consume the response as Server-Sent Events. |
-| `--routing-key <ROUTING_KEY>` | string | - | no | Sticky-routing key; set it to your stable session id to keep a session on one app replica. Sent verbatim as the X-Routing-Key header (default: generated for a Databricks App). Routing only: while session_id is a natural routing key, it is recommended to pass the session id in the --json body for session continuity. |
+| `--routing-key <ROUTING_KEY>` | string | - | no | Sticky-routing key; set it to your stable session id to keep a session on one app replica. Sent verbatim as the X-Routing-Key header (default: generated for a Databricks App). Routing only: for session continuity, also include the session id in the request body. |
 | `--timeout <TIMEOUT>` | float range | `300.0` | no | - |
 | `--auth`, `--no-auth` | flag | - | no | Inject Databricks OAuth authentication. |
+
+#### `agentbricks endpoint loadtest`
+
+Repeat HTTP requests with Locust and report performance. Requires
+`pip install 'databricks-agentbricks[loadtest]'`. The load generator runs on the machine executing
+the command; the target can be a deployed Databricks App, localhost, or another HTTP server.
+Each measured request is one HTTP exchange through complete body or SSE consumption. A `202`
+measures submission only; it does not follow background event or status URLs.
+
+```
+agentbricks endpoint loadtest [APP] --path PATH [options]
+```
+
+_Arguments_
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `APP` | no | Databricks App name; use `--url` for an arbitrary server. |
+
+_Options_
+
+| Option | Values | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `--url <URL>` | string | - | no | Base URL for localhost or an arbitrary HTTP server. |
+| `--method <METHOD>` | string | `POST` | no | HTTP method. |
+| `--path <PATH>` | string | - | yes | Request path, such as /api/invocations. |
+| `--query <QUERY>` | string | - | no | Query parameter as 'name=value'; repeat for more. |
+| `--sse` | flag | - | no | Consume responses as Server-Sent Events. |
+| `--routing-key <ROUTING_KEY>` | string | - | no | Sticky-routing key sent as X-Routing-Key. By default, each App user gets a key matching its generated user identity. Include session_id in the request body for session continuity. |
+| `--timeout <TIMEOUT>` | float range | `300.0` | no | Maximum request duration and drain time in seconds. |
+| `--auth`, `--no-auth` | flag | - | no | Inject Databricks OAuth authentication. |
+| `--concurrency <CONCURRENCY>` | integer range | `1` | no | Concurrent simulated users. Each starts another request when its previous request finishes. |
+| `--max-duration <DURATION>` | integer range | `60` | no | Stop dispatch after this many seconds, or earlier if `--max-requests` is reached. |
+| `--max-requests <MAX_REQUESTS>` | integer range | - | no | Cap measured requests, excluding warm-up; dispatch stops at this cap or duration, whichever comes first. |
+| `--requests <REQUESTS_FILE>` | file path | - | no | Nonempty JSON array of complete request bodies, cycled in order. Omit for bodyless requests; an array containing null sends JSON null. A one-element array repeats one body. |
+| `--warmup`, `--no-warmup` | flag | `true` | no | Send one excluded real warm-up request before measurement. Disable to include any cold-start latency and avoid the extra request. |
+| `--report-dir <REPORT_DIR>` | path | - | no | Write all HTML, CSV, and JSON formats together in a new or empty directory. |
+| `--save-responses <FILE>` | file path | - | no | Export all successful measured request inputs, outputs, and returned trace IDs to a new private JSON file outside the report directory. Parent directory must exist. |
+
+`--requests` is the only load-test body input. `endpoint invoke` retains `--json` for one request.
+
+The optional warm-up uses the first body, makes a real call, may warm the endpoint or mutate state,
+and can incur model/tool costs. Its latency, including cold-start latency, is excluded from measured
+statistics, caps, and response exports. A failed warm-up stops the test. `--no-warmup` measures every
+request, including any cold start. Reports record the excluded warm-up count separately.
+Duration and request cap have equal priority: reaching either stops dispatch, then in-flight requests
+drain for up to `--timeout` seconds. Ctrl-C drains and preserves a partial report.
+
+`{{request_id}}` expands to a fresh UUID per request; `{{user_id}}` stays stable per simulated user.
+Warm-up has its own user identity. `{{uuid}}` is an alias for the current request UUID. For durable
+agents, use request_id as the invocation idempotency key and user_id as the session ID: reusing a
+fixed invocation ID can replay cached results. App routing defaults to the same per-user identity.
+
+With `--output json` before `endpoint`, stdout is the Agent Bricks summary object, identical to
+`summary.json`. Progress stays on stderr. The summary includes
+successful-only latency, all-completed latency, TTFT/usage coverage, and incomplete counts.
+Runtime usage sums distinct model messages, updating rather than recounting repeated message IDs.
+Chat Completions and Responses usage snapshots replace earlier totals.
+`--report-dir` writes `index.html`, `locust.html`, `locust_*.csv`, and `summary.json` together;
+there is no format selector. Reports contain metrics and the target host without raw request/answer
+content. These bounded results do not establish sustainable capacity or answer quality.
+
+`--save-responses` exports every successful measured response, without sampling. The separate mode
+0600 file may contain sensitive inputs and answers; keep it out of shared report bundles. Disk usage
+grows with the load, while results are streamed rather than retained in memory. Its schema is
+`{"schema_version":1,"case_count":N,"observations":[{"case_index":0,"inputs":{},"outputs":"...","trace_id":null}]}`.
+`case_index` is zero-based. Failed/incomplete requests and warm-up are excluded. Explicit trace IDs
+are saved when returned by the server; load testing does not enable tracing, retrieve traces, or run
+MLflow evaluation. Use native MLflow tooling for subsequent analysis.
+
+```sh
+agentbricks --profile <profile> --output json endpoint loadtest agent-bricks-my-agent \
+  --path /api/invocations --requests requests.json --sse \
+  --concurrency 5 --max-duration 60 --max-requests 200 --report-dir results/loadtest \
+  --save-responses responses.json
+```
 
 ### `agentbricks tools`
 
@@ -1742,7 +2041,7 @@ Discover available integrations and manage an agent's tool bindings.
 
 Tools are what let an agent act beyond the language model itself - query governed data, call a service, or run a function - and each one is recorded in agent.toml so `agentbricks dev` / `agentbricks deploy` wire it in. `agentbricks tools add` manages these Databricks-managed tool types:
 
-sandbox Query Unity Catalog data via system.ai.sandbox, scoped to the volumes you choose. mcp A Databricks-managed MCP service (see `agentbricks tools list --kind mcp`), e.g. system.ai.web_search. uc-function An existing Unity Catalog function (catalog.schema.function). genie-one Workspace-wide Genie One MCP tools. genie-agent Native Genie conversation tools for a configured space ID.
+sandbox Run code in a Databricks sandbox (system.ai.sandbox) with the selected identity's Unity Catalog access. mcp A Databricks-managed MCP service (see `agentbricks tools list --kind mcp`), e.g. system.ai.web_search. uc-function An existing Unity Catalog function (catalog.schema.function). genie-one Workspace-wide Genie One MCP tools. genie-agent Native Genie conversation tools for a configured space ID.
 
 Browse available integrations with `agentbricks tools list`, add one with `agentbricks tools add <type>`, and drop a binding with `agentbricks tools remove`. Review agent.toml for configured managed tools and MCP bindings. The list shows addable integrations, not configured bindings or individual operations inside an MCP service. Custom Python tools are code-first - write them directly in your project's code rather than through the CLI.
 
@@ -1764,7 +2063,7 @@ Review that project's agent.toml to check configured managed tools and MCP bindi
 
 | Subcommand | Description |
 | --- | --- |
-| [`tools add sandbox`](#agentbricks-tools-add-sandbox) | Add a data sandbox tool (system.ai.sandbox), scoped to specific Unity Catalog resources. |
+| [`tools add sandbox`](#agentbricks-tools-add-sandbox) | Add a sandbox tool (system.ai.sandbox) that runs code with the selected identity's access. |
 | [`tools add mcp`](#agentbricks-tools-add-mcp) | Validate and add a Databricks-managed MCP service as a tool. |
 | [`tools add uc-function`](#agentbricks-tools-add-uc-function) | Add an existing Unity Catalog function (catalog.schema.function) as a tool. |
 | [`tools add genie-one`](#agentbricks-tools-add-genie-one) | Add workspace-wide Genie One MCP tools. |
@@ -1772,9 +2071,9 @@ Review that project's agent.toml to check configured managed tools and MCP bindi
 
 ##### `agentbricks tools add sandbox`
 
-Add a data sandbox tool (system.ai.sandbox), scoped to specific Unity Catalog resources.
+Add a sandbox tool (system.ai.sandbox) that runs code with the selected identity's access.
 
-Review the target project's agent.toml to check configured managed tools and MCP bindings.
+Sandbox code can read and write whatever Unity Catalog data the user (--auth user) or the App service principal (--auth app) can. Review the target project's agent.toml to check configured managed tools and MCP bindings.
 
 ```
 agentbricks tools add sandbox [options]
@@ -1785,8 +2084,6 @@ _Options_
 
 | Option | Values | Default | Required | Description |
 | --- | --- | --- | --- | --- |
-| `--scope <SCOPES>` | string | - | yes | Allowed volume: resource. Repeat for multiple scopes. |
-| `--permission <read_only|read_write>` | `read_only` \| `read_write` | `read_only` | no | - |
 | `--name <TOOL_ID>` | string | `sandbox` | no | - |
 | `--auth <user|app>` | `user` \| `app` | `user` | no | - |
 | `--databricks-access-token-included`, `--no-databricks-access-token-included` | boolean flag | `--databricks-access-token-included` | no | Expose the selected Databricks credential to sandbox code. |
@@ -1884,7 +2181,7 @@ _Options_
 
 List available integrations to add, not configured agent bindings.
 
-By default, show built-in add recipes plus caller-visible MCP Services in system.ai. `--kind mcp` limits discovery to MCP Services; `--schema catalog.schema` replaces system.ai. Sandbox recipes require scopes; UC-function and Genie Agent recipes require concrete resource identifiers. Genie One needs no additional argument.
+By default, show built-in add recipes plus caller-visible MCP Services in system.ai. `--kind mcp` limits discovery to MCP Services; `--schema catalog.schema` replaces system.ai. UC-function and Genie Agent recipes require concrete resource identifiers. Sandbox and Genie One recipes need no additional argument.
 
 No agent project is required. MCP discovery uses your Databricks profile; local recipes do not authenticate. This does not scan every workspace schema or list individual MCP operations. API failures return a nonzero exit status and mark discovery incomplete, not empty.
 

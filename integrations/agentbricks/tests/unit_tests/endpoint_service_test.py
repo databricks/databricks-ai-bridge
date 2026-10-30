@@ -8,9 +8,9 @@ import pytest
 
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.services.endpoint_service import EndpointService, InvokeRequest
 from databricks_agentbricks.services.invoke.auth import WorkspaceOAuthAuthenticator
 from databricks_agentbricks.services.invoke.transport import EndpointResponse, HttpSession
-from databricks_agentbricks.services.invoke_service import InvokeRequest, InvokeService
 
 
 def _response(status_code: int = 200, body=None) -> EndpointResponse:
@@ -23,14 +23,14 @@ def _response(status_code: int = 200, body=None) -> EndpointResponse:
     )
 
 
-def _service() -> tuple[InvokeService, Mock, Mock, Mock]:
+def _service() -> tuple[EndpointService, Mock, Mock, Mock]:
     apps = Mock(spec=AppsClient)
     authenticator = Mock(spec=WorkspaceOAuthAuthenticator)
     authenticator.authorization_header.return_value = "Bearer test-token"
     transport = Mock(spec=HttpSession)
     transport.send.return_value = _response()
     return (
-        InvokeService(apps_client=apps, authenticator=authenticator, transport=transport),
+        EndpointService(apps_client=apps, authenticator=authenticator, transport=transport),
         apps,
         authenticator,
         transport,
@@ -130,7 +130,7 @@ def test_valid_request_propagates_http_fields() -> None:
     assert request.timeout == 12.5
 
 
-@patch("databricks_agentbricks.services.invoke_service.uuid4")
+@patch("databricks_agentbricks.services.endpoint_service.uuid4")
 def test_app_name_is_prefixed_and_uses_oauth_and_generated_routing_key(uuid4: Mock) -> None:
     service, apps, authenticator, transport = _service()
     apps.get_app_url.return_value = "https://agent.example/"

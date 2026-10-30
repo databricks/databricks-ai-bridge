@@ -56,3 +56,5 @@ class RunConfig:
     # What every invocation asks for; workspaces name their models differently.
     model: str
     wheel: pathlib.Path | None
+    # The databricks-ai-bridge wheel projects install; None keeps the release on the package index.
+    bridge_wheel: pathlib.Path | None

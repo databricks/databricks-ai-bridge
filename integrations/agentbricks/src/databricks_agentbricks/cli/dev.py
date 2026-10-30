@@ -16,12 +16,14 @@ import click
 
 from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.databricks_cli import _databricks
-from databricks_agentbricks.clients.local_ports import port_in_use
+from databricks_agentbricks.clients.local_ports import free_port, port_in_use
 from databricks_agentbricks.clients.local_tracing_client import LocalTracingClient
+from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.dev import (
     announce_agent_profile,
     announce_bound_resources,
+    announce_starting,
     local_trace_label,
 )
 from databricks_agentbricks.presentation.dev import (
@@ -57,6 +59,7 @@ def build_dev_service(obj) -> DevService:
         apps_client=AppsClient(obj.profile, runner=_databricks),
         local_tracing=LocalTracingClient(),
         port_in_use=port_in_use,
+        free_port=free_port,
     )
 
 
@@ -73,7 +76,7 @@ def build_dev_service(obj) -> DevService:
     help="Build the app's environment with uv before running. Default: build only if no .venv "
     "exists yet, and reuse it otherwise. Requires uv.",
 )
-@click.option("--app-port", type=int, default=None, help="Port to run the app on (default 8000).")
+@click.option("--app-port", type=int, default=None, help="Port to run the agent on (default 8000).")
 @click.pass_obj
 def dev(
     obj,
@@ -83,9 +86,9 @@ def dev(
 ) -> None:
     """Run your agent locally so you can try it before deploying.
 
-    Starts the agent on a local server — by default http://localhost:8000 — and prints where to
-    reach it: the chat UI if the project has one, otherwise a sample request against the agent's
-    API.
+    Starts the agent on a local server — by default http://localhost:8000 — and, once it answers,
+    prints where to reach it: the chat UI if the project has one, otherwise a sample request against
+    the agent's API. If the agent fails to start, you get an error instead.
 
     Auth uses your Databricks profile, resolved in this order: `-p`, the project's `.env`,
     then `DATABRICKS_CONFIG_PROFILE`. The agent reaches Databricks model serving through the AI
@@ -150,11 +153,21 @@ def dev(
             env_file.get("DATABRICKS_CONFIG_PROFILE"),
             env_credential=env_credential if uses_env_credentials else None,
         )
-        _announce_local_url(
-            plan.preview.source_dir,
-            plan.preview.port,
-            plan.preview.server,
-            local_trace_label(plan.preview),
-            has_chat_ui=plan.preview.has_chat_ui,
-        )
-        service.run(plan)
+        announce_starting()
+        # The green panel waits until the agent answers on its port, so a failed start (bad auth, a
+        # build error, a crash on import) never looks like a successful one.
+        try:
+            service.run(
+                plan,
+                on_ready=lambda: _announce_local_url(
+                    plan.preview.source_dir,
+                    plan.preview.port,
+                    plan.preview.server,
+                    local_trace_label(plan.preview),
+                    has_chat_ui=plan.preview.has_chat_ui,
+                ),
+            )
+        except AgentCliError:
+            # Separate the error from the run-local logs it follows.
+            render.console().print()
+            raise

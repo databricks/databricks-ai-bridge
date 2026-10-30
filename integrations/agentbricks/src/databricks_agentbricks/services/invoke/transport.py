@@ -38,13 +38,21 @@ class EndpointResponse:
     events: tuple[dict[str, Any], ...] = ()
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 class HttpSession:
     """Small stdlib HTTP client retaining cookies across requests."""
 
-    def __init__(self) -> None:
-        self._opener = urllib.request.build_opener(
+    def __init__(self, *, follow_redirects: bool = True) -> None:
+        handlers: list[urllib.request.BaseHandler] = [
             urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
-        )
+        ]
+        if not follow_redirects:
+            handlers.append(_NoRedirect())
+        self._opener = urllib.request.build_opener(*handlers)
 
     def send(
         self,

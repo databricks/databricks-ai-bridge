@@ -5,6 +5,7 @@ Runtime exports are resolved lazily so the base package does not import optional
 
 from typing import TYPE_CHECKING
 
+from databricks_agentkit._permissions import Principal, StorePermission
 from databricks_agentkit.client import AgentKitClient
 from databricks_agentkit.memory_store import Memory, MemorySearchResult, MemoryStore
 from databricks_agentkit.session_store import (
@@ -28,6 +29,8 @@ if TYPE_CHECKING:
 
 __all__ = [
     "AgentKitClient",
+    "Principal",
+    "StorePermission",
     "Memory",
     "MemorySearchResult",
     "MemoryStore",

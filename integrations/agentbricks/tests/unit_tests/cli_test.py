@@ -46,6 +46,7 @@ def test_root_registers_supported_commands():
     } <= names
     # Removed commands stay only as hidden pointers to their replacements.
     assert all(cli.agentbricks.commands[name].hidden for name in ("login", "logout"))
+    assert "eval" not in names
     assert "mcp" not in names
     assert "pipeline" not in names
     assert "durability" not in names
@@ -115,9 +116,11 @@ def test_nested_command_help_shows_usage_options_and_examples():
 
     assert result.exit_code == 0, result.output
     assert "Usage: agentbricks tools add sandbox [OPTIONS]" in result.output
-    assert "--scope TEXT" in result.output
+    assert "--auth [user|app]" in result.output
+    assert "--scope" not in result.output
+    assert "--permission" not in result.output
     assert "EXAMPLES" in result.output
-    assert "agentbricks tools add sandbox --scope volume:main.data.files" in result.output
+    assert "agentbricks tools add sandbox --auth app" in result.output
 
 
 def test_tools_help_explains_add_workflow():
@@ -153,7 +156,7 @@ def test_tools_add_help_explains_types_and_project_targeting():
     assert "Subcommands target the current directory by default" in result.output
     assert "Pass --source PATH to target another project." in result.output
     for example in (
-        "agentbricks tools add sandbox --scope volume:main.data.files",
+        "agentbricks tools add sandbox",
         "agentbricks tools add mcp system.ai.web_search",
         "agentbricks tools add uc-function catalog.schema.lookup_ticket",
     ):

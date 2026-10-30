@@ -58,6 +58,17 @@ def announce_agent_profile(
         )
 
 
+def announce_starting() -> None:
+    """Say the agent is starting, in a neutral style: success is shown only once it answers.
+
+    Blank lines set it apart from the setup notes above and the run-local logs that follow.
+    """
+    con = render.console()
+    con.print()
+    con.print(f"[{render.DIM}]•[/] Starting agent locally… Details appear here once it's ready.")
+    con.print()
+
+
 def announce_local_url(
     source_dir: pathlib.Path,
     port: int,
@@ -66,7 +77,7 @@ def announce_local_url(
     *,
     has_chat_ui: bool | None = None,
 ) -> None:
-    """Show the chat URL or an invocation example before run-local blocks."""
+    """Show the chat URL or an invocation example once the local agent is answering."""
     base = f"http://localhost:{port}"
     deploy_name = source_dir.resolve().name
     if has_chat_ui is None:
@@ -83,7 +94,7 @@ def announce_local_url(
         if trace_url:
             fields["Traces"] = trace_url
         render.success(
-            "Starting agent",
+            "Agent is running",
             fields=fields,
             next_steps=[
                 f"Open {base} to chat with your agent",
@@ -106,7 +117,7 @@ def announce_local_url(
         if trace_url:
             fields["Traces"] = trace_url
         render.success(
-            "Starting API-only agent (no chat UI — see `agentbricks init --help`)",
+            "API-only agent is running (no chat UI — see `agentbricks init --help`)",
             fields=fields,
             next_steps=[
                 (sample, "Send a test request"),

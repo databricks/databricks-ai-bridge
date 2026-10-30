@@ -32,6 +32,18 @@ def model_service_env(role: str = DEFAULT_MODEL_ROLE) -> str:
 
 # Enable only once Databricks Connect supports table downscoping.
 SANDBOX_TABLE_SCOPES_ENABLED = False
+# Enable only once the Sandbox API backend of system.ai.sandbox accepts resource policies; it
+# currently rejects any non-empty `_meta.downscope`, so sandbox calls must send an empty one.
+SANDBOX_DOWNSCOPE_ENABLED = False
+
+
+def downscope_unsupported_message(tool_id: str) -> str:
+    """The action-oriented error for a manifest that declares a downscope while it is disabled."""
+    return (
+        f"Tool {tool_id!r} declares policy.downscope, which system.ai.sandbox does not support: "
+        "sandbox code runs with the selected identity's own Unity Catalog access. "
+        f"Remove policy.downscope from the [[tools]] entry with id = {tool_id!r} in agent.toml."
+    )
 
 
 class ToolManifestError(RuntimeError):
@@ -240,6 +252,8 @@ def _tool(value: object) -> ToolRecord:
         raise RuntimeError("Only sandbox bindings accept policy.databricks_access_token_included.")
     tool_id = _required_string(value.get("id"), "a tool id")
     validate_genie_source(tool_id, source, has_downscope="downscope" in policy)
+    if raw_downscope and not SANDBOX_DOWNSCOPE_ENABLED:
+        raise ToolManifestError(downscope_unsupported_message(tool_id))
     auth = value.get("auth")
     if auth is not None and auth not in ("user", "app"):
         raise ToolManifestError("Tool auth must be 'user' or 'app'.")
@@ -258,8 +272,8 @@ def _tool(value: object) -> ToolRecord:
         databricks_access_token_included=databricks_access_token_included,
         auth=auth,
     )
-    if record.kind == "sandbox" and (record.service != "system.ai.sandbox" or not record.downscope):
-        raise RuntimeError("Sandbox bindings require system.ai.sandbox and a downscope.")
+    if record.kind == "sandbox" and record.service != "system.ai.sandbox":
+        raise RuntimeError("Sandbox bindings require system.ai.sandbox.")
     if record.kind == "mcp" and not record.service:
         raise RuntimeError("MCP bindings require source.service.")
     if record.kind == "uc_function" and not record.function:

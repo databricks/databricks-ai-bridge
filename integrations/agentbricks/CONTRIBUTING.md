@@ -6,7 +6,7 @@ distribution is `databricks-agentbricks`; installing it provides the `agentbrick
 
 ## Architecture and placement
 
-Use the deploy, dev, invoke, and tracing decomposition as the reference for new work. A simple command can
+Use the deploy, dev, endpoint, and tracing decomposition as the reference for new work. A simple command can
 call an existing client or project helper; multi-step operations belong in an injectable service.
 Place code by its primary responsibility:
 
@@ -23,9 +23,9 @@ Keep shared utilities at the top of `src/databricks_agentbricks/`: external adap
 local configuration in `projects/`, output rendering in `presentation/`, and the framework-neutral
 `Reporter` protocol in `reporting.py`. Keep Click command entry points in `cli/`. Workflow entry
 points belong directly in `services/` as `deploy_service.py`, `dev_service.py`,
-`invoke_service.py`, and `tracing_service.py`; tracing bind/unbind persist the project directly from
+`endpoint_service.py`, and `tracing_service.py`; tracing bind/unbind persist the project directly from
 the CLI, while `TracingService` coordinates list/get. Put helpers used only by one workflow in
-`services/deployment/`, `services/invoke/`, or `services/tracing/`, not in new top-level feature
+`services/deployment/`, `services/invoke/`, `services/loadtest/`, or `services/tracing/`, not in new top-level feature
 packages. Tracing's workspace MLflow reads and local server lifecycle live in `clients/`; its
 experiment naming rule is shared from `projects/`. Services should not import Click or CLI
 presentation code.
@@ -117,6 +117,31 @@ These tests cover claim races, recovery groups, session promotion, attempt fenci
 and process-local request-auth lifetime. They skip when the database URL is unset and do not call
 workspace APIs or verify live Databricks Apps ingress.
 
+## Store permission integration tests
+
+The opt-in permission tests run the installed CLI with three existing identities in the same
+workspace. The creator and grantee must be non-admins; the admin profile must be a workspace admin.
+The grantee principal is its user email or service-principal application/client ID. The workspace
+must have the store APIs and permission feature enabled. From `integrations/agentbricks`:
+
+```sh
+RUN_AGENTBRICKS_PERMISSION_INTEGRATION_TESTS=1 \
+AGENTBRICKS_PERMISSION_TEST_CREATOR_PROFILE=<creator-profile> \
+AGENTBRICKS_PERMISSION_TEST_ADMIN_PROFILE=<admin-profile> \
+AGENTBRICKS_PERMISSION_TEST_GRANTEE_PROFILE=<grantee-profile> \
+AGENTBRICKS_PERMISSION_TEST_GRANTEE_PRINCIPAL=<application-id> \
+  uv run pytest tests/integration_tests/store_permissions_test.py -q
+```
+
+For a human grantee, set `AGENTBRICKS_PERMISSION_TEST_PRINCIPAL_TYPE=USER` and use its email for
+`AGENTBRICKS_PERMISSION_TEST_GRANTEE_PRINCIPAL`. Tests use the installed `agentbricks` executable
+on the test host and the workspace selected by those profiles. They create session/memory stores
+owned by both the admin and the non-admin creator, then exercise permission operations, actual
+data reads/writes through grant and revoke, denied non-admin management, pagination, store
+isolation, and invalid requests. They revoke test grants, delete synthetic data and stores, and
+verify store deletion. They do not provision identities or change flags. These opt-in tests are
+separate from the private runner's nightly Agent Bricks suites.
+
 ## Deploy phase timings
 
 `agentbricks deploy` ends its text output with the total wall time (`Deployed in 2m05s`). To see
@@ -161,9 +186,9 @@ the SDK resolve the selected or default profile. Local commands may run without 
 credentials, and transport failures must not change command behavior. When changing this path,
 update `tests/unit_tests/telemetry_test.py` and the telemetry description in `README.md`.
 
-Run `uv run pytest tests/functional/cli_smoke_test.py -k telemetry_to_local_receiver -q` from
+Run `uv run pytest tests/suites/test_telemetry.py --workspace fake -q` from
 `integrations/agentbricks` to exercise the installed CLI, Click hook, SDK authentication, and HTTP
-upload against a temporary local receiver. It verifies the FrontendLog payload without workspace
+upload against the fake workspace's receiver. It verifies the FrontendLog payload without workspace
 credentials; it does not verify Lumberjack ingestion, which requires a test workspace with the
 registered schema deployed.
 
@@ -180,6 +205,13 @@ Whenever you change the CLI surface, update `cli.md` in the same change. That in
 Check the tables against the actual `click` definitions in `src/databricks_agentbricks/cli/`; the quickest
 drift check is to compare against the CLI's own `--help` output. Purely internal changes that don't
 alter the command surface or help text need no `cli.md` update.
+
+For CLI behavior changes, review
+[`agent-bricks-workflow/SKILL.md`](src/databricks_agentbricks/templates/agent-bricks-workflow/SKILL.md)
+and its references. Update affected workflow guidance in the same PR. In the PR description,
+identify the skill updates or briefly explain why none are needed. Keep the complete command and
+option reference in `cli.md`; the skill explains workflows and uses installed command help for
+exact syntax.
 
 ## Adding a new agent framework
 
@@ -256,5 +288,6 @@ on `main` to the next minor development version (for example, `0.5.0.dev0` after
 cutting `0.4`). That version identifies development builds; it is not a published
 release. The scaffolds continue to depend on the released package. A new minor
 series starts with a new release branch from `main`. Tagging does not publish the package. Arrange the separate
-secure public registry release and its approval to publish to PyPI. The live workspace E2E suites run
-separately in the private integration runner and are not included in this gate.
+secure public registry release and its approval to publish to PyPI. The gate runs the unit and framework tests and the E2E suites
+against the fake workspace (`--workspace fake`) from the built wheels. The live workspace E2E suites
+run separately in the private integration runner and are not included in this gate.

@@ -1,6 +1,6 @@
 [project]
 name = "databricks-agentbricks"
-version = "0.8.0.dev0"
+version = "0.9.0.dev0"
 description = "Agent Bricks CLI and AgentKit SDK for custom agents on Databricks"
 authors = [
     { name="Databricks", email="agent-feedback@databricks.com" },
@@ -35,6 +35,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+loadtest = [
+    "locust>=2.31",
+]
 # Framework adapters are optional; the CLI, store SDK, and HTTP runtime install by default.
 langgraph = [
     "databricks-langchain==0.21.0",
