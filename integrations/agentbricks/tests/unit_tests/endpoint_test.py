@@ -21,6 +21,9 @@ class _Ctx:
     profile = "profile"
     output = "json"
 
+    def announce_workspace(self) -> None:
+        pass
+
 
 def _response(
     body,

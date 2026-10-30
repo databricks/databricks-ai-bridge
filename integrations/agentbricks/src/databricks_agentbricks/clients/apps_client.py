@@ -24,6 +24,7 @@ from databricks_agentbricks.clients.databricks_cli import _databricks
 from databricks_agentbricks.clients.legacy_runtime_store import LakebaseBackend
 from databricks_agentbricks.clients.local_ports import accepts_connections
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.projects.profiles import auth_login_command
 
 DatabricksRunner = Callable[..., subprocess.CompletedProcess]
 
@@ -257,7 +258,7 @@ class AppsClient:
         raise self._existence_check_failed(name, detail)
 
     def _existence_check_failed(self, name: str, detail: str) -> AgentCliError:
-        login = f"agentbricks login --profile {self._profile or '<profile>'}"
+        login = auth_login_command(self._profile)
         return AgentCliError(
             f"Could not check whether deployment '{name}' exists.",
             hint=f"{detail or 'The `databricks apps get` command failed without a message.'}\n"

@@ -26,6 +26,11 @@ _APP = "agent-bricks-demo"
 _DEAD_PID = 2**22 + 1
 
 
+@pytest.fixture(autouse=True)
+def _authenticated_profile(validated_profile):
+    """Deploy checks the profile's auth before any work; these tests exercise what follows."""
+
+
 @pytest.fixture
 def project(tmp_path: pathlib.Path) -> pathlib.Path:
     AgentProject.create(tmp_path, framework="langgraph", server="custom").write()
@@ -254,7 +259,7 @@ def test_no_wait_passes_through_non_default_options(
     events: list[tuple] = []
     monkeypatch.setattr(deploy_mod, "_databricks", _DeployRunner(events))
     ctx = _real_deploy_context(_DeployApi(events))
-    ctx.profile = None
+    ctx.global_profile = None
 
     result = CliRunner().invoke(
         deploy_mod.deploy,

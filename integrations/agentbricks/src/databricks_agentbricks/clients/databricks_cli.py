@@ -1,7 +1,7 @@
 """Thin wrapper around the ``databricks`` CLI.
 
 Agent Bricks shells out to the ``databricks`` CLI for the operations it doesn't call over the REST client
-(``apps`` lifecycle, ``sync``, ``postgres`` endpoint/credential lookups). This is the single place
+(``apps`` lifecycle, ``sync``, ``postgres`` endpoint/credential lookups, ``auth login``). This is the single place
 that builds the argv, threads the ``--profile`` through, and normalizes a non-zero exit into an
 ``AgentCliError``. Kept separate from any one caller so ``deploy``, ``dev``, and ``app_resources``
 share it without importing each other.
@@ -17,6 +17,7 @@ from collections.abc import Callable, Mapping
 from typing import Optional
 
 from databricks_agentbricks.errors import AgentCliError
+from databricks_agentbricks.projects.profiles import auth_login_command
 
 # Lines of relayed output a `tee` run keeps for callers that inspect a failure.
 _TEE_TAIL_LINES = 200
@@ -96,6 +97,22 @@ def _run_tee(
             sys.stderr.flush()
             tail.append(line)
     return subprocess.CompletedProcess(cmd, proc.returncode, stdout="".join(tail), stderr="")
+
+
+def run_databricks_login(profile: Optional[str]) -> None:
+    """Run `databricks auth login`; with no profile it shows its own interactive profile picker."""
+    command = ["databricks", "auth", "login", *(["--profile", profile] if profile else [])]
+    retry = auth_login_command(profile) if profile else "agentbricks auth login"
+    try:
+        # Keep the child process interactive while preserving stdout for Agent Bricks JSON output.
+        result = subprocess.run(command, text=True, check=False, stdout=sys.stderr)
+    except FileNotFoundError as exc:
+        raise AgentCliError(
+            "Could not configure Databricks authentication: the `databricks` CLI was not found.",
+            hint=f"Install the Databricks CLI, then retry `{retry}`.",
+        ) from exc
+    if result.returncode != 0:
+        raise AgentCliError(f"`{' '.join(command)}` failed (exit {result.returncode}).")
 
 
 def _run_until_ready(

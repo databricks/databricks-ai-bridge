@@ -6,13 +6,15 @@ Root Click group. Global `--profile` and `--output` flow to every subcommand via
 
 from __future__ import annotations
 
+import functools
+import pathlib
 import sys
-from typing import Optional
+from typing import Any, Optional
 
 import click
 
 from databricks_agentbricks import errors
-from databricks_agentbricks.cli.auth import load_default_profile, login, logout
+from databricks_agentbricks.cli.auth import auth_group
 from databricks_agentbricks.cli.deploy import deploy, deployments
 from databricks_agentbricks.cli.dev import dev
 from databricks_agentbricks.cli.doctor import doctor
@@ -25,16 +27,97 @@ from databricks_agentbricks.cli.tools import tools
 from databricks_agentbricks.cli.tracing import tracing
 from databricks_agentbricks.clients.api_client_provider import ApiClientProvider
 from databricks_agentbricks.presentation.help import configure_help
+from databricks_agentbricks.presentation.profile import (
+    announce_workspace,
+    warn_legacy_default_profile,
+)
+from databricks_agentbricks.projects.config import find_project_root, is_agentbricks_project
+from databricks_agentbricks.projects.env_file import read_env
+from databricks_agentbricks.projects.profiles import (
+    SOURCE_SDK_DEFAULT,
+    ProfileInfo,
+    auth_login_command,
+    auth_switch_command,
+    legacy_default_profile,
+    resolve_profile,
+)
 from databricks_agentkit._api_client import _AgentBricksApiClient
 
 
 class CliContext:
-    """Shared per-invocation state: selected profile, output mode, lazily-built client."""
+    """Shared per-invocation state: selected profile, output mode, lazily-built client.
+
+    The profile is decided once per command, by `select_profile`, before the command body runs.
+    """
 
     def __init__(self, profile: Optional[str], output: str):
-        self.profile = profile
         self.output = output
-        self.api_client_provider = ApiClientProvider(profile)
+        self.global_profile = profile
+        # A `-p/--profile` given after the subcommand; recorded by its option callback.
+        self.subcommand_profile: Optional[str] = None
+        # The current directory, when it's an Agent Bricks project; recorded by the root group.
+        self.cwd_project: Optional[pathlib.Path] = None
+        # Unset until `select_profile` runs, so reading it earlier fails instead of going stale.
+        self.profile_info: ProfileInfo
+        self._provider: Optional[ApiClientProvider] = None
+        self._workspace_announced = False
+        self._project_dir: Optional[pathlib.Path] = None
+        self._project_env: dict[str, str] = {}
+
+    @property
+    def profile(self) -> Optional[str]:
+        return self.profile_info.name
+
+    def select_profile(self, source_project: Optional[pathlib.Path] = None) -> None:
+        """Resolve the command's profile once (see `resolve_profile`); the client provider follows it.
+
+        The project whose `.env` applies is `source_project` (a `--source` project) if given, else
+        the current directory's project; `-p` (global or after the subcommand) outranks it.
+        """
+        flag = self.subcommand_profile or self.global_profile
+        project_dir = source_project or self.cwd_project
+        env_values = None
+        if project_dir is not None:
+            directory = project_dir.resolve()
+            if directory != self._project_dir:
+                self._project_dir = directory
+                self._project_env = read_env(directory / ".env")
+            project_dir, env_values = directory, self._project_env
+        self.profile_info = resolve_profile(flag, project_dir, env_values)
+
+    @property
+    def api_client_provider(self) -> ApiClientProvider:
+        """Built on first use, so it always reflects the profile `select_profile` settled on."""
+        if self._provider is None:
+            self._provider = ApiClientProvider(self.profile, on_first_use=self.announce_workspace)
+        return self._provider
+
+    @api_client_provider.setter
+    def api_client_provider(self, provider: Any) -> None:
+        """Lets tests inject a fake provider."""
+        self._provider = provider
+
+    def project_env(self, project_dir: pathlib.Path) -> dict[str, str]:
+        """`project_dir`'s parsed `.env`, reusing the one `select_profile` already read."""
+        directory = project_dir.resolve()
+        if directory == self._project_dir:
+            return self._project_env
+        return read_env(directory / ".env")
+
+    def announce_workspace(self, resolved_host: Optional[str] = None) -> None:
+        """Name the profile and workspace once, when the command first reaches the workspace."""
+        if not self._workspace_announced:
+            self._workspace_announced = True
+            announce_workspace(
+                self.profile,
+                self.profile_info.source,
+                output=self.output,
+                resolved_host=resolved_host,
+            )
+            # Before profiles moved into `.env`, this case used the profile `agentbricks login` saved.
+            legacy_profile = legacy_default_profile()
+            if legacy_profile and self.profile_info.source == SOURCE_SDK_DEFAULT:
+                warn_legacy_default_profile(legacy_profile, self.output)
 
     def client(self) -> _AgentBricksApiClient:
         """Compatibility accessor for commands not yet migrated to ``api_client_provider``."""
@@ -70,8 +153,11 @@ def agentbricks(ctx: click.Context, profile: Optional[str], output: str) -> None
     authenticated command.
 
     New here? The examples below take you from an empty directory to a deployed agent. Agent Bricks
-    authenticates with a Databricks profile: run `agentbricks login` once to save a default, or pass
-    --profile / -p (without one, the Databricks SDK's default authentication is used).
+    authenticates with a Databricks profile: sign in with `agentbricks auth login <profile>`,
+    then run `agentbricks init <dir> --profile <profile>` to record it in the project's .env.
+    Inside a project, its .env profile is used (change it with `agentbricks auth switch`);
+    --profile / -p overrides it, and outside a project DATABRICKS_CONFIG_PROFILE applies (without
+    any of these, the Databricks SDK's default authentication is used).
 
     Agents built with Agent Bricks combine the platform's capabilities:
 
@@ -91,12 +177,94 @@ def agentbricks(ctx: click.Context, profile: Optional[str], output: str) -> None
     """
     # Let errors render to match the selected output mode (JSON errors for -o json).
     errors.set_output_mode(output)
-    ctx.obj = CliContext(profile=profile or load_default_profile(), output=output)
+    ctx.obj = CliContext(profile=profile, output=output)
+    project = find_project_root(pathlib.Path.cwd())
+    if project is not None:
+        # Every command run inside a project (including its subfolders) uses its `.env` profile, so
+        # e.g. `endpoint invoke` targets the same workspace that `deploy` just used.
+        ctx.obj.cwd_project = project
 
 
-agentbricks.add_command(login)
-agentbricks.add_command(logout)
+_REMOVED_COMMANDS = {
+    "login": f"Sign in with `{auth_login_command(None)}`, and pick a project's profile with "
+    f"`{auth_switch_command(None)}`.",
+    "logout": f"Profiles are now chosen per project in its .env (`{auth_switch_command(None)}`); "
+    "there is no saved default to clear.",
+}
+
+
+def _removed_command(name: str, hint: str) -> click.Command:
+    @click.command(
+        name,
+        hidden=True,
+        context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+    )
+    def removed() -> None:
+        raise errors.AgentCliError(f"`agentbricks {name}` was removed.", hint=hint)
+
+    return removed
+
+
+def _apply_subcommand_profile(
+    ctx: click.Context, _param: click.Parameter, value: Optional[str]
+) -> None:
+    obj = ctx.find_object(CliContext)
+    if value and obj is not None:
+        obj.subcommand_profile = value
+
+
+def _accept_profile_anywhere(command: click.Command, *, source_profile: bool = True) -> None:
+    """Let `-p/--profile` follow the subcommand too (`agentbricks dev -p X`), not only precede it.
+
+    Commands that declare their own `--profile` (`init`) keep it.
+    """
+    if isinstance(command, click.Group):
+        for subcommand in command.commands.values():
+            _accept_profile_anywhere(subcommand, source_profile=source_profile)
+        return
+    _select_profile_before_running(
+        command,
+        use_source=source_profile and any(param.name == "source" for param in command.params),
+    )
+    if any("--profile" in param.opts for param in command.params):
+        return
+    command.params.append(
+        click.Option(
+            ["--profile", "-p"],
+            default=None,
+            expose_value=False,
+            callback=_apply_subcommand_profile,
+            help="Databricks config profile to authenticate with (same as the global -p).",
+        )
+    )
+
+
+def _select_profile_before_running(command: click.Command, *, use_source: bool) -> None:
+    """Decide the profile once, just before `command` runs, from `-p`, `--source`'s project (so e.g.
+    `tracing bind --source proj` reads the workspace `deploy --source proj` writes to), the
+    current directory's project, then the environment."""
+    callback = command.callback
+    if callback is None:
+        return
+
+    @functools.wraps(callback)
+    def with_selected_profile(*args, **kwargs):
+        obj = click.get_current_context().find_object(CliContext)
+        if obj is not None:
+            source = kwargs.get("source") if use_source else None
+            source_project = (
+                pathlib.Path(source)
+                if source and is_agentbricks_project(pathlib.Path(source))
+                else None
+            )
+            obj.select_profile(source_project)
+        return callback(*args, **kwargs)
+
+    command.callback = with_selected_profile
+
+
 agentbricks.add_command(init)
+agentbricks.add_command(auth_group)
 agentbricks.add_command(doctor)
 agentbricks.add_command(dev)
 agentbricks.add_command(memory)
@@ -107,6 +275,11 @@ agentbricks.add_command(deployments)
 agentbricks.add_command(endpoint)
 agentbricks.add_command(tools)
 agentbricks.add_command(experimental)
+for _name, _hint in _REMOVED_COMMANDS.items():
+    agentbricks.add_command(_removed_command(_name, _hint))
+# `auth` commands resolve their own `--source` directory and must not move the session to it.
+for _command in agentbricks.commands.values():
+    _accept_profile_anywhere(_command, source_profile=_command is not auth_group)
 configure_help(agentbricks)
 
 

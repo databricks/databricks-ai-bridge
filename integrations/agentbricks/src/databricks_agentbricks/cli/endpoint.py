@@ -88,6 +88,8 @@ def invoke(
     auth,
 ) -> None:
     """Send one HTTP request to a Databricks App or arbitrary URL."""
+    if app:
+        obj.announce_workspace()
     service = build_endpoint_service(obj)
     request = InvokeRequest(
         app=app,
@@ -194,6 +196,8 @@ def loadtest(
         responses_file=responses_file,
         warmup=warmup,
     )
+    if app:
+        obj.announce_workspace()
     result = build_endpoint_service(obj).loadtest(plan)
     render_loadtest_summary(result.summary, report_dir=report_dir, output=obj.output)
     if obj.output == "json":

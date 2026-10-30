@@ -20,6 +20,7 @@ class _Ctx:
     profile = "prof"
     output = "text"
     api_client_provider = types.SimpleNamespace(get=lambda: types.SimpleNamespace())
+    announce_workspace = staticmethod(lambda: None)
 
 
 # --- ML-69259 / 69247: deployment-name validation ---------------------------
@@ -75,6 +76,9 @@ def test_deployments_list_shows_agent_bricks_apps(monkeypatch):
         profile = "prof"
         output = "json"
         api_client_provider = types.SimpleNamespace(get=lambda: types.SimpleNamespace())
+        announce_workspace = staticmethod(lambda: None)
+
+    announce_workspace = staticmethod(lambda: None)
 
     result = CliRunner().invoke(deploy_mod.deployments_list, [], obj=_JsonCtx())
     assert result.exit_code == 0, result.output

@@ -162,6 +162,24 @@ def test_prepare_builds_local_plan_and_run_uses_injected_apps_client(
     )
 
 
+def test_prepare_puts_local_env_in_the_local_manifest(
+    service_fixture: SimpleNamespace, tmp_path: pathlib.Path
+) -> None:
+    request = DevRequest(
+        source=str(tmp_path),
+        prepare_environment=None,
+        app_port=None,
+        local_env={"DATABRICKS_CONFIG_PROFILE": "ml"},
+    )
+
+    with service_fixture.service.prepare(request) as plan:
+        env = _manifest_env(plan.entry_point)
+
+    assert env["DATABRICKS_CONFIG_PROFILE"] == "ml"
+    assert env["MLFLOW_TRACKING_URI"] == "http://127.0.0.1:5599"
+    assert "DATABRICKS_CONFIG_PROFILE" not in (tmp_path / "app.yaml").read_text()
+
+
 def test_prepare_honors_explicit_environment_flag_and_default_port(
     service_fixture: SimpleNamespace, tmp_path: pathlib.Path
 ) -> None:

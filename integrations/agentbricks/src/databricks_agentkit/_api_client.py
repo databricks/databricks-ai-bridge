@@ -8,9 +8,6 @@ service without changing the public resource surface.
 
 from __future__ import annotations
 
-import configparser
-import os
-import pathlib
 import time
 from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import quote
@@ -113,15 +110,10 @@ def memory_entry_path(store: str, entry: str) -> str:
 
 
 def _profile_host(profile: str) -> Optional[str]:
-    config_path = pathlib.Path(
-        os.getenv("DATABRICKS_CONFIG_FILE", pathlib.Path.home() / ".databrickscfg")
-    )
-    parser = configparser.ConfigParser()
-    try:
-        parser.read(config_path)
-    except (OSError, configparser.Error):
-        return None
-    return parser.get(profile, "host", fallback=None)
+    # Imported here so the runtime import of this module doesn't load the CLI's profile lookups.
+    from databricks_agentbricks.projects.profiles import profile_host
+
+    return profile_host(profile)
 
 
 def _bound_retry_timeout(client: WorkspaceClient) -> WorkspaceClient:
@@ -174,7 +166,7 @@ class _AgentBricksApiClient:
             raise AgentCliError(
                 f"Could not initialize Databricks auth: {exc}",
                 hint="Select an existing profile with `agentbricks --profile <name> <command>` "
-                "or authenticate and save it with `agentbricks login --profile <name>`.",
+                "or sign in with `agentbricks auth login <name>`.",
             ) from exc
 
     @property
