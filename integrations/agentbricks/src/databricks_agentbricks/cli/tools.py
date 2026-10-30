@@ -53,6 +53,8 @@ def _tool_record(spec: ToolSpec) -> dict[str, str]:
         record["auth"] = spec.auth or (
             "app/default" if spec.source.kind == "uc_function" else "unspecified"
         )
+    if spec.environment is not None:
+        record["image_uri"] = spec.environment.image_uri
     return record
 
 
@@ -70,10 +72,10 @@ def _emit_change(
         render.emit_json(payload)
         return
     if changed_files:
-        render.success(
-            f"Added {spec.id}",
-            fields={"Kind": spec.source.kind, "Manifest": str(project.path)},
-        )
+        fields = {"Kind": spec.source.kind, "Manifest": str(project.path)}
+        if spec.environment is not None:
+            fields["Image"] = spec.environment.image_uri
+        render.success(f"Added {spec.id}", fields=fields)
     else:
         click.echo(f"Tool {spec.id!r} is already configured in {project.path}")
     click.echo(f"Review {project.path} to check configured managed tools and MCP bindings.")
@@ -110,6 +112,7 @@ def add_sandbox_to_manifest(
     tool_id: str = "sandbox",
     auth: Literal["user", "app"] = "user",
     databricks_access_token_included: bool = True,
+    image_uri: str | None = None,
 ) -> None:
     """Shared implementation for the nested command and compatibility alias."""
     if not tool_manifest.SANDBOX_DOWNSCOPE_ENABLED and (scopes or permission is not None):
@@ -136,6 +139,7 @@ def add_sandbox_to_manifest(
             scopes=parsed,
             auth=auth,
             databricks_access_token_included=databricks_access_token_included,
+            image_uri=image_uri,
         ),
     )
 
@@ -210,6 +214,12 @@ def _source_option(function):
     show_default=True,
     help="Expose the selected Databricks credential to sandbox code.",
 )
+@click.option(
+    "--image-uri",
+    default=None,
+    help="Unity Catalog custom image for new sandboxes (catalog.schema.image:tag or "
+    "catalog.schema.image@sha256:<digest>). Default: the standard sandbox image.",
+)
 @_source_option
 @click.pass_obj
 def add_sandbox(
@@ -220,12 +230,14 @@ def add_sandbox(
     source: pathlib.Path,
     auth: Literal["user", "app"],
     databricks_access_token_included: bool,
+    image_uri: str | None,
 ) -> None:
     """Add a sandbox tool (system.ai.sandbox) that runs code with the selected identity's access.
 
     Sandbox code can read and write whatever Unity Catalog data the user (--auth user) or the App
-    service principal (--auth app) can. Review the target project's agent.toml to check configured
-    managed tools and MCP bindings.
+    service principal (--auth app) can. Pass --image-uri to run sandbox code in a Unity Catalog
+    custom image; that identity needs access to the image. Review the target project's agent.toml
+    to check configured managed tools and MCP bindings.
     """
     add_sandbox_to_manifest(
         obj,
@@ -235,6 +247,7 @@ def add_sandbox(
         tool_id=tool_id,
         auth=auth,
         databricks_access_token_included=databricks_access_token_included,
+        image_uri=image_uri,
     )
 
 
