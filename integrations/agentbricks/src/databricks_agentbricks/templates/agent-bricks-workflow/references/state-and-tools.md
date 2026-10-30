@@ -7,9 +7,10 @@ Inspect the project's `agent.toml` before listing workspace resources or creatin
 A declaration does not prove the resource exists or that the deployed app can access it.
 Deployment reconciles declared stores and app grants.
 
-Memory store display names are not unique identifiers. Use the store ID or resource name returned
-by the CLI; session stores use their store name. Workspace-wide lists can include other projects'
-resources. Do not select a store solely because its display name resembles this project.
+Memory store display names are unique within a workspace. `memory bind` takes the display name;
+commands that take `--store` take the Store ID or resource name the CLI returns. Session stores use
+their store name. Workspace-wide lists include other projects' stores, so use the store declared in
+`agent.toml` rather than one whose name merely resembles this project.
 
 ## Seeding memory and local dev
 
