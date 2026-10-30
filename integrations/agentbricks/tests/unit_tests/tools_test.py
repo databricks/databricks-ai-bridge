@@ -269,6 +269,70 @@ def test_add_sandbox_can_disable_databricks_token_env(tmp_path: pathlib.Path):
     assert "databricks_access_token_included = false" in (project / "agent.toml").read_text()
 
 
+@pytest.mark.parametrize("output", ["text", "json"])
+def test_add_sandbox_with_image_uri_writes_environment(tmp_path, monkeypatch, output):
+    _disable_downscope(monkeypatch)
+    project = _project(tmp_path)
+    image_uri = "main.images.sandbox:v1"
+
+    result = CliRunner().invoke(
+        tools,
+        ["add", "sandbox", "--image-uri", image_uri, "--source", str(project)],
+        obj=_Ctx(output),
+    )
+
+    assert result.exit_code == 0, result.output
+    loaded = AgentProject.load(project).tools[0]
+    assert loaded.environment is not None
+    assert loaded.environment.image_uri == image_uri
+    manifest = (project / "agent.toml").read_text()
+    assert 'environment = {image_uri = "main.images.sandbox:v1"}' in manifest
+    if output == "json":
+        assert json.loads(result.output)["tool"]["image_uri"] == image_uri
+    else:
+        assert image_uri in result.output
+
+
+def test_add_sandbox_without_image_uri_omits_environment(tmp_path, monkeypatch):
+    _disable_downscope(monkeypatch)
+    project = _project(tmp_path)
+
+    result = CliRunner().invoke(
+        tools,
+        [
+            "add",
+            "sandbox",
+            "--source",
+            str(project),
+        ],
+        obj=_Ctx("json"),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert AgentProject.load(project).tools[0].environment is None
+    assert "environment" not in (project / "agent.toml").read_text()
+    assert "image_uri" not in json.loads(result.output)["tool"]
+
+
+@pytest.mark.parametrize("image_uri", ["", " main.images.sandbox:v1", "main.images.sandbox v1"])
+def test_add_sandbox_rejects_invalid_image_uri_without_project_changes(
+    tmp_path, monkeypatch, image_uri
+):
+    _disable_downscope(monkeypatch)
+    project = _project(tmp_path)
+    before = {path: path.read_bytes() for path in project.rglob("*") if path.is_file()}
+
+    result = CliRunner().invoke(
+        tools,
+        ["add", "sandbox", "--image-uri", image_uri, "--source", str(project)],
+        obj=_Ctx(),
+    )
+
+    assert result.exit_code != 0
+    assert "environment.image_uri" in result.output
+    assert {path: path.read_bytes() for path in project.rglob("*") if path.is_file()} == before
+
+
 def test_generic_mcp_rejects_sandbox_scope(tmp_path: pathlib.Path):
     project = _project(tmp_path)
 

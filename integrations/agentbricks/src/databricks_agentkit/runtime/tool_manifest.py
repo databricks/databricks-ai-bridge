@@ -37,6 +37,11 @@ SANDBOX_TABLE_SCOPES_ENABLED = False
 SANDBOX_DOWNSCOPE_ENABLED = False
 
 
+# The MCP `_meta` key that carries a sandbox binding's environment, outside model-controlled
+# arguments. system.ai.sandbox forwards it to the sandbox create request; it accepts only image_uri.
+SANDBOX_ENVIRONMENT_SPEC_META_KEY = "com.databricks/environment_spec"
+
+
 def downscope_unsupported_message(tool_id: str) -> str:
     """The action-oriented error for a manifest that declares a downscope while it is disabled."""
     return (
@@ -75,6 +80,44 @@ class ToolRecord:
     databricks_access_token_included: bool = False
     space_id: str | None = None
     auth: str | None = None
+    image_uri: str | None = None
+
+
+def validate_image_uri(value: object) -> str:
+    """Validate a sandbox custom image reference such as ``catalog.schema.image:tag``.
+
+    The sandbox service resolves the reference and authorizes access to the image, so only reject
+    values it can never accept.
+    """
+    if not isinstance(value, str) or not value:
+        raise ToolManifestError("Sandbox environment.image_uri must be a non-empty string.")
+    if any(
+        character.isspace() or ord(character) < 32 or ord(character) == 127 for character in value
+    ):
+        raise ToolManifestError(
+            "Sandbox environment.image_uri cannot contain whitespace or control characters."
+        )
+    return value
+
+
+def parse_sandbox_environment(kind: str, value: object) -> str | None:
+    """Parse a tool's optional ``environment`` table and return its image URI."""
+    if value is None:
+        return None
+    if kind != "sandbox":
+        raise ToolManifestError("Only sandbox bindings accept environment.")
+    if not isinstance(value, Mapping):
+        raise ToolManifestError("agent.toml tool environment must be a table.")
+    value = cast(Mapping[str, Any], value)
+    unexpected = set(value) - {"image_uri"}
+    if unexpected:
+        raise ToolManifestError(
+            "Sandbox environment has unsupported fields: "
+            f"{', '.join(sorted(str(field) for field in unexpected))}."
+        )
+    if "image_uri" not in value:
+        raise ToolManifestError("Sandbox environment must declare image_uri.")
+    return validate_image_uri(value["image_uri"])
 
 
 def validate_genie_source(
@@ -262,6 +305,7 @@ def _tool(value: object) -> ToolRecord:
             "Python tools are code-first and cannot be declared in agent.toml. "
             "Remove this entry; decorated tools in agent/tools remain active."
         )
+    image_uri = parse_sandbox_environment(kind, value.get("environment"))
     record = ToolRecord(
         id=tool_id,
         kind=kind,
@@ -271,6 +315,7 @@ def _tool(value: object) -> ToolRecord:
         downscope=tuple(_scope(item) for item in raw_downscope),
         databricks_access_token_included=databricks_access_token_included,
         auth=auth,
+        image_uri=image_uri,
     )
     if record.kind == "sandbox" and record.service != "system.ai.sandbox":
         raise RuntimeError("Sandbox bindings require system.ai.sandbox.")
@@ -362,7 +407,10 @@ def downscope_wire(tool: ToolRecord) -> dict[str, list[dict[str, str]]]:
 
 def sandbox_meta(tool: ToolRecord) -> dict[str, Any]:
     """Build the protected MCP metadata for a configured sandbox binding."""
-    return {
+    meta: dict[str, Any] = {
         "downscope": downscope_wire(tool),
         "databricks_access_token_included": tool.databricks_access_token_included,
     }
+    if tool.image_uri is not None:
+        meta[SANDBOX_ENVIRONMENT_SPEC_META_KEY] = {"image_uri": tool.image_uri}
+    return meta

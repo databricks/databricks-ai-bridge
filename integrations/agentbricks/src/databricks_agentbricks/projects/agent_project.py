@@ -174,6 +174,21 @@ class ToolPolicy:
 
 
 @dataclass(frozen=True)
+class ToolEnvironment:
+    """Sandbox environment selected by the host, outside model-controlled tool arguments."""
+
+    image_uri: str
+
+    def __post_init__(self) -> None:
+        try:
+            tool_manifest.validate_image_uri(self.image_uri)
+        except tool_manifest.ToolManifestError as exc:
+            raise AgentCliError(
+                str(exc), hint="Use a Unity Catalog image reference: catalog.schema.image:tag."
+            ) from exc
+
+
+@dataclass(frozen=True)
 class ToolSpec:
     """One framework-neutral tool binding from ``agent.toml``."""
 
@@ -181,6 +196,7 @@ class ToolSpec:
     source: ToolSource
     policy: ToolPolicy = field(default_factory=ToolPolicy)
     auth: Literal["user", "app"] | None = None
+    environment: ToolEnvironment | None = None
 
     def __post_init__(self) -> None:
         source_values = {"kind": self.source.kind}
@@ -201,6 +217,8 @@ class ToolSpec:
             raise AgentCliError(
                 "Only sandbox bindings accept policy.databricks_access_token_included."
             )
+        if kind != "sandbox" and self.environment is not None:
+            raise AgentCliError("Only sandbox bindings accept environment.")
         if kind in {"genie_one", "genie_agent"}:
             return
         if not _TOOL_ID.fullmatch(self.id):
@@ -236,12 +254,14 @@ class ToolSpec:
         scopes: Sequence[Scope] = (),
         auth: Literal["user", "app"] | None = None,
         databricks_access_token_included: bool = True,
+        image_uri: str | None = None,
     ) -> "ToolSpec":
         return cls(
             id=tool_id,
             source=ToolSource(kind="sandbox", service="system.ai.sandbox"),
             policy=ToolPolicy(tuple(scopes), databricks_access_token_included),
             auth=auth,
+            environment=ToolEnvironment(image_uri) if image_uri is not None else None,
         )
 
     @classmethod
@@ -418,6 +438,10 @@ def _tool_from_manifest(value: object) -> ToolSpec:
         raise AgentCliError("Tool policy databricks_access_token_included must be a boolean.")
     if kind != "sandbox" and "databricks_access_token_included" in policy_value:
         raise AgentCliError("Only sandbox bindings accept policy.databricks_access_token_included.")
+    try:
+        image_uri = tool_manifest.parse_sandbox_environment(kind, value.get("environment"))
+    except tool_manifest.ToolManifestError as exc:
+        raise AgentCliError(str(exc)) from exc
     return ToolSpec(
         id=tool_id,
         source=ToolSource(
@@ -431,6 +455,7 @@ def _tool_from_manifest(value: object) -> ToolSpec:
             databricks_access_token_included,
         ),
         auth=value.get("auth"),
+        environment=ToolEnvironment(image_uri) if image_uri is not None else None,
     )
 
 
@@ -463,6 +488,8 @@ def _tool_table(spec: ToolSpec) -> Any:
             policy["downscope"] = downscope
         policy["databricks_access_token_included"] = spec.policy.databricks_access_token_included
         table.add("policy", policy)
+        if spec.environment is not None:
+            table.add("environment", _inline_table({"image_uri": spec.environment.image_uri}))
     return table
 
 
