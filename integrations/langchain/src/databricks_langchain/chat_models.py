@@ -1581,6 +1581,12 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
     return input_items
 
 
+# AI Gateway returns Gemini's thought signature as a non-standard field on each tool call and
+# rejects the next request unless it's sent back. The raw tool calls in `additional_kwargs` keep it.
+# The long-term fix is for the gateway to keep the signature server-side.
+_THOUGHT_SIGNATURE = "thoughtSignature"
+
+
 def _get_tool_calls_from_ai_message(message: AIMessage) -> List[Dict]:
     tool_calls = [
         {
@@ -1607,13 +1613,33 @@ def _get_tool_calls_from_ai_message(message: AIMessage) -> List[Dict]:
     ]
 
     if tool_calls or invalid_tool_calls:
-        return tool_calls + invalid_tool_calls
+        return _restore_thought_signatures(
+            tool_calls + invalid_tool_calls, message.additional_kwargs.get("tool_calls")
+        )
 
     # Get tool calls from additional kwargs if present.
     return [
-        {k: v for k, v in tool_call.items() if k in {"id", "type", "function"}}
+        {k: v for k, v in tool_call.items() if k in {"id", "type", "function", _THOUGHT_SIGNATURE}}
         for tool_call in message.additional_kwargs.get("tool_calls", [])
     ]
+
+
+def _restore_thought_signatures(tool_calls: List[Dict], raw_tool_calls: Any) -> List[Dict]:
+    """Copy each raw tool call's `thoughtSignature` onto the serialized tool call with its id.
+
+    Gemini's tool-call id is the function name, so the same id can repeat in one message: pair
+    each tool call with the first unused raw entry that has its id, in order.
+    """
+    unused = [raw for raw in raw_tool_calls or [] if isinstance(raw, dict) and raw.get("id")]
+    if not any(raw.get(_THOUGHT_SIGNATURE) for raw in unused):
+        return tool_calls
+    for tool_call in tool_calls:
+        i = next((i for i, raw in enumerate(unused) if raw["id"] == tool_call["id"]), None)
+        if i is None:
+            continue
+        if signature := unused.pop(i).get(_THOUGHT_SIGNATURE):
+            tool_call[_THOUGHT_SIGNATURE] = signature
+    return tool_calls
 
 
 def _convert_dict_to_message(
