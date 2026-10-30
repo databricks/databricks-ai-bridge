@@ -57,8 +57,8 @@ keeps facts the agent recalls across conversations, keyed by `actor`: `runtime/a
 (`auth = "user"`) tool bound, the adapter also namespaces a supplied `actor` to the signed-in user; see
 [Request-user authorization](#request-user-authorization).
 
-Memory is off under `agentbricks dev`, so try it against the deployed app: two invocations with
-different `session_id`s and the same `actor`.
+Memory is off by default under `agentbricks dev`, so try it against the deployed app: two
+invocations with different `session_id`s and the same `actor`.
 
 ```bash
 ACTOR=user-123
@@ -122,7 +122,8 @@ Malformed middleware decisions return `INVALID_APPROVAL` before the resume value
 so the user can correct the decision and submit it with a new invocation ID.
 
 The default checkpointer is process-local. Bind a managed Session Store to preserve multi-turn and
-paused LangGraph state across restarts:
+paused LangGraph state across restarts (session stores are off by default in `agentbricks dev`; the
+binding takes effect after `agentbricks deploy`):
 
 ```bash
 agentbricks sessions bind my-agent-sessions
@@ -146,7 +147,19 @@ Use `agentbricks init --framework langgraph --disable-chat-app` for API-only out
 - Change `runtime/adapter.py` only to map a different application input/output contract.
 - Add local tools under `agent/tools/`; modules are auto-discovered.
 - Add MCP servers in `agent/mcps.py` or with `agentbricks tools add mcp`.
-- Bind long-term memory with `agentbricks memory bind <store>`.
+- Bind long-term memory with `agentbricks memory bind <store>`; `agentbricks deploy` creates the
+  store if it doesn't exist. Memory and session stores are off by default in `agentbricks dev` (the
+  chat app shows "Not connected" for memory locally) and connect after deploy. To start with
+  memories already in the store, create it and add entries before you bind and deploy:
+
+  ```bash
+  agentbricks memory stores create --name <store>    # prints a Store ID
+  agentbricks memory entries create --store <Store ID> --actor-id you@example.com \
+    --path /preferences/style.md --content "Prefers concise answers."
+  ```
+
+  `--path` is the entry's key in the store, not a file on your machine; the deployed chat app uses
+  the signed-in user's email as the actor.
 - Route the agent's model through a Unity Gateway model service you own with
   `agentbricks experimental models bind`, then search for a better model and prompt on your own
   eval set with `agentbricks experimental models upgrade`. These commands are experimental, so

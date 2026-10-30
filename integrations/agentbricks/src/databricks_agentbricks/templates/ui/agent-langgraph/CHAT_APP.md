@@ -20,6 +20,11 @@ entries (searchable, filterable by actor, with a modal for each entry); the othe
 in place, and Traces links out to the MLflow experiment. The transport selector is the only manual
 capability choice; hover or focus a mode to see what it does.
 
+Memory and session stores are off by default in `agentbricks dev`. The chat app shows "Not
+connected" for memory locally even when a store is bound, and the session indicator shows the
+in-process state. Both connect after `agentbricks deploy`. To use real stores locally, set
+`AGENT_MEMORY_STORE` and `AGENT_SESSION_STORE` in the project's `.env`.
+
 Tools opens a pane listing the `agent.toml` bindings, the Python tools from `agent.tools.all_tools()`,
 and the `agentbricks tools add …` commands to copy. It reads `GET /api/demo/tools`, which re-reads
 `agent.toml` on each request, so `tools add`/`remove` show up after a refresh. A bad `agent.toml` or

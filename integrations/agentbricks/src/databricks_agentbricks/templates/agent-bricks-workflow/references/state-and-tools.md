@@ -11,6 +11,24 @@ Memory store display names are not unique identifiers. Use the store ID or resou
 by the CLI; session stores use their store name. Workspace-wide lists can include other projects'
 resources. Do not select a store solely because its display name resembles this project.
 
+## Seeding memory and local dev
+
+Memory and session stores are off by default in `agentbricks dev`, even when a store is bound. The
+chat app shows "Not connected" for memory locally, and the stores connect after
+`agentbricks deploy`. Setting `AGENT_MEMORY_STORE` (the Store ID) or `AGENT_SESSION_STORE`
+(the store name) in the project's `.env` uses real stores locally.
+
+- Empty store: `agentbricks memory bind <name>`, then `agentbricks deploy <name>`. Deploy creates
+  the store if it doesn't exist and grants the app's service principal access.
+- Store with existing memories: `agentbricks memory stores create --name <name>` (prints a Store
+  ID), `agentbricks memory entries create --store <Store ID> --actor-id you@example.com --path
+  /preferences/style.md --content "..."`, then `memory bind <name>` and `deploy`. `--path` is the
+  entry's key in the store, not a file. `--actor-id` is the user the memory belongs to; the deployed
+  chat app uses the signed-in user's email. `--store` takes the Store ID, and `bind` takes the store
+  name.
+- An existing store is reused as is; deploy changes only the app's own grant. Use the store
+  permission commands below to give teammates access.
+
 ## Store permissions
 
 Use `agentbricks sessions stores permissions` or `agentbricks memory stores permissions` for
