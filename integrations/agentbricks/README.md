@@ -1385,6 +1385,8 @@ policy = { databricks_access_token_included = true }
 environment = { image_uri = "main.images.sandbox:v1" }
 ```
 
+Build and push the image to Databricks Artifact Registry as described in
+[Databricks Sandbox custom images](https://docs.databricks.com/aws/en/compute/serverless/sandbox-custom-image).
 Use a tag (`catalog.schema.image:tag`) or a digest (`catalog.schema.image@sha256:<digest>`). Each
 sandbox call sends the image in MCP `_meta` as `com.databricks/environment_spec`, outside the tool
 arguments controlled by the model, so sandboxes the agent creates use that image. The selected
