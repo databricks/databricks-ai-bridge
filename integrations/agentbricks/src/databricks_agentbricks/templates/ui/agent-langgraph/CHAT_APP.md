@@ -13,12 +13,15 @@ intentionally not a post-generation mutation command.
 
 ## Behavior
 
-The capability indicators are automatic. Streaming and background reflect the runtime contract;
-Session reflects checkpoint history; Memory requires `AGENT_MEMORY_STORE`; Traces reflects the MLflow
-tracing config (destination + experiment). Selecting Memory opens a pane for browsing the store's
-entries (searchable, filterable by actor, with a modal for each entry); the other indicators expand
-in place, and Traces links out to the MLflow experiment. The transport selector is the only manual
-capability choice; hover or focus a mode to see what it does.
+The capability indicators are automatic. Streaming and background reflect the runtime
+contract; Session reflects checkpoint history; Memory requires `AGENT_MEMORY_STORE`, which
+`agentbricks dev` leaves unset, so a store declared in `agent.toml` shows "Connects on deploy"
+locally and "Not connected" (with a bind hint) appears only when nothing is declared; Traces
+reflects the MLflow tracing config (destination + experiment). Selecting Memory opens a pane
+for browsing the store's entries (searchable, filterable by actor, with a modal for each
+entry); the other indicators expand in place, and Traces links out to the MLflow experiment.
+The transport selector is the only manual capability choice; hover or focus a mode to see
+what it does.
 
 Tools opens a pane listing the `agent.toml` bindings, the Python tools from `agent.tools.all_tools()`,
 and the `agentbricks tools add …` commands to copy. It reads `GET /api/demo/tools`, which re-reads

@@ -68,6 +68,36 @@ def _session_store() -> str:
     return (resolve_session_store() or "").strip()
 
 
+def _declared_store(table: str) -> str | None:
+    """The store name agent.toml declares under ``[<table>]`` (memory_store / session_store).
+
+    Independent of ``AGENT_*_STORE``: ``agentbricks dev`` leaves the env unset, so a bound store is
+    declared but not connected locally. Best-effort, display only: a missing or unreadable
+    agent.toml, or a missing/malformed table, means "nothing declared" and never raises.
+    """
+    try:
+        # tomllib is re-exported so Python 3.10 environments fall back to tomli like agentkit does.
+        from databricks_agentkit.runtime.tool_manifest import project_root, tomllib
+
+        with (project_root() / "agent.toml").open("rb") as manifest:
+            section = tomllib.load(manifest).get(table)
+        name = section.get("name") if isinstance(section, dict) else None
+    except Exception:
+        return None
+    return (name.strip() or None) if isinstance(name, str) else None
+
+
+def _unconnected_store_detail(kind: str, table: str, bind_command: str, env_var: str) -> str:
+    declared = _declared_store(table)
+    if not declared:
+        return f"No {kind} store configured. Run `{bind_command} <store>`."
+    return (
+        f"The {kind} store '{declared}' is declared in agent.toml but not connected: {kind} "
+        "stores are off by default under `agentbricks dev`. It connects after "
+        f"`agentbricks deploy`; to use it locally, set {env_var} in .env."
+    )
+
+
 def _request_actor(request: Request) -> str:
     """The actor for a demo request — the signed-in user, so the panels show that user's own data.
 
@@ -397,7 +427,9 @@ def _require_memory() -> None:
     if not _memory_store():
         raise HTTPException(
             status_code=503,
-            detail="No memory store configured. Run `agentbricks memory bind <store>`.",
+            detail=_unconnected_store_detail(
+                "memory", "memory_store", "agentbricks memory bind", "AGENT_MEMORY_STORE"
+            ),
         )
 
 
@@ -405,7 +437,9 @@ def _require_session() -> None:
     if not _session_store():
         raise HTTPException(
             status_code=503,
-            detail="No session store configured. Run `agentbricks sessions bind <store>`.",
+            detail=_unconnected_store_detail(
+                "session", "session_store", "agentbricks sessions bind", "AGENT_SESSION_STORE"
+            ),
         )
 
 
@@ -490,11 +524,13 @@ def install_ui(app: FastAPI) -> None:
                 "history": True,
                 "mode": "Managed Session Store" if session_store else "In-process checkpointer",
                 "store": session_store or None,
+                "declared": _declared_store("session_store"),
                 "actor": actor,
             },
             "memory": {
                 "enabled": bool(memory_store),
                 "store": f"memory-stores/{memory_store}" if memory_store else None,
+                "declared": _declared_store("memory_store"),
                 "actor": actor,
             },
             "tracing": _tracing(),
