@@ -158,6 +158,8 @@ def test_prepare_builds_local_plan_and_run_uses_injected_apps_client(
         prepare_environment=True,
         port=9000,
         app_port=54321,
+        on_ready=None,
+        quiet_status=None,
     )
 
 
@@ -180,6 +182,8 @@ def test_prepare_honors_explicit_environment_flag_and_default_port(
         prepare_environment=False,
         port=8000,
         app_port=54321,
+        on_ready=None,
+        quiet_status=None,
     )
 
 
@@ -320,6 +324,8 @@ def test_prepare_and_run_remain_safe_when_tracing_does_not_start(
         prepare_environment=False,
         port=8123,
         app_port=54321,
+        on_ready=None,
+        quiet_status=None,
     )
 
 

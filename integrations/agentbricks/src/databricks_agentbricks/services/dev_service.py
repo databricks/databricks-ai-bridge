@@ -183,14 +183,25 @@ class DevService:
                 if tracing_server is not None:
                     self._local_tracing.stop(tracing_server)
 
-    def run(self, plan: DevPlan) -> None:
-        """Run a prepared plan through the injected Apps local-run client."""
+    def run(
+        self,
+        plan: DevPlan,
+        on_ready: Callable[[], None] | None = None,
+        quiet_status: Callable[[float], str] | None = None,
+    ) -> None:
+        """Run a prepared plan through the injected Apps local-run client.
+
+        ``on_ready`` is called once the agent answers on its port, not when the command starts.
+        ``quiet_status`` gives the line to show while run-local's output is quiet before then.
+        """
         self._apps_client.run_local(
             plan.preview.source_dir,
             plan.entry_point.name,
             prepare_environment=plan.prepare_environment,
             port=plan.preview.port,
             app_port=plan.app_port,
+            on_ready=on_ready,
+            quiet_status=quiet_status,
         )
 
 

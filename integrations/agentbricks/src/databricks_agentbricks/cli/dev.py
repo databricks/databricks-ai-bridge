@@ -17,10 +17,13 @@ from databricks_agentbricks.clients.apps_client import AppsClient
 from databricks_agentbricks.clients.databricks_cli import _databricks
 from databricks_agentbricks.clients.local_ports import free_port, port_in_use
 from databricks_agentbricks.clients.local_tracing_client import LocalTracingClient
+from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.dev import (
     announce_bound_resources,
+    announce_starting,
     local_trace_label,
+    starting_status,
 )
 from databricks_agentbricks.presentation.dev import (
     announce_local_url as _announce_local_url,
@@ -67,9 +70,9 @@ def dev(
 ) -> None:
     """Run your agent locally so you can try it before deploying.
 
-    Starts the agent on a local server — by default http://localhost:8000 — and prints where to
-    reach it: the chat UI if the project has one, otherwise a sample request against the agent's
-    API.
+    Starts the agent on a local server — by default http://localhost:8000 — and, once it answers,
+    prints where to reach it: the chat UI if the project has one, otherwise a sample request against
+    the agent's API. If the agent fails to start, you get an error instead.
 
     Auth uses your Databricks profile (`-p` / `agentbricks login`), and the agent reaches Databricks model
     serving through the AI Gateway on that profile — so there are no model keys to set up.
@@ -97,11 +100,24 @@ def dev(
                 "warning", plan.preview.tracing_warning, help=plan.preview.tracing_help
             )
         announce_bound_resources(plan.preview)
-        _announce_local_url(
-            plan.preview.source_dir,
-            plan.preview.port,
-            plan.preview.server,
-            local_trace_label(plan.preview),
-            has_chat_ui=plan.preview.has_chat_ui,
-        )
-        service.run(plan)
+        announce_starting()
+        # The green panel waits until the agent answers on its port, so a failed start (bad auth, a
+        # build error, a crash on import) never looks like a successful one.
+        try:
+            service.run(
+                plan,
+                on_ready=lambda: _announce_local_url(
+                    plan.preview.source_dir,
+                    plan.preview.port,
+                    plan.preview.server,
+                    local_trace_label(plan.preview),
+                    has_chat_ui=plan.preview.has_chat_ui,
+                ),
+                # A spinner in the quiet stretches before the agent answers (e.g. while it imports
+                # its libraries), so a long wait doesn't look like a hang.
+                quiet_status=starting_status,
+            )
+        except AgentCliError:
+            # Separate the error from the run-local logs it follows.
+            render.console().print()
+            raise
