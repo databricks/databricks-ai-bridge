@@ -1982,7 +1982,7 @@ Review that project's agent.toml to check configured managed tools and MCP bindi
 
 Add a sandbox tool (system.ai.sandbox) that runs code with the selected identity's access.
 
-Sandbox code can read and write whatever Unity Catalog data the user (--auth user) or the App service principal (--auth app) can. Review the target project's agent.toml to check configured managed tools and MCP bindings.
+Sandbox code can read and write whatever Unity Catalog data the user (--auth user) or the App service principal (--auth app) can. Pass --image-uri to run sandbox code in a Unity Catalog custom image; that identity needs access to the image. Review the target project's agent.toml to check configured managed tools and MCP bindings.
 
 ```
 agentbricks tools add sandbox [options]
@@ -1996,6 +1996,7 @@ _Options_
 | `--name <TOOL_ID>` | string | `sandbox` | no | - |
 | `--auth <user|app>` | `user` \| `app` | `user` | no | - |
 | `--databricks-access-token-included`, `--no-databricks-access-token-included` | boolean flag | `--databricks-access-token-included` | no | Expose the selected Databricks credential to sandbox code. |
+| `--image-uri <IMAGE_URI>` | string | - | no | Unity Catalog custom image for new sandboxes (catalog.schema.image:tag or catalog.schema.image@sha256:<digest>). Default: the standard sandbox image. |
 | `--source <SOURCE>` | path | `.` | no | Agent project containing agent.toml. |
 
 ##### `agentbricks tools add mcp`

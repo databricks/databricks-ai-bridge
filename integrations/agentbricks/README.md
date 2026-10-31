@@ -1369,6 +1369,32 @@ policy = { databricks_access_token_included = true }
 Every sandbox call carries this fixed policy in MCP `_meta`, outside the tool arguments controlled
 by the model, with an empty `downscope`.
 
+To run sandbox code in a Unity Catalog custom image instead of the standard sandbox image, pass
+`--image-uri` when adding the tool, or add an `environment` table to an existing sandbox binding:
+
+```bash
+agentbricks tools add sandbox --image-uri main.images.sandbox:v1
+```
+
+```toml
+[[tools]]
+id = "sandbox"
+auth = "user"
+source = { kind = "sandbox", service = "system.ai.sandbox" }
+policy = { databricks_access_token_included = true }
+environment = { image_uri = "main.images.sandbox:v1" }
+```
+
+Build and push the image to Databricks Artifact Registry as described in
+[Databricks Sandbox custom images](https://docs.databricks.com/aws/en/compute/serverless/sandbox-custom-image).
+Use a tag (`catalog.schema.image:tag`) or a digest (`catalog.schema.image@sha256:<digest>`). Each
+sandbox call sends the image in MCP `_meta` as `com.databricks/environment_spec`, outside the tool
+arguments controlled by the model, so sandboxes the agent creates use that image. The selected
+identity (the request user or the App service principal) needs access to the image; the sandbox
+service resolves the reference and rejects images that it cannot use. Running code in an existing
+sandbox that was created with a different image fails; the agent must create a new sandbox. Omit
+`environment` to use the standard image.
+
 Sandbox resource scopes are not supported: the Sandbox API backend of `system.ai.sandbox` rejects any
 non-empty `_meta.downscope`. The scoping implementation (`--scope`, `--permission`, and
 `policy.downscope`) is retained behind a disabled code-level gate, `SANDBOX_DOWNSCOPE_ENABLED`, so it
