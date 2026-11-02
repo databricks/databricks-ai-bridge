@@ -165,6 +165,8 @@ class _State:
     model_selection: str = "bandit"
     # Production service -> the clone its calls are redirected to for the candidate being scored.
     active_clones: dict = field(default_factory=dict)
+    # Every clone an LLM call was redirected to since the current prediction started.
+    redirected_calls: list = field(default_factory=list)
     created_exp_endpoints: list = field(default_factory=list)
     scorer_attempted: int = 0
     scorer_succeeded: int = 0
@@ -601,8 +603,9 @@ def _patched_prompts(candidate, prompt_targets):
 # ---------------------------------------------------------------------------
 
 
-def _patch_create(import_path, cls_name, is_async, rewrites):
-    """Monkeypatch `<cls>.create` to rewrite `model=<endpoint>` to the clone `rewrites` names.
+def _patch_create(import_path, cls_name, is_async, rewrites, redirected):
+    """Monkeypatch `<cls>.create` to rewrite `model=<endpoint>` to the clone `rewrites` names,
+    appending each clone a call was sent to onto ``redirected``.
 
     Returns `(cls, "create", original)` for the caller to restore on exit, or
     `None` if the import isn't available (e.g. an older `openai` SDK without the
@@ -623,6 +626,7 @@ def _patch_create(import_path, cls_name, is_async, rewrites):
             model = kwargs.get("model")
             if model in rewrites:
                 kwargs["model"] = rewrites[model]
+                redirected.append(kwargs["model"])
             return await original(self, *args, **kwargs)
     else:
 
@@ -630,6 +634,7 @@ def _patch_create(import_path, cls_name, is_async, rewrites):
             model = kwargs.get("model")
             if model in rewrites:
                 kwargs["model"] = rewrites[model]
+                redirected.append(kwargs["model"])
             return original(self, *args, **kwargs)
 
     cls.create = patched
@@ -637,11 +642,11 @@ def _patch_create(import_path, cls_name, is_async, rewrites):
 
 
 @contextmanager
-def _patched_endpoints(active_clones):
+def _patched_endpoints(active_clones, redirected=None):
     """Rewrite `model=<prod_endpoint>` to its active clone on outbound LLM calls.
 
     ``active_clones`` is read on every call, so `_sync_destinations` switches candidates by
-    updating it.
+    updating it. Each redirected call's clone is appended to ``redirected``.
 
     Patches the OpenAI Python client's chat.completions and responses APIs (sync
     + async) so any agent routing through OpenAI / databricks_openai /
@@ -653,6 +658,7 @@ def _patched_endpoints(active_clones):
     not covered; document and add a separate intercept if it comes up.
     """
     rewrites = active_clones
+    redirected = [] if redirected is None else redirected
     targets = [
         ("openai.resources.chat.completions", "Completions", False),
         ("openai.resources.chat.completions", "AsyncCompletions", True),
@@ -662,7 +668,7 @@ def _patched_endpoints(active_clones):
     patches = [
         p
         for (path, cls_name, is_async) in targets
-        if (p := _patch_create(path, cls_name, is_async, rewrites)) is not None
+        if (p := _patch_create(path, cls_name, is_async, rewrites, redirected)) is not None
     ]
 
     try:
@@ -822,47 +828,24 @@ def _extract_trace_summary():
 # ---------------------------------------------------------------------------
 
 
-def _traced_request_models(trace):
-    """The model name each traced LLM request asked for (after the clone redirect)."""
-    names = []
-    for span in trace.data.spans if trace and trace.data else []:
-        inputs = span.inputs
-        if isinstance(inputs, str):
-            try:
-                inputs = json.loads(inputs)
-            except json.JSONDecodeError:
-                inputs = None
-        name = inputs.get("model") if isinstance(inputs, dict) else None
-        if not isinstance(name, str) or not name:
-            attrs = getattr(span, "attributes", None) or {}
-            name = attrs.get(_LLM_MODEL_ATTR_KEY)
-            if not name and hasattr(span, "get_attribute"):
-                name = span.get_attribute(_LLM_MODEL_ATTR_KEY)
-        if isinstance(name, str) and name:
-            names.append(name)
-    return names
+def _check_candidate_routing(state):
+    """Raise unless this prediction's LLM calls reached the candidate's clones, and no other's.
 
-
-def _check_candidate_routing(trace, state):
-    """Raise unless every traced call to a bound service reached the candidate's clone.
-
-    Catches an agent that bypasses the redirect (it would score production, not the candidate)
-    or a call that reached another candidate's clone.
+    The OpenAI-client redirect records each call it sends to a clone, so this holds for any
+    framework built on that client. An agent that bypasses it records none.
     """
     active = set(state.active_clones.values())
-    services = {et.name for et in state.endpoint_targets}
-    clones = {name for et in state.endpoint_targets for name in et.exp_names.values()}
-    requested = _traced_request_models(trace)
-    wrong = sorted({n for n in requested if n in services or (n in clones and n not in active)})
+    wrong = sorted(set(state.redirected_calls) - active)
     if wrong:
         raise RuntimeError(
-            f"Candidate calls reached {', '.join(wrong)} instead of the candidate's experimental "
-            "services. Route every LLM call through the OpenAI client so the redirect applies."
+            f"Candidate calls reached {', '.join(wrong)}, another candidate's experimental "
+            "service, instead of this candidate's."
         )
-    if not active & set(requested):
+    if not active & set(state.redirected_calls):
         raise RuntimeError(
-            "Cannot verify candidate routing: no calls to an experimental service were traced. "
-            "Enable MLflow autologging and route the agent through its bound model services."
+            "Cannot verify candidate routing: no LLM call was redirected to the candidate's "
+            "experimental services. Route every LLM call through the OpenAI client (directly or "
+            "via databricks-openai / LangChain) using the bound model service names."
         )
 
 
@@ -1190,8 +1173,7 @@ class _AgentAdapter(gepa.GEPAAdapter):
     def _run_one(self, candidate, inputs, expectations):
         """Score a single record. Caller owns prompt-patching + endpoint sync."""
         state = self.state
-        # Every real evaluation runs with clones active (`_sync_destinations` runs first).
-        previous_trace_id = mlflow.get_last_active_trace_id() if state.active_clones else None
+        state.redirected_calls.clear()
         start = time.perf_counter()
         prediction_failed = False
         try:
@@ -1201,15 +1183,9 @@ class _AgentAdapter(gepa.GEPAAdapter):
             answer = f"ERROR: {type(e).__name__}: {e}"
         latency = time.perf_counter() - start
         mlflow_trace = _get_active_trace()
+        # Every real evaluation runs with clones active (`_sync_destinations` runs first).
         if not prediction_failed and state.active_clones:
-            if previous_trace_id and (
-                getattr(getattr(mlflow_trace, "info", None), "trace_id", None) == previous_trace_id
-            ):
-                raise RuntimeError(
-                    "Cannot verify candidate routing without a fresh prediction trace. "
-                    "Trace each predict_fn call separately and enable MLflow autologging."
-                )
-            _check_candidate_routing(mlflow_trace, state)
+            _check_candidate_routing(state)
         trace = _extract_trace_summary()
 
         if prediction_failed:
@@ -1812,7 +1788,9 @@ def optimize_prompts_and_models(
         defaults.update(gepa_kwargs)
         # Prompt-only searches have no services to redirect, so they leave the OpenAI client alone.
         redirect = (
-            _patched_endpoints(state.active_clones) if state.endpoint_targets else nullcontext()
+            _patched_endpoints(state.active_clones, state.redirected_calls)
+            if state.endpoint_targets
+            else nullcontext()
         )
         with redirect:
             _preflight(state, seed, train_data, val_data)
