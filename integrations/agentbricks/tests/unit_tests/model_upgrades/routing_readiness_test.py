@@ -55,13 +55,10 @@ def gateway(monkeypatch):
     return api
 
 
-def _trace(*services):
-    spans = [SimpleNamespace(inputs={"model": s}, outputs={"model": s}) for s in services]
-    return SimpleNamespace(data=SimpleNamespace(spans=spans))
-
-
-def _run(monkeypatch, state, trace):
-    monkeypatch.setattr(opt, "_get_active_trace", lambda: trace)
+def _run(monkeypatch, state, *calls):
+    """Score one record whose prediction sends LLM calls to ``calls`` through the redirect."""
+    state.predict_fn = Mock(side_effect=lambda inputs: state.redirected_calls.extend(calls) or "a")
+    monkeypatch.setattr(opt, "_get_active_trace", lambda: None)
     monkeypatch.setattr(opt, "_extract_trace_summary", lambda: {})
     return opt._AgentAdapter(state)._run_one({"model:main.agent.llm": "haiku"}, {}, {})
 
@@ -114,26 +111,31 @@ def test_readiness_failure_still_cleans_up_every_clone(monkeypatch):
 
 def test_a_call_to_the_active_clone_is_scored(monkeypatch):
     state = _state()
-    score, _, _, _, _ = _run(monkeypatch, state, _trace(HAIKU_CLONE))
+    score, _, _, _, _ = _run(monkeypatch, state, HAIKU_CLONE)
     assert score == 1.0
     assert state.predict_fn.call_count == 1
 
 
 @pytest.mark.parametrize(
-    "trace, error",
+    "calls, error",
     [
-        (_trace("main.agent.llm"), "reached main.agent.llm"),  # the redirect was bypassed
-        (_trace(SONNET_CLONE), "reached " + SONNET_CLONE),  # another candidate's clone
-        (_trace(HAIKU_CLONE, SONNET_CLONE), "reached " + SONNET_CLONE),
-        (_trace("system.ai.other"), "no calls to an experimental service"),
-        (None, "no calls to an experimental service"),
+        ((), "no LLM call was redirected"),  # the agent bypassed the OpenAI client
+        ((SONNET_CLONE,), "reached " + SONNET_CLONE),  # another candidate's clone
+        ((HAIKU_CLONE, SONNET_CLONE), "reached " + SONNET_CLONE),
     ],
 )
-def test_misrouted_or_unverifiable_predictions_never_reach_scorers(monkeypatch, trace, error):
+def test_misrouted_or_unverifiable_predictions_never_reach_scorers(monkeypatch, calls, error):
     state = _state()
     with pytest.raises(RuntimeError, match=error):
-        _run(monkeypatch, state, trace)
+        _run(monkeypatch, state, *calls)
     state.scorers[0].assert_not_called()
+
+
+def test_calls_from_the_previous_prediction_do_not_count(monkeypatch):
+    state = _state()
+    state.redirected_calls.append(HAIKU_CLONE)
+    with pytest.raises(RuntimeError, match="no LLM call was redirected"):
+        _run(monkeypatch, state)
 
 
 def test_roles_the_agent_does_not_call_are_not_required(monkeypatch):
@@ -143,37 +145,17 @@ def test_roles_the_agent_does_not_call_are_not_required(monkeypatch):
     opt._sync_destinations(
         {"model:main.agent.llm": "haiku", "model:main.agent.unused": "haiku"}, state
     )
-    score, _, _, _, _ = _run(monkeypatch, state, _trace(HAIKU_CLONE))
+    score, _, _, _, _ = _run(monkeypatch, state, HAIKU_CLONE)
     assert score == 1.0
 
 
-def test_previous_predictions_trace_cannot_verify_an_untraced_record(monkeypatch):
+def test_a_failed_prediction_is_scored_zero_without_a_routing_check(monkeypatch):
     state = _state()
-    previous = _trace(HAIKU_CLONE)
-    previous.info = SimpleNamespace(trace_id="previous-record")
-    monkeypatch.setattr(opt.mlflow, "get_last_active_trace_id", lambda: "previous-record")
-    with pytest.raises(RuntimeError, match="fresh.*trace"):
-        _run(monkeypatch, state, previous)
-    state.scorers[0].assert_not_called()
-
-
-def test_request_model_attribute_and_serialized_span_payloads_are_supported():
-    span = SimpleNamespace(inputs="{}", outputs="{}", attributes={"mlflow.llm.model": HAIKU_CLONE})
-    trace = SimpleNamespace(data=SimpleNamespace(spans=[span]))
-    assert opt._traced_request_models(trace) == [HAIKU_CLONE]
-
-
-def test_request_model_get_attribute_is_supported():
-    span = SimpleNamespace(inputs={}, outputs={}, get_attribute=lambda key: HAIKU_CLONE)
-    trace = SimpleNamespace(data=SimpleNamespace(spans=[span]))
-    assert opt._traced_request_models(trace) == [HAIKU_CLONE]
-
-
-def test_unrelated_text_and_non_string_models_are_ignored():
-    spans = [
-        SimpleNamespace(inputs="plain text", outputs="plain text"),
-        SimpleNamespace(inputs={"model": []}, outputs={}),
-        *_trace(HAIKU_CLONE).data.spans,
-    ]
-    trace = SimpleNamespace(data=SimpleNamespace(spans=spans))
-    assert opt._traced_request_models(trace) == [HAIKU_CLONE]
+    state.predict_fn = Mock(side_effect=RuntimeError("agent crashed"))
+    monkeypatch.setattr(opt, "_get_active_trace", lambda: None)
+    monkeypatch.setattr(opt, "_extract_trace_summary", lambda: {})
+    score, _, _, feedback, _ = opt._AgentAdapter(state)._run_one(
+        {"model:main.agent.llm": "haiku"}, {}, {}
+    )
+    assert score == 0.0
+    assert "prediction failed" in feedback

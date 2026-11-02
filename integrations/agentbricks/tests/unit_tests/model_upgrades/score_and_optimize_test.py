@@ -280,7 +280,8 @@ def test_patched_endpoints_rewrites_to_the_active_clone_and_restores():
     Completions.create = fake_create
     try:
         active = {"wb-supervisor": "wb-supervisor_exp_a_m1", "wb-rewriter": "wb-rewriter_exp_a_m1"}
-        with _patched_endpoints(active):
+        redirected = []
+        with _patched_endpoints(active, redirected):
             Completions.create(None, model="wb-supervisor", messages=[])
             Completions.create(None, model="wb-rewriter", messages=[])
             Completions.create(None, model="some-other-endpoint", messages=[])
@@ -290,6 +291,12 @@ def test_patched_endpoints_rewrites_to_the_active_clone_and_restores():
             "wb-supervisor_exp_a_m1",
             "wb-rewriter_exp_a_m1",
             "some-other-endpoint",
+            "wb-supervisor_exp_a_m2",
+        ]
+        # Only redirected calls are recorded, each under the clone it was sent to.
+        assert redirected == [
+            "wb-supervisor_exp_a_m1",
+            "wb-rewriter_exp_a_m1",
             "wb-supervisor_exp_a_m2",
         ]
         # After exit, the patch is removed and our fake is back at the top.
