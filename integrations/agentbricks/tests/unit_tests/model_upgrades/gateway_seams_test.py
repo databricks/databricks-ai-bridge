@@ -1,4 +1,4 @@
-"""How the optimizer drives model services: the `_exp` clone lifecycle and destination syncs."""
+"""How the optimizer drives model services: per-model `_exp` clones and the redirect to them."""
 
 from __future__ import annotations
 
@@ -21,14 +21,20 @@ def _target(name="main.agent.llm", initial="claude-sonnet-4-5", experiment_id="t
 class _State:
     def __init__(self, targets):
         self.endpoint_targets = targets
-        self.last_gateway_synced = {}
-        self.backend_controls = {}
-        self.expected_backends = {}
+        self.active_clones = {}
         self.created_exp_endpoints = []
 
 
-def test_exp_clone_name_uses_underscore_leaf():
-    assert _target().exp_name == "main.agent.llm_exp_test"
+SONNET_CLONE = "main.agent.llm_exp_test_claude_sonnet_4_5"
+HAIKU_CLONE = "main.agent.llm_exp_test_claude_haiku_4_5"
+
+
+def test_each_model_gets_its_own_clone_name():
+    assert _target().exp_names == {
+        "claude-sonnet-4-5": SONNET_CLONE,
+        "claude-haiku-4-5": HAIKU_CLONE,
+    }
+    assert _target().exp_name("system.ai.claude-haiku-4-5") == HAIKU_CLONE
 
 
 def test_read_endpoint_destination_strips_schema(mocker):
@@ -36,13 +42,19 @@ def test_read_endpoint_destination_strips_schema(mocker):
     assert opt._read_endpoint_destination("main.agent.llm") == "claude-sonnet-4-5"
 
 
-def test_ensure_exp_endpoints_creates_clone_at_seed_model(mocker):
-    mocker.patch(f"{_MS}.get_model", side_effect=LookupError("missing"))
+def test_ensure_exp_endpoints_creates_one_clone_per_model_and_waits_for_each(mocker):
     create = mocker.patch(f"{_MS}.create")
-    opt._ensure_exp_endpoints(_State([_target()]))
-    _, name, model = create.call_args.args
-    assert (name, model) == ("main.agent.llm_exp_test", "system.ai.claude-sonnet-4-5")
-    assert "role=experimental" in create.call_args.kwargs["comment"]
+    wait = mocker.patch(f"{opt.__name__}._wait_until_serving")
+    state = _State([_target()])
+    opt._ensure_exp_endpoints(state)
+    created = sorted(call.args[1:] for call in create.call_args_list)
+    assert created == [
+        (HAIKU_CLONE, "system.ai.claude-haiku-4-5"),
+        (SONNET_CLONE, "system.ai.claude-sonnet-4-5"),
+    ]
+    assert all("role=experimental" in c.kwargs["comment"] for c in create.call_args_list)
+    assert sorted(state.created_exp_endpoints) == [HAIKU_CLONE, SONNET_CLONE]
+    assert sorted(call.args[0] for call in wait.call_args_list) == [HAIKU_CLONE, SONNET_CLONE]
 
 
 def test_existing_clone_is_neither_reused_nor_deleted(mocker):
@@ -57,7 +69,14 @@ def test_existing_clone_is_neither_reused_nor_deleted(mocker):
 
 def test_partial_clone_creation_failure_cleans_up_only_created_services(mocker):
     mocker.patch(f"{_MS}.get_model", return_value="system.ai.m1")
-    create = mocker.patch(f"{_MS}.create", side_effect=[None, RuntimeError("creation failed")])
+    created = []
+
+    def _create(client, name, model, **kwargs):
+        if name.endswith("_m2") and "writer" in name:
+            raise RuntimeError("creation failed")
+        created.append(name)
+
+    create = mocker.patch(f"{_MS}.create", side_effect=_create)
     delete = mocker.patch(f"{_MS}.delete")
     with pytest.raises(RuntimeError, match="creation failed"):
         opt.optimize_prompts_and_models(
@@ -68,20 +87,19 @@ def test_partial_clone_creation_failure_cleans_up_only_created_services(mocker):
             scorers=[lambda inputs, expectations, answer: 1.0],
             max_metric_calls=1,
         )
-    assert create.call_count == 2
-    delete.assert_called_once_with(
-        create.call_args_list[0].args[0], create.call_args_list[0].args[1]
-    )
+    assert create.call_count == 4  # router and writer, each with m1 and m2
+    assert sorted(call.args[1] for call in delete.call_args_list) == sorted(created)
+    assert len(created) == 3
 
 
-def test_sync_destinations_repoints_clone_once(mocker):
+def test_switching_candidates_redirects_without_updating_any_service(mocker):
     set_model = mocker.patch(f"{_MS}.set_model")
     state = _State([_target()])
-    candidate = {"model:main.agent.llm": "claude-haiku-4-5"}
-    opt._sync_destinations(candidate, state, use_exp=True)
-    opt._sync_destinations(candidate, state, use_exp=True)
-    set_model.assert_called_once()
-    assert set_model.call_args.args[1:] == ("main.agent.llm_exp_test", "system.ai.claude-haiku-4-5")
+    opt._sync_destinations({"model:main.agent.llm": "claude-haiku-4-5"}, state)
+    assert state.active_clones == {"main.agent.llm": HAIKU_CLONE}
+    opt._sync_destinations({"model:main.agent.llm": "claude-sonnet-4-5"}, state)
+    assert state.active_clones == {"main.agent.llm": SONNET_CLONE}
+    set_model.assert_not_called()
 
 
 def test_cleanup_deletes_clone_and_hints_on_failure(mocker, capsys):
@@ -90,10 +108,9 @@ def test_cleanup_deletes_clone_and_hints_on_failure(mocker, capsys):
     state = _State([_target()])
     opt._ensure_exp_endpoints(state)
     opt._cleanup_exp_endpoints(state)
-    assert (
-        "databricks api delete /api/2.1/unity-catalog/model-services/main.agent.llm_exp_test"
-        in (capsys.readouterr().out)
-    )
+    out = capsys.readouterr().out
+    for clone in (SONNET_CLONE, HAIKU_CLONE):
+        assert f"databricks api delete /api/2.1/unity-catalog/model-services/{clone}" in out
 
 
 def test_system_ai_names_pass_through_resolution():
@@ -113,12 +130,26 @@ def test_cost_prices_calls_to_the_service_as_the_routed_candidate(mocker):
         "databricks_agentkit.model_upgrades.optimization._mlflow_model_cost", side_effect=_cost
     )
     et = _target()
-    calls = [{"model": et.exp_name, "input": 100, "output": 50}]
+    calls = [{"model": "main.agent.llm", "input": 100, "output": 50}]
     cost = opt._estimate_cost_usd(
         {"model:main.agent.llm": "claude-haiku-4-5"}, [et], {}, {}, llm_calls=calls
     )
     assert cost == 0.001
     assert priced == ["claude-haiku-4-5"]
+
+
+def test_cost_prices_a_clone_as_the_one_model_it_routes_to(mocker):
+    priced = []
+    mocker.patch(
+        "databricks_agentkit.model_upgrades.optimization._mlflow_model_cost",
+        side_effect=lambda model, in_t, out_t: priced.append(model) or 0.001,
+    )
+    et = _target()
+    calls = [{"model": SONNET_CLONE, "requested": SONNET_CLONE, "input": 100, "output": 50}]
+    opt._estimate_cost_usd(
+        {"model:main.agent.llm": "claude-haiku-4-5"}, [et], {}, {}, llm_calls=calls
+    )
+    assert priced == ["claude-sonnet-4-5"]
 
 
 def test_cost_prices_an_uncataloged_backend_id_as_the_routed_candidate():
@@ -128,7 +159,7 @@ def test_cost_prices_an_uncataloged_backend_id_as_the_routed_candidate():
     calls = [
         {
             "model": "workspace-specific-sonnet-id",
-            "requested": et.exp_name,
+            "requested": SONNET_CLONE,
             "input": 1_000_000,
             "output": 0,
         }
@@ -154,7 +185,7 @@ def test_cost_prefers_a_priceable_backend_id_over_the_routed_candidate(mocker):
     calls = [
         {
             "model": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
-            "requested": et.exp_name,
+            "requested": SONNET_CLONE,
             "input": 100,
             "output": 50,
         }
@@ -198,20 +229,15 @@ def test_overlapping_runs_keep_their_models_and_cleanup_independent(mocker):
         f"{_MS}.create",
         side_effect=lambda client, name, model, **kw: services.update({name: model}),
     )
-    mocker.patch(
-        f"{_MS}.set_model", side_effect=lambda client, name, model: services.update({name: model})
-    )
     mocker.patch(f"{_MS}.delete", side_effect=lambda client, name: services.pop(name))
     target_a = opt._EndpointTarget("main.agent.llm", ["m1", "m2"], "m1")
     target_b = opt._EndpointTarget("main.agent.llm", ["m1", "m2"], "m1")
-    assert target_a.exp_name != target_b.exp_name
+    assert set(target_a.exp_names.values()).isdisjoint(target_b.exp_names.values())
     state_a, state_b = _State([target_a]), _State([target_b])
     opt._ensure_exp_endpoints(state_a)
     opt._ensure_exp_endpoints(state_b)
-    opt._sync_destinations({"model:main.agent.llm": "m1"}, state_a, use_exp=True)
-    opt._sync_destinations({"model:main.agent.llm": "m2"}, state_b, use_exp=True)
-    opt._sync_destinations({"model:main.agent.llm": "m1"}, state_a, use_exp=True)
-    assert services[target_a.exp_name] == "system.ai.m1"
-    assert services[target_b.exp_name] == "system.ai.m2"
     opt._cleanup_exp_endpoints(state_a)
-    assert services == {target_b.exp_name: "system.ai.m2"}
+    assert services == {
+        target_b.exp_name("m1"): "system.ai.m1",
+        target_b.exp_name("m2"): "system.ai.m2",
+    }

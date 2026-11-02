@@ -37,8 +37,8 @@ Do not invent eval records or expectations the user hasn't provided or approved;
 ## Running, applying, and undoing
 
 A search runs as a serverless job by default and can take hours; `--run-on local` runs it in the
-CLI's process. It evaluates temporary `<service>_exp_<id>` copies, so production traffic is
-untouched until the recommendation is applied. Check progress with `models status`.
+CLI's process. It evaluates temporary `<service>_exp_<id>_<model>` copies, one per candidate model,
+so production traffic is untouched until the recommendation is applied. Check progress with `models status`.
 
 `models apply` repoints production model services and moves prompt aliases; `models rollback` undoes
 the last apply. Both change what the deployed agent serves, so run them, or `upgrade --apply ask` /

@@ -7,8 +7,8 @@ Python project in workspace files) plus ``databricks-agentbricks[upgrade]``. Ins
 ``job_main`` imports the project's own ``predict_fn``, eval data, and scorers (``module:attr``
 references, the same inputs ``optimize_prompts_and_models`` takes) and runs the search:
 ``databricks_agentkit.model_upgrades.optimize_prompts_and_models`` (GEPA), which routes the agent's
-calls to a temporary ``<service>_exp_<id>`` clone of the bound model service, so production traffic is
-never touched while candidates run. The job records its ``UpgradeReport`` on an MLflow run; the CLI
+calls to temporary ``<service>_exp_<id>_<model>`` clones of the bound model services (one per
+candidate model), so production traffic is never touched while candidates run. The job records its ``UpgradeReport`` on an MLflow run; the CLI
 reads it back (``fetch_report``) and only `models apply` switches the service.
 
 The job-side heavy dependencies (``gepa``, full ``mlflow``) are imported lazily, so the CLI stays
@@ -441,7 +441,7 @@ def run_and_record(root: pathlib.Path, config: JobConfig) -> UpgradeReport:
     from databricks_agentkit.runtime.workspace import workspace_client  # noqa: PLC0415
 
     # Each call site must call its bound service (the agent reads AGENT_MODEL_SERVICE_<ROLE> at
-    # import), or the optimizer's redirect to the <service>_exp_<id> clone never matches.
+    # import), or the optimizer's redirect to the <service>_exp_<id>_<model> clones never matches.
     for role, service in config.services.items():
         os.environ[model_service_env(role)] = service
     mlflow.set_tracking_uri("databricks")
