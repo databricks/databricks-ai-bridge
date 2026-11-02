@@ -88,8 +88,7 @@ def _no_workspace(mocker):
 def _stub_route_readiness(request, mocker):
     if request.node.get_closest_marker("route_readiness"):
         return
-    mocker.patch(f"{_OPT}._probe_backend_model", return_value="test-backend")
-    mocker.patch(f"{_OPT}._wait_for_endpoint_model")
+    mocker.patch(f"{_OPT}._wait_until_serving")
 
 
 @pytest.fixture(autouse=True)

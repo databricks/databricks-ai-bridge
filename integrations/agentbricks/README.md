@@ -860,8 +860,10 @@ terminal instead, which needs the `upgrade` extra and the agent's dependencies i
 takes longer from a laptop than on a serverless job, and a record slower than `--latency-gate` (60
 seconds by default) scores 0, so raise it if a local run warns that records went over the gate. The job imports the `predict_fn`,
 eval data, and scorers you name from the project (the same inputs `optimize_prompts_and_models`
-takes, below) and runs each eval record once per candidate, against a temporary `<service>_exp_<id>`
-clone. Each LLM call must use its role's service, `resolve_model_service("<role>")`, which reads the
+takes, below) and runs each eval record once per candidate, against temporary clones of the model
+services: one per service and model it may use, `<service>_exp_<id>_<model>`, created up front and
+deleted when the search ends. Each clone always serves its one model, so switching candidates
+redirects calls to another clone instead of waiting for a service's model to change. Each LLM call must use its role's service, `resolve_model_service("<role>")`, which reads the
 `AGENT_MODEL_SERVICE_<ROLE>` env var that deploy (and the job, before importing your code) sets.
 GEPA also rewrites every prompt bound with `prompts bind` for each candidate model, so you don't
 pass prompt URIs unless you want a different set. Pass `--prompt` to pick specific prompts instead,
