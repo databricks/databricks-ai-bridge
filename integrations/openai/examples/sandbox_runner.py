@@ -103,14 +103,24 @@ async def main(*, profile: str | None, model: str, question: str, stream: bool) 
         return
 
     stream_result = Runner.run_streamed(agent, question, run_config=run_config)
-    saw_text_delta = False
+    printing_text = False
     async for event in stream_result.stream_events():
         if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent):
-            if not saw_text_delta:
-                print("assistant> ", end="", flush=True)
-                saw_text_delta = True
+            if not printing_text:
+                print("\nassistant> ", end="", flush=True)
+                printing_text = True
             print(event.data.delta, end="", flush=True)
-    if saw_text_delta:
+        elif event.type == "run_item_stream_event" and event.item.type == "tool_call_item":
+            # Show each sandbox command on its own line so the assistant's text
+            # before and after the tool calls does not run together.
+            raw = event.item.raw_item
+            name = getattr(raw, "name", "tool")
+            args = (getattr(raw, "arguments", "") or "").strip()
+            if printing_text:
+                print()
+                printing_text = False
+            print(f"  [tool: {name}] {args}"[:200].rstrip())
+    if printing_text:
         print()
 
 
