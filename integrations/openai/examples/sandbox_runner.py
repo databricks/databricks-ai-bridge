@@ -41,7 +41,10 @@ from databricks_openai import (
 )
 
 DEFAULT_MODEL = "databricks-claude-sonnet-5-5"
-DEFAULT_QUESTION = "Summarize this sandbox workspace in two sentences, citing the file names."
+DEFAULT_QUESTION = (
+    "Use the shell to run `ls -la`, then `cat` each file. Summarize the workspace in two "
+    "sentences, citing the file names and the shell commands you ran."
+)
 
 
 def _build_manifest() -> Manifest:
@@ -78,9 +81,9 @@ async def main(*, profile: str | None, model: str, question: str, stream: bool) 
         name="Databricks Sandbox Assistant",
         model=_serving_model(profile, model),
         instructions=(
-            "Answer questions about the sandbox workspace. Inspect the files with the shell "
-            "before answering, keep the response concise, and cite the file names you inspected. "
-            "Do not invent files that are not present."
+            "Answer questions about the sandbox workspace. Inspect the files before answering, "
+            "keep the response concise, and cite the file names you inspected. Do not invent "
+            "files that are not present."
         ),
         default_manifest=_build_manifest(),
         capabilities=[Shell()],
