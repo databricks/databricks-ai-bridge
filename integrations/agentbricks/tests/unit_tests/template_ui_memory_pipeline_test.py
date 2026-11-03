@@ -247,7 +247,7 @@ def test_pipeline_run_calls_use_the_pipeline_resource(ui):
 # ---- Memory pane JavaScript ------------------------------------------------
 
 _JS_FUNCTIONS = (
-    "formatJson prettyDateTime memoryStoreName jsonResponse pipelineText pipelineCommand "
+    "formatJson prettyDateTime memoryStoreName errorMessage jsonResponse pipelineText pipelineCommand "
     "pipelineSetting pipelineRunError pipelineRunning updatePipelineButton setPipelineConfirm "
     "renderPipeline loadPipeline runPipeline"
 ).split()
