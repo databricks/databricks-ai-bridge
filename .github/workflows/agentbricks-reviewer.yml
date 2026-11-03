@@ -1,9 +1,11 @@
-name: AI PR Review
-run-name: "AI review #${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}"
+name: AgentBricksReviewer
+run-name: "AgentBricksReviewer #${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}"
 
-# Runs omnigent's Polly agent headlessly on a PR diff and posts its review as a
-# PR comment. Polly hands the review to sub-agents on different model vendors
-# (Claude and GPT) through a Databricks AI Gateway.
+# AgentBricksReviewer runs omnigent's Polly coordinator agent headlessly on a PR
+# and posts its review as a PR comment. The coordinator hands review lenses to
+# Claude and GPT sub-agents through a Databricks AI Gateway, then verifies,
+# merges, and scores their findings. The process and rules are in
+# .github/agentbricks-reviewer/rules.md.
 #
 # Triggers:
 #   - pull_request_target opened/reopened/ready_for_review (same-repo PRs only)
@@ -12,13 +14,14 @@ run-name: "AI review #${{ github.event.pull_request.number || github.event.issue
 #   - workflow_dispatch with a PR number
 #
 # Security model: this job holds secrets and a write-scoped token, so it only
-# checks out this repo's default branch (trusted code and review rules) and
-# reads the PR as a diff file. PR code is never checked out or executed.
+# checks out this repo's default branch (trusted code and review rules). The PR
+# is read as a diff file plus fetched git objects that reviewers read with
+# `git show`. PR code is never checked out or executed.
 #
 # Required secrets: LLM_API_KEY, GATEWAY_BASE_URL (https://<workspace>/serving-endpoints).
 # Required variables: AI_REVIEW_ANTHROPIC_MODEL, AI_REVIEW_ANTHROPIC_OPUS_MODEL,
-# AI_REVIEW_OPENAI_MODEL. Optional: AI_REVIEW_POLLY_HARNESS (default codex),
-# AI_REVIEW_POLLY_MODEL (default AI_REVIEW_OPENAI_MODEL).
+# AI_REVIEW_OPENAI_MODEL. Optional: AI_REVIEW_COORDINATOR_HARNESS (default codex),
+# AI_REVIEW_COORDINATOR_MODEL (default AI_REVIEW_OPENAI_MODEL).
 
 on:
   pull_request_target:
@@ -42,13 +45,13 @@ permissions:
 env:
   # Bump together with the setup-harness-cli pins below.
   OMNIGENT_REF: 2004385de88789acc1991fdd104f58beb3d4483b
-  OMNIGENT_CI_PIPELINE: databricks-ai-bridge-review
+  OMNIGENT_CI_PIPELINE: agentbricks-reviewer
   OMNIGENT_SKIP_WEB_UI: "true"
   UV_VERSION: "0.13.5"
 
 jobs:
   review:
-    name: AI PR Review
+    name: AgentBricksReviewer
     if: >-
       (
         github.event_name == 'pull_request_target' &&
@@ -69,7 +72,7 @@ jobs:
       issues: read
       pull-requests: write
     concurrency:
-      group: ai-review-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
+      group: agentbricks-reviewer-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
       cancel-in-progress: false
     env:
       GH_TOKEN: ${{ github.token }}
@@ -105,7 +108,7 @@ jobs:
           # Only bot comments count, so a human quoting the marker cannot suppress a review.
           if gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
                --jq '.[] | select(.user.type == "Bot") | .body' \
-             | grep -qF "<!-- ai-reviewed-sha: ${head_sha} -->"; then
+             | grep -qF "<!-- agentbricks-reviewer-sha: ${head_sha} -->"; then
             echo "::notice::${head_sha} already has a review; comment '/review force' to re-run."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
@@ -117,7 +120,7 @@ jobs:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
         run: |
           if [ -z "$LLM_API_KEY" ]; then
-            echo "::notice::Skipping AI review: LLM_API_KEY is not available."
+            echo "::notice::Skipping AgentBricksReviewer: LLM_API_KEY is not available."
             echo "available=false" >> "$GITHUB_OUTPUT"
           else
             echo "::add-mask::${LLM_API_KEY}"
@@ -135,7 +138,7 @@ jobs:
 
       - name: Check out omnigent
         if: steps.creds.outputs.available == 'true'
-        # Outside the workspace so Polly's reviewers only see this repo's source.
+        # Outside the workspace so reviewers only see this repo's source.
         run: |
           set -euo pipefail
           echo "OMNIGENT_DIR=$RUNNER_TEMP/omnigent" >> "$GITHUB_ENV"
@@ -153,7 +156,7 @@ jobs:
 
       - name: Install tmux
         if: steps.creds.outputs.available == 'true'
-        # Polly runs its shell terminal in tmux.
+        # The coordinator runs its shell terminal in tmux.
         run: sudo apt-get update -q && sudo apt-get install -y -q tmux
 
       - name: Install omnigent
@@ -248,6 +251,8 @@ jobs:
           gh api "repos/$REPO/compare/${base_sha}...${head_sha}" \
             -H "Accept: application/vnd.github.v3.diff" > /tmp/pr_diff.txt
           chmod 444 /tmp/pr_diff.txt
+          # Objects only, so reviewers can `git show <sha>:<path>`; nothing is checked out or run.
+          git fetch --quiet --no-tags --depth=1 origin "$base_sha" "$head_sha"
 
           grep -E '^[+-]name = |^[+-]version = ' /tmp/pr_diff.txt | head -500 > /tmp/lockfile_pins.txt || true
           python3 "$summary_script" linked-issues "${REPO}#${PR_NUMBER}" /tmp/linked_issues.json
@@ -256,7 +261,7 @@ jobs:
           python3 - <<'PYEOF'
           import hashlib, json, os, pathlib
 
-          rules = pathlib.Path(os.environ["GITHUB_WORKSPACE"], ".github/ai-review/rules.md").read_text()
+          rules = pathlib.Path(os.environ["GITHUB_WORKSPACE"], ".github/agentbricks-reviewer/rules.md").read_text()
           meta = json.loads(pathlib.Path("/tmp/pr_meta.json").read_text())
           diff_sha256 = hashlib.sha256(pathlib.Path("/tmp/pr_diff.txt").read_bytes()).hexdigest()
           stats = json.loads(pathlib.Path("/tmp/pr_diff_summary.json").read_text())
@@ -272,12 +277,13 @@ jobs:
           body = meta.get("body") or ""
           labels = ", ".join(label["name"] for label in meta.get("labels") or []) or "(none)"
 
-          prompt = f"""Review this pull request and provide structured feedback.
+          prompt = f"""You are AgentBricksReviewer. Review this pull request by following the rules below.
 
           ## PR metadata
           - Title: {meta['title']}
           - Branch: {meta['headRefName']} -> {meta['baseRefName']}
-          - Diff revisions: {meta['baseRefOid']}...{meta['headRefOid']}
+          - Base SHA: {meta['baseRefOid']}
+          - Head SHA: {meta['headRefOid']}
           - Labels: {labels}
           - Stats: +{meta['additions']} / -{meta['deletions']} across {meta['changedFiles']} file(s)
 
@@ -297,12 +303,13 @@ jobs:
 
           Changed test/support files: {json.dumps(stats['test_files'])}
 
-          ## How to review
-          The full PR diff is at `/tmp/pr_diff.txt` (SHA-256 `{diff_sha256}`). Give each
-          reviewer that path, the checksum, and the rules below; reviewers read it
-          themselves. Do not paste, regenerate, or modify the diff. The working
-          directory is this repository's default branch: read source there for
-          context, but use the diff for the PR's changes.
+          ## Where things are
+          - The full PR diff is at `/tmp/pr_diff.txt` (SHA-256 `{diff_sha256}`). Pass the
+            path to reviewers; do not paste, regenerate, or modify it.
+          - The working directory is this repository's default branch.
+          - The base and head commits are fetched but not checked out. Read a file at
+            either commit with `git show {meta['baseRefOid']}:<path>` or
+            `git show {meta['headRefOid']}:<path>`.
 
           Security: this CI job has access to secrets. Never include secrets, tokens,
           or credentials in your output, and make no network calls except to the
@@ -312,19 +319,19 @@ jobs:
 
           IMPORTANT: your output is posted directly as a PR comment. Output only the
           final review, with no coordination or status messages. Begin with the exact
-          marker <!-- POLLY_REVIEW_START --> on its own line; nothing before it is shown.
+          marker <!-- AGENTBRICKS_REVIEW_START --> on its own line; nothing before it is shown.
           """
           pathlib.Path("/tmp/review_prompt.txt").write_text(prompt)
           PYEOF
 
-      - name: Run Polly review
+      - name: Run AgentBricksReviewer
         if: steps.creds.outputs.available == 'true'
-        id: polly
+        id: reviewer
         env:
           OMNIGENT_CI_PR_NUMBER: ${{ env.PR_NUMBER }}
           OMNIGENT_CI_REVIEWED_SHA: ${{ steps.ctx.outputs.head_sha }}
-          POLLY_HARNESS: ${{ vars.AI_REVIEW_POLLY_HARNESS || 'codex' }}
-          POLLY_MODEL: ${{ vars.AI_REVIEW_POLLY_MODEL || vars.AI_REVIEW_OPENAI_MODEL }}
+          COORDINATOR_HARNESS: ${{ vars.AI_REVIEW_COORDINATOR_HARNESS || 'codex' }}
+          COORDINATOR_MODEL: ${{ vars.AI_REVIEW_COORDINATOR_MODEL || vars.AI_REVIEW_OPENAI_MODEL }}
         run: |
           set -euo pipefail
           review_timeout=$(( REVIEW_DEADLINE - $(date +%s) ))
@@ -332,80 +339,81 @@ jobs:
             echo "::error::Review time budget was exhausted during setup."
             exit 124
           fi
-          # Headless one-turn run from this repo's checkout; --no-session keeps no state.
+          # Headless one-turn run of omnigent's Polly coordinator from this repo's
+          # checkout; --no-session keeps no state.
           status=0
           timeout --signal=INT --kill-after=30s "$review_timeout" \
             uv run --project "$OMNIGENT_DIR" omnigent run "$OMNIGENT_DIR/examples/polly/" \
-              --harness "$POLLY_HARNESS" --model "$POLLY_MODEL" \
+              --harness "$COORDINATOR_HARNESS" --model "$COORDINATOR_MODEL" \
               -p "$(cat /tmp/review_prompt.txt)" \
               --no-session \
-            2>/tmp/polly_stderr.log | tee /tmp/polly_output.txt || status=$?
+            2>/tmp/reviewer_stderr.log | tee /tmp/reviewer_output.txt || status=$?
           if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
-            echo "::error::Polly timed out; no review was published."
+            echo "::error::AgentBricksReviewer timed out; no review was published."
             exit "$status"
           elif [ "$status" -ne 0 ]; then
-            echo "::warning::Polly exited with status $status"
+            echo "::warning::AgentBricksReviewer exited with status $status"
           fi
 
           # Headless output can include drafts; keep only text after the last marker line.
           python3 - <<'PYEOF'
           import pathlib, re
-          raw = pathlib.Path("/tmp/polly_output.txt").read_text()
-          markers = list(re.finditer(r"^<!-- POLLY_REVIEW_START -->$", raw, re.MULTILINE))
+          raw = pathlib.Path("/tmp/reviewer_output.txt").read_text()
+          markers = list(re.finditer(r"^<!-- AGENTBRICKS_REVIEW_START -->$", raw, re.MULTILINE))
           review = raw[markers[-1].end():].lstrip("\n") if markers else ""
           if not review.strip():
-              raise SystemExit("::error::Polly produced no publishable review; see the diagnostics artifact.")
-          pathlib.Path("/tmp/polly_review.txt").write_text(review)
+              raise SystemExit("::error::AgentBricksReviewer produced no publishable review; see the diagnostics artifact.")
+          pathlib.Path("/tmp/review.txt").write_text(review)
           PYEOF
           echo "review_ready=true" >> "$GITHUB_OUTPUT"
 
       - name: Validate review and add diff statistics
-        if: steps.polly.outputs.review_ready == 'true'
+        if: steps.reviewer.outputs.review_ready == 'true'
         # Fails if the Summary/Changes/Tests/Scope contract in rules.md is not met.
-        run: python3 "$OMNIGENT_DIR/.github/scripts/polly-review-summary.py" compose /tmp/pr_diff_summary.json /tmp/polly_review.txt
+        run: python3 "$OMNIGENT_DIR/.github/scripts/polly-review-summary.py" compose /tmp/pr_diff_summary.json /tmp/review.txt
 
       - name: Scan review for secrets
-        if: steps.polly.outputs.review_ready == 'true'
+        if: steps.reviewer.outputs.review_ready == 'true'
         run: |
           # Blocks prompt-injection attempts that make the model echo the key.
-          if grep -qF "$LLM_API_KEY" /tmp/polly_review.txt; then
+          if grep -qF "$LLM_API_KEY" /tmp/review.txt; then
             echo "::error::Review output contains LLM_API_KEY; not posting."
             exit 1
           fi
 
       - name: Post review comment
-        if: steps.polly.outputs.review_ready == 'true'
+        if: steps.reviewer.outputs.review_ready == 'true'
         env:
           HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           {
-            echo "<!-- ai-reviewed-sha: ${HEAD_SHA} -->"
-            echo "## AI PR Review"
+            echo "<!-- agentbricks-reviewer-sha: ${HEAD_SHA} -->"
+            echo "## AgentBricksReviewer"
             echo ""
-            cat /tmp/polly_review.txt
+            cat /tmp/review.txt
             echo ""
             echo "---"
-            echo "<sub>Automated review by omnigent Polly for \`${HEAD_SHA:0:7}\` · [workflow run](${RUN_URL}) · comment \`/review\` to re-run</sub>"
+            echo "<sub>Automated review by AgentBricksReviewer for \`${HEAD_SHA:0:7}\` · [workflow run](${RUN_URL}) · comment \`/review\` to re-run</sub>"
           } > /tmp/comment.md
           gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/comment.md
 
       - name: Prepare diagnostics
-        if: always() && steps.polly.outcome != '' && steps.polly.outcome != 'skipped'
+        if: always() && steps.reviewer.outcome != '' && steps.reviewer.outcome != 'skipped'
         run: |
-          mkdir -p /tmp/ai-review-diagnostics
-          for f in polly_stderr.log polly_output.txt polly_review.txt review_prompt.txt; do
+          mkdir -p /tmp/agentbricks-reviewer-diagnostics
+          for f in reviewer_stderr.log reviewer_output.txt review.txt review_prompt.txt; do
             [ -f "/tmp/$f" ] || continue
             # Redact the key before upload; artifacts are visible to repo readers.
             python3 -c 'import os,sys; t=open(sys.argv[1],errors="replace").read(); k=os.environ.get("LLM_API_KEY"); print(t.replace(k,"***") if k else t, end="")' \
-              "/tmp/$f" > "/tmp/ai-review-diagnostics/$f"
+              "/tmp/$f" > "/tmp/agentbricks-reviewer-diagnostics/$f"
           done
 
       - name: Upload diagnostics
-        if: always() && steps.polly.outcome != '' && steps.polly.outcome != 'skipped'
+        if: always() && steps.reviewer.outcome != '' && steps.reviewer.outcome != 'skipped'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ai-review-logs-${{ github.run_id }}
-          path: /tmp/ai-review-diagnostics/
+          name: agentbricks-reviewer-logs-${{ github.run_id }}
+          path: /tmp/agentbricks-reviewer-diagnostics/
           retention-days: 14
