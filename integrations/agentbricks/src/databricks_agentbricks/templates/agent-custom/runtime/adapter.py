@@ -89,6 +89,21 @@ def _append(session: Session | None, session_id: str, record: dict[str, Any]) ->
         session.append_items([record])
 
 
+async def _checkpoint(
+    session: Session | None, session_id: str, record: dict[str, Any], context: InvocationContext
+) -> None:
+    # The Runtime Store owns the lease; Session Store writes must check it too.
+    await context.emit({"type": "checkpoint"})
+    await asyncio.to_thread(_append, session, session_id, record)
+    await context.emit({"type": "checkpoint"})
+
+
+def _version(record: dict[str, Any]) -> tuple[int, bool]:
+    # Older projects have no attempt field. A completion outranks its input record,
+    # even if a delayed write arrives after it in the append-only Session Store.
+    return record.get("attempt", 1), "response" in record
+
+
 def _memories(payload: dict[str, Any], actor: str, invocation_id: str) -> list[str]:
     store_id = os.getenv("AGENT_MEMORY_STORE")
     if not store_id:
@@ -124,21 +139,26 @@ async def invoke(value: Any, context: InvocationContext) -> dict[str, Any]:
     records, session = await asyncio.to_thread(_load, session_id, actor)
     turns: dict[str, dict[str, Any]] = {}
     for record in records:
-        turns[record["invocation_id"]] = record
+        previous = turns.get(record["invocation_id"])
+        if previous is None or _version(record) >= _version(previous):
+            turns[record["invocation_id"]] = record
     existing = turns.get(context.invocation_id)
     if existing is not None:
         if existing["input"] != payload:
             raise ValueError("invocation ID has already been used with different input")
+        if existing.get("attempt", 1) > context.attempt:
+            raise RuntimeError(f"invocation no longer owns attempt {context.attempt}")
         if "response" in existing:
             # Return the committed output without emitting a second message event.
             return copy.deepcopy(existing["response"])
-    else:
+    if existing is None or existing.get("attempt", 1) < context.attempt:
         existing = {
             "type": _RECORD_TYPE,
             "invocation_id": context.invocation_id,
+            "attempt": context.attempt,
             "input": payload,
         }
-        await asyncio.to_thread(_append, session, session_id, existing)
+        await _checkpoint(session, session_id, existing, context)
         turns[context.invocation_id] = existing
 
     history = []
@@ -160,7 +180,7 @@ async def invoke(value: Any, context: InvocationContext) -> dict[str, Any]:
         raise ValueError("run_agent must return an assistant message with string content")
     output = {**message, "type": "ai", "id": context.invocation_id}
     response = {"output": [output], "status": "completed"}
-    await asyncio.to_thread(_append, session, session_id, {**existing, "response": response})
+    await _checkpoint(session, session_id, {**existing, "response": response}, context)
     # Session checkpoints and Runtime Store events are separate writes. A crash here may
     # leave output available only in the final response; recovery does not duplicate events.
     await context.emit(copy.deepcopy({"type": "message", "message": output}))

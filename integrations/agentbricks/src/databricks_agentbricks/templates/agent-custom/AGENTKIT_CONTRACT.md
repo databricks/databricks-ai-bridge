@@ -46,6 +46,13 @@ side effects can repeat after failure. Use `context.invocation_id` as an idempot
 integrations, or your framework's native durable execution primitive. Request-user invocations
 cannot recover automatically because user credentials are not persisted.
 
+Input and completion checkpoints carry the runtime attempt number. Recovery reserves its own
+attempt before running unfinished agent code; later reads choose the highest attempt, with a
+completion ahead of its input record. This prevents a delayed old worker's append from replacing
+the new attempt's checkpoint. The adapter emits internal `checkpoint` events before and after each
+append to verify Runtime Store ownership. A worker that loses its lease cannot continue after
+the checkpoint operation. A saved completed response returns without new events.
+
 Completion records are written before message events. Session Store and Runtime Store writes
 are not atomic: a crash between them may leave a response present without a corresponding message
 event. Read the final invocation response as the authoritative result. Concurrent writes require

@@ -3,8 +3,8 @@
 `agentbricks init` scaffolds an agent; ``uv sync`` builds its venv; then the agent's real entrypoint
 (``start-server`` — the command ``agentbricks dev`` runs the app with) boots in a from-scratch environment
 whose only Databricks target is an in-process fake model-serving endpoint. Copying the printed
-next-step command into a real shell must come back with the model's answer, for each template.
-No cloud, no auth, no workspace.
+next-step command into a real shell must return the model's answer for model-backed templates,
+or the custom template's echo without any model requests. No cloud, no auth, no workspace.
 
 It boots the entrypoint directly rather than through ``databricks apps run-local``: run-local
 resolves a real workspace at startup (config discovery + SCIM user), so it can't run in an empty
@@ -33,7 +33,7 @@ import yaml
 from rich.console import Console
 
 from databricks_agentbricks.presentation import render
-from databricks_agentbricks.projects.agent_project import AgentServer
+from databricks_agentbricks.projects.types import AgentFramework, AgentServer
 
 _MARKER = "AGENTBRICKS_DEV_OK"
 
@@ -62,6 +62,10 @@ class _FakeServingHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length") or 0)
         request = json.loads(self.rfile.read(length))
+        if self.path == "/telemetry-ext":
+            self._json({})
+            return
+        self.server.model_requests.append(request)
         metadata = {"id": "chatcmpl-test", "created": 1, "model": "databricks-gpt-5-2"}
         if not request.get("stream"):
             self._json(
@@ -157,13 +161,15 @@ def _pin_package_source(
     pyproject.write_text(tomlkit.dumps(document))
 
 
-@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+@pytest.mark.parametrize("framework", ["langgraph", "openai", "custom"])
 @pytest.mark.parametrize(
     "server_kind,chat_ui", [("agentbricks", True), ("agentbricks", False), ("custom", False)]
 )
 def test_scaffolded_agent_boots_and_answers_locally(
     tmp_path: pathlib.Path, monkeypatch, framework: str, server_kind: str, chat_ui: bool
 ) -> None:
+    if framework == "custom" and chat_ui:
+        pytest.skip("The custom framework has no bundled browser UI")
     agentbricks = pathlib.Path(sys.executable).with_name("agentbricks")
     uv = shutil.which("uv")
     if not agentbricks.is_file() or uv is None:
@@ -198,12 +204,8 @@ def test_scaffolded_agent_boots_and_answers_locally(
         runtime_main = project / "runtime/main.py"
         source = runtime_main.read_text()
         source = source.replace(
-            "from databricks_agentkit import DurableAgentServer",
-            "from databricks_agentkit import DurableAgentServer\n"
-            "from databricks_agentkit.runtime.auth import InvocationAuthPolicy",
-        )
-        source = source.replace(
             "app = DurableAgentServer()",
+            "from databricks_agentkit.runtime.auth import InvocationAuthPolicy\n\n"
             'app = DurableAgentServer(auth_policy=InvocationAuthPolicy(("local-probe",)))',
         )
         runtime_main.write_text(source)
@@ -256,6 +258,7 @@ def test_scaffolded_agent_boots_and_answers_locally(
 
     # 4. Fake model serving.
     fake = ThreadingHTTPServer(("127.0.0.1", 0), _FakeServingHandler)
+    fake.model_requests = []
     fake_port = fake.server_address[1]
     threading.Thread(target=fake.serve_forever, daemon=True).start()
 
@@ -299,7 +302,9 @@ def test_scaffolded_agent_boots_and_answers_locally(
             #    than the console width: hard wraps or panel borders would break shell parsing.
             buf = io.StringIO()
             monkeypatch.setattr(render, "_stdout", Console(file=buf, width=80, no_color=True))
-            _announce_local_url(project, app_port, AgentServer(server_kind))
+            _announce_local_url(
+                project, app_port, AgentServer(server_kind), framework=AgentFramework(framework)
+            )
             (tmp_path / "next-steps.txt").write_text(buf.getvalue())
             commands = [
                 line
@@ -324,7 +329,8 @@ def test_scaffolded_agent_boots_and_answers_locally(
                     )
                     assert result.returncode == 0, result.stdout + result.stderr
                     body = json.loads(result.stdout)
-                    assert _MARKER in json.dumps(body["output"]), body
+                    expected = "Echo:" if framework == "custom" else _MARKER
+                    assert expected in json.dumps(body["output"]), body
                     if server_kind == "agentbricks":
                         assert body.get("status") == "completed", body
                         invocation_id = uuid.UUID(body["id"])
@@ -333,3 +339,5 @@ def test_scaffolded_agent_boots_and_answers_locally(
         finally:
             _terminate(server)
             fake.shutdown()
+    if framework == "custom":
+        assert fake.model_requests == [], "Custom harnesses must not require a model gateway"

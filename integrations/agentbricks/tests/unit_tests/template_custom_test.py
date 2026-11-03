@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import importlib
 import sys
+import threading
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -164,19 +166,29 @@ def template(request, scaffold, monkeypatch):
     return SimpleNamespace(root=root, adapter=adapter, remote=remote, mode=request.param)
 
 
-def context(invocation_id="turn", session_id="conversation", request_auth=None):
+def context(
+    invocation_id="turn", session_id="conversation", request_auth=None, *, attempt=1, owner=None
+):
     events = []
 
     async def emit(event):
+        if owner is not None and owner[0] != attempt:
+            raise RuntimeError(f"invocation no longer owns attempt {attempt}")
         events.append(copy.deepcopy(event))
         return len(events)
 
-    attempt = InvocationAttemptContext(invocation_id, 1, emit, session_id=session_id)
-    return InvocationContext(invocation_id, session_id, 1, attempt, request_auth), events
+    attempt_context = InvocationAttemptContext(invocation_id, attempt, emit, session_id=session_id)
+    return InvocationContext(
+        invocation_id, session_id, attempt, attempt_context, request_auth
+    ), events
 
 
 def message(content, **kwargs):
     return {"messages": [{"role": "user", "content": content}], **kwargs}
+
+
+def message_events(events):
+    return [event for event in events if event["type"] == "message"]
 
 
 @pytest.mark.asyncio
@@ -187,7 +199,7 @@ async def test_generated_agent_is_framework_neutral_and_emits_managed_message(te
         "status": "completed",
         "output": [{"role": "assistant", "content": "Echo: Hello", "type": "ai", "id": "turn"}],
     }
-    assert events == [{"type": "message", "message": response["output"][0]}]
+    assert message_events(events) == [{"type": "message", "message": response["output"][0]}]
     project = tomli.loads((template.root / "pyproject.toml").read_text())
     assert any(
         dep.startswith("databricks-agentbricks>=") for dep in project["project"]["dependencies"]
@@ -224,7 +236,7 @@ async def test_recovery_reuses_committed_response_without_duplicate_messages(tem
         assert await template.adapter.recover(payload, recovered_ctx) == original
         assert recovered_events == []
     assert len(template.adapter._load("conversation", "conversation")[0]) == 2
-    assert len(events) == 1
+    assert len(message_events(events)) == 1
     assert payload == message("once")
 
 
@@ -233,7 +245,96 @@ async def test_recovery_without_checkpoint_runs_original_input(template):
     ctx, events = context()
     response = await template.adapter.recover(message("first attempt was lost"), ctx)
     assert response["output"][0]["content"] == "Echo: first attempt was lost"
-    assert len(events) == 1
+    assert len(message_events(events)) == 1
+
+
+@pytest.mark.asyncio
+async def test_lost_lease_prevents_input_and_memory_checkpoint_writes(template, monkeypatch):
+    monkeypatch.setenv("AGENT_MEMORY_STORE", "memories")
+    ctx, events = context(owner=[2])
+    with pytest.raises(RuntimeError, match="no longer owns attempt"):
+        await template.adapter.invoke(message("save", remember="private fact"), ctx)
+    assert template.adapter._load("conversation", "conversation")[0] == []
+    assert template.remote.entries == {}
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_replaced_worker_cannot_commit_after_native_execution(template, monkeypatch):
+    native_run = template.adapter.run_agent
+    started, release = asyncio.Event(), asyncio.Event()
+    owner, calls = [1], []
+
+    async def delayed_native(messages, **kwargs):
+        number = len(calls) + 1
+        calls.append(number)
+        if number == 1:
+            started.set()
+            await release.wait()
+        response = await native_run(messages, **kwargs)
+        response["content"] += f" (run {number})"
+        return response
+
+    monkeypatch.setattr(template.adapter, "run_agent", delayed_native)
+    old_ctx, old_events = context(attempt=1, owner=owner)
+    old_task = asyncio.create_task(template.adapter.invoke(message("recover"), old_ctx))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=5)
+        owner[0] = 2
+        recovered_ctx, _events = context(attempt=2, owner=owner)
+        response = await template.adapter.recover(message("recover"), recovered_ctx)
+    finally:
+        release.set()
+    with pytest.raises(RuntimeError, match="no longer owns attempt"):
+        await old_task
+    assert response["output"][0]["content"] == "Echo: recover (run 2)"
+    assert message_events(old_events) == []
+    records, _session = template.adapter._load("conversation", "conversation")
+    assert [record["attempt"] for record in records if "response" in record] == [2]
+    saved_ctx, saved_events = context(attempt=3)
+    assert await template.adapter.recover(message("recover"), saved_ctx) == response
+    assert saved_events == []
+
+
+@pytest.mark.asyncio
+async def test_delayed_old_completion_cannot_replace_new_attempt_checkpoint(template, monkeypatch):
+    append, native_run = template.adapter._append, template.adapter.run_agent
+    started, release = threading.Event(), threading.Event()
+    owner, calls = [1], []
+
+    def delayed_append(session, session_id, record):
+        if "response" in record and not started.is_set():
+            started.set()
+            if not release.wait(timeout=5):
+                raise TimeoutError("replacement worker did not release the delayed append")
+        return append(session, session_id, record)
+
+    async def counted_native(messages, **kwargs):
+        number = len(calls) + 1
+        calls.append(number)
+        response = await native_run(messages, **kwargs)
+        response["content"] += f" (run {number})"
+        return response
+
+    monkeypatch.setattr(template.adapter, "_append", delayed_append)
+    monkeypatch.setattr(template.adapter, "run_agent", counted_native)
+    old_ctx, _events = context(attempt=1, owner=owner)
+    old_task = asyncio.create_task(template.adapter.invoke(message("recover"), old_ctx))
+    try:
+        assert await asyncio.to_thread(started.wait, 5)
+        owner[0] = 2
+        recovered_ctx, _events = context(attempt=2, owner=owner)
+        response = await template.adapter.recover(message("recover"), recovered_ctx)
+    finally:
+        release.set()
+    with pytest.raises(RuntimeError, match="no longer owns attempt"):
+        await old_task
+    records, _session = template.adapter._load("conversation", "conversation")
+    assert records[-1]["response"]["output"][0]["content"] == "Echo: recover (run 1)"
+    saved_ctx, saved_events = context(attempt=3)
+    assert await template.adapter.recover(message("recover"), saved_ctx) == response
+    assert response["output"][0]["content"] == "Echo: recover (run 2)"
+    assert saved_events == []
 
 
 @pytest.mark.asyncio
@@ -280,7 +381,9 @@ async def test_recovery_after_event_write_failure_returns_committed_response(tem
     ctx, _events = context()
 
     async def failed_emit(_event):
-        raise OSError("event store unavailable")
+        if _event["type"] == "message":
+            raise OSError("event store unavailable")
+        return 0
 
     failed_attempt = InvocationAttemptContext("turn", 1, failed_emit, session_id="conversation")
     failed_ctx = InvocationContext("turn", "conversation", 1, failed_attempt)
@@ -304,13 +407,13 @@ async def test_completion_failure_recovers_without_duplicate_history_or_memory(
     payload = message("save", actor="alice", remember="Likes teal")
     with pytest.raises(OSError, match="append"):
         await template.adapter.invoke(payload, ctx)
-    assert events == []
+    assert message_events(events) == []
     response = await template.adapter.recover(payload, ctx)
     assert response["output"][0]["content"] == "Echo: save\nRelevant memories:\nLikes teal"
     assert len(template.remote.items["conversation"]) == 2
     assert list(template.remote.entries) == [("alice", "/invocations/turn.md")]
     assert len(template.remote.searches) == (2 if failure == "before" else 1)
-    assert len(events) == (1 if failure == "before" else 0)
+    assert len(message_events(events)) == (1 if failure == "before" else 0)
 
 
 @pytest.mark.asyncio
