@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import pathlib
 
+from rich.text import Text
+
 from databricks_agentbricks.presentation import render
 from databricks_agentbricks.presentation.endpoint import agent_invoke_step
 from databricks_agentbricks.projects.types import AgentServer
+from databricks_agentbricks.reporting import format_elapsed
 from databricks_agentbricks.services.dev_service import DevPreview
 
 
@@ -47,6 +50,24 @@ def announce_starting() -> None:
     con.print()
     con.print(f"[{render.DIM}]•[/] Starting agent locally… Details appear here once it's ready.")
     con.print()
+
+
+# The same braille "dots" frames as the CLI's other spinners (rich's ``dots``).
+_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+_SPINNER_FPS = 12.5
+
+
+def starting_status(elapsed: float) -> str:
+    """The in-place line shown while the agent is starting and its output has gone quiet.
+
+    ``⠼ Starting the agent… 0:12``, dimmed like the CLI's other spinners, rendered for the terminal.
+    """
+    frame = _SPINNER_FRAMES[int(elapsed * _SPINNER_FPS) % len(_SPINNER_FRAMES)]
+    text = Text(f"{frame} Starting the agent… {format_elapsed(elapsed)}", style=render.DIM)
+    con = render.console()
+    with con.capture() as captured:
+        con.print(text, end="", soft_wrap=True)
+    return captured.get()
 
 
 def announce_local_url(
