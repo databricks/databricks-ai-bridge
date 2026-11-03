@@ -43,6 +43,10 @@ _TRANSIENT_HINT = (
     "This is usually a transient backend issue — re-running the command often succeeds."
 )
 
+_LAKEBASE_PERMISSION_DOCS = (
+    "https://docs.databricks.com/aws/en/oltp/projects/manage-project-permissions"
+)
+
 
 class AgentCliError(click.ClickException):
     """A user-facing CLI error rendered without a Python traceback."""
@@ -74,6 +78,21 @@ class AgentCliError(click.ClickException):
             help=self.hint,
             con=Console(stderr=True),
         )
+
+
+def store_create_permission_error(name: str, kind: str, cause: AgentCliError) -> AgentCliError:
+    """Explain managed-store creation permissions for CLI and SDK callers."""
+    command = "memory" if kind == "memory" else "sessions"
+    return AgentCliError(
+        f"You don't have permission to create {kind} store '{name}'.",
+        error_code=cause.error_code,
+        hint=(
+            "Managed store creation may require permission to create Lakebase projects. "
+            "Ask your workspace admin to check your access "
+            f"({_LAKEBASE_PERMISSION_DOCS}). To reuse an existing store you can access, run "
+            f"`agentbricks {command} bind <existing-store>` and deploy again."
+        ),
+    )
 
 
 def wrap_api_error(exc: Exception) -> AgentCliError:
