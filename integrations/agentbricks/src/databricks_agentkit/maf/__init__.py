@@ -7,7 +7,7 @@ if TYPE_CHECKING:
     from databricks_agentkit.maf.mcp import mcp_tools
     from databricks_agentkit.maf.memory import memory_tools
     from databricks_agentkit.maf.sessions import read_history, session_store
-    from databricks_agentkit.runtime import start_trace
+    from databricks_agentkit.runtime import start_trace, workspace_client, workspace_headers
 
 
 def configure_tracing() -> None:
@@ -27,6 +27,8 @@ __all__ = [
     "read_history",
     "session_store",
     "start_trace",
+    "workspace_client",
+    "workspace_headers",
 ]
 
 _MODULE_BY_NAME = {
@@ -36,6 +38,8 @@ _MODULE_BY_NAME = {
     "read_history": "databricks_agentkit.maf.sessions",
     "session_store": "databricks_agentkit.maf.sessions",
     "start_trace": "databricks_agentkit.runtime",
+    "workspace_client": "databricks_agentkit.runtime",
+    "workspace_headers": "databricks_agentkit.runtime",
 }
 
 

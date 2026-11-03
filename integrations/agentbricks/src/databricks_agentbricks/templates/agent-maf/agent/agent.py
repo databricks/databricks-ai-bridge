@@ -33,13 +33,15 @@ def configure() -> None:
 
 
 def create_agent(
-    actor: str, *, model: str | None = None, mcp=(), instructions: str | None = None
+    actor: str,
+    *,
+    async_client: AsyncDatabricksOpenAI,
+    model: str | None = None,
+    mcp=(),
+    instructions: str | None = None,
 ) -> Agent:
     tools = [*all_tools(), *memory_tools(actor), *genie_tools(), *mcp]
-    if any(
-        getattr(tool, "approval_mode", None) not in {None, "never_require"}
-        for tool in tools
-    ):
+    if any(getattr(tool, "approval_mode", None) not in {None, "never_require"} for tool in tools):
         raise ValueError(
             "The Microsoft Agent Framework template does not support approval-requiring tools."
         )
@@ -47,18 +49,21 @@ def create_agent(
         name="Agent",
         # Databricks Responses is stateless; send history instead of previous_response_id.
         default_options={"store": False},
-        instructions="You are a helpful assistant."
-        + (f"\n{instructions}" if instructions else ""),
+        instructions="You are a helpful assistant." + (f"\n{instructions}" if instructions else ""),
         client=OpenAIChatClient(
             model=model or resolve_model_service() or MODEL,
-            async_client=AsyncDatabricksOpenAI(
-                workspace_client=workspace_client(),
-                default_headers=workspace_headers() or None,
-                use_ai_gateway=True,
-            ),
+            async_client=async_client,
         ),
         context_providers=[session_store(actor)],
         tools=tools,
+    )
+
+
+def _model_client() -> AsyncDatabricksOpenAI:
+    return AsyncDatabricksOpenAI(
+        workspace_client=workspace_client(),
+        default_headers=workspace_headers() or None,
+        use_ai_gateway=True,
     )
 
 
@@ -73,11 +78,14 @@ async def run_agent(
 ) -> AsyncIterator[Any]:
     """Yield the native response stream; callers can also use this outside the HTTP runtime."""
     async with AsyncExitStack() as stack:
-        connections = [
-            await stack.enter_async_context(connection) for connection in mcp_tools()
-        ]
+        connections = [await stack.enter_async_context(connection) for connection in mcp_tools()]
+        client = await stack.enter_async_context(_model_client())
         agent = create_agent(
-            actor, model=model, mcp=connections, instructions=instructions
+            actor,
+            model=model,
+            mcp=connections,
+            instructions=instructions,
+            async_client=client,
         )
         with start_trace(
             "invoke", inputs=[m.to_dict() for m in messages], session_id=session_id

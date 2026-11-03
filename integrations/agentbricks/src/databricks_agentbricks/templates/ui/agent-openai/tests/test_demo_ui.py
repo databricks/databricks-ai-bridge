@@ -1,4 +1,7 @@
+from uuid import uuid4
+
 import pytest
+from agent import agent as native_agent
 from fastapi.testclient import TestClient
 from runtime import ui
 
@@ -98,7 +101,7 @@ class _FakeStateClient:
         }
 
 
-async def _session_history(session_id):
+async def _session_history(session_id, actor=None):
     return {
         "session_id": session_id,
         "session_items": [
@@ -117,8 +120,14 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
     else:
         monkeypatch.delenv("AGENT_MEMORY_STORE", raising=False)
         monkeypatch.delenv("AGENT_SESSION_STORE", raising=False)
-    if history:
-        monkeypatch.setattr(ui, "_local_history", _session_history)
+    if configured or history:
+        async def read_history(session_id, actor=None):
+            assert actor == ("alice" if configured else "agent")
+            if configured:
+                return _FakeStateClient().list_session_items(session_id)
+            return await _session_history(session_id, actor)
+
+        monkeypatch.setattr(native_agent, "read_history", read_history)
     # Keep model discovery deterministic and offline (no AI Gateway listing call).
     monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-sonnet-4-5")
     monkeypatch.setattr(ui, "_discover_chat_models", lambda: ["system.ai.claude-sonnet-4-5"])
@@ -436,26 +445,40 @@ def test_discover_chat_models_keeps_every_model(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_local_history_reads_messages_from_in_process_session(monkeypatch):
-    import databricks_agentkit.openai.sessions as ss
+    monkeypatch.delenv("AGENT_SESSION_STORE", raising=False)
+    session_id = str(uuid4())
+    maf_history = native_agent.session_store.__module__.startswith("databricks_agentkit.maf.")
+    if maf_history:
+        from agent_framework import Message
 
-    class _FakeSession:
-        async def get_items(self, limit=None):
-            return [
+        provider = native_agent.session_store("alice")
+        await provider.save_messages(
+            session_id,
+            [
+                Message("user", ["saved message"], message_id="m1"),
+                Message("assistant", ["saved reply"], message_id="m2"),
+            ],
+        )
+    else:
+        session = native_agent.session_store(session_id, actor="alice")
+        await session.add_items(
+            [
                 {"id": "m1", "role": "user", "content": "saved message"},
-                {"role": "assistant", "content": "saved reply"},
+                {"id": "m2", "role": "assistant", "content": "saved reply"},
             ]
+        )
 
-    monkeypatch.setattr(ss, "session_store", lambda session_id, actor=None: _FakeSession())
-    result = await ui._local_history("saved-session")
-
-    assert result == {
-        "session_id": "saved-session",
-        "session_items": [
-            {"item_id": "m1", "data": {"id": "m1", "role": "user", "content": "saved message"}},
-            {"item_id": "1", "data": {"role": "assistant", "content": "saved reply"}},
-        ],
-        "interrupts": [],
-    }
+    # Read through the same public native export used by the browser, without constructing an agent.
+    result = await ui._local_history(session_id, "alice")
+    assert result["session_id"] == session_id
+    assert [
+        (item["item_id"], item["data"]["role"], item["data"]["content"])
+        for item in result["session_items"]
+    ] == [("m1", "user", "saved message"), ("m2", "assistant", "saved reply")]
+    assert result["interrupts"] == []
+    assert (await ui._local_history(str(uuid4()), "alice"))["session_items"] == []
+    if maf_history:
+        assert (await ui._local_history(session_id, "bob"))["session_items"] == []
 
 
 def test_managed_memory_and_session_routes(monkeypatch):

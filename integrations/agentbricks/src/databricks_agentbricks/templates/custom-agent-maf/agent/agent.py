@@ -8,21 +8,20 @@ from databricks_agentkit import workspace_client, workspace_headers
 
 
 async def invoke(messages: list[dict[str, Any]]) -> dict[str, Any]:
-    agent = Agent(
-        name="Agent",
-        # Databricks Responses is stateless; send history instead of previous_response_id.
-        default_options={"store": False},
-        instructions="You are a helpful assistant.",
-        client=OpenAIChatClient(
-            model="system.ai.claude-sonnet-4-5",
-            async_client=AsyncDatabricksOpenAI(
-                workspace_client=workspace_client(),
-                default_headers=workspace_headers() or None,
-                use_ai_gateway=True,
+    async with AsyncDatabricksOpenAI(
+        workspace_client=workspace_client(),
+        default_headers=workspace_headers() or None,
+        use_ai_gateway=True,
+    ) as client:
+        agent = Agent(
+            name="Agent",
+            # Databricks Responses is stateless; send history instead of previous_response_id.
+            default_options={"store": False},
+            instructions="You are a helpful assistant.",
+            client=OpenAIChatClient(
+                model="system.ai.claude-sonnet-4-5",
+                async_client=client,
             ),
-        ),
-    )
-    result = await agent.run(
-        [Message(item["role"], [item["content"]]) for item in messages]
-    )
-    return {"output": [{"role": "assistant", "content": result.text}]}
+        )
+        result = await agent.run([Message(item["role"], [item["content"]]) for item in messages])
+        return {"output": [{"role": "assistant", "content": result.text}]}

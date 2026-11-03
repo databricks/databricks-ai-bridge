@@ -1,8 +1,8 @@
-# OpenAI Agents Chat App Overlay
+# Transcript Chat App Overlay
 
-`agentbricks init --framework openai` copies this framework-specific overlay after the base `agent-openai`
-template (it is included by default; `--disable-chat-app` opts out). It is intentionally not a
-post-generation mutation command.
+`agentbricks init --framework openai` and `agentbricks init --framework maf` copy this shared overlay
+after the selected agent template. It is included by default; `--disable-chat-app` opts out.
+It is intentionally not a post-generation mutation command.
 
 ## Installed files
 
@@ -39,9 +39,10 @@ answer text blocks as Markdown, with readable reasoning in a collapsed **Reasoni
 Signatures and encrypted reasoning are excluded from the chat display. Raw HTML is escaped
 and images are not loaded; Copy preserves the original Markdown.
 
-The UI reads local history from the agent's in-process session (`SQLiteSession`) and managed history
-from Session Store items. It keeps a stable application session UUID in browser local storage,
-sends it as every durable invocation's top-level `session_id`, and also uses the same value in the
+The UI reads both local and managed history through `agent.agent.read_history(session_id, actor)`.
+The native adapter translates its transcript to the browser's common message shape. Keep this export
+when adapting the agent. The browser keeps a stable application session UUID in local storage,
+sends it as every durable invocation's top-level `session_id`, and uses the same value in the
 independent `X-Routing-Key` header for sticky routing; each turn gets a separate invocation UUID.
 
 The Sessions card creates new session UUIDs in the browser. With a managed Session Store,
@@ -53,7 +54,16 @@ is no shared session index.
 Transcript responses include only user, assistant, tool, system, and human-decision message items;
 non-message items remain in Session Store but are never returned to the chat UI.
 
-Human-in-the-loop pauses are **in-process only**: a paused run (the Agents SDK `RunState`) is held in
-memory by `agent/agent.py`, not in the session transcript, so — unlike the LangGraph template — it is
-not durable even with a managed Session Store, and the unmanaged history path never reports pending
-interrupts. Resume a pause on the same process that created it.
+The native integrations retain different state:
+
+- **OpenAI Agents SDK:** local transcripts use `SQLiteSession`; managed transcripts contain Responses
+  items. Paused `RunState` is separate from the transcript. The managed runtime template checkpoints
+  it in a separate Session Store session when a store is bound; native callers without checkpoint
+  hooks keep it in process. Transcript reads return no interrupts, so reloading history does not
+  reconstruct pending approval controls. See [AGENTKIT_CONTRACT.md](AGENTKIT_CONTRACT.md) for resume
+  and checkpoint requirements.
+- **Microsoft Agent Framework:** a native `HistoryProvider` stores complete Message dictionaries,
+  including tool calls and results. Local history is scoped to actor and session within the process;
+  a bound Session Store retains it across restarts. The template does not implement approval
+  continuation or workflow checkpoints. Approval-requiring tools and request-user tool bindings are
+  rejected explicitly, so its browser approval controls have no pending actions.

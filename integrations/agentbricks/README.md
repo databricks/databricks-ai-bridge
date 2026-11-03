@@ -747,8 +747,8 @@ agentbricks sessions items append --help
 For projects with `[agent].server = "agentbricks"` (the default from `agentbricks init`), `agent.toml` is the
 declarative source of truth for Databricks-managed infrastructure: the Runtime Store, sandbox,
 managed MCP, Genie and Unity Catalog function bindings, plus memory and session resources. `agentbricks tools
-add` updates only this file; direct TOML edits have the same behavior. Both managed-server framework
-adapters read the managed bindings at runtime without generating or patching agent source:
+add` updates only this file; direct TOML edits have the same behavior. The LangGraph, OpenAI, and MAF
+managed-server adapters read the bindings at runtime without generating or patching agent source:
 
 ```sh
 agentbricks tools add sandbox --scope volume:main.data.files
@@ -1091,7 +1091,8 @@ again. If submission times out before a message ID is received, ask returns
 `NOT_SUBMITTED` means client setup timed out before sending the question. Query results include
 the first 100 rows, column schema, a truncation indicator, and a deep link to the conversation.
 
-Both framework modules, `databricks_agentkit.langgraph` and `databricks_agentkit.openai`, export
+The framework modules `databricks_agentkit.langgraph`, `databricks_agentkit.openai`, and
+`databricks_agentkit.maf` export
 `genie_tools()`. New managed-server templates (`server = "agentbricks"`) use it automatically for native Genie Agent bindings;
 Genie One uses the existing managed MCP helpers. In an existing project with `server = "agentbricks"`, import
 `genie_tools` from your framework module and add `*genie_tools()` to the agent's existing tool list.
@@ -1103,8 +1104,8 @@ The effective caller needs access to the data, the SQL warehouse, and the select
 where applicable. Agent Bricks CLI does not grant permissions or promise a service-principal fallback when
 caller credentials lack access. An offline add succeeding does not establish runtime access.
 
-The opt-in live tests exercise both frameworks against the configured workspace and an existing
-Genie space. From `integrations/agentbricks`, with both framework extras installed:
+The opt-in live tests exercise LangGraph and OpenAI against the configured workspace and an existing
+Genie space. From `integrations/agentbricks`, with those two framework extras installed:
 
 ```sh
 DATABRICKS_CONFIG_PROFILE=my-workspace RUN_AGENTBRICKS_GENIE_TESTS=1 \

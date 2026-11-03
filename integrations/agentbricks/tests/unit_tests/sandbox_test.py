@@ -261,6 +261,22 @@ def test_add_sandbox_rejects_unsupported_framework_without_writes(tmp_path: path
     assert mcps.read_text() == original
 
 
+@pytest.mark.parametrize("metadata", [False, True])
+def test_add_sandbox_rejects_maf_source_rewriting_without_writes(tmp_path, metadata):
+    project, mcps = _project(tmp_path, framework="maf" if metadata else None)
+    original = mcps.read_bytes()
+    args = ["--source", str(project), "--scope", "catalog.schema.volume"]
+    if not metadata:
+        args.extend(["--framework", "maf"])
+
+    result = CliRunner().invoke(add_sandbox, args, obj=_TextCtx())
+
+    assert result.exit_code != 0
+    assert "Source rewriting is not supported for the 'maf' framework" in result.output
+    assert mcps.read_bytes() == original
+    assert not (project / "agent.toml").exists()
+
+
 def test_generated_block_reads_valid_python_template_at_render_time(
     tmp_path: pathlib.Path, monkeypatch
 ):

@@ -13,10 +13,14 @@ case "${1:-}" in
     ;;
   framework)
     uv run --resolution highest --exact --group tests --extra langgraph --extra openai --extra maf pytest tests/unit_tests
-    PYTHONPATH=src/databricks_agentbricks/templates/agent-openai \
-      uv run --no-sync pytest src/databricks_agentbricks/templates/agent-openai/tests
-    PYTHONPATH=src/databricks_agentbricks/templates/agent-maf \
-      uv run --no-sync pytest src/databricks_agentbricks/templates/agent-maf/tests
+    generated_templates=$(mktemp -d)
+    trap 'rm -rf "$generated_templates"' EXIT
+    for framework in openai maf; do
+      AGENTBRICKS_DISABLE_TELEMETRY=1 AGENTBRICKS_DISABLE_AGENT_HINT=1 \
+        uv run --no-sync agentbricks init --framework "$framework" "$generated_templates/agent-$framework"
+      PYTHONPATH="$generated_templates/agent-$framework" \
+        uv run --no-sync pytest "$generated_templates/agent-$framework/tests"
+    done
     ;;
   functional)
     uv build --wheel --out-dir dist ../..

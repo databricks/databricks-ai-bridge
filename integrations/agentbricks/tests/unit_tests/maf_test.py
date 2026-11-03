@@ -6,7 +6,7 @@ import sys
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import httpx
@@ -25,6 +25,7 @@ from agent_framework import (
     Message,
     ResponseStream,
 )
+from openai import AsyncOpenAI
 
 from databricks_agentkit.maf import sessions
 from databricks_agentkit.maf.sessions import DatabricksHistoryProvider
@@ -120,6 +121,7 @@ def template(monkeypatch):
     monkeypatch.setattr(sessions, "_local_messages", {})
     monkeypatch.setattr(agent, "mcp_tools", lambda: [])
     monkeypatch.setattr(agent, "start_trace", lambda *_args, **_kwargs: nullcontext())
+    monkeypatch.setattr(agent, "_model_client", lambda: AsyncOpenAI(api_key="local-test-key"))
     clients = []
 
     def create_agent(actor, **_kwargs):
@@ -318,7 +320,7 @@ def test_approval_tools_fail_before_model_configuration(template, monkeypatch):
         agent, "workspace_client", lambda: pytest.fail("validate before model configuration")
     )
     with pytest.raises(ValueError, match="approval-requiring tools"):
-        agent.create_agent("alice")
+        agent.create_agent("alice", async_client=Mock(spec=AsyncOpenAI))
 
 
 def test_configuration_resolves_model_binding_for_browser(template, monkeypatch):
