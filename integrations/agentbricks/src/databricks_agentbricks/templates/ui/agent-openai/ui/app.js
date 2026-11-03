@@ -53,6 +53,11 @@ const elements = {
   memorySearch: document.querySelector("#memory-search-input"),
   memoryCount: document.querySelector("#memory-count"),
   memoryEntries: document.querySelector("#memory-entries"),
+  memoryTabEntries: document.querySelector("#memory-tab-entries"),
+  memoryTabPipeline: document.querySelector("#memory-tab-pipeline"),
+  memoryEntriesPanel: document.querySelector("#memory-entries-panel"),
+  memoryPipeline: document.querySelector("#memory-pipeline"),
+  memoryPipelineAlert: document.querySelector("#memory-pipeline-alert"),
   memoryPipelineRun: document.querySelector("#memory-pipeline-run"),
   memoryPipelineBody: document.querySelector("#memory-pipeline-body"),
   memoryPipelineConfirm: document.querySelector("#memory-pipeline-confirm"),
@@ -1071,10 +1076,33 @@ function renderPipeline(pipeline, runs, notice = "") {
   body.append(list);
 }
 
+// Entries and Pipeline share the Memory pane as tabs; Entries is selected each time the pane opens.
+function selectMemoryTab(name, { focus = false } = {}) {
+  const tabs = {
+    entries: [elements.memoryTabEntries, elements.memoryEntriesPanel],
+    pipeline: [elements.memoryTabPipeline, elements.memoryPipeline],
+  };
+  for (const [key, [tab, panel]] of Object.entries(tabs)) {
+    const on = key === name;
+    tab.classList.toggle("active", on);
+    tab.setAttribute("aria-selected", String(on));
+    tab.tabIndex = on ? 0 : -1;
+    panel.hidden = !on;
+    if (on && focus) tab.focus();
+  }
+  if (name !== "pipeline") setPipelineConfirm(false);
+}
+
+// A dot on the Pipeline tab when the latest run failed, so it isn't missed from the Entries tab.
+function setPipelineAlert(failed) {
+  elements.memoryPipelineAlert.hidden = !failed;
+}
+
 async function loadPipeline(notice = "") {
   window.clearTimeout(pipelineState.timer);
   if (!state.config?.memory.pipelines) {
     // Never call the pipeline routes here: they need a deployed app with both stores bound.
+    setPipelineAlert(false);
     elements.memoryPipelineRun.hidden = true;
     elements.memoryPipelineBody.replaceChildren(
       pipelineText("memory-field-hint", "Memory pipelines need a deployed app with sessions and memory bound."),
@@ -1085,6 +1113,7 @@ async function loadPipeline(notice = "") {
     const response = await fetch(demoUrl("/api/demo/memory/pipeline"), { cache: "no-store" });
     const { pipeline, runs = [] } = await jsonResponse(response);
     renderPipeline(pipeline, runs, notice);
+    setPipelineAlert(runs[0]?.state === "FAILED");
     addEvent("memory.pipeline.get", { pipeline: pipeline?.name || null, runs: runs.length, status: runs[0]?.state });
     // Refresh while a run is in progress and the pane is open.
     if (pipelineRunning(runs) && !elements.memoryPane.hidden) {
@@ -1092,6 +1121,7 @@ async function loadPipeline(notice = "") {
       pipelineState.timer = window.setTimeout(() => void loadPipeline(), PIPELINE_POLL_MS);
     }
   } catch (error) {
+    setPipelineAlert(false);
     elements.memoryPipelineRun.hidden = true;
     elements.memoryPipelineConfirm.hidden = true;
     elements.memoryPipelineBody.replaceChildren(
@@ -1127,6 +1157,7 @@ function openMemoryPane() {
   elements.memoryStoreName.textContent = memoryStoreName();
   elements.memoryStore.title = state.config?.memory.store || "";
   if (!elements.memoryActor.value) elements.memoryActor.value = state.config?.memory.actor || "";
+  selectMemoryTab("entries");
   void loadMemory();
   void loadPipeline();
 }
@@ -1975,6 +2006,24 @@ elements.memoryRefresh.addEventListener("click", () => {
   void loadMemory();
   void loadPipeline();
 });
+elements.memoryTabEntries.addEventListener("click", () => selectMemoryTab("entries"));
+elements.memoryTabPipeline.addEventListener("click", () => selectMemoryTab("pipeline"));
+// Arrow keys, Home and End move between the tabs (the WAI-ARIA tabs pattern).
+for (const tab of [elements.memoryTabEntries, elements.memoryTabPipeline]) {
+  tab.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const next =
+      event.key === "Home"
+        ? "entries"
+        : event.key === "End"
+          ? "pipeline"
+          : tab === elements.memoryTabEntries
+            ? "pipeline"
+            : "entries";
+    selectMemoryTab(next, { focus: true });
+  });
+}
 elements.memoryPipelineRun.addEventListener("click", () => setPipelineConfirm(true));
 elements.memoryPipelineCancel.addEventListener("click", () => setPipelineConfirm(false));
 elements.memoryPipelineStart.addEventListener("click", () => void runPipeline());
