@@ -65,6 +65,7 @@ def _query_genie_as_agent(
     query_sql = genie_response.query or ""
     query_result = genie_response.result if genie_response.result is not None else ""
     query_conversation_id = genie_response.conversation_id or ""
+    visualizations = genie_response.visualizations
 
     # Create a list of AIMessage to return
     messages = []
@@ -80,17 +81,23 @@ def _query_genie_as_agent(
         messages.append(AIMessage(content=query_result_content, name="query_result"))
 
         # Return with DataFrame included
-        return {
+        response = {
             "messages": messages,
             "conversation_id": query_conversation_id,
             "dataframe": query_result,  # Include raw DataFrame if Genie returned dataframe
         }
+        if visualizations:
+            response["visualizations"] = visualizations
+        return response
     else:
         # String result - just add to messages
         messages.append(AIMessage(content=query_result, name="query_result"))
 
         # Return without DataFrame field
-        return {"messages": messages, "conversation_id": query_conversation_id}
+        response = {"messages": messages, "conversation_id": query_conversation_id}
+        if visualizations:
+            response["visualizations"] = visualizations
+        return response
 
 
 def GenieAgent(
@@ -101,6 +108,7 @@ def GenieAgent(
     message_processor: Optional[Callable] = None,
     client: Optional["WorkspaceClient"] = None,
     return_pandas: bool = False,
+    enable_visualization: bool = False,
 ):
     """Create a genie agent that can be used to query the API. If a description is not provided, the description of the genie space will be used.
 
@@ -114,6 +122,7 @@ def GenieAgent(
                             use the chat history to form the query.
         client: Optional WorkspaceClient instance
         return_pandas: Whether to return results as pandas DataFrames (if False, returns markdown strings)
+        enable_visualization: Whether to ask Genie to generate and download visualization PNGs
 
 
     Examples:
@@ -159,6 +168,7 @@ def GenieAgent(
             genie_space_id,
             client=client,
             return_pandas=return_pandas,
+            enable_visualization=enable_visualization,
         )
 
         # Create a partial function with the genie_space_id pre-filled
