@@ -545,7 +545,8 @@ async def test_openai_adapter_streams_unsigned_reasoning_reply(openai_template):
 class _GatewayCompletions:
     """Records each request and replies with raw gateway deltas (streamed) or a message.
 
-    ``retries`` are ``(deltas, message)`` replies for the following requests.
+    ``retries`` are ``(deltas, message)`` replies for the following requests. ``usages`` are each
+    request's token usage, sent in a final usage-only chunk when streamed.
     """
 
     def __init__(
@@ -553,10 +554,12 @@ class _GatewayCompletions:
         deltas: list[dict[str, Any]] | None = None,
         message: Any = None,
         retries: list[tuple[Any, Any]] | None = None,
+        usages: list[Any] | None = None,
     ):
         self.deltas = deltas
         self.message = message
         self.retries = list(retries or [])
+        self.usages = list(usages or [])
         self.requests: list[dict[str, Any]] = []
 
     async def create(self, **kwargs):
@@ -565,6 +568,7 @@ class _GatewayCompletions:
 
         if self.requests and self.retries:
             self.deltas, self.message = self.retries.pop(0)
+        usage = self.usages[len(self.requests)] if len(self.usages) > len(self.requests) else None
         self.requests.append(copy.deepcopy(kwargs))
         if not kwargs.get("stream"):
             return ChatCompletion.construct(
@@ -577,11 +581,15 @@ class _GatewayCompletions:
                         index=0, finish_reason="stop", message=self.message, logprobs=None
                     )
                 ],
+                usage=usage,
             )
 
         async def stream():
-            for chunk in _claude5_chunks(self.deltas or []):
+            chunks = _claude5_chunks(self.deltas or [])
+            for chunk in chunks:
                 yield chunk
+            if usage is not None:
+                yield chunks[-1].model_copy(update={"choices": [], "usage": usage})
 
         return stream()
 
@@ -768,6 +776,70 @@ async def test_non_streamed_reply_with_only_reasoning_is_requested_again():
 
     assert len(completions.requests) == 2
     assert result.final_output == ANSWER
+
+
+def _usage(prompt: int, completion: int, reasoning: int = 0):
+    from openai.types.completion_usage import CompletionTokensDetails, CompletionUsage
+
+    return CompletionUsage(
+        prompt_tokens=prompt,
+        completion_tokens=completion,
+        total_tokens=prompt + completion,
+        completion_tokens_details=CompletionTokensDetails(reasoning_tokens=reasoning),
+    )
+
+
+def _tokens(result) -> tuple[int, int, int, int]:
+    usage = result.context_wrapper.usage
+    reasoning = usage.output_tokens_details.reasoning_tokens
+    return usage.input_tokens, usage.output_tokens, usage.total_tokens, reasoning
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("retry_usage", "expected"),
+    [(_usage(100, 10), (200, 210, 410, 200)), (None, (100, 200, 300, 200))],
+    ids=["both-report-usage", "retry-reports-none"],
+)
+async def test_retry_keeps_both_attempts_token_usage_when_streamed(retry_usage, expected):
+    pytest.importorskip("agents")
+    from agents import Runner, set_tracing_disabled
+
+    set_tracing_disabled(True)
+    completions = _GatewayCompletions(
+        QWEN_REASONING_ONLY,
+        retries=[(QWEN_DELTAS, None)],
+        usages=[_usage(100, 200, reasoning=200), retry_usage],
+    )
+    result = Runner.run_streamed(_fallback_agent("system.ai.qwen35-122b-a10b", completions), "hi")
+    async for _ in result.stream_events():
+        pass
+
+    assert len(completions.requests) == 2
+    assert result.final_output.strip() == ANSWER
+    assert _tokens(result) == expected
+
+
+@pytest.mark.asyncio
+async def test_retry_keeps_both_attempts_token_usage_when_not_streamed():
+    pytest.importorskip("agents")
+    from agents import Runner, set_tracing_disabled
+    from openai.types.chat import ChatCompletionMessage
+
+    set_tracing_disabled(True)
+    empty = ChatCompletionMessage.construct(
+        role="assistant", content=[_unsigned(UNSIGNED_REASONING)]
+    )
+    answer = ChatCompletionMessage.construct(role="assistant", content=copy.deepcopy(QWEN_BLOCKS))
+    completions = _GatewayCompletions(
+        message=empty,
+        retries=[(None, answer)],
+        usages=[_usage(100, 200, reasoning=200), _usage(100, 10)],
+    )
+    result = await Runner.run(_fallback_agent("system.ai.qwen35-122b-a10b", completions), "hi")
+
+    assert result.final_output == ANSWER
+    assert _tokens(result) == (200, 210, 410, 200)
 
 
 @pytest.mark.asyncio

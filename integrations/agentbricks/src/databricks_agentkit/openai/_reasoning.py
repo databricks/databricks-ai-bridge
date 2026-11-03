@@ -4,7 +4,7 @@ Reasoning models on the AI Gateway (Claude 5.x, Qwen, Gemini, gpt-oss) send ``co
 ``delta.content`` as a list of ``reasoning`` and ``text`` parts, which the Agents SDK rejects
 (``ResponseTextDeltaEvent.delta`` must be a string). This mirrors the newer release: the answer stays
 as text, reasoning moves to the SDK's thinking blocks, and signed blocks go back as reasoning parts.
-A reply that stops after unsigned reasoning, with no answer, is requested once more. On releases
+A reply that stops after unsigned reasoning, with no answer, is requested once more, and both attempts' token usage is reported. On releases
 that have the model, ``chat_model`` still wraps its client for that retry.
 """
 
@@ -135,17 +135,37 @@ class _Reply:
         return self.reasoning and not self.signed and not self.answered
 
 
+def _sum(a: Any, b: Any) -> Any:
+    if isinstance(a, dict) and isinstance(b, dict):
+        return {key: _sum(a.get(key), b.get(key)) for key in a.keys() | b.keys()}
+    if isinstance(a, int) and isinstance(b, int):
+        return a + b
+    return a if b is None else b
+
+
+def _add_usage(earlier: Any, usage: Any) -> Any:
+    """Add an earlier attempt's ``CompletionUsage`` to ``usage``; either may be None."""
+    if earlier is None or usage is None:
+        return earlier if usage is None else usage
+    return type(usage).model_validate(_sum(earlier.model_dump(), usage.model_dump()))
+
+
 class _SplitStream:
     """Async stream that splits each chunk's reasoning out of ``delta.content``.
 
     Some models (Qwen after a tool call) sometimes stop after reasoning, with no answer. The
-    request is then sent once more and its chunks continue this stream.
+    request is then sent once more and its chunks continue this stream. The Agents SDK keeps only
+    the last usage it sees, so the first attempt's usage is added to the retry's.
     """
 
     def __init__(self, stream: Any, retry: Any = None):
         self._stream = stream
         self._retry = retry
         self._reply = _Reply()
+        self._usage: Any = None  # the latest usage of the attempt being read
+        self._earlier: Any = None  # the first attempt's usage, once retried
+        self._carried = False  # whether a retry chunk carried ``_earlier``
+        self._last: Any = None
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._stream, name)
@@ -158,12 +178,23 @@ class _SplitStream:
             try:
                 chunk = await self._stream.__anext__()
             except StopAsyncIteration:
+                if self._earlier is not None and not self._carried and self._last is not None:
+                    # The retry reported no usage: report the first attempt's on its own.
+                    self._carried = True
+                    return self._last.model_copy(update={"choices": [], "usage": self._earlier})
                 if self._retry is None or not self._reply.unanswered:
                     raise
                 self._stream, self._retry = await self._retry(), None
+                self._earlier, self._usage = self._usage, None
                 continue
             _split_response(chunk)
             self._reply.add(chunk)
+            self._last = chunk
+            if getattr(chunk, "usage", None) is not None:
+                self._usage = chunk.usage
+                if self._earlier is not None:
+                    chunk.usage = _add_usage(self._earlier, chunk.usage)
+                    self._carried = True
             return chunk
 
 
@@ -183,8 +214,12 @@ class _Completions:
         reply = _Reply()
         reply.add(response)
         if reply.unanswered:
+            first = response
             response = await self._completions.create(**kwargs)
             _split_response(response)
+            response.usage = _add_usage(
+                getattr(first, "usage", None), getattr(response, "usage", None)
+            )
         return response
 
 
