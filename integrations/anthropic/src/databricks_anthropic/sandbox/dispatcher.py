@@ -1,0 +1,294 @@
+"""Poll a self-hosted environment's work queue and run each session in a Databricks Sandbox."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from collections.abc import Callable
+from dataclasses import KW_ONLY, dataclass, field
+from typing import TYPE_CHECKING, Any
+
+from anthropic import NOT_GIVEN, AsyncAnthropic
+
+from databricks_anthropic.sandbox import _ops
+from databricks_anthropic.sandbox.launcher import (
+    MANAGED_BY,
+    TAG_ENVIRONMENT,
+    TAG_LIFECYCLE,
+    TAG_MANAGED_BY,
+    TAG_SESSION,
+    DatabricksSandboxLauncher,
+    LaunchResult,
+)
+
+# An ephemeral sandbox deletes itself when its worker finishes; one still around (stopped) after
+# this long means the worker crashed or was killed, so cleanup removes it.
+EPHEMERAL_GRACE_S = 3600
+# results / failures keep only the most recent launches (the dispatcher can run for weeks).
+MAX_RECORDED = 1000
+
+
+if TYPE_CHECKING:
+    import anthropic
+    from anthropic.types.beta.environments import BetaSelfHostedWork
+
+log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class CleanupAction:
+    sandbox_name: str
+    action: str  # "delete" | "keep"
+    reason: str
+
+
+@dataclass
+class DatabricksSandboxDispatcher:
+    """Claim work from a Claude Managed Agents self-hosted environment.
+
+    Every claimed ``session`` item is handed to :class:`DatabricksSandboxLauncher`, which
+    runs the session's worker in its own sandbox. Needs only outbound HTTPS: no webhook.
+
+    ``drain=True`` returns once the queue is empty (scripts, tests); the default polls
+    until cancelled. ``accept`` optionally filters claimed session items (e.g. only the
+    caller's own session in a test). The poller acks every item it yields; a skipped item
+    gets no heartbeat, so it is re-delivered to the next poll that sets ``reclaim_older_than_ms``.
+    An item whose launch fails is stopped (``force``), so it is not relaunched in a loop.
+
+    While polling (not in drain mode) it also sweeps every ``sweep_interval_s``: stopped
+    resumable sandboxes unused for ``launcher.retention_days`` are deleted, as are leftover
+    ephemeral ones. Pass ``sessions_api`` (an ``anthropic.Anthropic`` client with an API key)
+    to also delete sandboxes whose Claude session was deleted or archived.
+    """
+
+    launcher: DatabricksSandboxLauncher
+    _: KW_ONLY
+    max_concurrent_launches: int = 8
+    drain: bool = False
+    reclaim_older_than_ms: int | None = 2000
+    accept: Callable[[BetaSelfHostedWork], bool] | None = None
+    sweep_interval_s: float | None = 3600
+    sessions_api: anthropic.Anthropic | None = None  # with an API key, for session-gone cleanup
+    results: list[LaunchResult] = field(default_factory=list, init=False)
+    failures: list[tuple[str, str]] = field(default_factory=list, init=False)
+
+    def _client(self) -> AsyncAnthropic:
+        # Explicit auth_token + base_url: ambient ANTHROPIC_* (e.g. Claude Code routed via a
+        # gateway) must not redirect or re-authenticate queue calls.
+        return AsyncAnthropic(
+            auth_token=self.launcher.environment_key, base_url=self.launcher.anthropic_base_url
+        )
+
+    async def run(self) -> list[LaunchResult]:
+        semaphore = asyncio.Semaphore(self.max_concurrent_launches)
+        inflight: dict[str, asyncio.Task[None]] = {}
+
+        async def launch(work: BetaSelfHostedWork) -> None:
+            async with semaphore:
+                try:
+                    self.results.append(await asyncio.to_thread(self.launcher.launch, work))
+                    del self.results[:-MAX_RECORDED]  # bounded history in poll mode
+                except Exception as e:  # noqa: BLE001 - one bad item must not stop the dispatcher
+                    detail = f"{type(e).__name__}: {e}"
+                    self.failures.append((work.data.id, detail))
+                    del self.failures[:-MAX_RECORDED]
+                    log.error("launch failed session=%s work=%s: %s", work.data.id, work.id, detail)
+                    await self._stop_work(work)
+
+        sweeper = None
+        if not self.drain and self.sweep_interval_s:
+            sweeper = asyncio.create_task(self._sweep_forever())
+        async with self._client() as client:
+            try:
+                poller = client.beta.environments.work.poller(
+                    environment_id=self.launcher.environment_id,
+                    environment_key=self.launcher.environment_key,
+                    reclaim_older_than_ms=self.reclaim_older_than_ms,
+                    auto_stop=False,  # the sandboxed worker owns the stop call
+                    drain=self.drain,
+                    # Non-blocking in drain mode (the API rejects block_ms=0).
+                    block_ms=None if self.drain else NOT_GIVEN,
+                )
+                async for work in poller:
+                    if work.data.type != "session":
+                        log.info("skipping work=%s type=%s", work.id, work.data.type)
+                        continue
+                    session_id = work.data.id
+                    if self.accept is not None and not self.accept(work):
+                        log.info("not accepted: work=%s session=%s", work.id, session_id)
+                        continue
+                    running = inflight.get(session_id)
+                    if running and not running.done():
+                        log.info(
+                            "session=%s already launching; skipping work=%s", session_id, work.id
+                        )
+                        continue
+                    log.info("claimed work=%s session=%s", work.id, session_id)
+                    for done in [sid for sid, task in inflight.items() if task.done()]:
+                        del inflight[done]  # keep the map bounded in long-running poll mode
+                    inflight[session_id] = asyncio.create_task(launch(work))
+            finally:
+                if sweeper:
+                    sweeper.cancel()
+                pending = [t for t in inflight.values() if not t.done()]
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+        return self.results
+
+    async def _stop_work(self, work: BetaSelfHostedWork) -> None:
+        """Release a work item we could not serve, so the poller does not relaunch it every few seconds."""
+        try:
+            async with self._client() as client:
+                await client.beta.environments.work.stop(
+                    work.id, environment_id=self.launcher.environment_id, force=True
+                )
+        except Exception as e:  # noqa: BLE001 - best effort
+            log.warning("could not stop work=%s: %s: %s", work.id, type(e).__name__, e)
+
+    async def _sweep_forever(self) -> None:
+        while True:
+            try:
+                for action in await asyncio.to_thread(self.cleanup):
+                    if action.action == "delete":
+                        log.info("cleanup deleted %s (%s)", action.sandbox_name, action.reason)
+            except Exception as e:  # noqa: BLE001 - never let cleanup stop the dispatcher
+                log.warning("cleanup sweep failed: %s: %s", type(e).__name__, e)
+            await asyncio.sleep(self.sweep_interval_s or 3600)
+
+    def list_session_sandboxes(self) -> list[Any]:
+        """Sandboxes this launcher created: its id prefix **and** our tags for this environment.
+
+        Sandboxes created by anything else (other tools, other environments, or untagged ones that
+        happen to share the prefix) are never returned, so cleanup can't touch them.
+        """
+        prefix = _ops.sandbox_name(self.launcher.sandbox_id_prefix)
+        return [
+            sb
+            for sb in self.launcher.workspace_client.sandbox.list_sandboxes()
+            if sb.name and sb.name.startswith(prefix) and self._owns(sb)
+        ]
+
+    def _owns(self, sandbox: Any) -> bool:
+        tags = dict(getattr(getattr(sandbox, "metadata", None), "custom_tags", None) or {})
+        return (
+            tags.get(TAG_MANAGED_BY) == MANAGED_BY
+            and tags.get(TAG_ENVIRONMENT) == self.launcher.environment_id
+        )
+
+    def plan_cleanup(
+        self,
+        *,
+        delete_all: bool = False,
+        force: bool = False,
+        retention_days: float | None = None,
+        sessions_api: anthropic.Anthropic | None = None,
+        now: float | None = None,
+    ) -> list[CleanupAction]:
+        """Decide what to delete without deleting anything (``cleanup`` applies the plan).
+
+        ``delete_all`` deletes every sandbox this launcher owns, except running ones unless ``force``.
+        """
+        now = time.time() if now is None else now
+        retention_s = (
+            self.launcher.retention_days if retention_days is None else retention_days
+        ) * 86400
+        sessions_api = sessions_api if sessions_api is not None else self.sessions_api
+        plan = []
+        for sb in self.list_session_sandboxes():
+            tags = dict(getattr(getattr(sb, "metadata", None), "custom_tags", None) or {})
+            state = sb.status.state if sb.status else None
+            stopped = state == _ops.SandboxState.SANDBOX_STATE_STOPPED
+            last_used = max(_seconds(sb.update_time), _seconds(sb.create_time))
+            idle_s = now - last_used if last_used else 0
+            gone = False
+            if not delete_all and sessions_api is not None and tags.get(TAG_SESSION):
+                try:
+                    gone = _session_gone(sessions_api, tags[TAG_SESSION])
+                except Exception as e:  # noqa: BLE001 - one failed lookup must not abort the sweep
+                    plan.append(
+                        CleanupAction(sb.name, "keep", f"session lookup failed: {type(e).__name__}")
+                    )
+                    continue
+            if delete_all and state == _ops.SandboxState.SANDBOX_STATE_RUNNING and not force:
+                plan.append(CleanupAction(sb.name, "keep", "running (pass force to delete it)"))
+            elif delete_all:
+                plan.append(CleanupAction(sb.name, "delete", "delete-all requested"))
+            elif gone:
+                plan.append(
+                    CleanupAction(
+                        sb.name, "delete", f"Claude session {tags[TAG_SESSION]} deleted or archived"
+                    )
+                )
+            elif stopped and tags.get(TAG_LIFECYCLE) == "ephemeral" and idle_s > EPHEMERAL_GRACE_S:
+                plan.append(
+                    CleanupAction(
+                        sb.name, "delete", "leftover ephemeral sandbox (worker did not delete it)"
+                    )
+                )
+            elif stopped and idle_s > retention_s:
+                plan.append(
+                    CleanupAction(
+                        sb.name, "delete", f"stopped and unused for {idle_s / 86400:.1f} days"
+                    )
+                )
+            else:
+                plan.append(
+                    CleanupAction(
+                        sb.name,
+                        "keep",
+                        f"{state.value if state else 'unknown'}",
+                    )
+                )
+        return plan
+
+    def cleanup(
+        self,
+        *,
+        dry_run: bool = False,
+        delete_all: bool = False,
+        force: bool = False,
+        retention_days: float | None = None,
+        sessions_api: anthropic.Anthropic | None = None,
+    ) -> list[CleanupAction]:
+        """Apply :meth:`plan_cleanup`: delete what it marks for deletion (unless ``dry_run``)."""
+        plan = self.plan_cleanup(
+            delete_all=delete_all,
+            force=force,
+            retention_days=retention_days,
+            sessions_api=sessions_api,
+        )
+        if not dry_run:
+            for action in plan:
+                if action.action != "delete":
+                    continue
+                try:
+                    _ops.delete_quietly(self.launcher.workspace_client, action.sandbox_name)
+                except Exception as e:  # noqa: BLE001 - keep going; the next sweep retries
+                    log.warning(
+                        "cleanup could not delete %s: %s: %s",
+                        action.sandbox_name,
+                        type(e).__name__,
+                        e,
+                    )
+        return plan
+
+
+def _seconds(timestamp: Any) -> float:
+    """protobuf Timestamp (or None) -> epoch seconds."""
+    if timestamp is None:
+        return 0.0
+    return (
+        float(getattr(timestamp, "seconds", 0) or 0)
+        + float(getattr(timestamp, "nanos", 0) or 0) / 1e9
+    )
+
+
+def _session_gone(sessions_api: Any, session_id: str) -> bool:
+    import anthropic
+
+    try:
+        session = sessions_api.beta.sessions.retrieve(session_id)
+    except anthropic.NotFoundError:
+        return True
+    return getattr(session, "archived_at", None) is not None
