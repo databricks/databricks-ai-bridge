@@ -1798,6 +1798,22 @@ h2 {
   white-space: nowrap;
 }
 
+/* Shared with the pipeline section (#798) for its heading and help text. */
+.memory-field-label {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.memory-field-hint {
+  margin: 0 0 6px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .memory-search {
   position: relative;
   display: flex;
