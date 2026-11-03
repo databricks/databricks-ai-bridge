@@ -509,6 +509,38 @@ def test_dev_prints_invoke_inside_panel_for_each_template(tmp_path, framework, s
         assert "curl -X POST" in panel  # preserve the existing API-only next step
 
 
+@pytest.mark.parametrize("server", ["agentbricks", "custom"])
+def test_dev_deploy_step_keeps_the_recorded_deployment_name(tmp_path: pathlib.Path, server: str):
+    project_dir = tmp_path / "my-project"
+    project_dir.mkdir()
+    (project_dir / "app.yaml").write_text("command: []\n")
+    project = AgentProject.create(project_dir, framework="langgraph", server=server)
+    project.set_deployment_name("recorded-name")
+    project.write()
+
+    with mock.patch.object(dev_mod, "_databricks", side_effect=_run_local_starts):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(project_dir)], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    rows = [line.strip("│ ") for line in result.output.splitlines()]
+    # `deploy NAME` would rename the deployment, so the step omits it when agent.toml records one.
+    assert "agentbricks deploy" in rows, result.output
+    assert "Deploy it to Databricks as agent-bricks-recorded-name" in rows, result.output
+
+
+def test_dev_deploy_step_names_an_unnamed_project_after_its_directory(tmp_path: pathlib.Path):
+    project_dir = tmp_path / "my-project"
+    project_dir.mkdir()
+    (project_dir / "app.yaml").write_text("command: []\n")
+    AgentProject.create(project_dir, framework="langgraph", server="agentbricks").write()
+
+    with mock.patch.object(dev_mod, "_databricks", side_effect=_run_local_starts):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(project_dir)], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    assert "agentbricks deploy my-project" in " ".join(result.output.split())
+
+
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
 def test_dev_custom_server_recommends_wiring_tools_in_agent_code(
     tmp_path: pathlib.Path,
