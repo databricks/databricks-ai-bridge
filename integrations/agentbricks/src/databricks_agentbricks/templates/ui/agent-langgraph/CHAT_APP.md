@@ -25,6 +25,14 @@ and the `agentbricks tools add …` commands to copy. It reads `GET /api/demo/to
 `agent.toml` on each request, so `tools add`/`remove` show up after a refresh. A bad `agent.toml` or
 `agent.tools` import shows as an error in the pane. MCP servers from `agent/mcps.py` are not listed.
 
+In a deployed app with both stores bound, the Memory pane also shows the memory pipeline for that
+session store + memory store pair (`GET /api/demo/memory/pipeline`): its model, trigger,
+instructions, and five most recent runs. **Run now** (`POST /api/demo/memory/pipeline/run`) asks for
+confirmation first, because a run can rewrite, merge, or delete any memory in the store, then
+refreshes every 10 seconds until the run finishes. With no pipeline the pane shows the
+`agentbricks memory pipeline create` command; create, update, pause, resume, and delete stay in the
+CLI. Under `agentbricks dev`, or without both stores, the pane makes no pipeline calls.
+
 The composer's model picker lists the workspace's Unity Catalog AI Gateway chat model services — the
 `system.ai.*` model services from `GET /api/2.1/unity-catalog/model-services?parent=schemas/system.ai`
 (embeddings-only services filtered out), exposed as `GET /api/demo/models` and pinned to
