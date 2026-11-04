@@ -148,3 +148,11 @@ def test_missing_sandbox_raises_when_create_disabled() -> None:
     with pytest.raises(NotFound):
         _session(client, create_if_missing=False).start()
     client.sandbox.create_sandbox.assert_not_called()
+
+
+def test_tags_user_agent_for_attribution() -> None:
+    client = _client()
+    _session(client)
+    client.config.with_user_agent_extra.assert_called_once()
+    product = client.config.with_user_agent_extra.call_args.args[0]
+    assert product == "databricks-langchain"
