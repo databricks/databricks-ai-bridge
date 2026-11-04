@@ -25,10 +25,14 @@ run-name: "AgentBricksReviewer #${{ github.event.pull_request.number || github.e
 # AI_REVIEW_OPENAI_MODEL. Optional: AI_REVIEW_COORDINATOR_HARNESS (default codex),
 # AI_REVIEW_COORDINATOR_MODEL (default AI_REVIEW_OPENAI_MODEL).
 #
-# Optional, for runners without direct access to public registries:
-#   - secrets PYPI_INDEX_URL and NPM_REGISTRY_URL: package mirrors for omnigent and
-#     the harness CLIs. Kept in secrets so the URLs stay out of this public repo
-#     and are masked in logs.
+# Packages: the protected runners block public registries, so omnigent and the
+# harness CLIs install through Databricks' JFrog, authenticated with the job's
+# GitHub OIDC token (no stored secret). Where JFrog doesn't trust the job, as on a
+# fork, installs fall back to public PyPI and npm.
+#
+# Optional:
+#   - secrets PYPI_INDEX_URL and NPM_REGISTRY_URL: package mirrors that take
+#     precedence over JFrog.
 #   - variable AI_REVIEW_RUNS_ON: JSON `runs-on` value, for example "ubuntu-24.04"
 #     on a fork (with the quotes). Defaults to the org's protected runner group.
 
@@ -87,6 +91,8 @@ jobs:
       # Comment- and dispatch-triggered runs attach to the default branch, so they
       # post a commit status to appear in the PR's checks list.
       statuses: write
+      # GitHub OIDC token, exchanged for a JFrog package-mirror token.
+      id-token: write
     concurrency:
       group: agentbricks-reviewer-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
       cancel-in-progress: false
@@ -219,6 +225,34 @@ jobs:
         # The coordinator runs its shell terminal in tmux.
         run: sudo apt-get update -q && sudo apt-get install -y -q tmux
 
+      - name: Get JFrog package-mirror token
+        if: steps.creds.outputs.available == 'true'
+        run: |
+          set -uo pipefail
+          # Same exchange as databricks/databricks-bot-engine's setup-jfrog action.
+          # The token goes to a temp file, not the job environment, and is deleted
+          # after the installs so the review agents never see it.
+          id_token="$(curl -sS --max-time 30 -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=jfrog-github" | jq -r '.value // empty')"
+          [ -n "$id_token" ] && echo "::add-mask::$id_token"
+          token=""
+          if [ -n "$id_token" ]; then
+            token="$(jq -n --arg t "$id_token" '{grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+                subject_token_type: "urn:ietf:params:oauth:token-type:id_token", subject_token: $t,
+                provider_name: "github-actions"}' \
+              | curl -sS --max-time 30 -X POST -H "Content-Type: application/json" --data @- \
+                  https://databricks.jfrog.io/access/api/v1/oidc/token \
+              | jq -r '.access_token // empty' 2>/dev/null)"
+          fi
+          if [ -n "$token" ]; then
+            echo "::add-mask::$token"
+            umask 077
+            printf '%s' "$token" > "$RUNNER_TEMP/jfrog-token"
+            echo "Using Databricks JFrog for PyPI and npm."
+          else
+            echo "::warning::No JFrog token for this job; installing from public PyPI and npm."
+          fi
+
       - name: Install omnigent
         if: steps.creds.outputs.available == 'true'
         working-directory: ${{ env.OMNIGENT_DIR }}
@@ -226,9 +260,13 @@ jobs:
           PYPI_INDEX_URL: ${{ secrets.PYPI_INDEX_URL }}
         run: |
           set -euo pipefail
-          if [ -n "$PYPI_INDEX_URL" ]; then
+          index="$PYPI_INDEX_URL"
+          if [ -z "$index" ] && [ -s "$RUNNER_TEMP/jfrog-token" ]; then
+            index="https://gha-service-account:$(cat "$RUNNER_TEMP/jfrog-token")@databricks.jfrog.io/artifactory/api/pypi/db-pypi/simple"
+          fi
+          if [ -n "$index" ]; then
             # A different index makes uv re-resolve omnigent's lockfile against the mirror.
-            export UV_DEFAULT_INDEX="$PYPI_INDEX_URL" PIP_INDEX_URL="$PYPI_INDEX_URL"
+            export UV_DEFAULT_INDEX="$index" PIP_INDEX_URL="$index"
           fi
           uv sync --extra all
 
@@ -240,12 +278,23 @@ jobs:
           set -euo pipefail
           # A job-owned prefix avoids needing write access to the runner's global npm directory.
           prefix="$RUNNER_TEMP/npm-global"
-          npm install --global --prefix "$prefix" --no-fund --no-audit \
-            --registry "${NPM_REGISTRY_URL:-https://registry.npmjs.org/}" \
+          registry="${NPM_REGISTRY_URL:-https://registry.npmjs.org/}"
+          if [ -z "$NPM_REGISTRY_URL" ] && [ -s "$RUNNER_TEMP/jfrog-token" ]; then
+            registry="https://databricks.jfrog.io/artifactory/api/npm/db-npm/"
+            # The auth token goes in a temp npmrc rather than on the command line.
+            export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/jfrog.npmrc"
+            ( umask 077; printf '//databricks.jfrog.io/artifactory/api/npm/db-npm/:_authToken=%s\n' \
+                "$(cat "$RUNNER_TEMP/jfrog-token")" > "$NPM_CONFIG_USERCONFIG" )
+          fi
+          npm install --global --prefix "$prefix" --no-fund --no-audit --registry "$registry" \
             "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@openai/codex@${CODEX_VERSION}"
           echo "$prefix/bin" >> "$GITHUB_PATH"
           "$prefix/bin/claude" --version
           "$prefix/bin/codex" --version
+
+      - name: Remove JFrog token
+        if: always()
+        run: rm -f "$RUNNER_TEMP/jfrog-token" "$RUNNER_TEMP/jfrog.npmrc"
 
       - name: Write gateway and provider config
         if: steps.creds.outputs.available == 'true'
