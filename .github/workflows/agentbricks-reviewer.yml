@@ -26,9 +26,11 @@ run-name: "AgentBricksReviewer #${{ github.event.pull_request.number || github.e
 # Required secrets: GATEWAY_BASE_URL (the workspace URL, https://<workspace>) and
 # either GATEWAY_CLIENT_ID + GATEWAY_CLIENT_SECRET (a service principal's OAuth
 # credentials, preferred) or LLM_API_KEY (a token for that workspace).
-# Required variables: AI_REVIEW_ANTHROPIC_MODEL, AI_REVIEW_ANTHROPIC_OPUS_MODEL,
-# AI_REVIEW_OPENAI_MODEL. Optional: AI_REVIEW_COORDINATOR_HARNESS (default codex),
-# AI_REVIEW_COORDINATOR_MODEL (default AI_REVIEW_OPENAI_MODEL).
+# Required variables: AI_REVIEW_ANTHROPIC_MODEL, AI_REVIEW_OPENAI_MODEL.
+# Optional: AI_REVIEW_COORDINATOR_HARNESS (default codex),
+# AI_REVIEW_COORDINATOR_MODEL (default AI_REVIEW_OPENAI_MODEL), and
+# AI_REVIEW_ANTHROPIC_OPUS_MODEL (the gateway model behind Claude Code's "opus"
+# alias, needed only if Claude Code calls that alias).
 #
 # Packages: the protected runners block public registries, so omnigent and the
 # harness CLIs install through Databricks' JFrog, authenticated with the job's
@@ -320,7 +322,6 @@ jobs:
           set -euo pipefail
           : "${GATEWAY_BASE_URL:?Set the GATEWAY_BASE_URL secret}"
           : "${ANTHROPIC_MODEL:?Set the AI_REVIEW_ANTHROPIC_MODEL variable}"
-          : "${ANTHROPIC_OPUS_MODEL:?Set the AI_REVIEW_ANTHROPIC_OPUS_MODEL variable}"
           : "${OPENAI_MODEL:?Set the AI_REVIEW_OPENAI_MODEL variable}"
           echo "DATABRICKS_BEARER=${LLM_API_KEY}" >> "$GITHUB_ENV"
           # Python writes the files so secrets are never interpolated into shell or YAML.
@@ -346,8 +347,8 @@ jobs:
                           "api_key_ref": "env:LLM_API_KEY",
                           "models": {
                               "default": os.environ["ANTHROPIC_MODEL"],
-                              # Claude's auto-permission classifier needs a routable Opus fallback.
-                              "opus": os.environ["ANTHROPIC_OPUS_MODEL"],
+                              # Maps Claude Code's "opus" alias to a gateway model; omitted when unset.
+                              **({"opus": opus} if (opus := os.environ.get("ANTHROPIC_OPUS_MODEL")) else {}),
                           },
                       },
                       "openai": {
