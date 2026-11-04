@@ -265,10 +265,15 @@ jobs:
             index="https://gha-service-account:$(cat "$RUNNER_TEMP/jfrog-token")@databricks.jfrog.io/artifactory/api/pypi/db-pypi/simple"
           fi
           if [ -n "$index" ]; then
-            # A different index makes uv re-resolve omnigent's lockfile against the mirror.
             export UV_DEFAULT_INDEX="$index" PIP_INDEX_URL="$index"
           fi
-          uv sync --extra all
+          # --frozen installs omnigent's uv.lock as-is (pinned versions and hashes,
+          # downloaded from files.pythonhosted.org, which these runners can reach),
+          # so only the unlocked build backends (setuptools, hatchling) come from
+          # the index. --no-config drops omnigent's uv.toml `exclude-newer = "P7D"`,
+          # which rejects every version on JFrog because it publishes no upload
+          # times; JFrog applies its own 7-day quarantine.
+          uv sync --frozen --no-config --extra all
 
       - name: Install Claude Code and Codex CLIs
         if: steps.creds.outputs.available == 'true'
