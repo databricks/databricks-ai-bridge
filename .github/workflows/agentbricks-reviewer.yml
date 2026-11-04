@@ -84,6 +84,9 @@ jobs:
       contents: read
       issues: read
       pull-requests: write
+      # Runs from these triggers attach to the default branch, so the job posts a
+      # commit status to put itself in the PR's checks list.
+      statuses: write
     concurrency:
       group: agentbricks-reviewer-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
       cancel-in-progress: false
@@ -115,6 +118,7 @@ jobs:
             exit 0
           fi
           head_sha="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.sha')"
+          echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
           if [ "${FORCE_REVIEW:-false}" = "true" ] || grep -qE '^[[:space:]]*/review[[:space:]]+force([[:space:]]|$)' <<<"${COMMENT_BODY:-}"; then
             exit 0
           fi
@@ -125,6 +129,18 @@ jobs:
             echo "::notice::${head_sha} already has a review; comment '/review force' to re-run."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Show review as pending on the PR
+        id: status_pending
+        if: steps.dupe.outputs.skip != 'true' && steps.dupe.outputs.head_sha != ''
+        env:
+          HEAD_SHA: ${{ steps.dupe.outputs.head_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh api "repos/$REPO/statuses/$HEAD_SHA" --silent \
+            -f state=pending -f context=AgentBricksReviewer \
+            -f description="Review in progress" -f target_url="$RUN_URL" \
+            || echo "::warning::Could not post the pending status on the PR."
 
       - name: Get gateway credentials
         if: steps.dupe.outputs.skip != 'true'
@@ -466,3 +482,27 @@ jobs:
           name: agentbricks-reviewer-logs-${{ github.run_id }}
           path: /tmp/agentbricks-reviewer-diagnostics/
           retention-days: 14
+
+      # Last step, so it sees failures and cancellations from every earlier step.
+      - name: Show review result on the PR
+        if: always() && steps.status_pending.outcome == 'success'
+        env:
+          HEAD_SHA: ${{ steps.dupe.outputs.head_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          JOB_STATUS: ${{ job.status }}
+          CREDS_AVAILABLE: ${{ steps.creds.outputs.available }}
+          REVIEW_READY: ${{ steps.reviewer.outputs.review_ready }}
+        run: |
+          if [ "$JOB_STATUS" = success ] && [ "$REVIEW_READY" = true ]; then
+            state=success description="Review posted as a PR comment"
+          elif [ "$JOB_STATUS" = success ] && [ "$CREDS_AVAILABLE" = false ]; then
+            state=success description="Skipped: gateway credentials are not configured"
+          elif [ "$JOB_STATUS" = cancelled ]; then
+            state=error description="Review was cancelled or timed out"
+          else
+            state=failure description="Review failed; open Details for the run log"
+          fi
+          gh api "repos/$REPO/statuses/$HEAD_SHA" --silent \
+            -f state="$state" -f context=AgentBricksReviewer \
+            -f description="$description" -f target_url="$RUN_URL" \
+            || echo "::warning::Could not post the final status on the PR."
