@@ -18,7 +18,7 @@ run-name: "AgentBricksReviewer #${{ github.event.pull_request.number || github.e
 # is read as a diff file plus fetched git objects that reviewers read with
 # `git show`. PR code is never checked out or executed.
 #
-# Required secrets: LLM_API_KEY, GATEWAY_BASE_URL (https://<workspace>/serving-endpoints).
+# Required secrets: LLM_API_KEY, GATEWAY_BASE_URL (the workspace URL, https://<workspace>).
 # Required variables: AI_REVIEW_ANTHROPIC_MODEL, AI_REVIEW_ANTHROPIC_OPUS_MODEL,
 # AI_REVIEW_OPENAI_MODEL. Optional: AI_REVIEW_COORDINATOR_HARNESS (default codex),
 # AI_REVIEW_COORDINATOR_MODEL (default AI_REVIEW_OPENAI_MODEL).
@@ -222,11 +222,10 @@ jobs:
           if not ci_request_tags(strict=True).get("pipeline"):
               raise SystemExit("OMNIGENT_CI_PIPELINE is required")
           home = pathlib.Path.home()
-          gw = os.environ["GATEWAY_BASE_URL"]
+          # Older secrets end in /serving-endpoints; accept both forms.
+          workspace_url = os.environ["GATEWAY_BASE_URL"].strip().rstrip("/").removesuffix("/serving-endpoints")
           home.joinpath(".databrickscfg").write_text(
-              "[default]\nhost  = {}\ntoken = {}\n".format(
-                  gw.removesuffix("/serving-endpoints"), os.environ["LLM_API_KEY"]
-              )
+              "[default]\nhost  = {}\ntoken = {}\n".format(workspace_url, os.environ["LLM_API_KEY"])
           )
           cfg = {
               "providers": {
@@ -234,7 +233,7 @@ jobs:
                       "kind": "gateway",
                       "default": ["anthropic", "openai"],
                       "anthropic": {
-                          "base_url": ci_gateway_base_url(gw, "anthropic"),
+                          "base_url": ci_gateway_base_url(workspace_url, "anthropic"),
                           "api_key_ref": "env:LLM_API_KEY",
                           "models": {
                               "default": os.environ["ANTHROPIC_MODEL"],
@@ -243,7 +242,7 @@ jobs:
                           },
                       },
                       "openai": {
-                          "base_url": ci_gateway_base_url(gw, "codex/v1"),
+                          "base_url": ci_gateway_base_url(workspace_url, "codex/v1"),
                           "api_key_ref": "env:LLM_API_KEY",
                           "wire_api": "responses",
                           "models": {"default": os.environ["OPENAI_MODEL"]},
