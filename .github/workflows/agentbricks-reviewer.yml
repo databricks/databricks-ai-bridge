@@ -8,7 +8,10 @@ run-name: "AgentBricksReviewer #${{ github.event.pull_request.number || github.e
 # .github/agentbricks-reviewer/rules.md.
 #
 # Triggers:
-#   - pull_request_target opened/reopened/ready_for_review (same-repo PRs only)
+#   - pull_request_target opened/reopened/ready_for_review, for non-draft PRs
+#     (including fork PRs) whose author is an OWNER/MEMBER/COLLABORATOR. Other
+#     authors' PRs need a member's `/review`. GitHub blocks pull_request_target
+#     on public repos from 2026-12-02 unless a repo Actions policy allows it.
 #   - a `/review` comment from an OWNER/MEMBER/COLLABORATOR (`/review force`
 #     re-reviews a commit that already has a review)
 #   - workflow_dispatch with a PR number
@@ -16,7 +19,9 @@ run-name: "AgentBricksReviewer #${{ github.event.pull_request.number || github.e
 # Security model: this job holds secrets and a write-scoped token, so it only
 # checks out this repo's default branch (trusted code and review rules). The PR
 # is read as a diff file plus fetched git objects that reviewers read with
-# `git show`. PR code is never checked out or executed.
+# `git show`. PR code is never checked out or executed. The PR's text reaches
+# AI agents that have a shell, so only the steps that call GitHub get GH_TOKEN,
+# and the review step clears the runner's OIDC and runtime tokens first.
 #
 # Required secrets: GATEWAY_BASE_URL (the workspace URL, https://<workspace>) and
 # either GATEWAY_CLIENT_ID + GATEWAY_CLIENT_SECRET (a service principal's OAuth
@@ -71,8 +76,9 @@ jobs:
     if: >-
       (
         github.event_name == 'pull_request_target' &&
-        github.event.pull_request.head.repo.full_name == github.repository &&
-        !github.event.pull_request.draft
+        !github.event.pull_request.draft &&
+        github.event.pull_request.user.type != 'Bot' &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
       ) || (
         github.event_name == 'issue_comment' &&
         github.event.issue.pull_request != null &&
@@ -97,7 +103,6 @@ jobs:
       group: agentbricks-reviewer-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
       cancel-in-progress: false
     env:
-      GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
       PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
     steps:
@@ -108,12 +113,14 @@ jobs:
       - name: Acknowledge /review command
         if: github.event_name == 'issue_comment'
         env:
+          GH_TOKEN: ${{ github.token }}
           COMMENT_ID: ${{ github.event.comment.id }}
         run: gh api "repos/$REPO/issues/comments/$COMMENT_ID/reactions" -f content=eyes --silent || true
 
       - name: Skip if this commit already has a review
         id: dupe
         env:
+          GH_TOKEN: ${{ github.token }}
           COMMENT_BODY: ${{ github.event.comment.body }}
           FORCE_REVIEW: ${{ github.event_name == 'workflow_dispatch' && inputs.force || false }}
         run: |
@@ -143,6 +150,7 @@ jobs:
           github.event_name != 'pull_request_target' &&
           steps.dupe.outputs.skip != 'true' && steps.dupe.outputs.head_sha != ''
         env:
+          GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ steps.dupe.outputs.head_sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -360,6 +368,7 @@ jobs:
         if: steps.creds.outputs.available == 'true'
         id: ctx
         env:
+          GH_TOKEN: ${{ github.token }}
           EXPECTED_HEAD: ${{ steps.dupe.outputs.head_sha }}
         run: |
           set -euo pipefail
@@ -468,6 +477,10 @@ jobs:
             echo "::error::Review time budget was exhausted during setup."
             exit 124
           fi
+          # The agents read untrusted PR text and have a shell: don't let them mint
+          # OIDC tokens or use the runner's artifact and cache token.
+          unset ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_RUNTIME_TOKEN \
+            ACTIONS_RESULTS_URL ACTIONS_CACHE_URL GH_TOKEN GITHUB_TOKEN
           # Headless one-turn run of omnigent's Polly coordinator from this repo's
           # checkout; --no-session keeps no state.
           status=0
@@ -513,6 +526,7 @@ jobs:
       - name: Post review comment
         if: steps.reviewer.outputs.review_ready == 'true'
         env:
+          GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -551,6 +565,7 @@ jobs:
       - name: Show review result on the PR
         if: always() && steps.status_pending.outcome == 'success'
         env:
+          GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ steps.dupe.outputs.head_sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           JOB_STATUS: ${{ job.status }}
