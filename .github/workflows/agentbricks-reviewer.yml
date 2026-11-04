@@ -22,6 +22,13 @@ run-name: "AgentBricksReviewer #${{ github.event.pull_request.number || github.e
 # Required variables: AI_REVIEW_ANTHROPIC_MODEL, AI_REVIEW_ANTHROPIC_OPUS_MODEL,
 # AI_REVIEW_OPENAI_MODEL. Optional: AI_REVIEW_COORDINATOR_HARNESS (default codex),
 # AI_REVIEW_COORDINATOR_MODEL (default AI_REVIEW_OPENAI_MODEL).
+#
+# Optional, for runners without direct access to public registries:
+#   - secrets PYPI_INDEX_URL and NPM_REGISTRY_URL: package mirrors for omnigent and
+#     the harness CLIs. Kept in secrets so the URLs stay out of this public repo
+#     and are masked in logs.
+#   - variable AI_REVIEW_RUNS_ON: JSON `runs-on` value, for example "ubuntu-24.04"
+#     on a fork (with the quotes). Defaults to the org's protected runner group.
 
 on:
   pull_request_target:
@@ -43,8 +50,11 @@ permissions:
   contents: read
 
 env:
-  # Bump together with the setup-harness-cli pins below.
   OMNIGENT_REF: 2004385de88789acc1991fdd104f58beb3d4483b
+  # Harness CLI versions pinned by omnigent at OMNIGENT_REF
+  # (.github/actions/setup-harness-cli/manifest.json); bump them together.
+  CLAUDE_CODE_VERSION: "2.1.295"
+  CODEX_VERSION: "0.142.0"
   OMNIGENT_CI_PIPELINE: agentbricks-reviewer
   OMNIGENT_SKIP_WEB_UI: "true"
   UV_VERSION: "0.13.5"
@@ -66,9 +76,7 @@ jobs:
       ) ||
       github.event_name == 'workflow_dispatch'
     # The org IP allow list rejects GitHub API calls from GitHub-hosted runners; protected runners are allow-listed.
-    runs-on:
-      group: databricks-protected-runner-group
-      labels: linux-ubuntu-latest
+    runs-on: ${{ fromJSON(vars.AI_REVIEW_RUNS_ON || '{"group":"databricks-protected-runner-group","labels":"linux-ubuntu-latest"}') }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -165,19 +173,30 @@ jobs:
       - name: Install omnigent
         if: steps.creds.outputs.available == 'true'
         working-directory: ${{ env.OMNIGENT_DIR }}
-        run: uv sync --extra all
+        env:
+          PYPI_INDEX_URL: ${{ secrets.PYPI_INDEX_URL }}
+        run: |
+          set -euo pipefail
+          if [ -n "$PYPI_INDEX_URL" ]; then
+            # A different index makes uv re-resolve omnigent's lockfile against the mirror.
+            export UV_DEFAULT_INDEX="$PYPI_INDEX_URL" PIP_INDEX_URL="$PYPI_INDEX_URL"
+          fi
+          uv sync --extra all
 
-      - name: Install Claude Code CLI
+      - name: Install Claude Code and Codex CLIs
         if: steps.creds.outputs.available == 'true'
-        uses: omnigent-ai/omnigent/.github/actions/setup-harness-cli@2004385de88789acc1991fdd104f58beb3d4483b
-        with:
-          harness: claude
-
-      - name: Install Codex CLI
-        if: steps.creds.outputs.available == 'true'
-        uses: omnigent-ai/omnigent/.github/actions/setup-harness-cli@2004385de88789acc1991fdd104f58beb3d4483b
-        with:
-          harness: codex
+        env:
+          NPM_REGISTRY_URL: ${{ secrets.NPM_REGISTRY_URL }}
+        run: |
+          set -euo pipefail
+          # A job-owned prefix avoids needing write access to the runner's global npm directory.
+          prefix="$RUNNER_TEMP/npm-global"
+          npm install --global --prefix "$prefix" --no-fund --no-audit \
+            --registry "${NPM_REGISTRY_URL:-https://registry.npmjs.org/}" \
+            "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@openai/codex@${CODEX_VERSION}"
+          echo "$prefix/bin" >> "$GITHUB_PATH"
+          "$prefix/bin/claude" --version
+          "$prefix/bin/codex" --version
 
       - name: Write gateway and provider config
         if: steps.creds.outputs.available == 'true'
