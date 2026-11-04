@@ -84,8 +84,8 @@ jobs:
       contents: read
       issues: read
       pull-requests: write
-      # Runs from these triggers attach to the default branch, so the job posts a
-      # commit status to put itself in the PR's checks list.
+      # Comment- and dispatch-triggered runs attach to the default branch, so they
+      # post a commit status to appear in the PR's checks list.
       statuses: write
     concurrency:
       group: agentbricks-reviewer-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
@@ -132,7 +132,10 @@ jobs:
 
       - name: Show review as pending on the PR
         id: status_pending
-        if: steps.dupe.outputs.skip != 'true' && steps.dupe.outputs.head_sha != ''
+        # pull_request_target runs already show as a check on the PR head.
+        if: >-
+          github.event_name != 'pull_request_target' &&
+          steps.dupe.outputs.skip != 'true' && steps.dupe.outputs.head_sha != ''
         env:
           HEAD_SHA: ${{ steps.dupe.outputs.head_sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -302,6 +305,8 @@ jobs:
       - name: Collect PR context and build prompt
         if: steps.creds.outputs.available == 'true'
         id: ctx
+        env:
+          EXPECTED_HEAD: ${{ steps.dupe.outputs.head_sha }}
         run: |
           set -euo pipefail
           summary_script="$OMNIGENT_DIR/.github/scripts/polly-review-summary.py"
@@ -312,6 +317,11 @@ jobs:
             > /tmp/pr_meta.json
           base_sha="$(jq -r .baseRefOid /tmp/pr_meta.json)"
           head_sha="$(jq -r .headRefOid /tmp/pr_meta.json)"
+          # The status and duplicate check used this commit; review the same one.
+          if [ -n "$EXPECTED_HEAD" ] && [ "$EXPECTED_HEAD" != "$head_sha" ]; then
+            echo "::error::PR #$PR_NUMBER moved from ${EXPECTED_HEAD:0:7} to ${head_sha:0:7} during the review; comment /review to review the new commit."
+            exit 1
+          fi
           echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
           gh api "repos/$REPO/compare/${base_sha}...${head_sha}" \
             -H "Accept: application/vnd.github.v3.diff" > /tmp/pr_diff.txt
