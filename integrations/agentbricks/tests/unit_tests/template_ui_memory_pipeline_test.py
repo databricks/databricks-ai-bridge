@@ -249,7 +249,7 @@ def test_pipeline_run_calls_use_the_pipeline_resource(ui):
 _JS_FUNCTIONS = (
     "formatJson prettyDateTime memoryStoreName errorMessage jsonResponse pipelineText pipelineCommand "
     "pipelineSetting pipelineRunError pipelineRunning updatePipelineButton setPipelineConfirm "
-    "renderPipeline loadPipeline runPipeline"
+    "setPipelineAlert renderPipeline loadPipeline runPipeline"
 ).split()
 
 _JS_HARNESS = r"""
@@ -268,8 +268,9 @@ class Node {
 const document = { createElement: (tag) => new Node(tag) };
 const elements = { memoryPipelineRun: new Node('button'), memoryPipelineBody: new Node('div'),
   memoryPipelineConfirm: new Node('div'), memoryPipelineConfirmText: new Node('p'),
-  memoryPane: new Node('div') };
+  memoryPane: new Node('div'), memoryPipelineAlert: new Node('span') };
 elements.memoryPipelineConfirm.hidden = true;
+const alertDot = elements.memoryPipelineAlert;
 const state = { config: { memory: { pipelines: true, store: 'memory-stores/store' },
   session: { store: 'sessions' } } };
 const events = [], requests = [], timers = [], log = [];
@@ -300,6 +301,7 @@ await loadPipeline();
 assert.equal(requests.length, 0);
 assert.match(body(), /Memory pipelines need a deployed app with sessions and memory bound\./);
 assert.equal(button.hidden, true);
+assert.equal(alertDot.hidden, true, 'no failed-run dot without pipelines');
 state.config.memory.pipelines = true;
 
 // FR-5: no pipeline for the pair shows the create command.
@@ -326,6 +328,7 @@ assert.equal(button.hidden, false);
 assert.equal(button.disabled, false);
 assert.equal(button.textContent, 'Run now');
 assert.deepEqual(timers, [], 'no polling once runs are finished');
+assert.equal(alertDot.hidden, false, 'the Pipeline tab flags a failed latest run');
 assert.equal(events.at(-1).type, 'memory.pipeline.get');
 
 // FR-3: "Run now" opens the warning without starting a run; Cancel closes it.
@@ -354,6 +357,7 @@ assert.ok(events.some((event) => event.type === 'memory.pipeline.run'));
 assert.equal(button.disabled, true);
 assert.equal(button.textContent, 'Running…');
 assert.match(body(), /Running/);
+assert.equal(alertDot.hidden, true, 'a newer run clears the failed-run dot');
 assert.deepEqual(timers, [10000]);
 
 // A closed pane stops polling.
@@ -438,15 +442,16 @@ def test_memory_pane_has_the_pipeline_block(framework):
 
 
 @pytest.mark.parametrize("framework", FRAMEWORKS)
-def test_memory_entries_scroll_above_the_pipeline(framework):
+def test_memory_entries_scroll_within_their_tab(framework):
     css = (UI_TEMPLATES / f"agent-{framework}" / "ui" / "styles.css").read_text()
 
-    # A capped, scrolling entries list keeps many memories from pushing the pipeline down.
+    # The pipeline has its own tab, so the entries list fills the Entries tab and scrolls in place.
     entries = re.search(r"^\.memory-entries \{(.*?)\}", css, re.M | re.S)
     assert entries
-    assert "max-height: 320px;" in entries.group(1)
+    assert "flex: 1 1 auto;" in entries.group(1)
+    assert "min-height: 0;" in entries.group(1)
     assert "overflow-y: auto;" in entries.group(1)
-    assert "flex: 1;" not in entries.group(1)
+    assert "max-height" not in entries.group(1)
 
 
 @pytest.mark.parametrize("framework", FRAMEWORKS)
