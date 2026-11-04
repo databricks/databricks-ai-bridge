@@ -18,10 +18,19 @@ run-name: "AgentBricksReviewer #${{ github.event.pull_request.number || github.e
 # is read as a diff file plus fetched git objects that reviewers read with
 # `git show`. PR code is never checked out or executed.
 #
-# Required secrets: LLM_API_KEY, GATEWAY_BASE_URL (https://<workspace>/serving-endpoints).
+# Required secrets: GATEWAY_BASE_URL (the workspace URL, https://<workspace>) and
+# either GATEWAY_CLIENT_ID + GATEWAY_CLIENT_SECRET (a service principal's OAuth
+# credentials, preferred) or LLM_API_KEY (a token for that workspace).
 # Required variables: AI_REVIEW_ANTHROPIC_MODEL, AI_REVIEW_ANTHROPIC_OPUS_MODEL,
 # AI_REVIEW_OPENAI_MODEL. Optional: AI_REVIEW_COORDINATOR_HARNESS (default codex),
 # AI_REVIEW_COORDINATOR_MODEL (default AI_REVIEW_OPENAI_MODEL).
+#
+# Optional, for runners without direct access to public registries:
+#   - secrets PYPI_INDEX_URL and NPM_REGISTRY_URL: package mirrors for omnigent and
+#     the harness CLIs. Kept in secrets so the URLs stay out of this public repo
+#     and are masked in logs.
+#   - variable AI_REVIEW_RUNS_ON: JSON `runs-on` value, for example "ubuntu-24.04"
+#     on a fork (with the quotes). Defaults to the org's protected runner group.
 
 on:
   pull_request_target:
@@ -43,8 +52,11 @@ permissions:
   contents: read
 
 env:
-  # Bump together with the setup-harness-cli pins below.
   OMNIGENT_REF: 2004385de88789acc1991fdd104f58beb3d4483b
+  # Harness CLI versions pinned by omnigent at OMNIGENT_REF
+  # (.github/actions/setup-harness-cli/manifest.json); bump them together.
+  CLAUDE_CODE_VERSION: "2.1.295"
+  CODEX_VERSION: "0.142.0"
   OMNIGENT_CI_PIPELINE: agentbricks-reviewer
   OMNIGENT_SKIP_WEB_UI: "true"
   UV_VERSION: "0.13.5"
@@ -66,14 +78,15 @@ jobs:
       ) ||
       github.event_name == 'workflow_dispatch'
     # The org IP allow list rejects GitHub API calls from GitHub-hosted runners; protected runners are allow-listed.
-    runs-on:
-      group: databricks-protected-runner-group
-      labels: linux-ubuntu-latest
+    runs-on: ${{ fromJSON(vars.AI_REVIEW_RUNS_ON || '{"group":"databricks-protected-runner-group","labels":"linux-ubuntu-latest"}') }}
     timeout-minutes: 30
     permissions:
       contents: read
       issues: read
       pull-requests: write
+      # Comment- and dispatch-triggered runs attach to the default branch, so they
+      # post a commit status to appear in the PR's checks list.
+      statuses: write
     concurrency:
       group: agentbricks-reviewer-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
       cancel-in-progress: false
@@ -105,6 +118,7 @@ jobs:
             exit 0
           fi
           head_sha="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.sha')"
+          echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
           if [ "${FORCE_REVIEW:-false}" = "true" ] || grep -qE '^[[:space:]]*/review[[:space:]]+force([[:space:]]|$)' <<<"${COMMENT_BODY:-}"; then
             exit 0
           fi
@@ -116,19 +130,62 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Check LLM credentials
+      - name: Show review as pending on the PR
+        id: status_pending
+        # pull_request_target runs already show as a check on the PR head.
+        if: >-
+          github.event_name != 'pull_request_target' &&
+          steps.dupe.outputs.skip != 'true' && steps.dupe.outputs.head_sha != ''
+        env:
+          HEAD_SHA: ${{ steps.dupe.outputs.head_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh api "repos/$REPO/statuses/$HEAD_SHA" --silent \
+            -f state=pending -f context=AgentBricksReviewer \
+            -f description="Review in progress" -f target_url="$RUN_URL" \
+            || echo "::warning::Could not post the pending status on the PR."
+
+      - name: Get gateway credentials
         if: steps.dupe.outputs.skip != 'true'
         id: creds
         env:
+          GATEWAY_BASE_URL: ${{ secrets.GATEWAY_BASE_URL }}
+          GATEWAY_CLIENT_ID: ${{ secrets.GATEWAY_CLIENT_ID }}
+          GATEWAY_CLIENT_SECRET: ${{ secrets.GATEWAY_CLIENT_SECRET }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
         run: |
-          if [ -z "$LLM_API_KEY" ]; then
-            echo "::notice::Skipping AgentBricksReviewer: LLM_API_KEY is not available."
-            echo "available=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "::add-mask::${LLM_API_KEY}"
-            echo "available=true" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          if [ -n "$GATEWAY_CLIENT_ID" ] && [ -n "$GATEWAY_CLIENT_SECRET" ]; then
+            : "${GATEWAY_BASE_URL:?Set the GATEWAY_BASE_URL secret}"
+            # Same normalization as the provider config step: trim, then drop a trailing / and /serving-endpoints.
+            workspace_url="$(printf '%s' "$GATEWAY_BASE_URL" | tr -d '[:space:]')"
+            workspace_url="${workspace_url%/}"
+            workspace_url="${workspace_url%/serving-endpoints}"
+            # Service principal OAuth (machine-to-machine). The token lasts about an
+            # hour, longer than this job. Credentials go through stdin, not argv.
+            response="$(printf 'user = "%s:%s"\n' "$GATEWAY_CLIENT_ID" "$GATEWAY_CLIENT_SECRET" \
+              | curl --silent --show-error --max-time 30 --config - --write-out '\n%{http_code}' \
+                  --data grant_type=client_credentials --data scope=all-apis \
+                  "$workspace_url/oidc/v1/token")"
+            status="${response##*$'\n'}"
+            body="${response%$'\n'*}"
+            LLM_API_KEY="$(jq -r '.access_token // empty' <<<"$body" 2>/dev/null || true)"
+            if [ "$status" != 200 ] || [ -z "$LLM_API_KEY" ]; then
+              # Error bodies carry no token, so the reason is safe to print.
+              reason="$(jq -r '[.error, .error_description, .message] | map(select(.)) | join(": ")' <<<"$body" 2>/dev/null || true)"
+              echo "::error::Service principal token request to <workspace>/oidc/v1/token failed (HTTP ${status}): ${reason:-$(head -c 300 <<<"$body")}"
+              exit 1
+            fi
           fi
+          if [ -z "${LLM_API_KEY:-}" ]; then
+            echo "::notice::Skipping AgentBricksReviewer: set GATEWAY_CLIENT_ID and GATEWAY_CLIENT_SECRET (or LLM_API_KEY)."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::add-mask::${LLM_API_KEY}"
+          # Later steps, including the omnigent config, read this exported token.
+          echo "LLM_API_KEY=${LLM_API_KEY}" >> "$GITHUB_ENV"
+          echo "available=true" >> "$GITHUB_OUTPUT"
 
       # Default branch for automatic runs; the selected ref for manual dispatch,
       # so the workflow can be tested from a branch before it merges.
@@ -165,24 +222,34 @@ jobs:
       - name: Install omnigent
         if: steps.creds.outputs.available == 'true'
         working-directory: ${{ env.OMNIGENT_DIR }}
-        run: uv sync --extra all
+        env:
+          PYPI_INDEX_URL: ${{ secrets.PYPI_INDEX_URL }}
+        run: |
+          set -euo pipefail
+          if [ -n "$PYPI_INDEX_URL" ]; then
+            # A different index makes uv re-resolve omnigent's lockfile against the mirror.
+            export UV_DEFAULT_INDEX="$PYPI_INDEX_URL" PIP_INDEX_URL="$PYPI_INDEX_URL"
+          fi
+          uv sync --extra all
 
-      - name: Install Claude Code CLI
+      - name: Install Claude Code and Codex CLIs
         if: steps.creds.outputs.available == 'true'
-        uses: omnigent-ai/omnigent/.github/actions/setup-harness-cli@2004385de88789acc1991fdd104f58beb3d4483b
-        with:
-          harness: claude
-
-      - name: Install Codex CLI
-        if: steps.creds.outputs.available == 'true'
-        uses: omnigent-ai/omnigent/.github/actions/setup-harness-cli@2004385de88789acc1991fdd104f58beb3d4483b
-        with:
-          harness: codex
+        env:
+          NPM_REGISTRY_URL: ${{ secrets.NPM_REGISTRY_URL }}
+        run: |
+          set -euo pipefail
+          # A job-owned prefix avoids needing write access to the runner's global npm directory.
+          prefix="$RUNNER_TEMP/npm-global"
+          npm install --global --prefix "$prefix" --no-fund --no-audit \
+            --registry "${NPM_REGISTRY_URL:-https://registry.npmjs.org/}" \
+            "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@openai/codex@${CODEX_VERSION}"
+          echo "$prefix/bin" >> "$GITHUB_PATH"
+          "$prefix/bin/claude" --version
+          "$prefix/bin/codex" --version
 
       - name: Write gateway and provider config
         if: steps.creds.outputs.available == 'true'
         env:
-          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           GATEWAY_BASE_URL: ${{ secrets.GATEWAY_BASE_URL }}
           ANTHROPIC_MODEL: ${{ vars.AI_REVIEW_ANTHROPIC_MODEL }}
           ANTHROPIC_OPUS_MODEL: ${{ vars.AI_REVIEW_ANTHROPIC_OPUS_MODEL }}
@@ -193,7 +260,6 @@ jobs:
           : "${ANTHROPIC_MODEL:?Set the AI_REVIEW_ANTHROPIC_MODEL variable}"
           : "${ANTHROPIC_OPUS_MODEL:?Set the AI_REVIEW_ANTHROPIC_OPUS_MODEL variable}"
           : "${OPENAI_MODEL:?Set the AI_REVIEW_OPENAI_MODEL variable}"
-          echo "LLM_API_KEY=${LLM_API_KEY}" >> "$GITHUB_ENV"
           echo "DATABRICKS_BEARER=${LLM_API_KEY}" >> "$GITHUB_ENV"
           # Python writes the files so secrets are never interpolated into shell or YAML.
           uv run --project "$OMNIGENT_DIR" python - <<'PYEOF'
@@ -203,11 +269,10 @@ jobs:
           if not ci_request_tags(strict=True).get("pipeline"):
               raise SystemExit("OMNIGENT_CI_PIPELINE is required")
           home = pathlib.Path.home()
-          gw = os.environ["GATEWAY_BASE_URL"]
+          # Older secrets end in /serving-endpoints; accept both forms.
+          workspace_url = os.environ["GATEWAY_BASE_URL"].strip().rstrip("/").removesuffix("/serving-endpoints")
           home.joinpath(".databrickscfg").write_text(
-              "[default]\nhost  = {}\ntoken = {}\n".format(
-                  gw.removesuffix("/serving-endpoints"), os.environ["LLM_API_KEY"]
-              )
+              "[default]\nhost  = {}\ntoken = {}\n".format(workspace_url, os.environ["LLM_API_KEY"])
           )
           cfg = {
               "providers": {
@@ -215,7 +280,7 @@ jobs:
                       "kind": "gateway",
                       "default": ["anthropic", "openai"],
                       "anthropic": {
-                          "base_url": ci_gateway_base_url(gw, "anthropic"),
+                          "base_url": ci_gateway_base_url(workspace_url, "anthropic"),
                           "api_key_ref": "env:LLM_API_KEY",
                           "models": {
                               "default": os.environ["ANTHROPIC_MODEL"],
@@ -224,7 +289,7 @@ jobs:
                           },
                       },
                       "openai": {
-                          "base_url": ci_gateway_base_url(gw, "codex/v1"),
+                          "base_url": ci_gateway_base_url(workspace_url, "codex/v1"),
                           "api_key_ref": "env:LLM_API_KEY",
                           "wire_api": "responses",
                           "models": {"default": os.environ["OPENAI_MODEL"]},
@@ -240,6 +305,8 @@ jobs:
       - name: Collect PR context and build prompt
         if: steps.creds.outputs.available == 'true'
         id: ctx
+        env:
+          EXPECTED_HEAD: ${{ steps.dupe.outputs.head_sha }}
         run: |
           set -euo pipefail
           summary_script="$OMNIGENT_DIR/.github/scripts/polly-review-summary.py"
@@ -250,6 +317,11 @@ jobs:
             > /tmp/pr_meta.json
           base_sha="$(jq -r .baseRefOid /tmp/pr_meta.json)"
           head_sha="$(jq -r .headRefOid /tmp/pr_meta.json)"
+          # The status and duplicate check used this commit; review the same one.
+          if [ -n "$EXPECTED_HEAD" ] && [ "$EXPECTED_HEAD" != "$head_sha" ]; then
+            echo "::error::PR #$PR_NUMBER moved from ${EXPECTED_HEAD:0:7} to ${head_sha:0:7} during the review; comment /review to review the new commit."
+            exit 1
+          fi
           echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
           gh api "repos/$REPO/compare/${base_sha}...${head_sha}" \
             -H "Accept: application/vnd.github.v3.diff" > /tmp/pr_diff.txt
@@ -420,3 +492,27 @@ jobs:
           name: agentbricks-reviewer-logs-${{ github.run_id }}
           path: /tmp/agentbricks-reviewer-diagnostics/
           retention-days: 14
+
+      # Last step, so it sees failures and cancellations from every earlier step.
+      - name: Show review result on the PR
+        if: always() && steps.status_pending.outcome == 'success'
+        env:
+          HEAD_SHA: ${{ steps.dupe.outputs.head_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          JOB_STATUS: ${{ job.status }}
+          CREDS_AVAILABLE: ${{ steps.creds.outputs.available }}
+          REVIEW_READY: ${{ steps.reviewer.outputs.review_ready }}
+        run: |
+          if [ "$JOB_STATUS" = success ] && [ "$REVIEW_READY" = true ]; then
+            state=success description="Review posted as a PR comment"
+          elif [ "$JOB_STATUS" = success ] && [ "$CREDS_AVAILABLE" = false ]; then
+            state=success description="Skipped: gateway credentials are not configured"
+          elif [ "$JOB_STATUS" = cancelled ]; then
+            state=error description="Review was cancelled or timed out"
+          else
+            state=failure description="Review failed; open Details for the run log"
+          fi
+          gh api "repos/$REPO/statuses/$HEAD_SHA" --silent \
+            -f state="$state" -f context=AgentBricksReviewer \
+            -f description="$description" -f target_url="$RUN_URL" \
+            || echo "::warning::Could not post the final status on the PR."
