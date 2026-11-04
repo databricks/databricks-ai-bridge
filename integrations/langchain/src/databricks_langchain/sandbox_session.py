@@ -48,7 +48,7 @@ def _user_agent_version() -> str:
     try:
         return version("databricks-langchain")
     except PackageNotFoundError:
-        return "0.0.0"
+        return "unknown"
 
 
 class DatabricksSandboxSession:

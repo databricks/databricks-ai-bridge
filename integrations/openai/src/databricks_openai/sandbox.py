@@ -98,7 +98,7 @@ def _user_agent_version() -> str:
     try:
         return version("databricks-openai")
     except PackageNotFoundError:
-        return "0.0.0"
+        return "unknown"
 
 
 _SHELL = "/bin/bash"
