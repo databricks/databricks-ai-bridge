@@ -144,13 +144,17 @@ jobs:
             workspace_url="${workspace_url%/serving-endpoints}"
             # Service principal OAuth (machine-to-machine). The token lasts about an
             # hour, longer than this job. Credentials go through stdin, not argv.
-            LLM_API_KEY="$(printf 'user = "%s:%s"\n' "$GATEWAY_CLIENT_ID" "$GATEWAY_CLIENT_SECRET" \
-              | curl --silent --show-error --fail --max-time 30 --config - \
+            response="$(printf 'user = "%s:%s"\n' "$GATEWAY_CLIENT_ID" "$GATEWAY_CLIENT_SECRET" \
+              | curl --silent --show-error --max-time 30 --config - --write-out '\n%{http_code}' \
                   --data grant_type=client_credentials --data scope=all-apis \
-                  "$workspace_url/oidc/v1/token" \
-              | jq -r '.access_token // empty')"
-            if [ -z "$LLM_API_KEY" ]; then
-              echo "::error::The service principal token request returned no access_token."
+                  "$workspace_url/oidc/v1/token")"
+            status="${response##*$'\n'}"
+            body="${response%$'\n'*}"
+            LLM_API_KEY="$(jq -r '.access_token // empty' <<<"$body" 2>/dev/null || true)"
+            if [ "$status" != 200 ] || [ -z "$LLM_API_KEY" ]; then
+              # Error bodies carry no token, so the reason is safe to print.
+              reason="$(jq -r '[.error, .error_description, .message] | map(select(.)) | join(": ")' <<<"$body" 2>/dev/null || true)"
+              echo "::error::Service principal token request to <workspace>/oidc/v1/token failed (HTTP ${status}): ${reason:-$(head -c 300 <<<"$body")}"
               exit 1
             fi
           fi
