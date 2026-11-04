@@ -89,6 +89,18 @@ DEFAULT_INACTIVITY_TIMEOUT_S = 900
 DEFAULT_WAIT_FOR_RUNNING_TIMEOUT_S = 180
 _WAIT_POLL_INTERVAL_S = 3
 
+_USER_AGENT_PRODUCT = "databricks-openai"
+
+
+def _user_agent_version() -> str:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("databricks-openai")
+    except PackageNotFoundError:
+        return "0.0.0"
+
+
 _SHELL = "/bin/bash"
 # execute_command_sync is direct-exec (no shell, no PATH/login profile), but the
 # base session issues bare argv (ls, mkdir, python3, test) that need PATH resolution
@@ -575,8 +587,23 @@ class DatabricksSandboxClient(_SandboxClientBase):  # type: ignore[valid-type,mi
         if not _sandbox_imports_available:
             raise ImportError(_IMPORT_ERROR)
         super().__init__()
+        # Tag the User-Agent so Databricks can attribute sandbox usage to this
+        # integration. When we build the client, set the token on the config first
+        # so both the CRUD/REST and command-exec/gRPC paths carry it (REST snapshots
+        # the User-Agent at client construction). A caller-supplied client is tagged
+        # in place, which reaches the per-call gRPC path; for CRUD attribution on a
+        # supplied client, pass profile= instead so we build it with the token.
+        token_version = _user_agent_version()
         if client is None:
-            client = WorkspaceClient(profile=profile) if profile else WorkspaceClient()
+            from databricks.sdk.config import Config
+
+            config = Config(profile=profile) if profile else Config()
+            config.with_user_agent_extra(_USER_AGENT_PRODUCT, token_version)
+            client = WorkspaceClient(config=config)
+        else:
+            config = getattr(client, "config", None)
+            if config is not None:
+                config.with_user_agent_extra(_USER_AGENT_PRODUCT, token_version)
         self._client = client
         self._instrumentation = (
             instrumentation if instrumentation is not None else Instrumentation()
