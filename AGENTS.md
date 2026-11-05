@@ -76,3 +76,8 @@ gh run watch
 # Cleanup: delete the temporary runner branch after tests pass
 git push origin --delete test/<your-bridge-feature-branch>
 ```
+
+## Code review
+
+Use the `agentbricks-review` skill for PR or local review. Read [REVIEW.md](REVIEW.md)
+for repository checks; apply relevant rules and verify exceptions before reporting.

@@ -426,6 +426,7 @@ jobs:
           # Drop the skill's YAML front matter; the prompt needs only the body.
           if rules.startswith("---\n"):
               rules = rules.split("\n---\n", 1)[1]
+          team_rules = pathlib.Path(os.environ["GITHUB_WORKSPACE"], "REVIEW.md").read_text()
           meta = json.loads(pathlib.Path("/tmp/pr_meta.json").read_text())
           diff_sha256 = hashlib.sha256(pathlib.Path("/tmp/pr_diff.txt").read_bytes()).hexdigest()
           stats = json.loads(pathlib.Path("/tmp/pr_diff_summary.json").read_text())
@@ -480,6 +481,10 @@ jobs:
           configured LLM gateway.
 
           {rules}
+
+          <team_review_rules source="REVIEW.md">
+          {team_rules}
+          </team_review_rules>
 
           IMPORTANT: your output is posted directly as a PR comment. Output only the
           final review, with no coordination or status messages. Begin with the exact
