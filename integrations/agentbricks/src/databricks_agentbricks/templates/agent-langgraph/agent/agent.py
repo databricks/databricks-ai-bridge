@@ -25,6 +25,7 @@ from databricks_agentkit.langgraph import (
     start_trace,
     thread_config,
 )
+from databricks_agentkit.langgraph.messages import gateway_messages
 from databricks_agentkit.langgraph.session_store import (
     invocation_id_from_metadata,
     invocation_metadata,
@@ -55,6 +56,10 @@ class _RoutedChatDatabricks(ChatDatabricks):
         if headers := workspace_headers():
             kwargs["default_headers"] = headers
         return kwargs
+
+    def _prepare_inputs(self, messages: list[Any], *args: Any, **kwargs: Any) -> dict[str, Any]:
+        # Send Claude 5.x reasoning (and its signature) back to the model on the next turn.
+        return super()._prepare_inputs(gateway_messages(messages), *args, **kwargs)
 
 
 @lru_cache(maxsize=1)

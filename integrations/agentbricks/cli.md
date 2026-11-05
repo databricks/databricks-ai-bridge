@@ -183,7 +183,7 @@ _Arguments_
 
 Run your agent locally so you can try it before deploying.
 
-Starts the agent on a local server - by default http://localhost:8000 - and prints where to reach it: the chat UI if the project has one, otherwise a sample request against the agent's API.
+Starts the agent on a local server - by default http://localhost:8000 - and, once it answers, prints where to reach it: the chat UI if the project has one, otherwise a sample request against the agent's API. If the agent fails to start, you get an error instead.
 
 Auth uses your Databricks profile (`-p` / `agentbricks login`), and the agent reaches Databricks model serving through the AI Gateway on that profile - so there are no model keys to set up.
 

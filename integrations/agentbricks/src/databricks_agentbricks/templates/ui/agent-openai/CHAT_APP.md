@@ -13,20 +13,32 @@ post-generation mutation command.
 
 ## Behavior
 
-The capability indicators are automatic. Streaming and background reflect the runtime
-contract; Session reflects transcript history; Memory requires `AGENT_MEMORY_STORE`, which
-`agentbricks dev` leaves unset, so a store declared in `agent.toml` shows "Connects on deploy"
-locally and "Not connected" (with a bind hint) appears only when nothing is declared; Traces
-reflects the MLflow tracing config (destination + experiment). Selecting Memory opens a pane
-for browsing the store's entries (searchable, filterable by actor, with a modal for each
-entry); the other indicators expand in place, and Traces links out to the MLflow experiment.
-The transport selector is the only manual capability choice; hover or focus a mode to see
-what it does.
+The capability indicators are automatic. Streaming and background reflect the runtime contract;
+Session reflects transcript history; Memory requires `AGENT_MEMORY_STORE`; Traces reflects the MLflow
+tracing config (destination + experiment). Selecting Memory opens a pane for browsing the store's
+entries (searchable, filterable by actor, with a modal for each entry); the other indicators expand
+in place, and Traces links out to the MLflow experiment. The transport selector is the only manual
+capability choice; hover or focus a mode to see what it does.
+
+Memory and session stores are off by default in `agentbricks dev`. The chat app shows "Not
+connected" for memory locally even when a store is bound, and the session indicator shows the
+in-process state. Both connect after `agentbricks deploy`. To use real stores locally, set
+`AGENT_MEMORY_STORE` and `AGENT_SESSION_STORE` in the project's `.env`.
 
 Tools opens a pane listing the `agent.toml` bindings, the Python tools from `agent.tools.all_tools()`,
 and the `agentbricks tools add …` commands to copy. It reads `GET /api/demo/tools`, which re-reads
 `agent.toml` on each request, so `tools add`/`remove` show up after a refresh. A bad `agent.toml` or
 `agent.tools` import shows as an error in the pane. MCP servers from `agent/mcps.py` are not listed.
+
+The Memory pane has two tabs. **Entries** browses the store's memories by actor. In a deployed app
+with both stores bound, **Pipeline** shows the memory pipeline for that session store + memory store
+pair (`GET /api/demo/memory/pipeline`): its model, trigger, instructions, and five most recent runs.
+A dot on the Pipeline tab marks a failed latest run. **Run now** (`POST
+/api/demo/memory/pipeline/run`) asks for confirmation first, because a run can rewrite, merge, or
+delete any memory in the store, then refreshes every 10 seconds until the run finishes. With no
+pipeline the pane shows the `agentbricks memory pipeline create` command; create, update, pause,
+resume, and delete stay in the CLI. Under `agentbricks dev`, or without both stores, the pane makes
+no pipeline calls.
 
 The composer's model picker lists the workspace's Unity Catalog AI Gateway chat model services — the
 `system.ai.*` model services from `GET /api/2.1/unity-catalog/model-services?parent=schemas/system.ai`

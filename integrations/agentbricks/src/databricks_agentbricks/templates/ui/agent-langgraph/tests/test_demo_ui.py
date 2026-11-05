@@ -97,6 +97,24 @@ class _FakeStateClient:
             ]
         }
 
+    def find_memory_pipeline(self):
+        return {"name": "memory-pipelines/p1", "memory_store": "memory-stores/store"}
+
+    def list_memory_pipeline_runs(self, pipeline):
+        return {
+            "pipeline_runs": [
+                {
+                    "name": f"{pipeline}/runs/{i}",
+                    "state": "SUCCEEDED",
+                    "create_time": f"2026-10-0{i}",
+                }
+                for i in range(1, 8)
+            ]
+        }
+
+    def run_memory_pipeline(self, pipeline):
+        return {"name": f"{pipeline}/runs/8", "state": "RUNNING"}
+
 
 class _FakeInterrupt:
     def __init__(self, value, id):
@@ -252,99 +270,6 @@ def test_demo_ui_routes(monkeypatch):
     assert client.post("/api/demo/sessions", json={"session_id": "ignored"}).status_code == 503
 
 
-def _declare_stores(monkeypatch, tmp_path, manifest):
-    """Point the runtime at a project whose agent.toml is ``manifest`` (None = no agent.toml)."""
-    if manifest is not None:
-        (tmp_path / "agent.toml").write_text(manifest)
-    monkeypatch.setenv("AGENTBRICKS_PROJECT_ROOT", str(tmp_path))
-    if manifest is None:
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.delenv("AGENTBRICKS_PROJECT_ROOT")
-
-
-_DECLARED = (
-    'schema_version = 1\n[memory_store]\nname = "my-memory"\n[session_store]\nname = "my-sessions"\n'
-)
-
-
-def test_demo_config_reports_declared_stores_without_connecting_them(monkeypatch, tmp_path):
-    _declare_stores(monkeypatch, tmp_path, _DECLARED)
-    config = _client(monkeypatch).get("/api/ui/config").json()
-
-    # `agentbricks dev` leaves the env unset: declared, but not connected.
-    assert config["memory"]["declared"] == "my-memory"
-    assert config["memory"]["enabled"] is False
-    assert config["memory"]["store"] is None
-    assert config["session"]["declared"] == "my-sessions"
-    assert config["session"]["managed"] is False
-    assert config["session"]["mode"] != "Managed Session Store"
-
-
-def test_demo_config_declared_is_independent_of_the_connected_store(monkeypatch, tmp_path):
-    _declare_stores(monkeypatch, tmp_path, _DECLARED)
-    config = _client(monkeypatch, configured=True).get("/api/ui/config").json()
-
-    assert config["memory"]["enabled"] is True
-    assert config["memory"]["declared"] == "my-memory"
-    assert config["session"]["managed"] is True
-
-
-@pytest.mark.parametrize(
-    "manifest",
-    [
-        None,
-        "schema_version = 1\n",
-        "schema_version = 1\n[memory_store]\nid = 'abc'\n",
-        "schema_version = 1\nmemory_store = 3\nsession_store = 'x'\n",
-        "schema_version = 1\n[memory_store]\nname = ''\n[session_store]\nname = 7\n",
-        "this is = = not toml",
-    ],
-)
-def test_demo_config_declared_is_null_when_nothing_usable_is_declared(
-    monkeypatch, tmp_path, manifest
-):
-    _declare_stores(monkeypatch, tmp_path, manifest)
-    response = _client(monkeypatch).get("/api/ui/config")
-
-    assert response.status_code == 200
-    config = response.json()
-    assert config["memory"]["declared"] is None
-    assert config["session"]["declared"] is None
-
-
-def test_store_503_names_the_declared_store_instead_of_a_bind_command(monkeypatch, tmp_path):
-    _declare_stores(monkeypatch, tmp_path, _DECLARED)
-    client = _client(monkeypatch)
-
-    memory = client.post("/api/demo/memory/search", json={"query": "profile"})
-    sessions = client.post("/api/demo/sessions", json={"session_id": "ignored"})
-    assert (memory.status_code, sessions.status_code) == (503, 503)
-    for response, kind, name, env in (
-        (memory, "memory", "my-memory", "AGENT_MEMORY_STORE"),
-        (sessions, "session", "my-sessions", "AGENT_SESSION_STORE"),
-    ):
-        detail = response.json()["detail"]
-        assert f"'{name}' is declared in agent.toml but not connected" in detail
-        assert "agentbricks dev" in detail and "agentbricks deploy" in detail
-        assert env in detail
-        assert "bind" not in detail
-
-
-def test_store_503_keeps_the_bind_command_when_nothing_is_declared(monkeypatch, tmp_path):
-    _declare_stores(monkeypatch, tmp_path, "schema_version = 1\n")
-    client = _client(monkeypatch)
-
-    memory = client.post("/api/demo/memory/search", json={"query": "profile"})
-    sessions = client.post("/api/demo/sessions", json={"session_id": "ignored"})
-    assert memory.status_code == sessions.status_code == 503
-    assert memory.json()["detail"] == (
-        "No memory store configured. Run `agentbricks memory bind <store>`."
-    )
-    assert sessions.json()["detail"] == (
-        "No session store configured. Run `agentbricks sessions bind <store>`."
-    )
-
-
 @pytest.mark.parametrize(
     ("local", "endpoint", "schema", "persistent"),
     [
@@ -401,6 +326,28 @@ def test_demo_config_distinguishes_run_local_from_a_deployed_app(monkeypatch):
 
     monkeypatch.setenv("DATABRICKS_APP_URL", "https://agent.example.databricksapps.com")
     assert _client(monkeypatch).get("/api/ui/config").json()["deployed"] is True
+
+
+def test_demo_config_reports_the_local_profile_and_no_viewer_without_an_identity(monkeypatch):
+    # Locally the chip says which Databricks profile the agent signs in with; with no forwarded
+    # identity there is no viewer name to show.
+    monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "my-workspace")
+    config = _client(monkeypatch).get("/api/ui/config").json()
+    assert config["profile"] == "my-workspace"
+    assert config["viewer"] is None
+    monkeypatch.delenv("DATABRICKS_CONFIG_PROFILE")
+    assert _client(monkeypatch).get("/api/ui/config").json()["profile"] is None
+
+
+def test_demo_config_reports_a_bound_memory_store_that_connects_on_deploy(monkeypatch):
+    # `agentbricks dev` keeps memory off but names the bound store, so the card can say it connects
+    # on deploy instead of reading as missing.
+    monkeypatch.setenv("AGENTBRICKS_DEV_BOUND_MEMORY_STORE", "agent-memory")
+    memory = _client(monkeypatch).get("/api/ui/config").json()["memory"]
+    assert memory["enabled"] is False
+    assert memory["bound_store"] == "agent-memory"
+    monkeypatch.delenv("AGENTBRICKS_DEV_BOUND_MEMORY_STORE")
+    assert _client(monkeypatch).get("/api/ui/config").json()["memory"]["bound_store"] is None
 
 
 def test_demo_config_does_not_wait_for_model_discovery(monkeypatch):
@@ -551,7 +498,9 @@ async def test_checkpoint_history_reads_messages_and_interrupts(monkeypatch):
         }
         return SimpleNamespace(
             checkpoint={"channel_values": {"messages": [message]}},
-            pending_writes=[("task", "__interrupt__", [_FakeInterrupt({"approval": True}, "int-1")])],
+            pending_writes=[
+                ("task", "__interrupt__", [_FakeInterrupt({"approval": True}, "int-1")])
+            ],
         )
 
     monkeypatch.setattr(session_store, "history_checkpoint", saved_checkpoint)
@@ -576,8 +525,9 @@ def test_managed_memory_and_session_routes(monkeypatch):
     assert config["memory"] == {
         "enabled": True,
         "store": "memory-stores/store",
-        "declared": None,
         "actor": "alice",
+        "pipelines": False,
+        "bound_store": None,
     }
     assert config["session"]["store"] == "sessions"
     assert config["session"]["actor"] == "alice"
@@ -649,6 +599,19 @@ def test_managed_memory_and_session_routes(monkeypatch):
         ]["data"]["content"]
         == "s2"
     )
+
+
+def test_memory_pipeline_routes(monkeypatch):
+    # Without both stores the pipeline routes refuse before calling the API.
+    unconfigured = _client(monkeypatch)
+    assert unconfigured.get("/api/demo/memory/pipeline").status_code == 503
+    assert unconfigured.post("/api/demo/memory/pipeline/run").status_code == 503
+
+    client = _client(monkeypatch, configured=True, session_id="s1")
+    pipeline = client.get("/api/demo/memory/pipeline").json()
+    assert pipeline["pipeline"]["name"] == "memory-pipelines/p1"
+    assert [run["name"][-1] for run in pipeline["runs"]] == ["7", "6", "5", "4", "3"]
+    assert client.post("/api/demo/memory/pipeline/run").json()["state"] == "RUNNING"
 
 
 def test_open_session_rejects_another_actor(monkeypatch):

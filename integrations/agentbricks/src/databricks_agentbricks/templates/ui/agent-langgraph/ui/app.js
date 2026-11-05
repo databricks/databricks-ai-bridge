@@ -45,12 +45,25 @@ const elements = {
   memoryPane: document.querySelector("#memory-pane"),
   memoryBack: document.querySelector("#memory-back"),
   memoryRefresh: document.querySelector("#memory-refresh"),
+  memorySetup: document.querySelector("#memory-setup"),
+  memoryBrowse: document.querySelector("#memory-browse"),
+  memoryStore: document.querySelector("#memory-store"),
   memoryStoreName: document.querySelector("#memory-store-name"),
-  memoryStoreResource: document.querySelector("#memory-store-resource"),
   memoryActor: document.querySelector("#memory-actor-input"),
   memorySearch: document.querySelector("#memory-search-input"),
   memoryCount: document.querySelector("#memory-count"),
   memoryEntries: document.querySelector("#memory-entries"),
+  memoryTabEntries: document.querySelector("#memory-tab-entries"),
+  memoryTabPipeline: document.querySelector("#memory-tab-pipeline"),
+  memoryEntriesPanel: document.querySelector("#memory-entries-panel"),
+  memoryPipeline: document.querySelector("#memory-pipeline"),
+  memoryPipelineAlert: document.querySelector("#memory-pipeline-alert"),
+  memoryPipelineRun: document.querySelector("#memory-pipeline-run"),
+  memoryPipelineBody: document.querySelector("#memory-pipeline-body"),
+  memoryPipelineConfirm: document.querySelector("#memory-pipeline-confirm"),
+  memoryPipelineConfirmText: document.querySelector("#memory-pipeline-confirm-text"),
+  memoryPipelineCancel: document.querySelector("#memory-pipeline-cancel"),
+  memoryPipelineStart: document.querySelector("#memory-pipeline-start"),
   memoryModal: document.querySelector("#memory-modal"),
   memoryModalTitle: document.querySelector("#memory-modal-title"),
   memoryModalBody: document.querySelector("#memory-modal-body"),
@@ -463,10 +476,29 @@ function initials(name) {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
-function setViewer(name) {
-  const label = name || "Local developer";
-  elements.viewerValue.textContent = label;
-  if (elements.viewerAvatar) elements.viewerAvatar.textContent = initials(label);
+const LAPTOP_ICON = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45L4 16"/></svg>';
+
+// A local run (`agentbricks dev`) looks like a deployment otherwise, so mark it and explain on hover.
+function setViewer(name, { deployed = true, profile = null } = {}) {
+  const chip = elements.viewerValue.closest(".viewer-chip");
+  const tip = chip?.querySelector(".viewer-tip");
+  if (deployed) {
+    const label = name || "Local developer";
+    elements.viewerValue.textContent = label;
+    if (elements.viewerAvatar) elements.viewerAvatar.textContent = initials(label);
+    if (tip) tip.hidden = true;
+    chip?.removeAttribute("tabindex");
+    return;
+  }
+  elements.viewerValue.textContent = name ? `Local run · ${name}` : "Local run";
+  if (elements.viewerAvatar) elements.viewerAvatar.innerHTML = LAPTOP_ICON;
+  if (tip) {
+    const signIn = profile ? `your Databricks profile '${profile}'` : "your default Databricks profile";
+    tip.textContent = `Running on your machine, signed in with ${signIn}.`;
+    tip.hidden = false;
+  }
+  // Focusable so keyboard users can reach the tooltip too.
+  chip?.setAttribute("tabindex", "0");
 }
 
 function formatClock(date = new Date()) {
@@ -780,10 +812,11 @@ function renderMemoryCards(entries, query) {
   elements.memoryCount.textContent = entries.length
     ? query
       ? `${entries.length} matching`
-      : `${entries.length} of ${entries.length} entries`
+      : `${entries.length} ${entries.length === 1 ? "entry" : "entries"}`
     : "";
   if (!entries.length) {
-    memoryMessage(query ? "No entries match your search." : "No memory entries for this actor yet.");
+    if (query) memoryMessage("No entries match your search.");
+    else renderMemoryEmpty();
     return;
   }
   for (const entry of entries) {
@@ -799,29 +832,100 @@ function renderMemoryCards(entries, query) {
     const preview = document.createElement("p");
     preview.className = "memory-entry-preview";
     preview.textContent = extractText(entry.content) || entry.description || "";
+    // The actor is already in the field above, so the foot shows only when the entry changed.
     const foot = document.createElement("div");
     foot.className = "memory-entry-foot";
-    const actor = document.createElement("span");
-    actor.className = "memory-entry-actor";
-    actor.textContent = entry.actor_id || "";
     const time = document.createElement("span");
     time.className = "memory-entry-time";
     time.textContent = prettyDate(entry.update_time || entry.create_time);
-    foot.append(actor, time);
+    foot.append(time);
     card.append(top, preview, foot);
     card.addEventListener("click", () => openMemoryModal(entry));
     elements.memoryEntries.append(card);
   }
 }
 
-async function loadMemory() {
-  if (!state.config?.memory.enabled) {
-    const connection = memoryConnection(state.config);
-    memoryMessage(
-      connection.detail || "Connect a Memory Store to browse entries: agentbricks memory bind <store-name>",
-    );
+// Quote a value for the shell only when it needs it, so commands stay readable.
+function shellWord(value) {
+  return /^[\w@.+\-/:]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function codeText(text) {
+  const code = document.createElement("code");
+  code.textContent = text;
+  return code;
+}
+
+// The centered icon that leads each Memory empty state.
+function memoryEmptyIcon() {
+  const badge = document.createElement("span");
+  badge.className = "memory-empty-icon";
+  badge.setAttribute("aria-hidden", "true");
+  badge.append(
+    iconSvg(
+      "icon",
+      '<rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/>',
+    ),
+  );
+  return badge;
+}
+
+// A connected store with nothing for this actor: say how entries appear, and how to add one.
+function renderMemoryEmpty() {
+  const actor = currentMemoryActor();
+  const empty = document.createElement("div");
+  empty.className = "memory-empty-state";
+  const title = document.createElement("strong");
+  title.className = "memory-setup-title";
+  title.textContent = actor ? `No memories for ${actor} yet` : "No memories yet";
+  const body = document.createElement("p");
+  body.textContent = "The agent saves them as you chat. To add one yourself, run:";
+  const command = [
+    "agentbricks memory entries create",
+    `--store ${shellWord(state.config?.memory.store || "")}`,
+    `--actor-id ${shellWord(actor)}`,
+    "--path /preferences/style.md",
+    '--content "Prefers concise answers with code examples."',
+  ].join(" ");
+  empty.append(memoryEmptyIcon(), title, body, placeholderCommandRow(command));
+  elements.memoryEntries.append(empty);
+}
+
+// No store to browse: say why and give the command that fixes it, instead of controls that can't work.
+function renderMemorySetup() {
+  const bound = state.config?.memory.bound_store;
+  elements.memoryBrowse.hidden = true;
+  elements.memorySetup.hidden = false;
+  const title = document.createElement("strong");
+  title.className = "memory-setup-title";
+  const body = document.createElement("p");
+  if (bound && !state.config.deployed) {
+    title.textContent = `${bound} is bound`;
+    body.append("Memory is off in ", codeText("agentbricks dev"), ", so entries show here after you deploy.");
+    elements.memorySetup.replaceChildren(memoryEmptyIcon(), title, body, placeholderCommandRow("agentbricks deploy"));
     return;
   }
+  title.textContent = "No memory store yet";
+  body.textContent = "Memory lets the agent remember facts and preferences about each user across conversations.";
+  const note = document.createElement("p");
+  note.className = "memory-setup-note";
+  note.append("Run in your project directory, then run ", codeText("agentbricks deploy"), ". It creates the store for you.");
+  elements.memorySetup.replaceChildren(
+    memoryEmptyIcon(),
+    title,
+    body,
+    placeholderCommandRow("agentbricks memory bind agent-memory", "agent-memory"),
+    note,
+  );
+}
+
+async function loadMemory() {
+  if (!state.config?.memory.enabled) {
+    renderMemorySetup();
+    return;
+  }
+  elements.memorySetup.hidden = true;
+  elements.memoryBrowse.hidden = false;
   const query = memoryState.query.trim();
   const actor = currentMemoryActor();
   memoryMessage(query ? "Searching…" : "Loading memory…", "loading");
@@ -851,17 +955,216 @@ async function loadMemory() {
   }
 }
 
+// ---- Memory pipeline (inside the Memory pane) -------------------------------
+
+const PIPELINE_TRIGGERS = { MANUAL_ONLY: "Manual only", SCHEDULED: "Every ~24h" };
+const PIPELINE_RUN_STATES = {
+  RUNNING: ["Running", "degraded"],
+  SUCCEEDED: ["Succeeded", "enabled"],
+  FAILED: ["Failed", "disabled"],
+  CANCELLED: ["Cancelled", ""],
+};
+const PIPELINE_RUN_CONFIRM =
+  "Run the pipeline now? It can rewrite, merge, or delete any memory in this store, including ones the agent saved.";
+const PIPELINE_POLL_MS = 10000;
+const pipelineState = { timer: null, starting: false };
+
+function pipelineText(className, text, tag = "p") {
+  const node = document.createElement(tag);
+  node.className = className;
+  node.textContent = text;
+  return node;
+}
+
+function pipelineCommand(command) {
+  const row = document.createElement("div");
+  row.className = "cap-command";
+  const code = document.createElement("code");
+  code.textContent = command;
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.setAttribute("aria-label", `Copy command: ${command}`);
+  copy.innerHTML =
+    '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+  copy.addEventListener("click", () => void navigator.clipboard.writeText(command).catch(() => {}));
+  row.append(code, copy);
+  return row;
+}
+
+function pipelineSetting(label, value) {
+  const row = document.createElement("div");
+  row.className = "memory-pipeline-setting";
+  row.append(pipelineText("memory-pipeline-key", label, "span"), pipelineText("memory-pipeline-value", value, "span"));
+  return row;
+}
+
+function pipelineRunError(error) {
+  if (!error) return "";
+  return typeof error === "string" ? error : error.message || formatJson(error);
+}
+
+function pipelineRunning(runs) {
+  return runs[0]?.state === "RUNNING";
+}
+
+// "Run now" is off while a run is starting or in progress: a pipeline runs one at a time.
+function updatePipelineButton(pipeline, runs) {
+  const busy = pipelineState.starting || pipelineRunning(runs);
+  elements.memoryPipelineRun.hidden = !pipeline;
+  elements.memoryPipelineRun.disabled = busy || !elements.memoryPipelineConfirm.hidden;
+  elements.memoryPipelineRun.textContent = busy ? "Running…" : "Run now";
+  if (!pipeline || busy) elements.memoryPipelineConfirm.hidden = true;
+}
+
+function setPipelineConfirm(open) {
+  elements.memoryPipelineConfirmText.textContent = PIPELINE_RUN_CONFIRM;
+  elements.memoryPipelineConfirm.hidden = !open;
+  elements.memoryPipelineRun.disabled = open;
+}
+
+function renderPipeline(pipeline, runs, notice = "") {
+  const body = elements.memoryPipelineBody;
+  body.replaceChildren();
+  updatePipelineButton(pipeline, runs);
+  if (notice) body.append(pipelineText("memory-error", notice));
+  if (!pipeline) {
+    const memoryStore = memoryStoreName();
+    const sessionStore = state.config?.session.store || "<session-store>";
+    body.append(
+      pipelineText("memory-field-hint", "No pipeline for this store pair. Create one:"),
+      pipelineCommand(
+        `agentbricks memory pipeline create --memory-store ${memoryStore} --session-store ${sessionStore}`,
+      ),
+    );
+    return;
+  }
+  const policy = pipeline.dreamer_policy || {};
+  const name = pipeline.display_name || String(pipeline.name || "").split("/").pop() || "Memory pipeline";
+  body.append(
+    pipelineText("memory-pipeline-name", `${name} · ${PIPELINE_TRIGGERS[policy.trigger] || "Manual only"}`),
+    pipelineSetting("Model", policy.model || pipeline.model || "Default"),
+  );
+  const instructions = pipelineSetting("Instructions", policy.instructions || "Default");
+  // Long instructions stay clamped to two lines until clicked.
+  instructions.addEventListener("click", () => instructions.classList.toggle("expanded"));
+  body.append(
+    instructions,
+    pipelineText("memory-field-hint", "Edit with agentbricks memory pipeline update. Applies to the next run."),
+    pipelineText("memory-field-label", "Recent runs", "h4"),
+  );
+  if (!runs.length) {
+    body.append(pipelineText("memory-field-hint", "No runs yet."));
+    return;
+  }
+  const list = document.createElement("ul");
+  list.className = "memory-pipeline-runs";
+  for (const run of runs) {
+    const [label, orb] = PIPELINE_RUN_STATES[run.state] || [run.state || "Unknown", ""];
+    const item = document.createElement("li");
+    const status = document.createElement("span");
+    status.className = `status-orb ${orb}`.trim();
+    status.setAttribute("aria-hidden", "true");
+    item.append(
+      status,
+      pipelineText("memory-pipeline-state", label, "span"),
+      pipelineText("memory-entry-time", prettyDateTime(run.create_time), "span"),
+    );
+    const error = pipelineRunError(run.error);
+    if (error) item.append(pipelineText("memory-pipeline-run-error", error));
+    list.append(item);
+  }
+  body.append(list);
+}
+
+// Entries and Pipeline share the Memory pane as tabs; Entries is selected each time the pane opens.
+function selectMemoryTab(name, { focus = false } = {}) {
+  const tabs = {
+    entries: [elements.memoryTabEntries, elements.memoryEntriesPanel],
+    pipeline: [elements.memoryTabPipeline, elements.memoryPipeline],
+  };
+  for (const [key, [tab, panel]] of Object.entries(tabs)) {
+    const on = key === name;
+    tab.classList.toggle("active", on);
+    tab.setAttribute("aria-selected", String(on));
+    tab.tabIndex = on ? 0 : -1;
+    panel.hidden = !on;
+    if (on && focus) tab.focus();
+  }
+  if (name !== "pipeline") setPipelineConfirm(false);
+}
+
+// A dot on the Pipeline tab when the latest run failed, so it isn't missed from the Entries tab.
+function setPipelineAlert(failed) {
+  elements.memoryPipelineAlert.hidden = !failed;
+}
+
+async function loadPipeline(notice = "") {
+  window.clearTimeout(pipelineState.timer);
+  if (!state.config?.memory.pipelines) {
+    // Never call the pipeline routes here: they need a deployed app with both stores bound.
+    setPipelineAlert(false);
+    elements.memoryPipelineRun.hidden = true;
+    elements.memoryPipelineBody.replaceChildren(
+      pipelineText("memory-field-hint", "Memory pipelines need a deployed app with sessions and memory bound."),
+    );
+    return;
+  }
+  try {
+    const response = await fetch(demoUrl("/api/demo/memory/pipeline"), { cache: "no-store" });
+    const { pipeline, runs = [] } = await jsonResponse(response);
+    renderPipeline(pipeline, runs, notice);
+    setPipelineAlert(runs[0]?.state === "FAILED");
+    addEvent("memory.pipeline.get", { pipeline: pipeline?.name || null, runs: runs.length, status: runs[0]?.state });
+    // Refresh while a run is in progress and the pane is open.
+    if (pipelineRunning(runs) && !elements.memoryPane.hidden) {
+      window.clearTimeout(pipelineState.timer);
+      pipelineState.timer = window.setTimeout(() => void loadPipeline(), PIPELINE_POLL_MS);
+    }
+  } catch (error) {
+    setPipelineAlert(false);
+    elements.memoryPipelineRun.hidden = true;
+    elements.memoryPipelineConfirm.hidden = true;
+    elements.memoryPipelineBody.replaceChildren(
+      pipelineText("memory-error", error instanceof Error ? error.message : String(error)),
+    );
+    addEvent("memory.pipeline.error", { message: String(error) });
+  }
+}
+
+// Called from the confirm's "Run" button: "Run now" only opens the warning.
+async function runPipeline() {
+  elements.memoryPipelineConfirm.hidden = true;
+  pipelineState.starting = true;
+  updatePipelineButton(true, []);
+  let notice = "";
+  try {
+    const response = await fetch(demoUrl("/api/demo/memory/pipeline/run"), { method: "POST" });
+    const run = await jsonResponse(response);
+    addEvent("memory.pipeline.run", { run_id: run.name, status: run.state });
+  } catch (error) {
+    notice = error instanceof Error ? error.message : String(error);
+    addEvent("memory.pipeline.error", { message: notice });
+  } finally {
+    pipelineState.starting = false;
+  }
+  await loadPipeline(notice);
+}
+
 function openMemoryPane() {
   elements.leftCard.classList.add("memory-open");
   elements.capabilitiesBlock.hidden = true;
   elements.memoryPane.hidden = false;
   elements.memoryStoreName.textContent = memoryStoreName();
-  elements.memoryStoreResource.textContent = state.config?.memory.store || "";
+  elements.memoryStore.title = state.config?.memory.store || "";
   if (!elements.memoryActor.value) elements.memoryActor.value = state.config?.memory.actor || "";
+  selectMemoryTab("entries");
   void loadMemory();
+  void loadPipeline();
 }
 
 function closeMemoryPane() {
+  window.clearTimeout(pipelineState.timer);
+  setPipelineConfirm(false);
   elements.leftCard.classList.remove("memory-open");
   elements.memoryPane.hidden = true;
   elements.capabilitiesBlock.hidden = false;
@@ -882,22 +1185,38 @@ function closeMemoryModal() {
 
 // ---- Tools pane ------------------------------------------------------------
 
-function toolsSection(title) {
+// A section heading with its item count, then the grouped card its rows go in.
+function toolsSection(title, count, note) {
+  const head = document.createElement("div");
+  head.className = "tools-section-head";
   const heading = document.createElement("h3");
   heading.className = "tools-heading";
   heading.textContent = title;
-  elements.toolsBody.append(heading);
+  head.append(heading);
+  if (count) {
+    const badge = document.createElement("span");
+    badge.className = "tools-count";
+    badge.textContent = String(count);
+    head.append(badge);
+  }
+  elements.toolsBody.append(head);
+  if (note) elements.toolsBody.append(note);
+  const group = document.createElement("div");
+  group.className = "tools-group";
+  elements.toolsBody.append(group);
+  return group;
 }
 
-function toolRow(badge, name, detail) {
+function toolsEmpty(text) {
+  const empty = document.createElement("div");
+  empty.className = "tools-empty";
+  empty.textContent = text;
+  return empty;
+}
+
+function toolRow(name, detail) {
   const row = document.createElement("div");
   row.className = "tool-row";
-  if (badge) {
-    const label = document.createElement("span");
-    label.className = "tool-badge";
-    label.textContent = badge;
-    row.append(label);
-  }
   const id = document.createElement("span");
   id.className = "tool-name";
   id.textContent = name;
@@ -905,9 +1224,46 @@ function toolRow(badge, name, detail) {
   if (detail) {
     const source = document.createElement("span");
     source.className = "tool-detail";
+    // Long descriptions clamp to two lines; the full text stays in the tooltip.
+    source.title = detail;
     source.textContent = detail;
     row.append(source);
   }
+  return row;
+}
+
+// A copyable command that wraps only between words, never at a hyphen inside one (`uc-function`),
+// with the part to replace (if any) set off.
+function placeholderCommandRow(command, placeholder) {
+  const row = commandRow(command);
+  const code = row.children[0];
+  code.textContent = "";
+  command.split(" ").forEach((word, index) => {
+    if (index) code.append(" ");
+    const token = document.createElement("span");
+    token.className = "cap-token";
+    const at = placeholder ? word.indexOf(placeholder) : -1;
+    if (at >= 0) {
+      const part = document.createElement("em");
+      part.className = "cap-placeholder";
+      part.textContent = placeholder;
+      token.append(word.slice(0, at), part, word.slice(at + placeholder.length));
+    } else {
+      token.textContent = word;
+    }
+    code.append(token);
+  });
+  return row;
+}
+
+// An add recipe: its label, then the command with the part to replace (if any) set off.
+function addCommandRow(entry) {
+  const row = document.createElement("div");
+  row.className = "tool-row tool-add";
+  const label = document.createElement("span");
+  label.className = "cap-command-label";
+  label.textContent = entry.label;
+  row.append(label, placeholderCommandRow(entry.command, entry.placeholder));
   return row;
 }
 
@@ -934,39 +1290,29 @@ function renderTools(payload) {
     elements.toolsBody.append(message);
   }
 
-  toolsSection("Connected");
-  if (!connected.length) {
-    const empty = document.createElement("div");
-    empty.className = "tools-empty";
-    empty.textContent = "No managed tools connected yet.";
-    elements.toolsBody.append(empty);
-  }
-  for (const tool of connected) elements.toolsBody.append(toolRow(tool.label, tool.id, tool.source));
+  const connectedGroup = toolsSection("Connected", connected.length);
+  if (!connected.length) connectedGroup.append(toolsEmpty("No managed tools yet. Add one below."));
+  for (const tool of connected) connectedGroup.append(toolRow(tool.id, tool.source));
 
-  toolsSection("Defined in code");
-  if (!local.length) {
-    const empty = document.createElement("div");
-    empty.className = "tools-empty";
-    empty.textContent = "No Python tools found in agent/tools.";
-    elements.toolsBody.append(empty);
-  }
-  for (const tool of local) elements.toolsBody.append(toolRow(null, tool.name, tool.description));
+  const from = document.createElement("p");
+  from.className = "tools-note";
+  const folder = document.createElement("code");
+  folder.textContent = "agent/tools/";
+  from.append("From ", folder);
+  const localGroup = toolsSection("Defined in code", local.length, from);
+  if (!local.length) localGroup.append(toolsEmpty("No Python tools found in agent/tools."));
+  for (const tool of local) localGroup.append(toolRow(tool.name, tool.description));
 
-  toolsSection("Add a tool");
-  for (const entry of payload?.add_commands || []) {
-    const label = document.createElement("span");
-    label.className = "cap-command-label";
-    label.textContent = entry.label;
-    elements.toolsBody.append(label, commandRow(entry.command));
-  }
+  // Where to run the commands comes before them, not after.
   const hint = document.createElement("p");
-  hint.className = "tools-hint";
+  hint.className = "tools-note tools-hint";
   const dev = document.createElement("code");
   dev.textContent = "agentbricks dev";
   const deploy = document.createElement("code");
   deploy.textContent = "agentbricks deploy";
   hint.append("Run in your project directory, then restart ", dev, " or run ", deploy, ".");
-  elements.toolsBody.append(hint);
+  const addGroup = toolsSection("Add a tool", 0, hint);
+  for (const entry of payload?.add_commands || []) addGroup.append(addCommandRow(entry));
 }
 
 async function loadTools() {
@@ -1408,51 +1754,6 @@ async function loadModels() {
   renderModels(await jsonResponse(response));
 }
 
-// ---- Store connection state ------------------------------------------------
-// `agentbricks dev` strips AGENT_MEMORY_STORE / AGENT_SESSION_STORE, so a store that agent.toml
-// declares (for example after `agentbricks memory bind`) is not connected locally until deploy.
-// `info` is config.memory / config.session: `enabled`/`managed` means connected, `declared` is the
-// store name agent.toml declares (or null).
-const DEV_STORES_NOTE = "Memory and session stores are off by default in `agentbricks dev`.";
-
-function storeConnection(kind, info, deployed, bindCommand, envVar) {
-  if (info.enabled || info.managed) return { phase: "connected", detail: null, command: null };
-  const declared = info.declared;
-  if (!declared) return { phase: "unbound", detail: null, command: bindCommand };
-  if (deployed) {
-    return {
-      phase: "redeploy",
-      detail: `The ${kind} store "${declared}" is declared in agent.toml but this deployment is not connected to it. Redeploy to connect it.`,
-      command: "agentbricks deploy",
-    };
-  }
-  return {
-    phase: "on-deploy",
-    detail: `${DEV_STORES_NOTE} The ${kind} store "${declared}" declared in agent.toml connects after \`agentbricks deploy\`; to use it locally, set ${envVar} in .env.`,
-    command: null,
-  };
-}
-
-function memoryConnection(config) {
-  return storeConnection("memory", config.memory, Boolean(config.deployed), "agentbricks memory bind <store-name>", "AGENT_MEMORY_STORE");
-}
-
-function sessionConnection(config) {
-  return storeConnection("session", config.session, Boolean(config.deployed), "agentbricks sessions bind <store-name>", "AGENT_SESSION_STORE");
-}
-
-// The Memory orb: connected, "degraded" while a declared store waits for deploy, else off.
-function memoryCapabilityState(connection) {
-  if (connection.phase === "connected") return true;
-  return connection.phase === "on-deploy" ? "degraded" : false;
-}
-
-// The Memory card's one-line label.
-function memoryModeLabel(config, connection) {
-  if (connection.phase === "connected") return `Connected · actor ${config.memory.actor}`;
-  return connection.phase === "on-deploy" ? "Connects on deploy" : "Not connected";
-}
-
 async function loadConfig() {
   try {
     const response = await fetch(demoUrl("/api/ui/config"), { cache: "no-store" });
@@ -1461,30 +1762,38 @@ async function loadConfig() {
     state.instanceId = config.instance_id;
     renderModels(config.models);
     void loadModels().catch((error) => addEvent("models.error", { message: String(error) }));
-    setViewer(config.viewer);
+    setViewer(config.viewer, { deployed: config.deployed, profile: config.profile });
     elements.sessionMode.textContent = config.session.mode;
-    const sessionConnectionState = sessionConnection(config);
-    const memoryConnectionState = memoryConnection(config);
-    elements.memoryMode.textContent = memoryModeLabel(config, memoryConnectionState);
-    if (memoryConnectionState.detail) elements.memoryMode.setAttribute("title", memoryConnectionState.detail);
-    else elements.memoryMode.removeAttribute("title");
+    // Memory is off under `agentbricks dev`, so a bound store reads as active after deploy, not missing.
+    const memoryState = config.memory.enabled
+      ? "connected"
+      : config.memory.bound_store && !config.deployed
+        ? "on-deploy"
+        : "off";
+    elements.memoryMode.textContent = {
+      connected: "Connected",
+      "on-deploy": "Bound · active after deploy",
+      off: "Not connected",
+    }[memoryState];
     setCapability(
       elements.sessionStatus,
       config.session.managed ? true : config.session.history ? "degraded" : false,
       config.session.managed
         ? `Connected to Session Store "${config.session.store}" for actor ${config.session.actor}. State is durable and shareable.`
-        : ["Session state is kept in process and resets when the app restarts.", sessionConnectionState.detail]
-            .filter(Boolean)
-            .join(" "),
-      sessionConnectionState.command,
+        : "Session state is kept in process and resets when the app restarts.",
+      config.session.managed ? null : "agentbricks sessions bind <store-name>",
     );
     setCapability(
       elements.memoryStatus,
-      memoryCapabilityState(memoryConnectionState),
-      config.memory.enabled
-        ? `Connected to ${config.memory.store} for actor ${config.memory.actor}.`
-        : ["No long-term memory is connected.", memoryConnectionState.detail].filter(Boolean).join(" "),
-      memoryConnectionState.command,
+      memoryState === "connected" ? true : memoryState === "on-deploy" ? "degraded" : false,
+      {
+        connected: `Connected to ${config.memory.store} for actor ${config.memory.actor}.`,
+        "on-deploy": `Memory store "${config.memory.bound_store}" is bound. Memory is off in agentbricks dev and connects when you deploy.`,
+        off: "No long-term memory is connected.",
+      }[memoryState],
+      { connected: null, "on-deploy": "agentbricks deploy", off: "agentbricks memory bind <store-name>" }[
+        memoryState
+      ],
     );
     elements.tracingMode.textContent = config.tracing?.enabled ? "Connected" : "Not configured";
     setCapability(
@@ -1510,7 +1819,10 @@ async function loadConfig() {
     addEvent("runtime.config", config);
     void refreshSessionView({ hydrateChat: true });
     // The memory pane loads lazily when opened; refresh it if it is already open.
-    if (!elements.memoryPane.hidden) void loadMemory();
+    if (!elements.memoryPane.hidden) {
+      void loadMemory();
+      void loadPipeline();
+    }
     // Tools re-read agent.toml on every fetch, so refreshing picks up `agentbricks tools add/remove`.
     void loadTools();
     return config;
@@ -1579,6 +1891,54 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") showModeTip(null);
 });
 
+// The local-run viewer tip follows the same rule: JS owns visibility, and it never shows with a mode tip.
+const viewerChip = elements.viewerValue.closest(".viewer-chip");
+
+function showViewerTip(on) {
+  const tip = viewerChip?.querySelector(".viewer-tip");
+  viewerChip?.classList.toggle("tip-visible", Boolean(on && tip && !tip.hidden));
+  if (on) showModeTip(null);
+}
+
+viewerChip?.addEventListener("pointerenter", (event) => {
+  if (event.pointerType !== "touch") showViewerTip(true);
+});
+viewerChip?.addEventListener("pointerleave", (event) => {
+  if (event.pointerType !== "touch") showViewerTip(false);
+});
+viewerChip?.addEventListener("focus", () => {
+  if (viewerChip.matches(":focus-visible") || touchOnly.matches) showViewerTip(true);
+});
+viewerChip?.addEventListener("blur", () => showViewerTip(false));
+modeOptions.forEach((option) => {
+  option.addEventListener("pointerenter", () => showViewerTip(false));
+  option.querySelector(".mode-button").addEventListener("focus", () => showViewerTip(false));
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") showViewerTip(false);
+});
+
+// The actor field's icon explains what an actor is, on hover or keyboard focus.
+const memoryActorIcon = document.querySelector(".memory-actor-icon");
+
+function showMemoryActorTip(on) {
+  memoryActorIcon?.classList.toggle("tip-visible", Boolean(on));
+}
+
+memoryActorIcon?.addEventListener("pointerenter", (event) => {
+  if (event.pointerType !== "touch") showMemoryActorTip(true);
+});
+memoryActorIcon?.addEventListener("pointerleave", (event) => {
+  if (event.pointerType !== "touch") showMemoryActorTip(false);
+});
+memoryActorIcon?.addEventListener("focus", () => {
+  if (memoryActorIcon.matches(":focus-visible") || touchOnly.matches) showMemoryActorTip(true);
+});
+memoryActorIcon?.addEventListener("blur", () => showMemoryActorTip(false));
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") showMemoryActorTip(false);
+});
+
 elements.modelSelect.addEventListener("change", () => {
   state.model = elements.modelSelect.value;
   sizeModelSelect();
@@ -1630,7 +1990,31 @@ document.querySelectorAll(".capability").forEach((button) => {
 
 // Memory pane controls.
 elements.memoryBack.addEventListener("click", closeMemoryPane);
-elements.memoryRefresh.addEventListener("click", () => loadMemory());
+elements.memoryRefresh.addEventListener("click", () => {
+  void loadMemory();
+  void loadPipeline();
+});
+elements.memoryTabEntries.addEventListener("click", () => selectMemoryTab("entries"));
+elements.memoryTabPipeline.addEventListener("click", () => selectMemoryTab("pipeline"));
+// Arrow keys, Home and End move between the tabs (the WAI-ARIA tabs pattern).
+for (const tab of [elements.memoryTabEntries, elements.memoryTabPipeline]) {
+  tab.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const next =
+      event.key === "Home"
+        ? "entries"
+        : event.key === "End"
+          ? "pipeline"
+          : tab === elements.memoryTabEntries
+            ? "pipeline"
+            : "entries";
+    selectMemoryTab(next, { focus: true });
+  });
+}
+elements.memoryPipelineRun.addEventListener("click", () => setPipelineConfirm(true));
+elements.memoryPipelineCancel.addEventListener("click", () => setPipelineConfirm(false));
+elements.memoryPipelineStart.addEventListener("click", () => void runPipeline());
 elements.memoryActor.addEventListener("input", () => {
   window.clearTimeout(memoryState.searchTimer);
   memoryState.searchTimer = window.setTimeout(() => void loadMemory(), 300);

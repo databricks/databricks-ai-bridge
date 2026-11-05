@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import uuid
 from functools import lru_cache
 from pathlib import Path
@@ -22,6 +23,10 @@ from databricks_agentkit.runtime.store import runtime_store_is_persistent_enviro
 _UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
 _INSTANCE_ID = uuid.uuid4().hex[:12]  # identifies this process in the UI
 _AGENTS_API = "/api/2.0/agents"
+# Memory pipelines have no store filter, so the pane pages through the list up to this cap.
+_PIPELINE_LIST_PAGES = 10
+_PIPELINE_RUNS_SHOWN = 5
+_PIPELINES_UNAVAILABLE = "Memory pipelines need a deployed app with sessions and memory bound."
 _MESSAGE_ROLES = {
     "ai",
     "assistant",
@@ -52,6 +57,9 @@ class SessionItemsRequest(BaseModel):
 
 
 _USER_HEADERS = ("x-forwarded-email", "x-forwarded-user")
+# Set by `agentbricks dev` (display only; memory stays off locally). Spelled out rather than imported
+# from databricks_agentkit so the chat app still loads against an older SDK, which just never sets it.
+_DEV_BOUND_MEMORY_STORE_ENV = "AGENTBRICKS_DEV_BOUND_MEMORY_STORE"
 
 
 def _memory_store() -> str:
@@ -66,36 +74,6 @@ def _session_store() -> str:
     from databricks_agentkit.runtime.tool_manifest import resolve_session_store
 
     return (resolve_session_store() or "").strip()
-
-
-def _declared_store(table: str) -> str | None:
-    """The store name agent.toml declares under ``[<table>]`` (memory_store / session_store).
-
-    Independent of ``AGENT_*_STORE``: ``agentbricks dev`` leaves the env unset, so a bound store is
-    declared but not connected locally. Best-effort, display only: a missing or unreadable
-    agent.toml, or a missing/malformed table, means "nothing declared" and never raises.
-    """
-    try:
-        # tomllib is re-exported so Python 3.10 environments fall back to tomli like agentkit does.
-        from databricks_agentkit.runtime.tool_manifest import project_root, tomllib
-
-        with (project_root() / "agent.toml").open("rb") as manifest:
-            section = tomllib.load(manifest).get(table)
-        name = section.get("name") if isinstance(section, dict) else None
-    except Exception:
-        return None
-    return (name.strip() or None) if isinstance(name, str) else None
-
-
-def _unconnected_store_detail(kind: str, table: str, bind_command: str, env_var: str) -> str:
-    declared = _declared_store(table)
-    if not declared:
-        return f"No {kind} store configured. Run `{bind_command} <store>`."
-    return (
-        f"The {kind} store '{declared}' is declared in agent.toml but not connected: {kind} "
-        "stores are off by default under `agentbricks dev`. It connects after "
-        f"`agentbricks deploy`; to use it locally, set {env_var} in .env."
-    )
 
 
 def _request_actor(request: Request) -> str:
@@ -214,7 +192,8 @@ _TOOL_LABELS = {
     "sandbox": "Sandbox",
 }
 # The `agentbricks tools add` recipes the Tools pane offers to copy (the ones
-# `agentbricks tools list` prints), plus the command that discovers more MCP services.
+# `agentbricks tools list` prints), plus the command that discovers more MCP services. `placeholder`
+# marks the part of a command the user replaces, so the pane can set it off.
 _ADD_COMMANDS = (
     {
         "kind": "mcp",
@@ -225,12 +204,14 @@ _ADD_COMMANDS = (
         "kind": "uc-function",
         "label": "Unity Catalog function",
         "command": "agentbricks tools add uc-function catalog.schema.function",
+        "placeholder": "catalog.schema.function",
     },
     {"kind": "genie-one", "label": "Genie One", "command": "agentbricks tools add genie-one"},
     {
         "kind": "genie-agent",
         "label": "Genie Agent",
         "command": "agentbricks tools add genie-agent SPACE_ID",
+        "placeholder": "SPACE_ID",
     },
     {
         "kind": "sandbox",
@@ -406,10 +387,65 @@ class _ManagedStateClient:
             query={"order_by": "create_time asc", "page_size": 100},
         )
 
+    def find_memory_pipeline(self) -> dict | None:
+        """The pipeline for the bound session store + memory store pair (at most one exists)."""
+        token = None
+        for _ in range(_PIPELINE_LIST_PAGES):
+            query: dict[str, Any] = {"page_size": 100}
+            if token:
+                query["page_token"] = token
+            result = self._do("GET", f"{_AGENTS_API}/memory-pipelines", query=query)
+            for pipeline in result.get("memory_pipelines", []):
+                if isinstance(pipeline, dict) and _is_bound_pipeline(pipeline):
+                    return pipeline
+            token = result.get("next_page_token")
+            if not token:
+                break
+        return None
+
+    def list_memory_pipeline_runs(self, pipeline: str) -> dict:
+        return self._do(
+            "GET",
+            f"{_AGENTS_API}/{_pipeline_path(pipeline)}/runs",
+            query={"page_size": _PIPELINE_RUNS_SHOWN},
+        )
+
+    def run_memory_pipeline(self, pipeline: str) -> dict:
+        return self._do("POST", f"{_AGENTS_API}/{_pipeline_path(pipeline)}/run", body={})
+
+
+def _store_id(name: Any) -> str:
+    # Pipelines name their stores as resources ("memory-stores/<id>"); compare the trailing id.
+    return str(name or "").strip("/").split("/")[-1]
+
+
+def _is_bound_pipeline(pipeline: dict[str, Any]) -> bool:
+    return _store_id(pipeline.get("memory_store")) == _store_id(_memory_store()) and _store_id(
+        pipeline.get("session_store")
+    ) == _store_id(_session_store())
+
+
+def _pipeline_path(name: str) -> str:
+    if not re.fullmatch(r"memory-pipelines/[^/]+", name):
+        raise ValueError(f"Invalid memory pipeline name: {name!r}")
+    return name
+
+
+def _recent_runs(result: dict[str, Any]) -> list[dict[str, Any]]:
+    runs = [run for run in result.get("pipeline_runs", []) if isinstance(run, dict)]
+    runs.sort(key=lambda run: str(run.get("create_time") or ""), reverse=True)
+    return runs[:_PIPELINE_RUNS_SHOWN]
+
 
 @lru_cache(maxsize=1)
 def _state_client() -> _ManagedStateClient:
     return _ManagedStateClient()
+
+
+def _api_error(exc: Exception) -> HTTPException:
+    code = getattr(exc, "error_code", None)
+    detail = f"{code}: {exc}" if code else str(exc)
+    return HTTPException(status_code=502, detail=detail)
 
 
 async def _managed_call(operation, *args):
@@ -418,18 +454,14 @@ async def _managed_call(operation, *args):
     except HTTPException:
         raise
     except Exception as exc:
-        code = getattr(exc, "error_code", None)
-        detail = f"{code}: {exc}" if code else str(exc)
-        raise HTTPException(status_code=502, detail=detail) from exc
+        raise _api_error(exc) from exc
 
 
 def _require_memory() -> None:
     if not _memory_store():
         raise HTTPException(
             status_code=503,
-            detail=_unconnected_store_detail(
-                "memory", "memory_store", "agentbricks memory bind", "AGENT_MEMORY_STORE"
-            ),
+            detail="No memory store configured. Run `agentbricks memory bind <store>`.",
         )
 
 
@@ -437,9 +469,30 @@ def _require_session() -> None:
     if not _session_store():
         raise HTTPException(
             status_code=503,
-            detail=_unconnected_store_detail(
-                "session", "session_store", "agentbricks sessions bind", "AGENT_SESSION_STORE"
-            ),
+            detail="No session store configured. Run `agentbricks sessions bind <store>`.",
+        )
+
+
+def _require_pipeline_stores() -> None:
+    # A pipeline reads one session store and writes one memory store, so it needs both bound.
+    if not (_memory_store() and _session_store()):
+        raise HTTPException(status_code=503, detail=_PIPELINES_UNAVAILABLE)
+
+
+async def _run_memory_pipeline(pipeline: str) -> dict | JSONResponse:
+    try:
+        return await asyncio.to_thread(_state_client().run_memory_pipeline, pipeline)
+    except Exception as exc:
+        if str(getattr(exc, "error_code", "")).upper() != "ABORTED":
+            raise _api_error(exc) from exc
+        # One run at a time: ABORTED names the run already in progress.
+        active = re.search(r"memory-pipelines/[^/\s]+/runs/[0-9]+", str(exc))
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": "A run is already in progress.",
+                "active_run": active.group(0) if active else None,
+            },
         )
 
 
@@ -504,8 +557,11 @@ def install_ui(app: FastAPI) -> None:
         return {
             "session_id": _request_session_id(request),
             "instance_id": _INSTANCE_ID,
-            "viewer": actor if actor != "agent" else "Local developer",
+            # None when there is no signed-in identity; the page then shows a generic label.
+            "viewer": actor if actor != "agent" else None,
             "deployed": _is_deployed(),
+            # The Databricks profile the agent signs in with locally (same setting it reads).
+            "profile": os.getenv("DATABRICKS_CONFIG_PROFILE") or None,
             "models": {"default": default_model, "available": [default_model]},
             "streaming": {
                 "enabled": True,
@@ -524,14 +580,16 @@ def install_ui(app: FastAPI) -> None:
                 "history": True,
                 "mode": "Managed Session Store" if session_store else "In-process session",
                 "store": session_store or None,
-                "declared": _declared_store("session_store"),
                 "actor": actor,
             },
             "memory": {
                 "enabled": bool(memory_store),
                 "store": f"memory-stores/{memory_store}" if memory_store else None,
-                "declared": _declared_store("memory_store"),
                 "actor": actor,
+                # Memory is off under `agentbricks dev`, so pipelines need a deployed app.
+                "pipelines": _is_deployed() and bool(memory_store and session_store),
+                # Under `agentbricks dev`, the store bound in agent.toml that connects on deploy.
+                "bound_store": os.getenv(_DEV_BOUND_MEMORY_STORE_ENV) or None,
             },
             "tracing": _tracing(),
         }
@@ -576,6 +634,23 @@ def install_ui(app: FastAPI) -> None:
         return await _managed_call(
             _state_client().search_memory_entries, payload.actor or _request_actor(request), payload
         )
+
+    @app.get("/api/demo/memory/pipeline", include_in_schema=False)
+    async def get_memory_pipeline() -> dict:
+        _require_pipeline_stores()
+        pipeline = await _managed_call(_state_client().find_memory_pipeline)
+        if pipeline is None:
+            return {"pipeline": None, "runs": []}
+        runs = await _managed_call(_state_client().list_memory_pipeline_runs, pipeline["name"])
+        return {"pipeline": pipeline, "runs": _recent_runs(runs)}
+
+    @app.post("/api/demo/memory/pipeline/run", include_in_schema=False, response_model=None)
+    async def run_memory_pipeline() -> dict | JSONResponse:
+        _require_pipeline_stores()
+        pipeline = await _managed_call(_state_client().find_memory_pipeline)
+        if pipeline is None:
+            raise HTTPException(status_code=404, detail="No pipeline for this store pair.")
+        return await _run_memory_pipeline(pipeline["name"])
 
     @app.post("/api/demo/sessions", include_in_schema=False)
     async def ensure_session(request: Request) -> dict:

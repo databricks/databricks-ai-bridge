@@ -165,6 +165,12 @@ agentbricks deploy              # deploy to Databricks as agent-bricks-my-agent
 `agentbricks dev` runs the agent locally on `http://localhost:8000`, wrapping the Databricks Apps
 local runtime so local behavior matches a deployment.
 
+Memory and session stores are off by default in `agentbricks dev`, even when a store is bound in
+`agent.toml`: the chat app shows "Not connected" for memory, and conversation state stays in
+process. They connect after `agentbricks deploy`. To use real stores locally, set
+`AGENT_MEMORY_STORE` (the Store ID) and `AGENT_SESSION_STORE` (the store name) in the project's
+`.env`.
+
 `agentbricks init` records the deployment name in `agent.toml`, so `agentbricks deploy` from the
 project directory deploys a Databricks App named `agent-bricks-my-agent`, provisions the
 stores declared in `agent.toml`, and grants the app's service principal access to the stores and
@@ -627,8 +633,9 @@ it in `recall` and `list_memories`. `memory_tools` resolves the store from the `
 binding, carried to the runtime by the `AGENT_MEMORY_STORE` env var that `agentbricks deploy`
 injects, and returns no tools when no store is set, so the agent runs unchanged.
 That "no store set" path is also how it runs under `agentbricks dev`, which runs locally: memory is off
-there (the store is provisioned and used only at deploy). The OpenAI Agents adapter exposes the same
-tools as `databricks_agentkit.openai.memory_tools(actor)`:
+by default there (the store is provisioned and used only at deploy), even when a store is bound in
+`agent.toml`. Setting `AGENT_MEMORY_STORE` in the project's `.env` uses that store locally. The
+OpenAI Agents adapter exposes the same tools as `databricks_agentkit.openai.memory_tools(actor)`:
 
 ```python
 from databricks_agentkit.langgraph import memory_tools
@@ -711,8 +718,8 @@ trusted application context. The chat app sends the signed-in user; HTTP clients
 `agentbricks endpoint invoke`, have to send it themselves. With a request-user (`auth = "user"`) tool
 bound, the runtime also namespaces a supplied `actor` to the signed-in user.
 
-Memory is off under `agentbricks dev`, so try this against a deployed agent: two conversations, one
-actor.
+Memory is off by default under `agentbricks dev`, so try this against a deployed agent: two
+conversations, one actor.
 
 ```sh
 ask() { agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent --path /api/invocations \
@@ -720,6 +727,37 @@ ask() { agentbricks --profile <profile> endpoint invoke agent-bricks-my-agent --
 ask "Remember that I prefer answers as bullet points."  # conversation 1 saves a fact
 ask "How do I like my answers formatted?"                # conversation 2 recalls it
 ```
+
+### Seeding and using memory from the CLI
+
+There are two ways to get a memory store behind a deployed agent. Both end with
+`agentbricks deploy`, which creates the store if it doesn't exist and grants the app access to it.
+
+**Start with an empty store.** Bind the store name, then deploy:
+
+```sh
+agentbricks memory bind support-agent-memory
+agentbricks deploy my-agent
+```
+
+**Start with memories already in the store.** Create the store, add entries, then bind and deploy:
+
+```sh
+agentbricks memory stores create --name support-agent-memory     # prints a Store ID
+agentbricks memory entries create --store <Store ID> \
+  --actor-id you@example.com \
+  --path /preferences/style.md \
+  --content "Prefers Python and concise answers with code examples."
+agentbricks memory bind support-agent-memory
+agentbricks deploy my-agent
+```
+
+`--path` is the entry's key inside the store, written like a file path; it isn't a file on your
+machine. `--actor-id` is the user the memory belongs to. In the deployed chat app, the actor is the
+signed-in user's email, so seed entries under your own email to see them recalled. `--store` takes
+the Store ID that `memory stores create` (or `memory stores list`) prints, while `bind` takes the
+store name. Check what you seeded with
+`agentbricks memory entries list --store <Store ID> --actor-id you@example.com`.
 
 ### Declaring and provisioning stores
 
@@ -741,6 +779,13 @@ agentbricks memory bind support-agent-memory
 # deploy creates any declared-but-missing store and grants the app's service principal access.
 agentbricks deploy my-agent
 ```
+
+A store that already exists is reused as is: `deploy` doesn't create a second one or change who else
+can access it. Its only permission change is a WRITE grant for the app's service principal, which
+needs you to be the store's creator or a workspace admin; if you aren't, the deploy still succeeds
+and reports the missing grant. In a shared workspace, give teammates access with
+`agentbricks memory stores permissions grant` (or `agentbricks sessions stores permissions grant`);
+see [Managing store permissions](#managing-store-permissions).
 
 Memory and session stores are independent resources: deleting one never affects the other.
 For projects with `agent.toml`, unbinding either store removes its declaration; the next deploy
@@ -1494,7 +1539,8 @@ agentbricks --profile <profile> deploy agent-bricks-agent-demo --source .
 (`bind` declares the store name in `agent.toml`; `agentbricks deploy` creates any declared-but-missing
 store and grants the app's service principal access to it. The memory store id flows to the runtime
 via the `AGENT_MEMORY_STORE` env var that `deploy` injects; `agentbricks dev` runs locally with memory off
-and does not inject it. The id is not persisted in `agent.toml`.)
+and does not inject it, so the chat app shows "Not connected" for memory until you deploy. The id is
+not persisted in `agent.toml`.)
 
 The chat UI generates a stable application session UUID in browser local storage, sends it as the
 invocation's top-level `session_id`, sends the signed-in user as `input.actor`, and creates a fresh
