@@ -5,7 +5,7 @@ run-name: "AgentBricksReviewer #${{ github.event.pull_request.number || github.e
 # and posts its review as a PR comment. The coordinator hands review lenses to
 # Claude and GPT sub-agents through a Databricks AI Gateway, then verifies,
 # merges, and scores their findings. The process and rules are in
-# .github/agentbricks-reviewer/rules.md.
+# .claude/skills/agentbricks-review/SKILL.md, which also runs as a local skill.
 #
 # Triggers:
 #   - pull_request_target opened/reopened/ready_for_review, for non-draft PRs
@@ -422,7 +422,10 @@ jobs:
           python3 - <<'PYEOF'
           import hashlib, json, os, pathlib
 
-          rules = pathlib.Path(os.environ["GITHUB_WORKSPACE"], ".github/agentbricks-reviewer/rules.md").read_text()
+          rules = pathlib.Path(os.environ["GITHUB_WORKSPACE"], ".claude/skills/agentbricks-review/SKILL.md").read_text()
+          # Drop the skill's YAML front matter; the prompt needs only the body.
+          if rules.startswith("---\n"):
+              rules = rules.split("\n---\n", 1)[1]
           meta = json.loads(pathlib.Path("/tmp/pr_meta.json").read_text())
           diff_sha256 = hashlib.sha256(pathlib.Path("/tmp/pr_diff.txt").read_bytes()).hexdigest()
           stats = json.loads(pathlib.Path("/tmp/pr_diff_summary.json").read_text())
@@ -534,7 +537,7 @@ jobs:
 
       - name: Validate review and add diff statistics
         if: steps.reviewer.outputs.review_ready == 'true'
-        # Fails if the Summary/Changes/Tests/Scope contract in rules.md is not met.
+        # Fails if the Summary/Changes/Tests/Scope contract in the agentbricks-review skill is not met.
         run: python3 "$OMNIGENT_DIR/.github/scripts/polly-review-summary.py" compose /tmp/pr_diff_summary.json /tmp/review.txt
 
       - name: Scan review for secrets

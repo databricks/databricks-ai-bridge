@@ -1,21 +1,46 @@
-# AgentBricksReviewer rules
+---
+name: agentbricks-review
+description: Multi-lens code review of a databricks-ai-bridge PR or local branch, with verified findings and a merge safety score. The AgentBricksReviewer GitHub workflow runs it on PRs; run it locally with "/agentbricks-review [PR number or URL]" or when asked to review a PR or the current changes.
+---
 
-`.github/workflows/agentbricks-reviewer.yml` reads this file from the default
-branch, never from the PR under review, so a PR cannot change the rules it is
-judged by. The workflow prepends PR metadata, the diff location, and the PR head
-commit. Everything below is the review contract.
+# AgentBricksReviewer
+
+This skill is the review contract for this repository. It runs in two places:
+
+- **CI:** `.github/workflows/agentbricks-reviewer.yml` reads this file from the
+  default branch, never from the PR under review, so a PR cannot change the rules
+  it is judged by. The workflow prepends PR metadata, the diff location, and the
+  base and head commits, then posts the review as a PR comment.
+- **Locally:** see "Running locally" below.
 
 You coordinate the review: you dispatch reviewers, then verify, merge, and score
 what they report. Part 1 is your process, Part 2 is what every reviewer must
 follow, Part 3 is what to look for in this repository, and Part 4 is the output
 format.
 
+## Running locally
+
+1. **Find the change.**
+   - **A PR** (number or URL): save `gh pr diff <n> --repo databricks/databricks-ai-bridge`
+     to a temp file, get `baseRefOid` and `headRefOid` from
+     `gh pr view <n> --json baseRefOid,headRefOid,title,body,labels`, and run
+     `git fetch origin pull/<n>/head` so `git show <head_sha>:<path>` works.
+   - **No argument:** review the current branch against `origin/main`. Save
+     `git diff $(git merge-base origin/main HEAD)` to a temp file; this includes
+     uncommitted changes. Treat the working tree as the head: read files directly
+     instead of with `git show <head_sha>:<path>`.
+2. **Dispatch reviewers** with your runtime's sub-agent tool, following Part 1.
+   If only one vendor is available, say so, and label confidence by reviewer
+   count alone.
+3. **Report** in the Part 4 format. Show it to the user; post it to the PR only
+   if asked. Do not edit code.
+
 # Part 1: Coordinator process
 
-## 1. Pick review lenses by change size
+## 1. Pick review lenses
 
-Each lens is one angle of review. Size the review by changed lines in the
-computed diff statistics, excluding lockfiles and generated files:
+Each lens is one angle of review. Start from the change size, measured in changed
+lines excluding lockfiles and generated files:
 
 | Change size | Lenses |
 |---|---|
@@ -23,9 +48,16 @@ computed diff statistics, excluding lockfiles and generated files:
 | Medium (~150–600 lines) | the above, plus public API and architecture, maintainability |
 | Large (over ~600 lines) | the above, plus performance, operational safety, agent usability |
 
-Always add the security lens when the diff touches credentials, auth, HTTP
-clients, deserialization, file paths, or subprocess calls, and the public API
-lens when it touches anything exported from a published package.
+Then add lenses by what the diff touches, at any size:
+
+- **Public surface → public API and architecture, and agent usability.** The
+  public surface is anything users or agents call: names exported from a
+  published package (its public modules, `__init__`, `__all__`, or a TypeScript
+  package's exports), the `agentbricks` CLI (commands, flags, output, exit
+  codes), MCP tool definitions, and user-facing error types or messages.
+- **Security-sensitive code → security.** Credentials, auth, HTTP clients,
+  deserialization, file paths, or subprocess calls. (Security is already in
+  every review; this is a reminder to give it real weight here.)
 
 Lens definitions:
 
@@ -51,14 +83,17 @@ Lens definitions:
   repeated client construction, and blocking calls in async paths.
 - **Operational safety:** error messages a user can act on, retries and
   timeouts, and failures that are swallowed silently.
-- **Agent usability:** these SDKs are called by AI agents; check that new tools
-  and errors have clear names, descriptions, and structured, explicit failures.
+- **Agent usability:** these SDKs and the `agentbricks` CLI are used by AI agents.
+  Check that new or changed tools, functions, parameters, and CLI commands have
+  clear names, docstrings, and `--help` text; that output is machine-readable
+  where agents parse it; that errors say what went wrong and how to fix it; and
+  that failures are explicit (non-zero exit codes, typed exceptions), not silent.
 
 ## 2. Dispatch reviewers
 
 - Group the lenses into 2–4 reviewer sub-agents and split them across vendors:
-  at least one `claude_code` reviewer and at least one `codex` reviewer. Put
-  correctness and security with different vendors when both are selected.
+  in CI, at least one `claude_code` reviewer and at least one `codex` reviewer.
+  Put correctness and security with different vendors when both are selected.
 - Start every reviewer in the same turn.
 - Give each reviewer the diff path and checksum, the base and head SHAs, its
   lens definitions, the PR title and description, and Part 2 and Part 3 of this
@@ -135,9 +170,10 @@ giving a score.
   `Verified-against: path:start-end`, the range you read to confirm it. Search
   base classes, shared helpers in `src/databricks_ai_bridge/`, and the
   `databricks-sdk` layer before claiming a check is missing.
-- **Read the PR's files at its head:** use `git show <head_sha>:<path>`. The
-  working directory is the default branch, not the PR. Line numbers in findings
-  are line numbers in the file at the head commit, not positions in the diff.
+- **Read the PR's files at its head:** use `git show <head_sha>:<path>`. In CI
+  and for PR reviews, the working directory is not the PR. When reviewing the
+  local working tree, read files directly. Line numbers in findings are line
+  numbers in the file at the head, not positions in the diff.
 - **Trace callers:** for each change visible to callers (signature, return
   value, fields, error behavior), compare the old and new contract and search
   every package in the repo for callers that rely on the old behavior, even
@@ -222,6 +258,9 @@ Then these sections, in order. Write "None." for an empty section.
 6. **Summary**: exactly one `## Summary` heading containing the three
    subsections below. The workflow inserts computed diff statistics after it
    and rejects the review if a subsection is missing or empty.
+
+Mention only the reviewers that delivered. Do not list workers or tools that
+were unavailable or not installed.
 
 Write each finding as one list item:
 `[SEVERITY] [CONFIDENCE] path:line — trigger → consequence`, followed by
