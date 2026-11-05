@@ -345,6 +345,43 @@ def test_demo_config_reports_a_bound_memory_store_that_connects_on_deploy(monkey
     assert _client(monkeypatch).get("/api/ui/config").json()["memory"]["bound_store"] is None
 
 
+def test_demo_config_reports_a_bound_session_store_that_connects_on_deploy(monkeypatch):
+    monkeypatch.setenv("AGENTBRICKS_DEV_BOUND_SESSION_STORE", "agent-sessions")
+    session = _client(monkeypatch).get("/api/ui/config").json()["session"]
+    assert session["managed"] is False
+    assert session["bound_store"] == "agent-sessions"
+    monkeypatch.delenv("AGENTBRICKS_DEV_BOUND_SESSION_STORE")
+    assert _client(monkeypatch).get("/api/ui/config").json()["session"]["bound_store"] is None
+
+
+def test_store_routes_say_a_bound_store_connects_on_deploy(monkeypatch):
+    # Without a bound store, the 503 asks to bind one; with one, it says it connects on deploy.
+    client = _client(monkeypatch)
+    memory = client.post("/api/demo/memory/search", json={"query": "profile"})
+    session = client.post("/api/demo/sessions", json={"session_id": "ignored"})
+    assert memory.status_code == session.status_code == 503
+    assert memory.json()["detail"] == (
+        "No memory store configured. Run `agentbricks memory bind <store>`."
+    )
+    assert session.json()["detail"] == (
+        "No session store configured. Run `agentbricks sessions bind <store>`."
+    )
+
+    monkeypatch.setenv("AGENTBRICKS_DEV_BOUND_MEMORY_STORE", "agent-memory")
+    monkeypatch.setenv("AGENTBRICKS_DEV_BOUND_SESSION_STORE", "agent-sessions")
+    memory = client.post("/api/demo/memory/search", json={"query": "profile"})
+    session = client.post("/api/demo/sessions", json={"session_id": "ignored"})
+    assert memory.status_code == session.status_code == 503
+    assert memory.json()["detail"] == (
+        "The memory store 'agent-memory' is bound in agent.toml, but memory stores are off in "
+        "`agentbricks dev`. It connects after `agentbricks deploy`."
+    )
+    assert session.json()["detail"] == (
+        "The session store 'agent-sessions' is bound in agent.toml, but session stores are off in "
+        "`agentbricks dev`. It connects after `agentbricks deploy`."
+    )
+
+
 def test_demo_config_does_not_wait_for_model_discovery(monkeypatch):
     client = _client(monkeypatch)
     calls = []

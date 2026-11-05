@@ -1766,6 +1766,28 @@ async function loadModels() {
   renderModels(await jsonResponse(response));
 }
 
+// The Session card: [orb state, detail, command]. Session stores are off under `agentbricks dev`
+// too, so a bound store reads as connecting on deploy instead of asking to be bound again.
+function sessionCapability(config) {
+  const session = config.session;
+  if (session.managed) {
+    return [
+      true,
+      `Connected to Session Store "${session.store}" for actor ${session.actor}. State is durable and shareable.`,
+      null,
+    ];
+  }
+  const orb = session.history ? "degraded" : false;
+  if (session.bound_store && !config.deployed) {
+    return [
+      orb,
+      `Session store "${session.bound_store}" is bound. Session stores are off in agentbricks dev, so state is kept in process until you deploy.`,
+      "agentbricks deploy",
+    ];
+  }
+  return [orb, "Session state is kept in process and resets when the app restarts.", "agentbricks sessions bind <store-name>"];
+}
+
 async function loadConfig() {
   try {
     const response = await fetch(demoUrl("/api/ui/config"), { cache: "no-store" });
@@ -1787,14 +1809,7 @@ async function loadConfig() {
       "on-deploy": "Bound · active after deploy",
       off: "Not connected",
     }[memoryState];
-    setCapability(
-      elements.sessionStatus,
-      config.session.managed ? true : config.session.history ? "degraded" : false,
-      config.session.managed
-        ? `Connected to Session Store "${config.session.store}" for actor ${config.session.actor}. State is durable and shareable.`
-        : "Session state is kept in process and resets when the app restarts.",
-      config.session.managed ? null : "agentbricks sessions bind <store-name>",
-    );
+    setCapability(elements.sessionStatus, ...sessionCapability(config));
     setCapability(
       elements.memoryStatus,
       memoryState === "connected" ? true : memoryState === "on-deploy" ? "degraded" : false,

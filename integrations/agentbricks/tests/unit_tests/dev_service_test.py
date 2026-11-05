@@ -141,12 +141,14 @@ def test_prepare_builds_local_plan_and_run_uses_injected_apps_client(
             "KEEP": "original",
             "MLFLOW_TRACKING_URI": "http://127.0.0.1:5599",
             "MLFLOW_EXPERIMENT_NAME": "local-agent",
-            # Display-only, so the chat app can say the bound store connects on deploy.
+            # Display-only, so the chat app can say the bound stores connect on deploy.
             "AGENTBRICKS_DEV_BOUND_MEMORY_STORE": "memory",
+            "AGENTBRICKS_DEV_BOUND_SESSION_STORE": "sessions",
             "DATABRICKS_AGENTBRICKS_RUNTIME_STORE_LOCAL": "true",
         }
-        # Memory itself stays off: the store setting the runtime reads is not set locally.
+        # The stores themselves stay off: the settings the runtime reads are not set locally.
         assert "AGENT_MEMORY_STORE" not in _manifest_env(plan.entry_point)
+        assert "AGENT_SESSION_STORE" not in _manifest_env(plan.entry_point)
 
         service_fixture.service.run(plan)
 
@@ -379,3 +381,16 @@ def test_prepare_omits_the_bound_memory_store_note_when_none_is_bound(
         DevRequest(source=str(tmp_path), prepare_environment=False, app_port=None)
     ) as plan:
         assert "AGENTBRICKS_DEV_BOUND_MEMORY_STORE" not in _manifest_env(plan.entry_point)
+        assert "AGENTBRICKS_DEV_BOUND_SESSION_STORE" not in _manifest_env(plan.entry_point)
+
+
+def test_prepare_notes_each_bound_store_independently(
+    service_fixture: SimpleNamespace, tmp_path: pathlib.Path
+) -> None:
+    service_fixture.resolver.resource_bindings.return_value = (None, "sessions", None)
+    with service_fixture.service.prepare(
+        DevRequest(source=str(tmp_path), prepare_environment=False, app_port=None)
+    ) as plan:
+        env = _manifest_env(plan.entry_point)
+        assert env["AGENTBRICKS_DEV_BOUND_SESSION_STORE"] == "sessions"
+        assert "AGENTBRICKS_DEV_BOUND_MEMORY_STORE" not in env

@@ -25,6 +25,7 @@ from databricks_agentkit.runtime.cors import CORS_ALLOWED_ORIGINS_ENV
 from databricks_agentkit.runtime.store import RUNTIME_STORE_LOCAL_ENV
 from databricks_agentkit.runtime.tool_manifest import (
     DEV_BOUND_MEMORY_STORE_ENV,
+    DEV_BOUND_SESSION_STORE_ENV,
     MEMORY_STORE_ENV,
     SESSION_STORE_ENV,
 )
@@ -156,6 +157,9 @@ class DevService:
                 # Display-only: lets the chat app say the bound store connects on deploy. Memory
                 # itself stays off locally; nothing resolves a store from this.
                 local_env[DEV_BOUND_MEMORY_STORE_ENV] = memory_store
+            if session_store:
+                # Display-only, likewise: session state stays in process locally.
+                local_env[DEV_BOUND_SESSION_STORE_ENV] = session_store
             entry_point = _dev_entry_point(
                 app_yaml,
                 local_env or None,
