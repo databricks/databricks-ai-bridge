@@ -37,29 +37,17 @@ format.
 
 # Part 1: Coordinator process
 
-## 1. Pick review lenses
+## 1. Review lenses
 
-Each lens is one angle of review. Start from the change size, measured in changed
-lines excluding lockfiles and generated files:
+Each lens is one angle of review. Every review considers every lens, whatever the
+PR's size. When a lens doesn't apply to the diff (performance on a docs change,
+for example), the reviewer says it was checked and found nothing; it is never
+skipped.
 
-| Change size | Lenses |
-|---|---|
-| Small (under ~150 lines) | correctness (devil's advocate), security, tests |
-| Medium (~150–600 lines) | the above, plus public API and architecture, maintainability |
-| Large (over ~600 lines) | the above, plus performance, operational safety, agent usability |
+Priority decides where reviewers spend effort, not how severe a finding is: a P1
+lens can still produce a Critical finding.
 
-Then add lenses by what the diff touches, at any size:
-
-- **Public surface → public API and architecture, and agent usability.** The
-  public surface is anything users or agents call: names exported from a
-  published package (its public modules, `__init__`, `__all__`, or a TypeScript
-  package's exports), the `agentbricks` CLI (commands, flags, output, exit
-  codes), MCP tool definitions, and user-facing error types or messages.
-- **Security-sensitive code → security.** Credentials, auth, HTTP clients,
-  deserialization, file paths, or subprocess calls. (Security is already in
-  every review; this is a reminder to give it real weight here.)
-
-Lens definitions:
+**P0: every reviewer covers both.**
 
 - **Correctness (devil's advocate):** compare what the PR claims with what the
   code does. Pick the strongest reachable failure hypotheses and state each as
@@ -69,31 +57,53 @@ Lens definitions:
   and branches that agree with each other but not with their intended meaning.
   Use at most two passes: read and hypothesize, then test each hypothesis
   against the surrounding code. A clean result is valid.
+- **Public API UX and compatibility:** the public surface is anything users or
+  agents call: names exported from a published package (its public modules,
+  `__init__`, `__all__`, or a TypeScript package's exports), the `agentbricks`
+  CLI (commands, flags, output, exit codes), MCP tool definitions, and
+  user-facing error types or messages. For every change to it, check:
+  - **Compatibility:** apply Part 3's public API compatibility and
+    cross-package version floor rules, including callers that rely on old
+    behavior with an unchanged signature.
+  - **UX for people and agents:** clear names, docstrings, and `--help` text;
+    machine-readable output where agents parse it; errors that say what went
+    wrong and how to fix it; explicit failures (non-zero exit codes, typed
+    exceptions), not silent ones.
+  - **Consistency:** new names and parameters match the existing APIs, including
+    the equivalent API in sibling packages such as `databricks-langchain` and
+    `databricks-openai`.
+
+  If the diff touches no public surface, say so.
+
+**P1: split across reviewers, each covered by at least one.**
+
 - **Security:** injection, auth or authorization bypass, on-behalf-of credential
   handling, secrets in logs or errors, unsafe deserialization, path traversal,
-  SSRF, and anything that weakens an existing boundary.
+  SSRF, and anything that weakens an existing boundary. Look hardest where the
+  diff touches credentials, auth, HTTP clients, deserialization, file paths, or
+  subprocess calls.
 - **Tests:** do the tests fail for the bug or broken contract they claim to
   guard? Look for assertions that only mirror mocks, coverage lost through
   deleted or weakened assertions, and tests at the wrong layer.
-- **Public API and architecture:** contract changes for package users, coupling
-  between packages, and whether the change belongs in core or in an integration.
-- **Maintainability:** duplication of an existing helper (name both
-  implementations), needless indirection, and comments that narrate the code.
+- **Architecture and maintainability:** coupling between packages, whether the
+  change belongs in core or in an integration, duplication of an existing helper
+  (name both implementations), needless indirection, and comments that narrate
+  the code.
 - **Performance:** extra network round trips, unbounded loops or buffering,
   repeated client construction, and blocking calls in async paths.
-- **Operational safety:** error messages a user can act on, retries and
-  timeouts, and failures that are swallowed silently.
-- **Agent usability:** these SDKs and the `agentbricks` CLI are used by AI agents.
-  Check that new or changed tools, functions, parameters, and CLI commands have
-  clear names, docstrings, and `--help` text; that output is machine-readable
-  where agents parse it; that errors say what went wrong and how to fix it; and
-  that failures are explicit (non-zero exit codes, typed exceptions), not silent.
+- **Operational safety:** retries and timeouts, failures that are swallowed
+  silently, and logging that helps someone debug a failure without leaking data.
 
 ## 2. Dispatch reviewers
 
-- Group the lenses into 2–4 reviewer sub-agents and split them across vendors:
-  in CI, at least one `claude_code` reviewer and at least one `codex` reviewer.
-  Put correctness and security with different vendors when both are selected.
+- Use 2–4 reviewer sub-agents split across vendors: in CI, at least one
+  `claude_code` reviewer and at least one `codex` reviewer.
+- Give every reviewer both P0 lenses, so each P0 finding gets a second opinion
+  from another vendor. Split the P1 lenses so each is assigned to at least one
+  reviewer. With two reviewers, for example, one takes security, tests, and
+  operational safety, and the other takes architecture and maintainability, and
+  performance. For large diffs, add a third or fourth reviewer so the P1 lenses
+  get enough attention.
 - Start every reviewer in the same turn.
 - Give each reviewer the diff path and checksum, the base and head SHAs, its
   lens definitions, the PR title and description, and Part 2 and Part 3 of this
@@ -243,7 +253,9 @@ and the TypeScript packages `integrations/ai-sdk-provider` and
 # Part 4: Output format
 
 Start with one line: `**Merge safety:** <score>/100 (<risk>) · reviewers:
-<delivered>/<dispatched> · lenses: <comma-separated lenses>`.
+<delivered>/<dispatched> · findings by lens: <lens (count), ...>`, or
+`findings by lens: none` when no lens found anything. Every lens is always
+checked, so list only the lenses with findings.
 
 Then these sections, in order. Write "None." for an empty section.
 
