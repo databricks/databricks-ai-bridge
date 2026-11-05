@@ -15,9 +15,9 @@ their store name. Workspace-wide lists include other projects' stores, so use th
 ## Seeding memory and local dev
 
 Memory and session stores are off by default in `agentbricks dev`, even when a store is bound. The
-chat app shows "Not connected" for memory locally, and the stores connect after
-`agentbricks deploy`. Setting `AGENT_MEMORY_STORE` (the Store ID) or `AGENT_SESSION_STORE`
-(the store name) in the project's `.env` uses real stores locally.
+chat app labels a bound memory store "Bound · active after deploy" locally, and the stores connect
+after `agentbricks deploy`. Setting `AGENT_MEMORY_STORE` (the Store ID) or
+`AGENT_SESSION_STORE` (the store name) in the project's `.env` uses real stores locally.
 
 - Empty store: `agentbricks memory bind <name>`, then `agentbricks deploy <name>`. Deploy creates
   the store if it doesn't exist and grants the app's service principal access.
