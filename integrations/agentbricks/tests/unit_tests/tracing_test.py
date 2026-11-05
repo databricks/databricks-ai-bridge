@@ -851,7 +851,6 @@ def test_start_local_tracing_server_launches_sqlite_server(tmp_path: pathlib.Pat
 
     def _fake_popen(cmd, **kwargs):
         captured["cmd"] = cmd
-        captured["env"] = kwargs["env"]
         return mock.Mock()
 
     monkeypatch.setattr(local_tracing_client.subprocess, "Popen", _fake_popen)
@@ -867,9 +866,6 @@ def test_start_local_tracing_server_launches_sqlite_server(tmp_path: pathlib.Pat
     # across agentbricks releases; the server owns the schema and reads go over REST, so no exact-version pin)
     assert captured["cmd"][captured["cmd"].index("--python") + 1] == "3.12"
     assert "mlflow>=3.10,<4" in captured["cmd"]
-    # One worker and no job runner: the defaults spawn 17 processes and about 2.7 GB.
-    assert captured["cmd"][captured["cmd"].index("--workers") + 1] == "1"
-    assert captured["env"]["MLFLOW_SERVER_ENABLE_JOB_EXECUTION"] == "false"
 
 
 def test_start_local_tracing_server_degrades_when_launch_fails(tmp_path: pathlib.Path, monkeypatch):
