@@ -31,8 +31,8 @@ def _build_sandbox_mcp_server() -> McpServer:
         workspace_client=workspace_client,
         timeout=120.0,
         name="system.ai.sandbox",
-        # Production advertises ``sandbox``; older preview workspaces use ``run_code``.
-        tool_filter={"allowed_tool_names": ["sandbox", "run_code"]},
+        # Keep the ReplVM alias alongside the Sandbox API lifecycle tools.
+        tool_filter={"allowed_tool_names": ["sandbox", "run_code", "create_sandbox", "delete_sandbox"]},
     )
 
 
