@@ -10,12 +10,13 @@ from typing import Protocol, cast
 
 from databricks_agentkit.runtime.auth import AuthError
 from databricks_agentkit.runtime.errors import describe_failure
-from databricks_agentkit.runtime.store import RuntimeStore
+from databricks_agentkit.runtime.store import RuntimeStore, SuspensionRuntimeStore
 from databricks_agentkit.runtime.types import (
     Invocation,
     InvocationAttemptContext,
     InvocationExecutorFn,
     InvocationStatus,
+    InvocationSuspension,
     JsonObject,
     JsonValue,
 )
@@ -92,9 +93,36 @@ class AttemptExecution:
                     invocation_id=invocation_id,
                     attempt=claimed.attempt,
                     session_id=claimed.session_id,
+                    continuation=copy.deepcopy(claimed.continuation),
                     _emit=emit,
                 ),
             )
+            if isinstance(response, InvocationSuspension):
+                if not isinstance(self._runtime_store, SuspensionRuntimeStore):
+                    raise TypeError("This Runtime Store does not support invocation suspension")
+                continuation = _copy_json_object(response.continuation, "continuation")
+                try:
+                    suspended = await self._runtime_store.suspend(
+                        invocation_id, claimed.attempt, continuation
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # A write may have committed before its acknowledgment was lost. Failing the
+                    # attempt here would turn a durable pause into a terminal failure.
+                    logger.exception(
+                        "Could not confirm invocation suspension: %s attempt=%d",
+                        invocation_id,
+                        claimed.attempt,
+                    )
+                    return
+                if not suspended:
+                    logger.info(
+                        "Skipped suspension after Runtime Store ownership changed: %s attempt=%d",
+                        invocation_id,
+                        claimed.attempt,
+                    )
+                return
             response = copy_json_value(response, "executor response")
             completed = await self._runtime_store.complete(
                 invocation_id,
@@ -160,7 +188,7 @@ class LocalInvocationExecutor(InvocationExecutor):
     def ensure_scheduled(self, state: Invocation) -> None:
         if state.status != InvocationStatus.QUEUED:
             return
-        self._schedule(state.invocation_id, retry_if_running=False)
+        self._schedule(state.invocation_id, retry_if_running=True)
 
     def _schedule(self, invocation_id: str, *, retry_if_running: bool) -> None:
         current = self._tasks.get(invocation_id)
@@ -202,6 +230,9 @@ class LocalInvocationExecutor(InvocationExecutor):
     def _discard_task(self, invocation_id: str, completed: asyncio.Task[None]) -> None:
         if self._tasks.get(invocation_id) is completed:
             self._tasks.pop(invocation_id, None)
+            retry = invocation_id in self._claim_retries
             self._claim_retries.discard(invocation_id)
+            if retry:
+                self._schedule(invocation_id, retry_if_running=False)
         if not completed.cancelled():
             completed.exception()

@@ -27,6 +27,7 @@ class InvocationStatus(str, Enum):
 
     QUEUED = "QUEUED"
     ACTIVE = "ACTIVE"
+    AWAITING_RESOLUTION = "AWAITING_RESOLUTION"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
 
@@ -44,6 +45,7 @@ class Invocation:
     session_sequence_number: int | None = None  # Immutable acceptance order, not an event cursor.
     worker_id: str | None = None  # Submitting worker while queued; executing worker while active.
     recovery_affinity: str | None = None
+    continuation: JsonObject | None = None
 
     @property
     def is_terminal(self) -> bool:
@@ -72,6 +74,7 @@ class InvocationAttemptContext:
     attempt: int
     _emit: InvocationEventEmitter | None = field(default=None, repr=False, compare=False)
     session_id: str | None = None
+    continuation: JsonObject | None = None
 
     @property
     def is_recovery(self) -> bool:
@@ -85,7 +88,16 @@ class InvocationAttemptContext:
         return await self._emit(event)
 
 
-InvocationExecutorFn = Callable[[JsonValue, InvocationAttemptContext], Awaitable[JsonValue]]
+@dataclass(frozen=True)
+class InvocationSuspension:
+    """End this attempt and persist host-defined continuation state without completing the invocation."""
+
+    continuation: JsonObject
+
+
+InvocationExecutorFn = Callable[
+    [JsonValue, InvocationAttemptContext], Awaitable[JsonValue | InvocationSuspension]
+]
 
 
 @dataclass(frozen=True)
@@ -124,3 +136,7 @@ class InvocationNotFoundError(LookupError):
 
 class InvocationFailedError(RuntimeError):
     """Raised when an invocation reaches the failed state."""
+
+
+class InvocationAwaitingResolutionError(RuntimeError):
+    """Raised when a foreground wait reaches a suspended invocation."""
