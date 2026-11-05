@@ -1,6 +1,6 @@
 import os
 import re
-from typing import Any, Generator, cast
+from typing import Any, Generator, Iterable, cast
 from uuid import uuid4
 
 from databricks.sdk import WorkspaceClient
@@ -280,9 +280,11 @@ def _adapt_gateway_response(response: Any) -> None:
 
 
 def _adapt_gateway_chunk(chunk: Any, streamed: dict) -> Any:
+    """`streamed` holds one state dict per choice: tool-call indexes are local to a choice."""
     for choice in getattr(chunk, "choices", None) or []:
         _flatten_signed_text_parts(choice.delta)
-        _adapt_gateway_tool_calls(getattr(choice.delta, "tool_calls", None), streamed)
+        state = streamed.setdefault(getattr(choice, "index", None), {})
+        _adapt_gateway_tool_calls(getattr(choice.delta, "tool_calls", None), state)
     return chunk
 
 
@@ -332,6 +334,96 @@ def _restore_gateway_messages(messages: Any) -> None:
                 # Replace the dict rather than edit it: the caller may reuse its tool-call dicts.
                 kept = {k: v for k, v in call.items() if k != "extra_content"}
                 tool_calls[i] = kept | restored
+
+
+class _ModelAdapter:
+    """Model-family request and response handling. The default sends and returns as is.
+
+    Adapters are stateless; stream state lives in each adapted stream.
+    """
+
+    def prepare_request(self, kwargs: dict) -> None:
+        pass
+
+    def adapt_response(self, response: Any) -> Any:
+        return response
+
+    def adapt_stream(self, stream: Any) -> Any:
+        return stream
+
+
+class _ClaudeAdapter(_ModelAdapter):
+    """Round-trips Claude's signed reasoning and avoids empty assistant content."""
+
+    def prepare_request(self, kwargs: dict) -> None:
+        _restore_reasoning_in_messages(kwargs.get("messages"))
+        _fix_empty_assistant_content_in_messages(kwargs.get("messages"))
+
+    def adapt_response(self, response: Any) -> Any:
+        _split_reasoning_in_response(response)
+        return response
+
+    def adapt_stream(self, stream: Any) -> Any:
+        return _ReasoningSplittingStream(stream)
+
+
+class _GeminiAdapter(_ModelAdapter):
+    """Round-trips Gemini's tool-call thought signatures and repeated tool-call ids."""
+
+    def prepare_request(self, kwargs: dict) -> None:
+        _restore_gateway_messages(kwargs.get("messages"))
+
+    def adapt_response(self, response: Any) -> Any:
+        _adapt_gateway_response(response)
+        return response
+
+    def adapt_stream(self, stream: Any) -> Any:
+        if isinstance(stream, AsyncStream):
+            _adapt_async_gateway_stream(stream)
+        elif isinstance(stream, Stream):
+            _adapt_gateway_stream(stream)
+        return stream
+
+
+_DEFAULT_ADAPTER = _ModelAdapter()
+_CLAUDE_ADAPTER = _ClaudeAdapter()
+_GEMINI_ADAPTER = _GeminiAdapter()
+
+
+def _is_gemini_model(model: str | None) -> bool:
+    """Returns True if the model is a Gemini variant."""
+    if not model:
+        return False
+    return "gemini" in model.lower()
+
+
+def _model_adapter(model: str | None) -> _ModelAdapter:
+    if _is_claude_model(model):
+        return _CLAUDE_ADAPTER
+    if _is_gemini_model(model):
+        return _GEMINI_ADAPTER
+    return _DEFAULT_ADAPTER
+
+
+def _prepare_completion_request(kwargs: dict) -> _ModelAdapter:
+    """Request preparation shared by the sync and async completions clients."""
+    model = kwargs.get("model")
+    if _should_strip_strict(model):
+        _strip_strict_from_tools(kwargs.get("tools"))
+    # `messages` may be any iterable: read it once so the adapter and the SDK see the same list.
+    messages = kwargs.get("messages")
+    if isinstance(messages, Iterable) and not isinstance(messages, (list, str, bytes, dict)):
+        kwargs["messages"] = list(messages)
+    adapter = _model_adapter(model)
+    adapter.prepare_request(kwargs)
+    _strip_strict_from_kwargs(kwargs)
+    return adapter
+
+
+def _adapt_completion(adapter: _ModelAdapter, kwargs: dict, response: Any) -> Any:
+    if kwargs.get("stream"):
+        return adapter.adapt_stream(response)
+    return adapter.adapt_response(response)
 
 
 def _resolve_base_url(
@@ -458,30 +550,12 @@ def _wrap_app_error(e: Exception, app_name: str) -> ValueError:
 class DatabricksCompletions(Completions):
     """Completions that conditionally strips 'strict' from tools for non-GPT models.
 
-    Also adapts Gemini tool calls to AI Gateway (thought signatures, repeated ids).
+    Claude and Gemini requests and responses go through a model-family adapter.
     """
 
     def create(self, **kwargs):
-        model = kwargs.get("model")
-        if _should_strip_strict(model):
-            _strip_strict_from_tools(kwargs.get("tools"))
-        is_claude = _is_claude_model(model)
-        if is_claude:
-            _restore_reasoning_in_messages(kwargs.get("messages"))
-            _fix_empty_assistant_content_in_messages(kwargs.get("messages"))
-        _restore_gateway_messages(kwargs.get("messages"))
-        kwargs = _strip_strict_from_kwargs(kwargs)
-        response = super().create(**kwargs)
-        if isinstance(response, Stream):
-            _adapt_gateway_stream(response)
-        else:
-            _adapt_gateway_response(response)
-        if not is_claude:
-            return response
-        if kwargs.get("stream"):
-            return _ReasoningSplittingStream(response)
-        _split_reasoning_in_response(response)
-        return response
+        adapter = _prepare_completion_request(kwargs)
+        return _adapt_completion(adapter, kwargs, super().create(**kwargs))
 
 
 class DatabricksChat(Chat):
@@ -678,30 +752,12 @@ class DatabricksOpenAI(OpenAI):
 class AsyncDatabricksCompletions(AsyncCompletions):
     """Async completions that conditionally strips 'strict' from tools for non-GPT models.
 
-    Also adapts Gemini tool calls to AI Gateway (thought signatures, repeated ids).
+    Claude and Gemini requests and responses go through a model-family adapter.
     """
 
     async def create(self, **kwargs):
-        model = kwargs.get("model")
-        if _should_strip_strict(model):
-            _strip_strict_from_tools(kwargs.get("tools"))
-        is_claude = _is_claude_model(model)
-        if is_claude:
-            _restore_reasoning_in_messages(kwargs.get("messages"))
-            _fix_empty_assistant_content_in_messages(kwargs.get("messages"))
-        _restore_gateway_messages(kwargs.get("messages"))
-        kwargs = _strip_strict_from_kwargs(kwargs)
-        response = await super().create(**kwargs)
-        if isinstance(response, AsyncStream):
-            _adapt_async_gateway_stream(response)
-        else:
-            _adapt_gateway_response(response)
-        if not is_claude:
-            return response
-        if kwargs.get("stream"):
-            return _ReasoningSplittingStream(response)
-        _split_reasoning_in_response(response)
-        return response
+        adapter = _prepare_completion_request(kwargs)
+        return _adapt_completion(adapter, kwargs, await super().create(**kwargs))
 
 
 class AsyncDatabricksChat(AsyncChat):

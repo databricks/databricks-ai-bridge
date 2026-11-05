@@ -244,3 +244,65 @@ def test_messages_without_google_signatures_are_untouched():
     expected = copy.deepcopy(messages)
     _restore_gateway_messages(messages)
     assert messages == expected
+
+
+def _sync_client(gateway: _Gateway) -> DatabricksOpenAI:
+    transport = httpx.MockTransport(gateway)
+    with patch(
+        "databricks_openai.utils.clients._get_authorized_http_client",
+        return_value=httpx.Client(transport=transport),
+    ):
+        return DatabricksOpenAI(workspace_client=_workspace_client(), use_ai_gateway=True)
+
+
+@pytest.mark.parametrize("model", ["databricks-gpt-5-2", "databricks-claude-sonnet-4-5", GEMINI])
+def test_sync_generator_messages_are_sent(model):
+    gateway = _Gateway(ANSWER_TURN)
+    messages = cast(Any, iter([{"role": "user", "content": "hello"}]))
+    _sync_client(gateway).chat.completions.create(model=model, messages=messages)
+    assert gateway.requests[0]["messages"] == [{"role": "user", "content": "hello"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["databricks-gpt-5-2", "databricks-claude-sonnet-4-5", GEMINI])
+async def test_async_generator_messages_are_sent(model):
+    gateway = _Gateway(ANSWER_TURN)
+    messages = cast(Any, iter([{"role": "user", "content": "hello"}]))
+    await _async_client(gateway).chat.completions.create(model=model, messages=messages)
+    assert gateway.requests[0]["messages"] == [{"role": "user", "content": "hello"}]
+
+
+def _choice_chunk(index: int, tool_call: dict[str, Any]) -> str:
+    body = {
+        "id": "chunk",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": GEMINI,
+        "choices": [{"index": index, "delta": {"tool_calls": [tool_call]}, "finish_reason": None}],
+    }
+    return f"data: {json.dumps(body)}\n\n"
+
+
+def test_stream_state_is_kept_per_choice():
+    # Interleaved choices, each with tool index 0: ids and signatures must not mix.
+    more = _tool_call("2", "UTC") | {"index": 0}
+    stream = (
+        _choice_chunk(0, _tool_call("SIG_A", "UTC") | {"index": 0})
+        + _choice_chunk(1, _tool_call("SIG_B", "UTC") | {"index": 0})
+        + _choice_chunk(0, more)
+        + "data: [DONE]\n\n"
+    )
+    client = _sync_client(_Gateway(stream))
+    chunks = list(client.chat.completions.create(model=GEMINI, messages=[], stream=True))
+    calls = [(chunk.choices[0].delta.tool_calls or [])[0] for chunk in chunks]
+    signatures = [cast(Any, c).extra_content["google"]["thought_signature"] for c in calls]
+    assert signatures == ["SIG_A", "SIG_B", "SIG_A2"]
+    assert calls[0].id == calls[2].id != calls[1].id
+
+
+@pytest.mark.parametrize("model", ["databricks-gpt-5-2", "databricks-claude-sonnet-4-5"])
+def test_gemini_handling_is_off_for_other_models(model):
+    reply = _sync_client(_Gateway(TOOL_TURN)).chat.completions.create(model=model, messages=[])
+    calls = reply.choices[0].message.tool_calls or []
+    assert [c.id for c in calls] == ["get_current_time", "get_current_time"]
+    assert all(getattr(c, "extra_content", None) is None for c in calls)
