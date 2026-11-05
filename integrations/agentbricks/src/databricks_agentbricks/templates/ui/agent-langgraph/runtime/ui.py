@@ -57,10 +57,9 @@ class SessionItemsRequest(BaseModel):
 
 
 _USER_HEADERS = ("x-forwarded-email", "x-forwarded-user")
-# Set by `agentbricks dev` (display only; stores stay off locally). Spelled out rather than imported
+# Set by `agentbricks dev` (display only; memory stays off locally). Spelled out rather than imported
 # from databricks_agentkit so the chat app still loads against an older SDK, which just never sets it.
 _DEV_BOUND_MEMORY_STORE_ENV = "AGENTBRICKS_DEV_BOUND_MEMORY_STORE"
-_DEV_BOUND_SESSION_STORE_ENV = "AGENTBRICKS_DEV_BOUND_SESSION_STORE"
 
 
 def _memory_store() -> str:
@@ -458,29 +457,19 @@ async def _managed_call(operation, *args):
         raise _api_error(exc) from exc
 
 
-def _store_unavailable(kind: str, bound_env: str) -> str:
-    """Why a store route can't run: a store bound in agent.toml only connects after deploy."""
-    bound = os.getenv(bound_env)
-    if bound:
-        return (
-            f"The {kind} store {bound!r} is bound in agent.toml, but {kind} stores are off in "
-            "`agentbricks dev`. It connects after `agentbricks deploy`."
-        )
-    command = "memory" if kind == "memory" else "sessions"
-    return f"No {kind} store configured. Run `agentbricks {command} bind <store>`."
-
-
 def _require_memory() -> None:
     if not _memory_store():
         raise HTTPException(
-            status_code=503, detail=_store_unavailable("memory", _DEV_BOUND_MEMORY_STORE_ENV)
+            status_code=503,
+            detail="No memory store configured. Run `agentbricks memory bind <store>`.",
         )
 
 
 def _require_session() -> None:
     if not _session_store():
         raise HTTPException(
-            status_code=503, detail=_store_unavailable("session", _DEV_BOUND_SESSION_STORE_ENV)
+            status_code=503,
+            detail="No session store configured. Run `agentbricks sessions bind <store>`.",
         )
 
 
@@ -592,8 +581,6 @@ def install_ui(app: FastAPI) -> None:
                 "mode": "Managed Session Store" if session_store else "In-process checkpointer",
                 "store": session_store or None,
                 "actor": actor,
-                # Under `agentbricks dev`, the store bound in agent.toml that connects on deploy.
-                "bound_store": os.getenv(_DEV_BOUND_SESSION_STORE_ENV) or None,
             },
             "memory": {
                 "enabled": bool(memory_store),

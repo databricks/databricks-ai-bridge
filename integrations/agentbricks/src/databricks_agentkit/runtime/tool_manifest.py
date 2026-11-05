@@ -21,8 +21,6 @@ SESSION_STORE_ENV = "AGENT_SESSION_STORE"
 # Display-only: under `agentbricks dev` (where memory is off), the name of the memory store bound in
 # agent.toml, so the chat app can say it connects on deploy. Nothing resolves a store from it.
 DEV_BOUND_MEMORY_STORE_ENV = "AGENTBRICKS_DEV_BOUND_MEMORY_STORE"
-# Display-only, as above: the session store bound in agent.toml (session state stays in process).
-DEV_BOUND_SESSION_STORE_ENV = "AGENTBRICKS_DEV_BOUND_SESSION_STORE"
 # The UC model service (catalog.schema.name) each LLM call site goes through the AI Gateway, one env
 # var per role (`AGENT_MODEL_SERVICE_<ROLE>`), written by `agentbricks deploy` from agent.toml's
 # [experimental.model_services.<role>] bindings. A single-model agent uses DEFAULT_MODEL_ROLE.
