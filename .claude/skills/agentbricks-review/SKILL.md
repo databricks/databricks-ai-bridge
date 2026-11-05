@@ -1,33 +1,53 @@
-# AgentBricksReviewer rules
+---
+name: agentbricks-review
+description: Multi-lens code review of a databricks-ai-bridge PR or local branch, with verified findings and a merge safety score. The AgentBricksReviewer GitHub workflow runs it on PRs; run it locally with "/agentbricks-review [PR number or URL]" or when asked to review a PR or the current changes.
+---
 
-`.github/workflows/agentbricks-reviewer.yml` reads this file from the default
-branch, never from the PR under review, so a PR cannot change the rules it is
-judged by. The workflow prepends PR metadata, the diff location, and the PR head
-commit. Everything below is the review contract.
+# AgentBricksReviewer
+
+This skill is the review contract for this repository. It runs in two places:
+
+- **CI:** `.github/workflows/agentbricks-reviewer.yml` reads this file from the
+  default branch, never from the PR under review, so a PR cannot change the rules
+  it is judged by. The workflow prepends PR metadata, the diff location, and the
+  base and head commits, then posts the review as a PR comment.
+- **Locally:** see "Running locally" below.
 
 You coordinate the review: you dispatch reviewers, then verify, merge, and score
 what they report. Part 1 is your process, Part 2 is what every reviewer must
 follow, Part 3 is what to look for in this repository, and Part 4 is the output
 format.
 
+## Running locally
+
+1. **Find the change.**
+   - **A PR** (number or URL): save `gh pr diff <n> --repo databricks/databricks-ai-bridge`
+     to a temp file, get `baseRefOid` and `headRefOid` from
+     `gh pr view <n> --json baseRefOid,headRefOid,title,body,labels`, and run
+     `git fetch origin pull/<n>/head` so `git show <head_sha>:<path>` works.
+   - **No argument:** review the current branch against `origin/main`. Save
+     `git diff $(git merge-base origin/main HEAD)` to a temp file; this includes
+     uncommitted changes. Treat the working tree as the head: read files directly
+     instead of with `git show <head_sha>:<path>`.
+2. **Dispatch reviewers** with your runtime's sub-agent tool, following Part 1.
+   If only one vendor is available, say so, and label confidence by reviewer
+   count alone.
+3. **Report** in the Part 4 format. Show it to the user; post it to the PR only
+   if asked. Do not edit code.
+
 # Part 1: Coordinator process
 
-## 1. Pick review lenses by change size
+## 1. Review lenses
 
-Each lens is one angle of review. Size the review by changed lines in the
-computed diff statistics, excluding lockfiles and generated files:
+Each lens is one angle of review. Every review considers every lens, whatever the
+PR's size. When a lens doesn't apply to the diff (performance on a docs change,
+for example), the reviewer says it was checked and found nothing; it is never
+skipped.
 
-| Change size | Lenses |
-|---|---|
-| Small (under ~150 lines) | correctness (devil's advocate), security, tests |
-| Medium (~150–600 lines) | the above, plus public API and architecture, maintainability |
-| Large (over ~600 lines) | the above, plus performance, operational safety, agent usability |
+Priority decides where reviewers spend effort, not how severe a finding is: a P1
+lens can still produce a Critical finding.
 
-Always add the security lens when the diff touches credentials, auth, HTTP
-clients, deserialization, file paths, or subprocess calls, and the public API
-lens when it touches anything exported from a published package.
-
-Lens definitions:
+**P0: every reviewer covers both.**
 
 - **Correctness (devil's advocate):** compare what the PR claims with what the
   code does. Pick the strongest reachable failure hypotheses and state each as
@@ -37,28 +57,53 @@ Lens definitions:
   and branches that agree with each other but not with their intended meaning.
   Use at most two passes: read and hypothesize, then test each hypothesis
   against the surrounding code. A clean result is valid.
+- **Public API UX and compatibility:** the public surface is anything users or
+  agents call: names exported from a published package (its public modules,
+  `__init__`, `__all__`, or a TypeScript package's exports), the `agentbricks`
+  CLI (commands, flags, output, exit codes), MCP tool definitions, and
+  user-facing error types or messages. For every change to it, check:
+  - **Compatibility:** apply Part 3's public API compatibility and
+    cross-package version floor rules, including callers that rely on old
+    behavior with an unchanged signature.
+  - **UX for people and agents:** clear names, docstrings, and `--help` text;
+    machine-readable output where agents parse it; errors that say what went
+    wrong and how to fix it; explicit failures (non-zero exit codes, typed
+    exceptions), not silent ones.
+  - **Consistency:** new names and parameters match the existing APIs, including
+    the equivalent API in sibling packages such as `databricks-langchain` and
+    `databricks-openai`.
+
+  If the diff touches no public surface, say so.
+
+**P1: split across reviewers, each covered by at least one.**
+
 - **Security:** injection, auth or authorization bypass, on-behalf-of credential
   handling, secrets in logs or errors, unsafe deserialization, path traversal,
-  SSRF, and anything that weakens an existing boundary.
+  SSRF, and anything that weakens an existing boundary. Look hardest where the
+  diff touches credentials, auth, HTTP clients, deserialization, file paths, or
+  subprocess calls.
 - **Tests:** do the tests fail for the bug or broken contract they claim to
   guard? Look for assertions that only mirror mocks, coverage lost through
   deleted or weakened assertions, and tests at the wrong layer.
-- **Public API and architecture:** contract changes for package users, coupling
-  between packages, and whether the change belongs in core or in an integration.
-- **Maintainability:** duplication of an existing helper (name both
-  implementations), needless indirection, and comments that narrate the code.
+- **Architecture and maintainability:** coupling between packages, whether the
+  change belongs in core or in an integration, duplication of an existing helper
+  (name both implementations), needless indirection, and comments that narrate
+  the code.
 - **Performance:** extra network round trips, unbounded loops or buffering,
   repeated client construction, and blocking calls in async paths.
-- **Operational safety:** error messages a user can act on, retries and
-  timeouts, and failures that are swallowed silently.
-- **Agent usability:** these SDKs are called by AI agents; check that new tools
-  and errors have clear names, descriptions, and structured, explicit failures.
+- **Operational safety:** retries and timeouts, failures that are swallowed
+  silently, and logging that helps someone debug a failure without leaking data.
 
 ## 2. Dispatch reviewers
 
-- Group the lenses into 2–4 reviewer sub-agents and split them across vendors:
-  at least one `claude_code` reviewer and at least one `codex` reviewer. Put
-  correctness and security with different vendors when both are selected.
+- Use 2–4 reviewer sub-agents split across vendors: in CI, at least one
+  `claude_code` reviewer and at least one `codex` reviewer.
+- Give every reviewer both P0 lenses, so each P0 finding gets a second opinion
+  from another vendor. Split the P1 lenses so each is assigned to at least one
+  reviewer. With two reviewers, for example, one takes security, tests, and
+  operational safety, and the other takes architecture and maintainability, and
+  performance. For large diffs, add a third or fourth reviewer so the P1 lenses
+  get enough attention.
 - Start every reviewer in the same turn.
 - Give each reviewer the diff path and checksum, the base and head SHAs, its
   lens definitions, the PR title and description, and Part 2 and Part 3 of this
@@ -135,9 +180,10 @@ giving a score.
   `Verified-against: path:start-end`, the range you read to confirm it. Search
   base classes, shared helpers in `src/databricks_ai_bridge/`, and the
   `databricks-sdk` layer before claiming a check is missing.
-- **Read the PR's files at its head:** use `git show <head_sha>:<path>`. The
-  working directory is the default branch, not the PR. Line numbers in findings
-  are line numbers in the file at the head commit, not positions in the diff.
+- **Read the PR's files at its head:** use `git show <head_sha>:<path>`. In CI
+  and for PR reviews, the working directory is not the PR. When reviewing the
+  local working tree, read files directly. Line numbers in findings are line
+  numbers in the file at the head, not positions in the diff.
 - **Trace callers:** for each change visible to callers (signature, return
   value, fields, error behavior), compare the old and new contract and search
   every package in the repo for callers that rely on the old behavior, even
@@ -207,7 +253,9 @@ and the TypeScript packages `integrations/ai-sdk-provider` and
 # Part 4: Output format
 
 Start with one line: `**Merge safety:** <score>/100 (<risk>) · reviewers:
-<delivered>/<dispatched> · lenses: <comma-separated lenses>`.
+<delivered>/<dispatched> · findings by lens: <lens (count), ...>`, or
+`findings by lens: none` when no lens found anything. Every lens is always
+checked, so list only the lenses with findings.
 
 Then these sections, in order. Write "None." for an empty section.
 
@@ -222,6 +270,9 @@ Then these sections, in order. Write "None." for an empty section.
 6. **Summary**: exactly one `## Summary` heading containing the three
    subsections below. The workflow inserts computed diff statistics after it
    and rejects the review if a subsection is missing or empty.
+
+Mention only the reviewers that delivered. Do not list workers or tools that
+were unavailable or not installed.
 
 Write each finding as one list item:
 `[SEVERITY] [CONFIDENCE] path:line — trigger → consequence`, followed by

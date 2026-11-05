@@ -5,13 +5,15 @@ run-name: "AgentBricksReviewer #${{ github.event.pull_request.number || github.e
 # and posts its review as a PR comment. The coordinator hands review lenses to
 # Claude and GPT sub-agents through a Databricks AI Gateway, then verifies,
 # merges, and scores their findings. The process and rules are in
-# .github/agentbricks-reviewer/rules.md.
+# .claude/skills/agentbricks-review/SKILL.md, which also runs as a local skill.
 #
 # Triggers:
 #   - pull_request_target opened/reopened/ready_for_review, for non-draft PRs
-#     (including fork PRs) whose author is an OWNER/MEMBER/COLLABORATOR. Other
-#     authors' PRs need a member's `/review`. GitHub blocks pull_request_target
-#     on public repos from 2026-12-02 unless a repo Actions policy allows it.
+#     (including fork PRs) whose author has write, maintain, or admin access to
+#     this repo. The event's author_association can't be used for this: it misses
+#     members whose org membership is private. Other authors' PRs need a
+#     member's `/review`. GitHub blocks pull_request_target on public repos from
+#     2026-12-02 unless a repo Actions policy allows it.
 #   - a `/review` comment from an OWNER/MEMBER/COLLABORATOR (`/review force`
 #     re-reviews a commit that already has a review)
 #   - workflow_dispatch with a PR number
@@ -26,9 +28,11 @@ run-name: "AgentBricksReviewer #${{ github.event.pull_request.number || github.e
 # Required secrets: GATEWAY_BASE_URL (the workspace URL, https://<workspace>) and
 # either GATEWAY_CLIENT_ID + GATEWAY_CLIENT_SECRET (a service principal's OAuth
 # credentials, preferred) or LLM_API_KEY (a token for that workspace).
-# Required variables: AI_REVIEW_ANTHROPIC_MODEL, AI_REVIEW_ANTHROPIC_OPUS_MODEL,
-# AI_REVIEW_OPENAI_MODEL. Optional: AI_REVIEW_COORDINATOR_HARNESS (default codex),
-# AI_REVIEW_COORDINATOR_MODEL (default AI_REVIEW_OPENAI_MODEL).
+# Required variables: AI_REVIEW_ANTHROPIC_MODEL, AI_REVIEW_OPENAI_MODEL.
+# Optional: AI_REVIEW_COORDINATOR_HARNESS (default codex),
+# AI_REVIEW_COORDINATOR_MODEL (default AI_REVIEW_OPENAI_MODEL), and
+# AI_REVIEW_ANTHROPIC_OPUS_MODEL (the gateway model behind Claude Code's "opus"
+# alias, needed only if Claude Code calls that alias).
 #
 # Packages: the protected runners block public registries, so omnigent and the
 # harness CLIs install through Databricks' JFrog, authenticated with the job's
@@ -77,8 +81,7 @@ jobs:
       (
         github.event_name == 'pull_request_target' &&
         !github.event.pull_request.draft &&
-        github.event.pull_request.user.type != 'Bot' &&
-        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+        github.event.pull_request.user.type != 'Bot'
       ) || (
         github.event_name == 'issue_comment' &&
         github.event.issue.pull_request != null &&
@@ -117,8 +120,29 @@ jobs:
           COMMENT_ID: ${{ github.event.comment.id }}
         run: gh api "repos/$REPO/issues/comments/$COMMENT_ID/reactions" -f content=eyes --silent || true
 
+      - name: Check the PR author's access
+        id: author
+        if: github.event_name == 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
+        run: |
+          # gh prints the error body to stdout on failure, so don't use its output then.
+          if ! permission="$(gh api "repos/$REPO/collaborators/$AUTHOR/permission" --jq .permission 2>/dev/null)"; then
+            permission=unknown
+          fi
+          case "$permission" in
+            admin|maintain|write)
+              echo "$AUTHOR has $permission access (author_association: $AUTHOR_ASSOCIATION); reviewing." ;;
+            *)
+              echo "::notice::Not auto-reviewing: $AUTHOR has '$permission' access (author_association: $AUTHOR_ASSOCIATION). A member can comment /review."
+              echo "skip=true" >> "$GITHUB_OUTPUT" ;;
+          esac
+
       - name: Skip if this commit already has a review
         id: dupe
+        if: steps.author.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           COMMENT_BODY: ${{ github.event.comment.body }}
@@ -160,7 +184,7 @@ jobs:
             || echo "::warning::Could not post the pending status on the PR."
 
       - name: Get gateway credentials
-        if: steps.dupe.outputs.skip != 'true'
+        if: steps.author.outputs.skip != 'true' && steps.dupe.outputs.skip != 'true'
         id: creds
         env:
           GATEWAY_BASE_URL: ${{ secrets.GATEWAY_BASE_URL }}
@@ -320,7 +344,6 @@ jobs:
           set -euo pipefail
           : "${GATEWAY_BASE_URL:?Set the GATEWAY_BASE_URL secret}"
           : "${ANTHROPIC_MODEL:?Set the AI_REVIEW_ANTHROPIC_MODEL variable}"
-          : "${ANTHROPIC_OPUS_MODEL:?Set the AI_REVIEW_ANTHROPIC_OPUS_MODEL variable}"
           : "${OPENAI_MODEL:?Set the AI_REVIEW_OPENAI_MODEL variable}"
           echo "DATABRICKS_BEARER=${LLM_API_KEY}" >> "$GITHUB_ENV"
           # Python writes the files so secrets are never interpolated into shell or YAML.
@@ -346,8 +369,8 @@ jobs:
                           "api_key_ref": "env:LLM_API_KEY",
                           "models": {
                               "default": os.environ["ANTHROPIC_MODEL"],
-                              # Claude's auto-permission classifier needs a routable Opus fallback.
-                              "opus": os.environ["ANTHROPIC_OPUS_MODEL"],
+                              # Maps Claude Code's "opus" alias to a gateway model; omitted when unset.
+                              **({"opus": opus} if (opus := os.environ.get("ANTHROPIC_OPUS_MODEL")) else {}),
                           },
                       },
                       "openai": {
@@ -399,7 +422,10 @@ jobs:
           python3 - <<'PYEOF'
           import hashlib, json, os, pathlib
 
-          rules = pathlib.Path(os.environ["GITHUB_WORKSPACE"], ".github/agentbricks-reviewer/rules.md").read_text()
+          rules = pathlib.Path(os.environ["GITHUB_WORKSPACE"], ".claude/skills/agentbricks-review/SKILL.md").read_text()
+          # Drop the skill's YAML front matter; the prompt needs only the body.
+          if rules.startswith("---\n"):
+              rules = rules.split("\n---\n", 1)[1]
           meta = json.loads(pathlib.Path("/tmp/pr_meta.json").read_text())
           diff_sha256 = hashlib.sha256(pathlib.Path("/tmp/pr_diff.txt").read_bytes()).hexdigest()
           stats = json.loads(pathlib.Path("/tmp/pr_diff_summary.json").read_text())
@@ -511,7 +537,7 @@ jobs:
 
       - name: Validate review and add diff statistics
         if: steps.reviewer.outputs.review_ready == 'true'
-        # Fails if the Summary/Changes/Tests/Scope contract in rules.md is not met.
+        # Fails if the Summary/Changes/Tests/Scope contract in the agentbricks-review skill is not met.
         run: python3 "$OMNIGENT_DIR/.github/scripts/polly-review-summary.py" compose /tmp/pr_diff_summary.json /tmp/review.txt
 
       - name: Scan review for secrets

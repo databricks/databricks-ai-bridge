@@ -39,6 +39,10 @@ ruff check && ruff format
 ty check
 ```
 
+## Code Review
+
+AgentBricksReviewer (`.github/workflows/agentbricks-reviewer.yml`) reviews PRs automatically and posts its review as a PR comment; comment `/review` to re-run it. Its rules live in [`.claude/skills/agentbricks-review/SKILL.md`](.claude/skills/agentbricks-review/SKILL.md), which also runs locally: `/agentbricks-review [PR number or URL]`, or with no argument to review the current branch against `origin/main`. CI always uses the copy on the default branch, so edits to the skill take effect after they merge.
+
 ## Integration Tests
 
 Integration tests hit live Databricks APIs (no mocks). See [`tests/README.md`](tests/README.md) for what tests exist, their coverage, and how to run them. See [`.claude/skills/integration-tests.md`](.claude/skills/integration-tests.md) for principles and patterns when writing new tests (trigger with `/integration-tests`).
