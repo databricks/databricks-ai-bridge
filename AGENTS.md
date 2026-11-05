@@ -43,6 +43,8 @@ ty check
 
 AgentBricksReviewer (`.github/workflows/agentbricks-reviewer.yml`) reviews PRs automatically and posts its review as a PR comment; comment `/review` to re-run it. Its rules live in [`.claude/skills/agentbricks-review/SKILL.md`](.claude/skills/agentbricks-review/SKILL.md), which also runs locally: `/agentbricks-review [PR number or URL]`, or with no argument to review the current branch against `origin/main`. CI always uses the copy on the default branch, so edits to the skill take effect after they merge.
 
+When the `AI_REVIEW_AUTO_APPROVE` repo variable is `true`, the workflow also approves PRs that pass [`.github/scripts/agentbricks_auto_approve.py`](.github/scripts/agentbricks_auto_approve.py): a high merge safety score, no blocking, security, or uncertain findings, a small diff that doesn't touch CI, review rules, dependencies, or credential code, and an author with write access. Pushing new commits dismisses that approval.
+
 ## Integration Tests
 
 Integration tests hit live Databricks APIs (no mocks). See [`tests/README.md`](tests/README.md) for what tests exist, their coverage, and how to run them. See [`.claude/skills/integration-tests.md`](.claude/skills/integration-tests.md) for principles and patterns when writing new tests (trigger with `/integration-tests`).
