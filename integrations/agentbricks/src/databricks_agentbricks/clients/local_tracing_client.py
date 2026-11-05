@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import pathlib
 import socket
 import subprocess
@@ -45,7 +46,16 @@ def _mlflow_server_argv(db: pathlib.Path, artifacts: pathlib.Path, port: int) ->
         "127.0.0.1",
         "--port",
         str(port),
+        # One developer's traces don't need MLflow's default of four workers.
+        "--workers",
+        "1",
     ]
+
+
+def _mlflow_server_env() -> dict[str, str]:
+    # The job runner only serves server-side scorers, evaluation, and prompt optimization; with the
+    # extra workers it costs about 2 GB.
+    return {**os.environ, "MLFLOW_SERVER_ENABLE_JOB_EXECUTION": "false"}
 
 
 def _wait_for_server(base_url: str, server: subprocess.Popen, timeout: float = 60.0) -> bool:
@@ -78,6 +88,7 @@ class LocalTracingClient:
             with (agentbricks_dir / "mlflow-server.log").open("w") as log:
                 server = subprocess.Popen(
                     _mlflow_server_argv(db, artifacts, port),
+                    env=_mlflow_server_env(),
                     stdout=log,
                     stderr=subprocess.STDOUT,
                 )
@@ -106,6 +117,7 @@ class LocalTracingClient:
             with (db.parent / "mlflow-read.log").open("w") as log:
                 server = subprocess.Popen(
                     _mlflow_server_argv(db, artifacts, port),
+                    env=_mlflow_server_env(),
                     stdout=log,
                     stderr=subprocess.STDOUT,
                 )
