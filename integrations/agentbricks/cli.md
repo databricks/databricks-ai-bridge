@@ -627,12 +627,12 @@ Manage pipelines that distill session history into long-term memory.
 
 | Subcommand | Description |
 | --- | --- |
-| [`memory pipeline create`](#agentbricks-memory-pipeline-create) | Create a Dreamer memory pipeline. |
-| [`memory pipeline list`](#agentbricks-memory-pipeline-list) | List Dreamer memory pipelines in the workspace. |
-| [`memory pipeline get`](#agentbricks-memory-pipeline-get) | Get a Dreamer memory pipeline by id or resource name. |
+| [`memory pipeline create`](#agentbricks-memory-pipeline-create) | Create a Dreaming memory pipeline. |
+| [`memory pipeline list`](#agentbricks-memory-pipeline-list) | List Dreaming memory pipelines in the workspace. |
+| [`memory pipeline get`](#agentbricks-memory-pipeline-get) | Get a Dreaming memory pipeline by id or resource name. |
 | [`memory pipeline update`](#agentbricks-memory-pipeline-update) | Update a pipeline's display name, instructions, model, or trigger. |
-| [`memory pipeline delete`](#agentbricks-memory-pipeline-delete) | Delete a Dreamer memory pipeline and its backing job. |
-| [`memory pipeline run`](#agentbricks-memory-pipeline-run) | Manually run a Dreamer memory pipeline. |
+| [`memory pipeline delete`](#agentbricks-memory-pipeline-delete) | Delete a Dreaming memory pipeline and its backing job. |
+| [`memory pipeline run`](#agentbricks-memory-pipeline-run) | Manually run a Dreaming memory pipeline. |
 | [`memory pipeline pause`](#agentbricks-memory-pipeline-pause) | Pause scheduled runs; active runs continue and manual runs remain available. |
 | [`memory pipeline resume`](#agentbricks-memory-pipeline-resume) | Enable scheduled runs, automatically about every 24 hours. |
 | [`memory pipeline runs`](#agentbricks-memory-pipeline-runs) | Inspect memory pipeline runs. |
@@ -647,7 +647,7 @@ agentbricks memory pipeline create --memory-store TEXT --session-store TEXT [opt
 | --- | --- | --- | --- | --- |
 | `--memory-store` | string | - | yes | Memory store name or resource name. |
 | `--session-store` | string | - | yes | Session store name or resource name. |
-| `--model` | string | - | no | Model service used for Dreamer distillation. |
+| `--model` | string | - | no | Model service used for Dreaming distillation. |
 | `--display-name` | string | - | no | Optional human-readable pipeline name. |
 | `--instructions` | string | - | no | Instructions steering distillation: inline text or @path to a UTF-8 file. |
 | `--trigger <manual\|scheduled>` | `manual` \| `scheduled` | `manual` | no | How runs start: only when you start one, or also automatically about every 24 hours. |
@@ -780,7 +780,7 @@ Text output renders pipeline run details; global `--output json` returns the nat
 
 ##### `agentbricks memory pipeline run`
 
-Trigger the pipeline's Dreamer engine and return the newly created run.
+Trigger the pipeline's Dreaming engine and return the newly created run.
 
 ```text
 agentbricks memory pipeline run NAME
