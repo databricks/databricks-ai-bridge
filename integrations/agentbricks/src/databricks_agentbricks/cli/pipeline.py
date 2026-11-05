@@ -39,7 +39,7 @@ def _store_id(name: Any) -> str | None:
 def _render_detail(pipeline: dict) -> None:
     policy = field(pipeline, "dreamer_policy") or {}
     render.detail(
-        "Dreamer",
+        "Dreaming",
         field(pipeline, "display_name") or field(pipeline, "name") or "—",
         {
             "Resource name": field(pipeline, "name"),
@@ -58,7 +58,7 @@ def _render_detail(pipeline: dict) -> None:
 
 def _render_run(run: dict) -> None:
     render.detail(
-        "Dreamer Run",
+        "Dreaming Run",
         field(run, "name") or "—",
         {
             "Resource name": field(run, "name"),
@@ -78,7 +78,7 @@ def pipeline() -> None:
 @pipeline.command("create")
 @click.option("--memory-store", required=True, help="Memory store name or resource name.")
 @click.option("--session-store", required=True, help="Session store name or resource name.")
-@click.option("--model", default=None, help="Model service used for Dreamer distillation.")
+@click.option("--model", default=None, help="Model service used for Dreaming distillation.")
 @click.option("--display-name", default=None, help="Optional human-readable pipeline name.")
 @click.option(
     "--instructions",
@@ -95,7 +95,7 @@ def pipeline() -> None:
 )
 @click.pass_obj
 def create(obj, memory_store, session_store, model, display_name, instructions, trigger) -> None:
-    """Create a Dreamer memory pipeline."""
+    """Create a Dreaming memory pipeline."""
     data = obj.client().create_memory_pipeline(
         memory_store=memory_store,
         session_store=session_store,
@@ -108,7 +108,7 @@ def create(obj, memory_store, session_store, model, display_name, instructions, 
         render.emit_json(data)
         return
     render.success(
-        "Created Dreamer memory pipeline",
+        "Created Dreaming memory pipeline",
         fields={"Resource name": field(data, "name")},
         next_steps=[
             (f"agentbricks memory pipeline get {field(data, 'name')}", "View the pipeline"),
@@ -122,14 +122,14 @@ def create(obj, memory_store, session_store, model, display_name, instructions, 
 @click.option("--page-token", default=None)
 @click.pass_obj
 def list_(obj, page_size, page_token) -> None:
-    """List Dreamer memory pipelines in the workspace."""
+    """List Dreaming memory pipelines in the workspace."""
     data = obj.client().list_memory_pipelines(page_size, page_token)
     if obj.output == "json":
         render.emit_json(data)
         return
     pipelines = field(data, "memory_pipelines") or []
     render.resource_table(
-        "Dreamer Memory Pipelines",
+        "Dreaming Memory Pipelines",
         [
             ("Resource name", "left"),
             ("Session store", "left"),
@@ -158,7 +158,7 @@ def list_(obj, page_size, page_token) -> None:
 @click.argument("name")
 @click.pass_obj
 def get(obj, name) -> None:
-    """Get a Dreamer memory pipeline by id or resource name."""
+    """Get a Dreaming memory pipeline by id or resource name."""
     data = obj.client().get_memory_pipeline(name)
     if obj.output == "json":
         render.emit_json(data)
@@ -240,20 +240,20 @@ def resume(obj, name) -> None:
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
 @click.pass_obj
 def delete(obj, name, yes) -> None:
-    """Delete a Dreamer memory pipeline and its backing job."""
-    render.confirm_destroy(f"Dreamer memory pipeline '{name}'", assume_yes=yes)
+    """Delete a Dreaming memory pipeline and its backing job."""
+    render.confirm_destroy(f"Dreaming memory pipeline '{name}'", assume_yes=yes)
     obj.client().delete_memory_pipeline(name)
     if obj.output == "json":
         render.emit_json({"deleted": name})
         return
-    render.success(f"Deleted Dreamer memory pipeline '{name}'")
+    render.success(f"Deleted Dreaming memory pipeline '{name}'")
 
 
 @pipeline.command("run")
 @click.argument("name")
 @click.pass_obj
 def run(obj, name) -> None:
-    """Manually run a Dreamer memory pipeline."""
+    """Manually run a Dreaming memory pipeline."""
     try:
         data = obj.client().run_memory_pipeline(name)
     except AgentCliError as exc:
