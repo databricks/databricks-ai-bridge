@@ -1505,6 +1505,8 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
             cc_msg.pop("name")
         role = cc_msg["role"]
         if role == "assistant":
+            # Responses API messages carry each call both as a content block and in tool_calls.
+            emitted_call_ids = set()
             if isinstance(cc_msg.get("content"), list):
                 for block in cc_msg["content"]:
                     if isinstance(block, dict) and (block_type := block.get("type")):
@@ -1563,6 +1565,8 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
                                 block["id"] = _truncate(raw_id)
                             elif len(block["id"]) > _MAX_ID:
                                 block["id"] = _truncate(block["id"])
+                            if block_type == "function_call" and (call_id := block.get("call_id")):
+                                emitted_call_ids.add(call_id)
                             input_items.append(block)
             elif isinstance(cc_msg.get("content"), str):
                 input_items.append(
@@ -1585,6 +1589,7 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
                             "arguments": tool_call["function"]["arguments"],
                         }
                         for tool_call in tool_calls
+                        if tool_call["id"] not in emitted_call_ids
                     ]
                 )
         elif role == "tool":
