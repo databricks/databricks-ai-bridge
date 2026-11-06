@@ -14,7 +14,7 @@ class PromptTest(unittest.TestCase):
     def setUp(self):
         root = Path(__file__).resolve().parents[2]
         self.root = root
-        self.workflow = (root / ".github/workflows/agentbricks-reviewer.yml").read_text()
+        self.workflow = (root / ".github/workflows/pr-reviewer.yml").read_text()
         start = self.workflow.index(
             "          import hashlib, html, json, os, pathlib\n"
         )
