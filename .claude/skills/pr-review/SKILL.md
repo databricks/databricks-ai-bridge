@@ -1,6 +1,6 @@
 ---
-name: agentbricks-review
-description: Multi-lens code review of a PR or local branch in any repository, with auto-discovered REVIEW.md criteria, verified findings, and a merge safety score.
+name: pr-review
+description: Multi-lens review of a pull request or local branch in any repository, with auto-discovered REVIEW.md criteria, verified findings, and a merge safety score.
 ---
 
 # Multi-lens repository review
@@ -8,7 +8,7 @@ description: Multi-lens code review of a PR or local branch in any repository, w
 This skill is a reusable review contract. A repository supplies its own criteria
 through root and directory-scoped `REVIEW.md` files. It runs in two places here:
 
-- **CI:** `.github/workflows/agentbricks-reviewer.yml` reads this file from the
+- **CI:** a repository workflow can read this file from the
   default branch, never from the PR under review, so a PR cannot change the rules
   it is judged by. The workflow prepends PR metadata, the diff location, and the
   base and head commits, then posts the review as a PR comment.

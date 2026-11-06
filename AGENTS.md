@@ -41,7 +41,7 @@ ty check
 
 ## Code Review
 
-AgentBricksReviewer (`.github/workflows/agentbricks-reviewer.yml`) reviews PRs automatically and posts its review as a PR comment; comment `/review` to re-run it. Its process lives in [`.claude/skills/agentbricks-review/SKILL.md`](.claude/skills/agentbricks-review/SKILL.md), which also runs locally: `/agentbricks-review [PR number or URL]`, or with no argument to review the current branch against `origin/main`. Reviews always load root [`REVIEW.md`](REVIEW.md), then auto-discover additional `REVIEW.md` files scoped to changed paths. CI uses these files from the default branch, so edits take effect after they merge.
+AgentBricksReviewer (`.github/workflows/agentbricks-reviewer.yml`) reviews PRs automatically and posts its review as a PR comment; comment `/review` to re-run it. Its generic process lives in [`.claude/skills/pr-review/SKILL.md`](.claude/skills/pr-review/SKILL.md), which also runs locally: `/pr-review [PR number or URL]`, or with no argument to review the current branch against the repository's default branch. Reviews always load root [`REVIEW.md`](REVIEW.md), then auto-discover additional `REVIEW.md` files scoped to changed paths. CI uses these files from the default branch, so edits take effect after they merge.
 
 ## Integration Tests
 

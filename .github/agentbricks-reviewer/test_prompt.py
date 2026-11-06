@@ -56,7 +56,7 @@ class PromptTest(unittest.TestCase):
     def test_arbitrary_root_and_scoped_rules_are_injected_once(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            skill = workspace / ".claude/skills/agentbricks-review/SKILL.md"
+            skill = workspace / ".claude/skills/pr-review/SKILL.md"
             skill.parent.mkdir(parents=True)
             skill.write_text((self.root / skill.relative_to(workspace)).read_text())
             root_rules = "# General rules\n\nGENERAL-001\n"
@@ -75,7 +75,7 @@ class PromptTest(unittest.TestCase):
         self.assertLess(prompt.index(root_rules), prompt.index(scoped_rules))
         self.assertIn('<review_rules source="REVIEW.md">', prompt)
         self.assertIn('<review_rules source="packages/example/REVIEW.md">', prompt)
-        self.assertNotIn("name: agentbricks-review", prompt)
+        self.assertNotIn("name: pr-review", prompt)
         self.assertIn("# Part 1: Coordinator process", prompt)
 
     def test_agentbricks_change_loads_its_automation_policy(self):
