@@ -1274,7 +1274,7 @@ Deploy derives Apps user scopes from explicit `auth = "user"` bindings and union
 | UC function | `mcp.functions` |
 | Sandbox with a Volume downscope | `ai-gateway`, `files` |
 | First-class Genie One or Genie Agent | `genie` |
-| Sandbox with token injection | `ai-gateway`, `workspace.workspace` |
+| Sandbox with token injection | `ai-gateway`, `workspace.workspace`, `files`, `sql`, `catalog.catalogs:read`, `catalog.schemas:read`, `catalog.tables:read` |
 | Sandbox with token injection disabled | `ai-gateway` |
 
 For example, bind Genie tools in a current project with `server = "agentbricks"`:
@@ -1302,15 +1302,20 @@ The `system.ai.dbsql` managed MCP additionally requests the Apps `sql` user scop
 API consent, not `sql:restricted-query`; read-only enforcement remains the service policy plus the
 requesting user's Unity Catalog grants. DBSQL does not use Databricks Connect.
 
-When a user-auth sandbox has `databricks_access_token_included = true`, it requests the Apps
-`workspace.workspace` user scope so the injected credential can call workspace APIs. A sandbox
-binding with a Volume downscope additionally requests the Apps `files` user scope.
-OAuth consent does not grant Volume access: the requesting user still needs the corresponding
-Unity Catalog privileges, and the sandbox downscope remains authoritative. A sandbox binding with
-token injection disabled does not request `workspace.workspace`; its other resource-derived scopes
-still apply. Databricks Apps rejects the legacy bare `workspace` scope, so Agent Bricks requests
-`workspace.workspace`. These scopes are requested only for `auth = "user"`; `auth = "app"` uses
-the App service principal's permissions instead.
+When a user-auth sandbox has `databricks_access_token_included = true`, the injected credential
+carries only the App's user API scopes, so the sandbox requests `workspace.workspace` (workspace
+files), `files` (Volume files through the Files API), `sql` (SQL warehouses through the Statement
+Execution API), and `catalog.catalogs:read`, `catalog.schemas:read`, and `catalog.tables:read`
+(Unity Catalog metadata). Apps has no user API scope for Databricks Connect, clusters, jobs, or
+secrets, so sandbox code cannot call those APIs as the request user; use `auth = "app"` for them.
+An existing App deployed before these defaults needs `--allow-user-scope-update` once. A sandbox
+binding with a Volume downscope also requests the Apps `files` user scope.
+OAuth consent does not grant data access: the requesting user still needs the corresponding
+Unity Catalog and warehouse privileges, and the sandbox downscope remains authoritative. A sandbox
+binding with token injection disabled requests none of these credential scopes; its other
+resource-derived scopes still apply. Databricks Apps rejects the legacy bare `workspace` scope, so
+Agent Bricks requests `workspace.workspace`. These scopes are requested only for `auth = "user"`;
+`auth = "app"` uses the App service principal's permissions instead.
 
 Review the target App's scopes and coordinate with its other owners before allowing the update. Once
 those scopes are present, later deploys do not need the flag. The CLI preserves unrelated scopes,
