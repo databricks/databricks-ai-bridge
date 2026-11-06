@@ -107,6 +107,9 @@ class DecideTest(unittest.TestCase):
         for path, fragment in (
             (".github/workflows/agentbricks-reviewer.yml", "CI or review configuration"),
             (".claude/skills/agentbricks-review/SKILL.md", "CI or review configuration"),
+            ("REVIEW.md", "CI or review configuration"),
+            ("integrations/agentbricks/REVIEW.md", "CI or review configuration"),
+            ("integrations/openai/REVIEW.md", "CI or review configuration"),
             ("integrations/openai/pyproject.toml", "dependency manifest"),
             ("uv.lock", "dependency manifest"),
             ("integrations/langchainjs/package-lock.json", "dependency manifest"),
@@ -121,6 +124,17 @@ class DecideTest(unittest.TestCase):
 
     def test_names_that_only_contain_auth_are_allowed(self):
         self.assertTrue(gate.decide(review(), diff("docs/authors.md", "integrations/agentbricks/src/databricks_agentbricks/author_utils.py"))["approve"])
+
+    def test_other_guidance_docs_remain_eligible(self):
+        for path in (
+            "AGENTS.md",
+            "CLAUDE.md",
+            "integrations/agentbricks/AGENTS.md",
+            "integrations/agentbricks/CLAUDE.md",
+            ".agents/skills/agentbricks-review/SKILL.md",
+        ):
+            with self.subTest(path):
+                self.assertTrue(gate.decide(review(), diff(path))["approve"])
 
     def test_changes_outside_agentbricks_are_refused_unless_docs(self):
         for path in (

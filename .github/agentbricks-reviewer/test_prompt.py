@@ -4,6 +4,8 @@ import ast
 import copy
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -91,6 +93,70 @@ class PromptTest(unittest.TestCase):
 
     def test_workflow_does_not_hardcode_the_agentbricks_rule_file(self):
         self.assertNotIn('"integrations/agentbricks/REVIEW.md"', self.workflow)
+
+
+class ChangedPathsTest(unittest.TestCase):
+    def test_shallow_diverged_pr_includes_both_rename_scopes(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / ".github/workflows/agentbricks-reviewer.yml").read_text()
+        fetch = next(
+            line.strip() for line in workflow.splitlines()
+            if line.strip().startswith("git fetch --quiet --no-tags --depth=1 origin")
+        )
+        start = workflow.index("          import json, pathlib, subprocess, sys\n")
+        end = workflow.index("\n          PYCHANGED", start)
+        collector = "\n".join(line[10:] for line in workflow[start:end].splitlines())
+
+        with tempfile.TemporaryDirectory() as directory:
+            scratch = Path(directory)
+            source = scratch / "source"
+            source.mkdir()
+            env = dict(
+                os.environ, GIT_AUTHOR_NAME="Test", GIT_AUTHOR_EMAIL="test@example.com",
+                GIT_COMMITTER_NAME="Test", GIT_COMMITTER_EMAIL="test@example.com",
+            )
+
+            def git(*args, cwd=source):
+                return subprocess.check_output(
+                    ["git", *args], cwd=cwd, env=env, stderr=subprocess.PIPE, text=True
+                ).strip()
+
+            git("init", "-q", "-b", "main")
+            old = "packages/old name.py"
+            new = "integrations/agentbricks/new name.py"
+            (source / old).parent.mkdir(parents=True)
+            (source / old).write_text("unchanged content\n")
+            git("add", ".")
+            git("commit", "-qm", "shared ancestor")
+            merge_base = git("rev-parse", "HEAD")
+            git("checkout", "-qb", "feature")
+            (source / new).parent.mkdir(parents=True)
+            git("mv", old, new)
+            git("commit", "-qm", "move between scopes")
+            head = git("rev-parse", "HEAD")
+            git("checkout", "-q", "main")
+            (source / "main-only.txt").write_text("unrelated base change\n")
+            git("add", ".")
+            git("commit", "-qm", "advance main")
+            base = git("rev-parse", "HEAD")
+            checkout = scratch / "checkout"
+            git("clone", "-q", "--depth=1", source.as_uri(), str(checkout))
+            subprocess.run(
+                ["bash", "-c", fetch], cwd=checkout, check=True,
+                env=dict(env, base_sha=base, head_sha=head, merge_base_sha=merge_base),
+                capture_output=True, text=True,
+            )
+            self.assertEqual(git("rev-parse", "--is-shallow-repository", cwd=checkout), "true")
+            output = scratch / "changed.json"
+            collector = collector.replace('"/tmp/pr_changed_paths.json"', repr(str(output)))
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(checkout)
+                with patch.object(sys, "argv", ["collector", merge_base, head]):
+                    exec(compile(collector, "workflow-changed-paths", "exec"), {})
+            finally:
+                os.chdir(original_cwd)
+            self.assertEqual(set(json.loads(output.read_text())), {old, new})
 
 
 if __name__ == "__main__":
