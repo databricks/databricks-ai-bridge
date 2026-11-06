@@ -136,8 +136,8 @@ def assess_change_risk(review: str, files: list[str], lines: int, diff: str = ""
         floor("medium", "production changes span multiple packages: " + ", ".join(sorted(components)))
     if lines > 1000 or len(files) > 30:
         floor("high", "the change exceeds 1000 lines or 30 paths")
-    elif lines > 200 or len(files) > 10:
-        floor("medium", "the change exceeds 200 lines or 10 paths")
+    elif len(files) > 10:
+        floor("medium", "the change exceeds 10 paths")
     if "GIT binary patch" in diff or re.search(r"^Binary files .+ differ$", diff, re.MULTILINE):
         floor("high", "binary changes need human review")
     if score is not None:

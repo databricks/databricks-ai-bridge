@@ -231,13 +231,23 @@ class ChangeRiskTest(unittest.TestCase):
 
     def test_size_and_binary_changes_raise_risk(self):
         for content, expected in (
-            (diff(CODE, added=201), "medium"), (diff(CODE, added=1001), "high"),
+            (diff(CODE, added=1001), "high"),
             (diff(*[f"docs/{i}.md" for i in range(11)]), "medium"),
             (diff(*[f"docs/{i}.md" for i in range(31)]), "high"),
             (diff(CODE) + "Binary files a/image.png and b/image.png differ\n", "high"),
         ):
             with self.subTest(expected=expected):
                 self.assertEqual(gate.decide(review(), content)["risk"]["level"], expected)
+
+    def test_line_limit_controls_approval_without_changing_risk(self):
+        content = diff(CODE, added=201)
+        limited = gate.decide(review(), content)
+        self.assertEqual(limited["risk"]["level"], "low")
+        self.assertFalse(limited["approve"])
+        self.assertIn("201 changed lines is over the 200-line limit", limited["reasons"])
+        relaxed = gate.decide(review(), content, max_lines=300)
+        self.assertTrue(relaxed["approve"], relaxed)
+        self.assertEqual(relaxed["risk"], limited["risk"])
 
     def test_canonical_changed_paths_drive_scope_and_risk(self):
         paths = ["integrations/agentbricks/src/cli/new command.py"]

@@ -26,8 +26,10 @@ The reviewer considers actual behavior, affected users/packages, public API
 compatibility, credentials/data writes, tests, and rollback. CI adds minimum
 risk levels: protected CI/review/dependency/credential paths, migration/release
 behavior, and binaries are high; public CLI/API/runtime/persistence paths and
-multiple production packages are at least medium. More than 200 changed lines
-or 10 paths is at least medium; more than 1000 lines or 30 paths is high. CI
+multiple production packages are at least medium. More than 10 paths is at
+least medium; more than 1000 lines or 30 paths is high. The configurable
+`AI_REVIEW_AUTO_APPROVE_MAX_LINES` separately limits approval eligibility without
+changing the risk classification. CI
 caps the safety score at 89 or 59 when a minimum risk level applies and shows
 the reasons in the review comment. Root and scoped REVIEW.md changes remain
 protected; this does not add AGENTS.md or CLAUDE.md to the protected filenames.
