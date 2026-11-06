@@ -1,11 +1,11 @@
-name: PRReviewer
-run-name: "PRReviewer #${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}"
+name: AutoReviewer
+run-name: "AutoReviewer #${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}"
 
-# PRReviewer runs omnigent's Polly coordinator agent headlessly on a PR
+# AutoReviewer runs omnigent's Polly coordinator agent headlessly on a PR
 # and posts its review as a PR comment. The coordinator hands review lenses to
 # Claude and GPT sub-agents through a Databricks AI Gateway, then verifies,
 # merges, and scores their findings. The process and rules are in
-# .claude/skills/pr-review/SKILL.md, which also runs as a local skill.
+# .claude/skills/auto-reviewer/SKILL.md, which also runs as a local skill.
 #
 # Triggers:
 #   - pull_request_target opened/reopened/ready_for_review, for non-draft PRs
@@ -70,13 +70,13 @@ env:
   # (.github/actions/setup-harness-cli/manifest.json); bump them together.
   CLAUDE_CODE_VERSION: "2.1.295"
   CODEX_VERSION: "0.142.0"
-  OMNIGENT_CI_PIPELINE: pr-reviewer
+  OMNIGENT_CI_PIPELINE: auto-reviewer
   OMNIGENT_SKIP_WEB_UI: "true"
   UV_VERSION: "0.13.5"
 
 jobs:
   review:
-    name: PRReviewer
+    name: AutoReviewer
     if: >-
       (
         github.event_name == 'pull_request_target' &&
@@ -103,7 +103,7 @@ jobs:
       # GitHub OIDC token, exchanged for a JFrog package-mirror token.
       id-token: write
     concurrency:
-      group: pr-reviewer-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
+      group: auto-reviewer-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
       cancel-in-progress: false
     env:
       REPO: ${{ github.repository }}
@@ -162,7 +162,7 @@ jobs:
           # Only bot comments count, so a human quoting the marker cannot suppress a review.
           if gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
                --jq '.[] | select(.user.type == "Bot") | .body' \
-             | grep -qF "<!-- pr-reviewer-sha: ${head_sha} -->"; then
+             | grep -qF "<!-- auto-reviewer-sha: ${head_sha} -->"; then
             echo "::notice::${head_sha} already has a review; comment '/review force' to re-run."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
@@ -179,7 +179,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           gh api "repos/$REPO/statuses/$HEAD_SHA" --silent \
-            -f state=pending -f context=PRReviewer \
+            -f state=pending -f context=AutoReviewer \
             -f description="Review in progress" -f target_url="$RUN_URL" \
             || echo "::warning::Could not post the pending status on the PR."
 
@@ -216,7 +216,7 @@ jobs:
             fi
           fi
           if [ -z "${LLM_API_KEY:-}" ]; then
-            echo "::notice::Skipping PRReviewer: set GATEWAY_CLIENT_ID and GATEWAY_CLIENT_SECRET (or LLM_API_KEY)."
+            echo "::notice::Skipping AutoReviewer: set GATEWAY_CLIENT_ID and GATEWAY_CLIENT_SECRET (or LLM_API_KEY)."
             echo "available=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -431,7 +431,7 @@ jobs:
           python3 - <<'PYEOF'
           import hashlib, html, json, os, pathlib
 
-          rules = pathlib.Path(os.environ["GITHUB_WORKSPACE"], ".claude/skills/pr-review/SKILL.md").read_text()
+          rules = pathlib.Path(os.environ["GITHUB_WORKSPACE"], ".claude/skills/auto-reviewer/SKILL.md").read_text()
           # Drop the skill's YAML front matter; the prompt needs only the body.
           if rules.startswith("---\n"):
               rules = rules.split("\n---\n", 1)[1]
@@ -478,7 +478,7 @@ jobs:
           body = meta.get("body") or ""
           labels = ", ".join(label["name"] for label in meta.get("labels") or []) or "(none)"
 
-          prompt = f"""You are PRReviewer. Review this pull request by following the rules below.
+          prompt = f"""You are AutoReviewer. Review this pull request by following the rules below.
 
           ## PR metadata
           - Title: {meta['title']}
@@ -525,12 +525,12 @@ jobs:
 
           IMPORTANT: your output is posted directly as a PR comment. Output only the
           final review, with no coordination or status messages. Begin with the exact
-          marker <!-- PR_REVIEW_START --> on its own line; nothing before it is shown.
+          marker <!-- AUTO_REVIEW_START --> on its own line; nothing before it is shown.
           """
           pathlib.Path("/tmp/review_prompt.txt").write_text(prompt)
           PYEOF
 
-      - name: Run PRReviewer
+      - name: Run AutoReviewer
         if: steps.creds.outputs.available == 'true'
         id: reviewer
         env:
@@ -559,27 +559,27 @@ jobs:
               --no-session \
             2>/tmp/reviewer_stderr.log | tee /tmp/reviewer_output.txt || status=$?
           if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
-            echo "::error::PRReviewer timed out; no review was published."
+            echo "::error::AutoReviewer timed out; no review was published."
             exit "$status"
           elif [ "$status" -ne 0 ]; then
-            echo "::warning::PRReviewer exited with status $status"
+            echo "::warning::AutoReviewer exited with status $status"
           fi
 
           # Headless output can include drafts; keep only text after the last marker line.
           python3 - <<'PYEOF'
           import pathlib, re
           raw = pathlib.Path("/tmp/reviewer_output.txt").read_text()
-          markers = list(re.finditer(r"^<!-- PR_REVIEW_START -->$", raw, re.MULTILINE))
+          markers = list(re.finditer(r"^<!-- AUTO_REVIEW_START -->$", raw, re.MULTILINE))
           review = raw[markers[-1].end():].lstrip("\n") if markers else ""
           if not review.strip():
-              raise SystemExit("::error::PRReviewer produced no publishable review; see the diagnostics artifact.")
+              raise SystemExit("::error::AutoReviewer produced no publishable review; see the diagnostics artifact.")
           pathlib.Path("/tmp/review.txt").write_text(review)
           PYEOF
           echo "review_ready=true" >> "$GITHUB_OUTPUT"
 
       - name: Validate review and add diff statistics
         if: steps.reviewer.outputs.review_ready == 'true'
-        # Fails if the Summary/Changes/Tests/Scope contract in the pr-review skill is not met.
+        # Fails if the Summary/Changes/Tests/Scope contract in the auto-reviewer skill is not met.
         run: python3 "$OMNIGENT_DIR/.github/scripts/polly-review-summary.py" compose /tmp/pr_diff_summary.json /tmp/review.txt
 
       - name: Scan review for secrets
@@ -600,33 +600,33 @@ jobs:
         run: |
           set -euo pipefail
           {
-            echo "<!-- pr-reviewer-sha: ${HEAD_SHA} -->"
-            echo "## PRReviewer"
+            echo "<!-- auto-reviewer-sha: ${HEAD_SHA} -->"
+            echo "## AutoReviewer"
             echo ""
             cat /tmp/review.txt
             echo ""
             echo "---"
-            echo "<sub>Automated review by PRReviewer for \`${HEAD_SHA:0:7}\` · [workflow run](${RUN_URL}) · comment \`/review\` to re-run</sub>"
+            echo "<sub>Automated review by AutoReviewer for \`${HEAD_SHA:0:7}\` · [workflow run](${RUN_URL}) · comment \`/review\` to re-run</sub>"
           } > /tmp/comment.md
           gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/comment.md
 
       - name: Prepare diagnostics
         if: always() && steps.reviewer.outcome != '' && steps.reviewer.outcome != 'skipped'
         run: |
-          mkdir -p /tmp/pr-reviewer-diagnostics
+          mkdir -p /tmp/auto-reviewer-diagnostics
           for f in reviewer_stderr.log reviewer_output.txt review.txt review_prompt.txt; do
             [ -f "/tmp/$f" ] || continue
             # Redact the key before upload; artifacts are visible to repo readers.
             python3 -c 'import os,sys; t=open(sys.argv[1],errors="replace").read(); k=os.environ.get("LLM_API_KEY"); print(t.replace(k,"***") if k else t, end="")' \
-              "/tmp/$f" > "/tmp/pr-reviewer-diagnostics/$f"
+              "/tmp/$f" > "/tmp/auto-reviewer-diagnostics/$f"
           done
 
       - name: Upload diagnostics
         if: always() && steps.reviewer.outcome != '' && steps.reviewer.outcome != 'skipped'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: pr-reviewer-logs-${{ github.run_id }}
-          path: /tmp/pr-reviewer-diagnostics/
+          name: auto-reviewer-logs-${{ github.run_id }}
+          path: /tmp/auto-reviewer-diagnostics/
           retention-days: 14
 
       # Last step, so it sees failures and cancellations from every earlier step.
@@ -650,6 +650,6 @@ jobs:
             state=failure description="Review failed; open Details for the run log"
           fi
           gh api "repos/$REPO/statuses/$HEAD_SHA" --silent \
-            -f state="$state" -f context=PRReviewer \
+            -f state="$state" -f context=AutoReviewer \
             -f description="$description" -f target_url="$RUN_URL" \
             || echo "::warning::Could not post the final status on the PR."

@@ -1,6 +1,6 @@
 # Team review criteria
 
-The `pr-review` skill defines review coordination and report
+The `auto-reviewer` skill defines review coordination and report
 formatting. Root `REVIEW.md` holds repository-wide checks. A directory may add a
 scoped `REVIEW.md`; reviews load the root file plus every file found while
 walking from the repository root to each changed file's parent.
