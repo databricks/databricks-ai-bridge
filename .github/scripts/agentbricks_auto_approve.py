@@ -1,11 +1,11 @@
-"""Decide whether AgentBricksReviewer may auto-approve a PR.
+"""Classify a PR review and decide whether PRReviewer may auto-approve it.
 
 The decision uses only facts the workflow can check itself: the posted review's
-score and finding sections, and the files and lines the diff changes. It never
-takes the model's word that a PR is safe to approve.
+score and finding sections, and the files and lines the diff changes. The risk
+label copies the model's score bands; approval adds deterministic safeguards.
 
 Usage: agentbricks_auto_approve.py --review REVIEW --diff DIFF [--min-score N] [--max-lines N]
-Prints a JSON object {"approve": bool, "reasons": [...]}; reasons explain a refusal.
+Prints JSON with the score, risk label, approval decision, and refusal reasons.
 """
 
 from __future__ import annotations
@@ -37,6 +37,16 @@ PROTECTED_NAMES = frozenset(
     }
 )
 SENSITIVE_NAME = re.compile(r"credential|oauth|secret|token|(?:^|[_.-])auth(?:[_.-]|$)", re.IGNORECASE)
+AGENTBRICKS_PREFIX = "integrations/agentbricks/"
+
+
+def risk_label(score: int) -> str:
+    """Map the model's merge-safety score to the requested three PR labels."""
+    if score >= 90:
+        return "review-risk: low"
+    if score >= 70:
+        return "review-risk: medium"
+    return "review-risk: high"
 
 
 def changed_files_and_lines(diff: str) -> tuple[list[str], int]:
@@ -77,12 +87,15 @@ def section_body(review: str, title: str) -> str | None:
 
 def decide(review: str, diff: str, min_score: int = 95, max_lines: int = 200) -> dict:
     reasons: list[str] = []
+    score: int | None = None
+    label: str | None = None
 
     summary = MERGE_SAFETY.search(review)
     if not summary:
         reasons.append("the review has no merge safety line")
     else:
         score = int(summary.group("score"))
+        label = risk_label(score)
         delivered, dispatched = int(summary.group("delivered")), int(summary.group("dispatched"))
         if score < min_score:
             reasons.append(f"merge safety {score}/100 is below {min_score}")
@@ -99,11 +112,17 @@ def decide(review: str, diff: str, min_score: int = 95, max_lines: int = 200) ->
     files, lines = changed_files_and_lines(diff)
     if not files:
         reasons.append("the diff changes no files")
+    outside_scope = [path for path in files if not path.startswith(AGENTBRICKS_PREFIX)]
+    if outside_scope:
+        reasons.append(
+            "the diff includes files outside integrations/agentbricks/**: "
+            + ", ".join(outside_scope)
+        )
     if lines > max_lines:
         reasons.append(f"{lines} changed lines is over the {max_lines}-line limit")
     reasons.extend(reason for path in files if (reason := protected_reason(path)))
 
-    return {"approve": not reasons, "reasons": reasons}
+    return {"score": score, "risk_label": label, "approve": not reasons, "reasons": reasons}
 
 
 def main(argv: list[str] | None = None) -> int:
