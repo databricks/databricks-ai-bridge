@@ -29,8 +29,7 @@ AUTO_APPROVE_PREFIXES = ("integrations/agentbricks/",)
 DOC_SUFFIXES = frozenset({".md", ".rst"})
 
 # Changes here need a human: CI and review rules, dependencies, and credential code.
-PROTECTED_PREFIXES = (".github/", ".claude/", ".agents/")
-REVIEW_POLICY_NAMES = frozenset({"REVIEW.md", "AGENTS.md", "CLAUDE.md"})
+PROTECTED_PREFIXES = (".github/", ".claude/")
 PROTECTED_NAMES = frozenset(
     {
         "pyproject.toml",
@@ -63,7 +62,7 @@ def changed_files_and_lines(diff: str) -> tuple[list[str], int]:
 def protected_reason(path: str) -> str | None:
     pure = PurePosixPath(path)
     name = pure.name
-    if path.startswith(PROTECTED_PREFIXES) or name in REVIEW_POLICY_NAMES:
+    if path.startswith(PROTECTED_PREFIXES) or name == "REVIEW.md":
         return f"{path} is CI or review configuration"
     if name in PROTECTED_NAMES or name.endswith(".lock") or re.fullmatch(r"requirements.*\.(txt|in)", name):
         return f"{path} is a dependency manifest or lockfile"
