@@ -41,7 +41,9 @@ ty check
 
 ## Code Review
 
-AgentBricksReviewer (`.github/workflows/agentbricks-reviewer.yml`) reviews PRs automatically and posts its review as a PR comment; comment `/review` to re-run it. Its rules live in [`.claude/skills/agentbricks-review/SKILL.md`](.claude/skills/agentbricks-review/SKILL.md), which also runs locally: `/agentbricks-review [PR number or URL]`, or with no argument to review the current branch against `origin/main`. CI always uses the copy on the default branch, so edits to the skill take effect after they merge.
+AutoReviewer (`.github/workflows/auto-reviewer.yml`) reviews all eligible PRs in this repository and posts its review as a PR comment; comment `/review` to re-run it. Its process lives in [`.claude/skills/auto-reviewer/SKILL.md`](.claude/skills/auto-reviewer/SKILL.md), which also runs locally: `/auto-reviewer [PR number or URL]`, or with no argument to review the current branch against `origin/main`. Reviews always load root [`REVIEW.md`](REVIEW.md), then auto-discover additional `REVIEW.md` files scoped to changed paths. CI uses these files from the default branch, so edits take effect after they merge.
+
+Each completed review copies the model's merge-safety score into one `review-risk: low`, `review-risk: medium`, or `review-risk: high` label. When the `AI_REVIEW_AUTO_APPROVE` repo variable is `true`, the workflow also approves PRs that pass [`.github/scripts/agentbricks_auto_approve.py`](.github/scripts/agentbricks_auto_approve.py): the entire diff is under `integrations/agentbricks/`, the score is high enough, every reviewer delivered, blocking/security/uncertain sections are empty, the diff is small and avoids protected files, the author has write access, and the reviewed commit is still current. Pushing new commits removes the stale label and dismisses that approval.
 
 ## Integration Tests
 

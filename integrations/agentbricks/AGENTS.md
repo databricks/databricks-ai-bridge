@@ -3,3 +3,6 @@
 When working in `integrations/agentbricks`, follow [CONTRIBUTING.md](CONTRIBUTING.md). It is the single
 source of truth for developing and testing the Agent Bricks CLI (`agentbricks`), AgentKit, and the local
 runtime, and for keeping the docs in sync, including the [`cli.md`](cli.md) command reference.
+
+For reviews in this directory, apply [REVIEW.md](REVIEW.md) in addition to the
+repository-wide review rules.

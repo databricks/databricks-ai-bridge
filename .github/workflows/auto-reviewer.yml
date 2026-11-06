@@ -1,11 +1,11 @@
-name: AgentBricksReviewer
-run-name: "AgentBricksReviewer #${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}"
+name: AutoReviewer
+run-name: "AutoReviewer #${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}"
 
-# AgentBricksReviewer runs omnigent's Polly coordinator agent headlessly on a PR
+# AutoReviewer runs omnigent's Polly coordinator agent headlessly on a PR
 # and posts its review as a PR comment. The coordinator hands review lenses to
 # Claude and GPT sub-agents through a Databricks AI Gateway, then verifies,
 # merges, and scores their findings. The process and rules are in
-# .claude/skills/agentbricks-review/SKILL.md, which also runs as a local skill.
+# .claude/skills/auto-reviewer/SKILL.md, which also runs as a local skill.
 #
 # Triggers:
 #   - pull_request_target opened/reopened/ready_for_review, for non-draft PRs
@@ -44,10 +44,25 @@ run-name: "AgentBricksReviewer #${{ github.event.pull_request.number || github.e
 #     precedence over JFrog.
 #   - variable AI_REVIEW_RUNS_ON: JSON `runs-on` value, for example "ubuntu-24.04"
 #     on a fork (with the quotes). Defaults to the org's protected runner group.
+#
+# Every completed review copies the model's score into exactly one
+# `review-risk: low|medium|high` label. Auto-approval is off unless the variable
+# AI_REVIEW_AUTO_APPROVE is "true":
+#   approves the reviewed commit when .github/scripts/agentbricks_auto_approve.py
+#   passes (merge safety >= AI_REVIEW_AUTO_APPROVE_MIN_SCORE, default 95; every
+#   reviewer delivered; no blocking, security, or uncertain findings; at most
+#   AI_REVIEW_AUTO_APPROVE_MAX_LINES changed lines, default 200; no CI, review
+#   rule, dependency, or credential files; and every changed path is under
+#   integrations/agentbricks/), the author has write access, and the PR head
+#   hasn't moved. The approver is the GitHub App in
+#   AUTO_REVIEWER_APP_CLIENT_ID (variable) and AUTO_REVIEWER_APP_PRIVATE_KEY
+#   (secret) when set, otherwise
+#   github-actions[bot]. A push to the PR dismisses the approval.
 
 on:
   pull_request_target:
-    types: [opened, reopened, ready_for_review]
+    # synchronize only runs dismiss-stale-approval; the review skips it.
+    types: [opened, reopened, ready_for_review, synchronize]
   issue_comment:
     types: [created]
   workflow_dispatch:
@@ -70,16 +85,17 @@ env:
   # (.github/actions/setup-harness-cli/manifest.json); bump them together.
   CLAUDE_CODE_VERSION: "2.1.295"
   CODEX_VERSION: "0.142.0"
-  OMNIGENT_CI_PIPELINE: agentbricks-reviewer
+  OMNIGENT_CI_PIPELINE: auto-reviewer
   OMNIGENT_SKIP_WEB_UI: "true"
   UV_VERSION: "0.13.5"
 
 jobs:
   review:
-    name: AgentBricksReviewer
+    name: AutoReviewer
     if: >-
       (
         github.event_name == 'pull_request_target' &&
+        github.event.action != 'synchronize' &&
         !github.event.pull_request.draft &&
         github.event.pull_request.user.type != 'Bot'
       ) || (
@@ -95,7 +111,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      issues: read
+      issues: write
       pull-requests: write
       # Comment- and dispatch-triggered runs attach to the default branch, so they
       # post a commit status to appear in the PR's checks list.
@@ -103,7 +119,7 @@ jobs:
       # GitHub OIDC token, exchanged for a JFrog package-mirror token.
       id-token: write
     concurrency:
-      group: agentbricks-reviewer-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
+      group: auto-reviewer-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
       cancel-in-progress: false
     env:
       REPO: ${{ github.repository }}
@@ -162,7 +178,7 @@ jobs:
           # Only bot comments count, so a human quoting the marker cannot suppress a review.
           if gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
                --jq '.[] | select(.user.type == "Bot") | .body' \
-             | grep -qF "<!-- agentbricks-reviewer-sha: ${head_sha} -->"; then
+             | grep -qF "<!-- auto-reviewer-sha: ${head_sha} -->"; then
             echo "::notice::${head_sha} already has a review; comment '/review force' to re-run."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
@@ -179,7 +195,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           gh api "repos/$REPO/statuses/$HEAD_SHA" --silent \
-            -f state=pending -f context=AgentBricksReviewer \
+            -f state=pending -f context=AutoReviewer \
             -f description="Review in progress" -f target_url="$RUN_URL" \
             || echo "::warning::Could not post the pending status on the PR."
 
@@ -216,7 +232,7 @@ jobs:
             fi
           fi
           if [ -z "${LLM_API_KEY:-}" ]; then
-            echo "::notice::Skipping AgentBricksReviewer: set GATEWAY_CLIENT_ID and GATEWAY_CLIENT_SECRET (or LLM_API_KEY)."
+            echo "::notice::Skipping AutoReviewer: set GATEWAY_CLIENT_ID and GATEWAY_CLIENT_SECRET (or LLM_API_KEY)."
             echo "available=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -414,18 +430,55 @@ jobs:
           chmod 444 /tmp/pr_diff.txt
           # Objects only, so reviewers can `git show <sha>:<path>`; nothing is checked out or run.
           git fetch --quiet --no-tags --depth=1 origin "$base_sha" "$head_sha"
+          python3 - "$base_sha" "$head_sha" <<'PYCHANGED'
+          import json, pathlib, subprocess, sys
+
+          changed = subprocess.check_output(
+              ["git", "diff", "--name-only", "-z", f"{sys.argv[1]}...{sys.argv[2]}"]
+          ).split(b"\0")
+          paths = [path.decode("utf-8", "surrogateescape") for path in changed if path]
+          pathlib.Path("/tmp/pr_changed_paths.json").write_text(json.dumps(paths))
+          PYCHANGED
 
           grep -E '^[+-]name = |^[+-]version = ' /tmp/pr_diff.txt | head -500 > /tmp/lockfile_pins.txt || true
           python3 "$summary_script" linked-issues "${REPO}#${PR_NUMBER}" /tmp/linked_issues.json
           python3 "$summary_script" stats /tmp/pr_diff.txt /tmp/pr_diff_summary.json
 
           python3 - <<'PYEOF'
-          import hashlib, json, os, pathlib
+          import hashlib, html, json, os, pathlib
 
-          rules = pathlib.Path(os.environ["GITHUB_WORKSPACE"], ".claude/skills/agentbricks-review/SKILL.md").read_text()
+          rules = pathlib.Path(os.environ["GITHUB_WORKSPACE"], ".claude/skills/auto-reviewer/SKILL.md").read_text()
           # Drop the skill's YAML front matter; the prompt needs only the body.
           if rules.startswith("---\n"):
               rules = rules.split("\n---\n", 1)[1]
+          workspace = pathlib.Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          changed_paths = json.loads(pathlib.Path("/tmp/pr_changed_paths.json").read_text())
+          candidates = {workspace / "REVIEW.md"}
+          for raw_path in changed_paths:
+              relative = pathlib.PurePosixPath(raw_path)
+              if relative.is_absolute() or ".." in relative.parts:
+                  continue
+              directories = relative.parts[:-1]
+              for depth in range(1, len(directories) + 1):
+                  candidates.add(workspace.joinpath(*directories[:depth], "REVIEW.md"))
+
+          review_files = []
+          for candidate in candidates:
+              if not candidate.is_file():
+                  continue
+              try:
+                  candidate.resolve().relative_to(workspace)
+              except ValueError:
+                  continue
+              review_files.append(candidate)
+          review_files.sort(key=lambda path: (len(path.relative_to(workspace).parts), path.as_posix()))
+          review_sources = [path.relative_to(workspace).as_posix() for path in review_files]
+          review_rules = "\n\n".join(
+              '<review_rules source="{}">\n{}\n</review_rules>'.format(
+                  html.escape(source, quote=True), path.read_text()
+              )
+              for source, path in zip(review_sources, review_files)
+          )
           meta = json.loads(pathlib.Path("/tmp/pr_meta.json").read_text())
           diff_sha256 = hashlib.sha256(pathlib.Path("/tmp/pr_diff.txt").read_bytes()).hexdigest()
           stats = json.loads(pathlib.Path("/tmp/pr_diff_summary.json").read_text())
@@ -441,7 +494,7 @@ jobs:
           body = meta.get("body") or ""
           labels = ", ".join(label["name"] for label in meta.get("labels") or []) or "(none)"
 
-          prompt = f"""You are AgentBricksReviewer. Review this pull request by following the rules below.
+          prompt = f"""You are AutoReviewer. Review this pull request by following the rules below.
 
           ## PR metadata
           - Title: {meta['title']}
@@ -466,6 +519,7 @@ jobs:
           {stats['markdown']}
 
           Changed test/support files: {json.dumps(stats['test_files'])}
+          Applicable review rule sources: {json.dumps(review_sources)}
 
           ## Where things are
           - The full PR diff is at `/tmp/pr_diff.txt` (SHA-256 `{diff_sha256}`). Pass the
@@ -481,14 +535,18 @@ jobs:
 
           {rules}
 
+          <applicable_review_rules>
+          {review_rules or "(none discovered)"}
+          </applicable_review_rules>
+
           IMPORTANT: your output is posted directly as a PR comment. Output only the
           final review, with no coordination or status messages. Begin with the exact
-          marker <!-- AGENTBRICKS_REVIEW_START --> on its own line; nothing before it is shown.
+          marker <!-- AUTO_REVIEW_START --> on its own line; nothing before it is shown.
           """
           pathlib.Path("/tmp/review_prompt.txt").write_text(prompt)
           PYEOF
 
-      - name: Run AgentBricksReviewer
+      - name: Run AutoReviewer
         if: steps.creds.outputs.available == 'true'
         id: reviewer
         env:
@@ -517,27 +575,27 @@ jobs:
               --no-session \
             2>/tmp/reviewer_stderr.log | tee /tmp/reviewer_output.txt || status=$?
           if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
-            echo "::error::AgentBricksReviewer timed out; no review was published."
+            echo "::error::AutoReviewer timed out; no review was published."
             exit "$status"
           elif [ "$status" -ne 0 ]; then
-            echo "::warning::AgentBricksReviewer exited with status $status"
+            echo "::warning::AutoReviewer exited with status $status"
           fi
 
           # Headless output can include drafts; keep only text after the last marker line.
           python3 - <<'PYEOF'
           import pathlib, re
           raw = pathlib.Path("/tmp/reviewer_output.txt").read_text()
-          markers = list(re.finditer(r"^<!-- AGENTBRICKS_REVIEW_START -->$", raw, re.MULTILINE))
+          markers = list(re.finditer(r"^<!-- AUTO_REVIEW_START -->$", raw, re.MULTILINE))
           review = raw[markers[-1].end():].lstrip("\n") if markers else ""
           if not review.strip():
-              raise SystemExit("::error::AgentBricksReviewer produced no publishable review; see the diagnostics artifact.")
+              raise SystemExit("::error::AutoReviewer produced no publishable review; see the diagnostics artifact.")
           pathlib.Path("/tmp/review.txt").write_text(review)
           PYEOF
           echo "review_ready=true" >> "$GITHUB_OUTPUT"
 
       - name: Validate review and add diff statistics
         if: steps.reviewer.outputs.review_ready == 'true'
-        # Fails if the Summary/Changes/Tests/Scope contract in the agentbricks-review skill is not met.
+        # Fails if the Summary/Changes/Tests/Scope contract in the auto-reviewer skill is not met.
         run: python3 "$OMNIGENT_DIR/.github/scripts/polly-review-summary.py" compose /tmp/pr_diff_summary.json /tmp/review.txt
 
       - name: Scan review for secrets
@@ -558,33 +616,115 @@ jobs:
         run: |
           set -euo pipefail
           {
-            echo "<!-- agentbricks-reviewer-sha: ${HEAD_SHA} -->"
-            echo "## AgentBricksReviewer"
+            echo "<!-- auto-reviewer-sha: ${HEAD_SHA} -->"
+            echo "## AutoReviewer"
             echo ""
             cat /tmp/review.txt
             echo ""
             echo "---"
-            echo "<sub>Automated review by AgentBricksReviewer for \`${HEAD_SHA:0:7}\` · [workflow run](${RUN_URL}) · comment \`/review\` to re-run</sub>"
+            echo "<sub>Automated review by AutoReviewer for \`${HEAD_SHA:0:7}\` · [workflow run](${RUN_URL}) · comment \`/review\` to re-run</sub>"
           } > /tmp/comment.md
           gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/comment.md
+
+      - name: Classify model score and approval eligibility
+        id: decision
+        if: steps.reviewer.outputs.review_ready == 'true'
+        env:
+          MIN_SCORE: ${{ vars.AI_REVIEW_AUTO_APPROVE_MIN_SCORE || '95' }}
+          MAX_LINES: ${{ vars.AI_REVIEW_AUTO_APPROVE_MAX_LINES || '200' }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/agentbricks_auto_approve.py \
+            --review /tmp/review.txt --diff /tmp/pr_diff.txt \
+            --min-score "$MIN_SCORE" --max-lines "$MAX_LINES" \
+            > /tmp/approval-decision.json
+          score="$(jq -r '.score // empty' /tmp/approval-decision.json)"
+          risk_label="$(jq -r '.risk_label // empty' /tmp/approval-decision.json)"
+          if [ -z "$score" ] || [ -z "$risk_label" ]; then
+            echo "::warning::The review has no parseable merge-safety score; no risk label or approval will be applied."
+            exit 0
+          fi
+          echo "score=$score" >> "$GITHUB_OUTPUT"
+          echo "risk_label=$risk_label" >> "$GITHUB_OUTPUT"
+
+      - name: Copy model risk to the PR label
+        if: steps.decision.outputs.risk_label != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RISK_LABEL: ${{ steps.decision.outputs.risk_label }}
+        run: |
+          set -euo pipefail
+          gh label create "review-risk: low" --repo "$REPO" --color 2da44e \
+            --description "AutoReviewer model score: 90-100" --force
+          gh label create "review-risk: medium" --repo "$REPO" --color bf8700 \
+            --description "AutoReviewer model score: 70-89" --force
+          gh label create "review-risk: high" --repo "$REPO" --color cf222e \
+            --description "AutoReviewer model score: 0-69" --force
+          for label in "review-risk: low" "review-risk: medium" "review-risk: high"; do
+            gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "$label" >/dev/null 2>&1 || true
+          done
+          gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "$RISK_LABEL"
+          echo "Applied $RISK_LABEL from the model's ${{ steps.decision.outputs.score }}/100 score."
+
+      - name: Get AutoReviewer app token
+        id: app_token
+        if: >-
+          steps.decision.outputs.risk_label != '' &&
+          vars.AI_REVIEW_AUTO_APPROVE == 'true' && vars.AUTO_REVIEWER_APP_CLIENT_ID != ''
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.AUTO_REVIEWER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AUTO_REVIEWER_APP_PRIVATE_KEY }}
+
+      - name: Auto-approve if low risk
+        if: steps.decision.outputs.risk_label != '' && vars.AI_REVIEW_AUTO_APPROVE == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token || github.token }}
+          HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
+          MIN_SCORE: ${{ vars.AI_REVIEW_AUTO_APPROVE_MIN_SCORE || '95' }}
+          MAX_LINES: ${{ vars.AI_REVIEW_AUTO_APPROVE_MAX_LINES || '200' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          decision="$(cat /tmp/approval-decision.json)"
+          mapfile -t reasons < <(jq -r '.reasons[]' <<<"$decision")
+          pr="$(gh api "repos/$REPO/pulls/$PR_NUMBER")"
+          author="$(jq -r .user.login <<<"$pr")"
+          if ! permission="$(gh api "repos/$REPO/collaborators/$author/permission" --jq .permission 2>/dev/null)"; then
+            permission=unknown
+          fi
+          case "$permission" in admin|maintain|write) ;; *) reasons+=("$author has '$permission' access") ;; esac
+          [ "$(jq -r .draft <<<"$pr")" = false ] || reasons+=("the PR is a draft")
+          [ "$(jq -r .head.sha <<<"$pr")" = "$HEAD_SHA" ] || reasons+=("the PR moved past the reviewed commit")
+          if [ "${#reasons[@]}" -gt 0 ]; then
+            printf -v joined '%s; ' "${reasons[@]}"
+            echo "::notice::Not auto-approving: ${joined%; }."
+            exit 0
+          fi
+          body="<!-- auto-reviewer-approval -->
+          Auto-approved by AutoReviewer for \`${HEAD_SHA:0:7}\`: the entire diff is under \`integrations/agentbricks/\`, merge safety is at least ${MIN_SCORE}, every reviewer delivered, there are no blocking, security, or uncertain findings, the diff has at most ${MAX_LINES} changed lines, and it changes no protected files. Pushing new commits dismisses this approval. [Workflow run](${RUN_URL})"
+          gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --silent \
+            -f event=APPROVE -f commit_id="$HEAD_SHA" -f body="$body" \
+            && echo "Approved ${HEAD_SHA:0:7}." \
+            || echo "::warning::Could not approve the PR; check that Actions may approve PRs in the repo settings."
 
       - name: Prepare diagnostics
         if: always() && steps.reviewer.outcome != '' && steps.reviewer.outcome != 'skipped'
         run: |
-          mkdir -p /tmp/agentbricks-reviewer-diagnostics
+          mkdir -p /tmp/auto-reviewer-diagnostics
           for f in reviewer_stderr.log reviewer_output.txt review.txt review_prompt.txt; do
             [ -f "/tmp/$f" ] || continue
             # Redact the key before upload; artifacts are visible to repo readers.
             python3 -c 'import os,sys; t=open(sys.argv[1],errors="replace").read(); k=os.environ.get("LLM_API_KEY"); print(t.replace(k,"***") if k else t, end="")' \
-              "/tmp/$f" > "/tmp/agentbricks-reviewer-diagnostics/$f"
+              "/tmp/$f" > "/tmp/auto-reviewer-diagnostics/$f"
           done
 
       - name: Upload diagnostics
         if: always() && steps.reviewer.outcome != '' && steps.reviewer.outcome != 'skipped'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: agentbricks-reviewer-logs-${{ github.run_id }}
-          path: /tmp/agentbricks-reviewer-diagnostics/
+          name: auto-reviewer-logs-${{ github.run_id }}
+          path: /tmp/auto-reviewer-diagnostics/
           retention-days: 14
 
       # Last step, so it sees failures and cancellations from every earlier step.
@@ -608,6 +748,58 @@ jobs:
             state=failure description="Review failed; open Details for the run log"
           fi
           gh api "repos/$REPO/statuses/$HEAD_SHA" --silent \
-            -f state="$state" -f context=AgentBricksReviewer \
+            -f state="$state" -f context=AutoReviewer \
             -f description="$description" -f target_url="$RUN_URL" \
             || echo "::warning::Could not post the final status on the PR."
+
+
+  # Approvals aren't dismissed on push by branch protection here, so drop
+  # AutoReviewer's approval and model-risk label when the PR gets commits it didn't review.
+  dismiss-stale-approval:
+    name: AutoReviewer approval
+    if: github.event_name == 'pull_request_target' && github.event.action == 'synchronize'
+    runs-on: ${{ fromJSON(vars.AI_REVIEW_RUNS_ON || '{"group":"databricks-protected-runner-group","labels":"linux-ubuntu-latest"}') }}
+    timeout-minutes: 5
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Remove stale model-risk label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          for label in "review-risk: low" "review-risk: medium" "review-risk: high"; do
+            gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "$label" >/dev/null 2>&1 || true
+          done
+
+      - name: Get AutoReviewer app token
+        id: app_token
+        if: vars.AUTO_REVIEWER_APP_CLIENT_ID != ''
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.AUTO_REVIEWER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AUTO_REVIEWER_APP_PRIVATE_KEY }}
+
+      - name: Dismiss approvals of earlier commits
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token || github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          ids="$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews" --jq '.[]
+            | select(.state == "APPROVED" and .user.type == "Bot"
+                and (.body | contains("<!-- auto-reviewer-approval -->"))
+                and .commit_id != $ENV.HEAD_SHA) | .id')"
+          if [ -z "$ids" ]; then
+            echo "No AutoReviewer approval to dismiss."
+            exit 0
+          fi
+          for id in $ids; do
+            gh api -X PUT "repos/$REPO/pulls/$PR_NUMBER/reviews/$id/dismissals" --silent \
+              -f event=DISMISS -f message="New commits were pushed after AutoReviewer approved. Comment /review to review them."
+            echo "Dismissed approval $id."
+          done
