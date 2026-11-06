@@ -746,6 +746,7 @@ jobs:
     runs-on: ${{ fromJSON(vars.AI_REVIEW_RUNS_ON || '{"group":"databricks-protected-runner-group","labels":"linux-ubuntu-latest"}') }}
     timeout-minutes: 5
     permissions:
+      contents: read
       pull-requests: write
       issues: write
     steps:
