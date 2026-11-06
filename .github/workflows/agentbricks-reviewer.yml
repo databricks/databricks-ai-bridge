@@ -44,10 +44,21 @@ run-name: "AgentBricksReviewer #${{ github.event.pull_request.number || github.e
 #     precedence over JFrog.
 #   - variable AI_REVIEW_RUNS_ON: JSON `runs-on` value, for example "ubuntu-24.04"
 #     on a fork (with the quotes). Defaults to the org's protected runner group.
+#
+# Auto-approval (off unless the variable AI_REVIEW_AUTO_APPROVE is "true"):
+#   approves the reviewed commit when .github/scripts/agentbricks_auto_approve.py
+#   passes (merge safety >= AI_REVIEW_AUTO_APPROVE_MIN_SCORE, default 95; every
+#   reviewer delivered; no blocking, security, or uncertain findings; at most
+#   AI_REVIEW_AUTO_APPROVE_MAX_LINES changed lines, default 200; only files under
+#   integrations/agentbricks/ or .md/.rst docs; no CI, review rule, dependency,
+#   or credential files), the author has write access, and
+#   the PR head hasn't moved. The approver is github-actions[bot], so the repo
+#   must allow Actions to approve PRs. A push to the PR dismisses the approval.
 
 on:
   pull_request_target:
-    types: [opened, reopened, ready_for_review]
+    # synchronize only runs dismiss-stale-approval; the review skips it.
+    types: [opened, reopened, ready_for_review, synchronize]
   issue_comment:
     types: [created]
   workflow_dispatch:
@@ -80,6 +91,7 @@ jobs:
     if: >-
       (
         github.event_name == 'pull_request_target' &&
+        github.event.action != 'synchronize' &&
         !github.event.pull_request.draft &&
         github.event.pull_request.user.type != 'Bot'
       ) || (
@@ -610,6 +622,40 @@ jobs:
           } > /tmp/comment.md
           gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/comment.md
 
+      - name: Auto-approve if low risk
+        if: steps.reviewer.outputs.review_ready == 'true' && vars.AI_REVIEW_AUTO_APPROVE == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
+          MIN_SCORE: ${{ vars.AI_REVIEW_AUTO_APPROVE_MIN_SCORE || '95' }}
+          MAX_LINES: ${{ vars.AI_REVIEW_AUTO_APPROVE_MAX_LINES || '200' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # The gate reads the posted review and the diff; it never asks the model.
+          decision="$(python3 .github/scripts/agentbricks_auto_approve.py \
+            --review /tmp/review.txt --diff /tmp/pr_diff.txt --min-score "$MIN_SCORE" --max-lines "$MAX_LINES")"
+          mapfile -t reasons < <(jq -r '.reasons[]' <<<"$decision")
+          pr="$(gh api "repos/$REPO/pulls/$PR_NUMBER")"
+          author="$(jq -r .user.login <<<"$pr")"
+          if ! permission="$(gh api "repos/$REPO/collaborators/$author/permission" --jq .permission 2>/dev/null)"; then
+            permission=unknown
+          fi
+          case "$permission" in admin|maintain|write) ;; *) reasons+=("$author has '$permission' access") ;; esac
+          [ "$(jq -r .draft <<<"$pr")" = false ] || reasons+=("the PR is a draft")
+          [ "$(jq -r .head.sha <<<"$pr")" = "$HEAD_SHA" ] || reasons+=("the PR moved past the reviewed commit")
+          if [ "${#reasons[@]}" -gt 0 ]; then
+            printf -v joined '%s; ' "${reasons[@]}"
+            echo "::notice::Not auto-approving: ${joined%; }."
+            exit 0
+          fi
+          body="<!-- agentbricks-reviewer-approval -->
+          Auto-approved by AgentBricksReviewer for \`${HEAD_SHA:0:7}\`: merge safety at least ${MIN_SCORE}, every reviewer delivered, no blocking, security, or uncertain findings, at most ${MAX_LINES} changed lines, and no CI, dependency, or credential files. Pushing new commits dismisses this approval. [Workflow run](${RUN_URL})"
+          gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --silent \
+            -f event=APPROVE -f commit_id="$HEAD_SHA" -f body="$body" \
+            && echo "Approved ${HEAD_SHA:0:7}." \
+            || echo "::warning::Could not approve the PR; check that Actions may approve PRs in the repo settings."
+
       - name: Prepare diagnostics
         if: always() && steps.reviewer.outcome != '' && steps.reviewer.outcome != 'skipped'
         run: |
@@ -653,3 +699,36 @@ jobs:
             -f state="$state" -f context=AgentBricksReviewer \
             -f description="$description" -f target_url="$RUN_URL" \
             || echo "::warning::Could not post the final status on the PR."
+
+
+  # Approvals aren't dismissed on push by branch protection here, so drop
+  # AgentBricksReviewer's approval when the PR gets commits it didn't review.
+  dismiss-stale-approval:
+    name: AgentBricksReviewer approval
+    if: github.event_name == 'pull_request_target' && github.event.action == 'synchronize'
+    runs-on: ${{ fromJSON(vars.AI_REVIEW_RUNS_ON || '{"group":"databricks-protected-runner-group","labels":"linux-ubuntu-latest"}') }}
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Dismiss approvals of earlier commits
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          ids="$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews" --jq '.[]
+            | select(.state == "APPROVED" and .user.type == "Bot"
+                and (.body | contains("<!-- agentbricks-reviewer-approval -->"))
+                and .commit_id != $ENV.HEAD_SHA) | .id')"
+          if [ -z "$ids" ]; then
+            echo "No AgentBricksReviewer approval to dismiss."
+            exit 0
+          fi
+          for id in $ids; do
+            gh api -X PUT "repos/$REPO/pulls/$PR_NUMBER/reviews/$id/dismissals" --silent \
+              -f event=DISMISS -f message="New commits were pushed after AgentBricksReviewer approved. Comment /review to review them."
+            echo "Dismissed approval $id."
+          done
