@@ -1,14 +1,15 @@
 ---
 name: pr-review
-description: Multi-lens review of a pull request or local branch in any repository, with auto-discovered REVIEW.md criteria, verified findings, and a merge safety score.
+description: Multi-lens review of a databricks-ai-bridge pull request or local branch, with auto-discovered REVIEW.md criteria, verified findings, and a merge safety score.
 ---
 
-# Multi-lens repository review
+# databricks-ai-bridge PR review
 
-This skill is a reusable review contract. A repository supplies its own criteria
-through root and directory-scoped `REVIEW.md` files. It runs in two places here:
+This skill is the review contract for this repository. Repository-wide criteria
+live in root `REVIEW.md`; directories can add scoped `REVIEW.md` files. It runs
+in two places:
 
-- **CI:** a repository workflow can read this file from the
+- **CI:** `.github/workflows/agentbricks-reviewer.yml` reads this file from the
   default branch, never from the PR under review, so a PR cannot change the rules
   it is judged by. The workflow prepends PR metadata, the diff location, and the
   base and head commits, then posts the review as a PR comment.
@@ -22,14 +23,15 @@ format.
 ## Running locally
 
 1. **Find the change.**
-   - **A PR** (number or URL): use the supplied target rather than assuming an
-     owner, repository, or base branch. Save its `gh pr diff`, read
-     `baseRefOid`, `headRefOid`, title, body, and labels with `gh pr view`, and
-     fetch the exact commits so `git show <head_sha>:<path>` works.
-   - **No argument:** determine the repository's default branch instead of
-     assuming `main`, then diff from its merge base with `HEAD`. Include
-     committed and uncommitted changes. Treat the working tree as the head:
-     read files directly instead of with `git show <head_sha>:<path>`.
+   - **A PR** (number or URL): save `gh pr diff <n> --repo databricks/databricks-ai-bridge`
+     to a temp file, get `baseRefOid` and `headRefOid` from
+     `gh pr view <n> --repo databricks/databricks-ai-bridge --json baseRefOid,headRefOid,title,body,labels`,
+     and run `git fetch origin pull/<n>/head` so
+     `git show <head_sha>:<path>` works.
+   - **No argument:** review the current branch against `origin/main`. Save
+     `git diff $(git merge-base origin/main HEAD)` to a temp file; this includes
+     committed and uncommitted changes. Treat the working tree as the head: read
+     files directly instead of with `git show <head_sha>:<path>`.
 2. **Dispatch reviewers** with your runtime's sub-agent tool, following Part 1.
    If only one vendor is available, say so, and label confidence by reviewer
    count alone.
