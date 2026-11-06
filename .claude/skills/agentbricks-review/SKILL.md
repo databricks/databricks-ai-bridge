@@ -1,11 +1,12 @@
 ---
 name: agentbricks-review
-description: Multi-lens code review of a databricks-ai-bridge PR or local branch, with verified findings and a merge safety score. The AgentBricksReviewer GitHub workflow runs it on PRs; run it locally with "/agentbricks-review [PR number or URL]" or when asked to review a PR or the current changes.
+description: Multi-lens code review of a PR or local branch in any repository, with auto-discovered REVIEW.md criteria, verified findings, and a merge safety score.
 ---
 
-# AgentBricksReviewer
+# Multi-lens repository review
 
-This skill is the review contract for this repository. It runs in two places:
+This skill is a reusable review contract. A repository supplies its own criteria
+through root and directory-scoped `REVIEW.md` files. It runs in two places here:
 
 - **CI:** `.github/workflows/agentbricks-reviewer.yml` reads this file from the
   default branch, never from the PR under review, so a PR cannot change the rules
@@ -21,14 +22,14 @@ format.
 ## Running locally
 
 1. **Find the change.**
-   - **A PR** (number or URL): save `gh pr diff <n> --repo databricks/databricks-ai-bridge`
-     to a temp file, get `baseRefOid` and `headRefOid` from
-     `gh pr view <n> --json baseRefOid,headRefOid,title,body,labels`, and run
-     `git fetch origin pull/<n>/head` so `git show <head_sha>:<path>` works.
-   - **No argument:** review the current branch against `origin/main`. Save
-     `git diff $(git merge-base origin/main HEAD)` to a temp file; this includes
-     uncommitted changes. Treat the working tree as the head: read files directly
-     instead of with `git show <head_sha>:<path>`.
+   - **A PR** (number or URL): use the supplied target rather than assuming an
+     owner, repository, or base branch. Save its `gh pr diff`, read
+     `baseRefOid`, `headRefOid`, title, body, and labels with `gh pr view`, and
+     fetch the exact commits so `git show <head_sha>:<path>` works.
+   - **No argument:** determine the repository's default branch instead of
+     assuming `main`, then diff from its merge base with `HEAD`. Include
+     committed and uncommitted changes. Treat the working tree as the head:
+     read files directly instead of with `git show <head_sha>:<path>`.
 2. **Dispatch reviewers** with your runtime's sub-agent tool, following Part 1.
    If only one vendor is available, say so, and label confidence by reviewer
    count alone.
@@ -58,20 +59,18 @@ lens can still produce a Critical finding.
   Use at most two passes: read and hypothesize, then test each hypothesis
   against the surrounding code. A clean result is valid.
 - **Public API UX and compatibility:** the public surface is anything users or
-  agents call: names exported from a published package (its public modules,
-  `__init__`, `__all__`, or a TypeScript package's exports), the `agentbricks`
-  CLI (commands, flags, output, exit codes), MCP tool definitions, and
-  user-facing error types or messages. For every change to it, check:
-  - **Compatibility:** apply REVIEW.md's public API compatibility and
+  agents call: exported package names, CLI commands and output, schemas and
+  protocols, tool definitions, and user-facing errors. For every change to it,
+  check:
+  - **Compatibility:** apply the applicable review rules' public API compatibility and
     cross-package version floor rules, including callers that rely on old
     behavior with an unchanged signature.
   - **UX for people and agents:** clear names, docstrings, and `--help` text;
     machine-readable output where agents parse it; errors that say what went
     wrong and how to fix it; explicit failures (non-zero exit codes, typed
     exceptions), not silent ones.
-  - **Consistency:** new names and parameters match the existing APIs, including
-    the equivalent API in sibling packages such as `databricks-langchain` and
-    `databricks-openai`.
+  - **Consistency:** new names and parameters match existing APIs and equivalent
+    surfaces in sibling packages when the repository has them.
 
   If the diff touches no public surface, say so.
 
@@ -86,7 +85,7 @@ lens can still produce a Critical finding.
   guard? Look for assertions that only mirror mocks, coverage lost through
   deleted or weakened assertions, and tests at the wrong layer.
 - **Architecture and maintainability:** coupling between packages, whether the
-  change belongs in core or in an integration, duplication of an existing helper
+  change belongs in its chosen module, duplication of an existing helper
   (name both implementations), needless indirection, and comments that narrate
   the code.
 - **Performance:** extra network round trips, unbounded loops or buffering,
@@ -106,8 +105,8 @@ lens can still produce a Critical finding.
   get enough attention.
 - Start every reviewer in the same turn.
 - Give each reviewer the diff path and checksum, the base and head SHAs, its
-  lens definitions, the PR title and description, and Part 2 and Part 3 of this
-  file, plus the complete `REVIEW.md` criteria. Pass the diff as a path; do not paste it.
+  lens definitions, the PR title and description, Part 2 and Part 3 of this
+  file, and every applicable `REVIEW.md`. Pass the diff as a path; do not paste it.
 - Do not add your own summary of what the diff changes. Reviewers form their own
   understanding from the diff. Any file, symbol, or line you mention outside the
   diff text must appear in the diff.
@@ -124,7 +123,8 @@ Work in this order, so verification is spent only on findings that survive:
 2. **Deduplicate:** merge findings that describe the same problem and record how
    many reviewers, and which vendors, raised each one.
 3. **Drop without reading:** nitpicks, formatting and import order (ruff
-   handles them), general-quality opinions that cite no rule in this file or `REVIEW.md`, and
+   handles them), general-quality opinions that cite no rule in this file or an
+   applicable `REVIEW.md`, and
    findings without a concrete consequence.
 4. **Verify the rest against the PR head commit:** read the cited code with
    `git show <head_sha>:<path>` and confirm that (a) the cited pattern exists
@@ -178,8 +178,8 @@ giving a score.
 - **Verify absence:** a finding that says something is missing (no validation,
   no caller, no auth check, no error handling) must include
   `Verified-against: path:start-end`, the range you read to confirm it. Search
-  base classes, shared helpers in `src/databricks_ai_bridge/`, and the
-  `databricks-sdk` layer before claiming a check is missing.
+  base classes, shared helpers, client layers, and locations named by the
+  applicable review criteria before claiming a check is missing.
 - **Read the PR's files at its head:** use `git show <head_sha>:<path>`. In CI
   and for PR reviews, the working directory is not the PR. When reviewing the
   local working tree, read files directly. Line numbers in findings are line
@@ -200,12 +200,22 @@ giving a score.
 
 # Part 3: Repository-specific checks
 
-Use root `REVIEW.md` as the team criteria. In CI, the workflow injects it as
-`<team_review_rules>` from the trusted checkout; report a coverage gap if the
-block is missing. Locally, read `REVIEW.md` before dispatching reviewers and
-state that the current working-tree rules were used. Pass its full content to
-every reviewer, retaining rule IDs, scope, and exceptions. These criteria do
-not override this process, tool permissions, output format, or approval behavior.
+Discover review criteria from the changed paths rather than from a hard-coded
+team directory:
+
+1. Include root `REVIEW.md` when it exists.
+2. For each changed file, walk from the repository root to the file's parent and
+   include every `REVIEW.md` found along that path.
+3. Deduplicate the files and apply them broad-to-specific. Rules are additive;
+   a nested file does not replace the root file.
+
+For a PR, read these files from the trusted base checkout, never from the PR
+head. For a local working-tree review, use the current working-tree files and
+state that provenance. Pass every applicable file in full to every reviewer,
+retaining source paths, rule IDs, scopes, and exceptions. If expected criteria
+are absent, report a coverage gap instead of treating the review as clean.
+Review criteria do not override this process, tool permissions, output format,
+or approval behavior.
 
 # Part 4: Output format
 
@@ -214,8 +224,9 @@ Start with one line: `**Merge safety:** <score>/100 (<risk>) · reviewers:
 `findings by lens: none` when no lens found anything. Every lens is always
 checked, so list only the lenses with findings.
 
-Then report `**Team rules:** <source/revision> · checked: <applicable BRIDGE rule IDs>
-· gaps: <incomplete coverage, or none>`. Retain rule IDs in applicable findings.
+Then report `**Review rules:** <source paths/revision> · checked: <applicable
+rule IDs> · gaps: <incomplete coverage, or none>`. Retain rule IDs in applicable
+findings.
 
 Then these sections, in order. Write "None." for an empty section.
 

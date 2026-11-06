@@ -414,19 +414,55 @@ jobs:
           chmod 444 /tmp/pr_diff.txt
           # Objects only, so reviewers can `git show <sha>:<path>`; nothing is checked out or run.
           git fetch --quiet --no-tags --depth=1 origin "$base_sha" "$head_sha"
+          python3 - "$base_sha" "$head_sha" <<'PYCHANGED'
+          import json, pathlib, subprocess, sys
+
+          changed = subprocess.check_output(
+              ["git", "diff", "--name-only", "-z", f"{sys.argv[1]}...{sys.argv[2]}"]
+          ).split(b"\0")
+          paths = [path.decode("utf-8", "surrogateescape") for path in changed if path]
+          pathlib.Path("/tmp/pr_changed_paths.json").write_text(json.dumps(paths))
+          PYCHANGED
 
           grep -E '^[+-]name = |^[+-]version = ' /tmp/pr_diff.txt | head -500 > /tmp/lockfile_pins.txt || true
           python3 "$summary_script" linked-issues "${REPO}#${PR_NUMBER}" /tmp/linked_issues.json
           python3 "$summary_script" stats /tmp/pr_diff.txt /tmp/pr_diff_summary.json
 
           python3 - <<'PYEOF'
-          import hashlib, json, os, pathlib
+          import hashlib, html, json, os, pathlib
 
           rules = pathlib.Path(os.environ["GITHUB_WORKSPACE"], ".claude/skills/agentbricks-review/SKILL.md").read_text()
           # Drop the skill's YAML front matter; the prompt needs only the body.
           if rules.startswith("---\n"):
               rules = rules.split("\n---\n", 1)[1]
-          team_rules = pathlib.Path(os.environ["GITHUB_WORKSPACE"], "REVIEW.md").read_text()
+          workspace = pathlib.Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          changed_paths = json.loads(pathlib.Path("/tmp/pr_changed_paths.json").read_text())
+          candidates = {workspace / "REVIEW.md"}
+          for raw_path in changed_paths:
+              relative = pathlib.PurePosixPath(raw_path)
+              if relative.is_absolute() or ".." in relative.parts:
+                  continue
+              directories = relative.parts[:-1]
+              for depth in range(1, len(directories) + 1):
+                  candidates.add(workspace.joinpath(*directories[:depth], "REVIEW.md"))
+
+          review_files = []
+          for candidate in candidates:
+              if not candidate.is_file():
+                  continue
+              try:
+                  candidate.resolve().relative_to(workspace)
+              except ValueError:
+                  continue
+              review_files.append(candidate)
+          review_files.sort(key=lambda path: (len(path.relative_to(workspace).parts), path.as_posix()))
+          review_sources = [path.relative_to(workspace).as_posix() for path in review_files]
+          review_rules = "\n\n".join(
+              '<review_rules source="{}">\n{}\n</review_rules>'.format(
+                  html.escape(source, quote=True), path.read_text()
+              )
+              for source, path in zip(review_sources, review_files)
+          )
           meta = json.loads(pathlib.Path("/tmp/pr_meta.json").read_text())
           diff_sha256 = hashlib.sha256(pathlib.Path("/tmp/pr_diff.txt").read_bytes()).hexdigest()
           stats = json.loads(pathlib.Path("/tmp/pr_diff_summary.json").read_text())
@@ -467,6 +503,7 @@ jobs:
           {stats['markdown']}
 
           Changed test/support files: {json.dumps(stats['test_files'])}
+          Applicable review rule sources: {json.dumps(review_sources)}
 
           ## Where things are
           - The full PR diff is at `/tmp/pr_diff.txt` (SHA-256 `{diff_sha256}`). Pass the
@@ -482,9 +519,9 @@ jobs:
 
           {rules}
 
-          <team_review_rules source="REVIEW.md">
-          {team_rules}
-          </team_review_rules>
+          <applicable_review_rules>
+          {review_rules or "(none discovered)"}
+          </applicable_review_rules>
 
           IMPORTANT: your output is posted directly as a PR comment. Output only the
           final review, with no coordination or status messages. Begin with the exact
