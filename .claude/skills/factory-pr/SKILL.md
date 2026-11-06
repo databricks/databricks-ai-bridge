@@ -7,12 +7,11 @@ Only publish when the user or task owner has authorized a PR. Check for an
 existing PR for the task and branch before creating one. Repository guidance
 and the explicit task scope determine reviewers, labels, and draft status.
 
-Inspect Git wrappers before publication. In Universe, `git pp` creates changes
-entirely under `experimental/` ready for review by default. When a draft is
-required, use `git pp --no-pr` for the fast-forward push and then explicitly
-create a draft with the repository's configured GitHub/Gitspoke client. Do not
-assume a wrapper honors the task's draft requirement. Read the remote PR afterward
-and verify draft status, head, target repository and requested reviewers.
+Use the repository's configured GitHub account and reconcile any existing PR
+for the branch before publishing. When a draft is requested, create it explicitly
+as a draft and read it back to verify draft status, head, target repository and
+requested reviewers. Inspect any publication wrapper before invoking it; do not
+assume it preserves branch history or honors the requested draft status.
 
 Lead with the concrete problem and resulting behavior. Keep the body short:
 one or two sentences, the meaningful validation result, and links to the detailed

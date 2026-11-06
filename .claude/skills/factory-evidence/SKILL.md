@@ -26,6 +26,14 @@ If UI or traces do not apply, provide a concrete reason. If they apply but are
 unavailable, mark the evidence incomplete rather than substituting a diagram or
 claiming success. Keep the detailed report separate from the concise PR body.
 
+For a phased factory task, commit the reviewable report and runtime artifacts
+during implementation, identifying their actual tested source hashes or prior
+commit. Formal testing verifies the final implementation commit; save fresh
+captures outside the checkout, compare them with committed artifacts, and report
+the actual HEAD. Keep historical failures and build identities intact. PR links
+must resolve to committed artifacts, not untracked worker files. Review notes
+and draft PR text also stay outside the checkout to preserve the tested tree.
+
 The checked-in factory.evidence module validates the evidence packet structure.
 Run `python -m factory.evidence evidence.json` when this package is available,
 or submit the packet to the authenticated session evidence-validation endpoint.

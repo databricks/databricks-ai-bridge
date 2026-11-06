@@ -28,7 +28,8 @@ The caller must be that assignee; a coordinator may use only a previously
 consented grant for the same owner. Do not substitute the app operator.
 
 Explain sharing before launch: the configured named team can view/comment on
-the app card and view the Omnigent session; only the owner steers or approves.
+the app card and, after native sharing is confirmed, the Omnigent session;
+only the owner steers or approves.
 Use share_with_team=false for a private manual launch. Inspect native_sharing
 on GET /api/factory/board/{receipt_id}; pending is not confirmed access.
 
