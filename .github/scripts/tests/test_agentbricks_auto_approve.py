@@ -1,4 +1,4 @@
-"""Tests for PRReviewer's AgentBricks auto-approval gate."""
+"""Tests for AutoReviewer's AgentBricks auto-approval gate."""
 
 import importlib.util
 import unittest
@@ -146,8 +146,8 @@ class DecideTest(unittest.TestCase):
 
     def test_protected_paths_are_refused(self):
         for path, fragment in (
-            (".github/workflows/pr-reviewer.yml", "CI or review configuration"),
-            (".claude/skills/pr-review/SKILL.md", "CI or review configuration"),
+            (".github/workflows/auto-reviewer.yml", "CI or review configuration"),
+            (".claude/skills/auto-reviewer/SKILL.md", "CI or review configuration"),
             ("integrations/agentbricks/pyproject.toml", "dependency manifest"),
             ("integrations/agentbricks/requirements-dev.txt", "dependency manifest"),
             ("integrations/agentbricks/src/credential.py", "credential or auth"),

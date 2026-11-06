@@ -1,4 +1,4 @@
-"""Classify a PR review and decide whether PRReviewer may auto-approve it.
+"""Classify a PR review and decide whether AutoReviewer may auto-approve it.
 
 The decision uses only facts the workflow can check itself: the posted review's
 score and finding sections, and the files and lines the diff changes. The risk

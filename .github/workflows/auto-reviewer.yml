@@ -55,7 +55,7 @@ run-name: "AutoReviewer #${{ github.event.pull_request.number || github.event.is
 #   rule, dependency, or credential files; and every changed path is under
 #   integrations/agentbricks/), the author has write access, and the PR head
 #   hasn't moved. The approver is the GitHub App in
-#   PR_REVIEWER_APP_CLIENT_ID (variable) and PR_REVIEWER_APP_PRIVATE_KEY
+#   AUTO_REVIEWER_APP_CLIENT_ID (variable) and AUTO_REVIEWER_APP_PRIVATE_KEY
 #   (secret) when set, otherwise
 #   github-actions[bot]. A push to the PR dismisses the approval.
 
@@ -655,26 +655,26 @@ jobs:
         run: |
           set -euo pipefail
           gh label create "review-risk: low" --repo "$REPO" --color 2da44e \
-            --description "PRReviewer model score: 90-100" --force
+            --description "AutoReviewer model score: 90-100" --force
           gh label create "review-risk: medium" --repo "$REPO" --color bf8700 \
-            --description "PRReviewer model score: 70-89" --force
+            --description "AutoReviewer model score: 70-89" --force
           gh label create "review-risk: high" --repo "$REPO" --color cf222e \
-            --description "PRReviewer model score: 0-69" --force
+            --description "AutoReviewer model score: 0-69" --force
           for label in "review-risk: low" "review-risk: medium" "review-risk: high"; do
             gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "$label" >/dev/null 2>&1 || true
           done
           gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "$RISK_LABEL"
           echo "Applied $RISK_LABEL from the model's ${{ steps.decision.outputs.score }}/100 score."
 
-      - name: Get PRReviewer app token
+      - name: Get AutoReviewer app token
         id: app_token
         if: >-
           steps.decision.outputs.risk_label != '' &&
-          vars.AI_REVIEW_AUTO_APPROVE == 'true' && vars.PR_REVIEWER_APP_CLIENT_ID != ''
+          vars.AI_REVIEW_AUTO_APPROVE == 'true' && vars.AUTO_REVIEWER_APP_CLIENT_ID != ''
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          client-id: ${{ vars.PR_REVIEWER_APP_CLIENT_ID }}
-          private-key: ${{ secrets.PR_REVIEWER_APP_PRIVATE_KEY }}
+          client-id: ${{ vars.AUTO_REVIEWER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AUTO_REVIEWER_APP_PRIVATE_KEY }}
 
       - name: Auto-approve if low risk
         if: steps.decision.outputs.risk_label != '' && vars.AI_REVIEW_AUTO_APPROVE == 'true'
@@ -701,8 +701,8 @@ jobs:
             echo "::notice::Not auto-approving: ${joined%; }."
             exit 0
           fi
-          body="<!-- pr-reviewer-approval -->
-          Auto-approved by PRReviewer for \`${HEAD_SHA:0:7}\`: the entire diff is under \`integrations/agentbricks/\`, merge safety is at least ${MIN_SCORE}, every reviewer delivered, there are no blocking, security, or uncertain findings, the diff has at most ${MAX_LINES} changed lines, and it changes no protected files. Pushing new commits dismisses this approval. [Workflow run](${RUN_URL})"
+          body="<!-- auto-reviewer-approval -->
+          Auto-approved by AutoReviewer for \`${HEAD_SHA:0:7}\`: the entire diff is under \`integrations/agentbricks/\`, merge safety is at least ${MIN_SCORE}, every reviewer delivered, there are no blocking, security, or uncertain findings, the diff has at most ${MAX_LINES} changed lines, and it changes no protected files. Pushing new commits dismisses this approval. [Workflow run](${RUN_URL})"
           gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --silent \
             -f event=APPROVE -f commit_id="$HEAD_SHA" -f body="$body" \
             && echo "Approved ${HEAD_SHA:0:7}." \
@@ -754,9 +754,9 @@ jobs:
 
 
   # Approvals aren't dismissed on push by branch protection here, so drop
-  # PRReviewer's approval and model-risk label when the PR gets commits it didn't review.
+  # AutoReviewer's approval and model-risk label when the PR gets commits it didn't review.
   dismiss-stale-approval:
-    name: PRReviewer approval
+    name: AutoReviewer approval
     if: github.event_name == 'pull_request_target' && github.event.action == 'synchronize'
     runs-on: ${{ fromJSON(vars.AI_REVIEW_RUNS_ON || '{"group":"databricks-protected-runner-group","labels":"linux-ubuntu-latest"}') }}
     timeout-minutes: 5
@@ -774,13 +774,13 @@ jobs:
             gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label "$label" >/dev/null 2>&1 || true
           done
 
-      - name: Get PRReviewer app token
+      - name: Get AutoReviewer app token
         id: app_token
-        if: vars.PR_REVIEWER_APP_CLIENT_ID != ''
+        if: vars.AUTO_REVIEWER_APP_CLIENT_ID != ''
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          client-id: ${{ vars.PR_REVIEWER_APP_CLIENT_ID }}
-          private-key: ${{ secrets.PR_REVIEWER_APP_PRIVATE_KEY }}
+          client-id: ${{ vars.AUTO_REVIEWER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AUTO_REVIEWER_APP_PRIVATE_KEY }}
 
       - name: Dismiss approvals of earlier commits
         env:
@@ -792,14 +792,14 @@ jobs:
           set -euo pipefail
           ids="$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews" --jq '.[]
             | select(.state == "APPROVED" and .user.type == "Bot"
-                and (.body | contains("<!-- pr-reviewer-approval -->"))
+                and (.body | contains("<!-- auto-reviewer-approval -->"))
                 and .commit_id != $ENV.HEAD_SHA) | .id')"
           if [ -z "$ids" ]; then
-            echo "No PRReviewer approval to dismiss."
+            echo "No AutoReviewer approval to dismiss."
             exit 0
           fi
           for id in $ids; do
             gh api -X PUT "repos/$REPO/pulls/$PR_NUMBER/reviews/$id/dismissals" --silent \
-              -f event=DISMISS -f message="New commits were pushed after PRReviewer approved. Comment /review to review them."
+              -f event=DISMISS -f message="New commits were pushed after AutoReviewer approved. Comment /review to review them."
             echo "Dismissed approval $id."
           done
