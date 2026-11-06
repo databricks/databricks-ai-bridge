@@ -30,7 +30,3 @@ If new changes invalidate evidence, rerun the affected checks before handoff.
 
 Return the PR URL, report and evidence references, current head, and remaining
 review needs. A requested draft body or a failed create call is not a published PR.
-
-Adapted from pstack's opening-a-pr playbook and Matt Pocock's concise PR approach.
-See [FACTORY-PROVENANCE.md](../FACTORY-PROVENANCE.md) for pinned sources and the
-history-preserving adaptation.

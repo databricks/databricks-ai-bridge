@@ -49,6 +49,3 @@ object inside the final `factory-result` JSON block. A separate JSON block or an
 artifact link is not a substitute. Use the implemented full commit SHA for both
 the result's `head` and the packet's `build`. Keep failed observations in their
 original reports; a rerun must capture fresh evidence at the same commit.
-
-Adapted from pstack's prove-it-works and show-me-your-work principles. See
-[FACTORY-PROVENANCE.md](../FACTORY-PROVENANCE.md) for pinned sources.

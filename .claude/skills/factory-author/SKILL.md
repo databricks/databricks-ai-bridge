@@ -32,11 +32,6 @@ requested. Distinguish implemented, tested, observed, and still unverified work.
 Keep the native session open for human steering; a request accepted by the
 session API is not evidence that the task has finished.
 
-Adapted from poteto/pstack's architect, feature, verifiable-unit and subtraction
-patterns, and Matt Pocock's specification and vertical-slice approach. Exact
-source revisions are in [references/sources.json](references/sources.json);
-license notices are in [FACTORY-PROVENANCE.md](../FACTORY-PROVENANCE.md).
-
 For a factory phase turn, perform only the requested phase in this same session.
 Use its exact attempt ID and result schema. A blocked result names the concrete
 missing prerequisite; ordinary reversible implementation choices do not need
