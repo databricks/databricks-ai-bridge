@@ -58,13 +58,17 @@ def diff(*paths, added=1):
     return "".join(hunks)
 
 
+CODE = "integrations/agentbricks/src/databricks_agentbricks/cli/app.py"
+TEST = "integrations/agentbricks/tests/unit_tests/agent_hint_test.py"
+
+
 class DecideTest(unittest.TestCase):
     def assert_refused(self, result, fragment):
         self.assertFalse(result["approve"], result)
         self.assertTrue(any(fragment in reason for reason in result["reasons"]), result["reasons"])
 
     def test_clean_small_review_is_approved(self):
-        result = gate.decide(review(), diff("README.md", "src/databricks_ai_bridge/utils/vector_search.py"))
+        result = gate.decide(review(), diff("README.md", CODE, TEST))
         self.assertEqual(result, {"approve": True, "reasons": []})
 
     def test_non_blocking_notes_do_not_block_approval(self):
@@ -88,16 +92,16 @@ class DecideTest(unittest.TestCase):
             ("uncertain", "Uncertain findings"),
         ):
             with self.subTest(title):
-                self.assert_refused(gate.decide(review(**{field: finding}), diff("a.py")), f'"{title}" is not empty')
+                self.assert_refused(gate.decide(review(**{field: finding}), diff(CODE)), f'"{title}" is not empty')
 
     def test_missing_section_or_summary_line_is_refused(self):
         text = review().replace("## Security vulnerabilities\n\nNone.\n", "")
-        self.assert_refused(gate.decide(text, diff("a.py")), 'no "Security vulnerabilities" section')
-        self.assert_refused(gate.decide("## Blocking issues\n\nNone.\n", diff("a.py")), "no merge safety line")
+        self.assert_refused(gate.decide(text, diff(CODE)), 'no "Security vulnerabilities" section')
+        self.assert_refused(gate.decide("## Blocking issues\n\nNone.\n", diff(CODE)), "no merge safety line")
 
     def test_large_diff_is_refused(self):
-        self.assert_refused(gate.decide(review(), diff("a.py", added=201)), "over the 200-line limit")
-        self.assertTrue(gate.decide(review(), diff("a.py", added=200))["approve"])
+        self.assert_refused(gate.decide(review(), diff(CODE, added=201)), "over the 200-line limit")
+        self.assertTrue(gate.decide(review(), diff(CODE, added=200))["approve"])
 
     def test_protected_paths_are_refused(self):
         for path, fragment in (
@@ -109,17 +113,33 @@ class DecideTest(unittest.TestCase):
             ("requirements-dev.txt", "dependency manifest"),
             ("src/databricks_ai_bridge/model_serving_obo_credential_strategy.py", "credential or auth"),
             ("databricks_mcp/src/databricks_mcp/oauth.py", "credential or auth"),
-            ("src/pkg/auth.py", "credential or auth"),
+            ("integrations/agentbricks/src/databricks_agentbricks/auth.py", "credential or auth"),
+            ("integrations/agentbricks/pyproject.toml", "dependency manifest"),
         ):
             with self.subTest(path):
                 self.assert_refused(gate.decide(review(), diff(path)), fragment)
 
     def test_names_that_only_contain_auth_are_allowed(self):
-        self.assertTrue(gate.decide(review(), diff("docs/authors.md", "src/pkg/author_utils.py"))["approve"])
+        self.assertTrue(gate.decide(review(), diff("docs/authors.md", "integrations/agentbricks/src/databricks_agentbricks/author_utils.py"))["approve"])
+
+    def test_changes_outside_agentbricks_are_refused_unless_docs(self):
+        for path in (
+            "src/databricks_ai_bridge/utils/vector_search.py",
+            "tests/databricks_ai_bridge/utils/test_vector_search.py",
+            "integrations/openai/src/databricks_openai/utils/clients.py",
+            "docs/source/conf.py",
+            "integrations/agentbricksx/a.py",
+        ):
+            with self.subTest(path):
+                self.assert_refused(gate.decide(review(), diff(path)), "outside integrations/agentbricks/")
+        docs = diff("README.md", "integrations/openai/README.md", "docs/source/index.rst", "CONTRIBUTING.md")
+        self.assertTrue(gate.decide(review(), docs)["approve"])
 
     def test_renamed_path_counts_both_names(self):
-        rename = "diff --git a/src/a.py b/.github/a.py\nsimilarity index 100%\n"
+        rename = "diff --git a/integrations/agentbricks/a.py b/.github/a.py\nsimilarity index 100%\n"
         self.assert_refused(gate.decide(review(), rename), "CI or review configuration")
+        moved_out = "diff --git a/integrations/agentbricks/a.py b/src/a.py\nsimilarity index 100%\n"
+        self.assert_refused(gate.decide(review(), moved_out), "outside integrations/agentbricks/")
 
     def test_empty_diff_is_refused(self):
         self.assert_refused(gate.decide(review(), ""), "changes no files")

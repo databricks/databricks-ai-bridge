@@ -49,8 +49,9 @@ run-name: "AgentBricksReviewer #${{ github.event.pull_request.number || github.e
 #   approves the reviewed commit when .github/scripts/agentbricks_auto_approve.py
 #   passes (merge safety >= AI_REVIEW_AUTO_APPROVE_MIN_SCORE, default 95; every
 #   reviewer delivered; no blocking, security, or uncertain findings; at most
-#   AI_REVIEW_AUTO_APPROVE_MAX_LINES changed lines, default 200; no CI, review
-#   rule, dependency, or credential files), the author has write access, and
+#   AI_REVIEW_AUTO_APPROVE_MAX_LINES changed lines, default 200; only files under
+#   integrations/agentbricks/ or .md/.rst docs; no CI, review rule, dependency,
+#   or credential files), the author has write access, and
 #   the PR head hasn't moved. The approver is github-actions[bot], so the repo
 #   must allow Actions to approve PRs. A push to the PR dismisses the approval.
 
