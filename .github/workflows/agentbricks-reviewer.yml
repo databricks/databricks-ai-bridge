@@ -682,7 +682,12 @@ jobs:
           gh api "repos/$REPO/issues/$PR_NUMBER/labels" -f "labels[]=$label" --silent
           for old in risk:low risk:medium risk:high; do
             [ "$old" = "$label" ] && continue
-            gh api -X DELETE "repos/$REPO/issues/$PR_NUMBER/labels/$old" --silent || true
+            if ! response="$(gh api -X DELETE "repos/$REPO/issues/$PR_NUMBER/labels/$old" --include --silent 2>&1)"; then
+              if ! grep -qE '^HTTP/[0-9.]+ 404([[:space:]]|$)' <<<"$response"; then
+                printf '%s\n' "$response" >&2
+                exit 1
+              fi
+            fi
           done
 
       - name: Auto-approve if low risk
@@ -791,10 +796,16 @@ jobs:
             exit 0
           fi
           for label in risk:low risk:medium risk:high; do
-            gh api -X DELETE "repos/$REPO/issues/$PR_NUMBER/labels/$label" --silent || true
+            if ! response="$(gh api -X DELETE "repos/$REPO/issues/$PR_NUMBER/labels/$label" --include --silent 2>&1)"; then
+              if ! grep -qE '^HTTP/[0-9.]+ 404([[:space:]]|$)' <<<"$response"; then
+                printf '%s\n' "$response" >&2
+                exit 1
+              fi
+            fi
           done
 
       - name: Dismiss approvals of earlier commits
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
