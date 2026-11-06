@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Optional
 
 from langchain_core.tools import BaseTool, tool
 
+from databricks_agentkit._actors import check_actor
 from databricks_agentkit.client import AgentKitClient
 from databricks_agentkit.runtime.workspace import workspace_client
 
@@ -111,9 +112,12 @@ def memory_tools(actor: str, store: str | None = None) -> list[BaseTool]:
     The store resolves ``store`` arg → ``AGENT_MEMORY_STORE`` env → the ``[memory_store]`` binding in
     agent.toml (`agentbricks memory bind`) → none (no tools). ``actor`` partitions the store; it is captured
     in the tools' closures (not exposed to the model). Call this per request with the identity whose
-    memory to use (e.g. the signed-in user).
+    memory to use (e.g. the signed-in user). An actor ending with ``:langgraph`` is refused: the
+    LangGraph memory store keeps each user's entries under that id.
     """
     from databricks_agentkit.runtime.tool_manifest import resolve_memory_store
+
+    check_actor(actor)
 
     store_id = resolve_memory_store(store)
     if not store_id:
