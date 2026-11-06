@@ -20,12 +20,16 @@ credential there; never export, enumerate secrets or try another person's
 credentials. Do not attach an Arclet bootstrap to Lakebox.
 
 POST /api/factory/sessions with request_id, repository, harness (codex/claude),
-assignee, title, prompt, workflow_mode (manual/phased), and share_with_team.
+assignee, title, prompt, workflow_mode (manual/phased/autonomous), and share_with_team.
 Keep one stable request_id per task. For a Jira handoff, use
 POST /api/factory/sessions/from-jira with dispatch_id, issue_key, summary,
 description, repository, harness, workflow_mode, and the actual assignee.
 The caller must be that assignee; a coordinator may use only a previously
 consented grant for the same owner. Do not substitute the app operator.
+Hosted Jira handoffs fetch the ticket's actual requirements and route from its
+labels. The Jira watcher requires `agent-platform-factory` and exactly one
+repository label: `databricks-ai-bridge` or `universe`. Confirm the configured
+project/component and ticket assignee; do not change labels unless requested.
 
 Explain sharing before launch: the configured named team can view/comment on
 the app card and, after native sharing is confirmed, the Omnigent session;
@@ -36,7 +40,10 @@ on GET /api/factory/board/{receipt_id}; pending is not confirmed access.
 Poll GET /api/factory/sessions/{receipt_id} until session_url appears, then
 return both the card and native conversation links. Accepted/queued input is
 not task completion. Reuse the same receipt after a lost response; never retry
-with a fresh ID to bypass uncertainty. For phased work, one conversation carries
-intake → design → implement → test → review → draft PR with owner gates.
+with a fresh ID to bypass uncertainty. For managed work, one conversation carries
+intake → design → implement → test → review → draft PR. Guided (`phased`)
+mode waits for owner approval after design and review. Automatic (`autonomous`)
+mode advances valid results under the owner's existing task authorization;
+credential failures and material scope conflicts still need direction.
 Read the checkout's factory-author, factory-evidence and factory-pr skills;
 report their source commit and paths. Keep the session available for steering.

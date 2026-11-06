@@ -26,17 +26,21 @@ If UI or traces do not apply, provide a concrete reason. If they apply but are
 unavailable, mark the evidence incomplete rather than substituting a diagram or
 claiming success. Keep the detailed report separate from the concise PR body.
 
-For a phased factory task, commit the reviewable report and runtime artifacts
-during implementation, identifying their actual tested source hashes or prior
-commit. Formal testing verifies the final implementation commit; save fresh
-captures outside the checkout, compare them with committed artifacts, and report
-the actual HEAD. Keep historical failures and build identities intact. PR links
-must resolve to committed artifacts, not untracked worker files. Review notes
-and draft PR text also stay outside the checkout to preserve the tested tree.
+Keep evidence proportional to the change. A small help-text or documentation
+change can link executed commands and output in the native session; do not add
+tracked reports solely to satisfy the factory. When reports are committed, record
+their actual tested source hashes or prior commit. Formal testing verifies the
+final implementation commit; save fresh captures outside the checkout and
+compare them with any committed artifacts. PR links must be accessible to
+reviewers, such as the native session or committed/uploaded artifacts, rather
+than untracked worker paths. Keep historical results and build identities intact.
+Review notes and draft PR text stay outside the checkout to preserve the tested tree.
 
-The checked-in factory.evidence module validates the evidence packet structure.
-Run `python -m factory.evidence evidence.json` when this package is available,
-or submit the packet to the authenticated session evidence-validation endpoint.
+The factory application's evidence validator checks packet structure; it is not
+an AI Bridge package dependency. Run `python -m factory.evidence evidence.json`
+only where that application package is available, or use its authenticated
+session evidence-validation endpoint when provided. Otherwise follow the schema
+in the phase request without installing a new validator.
 A structural pass does not verify links, replay the application, establish that
 the artifacts are genuine, or approve the change. Human intent review remains.
 
@@ -47,4 +51,4 @@ the result's `head` and the packet's `build`. Keep failed observations in their
 original reports; a rerun must capture fresh evidence at the same commit.
 
 Adapted from pstack's prove-it-works and show-me-your-work principles. See
-../FACTORY-PROVENANCE.md for pinned sources.
+[FACTORY-PROVENANCE.md](../FACTORY-PROVENANCE.md) for pinned sources.

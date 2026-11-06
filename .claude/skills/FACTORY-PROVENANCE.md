@@ -1,6 +1,7 @@
 # Author skill provenance
 
-Original portable adaptations; no upstream skill prose was copied. Sources are pinned in factory-author/references/sources.json.
+Original portable adaptations; no upstream skill prose was copied. Sources are
+pinned in [factory-author/references/sources.json](factory-author/references/sources.json).
 
 ## License notices
 
@@ -65,9 +66,10 @@ The factory keeps the useful workflow boundaries while changing source behavior
 that conflicts with the local contract. In particular, the upstream pstack PR
 playbook permits rebase and amend operations. These skills prohibit those
 operations and require new commits plus fast-forward pushes. The factory also
-requires a real runtime journey, inspected traces or request logs, and UI evidence
-or an explicit not-applicable record. The author policy is frozen per session;
-team knowledge retrieval and independent intent review remain future work.
+requires evidence appropriate to the change: a real runtime journey, inspected
+traces or request logs, and UI evidence when applicable, with concrete reasons
+when they do not apply. Skills are read from the task checkout; the session
+records the source commit and paths actually loaded.
 
 No upstream workflow is invoked against an external repository by this source
 asset build. The parent runtime may select a skill only after it has validated
