@@ -43,6 +43,8 @@ ty check
 
 AgentBricksReviewer (`.github/workflows/agentbricks-reviewer.yml`) reviews all eligible PRs in this repository and posts its review as a PR comment; comment `/review` to re-run it. Its process lives in [`.claude/skills/agentbricks-review/SKILL.md`](.claude/skills/agentbricks-review/SKILL.md), which also runs locally: `/agentbricks-review [PR number or URL]`, or with no argument to review the current branch against `origin/main`. Reviews always load root [`REVIEW.md`](REVIEW.md), then auto-discover additional `REVIEW.md` files scoped to changed paths. CI uses these files from the default branch, so edits take effect after they merge.
 
+Pushes to eligible PRs also request a new review, with at most three automatic push-review attempts per PR by default (`AI_REVIEW_MAX_PUSH_REVIEWS`; set `0` to disable). Failed attempts count toward the limit. A bot comment tracks the count; the initial review and manually requested `/review` runs do not consume this budget. Pushing still dismisses stale approvals after the limit is reached.
+
 When the `AI_REVIEW_AUTO_APPROVE` repo variable is `true`, the workflow also approves PRs that pass [`.github/scripts/agentbricks_auto_approve.py`](.github/scripts/agentbricks_auto_approve.py): a high merge safety score, no blocking, security, or uncertain findings, a small diff that only changes `integrations/agentbricks/` or Markdown/reST docs and doesn't touch CI, review rules, dependencies, or credential code, and an author with write access. The approval comes from `github-actions[bot]`. Pushing new commits dismisses that approval.
 
 ## Integration Tests
