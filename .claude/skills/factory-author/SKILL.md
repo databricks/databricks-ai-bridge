@@ -28,7 +28,9 @@ can it be deleted, folded into an existing component, or simplified without
 losing an acceptance criterion? Record consequential simplifications and tradeoffs.
 
 Apply factory-evidence before claiming completion and factory-pr when a PR is
-requested. Distinguish implemented, tested, observed, and still unverified work.
+requested. Authorized publication must deliver a ready-for-review PR; a draft
+alone is incomplete. Verify the remote PR state and tested HEAD before reporting
+completion. Distinguish implemented, tested, observed, and still unverified work.
 Keep the native session open for human steering; a request accepted by the
 session API is not evidence that the task has finished.
 

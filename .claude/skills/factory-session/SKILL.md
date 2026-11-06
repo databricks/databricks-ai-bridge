@@ -41,9 +41,10 @@ Poll GET /api/factory/sessions/{receipt_id} until session_url appears, then
 return both the card and native conversation links. Accepted/queued input is
 not task completion. Reuse the same receipt after a lost response; never retry
 with a fresh ID to bypass uncertainty. For managed work, one conversation carries
-intake → design → implement → test → review → draft PR. Guided (`phased`)
+intake → design → implement → test → review → ready-for-review PR. Guided (`phased`)
 mode waits for owner approval after design and review. Automatic (`autonomous`)
 mode advances valid results under the owner's existing task authorization;
-credential failures and material scope conflicts still need direction.
+credential failures and material scope conflicts still need direction. Both modes
+verify the published PR is ready for review, not a draft.
 Read the checkout's factory-author, factory-evidence and factory-pr skills;
 report their source commit and paths. Keep the session available for steering.
