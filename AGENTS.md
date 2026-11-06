@@ -39,6 +39,16 @@ ruff check && ruff format
 ty check
 ```
 
+## Software Factory
+
+For factory-assigned work, start with [factory-author](.claude/skills/factory-author/SKILL.md),
+then use [factory-evidence](.claude/skills/factory-evidence/SKILL.md) and
+[factory-pr](.claude/skills/factory-pr/SKILL.md) as needed. Use
+[factory-session](.claude/skills/factory-session/SKILL.md) only to launch or locate
+a session. These repository files are the source of truth; `.agents/skills/`
+links to the same files for Codex. The factory reads them from the task checkout,
+so a new checkout of `main` picks up updates after they merge.
+
 ## Code Review
 
 AgentBricksReviewer (`.github/workflows/agentbricks-reviewer.yml`) reviews all eligible PRs in this repository and posts its review as a PR comment; comment `/review` to re-run it. Its process lives in [`.claude/skills/agentbricks-review/SKILL.md`](.claude/skills/agentbricks-review/SKILL.md), which also runs locally: `/agentbricks-review [PR number or URL]`, or with no argument to review the current branch against `origin/main`. Reviews always load root [`REVIEW.md`](REVIEW.md), then auto-discover additional `REVIEW.md` files scoped to changed paths. CI uses these files from the default branch, so edits take effect after they merge.
