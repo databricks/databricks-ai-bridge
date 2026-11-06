@@ -76,7 +76,7 @@ class DurableInvocationExecutor(InvocationExecutor):
         """Schedule a newly queued invocation on this worker."""
         if state.status != InvocationStatus.QUEUED:
             return
-        self._schedule(state.invocation_id, recovery=False)
+        self._schedule(state.invocation_id, recovery=False, retry_if_running=True)
 
     def ensure_recovery_scheduled(self, invocation_id: str) -> None:
         """Schedule stale active or abandoned queued work discovered by recovery."""
@@ -156,6 +156,9 @@ class DurableInvocationExecutor(InvocationExecutor):
     def _discard_task(self, invocation_id: str, completed: asyncio.Task[None]) -> None:
         if self._tasks.get(invocation_id) is completed:
             self._tasks.pop(invocation_id, None)
+            retry = invocation_id in self._claim_retries
             self._claim_retries.discard(invocation_id)
+            if retry:
+                self._schedule(invocation_id, recovery=False)
         if not completed.cancelled():
             completed.exception()
