@@ -47,7 +47,7 @@ run-name: "AgentBricksReviewer #${{ github.event.pull_request.number || github.e
 #
 # Auto-approval (off unless the variable AI_REVIEW_AUTO_APPROVE is "true"):
 #   approves the reviewed commit when .github/scripts/agentbricks_auto_approve.py
-#   passes (merge safety >= AI_REVIEW_AUTO_APPROVE_MIN_SCORE, default 95; every
+#   passes (review score >= AI_REVIEW_AUTO_APPROVE_MIN_SCORE, default 95; every
 #   reviewer delivered; no blocking, security, or uncertain findings; at most
 #   AI_REVIEW_AUTO_APPROVE_MAX_LINES changed lines, default 200; only files under
 #   integrations/agentbricks/ or .md/.rst docs; no CI, review rule, dependency,
@@ -712,7 +712,7 @@ jobs:
             exit 0
           fi
           body="<!-- agentbricks-reviewer-approval -->
-          Auto-approved by AgentBricksReviewer for \`${HEAD_SHA:0:7}\`: low change risk, merge safety at least ${MIN_SCORE}, every reviewer delivered, no blocking, security, or uncertain findings, at most ${MAX_LINES} changed lines, and no CI, dependency, or credential files. Pushing new commits dismisses this approval. [Workflow run](${RUN_URL})"
+          Auto-approved by AgentBricksReviewer for \`${HEAD_SHA:0:7}\`: low change risk, review score at least ${MIN_SCORE}, every reviewer delivered, no blocking, security, or uncertain findings, at most ${MAX_LINES} changed lines, and no CI, dependency, or credential files. Pushing new commits dismisses this approval. [Workflow run](${RUN_URL})"
           gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --silent \
             -f event=APPROVE -f commit_id="$HEAD_SHA" -f body="$body" \
             && echo "Approved ${HEAD_SHA:0:7}." \

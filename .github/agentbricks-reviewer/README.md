@@ -16,11 +16,15 @@ The root file preserves the existing repository checks. The AgentBricks subtree
 adds its own criteria and automation-eligibility note without changing workflow
 triggers, approval behavior, or merge permissions.
 
-Reviews now report two independent assessments: the existing merge-safety score
+Reviews now report two independent assessments: a review score
 for findings and reviewer coverage, and change safety for the impact of the
 change itself. Change safety is a 0–100 rubric, not a probability. Higher is
 safer to automate: 90–100 is low, 60–89 medium, and 0–59 high risk. Missing or
 invalid assessments withhold approval and receive high risk.
+
+For example, `Review score: 100/100 · reviewers: 2/2` can appear alongside
+`Change safety: 80/100 (MEDIUM RISK)` for a clean review of a consequential
+change. Only change safety carries a risk band; the review score does not.
 
 The reviewer considers actual behavior, affected users/packages, public API
 compatibility, credentials/data writes, tests, and rollback. CI adds minimum

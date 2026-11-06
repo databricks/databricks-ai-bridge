@@ -21,7 +21,7 @@ def review(
     change_safety=100,
     change_risk="LOW",
 ):
-    return f"""**Merge safety:** {score}/100 (LOW RISK) · reviewers: {reviewers} · findings by lens: none
+    return f"""**Review score:** {score}/100 · reviewers: {reviewers} · findings by lens: none
 
 **Change safety:** {change_safety}/100 ({change_risk} RISK)
 **Risk rationale:** Small compatible change with focused tests and straightforward rollback.
@@ -85,6 +85,15 @@ class DecideTest(unittest.TestCase):
     def test_low_score_is_refused(self):
         self.assert_refused(gate.decide(review(score=94), diff("README.md")), "below 95")
 
+    def test_review_score_is_separate_from_risk_wording(self):
+        for old_line in (
+            "**Merge safety:** 100/100 (LOW RISK)",
+            "**Review score:** 100/100 (LOW RISK)",
+        ):
+            with self.subTest(old_line=old_line):
+                text = review().replace("**Review score:** 100/100", old_line)
+                self.assert_refused(gate.decide(text, diff("README.md")), "no review score line")
+
     def test_missing_reviewer_is_refused(self):
         self.assert_refused(gate.decide(review(reviewers="1/2"), diff("README.md")), "1 of 2")
 
@@ -104,7 +113,7 @@ class DecideTest(unittest.TestCase):
     def test_missing_section_or_summary_line_is_refused(self):
         text = review().replace("## Security vulnerabilities\n\nNone.\n", "")
         self.assert_refused(gate.decide(text, diff(CODE)), 'no "Security vulnerabilities" section')
-        self.assert_refused(gate.decide("## Blocking issues\n\nNone.\n", diff(CODE)), "no merge safety line")
+        self.assert_refused(gate.decide("## Blocking issues\n\nNone.\n", diff(CODE)), "no review score line")
 
     def test_large_diff_is_refused(self):
         self.assert_refused(gate.decide(review(), diff(CODE, added=201)), "over the 200-line limit")

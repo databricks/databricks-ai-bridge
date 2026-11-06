@@ -15,8 +15,8 @@ import re
 import sys
 from pathlib import Path, PurePosixPath
 
-MERGE_SAFETY = re.compile(
-    r"\*\*Merge safety:\*\*\s*(?P<score>\d+)/100\s*\((?P<risk>[A-Z ]+)\)"
+REVIEW_SCORE = re.compile(
+    r"\*\*Review score:\*\*\s*(?P<score>\d+)/100"
     r"\s*·\s*reviewers:\s*(?P<delivered>\d+)/(?P<dispatched>\d+)"
 )
 EMPTY_SECTIONS = ("Blocking issues", "Security vulnerabilities", "Uncertain findings")
@@ -152,14 +152,14 @@ def decide(review: str, diff: str, min_score: int = 95, max_lines: int = 200,
            paths: list[str] | None = None) -> dict:
     reasons: list[str] = []
 
-    summary = MERGE_SAFETY.search(review)
+    summary = REVIEW_SCORE.search(review)
     if not summary:
-        reasons.append("the review has no merge safety line")
+        reasons.append("the review has no review score line")
     else:
         score = int(summary.group("score"))
         delivered, dispatched = int(summary.group("delivered")), int(summary.group("dispatched"))
         if score < min_score:
-            reasons.append(f"merge safety {score}/100 is below {min_score}")
+            reasons.append(f"review score {score}/100 is below {min_score}")
         if delivered < 2 or delivered != dispatched:
             reasons.append(f"only {delivered} of {dispatched} reviewers delivered (need all, and at least 2)")
 

@@ -1,6 +1,6 @@
 ---
 name: agentbricks-review
-description: Multi-lens review of a databricks-ai-bridge pull request or local branch, with auto-discovered REVIEW.md criteria, verified findings, and a merge safety score.
+description: Multi-lens review of a databricks-ai-bridge pull request or local branch, with auto-discovered REVIEW.md criteria, verified findings, a review score, and separate change risk.
 ---
 
 # databricks-ai-bridge PR review
@@ -156,22 +156,18 @@ Work in this order, so verification is spent only on findings that survive:
 | Medium | real issue with limited reach or an easy workaround | Non-blocking notes | −3 |
 | Low | minor issue with a concrete consequence | Non-blocking notes | −1 |
 
-Merge safety score = 100 minus the deductions, floored at 0, then capped at
+Review score = 100 minus the deductions, floored at 0, then capped at
 `floor(100 × reviewers that delivered / reviewers dispatched)`.
 
-| Score | Risk |
-|---|---|
-| 90–100 | LOW RISK |
-| 70–89 | MODERATE RISK |
-| 40–69 | HIGH RISK |
-| 0–39 | CRITICAL RISK |
+This score describes findings and reviewer coverage. Do not attach a risk band
+to it; change risk is assessed separately below.
 
 If no reviewer delivered, say the review could not be completed instead of
 giving a score.
 
 ## 5. Assess change safety separately
 
-The merge safety score above measures findings and review coverage. Separately
+The review score above measures findings and review coverage. Separately
 assess the impact of merging this change even when no defects were found.
 Report a **change safety** score from 0 to 100: higher means safer to automate,
 not a calibrated probability. Use these bands:
@@ -194,7 +190,7 @@ CI applies minimum risk levels for protected paths, public/runtime components,
 multiple production packages, large diffs, and binary changes, using
 `.github/scripts/agentbricks_auto_approve.py`. CI may lower change safety and
 raise risk, and only the resulting low-risk assessment can be auto-approved.
-The existing merge-safety threshold, findings, author, scope, and commit checks
+The existing review-score threshold, findings, author, scope, and commit checks
 also apply. A low-risk label does not grant approval.
 
 # Part 2: Rules for every reviewer
@@ -252,7 +248,7 @@ or approval behavior.
 
 # Part 4: Output format
 
-Start with one line: `**Merge safety:** <score>/100 (<risk>) · reviewers:
+Start with one line: `**Review score:** <score>/100 · reviewers:
 <delivered>/<dispatched> · findings by lens: <lens (count), ...>`, or
 `findings by lens: none` when no lens found anything. Every lens is always
 checked, so list only the lenses with findings.
@@ -261,7 +257,7 @@ Then add an independent line in this exact format:
 `**Change safety:** <score>/100 (<LOW|MEDIUM|HIGH> RISK)`.
 Follow it with `**Risk rationale:**` and a concise explanation of the affected
 paths/components, behavioral impact, test evidence, and reversibility. PR risk
-labels use this assessment with CI's risk floors, not the merge-safety band.
+labels use this assessment with CI's risk floors, independently of the review score.
 
 Then report `**Review rules:** <source paths/revision> · checked: <applicable
 rule IDs> · gaps: <incomplete coverage, or none>`. Retain rule IDs in applicable
