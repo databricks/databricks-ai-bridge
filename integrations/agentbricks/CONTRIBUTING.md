@@ -62,6 +62,17 @@ pip install -e integrations/agentbricks     # only when dependencies changed
 Editing a template in the repo only affects **future** `agentbricks init` runs. An existing scaffold has
 its own copy of the template, so to iterate on a scaffolded project edit that copy (or re-init).
 
+## Running the unit tests
+
+From `integrations/agentbricks`:
+
+```sh
+uv run --group tests pytest tests/unit_tests
+```
+
+CI runs the same tests with both `--resolution lowest-direct` and `--resolution highest`, and once more with the
+`langgraph` and `openai` extras. See `.github/scripts/run_agentbricks_tests.sh` for the exact commands.
+
 ## Testing SDK / runtime changes in a scaffold
 
 A scaffold uses a normal `databricks-agentbricks` PyPI dependency, so `agentbricks dev` and `agentbricks deploy`
