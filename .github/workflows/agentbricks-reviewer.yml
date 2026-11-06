@@ -8,7 +8,7 @@ run-name: "AgentBricksReviewer #${{ github.event.pull_request.number || github.e
 # .claude/skills/agentbricks-review/SKILL.md, which also runs as a local skill.
 #
 # Triggers:
-#   - pull_request_target opened/reopened/ready_for_review, for non-draft PRs
+#   - pull_request_target opened/reopened/ready_for_review/synchronize, for non-draft PRs
 #     (including fork PRs) whose author has write, maintain, or admin access to
 #     this repo. The event's author_association can't be used for this: it misses
 #     members whose org membership is private. Other authors' PRs need a
@@ -57,7 +57,7 @@ run-name: "AgentBricksReviewer #${{ github.event.pull_request.number || github.e
 
 on:
   pull_request_target:
-    # synchronize only runs dismiss-stale-approval; the review skips it.
+    # Push reviews are capped by AI_REVIEW_MAX_PUSH_REVIEWS (default 3 per PR).
     types: [opened, reopened, ready_for_review, synchronize]
   issue_comment:
     types: [created]
@@ -91,7 +91,6 @@ jobs:
     if: >-
       (
         github.event_name == 'pull_request_target' &&
-        github.event.action != 'synchronize' &&
         !github.event.pull_request.draft &&
         github.event.pull_request.user.type != 'Bot'
       ) || (
@@ -195,8 +194,30 @@ jobs:
             -f description="Review in progress" -f target_url="$RUN_URL" \
             || echo "::warning::Could not post the pending status on the PR."
 
-      - name: Get gateway credentials
+      # Default branch for automatic runs; the selected ref for manual dispatch.
+      - name: Check out trusted code
         if: steps.author.outputs.skip != 'true' && steps.dupe.outputs.skip != 'true'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Reserve automatic push-review attempt
+        id: push_budget
+        if: >-
+          github.event_name == 'pull_request_target' && github.event.action == 'synchronize' &&
+          steps.author.outputs.skip != 'true' && steps.dupe.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAX_PUSH_REVIEWS: ${{ vars.AI_REVIEW_MAX_PUSH_REVIEWS || '3' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 .github/scripts/agentbricks_push_review.py \
+            --repo "$REPO" --pr "$PR_NUMBER" --limit "$MAX_PUSH_REVIEWS" --run-url "$RUN_URL" \
+            >> "$GITHUB_OUTPUT"
+
+      - name: Get gateway credentials
+        if: steps.author.outputs.skip != 'true' && steps.dupe.outputs.skip != 'true' && steps.push_budget.outputs.skip != 'true'
         id: creds
         env:
           GATEWAY_BASE_URL: ${{ secrets.GATEWAY_BASE_URL }}
@@ -236,15 +257,6 @@ jobs:
           # Later steps, including the omnigent config, read this exported token.
           echo "LLM_API_KEY=${LLM_API_KEY}" >> "$GITHUB_ENV"
           echo "available=true" >> "$GITHUB_OUTPUT"
-
-      # Default branch for automatic runs; the selected ref for manual dispatch,
-      # so the workflow can be tested from a branch before it merges.
-      - name: Check out trusted code
-        if: steps.creds.outputs.available == 'true'
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.repository.default_branch }}
-          persist-credentials: false
 
       - name: Check out omnigent
         if: steps.creds.outputs.available == 'true'
@@ -424,13 +436,16 @@ jobs:
           gh api "repos/$REPO/compare/${base_sha}...${head_sha}" \
             -H "Accept: application/vnd.github.v3.diff" > /tmp/pr_diff.txt
           chmod 444 /tmp/pr_diff.txt
+          merge_base_sha="$(gh api "repos/$REPO/compare/${base_sha}...${head_sha}" --jq .merge_base_commit.sha)"
           # Objects only, so reviewers can `git show <sha>:<path>`; nothing is checked out or run.
-          git fetch --quiet --no-tags --depth=1 origin "$base_sha" "$head_sha"
-          python3 - "$base_sha" "$head_sha" <<'PYCHANGED'
+          git fetch --quiet --no-tags --depth=1 origin "$base_sha" "$head_sha" "$merge_base_sha"
+          python3 - "$merge_base_sha" "$head_sha" <<'PYCHANGED'
           import json, pathlib, subprocess, sys
 
+          # GitHub resolved the merge base; shallow objects need no ancestry walk.
+          # Include both paths of moves so the old and new scopes receive review.
           changed = subprocess.check_output(
-              ["git", "diff", "--name-only", "-z", f"{sys.argv[1]}...{sys.argv[2]}"]
+              ["git", "diff", "--no-renames", "--name-only", "-z", sys.argv[1], sys.argv[2]]
           ).split(b"\0")
           paths = [path.decode("utf-8", "surrogateescape") for path in changed if path]
           pathlib.Path("/tmp/pr_changed_paths.json").write_text(json.dumps(paths))
