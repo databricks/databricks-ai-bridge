@@ -109,6 +109,9 @@ lens can still produce a Critical finding.
 - Give each reviewer the diff path and checksum, the base and head SHAs, its
   lens definitions, the PR title and description, Part 2 and Part 3 of this
   file, and every applicable `REVIEW.md`. Pass the diff as a path; do not paste it.
+- Ask each reviewer for change-risk factors as well as defects: affected
+  components, public behavior, persistent state, external effects, reversibility,
+  and evidence from tests. A risk factor is not itself a correctness finding.
 - Do not add your own summary of what the diff changes. Reviewers form their own
   understanding from the diff. Any file, symbol, or line you mention outside the
   diff text must appear in the diff.
@@ -165,6 +168,34 @@ Merge safety score = 100 minus the deductions, floored at 0, then capped at
 
 If no reviewer delivered, say the review could not be completed instead of
 giving a score.
+
+## 5. Assess change safety separately
+
+The merge safety score above measures findings and review coverage. Separately
+assess the impact of merging this change even when no defects were found.
+Report a **change safety** score from 0 to 100: higher means safer to automate,
+not a calibrated probability. Use these bands:
+
+| Change safety | Change risk | Typical change |
+|---|---|---|
+| 90–100 | LOW | Small docs/test changes or isolated, compatible implementation changes with clear tests and easy rollback |
+| 60–89 | MEDIUM | Public CLI/API behavior, runtime or persistence changes, cross-package behavior, or unclear rollback/test coverage |
+| 0–59 | HIGH | Credentials/permissions, sensitive data, migration/deletion, CI/release/dependency changes, or broad/hard-to-reverse effects |
+
+Assess the actual behavior, not just extensions or diff size. A template, shell
+script, config, or ordinary helper can change authorization, network access,
+data writes/deletes, billing, or published behavior. Consider compatibility,
+which users/components are affected, retry/idempotency, feature defaults,
+observability, test evidence, and whether rollback restores state. Explain the
+specific paths and behaviors that determine the score; flag unknown impact as
+at least medium. Do not give low risk merely because the review found no bugs.
+
+CI applies minimum risk levels for protected paths, public/runtime components,
+multiple production packages, large diffs, and binary changes, using
+`.github/scripts/agentbricks_auto_approve.py`. CI may lower change safety and
+raise risk, and only the resulting low-risk assessment can be auto-approved.
+The existing merge-safety threshold, findings, author, scope, and commit checks
+also apply. A low-risk label does not grant approval.
 
 # Part 2: Rules for every reviewer
 
@@ -225,6 +256,12 @@ Start with one line: `**Merge safety:** <score>/100 (<risk>) · reviewers:
 <delivered>/<dispatched> · findings by lens: <lens (count), ...>`, or
 `findings by lens: none` when no lens found anything. Every lens is always
 checked, so list only the lenses with findings.
+
+Then add an independent line in this exact format:
+`**Change safety:** <score>/100 (<LOW|MEDIUM|HIGH> RISK)`.
+Follow it with `**Risk rationale:**` and a concise explanation of the affected
+paths/components, behavioral impact, test evidence, and reversibility. PR risk
+labels use this assessment with CI's risk floors, not the merge-safety band.
 
 Then report `**Review rules:** <source paths/revision> · checked: <applicable
 rule IDs> · gaps: <incomplete coverage, or none>`. Retain rule IDs in applicable

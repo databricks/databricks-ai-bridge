@@ -57,6 +57,8 @@ Pushes to eligible PRs also request a new review, with at most three automatic p
 
 When the `AI_REVIEW_AUTO_APPROVE` repo variable is `true`, the workflow also approves PRs that pass [`.github/scripts/agentbricks_auto_approve.py`](.github/scripts/agentbricks_auto_approve.py): a high merge safety score, no blocking, security, or uncertain findings, a small diff that only changes `integrations/agentbricks/` or Markdown/reST docs and doesn't touch CI, review rules, dependencies, or credential code, and an author with write access. The approval comes from `github-actions[bot]`. Pushing new commits dismisses that approval.
 
+Reviews separately assess change safety (0–100, higher is safer to automate) based on affected components, public behavior, sensitive operations, tests, and reversibility. CI applies minimum risk levels for sensitive paths/components and large changes, then assigns one of `risk:low`, `risk:medium`, or `risk:high` even when automatic approval is disabled. Only low change risk (90–100) can pass automatic approval, alongside the existing merge-safety and eligibility checks. Medium is 60–89; high is 0–59 or an unavailable/invalid assessment. Pushing clears labels for the old head until the new head is reviewed.
+
 ## Integration Tests
 
 Integration tests hit live Databricks APIs (no mocks). See [`tests/README.md`](tests/README.md) for what tests exist, their coverage, and how to run them. See [`.claude/skills/integration-tests.md`](.claude/skills/integration-tests.md) for principles and patterns when writing new tests (trigger with `/integration-tests`).

@@ -1,8 +1,7 @@
 """Decide whether AgentBricksReviewer may auto-approve a PR.
 
-The decision uses only facts the workflow can check itself: the posted review's
-score and finding sections, and the files and lines the diff changes. It never
-takes the model's word that a PR is safe to approve.
+The decision combines the review's findings/coverage score and independent
+change-safety assessment with deterministic path, component, and size checks.
 
 Usage: agentbricks_auto_approve.py --review REVIEW --diff DIFF [--min-score N] [--max-lines N]
 Prints a JSON object {"approve": bool, "reasons": [...]}; reasons explain a refusal.
@@ -22,6 +21,11 @@ MERGE_SAFETY = re.compile(
 )
 EMPTY_SECTIONS = ("Blocking issues", "Security vulnerabilities", "Uncertain findings")
 HEADING = re.compile(r"^#{1,6}\s+(?P<title>.+?)\s*$", re.MULTILINE)
+CHANGE_SAFETY = re.compile(
+    r"^\*\*Change safety:\*\*\s*(?P<score>\d+)/100\s*\((?P<risk>LOW|MEDIUM|HIGH) RISK\)\s*$",
+    re.MULTILINE,
+)
+RISK_LEVELS = ("low", "medium", "high")
 
 # Only the agentbricks integration (its code, tests, and docs) and docs elsewhere can
 # be auto-approved; the other packages ship on their own and need a human.
@@ -83,7 +87,69 @@ def section_body(review: str, title: str) -> str | None:
     return None
 
 
-def decide(review: str, diff: str, min_score: int = 95, max_lines: int = 200) -> dict:
+def assess_change_risk(review: str, files: list[str], lines: int, diff: str = "") -> dict:
+    """Keep contextual model assessment separate from findings, with risk floors."""
+    matches = list(CHANGE_SAFETY.finditer(review))
+    reasons: list[str] = []
+    score = None
+    level = "high"
+    if len(matches) == 1:
+        score = int(matches[0].group("score"))
+        expected = "low" if score >= 90 else "medium" if score >= 60 else "high"
+        if not 0 <= score <= 100 or matches[0].group("risk").lower() != expected:
+            reasons.append("change-safety score or risk band is invalid")
+            score = None
+        else:
+            level = expected
+    else:
+        reasons.append("the review must contain exactly one change-safety assessment")
+    model_score = score
+
+    def floor(minimum: str, reason: str):
+        nonlocal level
+        if RISK_LEVELS.index(minimum) > RISK_LEVELS.index(level):
+            level = minimum
+        reasons.append(reason)
+
+    if not files:
+        floor("high", "no changed paths are available")
+    components = set()
+    for path in files:
+        pure = PurePosixPath(path)
+        protected = protected_reason(path)
+        if protected and "outside integrations/agentbricks/" not in protected:
+            floor("high", protected)
+        if pure.suffix.lower() in DOC_SUFFIXES or "tests" in pure.parts:
+            continue
+        parts = set(pure.parts)
+        if parts & {"auth", "oauth", "credentials", "secrets", "migrations", "deployment", "deploy", "release", "releases"} or pure.stem.startswith("release_"):
+            floor("high", f"{path} touches security, migration, deployment, or release behavior")
+        elif pure.name == "__init__.py" or parts & {"cli", "api", "runtime", "databricks_agentkit", "checkpoint", "checkpoints", "storage", "memory", "sessions"}:
+            floor("medium", f"{path} touches a public interface, runtime, or persisted state")
+        if len(pure.parts) >= 2 and pure.parts[0] == "integrations":
+            components.add(pure.parts[1])
+        elif path.startswith("src/databricks_ai_bridge/"):
+            components.add("core")
+        elif path.startswith("databricks_mcp/"):
+            components.add("mcp")
+    if len(components) > 1:
+        floor("medium", "production changes span multiple packages: " + ", ".join(sorted(components)))
+    if lines > 1000 or len(files) > 30:
+        floor("high", "the change exceeds 1000 lines or 30 paths")
+    elif lines > 200 or len(files) > 10:
+        floor("medium", "the change exceeds 200 lines or 10 paths")
+    if "GIT binary patch" in diff or re.search(r"^Binary files .+ differ$", diff, re.MULTILINE):
+        floor("high", "binary changes need human review")
+    if score is not None:
+        score = min(score, {"low": 100, "medium": 89, "high": 59}[level])
+    return {
+        "level": level, "label": f"risk:{level}", "safety_score": score,
+        "model_safety_score": model_score, "reasons": list(dict.fromkeys(reasons)),
+    }
+
+
+def decide(review: str, diff: str, min_score: int = 95, max_lines: int = 200,
+           paths: list[str] | None = None) -> dict:
     reasons: list[str] = []
 
     summary = MERGE_SAFETY.search(review)
@@ -105,13 +171,18 @@ def decide(review: str, diff: str, min_score: int = 95, max_lines: int = 200) ->
             reasons.append(f'"{title}" is not empty')
 
     files, lines = changed_files_and_lines(diff)
+    if paths is not None:
+        files = paths
     if not files:
         reasons.append("the diff changes no files")
     if lines > max_lines:
         reasons.append(f"{lines} changed lines is over the {max_lines}-line limit")
     reasons.extend(reason for path in files if (reason := protected_reason(path)))
+    risk = assess_change_risk(review, files, lines, diff)
+    if risk["level"] != "low":
+        reasons.append(f"change risk is {risk['level']}; automatic approval requires low risk")
 
-    return {"approve": not reasons, "reasons": reasons}
+    return {"approve": not reasons, "reasons": reasons, "risk": risk}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -120,12 +191,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--diff", required=True, type=Path)
     parser.add_argument("--min-score", type=int, default=95)
     parser.add_argument("--max-lines", type=int, default=200)
+    parser.add_argument("--paths", type=Path, help="JSON changed paths from the frozen Git comparison")
     args = parser.parse_args(argv)
     result = decide(
         args.review.read_text(encoding="utf-8"),
         args.diff.read_text(encoding="utf-8", errors="replace"),
         min_score=args.min_score,
         max_lines=args.max_lines,
+        paths=json.loads(args.paths.read_text()) if args.paths else None,
     )
     json.dump(result, sys.stdout)
     sys.stdout.write("\n")

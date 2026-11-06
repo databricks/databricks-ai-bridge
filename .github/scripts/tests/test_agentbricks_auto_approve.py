@@ -18,8 +18,13 @@ def review(
     security="None.",
     uncertain="None.",
     notes="None.",
+    change_safety=100,
+    change_risk="LOW",
 ):
     return f"""**Merge safety:** {score}/100 (LOW RISK) · reviewers: {reviewers} · findings by lens: none
+
+**Change safety:** {change_safety}/100 ({change_risk} RISK)
+**Risk rationale:** Small compatible change with focused tests and straightforward rollback.
 
 ## Blocking issues
 
@@ -58,7 +63,7 @@ def diff(*paths, added=1):
     return "".join(hunks)
 
 
-CODE = "integrations/agentbricks/src/databricks_agentbricks/cli/app.py"
+CODE = "integrations/agentbricks/src/databricks_agentbricks/utils/formatting.py"
 TEST = "integrations/agentbricks/tests/unit_tests/agent_hint_test.py"
 
 
@@ -69,7 +74,9 @@ class DecideTest(unittest.TestCase):
 
     def test_clean_small_review_is_approved(self):
         result = gate.decide(review(), diff("README.md", CODE, TEST))
-        self.assertEqual(result, {"approve": True, "reasons": []})
+        self.assertTrue(result["approve"], result)
+        self.assertEqual(result["reasons"], [])
+        self.assertEqual(result["risk"]["label"], "risk:low")
 
     def test_non_blocking_notes_do_not_block_approval(self):
         notes = "- [LOW] [HIGH CONFIDENCE] `README.md:3` — typo → readers stumble."
@@ -157,6 +164,91 @@ class DecideTest(unittest.TestCase):
 
     def test_empty_diff_is_refused(self):
         self.assert_refused(gate.decide(review(), ""), "changes no files")
+
+
+class ChangeRiskTest(unittest.TestCase):
+    def test_findings_score_does_not_replace_change_risk(self):
+        result = gate.decide(review(change_safety=70, change_risk="MEDIUM"), diff(CODE))
+        self.assertFalse(result["approve"])
+        self.assertEqual(result["risk"]["label"], "risk:medium")
+        self.assertEqual(result["risk"]["safety_score"], 70)
+
+    def test_risk_bands_at_boundaries(self):
+        for score, level in [(100, "low"), (90, "low"), (89, "medium"), (60, "medium"), (59, "high"), (0, "high")]:
+            with self.subTest(score=score):
+                result = gate.decide(review(change_safety=score, change_risk=level.upper()), diff(CODE))
+                self.assertEqual(result["risk"]["level"], level)
+                self.assertEqual(result["approve"], level == "low")
+
+    def test_missing_or_invalid_assessment_withholds_approval(self):
+        for text in (
+            review().replace("**Change safety:** 100/100 (LOW RISK)", ""),
+            review(change_safety=101),
+            review(change_safety=100, change_risk="HIGH"),
+            review() + "\n**Change safety:** 100/100 (LOW RISK)\n",
+        ):
+            with self.subTest(text=text):
+                result = gate.decide(text, diff(CODE))
+                self.assertFalse(result["approve"])
+                self.assertEqual(result["risk"]["label"], "risk:high")
+                self.assertIsNone(result["risk"]["safety_score"])
+
+    def test_public_interface_and_runtime_changes_have_medium_floor(self):
+        for path in (
+            "integrations/agentbricks/src/databricks_agentbricks/cli/app.py",
+            "integrations/agentbricks/src/databricks_agentkit/runtime/client.py",
+            "integrations/agentbricks/src/databricks_agentbricks/__init__.py",
+        ):
+            with self.subTest(path=path):
+                result = gate.decide(review(), diff(path))
+                self.assertFalse(result["approve"])
+                self.assertEqual(result["risk"]["safety_score"], 89)
+                self.assertEqual(result["risk"]["model_safety_score"], 100)
+
+    def test_sensitive_paths_have_high_floor(self):
+        for path in (
+            "REVIEW.md", "integrations/agentbricks/REVIEW.md", "uv.lock",
+            ".github/workflows/main.yml",
+            "integrations/agentbricks/src/auth/helper.py",
+            "integrations/agentbricks/src/migrations/update.py",
+        ):
+            with self.subTest(path=path):
+                result = gate.decide(review(), diff(path))
+                self.assertFalse(result["approve"])
+                self.assertEqual(result["risk"]["safety_score"], 59)
+                self.assertEqual(result["risk"]["label"], "risk:high")
+
+    def test_cross_package_production_changes_have_medium_floor(self):
+        result = gate.decide(review(), diff(CODE, "integrations/openai/src/helper.py"))
+        self.assertEqual(result["risk"]["label"], "risk:medium")
+        self.assertTrue(any("multiple packages" in reason for reason in result["risk"]["reasons"]))
+
+    def test_docs_and_tests_in_multiple_packages_can_remain_low_risk(self):
+        result = gate.decide(review(), diff("integrations/openai/README.md", "integrations/agentbricks/cli.md"))
+        self.assertTrue(result["approve"], result)
+        result = gate.decide(review(), diff(TEST))
+        self.assertTrue(result["approve"], result)
+
+    def test_size_and_binary_changes_raise_risk(self):
+        for content, expected in (
+            (diff(CODE, added=201), "medium"), (diff(CODE, added=1001), "high"),
+            (diff(*[f"docs/{i}.md" for i in range(11)]), "medium"),
+            (diff(*[f"docs/{i}.md" for i in range(31)]), "high"),
+            (diff(CODE) + "Binary files a/image.png and b/image.png differ\n", "high"),
+        ):
+            with self.subTest(expected=expected):
+                self.assertEqual(gate.decide(review(), content)["risk"]["level"], expected)
+
+    def test_canonical_changed_paths_drive_scope_and_risk(self):
+        paths = ["integrations/agentbricks/src/cli/new command.py"]
+        result = gate.decide(review(), diff("docs/example.md"), paths=paths)
+        self.assertEqual(result["risk"]["level"], "medium")
+        self.assertFalse(result["approve"])
+
+    def test_low_risk_does_not_override_correctness_findings(self):
+        result = gate.decide(review(score=75, blocking="A verified bug."), diff("README.md"))
+        self.assertEqual(result["risk"]["label"], "risk:low")
+        self.assertFalse(result["approve"])
 
 
 if __name__ == "__main__":
