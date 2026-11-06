@@ -47,12 +47,12 @@ AutoReviewer (`.github/workflows/auto-reviewer.yml`) reviews all eligible PRs in
 
 When authorized to continue working on a PR after pushing:
 
-- Use the agent runtime's existing GitHub activity monitor to wait for PRReviewer on that exact head commit.
+- Use the agent runtime's existing GitHub activity monitor to wait for AutoReviewer on that exact head commit.
 - Verify each concrete finding before changing code. Fix clear in-scope issues, test, and push another round only within the existing authorization.
 - Stop after three total review rounds.
 - Ask a human instead of continuing when you disagree with the review, suspect a false positive, encounter high-risk, security, or uncertain findings, would change intended behavior or architecture, need to expand scope, see another author move the branch, or reach the round or wait limit.
 
-Approval and risk labels apply only to the commit PRReviewer assessed. These instructions do not authorize commenting, pushing, approving, or merging beyond the user's request.
+Approval and risk labels apply only to the commit AutoReviewer assessed. These instructions do not authorize commenting, pushing, approving, or merging beyond the user's request.
 
 ## Integration Tests
 
