@@ -124,7 +124,7 @@ def assess_change_risk(review: str, files: list[str], lines: int, diff: str = ""
         parts = set(pure.parts)
         if parts & {"auth", "oauth", "credentials", "secrets", "migrations", "deployment", "deploy", "release", "releases"} or pure.stem.startswith("release_"):
             floor("high", f"{path} touches security, migration, deployment, or release behavior")
-        elif pure.name == "__init__.py" or parts & {"cli", "api", "runtime", "databricks_agentkit", "checkpoint", "checkpoints", "storage", "memory", "sessions"}:
+        elif pure.name == "__init__.py" or pure.stem.endswith(("_store", "_store_client")) or parts & {"cli", "api", "runtime", "databricks_agentkit", "checkpoint", "checkpoints", "storage", "memory", "sessions"}:
             floor("medium", f"{path} touches a public interface, runtime, or persisted state")
         if len(pure.parts) >= 2 and pure.parts[0] == "integrations":
             components.add(pure.parts[1])
@@ -185,6 +185,34 @@ def decide(review: str, diff: str, min_score: int = 95, max_lines: int = 200,
     return {"approve": not reasons, "reasons": reasons, "risk": risk}
 
 
+def safety_section(review: str, decision: dict) -> str:
+    risk = decision["risk"]
+    summary = REVIEW_SCORE.search(review)
+    review_score = f"{summary.group('score')}/100" if summary else "unavailable"
+    safety = f"{risk['safety_score']}/100" if risk["safety_score"] is not None else "unrated"
+    rationale = re.search(
+        r"^\*\*Risk rationale:\*\*\s*(.*?)(?=\n\s*\n|\n## |\Z)", review,
+        re.MULTILINE | re.DOTALL,
+    )
+    lines = [
+        "### Safety assessment", "",
+        "| Assessment | Result |", "|---|---|",
+        f"| Review score (findings and coverage) | {review_score} |",
+        f"| Change safety (impact of the change) | {safety} |",
+        f"| Change risk | **{risk['level'].upper()}** · `{risk['label']}` |", "",
+        "**Context:** " + (rationale[1].strip() if rationale else "The reviewer provided no change-risk rationale."),
+    ]
+    if risk["model_safety_score"] != risk["safety_score"]:
+        lines += ["", f"Model change safety before CI adjustments: {risk['model_safety_score']}/100."]
+    if risk["reasons"]:
+        lines += ["", "**CI risk factors:**"] + ["- " + reason for reason in risk["reasons"]]
+    lines += ["", "**Auto-approval content checks:** " + ("Passed." if decision["approve"] else "Not eligible.")]
+    if decision["reasons"]:
+        lines += ["- " + reason for reason in decision["reasons"]]
+    lines += ["", "Final approval also requires automation to be enabled, an eligible author, a non-draft PR, and the reviewed head to remain current."]
+    return "\n".join(lines) + "\n"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--review", required=True, type=Path)
@@ -192,14 +220,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-score", type=int, default=95)
     parser.add_argument("--max-lines", type=int, default=200)
     parser.add_argument("--paths", type=Path, help="JSON changed paths from the frozen Git comparison")
+    parser.add_argument("--safety-section", type=Path, help="Write the safety section for the PR comment")
     args = parser.parse_args(argv)
+    review = args.review.read_text(encoding="utf-8")
     result = decide(
-        args.review.read_text(encoding="utf-8"),
+        review,
         args.diff.read_text(encoding="utf-8", errors="replace"),
         min_score=args.min_score,
         max_lines=args.max_lines,
         paths=json.loads(args.paths.read_text()) if args.paths else None,
     )
+    if args.safety_section:
+        args.safety_section.write_text(safety_section(review, result))
     json.dump(result, sys.stdout)
     sys.stdout.write("\n")
     return 0

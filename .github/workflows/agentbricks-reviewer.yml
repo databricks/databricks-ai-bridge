@@ -627,16 +627,8 @@ jobs:
           set -euo pipefail
           python3 .github/scripts/agentbricks_auto_approve.py \
             --review /tmp/review.txt --diff /tmp/pr_diff.txt --paths /tmp/pr_changed_paths.json \
-            --min-score "$MIN_SCORE" --max-lines "$MAX_LINES" > /tmp/pr_review_decision.json
-          python3 - <<'PYRISK'
-          import json, pathlib
-          risk = json.loads(pathlib.Path('/tmp/pr_review_decision.json').read_text())['risk']
-          score = f"{risk['safety_score']}/100" if risk['safety_score'] is not None else 'unrated'
-          lines = [f"**Change safety (CI):** {score} ({risk['level'].upper()} RISK) · `{risk['label']}`"]
-          if risk['reasons']:
-              lines += ['', 'CI risk factors:'] + ['- ' + reason for reason in risk['reasons']]
-          pathlib.Path('/tmp/risk_summary.md').write_text('\n'.join(lines) + '\n')
-          PYRISK
+            --min-score "$MIN_SCORE" --max-lines "$MAX_LINES" \
+            --safety-section /tmp/risk_summary.md > /tmp/pr_review_decision.json
 
       - name: Post review comment
         if: steps.reviewer.outputs.review_ready == 'true'
@@ -649,6 +641,7 @@ jobs:
           {
             echo "<!-- agentbricks-reviewer-sha: ${HEAD_SHA} -->"
             echo "<!-- agentbricks-reviewer-risk-sha: ${HEAD_SHA} -->"
+            echo "<!-- agentbricks-reviewer-risk-label: $(jq -r .risk.label /tmp/pr_review_decision.json) -->"
             echo "## AgentBricksReviewer"
             echo ""
             cat /tmp/risk_summary.md
@@ -664,31 +657,8 @@ jobs:
         if: steps.reviewer.outputs.review_ready == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
         run: |
-          set -euo pipefail
-          current_head="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha)"
-          if [ "$current_head" != "$HEAD_SHA" ]; then
-            echo "::notice::Not labeling an outdated review."
-            exit 0
-          fi
-          label="$(jq -r .risk.label /tmp/pr_review_decision.json)"
-          for level in low medium high; do
-            case "$level" in low) color=0e8a16 ;; medium) color=fbca04 ;; high) color=b60205 ;; esac
-            gh label create "risk:$level" --repo "$REPO" --color "$color" \
-              --description "Change risk assessed by AgentBricksReviewer: $level" --force
-          done
-          # Add the new label before removing the previous assessment.
-          gh api "repos/$REPO/issues/$PR_NUMBER/labels" -f "labels[]=$label" --silent
-          for old in risk:low risk:medium risk:high; do
-            [ "$old" = "$label" ] && continue
-            if ! response="$(gh api -X DELETE "repos/$REPO/issues/$PR_NUMBER/labels/$old" --include --silent 2>&1)"; then
-              if ! grep -qE '^HTTP/[0-9.]+ 404([[:space:]]|$)' <<<"$response"; then
-                printf '%s\n' "$response" >&2
-                exit 1
-              fi
-            fi
-          done
+          python3 .github/scripts/agentbricks_risk_labels.py --repo "$REPO" --pr "$PR_NUMBER"
 
       - name: Auto-approve if low risk
         if: steps.reviewer.outputs.review_ready == 'true' && vars.AI_REVIEW_AUTO_APPROVE == 'true'
@@ -779,30 +749,19 @@ jobs:
       pull-requests: write
       issues: write
     steps:
+      - name: Check out trusted label reconciler
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
       - name: Clear risk labels for unreviewed commits
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          set -euo pipefail
-          # Keep labels if a review of this new head has already been published.
-          current_head="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha)"
-          [ "$current_head" = "$HEAD_SHA" ] || exit 0
-          if gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
-              --jq '.[] | select(.user.login == "github-actions[bot]") | .body' \
-              | grep -qF "<!-- agentbricks-reviewer-risk-sha: ${HEAD_SHA} -->"; then
-            exit 0
-          fi
-          for label in risk:low risk:medium risk:high; do
-            if ! response="$(gh api -X DELETE "repos/$REPO/issues/$PR_NUMBER/labels/$label" --include --silent 2>&1)"; then
-              if ! grep -qE '^HTTP/[0-9.]+ 404([[:space:]]|$)' <<<"$response"; then
-                printf '%s\n' "$response" >&2
-                exit 1
-              fi
-            fi
-          done
+          python3 .github/scripts/agentbricks_risk_labels.py --repo "$REPO" --pr "$PR_NUMBER"
 
       - name: Dismiss approvals of earlier commits
         if: always()

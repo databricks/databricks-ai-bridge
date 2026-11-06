@@ -207,6 +207,8 @@ class ChangeRiskTest(unittest.TestCase):
             "integrations/agentbricks/src/databricks_agentbricks/cli/app.py",
             "integrations/agentbricks/src/databricks_agentkit/runtime/client.py",
             "integrations/agentbricks/src/databricks_agentbricks/__init__.py",
+            "integrations/agentbricks/src/databricks_agentbricks/clients/managed_runtime_store.py",
+            "integrations/agentbricks/src/databricks_agentbricks/clients/conversation_store_client.py",
         ):
             with self.subTest(path=path):
                 result = gate.decide(review(), diff(path))
@@ -268,6 +270,24 @@ class ChangeRiskTest(unittest.TestCase):
         result = gate.decide(review(score=75, blocking="A verified bug."), diff("README.md"))
         self.assertEqual(result["risk"]["label"], "risk:low")
         self.assertFalse(result["approve"])
+
+    def test_safety_section_explains_assessment_and_eligibility(self):
+        text = review()
+        decision = gate.decide(text, diff("integrations/agentbricks/src/cli/app.py"))
+        section = gate.safety_section(text, decision)
+        self.assertIn("### Safety assessment", section)
+        self.assertIn("Review score (findings and coverage) | 100/100", section)
+        self.assertIn("Change safety (impact of the change) | 89/100", section)
+        self.assertIn("Small compatible change", section)
+        self.assertIn("Model change safety before CI adjustments: 100/100", section)
+        self.assertIn("Auto-approval content checks:** Not eligible.", section)
+        self.assertIn("public interface, runtime, or persisted state", section)
+
+    def test_safety_section_distinguishes_content_checks_from_final_approval(self):
+        text = review()
+        section = gate.safety_section(text, gate.decide(text, diff("README.md")))
+        self.assertIn("Auto-approval content checks:** Passed.", section)
+        self.assertIn("Final approval also requires automation to be enabled", section)
 
 
 if __name__ == "__main__":

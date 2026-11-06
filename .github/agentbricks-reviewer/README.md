@@ -26,6 +26,12 @@ For example, `Review score: 100/100 · reviewers: 2/2` can appear alongside
 `Change safety: 80/100 (MEDIUM RISK)` for a clean review of a consequential
 change. Only change safety carries a risk band; the review score does not.
 
+Each comment includes a Safety assessment section with both scores, the model's
+contextual rationale, any CI risk adjustments, and the content checks that
+permit or prevent automatic approval. Passing those content checks is separate
+from final authorization: automation must be enabled, the author eligible, the
+PR non-draft, and the reviewed head current.
+
 The reviewer considers actual behavior, affected users/packages, public API
 compatibility, credentials/data writes, tests, and rollback. CI adds minimum
 risk levels: protected CI/review/dependency/credential paths, migration/release
@@ -43,3 +49,10 @@ The workflow labels completed current-head reviews with `risk:low`,
 the old risk label and clears stale labels after pushes, including when the
 push-review budget is exhausted. Low risk is required for auto-approval but
 does not override findings, coverage, author, scope, size, or commit checks.
+
+Publishing and push cleanup use the same reconciler: derive the desired label
+from the latest current-head bot assessment, mutate labels, and reread both the
+head and assessment. If either changed, retry up to three times. This prevents
+an older publisher or delayed cleanup from leaving a newer head mislabeled.
+API failures surface except for missing labels, and approval invalidation runs
+independently even if label maintenance fails.
