@@ -142,3 +142,14 @@ def test_parse_vector_search_response_without_retriever_schema():
         column_3="column_3",
         column_4="column_4",
     )
+
+
+def test_parse_vector_search_response_min_score():
+    assert parse_vector_search_response(
+        search_resp, retriever_schema=RetrieverSchema(text_column="column_1"), min_score=0.5
+    ) == construct_docs_with_score(
+        page_content_column="column_1",
+        column_2="column_2",
+        column_3="column_3",
+        column_4="column_4",
+    )[:1]
