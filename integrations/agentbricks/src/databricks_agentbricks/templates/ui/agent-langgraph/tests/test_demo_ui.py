@@ -144,8 +144,8 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
     if history or configured:
         monkeypatch.setattr(ui, "_checkpoint_history", _session_history)
     # Keep model discovery deterministic and offline (no AI Gateway listing call).
-    monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-sonnet-4-5")
-    monkeypatch.setattr(ui, "_discover_chat_models", lambda: ["system.ai.claude-sonnet-4-5"])
+    monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-sonnet-5-5")
+    monkeypatch.setattr(ui, "_discover_chat_models", lambda: ["system.ai.claude-sonnet-5-5"])
 
     async def invoke_handler(request, context):
         return {"output": []}
@@ -232,8 +232,8 @@ def test_demo_ui_routes(monkeypatch):
     assert config["session_id"] == "routing-session"
     assert config["deployed"] is False
     assert config["models"] == {
-        "default": "system.ai.claude-sonnet-4-5",
-        "available": ["system.ai.claude-sonnet-4-5"],
+        "default": "system.ai.claude-sonnet-5-5",
+        "available": ["system.ai.claude-sonnet-5-5"],
     }
     assert config["streaming"]["enabled"] is True
     assert config["background"]["enabled"] is True
@@ -249,8 +249,8 @@ def test_demo_ui_routes(monkeypatch):
     assert client.get("/api/demo/config").status_code == 404
 
     assert client.get("/api/demo/models").json() == {
-        "default": "system.ai.claude-sonnet-4-5",
-        "available": ["system.ai.claude-sonnet-4-5"],
+        "default": "system.ai.claude-sonnet-5-5",
+        "available": ["system.ai.claude-sonnet-5-5"],
     }
 
     sessions = client.get("/api/demo/sessions").json()
@@ -356,13 +356,13 @@ def test_demo_config_does_not_wait_for_model_discovery(monkeypatch):
     monkeypatch.setattr(
         ui,
         "_discover_chat_models",
-        lambda: calls.append(True) or ["system.ai.claude-sonnet-4-5", "system.ai.llama-4-maverick"],
+        lambda: calls.append(True) or ["system.ai.claude-sonnet-5-5", "system.ai.llama-4-maverick"],
     )
 
     assert client.get("/api/ui/config").status_code == 200
     assert calls == []
     assert client.get("/api/demo/models").json()["available"] == [
-        "system.ai.claude-sonnet-4-5",
+        "system.ai.claude-sonnet-5-5",
         "system.ai.llama-4-maverick",
     ]
     assert calls == [True]
@@ -431,13 +431,13 @@ def test_chat_session_items_exclude_non_message_items():
 
 
 def test_discover_chat_models_pins_default_and_dedups(monkeypatch):
-    monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-sonnet-4-5")
+    monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-sonnet-5-5")
     monkeypatch.setattr(
         ui,
         "list_ai_gateway_model_services",
         lambda _client: [
             "system.ai.llama-4-maverick",
-            "system.ai.claude-sonnet-4-5",
+            "system.ai.claude-sonnet-5-5",
             "system.ai.claude-opus-4-8",
         ],
     )
@@ -445,14 +445,14 @@ def test_discover_chat_models_pins_default_and_dedups(monkeypatch):
 
     # Default pinned first, the rest alphabetical, and the default not repeated by discovery.
     assert ui._discover_chat_models() == [
-        "system.ai.claude-sonnet-4-5",
+        "system.ai.claude-sonnet-5-5",
         "system.ai.claude-opus-4-8",
         "system.ai.llama-4-maverick",
     ]
 
 
 def test_discover_chat_models_falls_back_to_default_on_error(monkeypatch):
-    monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-sonnet-4-5")
+    monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-sonnet-5-5")
 
     def _boom(_client):
         raise PermissionError("cannot read system.ai")
@@ -461,11 +461,11 @@ def test_discover_chat_models_falls_back_to_default_on_error(monkeypatch):
     monkeypatch.setattr(ui, "workspace_client", lambda: object())
 
     # A workspace that can't list the gateway still gets a working picker.
-    assert ui._discover_chat_models() == ["system.ai.claude-sonnet-4-5"]
+    assert ui._discover_chat_models() == ["system.ai.claude-sonnet-5-5"]
 
 
 def test_discover_chat_models_keeps_every_model(monkeypatch):
-    monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-sonnet-4-5")
+    monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-sonnet-5-5")
     monkeypatch.setattr(
         ui,
         "list_ai_gateway_model_services",
@@ -474,7 +474,7 @@ def test_discover_chat_models_keeps_every_model(monkeypatch):
     monkeypatch.setattr(ui, "workspace_client", lambda: object())
 
     result = ui._discover_chat_models()
-    assert result == ["system.ai.claude-sonnet-4-5"] + [
+    assert result == ["system.ai.claude-sonnet-5-5"] + [
         f"system.ai.test-model-{i:03d}" for i in range(30)
     ]
 

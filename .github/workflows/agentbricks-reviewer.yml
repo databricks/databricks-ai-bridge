@@ -8,7 +8,7 @@ run-name: "AgentBricksReviewer #${{ github.event.pull_request.number || github.e
 # .claude/skills/agentbricks-review/SKILL.md, which also runs as a local skill.
 #
 # Triggers:
-#   - pull_request_target opened/reopened/ready_for_review, for non-draft PRs
+#   - pull_request_target opened/reopened/ready_for_review/synchronize, for non-draft PRs
 #     (including fork PRs) whose author has write, maintain, or admin access to
 #     this repo. The event's author_association can't be used for this: it misses
 #     members whose org membership is private. Other authors' PRs need a
@@ -44,10 +44,21 @@ run-name: "AgentBricksReviewer #${{ github.event.pull_request.number || github.e
 #     precedence over JFrog.
 #   - variable AI_REVIEW_RUNS_ON: JSON `runs-on` value, for example "ubuntu-24.04"
 #     on a fork (with the quotes). Defaults to the org's protected runner group.
+#
+# Auto-approval (off unless the variable AI_REVIEW_AUTO_APPROVE is "true"):
+#   approves the reviewed commit when .github/scripts/agentbricks_auto_approve.py
+#   passes (merge safety >= AI_REVIEW_AUTO_APPROVE_MIN_SCORE, default 95; every
+#   reviewer delivered; no blocking, security, or uncertain findings; at most
+#   AI_REVIEW_AUTO_APPROVE_MAX_LINES changed lines, default 200; only files under
+#   integrations/agentbricks/ or .md/.rst docs; no CI, review rule, dependency,
+#   or credential files), the author has write access, and
+#   the PR head hasn't moved. The approver is github-actions[bot], so the repo
+#   must allow Actions to approve PRs. A push to the PR dismisses the approval.
 
 on:
   pull_request_target:
-    types: [opened, reopened, ready_for_review]
+    # Push reviews are capped by AI_REVIEW_MAX_PUSH_REVIEWS (default 3 per PR).
+    types: [opened, reopened, ready_for_review, synchronize]
   issue_comment:
     types: [created]
   workflow_dispatch:
@@ -183,8 +194,30 @@ jobs:
             -f description="Review in progress" -f target_url="$RUN_URL" \
             || echo "::warning::Could not post the pending status on the PR."
 
-      - name: Get gateway credentials
+      # Default branch for automatic runs; the selected ref for manual dispatch.
+      - name: Check out trusted code
         if: steps.author.outputs.skip != 'true' && steps.dupe.outputs.skip != 'true'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Reserve automatic push-review attempt
+        id: push_budget
+        if: >-
+          github.event_name == 'pull_request_target' && github.event.action == 'synchronize' &&
+          steps.author.outputs.skip != 'true' && steps.dupe.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAX_PUSH_REVIEWS: ${{ vars.AI_REVIEW_MAX_PUSH_REVIEWS || '3' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 .github/scripts/agentbricks_push_review.py \
+            --repo "$REPO" --pr "$PR_NUMBER" --limit "$MAX_PUSH_REVIEWS" --run-url "$RUN_URL" \
+            >> "$GITHUB_OUTPUT"
+
+      - name: Get gateway credentials
+        if: steps.author.outputs.skip != 'true' && steps.dupe.outputs.skip != 'true' && steps.push_budget.outputs.skip != 'true'
         id: creds
         env:
           GATEWAY_BASE_URL: ${{ secrets.GATEWAY_BASE_URL }}
@@ -224,15 +257,6 @@ jobs:
           # Later steps, including the omnigent config, read this exported token.
           echo "LLM_API_KEY=${LLM_API_KEY}" >> "$GITHUB_ENV"
           echo "available=true" >> "$GITHUB_OUTPUT"
-
-      # Default branch for automatic runs; the selected ref for manual dispatch,
-      # so the workflow can be tested from a branch before it merges.
-      - name: Check out trusted code
-        if: steps.creds.outputs.available == 'true'
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.repository.default_branch }}
-          persist-credentials: false
 
       - name: Check out omnigent
         if: steps.creds.outputs.available == 'true'
@@ -412,20 +436,60 @@ jobs:
           gh api "repos/$REPO/compare/${base_sha}...${head_sha}" \
             -H "Accept: application/vnd.github.v3.diff" > /tmp/pr_diff.txt
           chmod 444 /tmp/pr_diff.txt
+          merge_base_sha="$(gh api "repos/$REPO/compare/${base_sha}...${head_sha}" --jq .merge_base_commit.sha)"
           # Objects only, so reviewers can `git show <sha>:<path>`; nothing is checked out or run.
-          git fetch --quiet --no-tags --depth=1 origin "$base_sha" "$head_sha"
+          git fetch --quiet --no-tags --depth=1 origin "$base_sha" "$head_sha" "$merge_base_sha"
+          python3 - "$merge_base_sha" "$head_sha" <<'PYCHANGED'
+          import json, pathlib, subprocess, sys
+
+          # GitHub resolved the merge base; shallow objects need no ancestry walk.
+          # Include both paths of moves so the old and new scopes receive review.
+          changed = subprocess.check_output(
+              ["git", "diff", "--no-renames", "--name-only", "-z", sys.argv[1], sys.argv[2]]
+          ).split(b"\0")
+          paths = [path.decode("utf-8", "surrogateescape") for path in changed if path]
+          pathlib.Path("/tmp/pr_changed_paths.json").write_text(json.dumps(paths))
+          PYCHANGED
 
           grep -E '^[+-]name = |^[+-]version = ' /tmp/pr_diff.txt | head -500 > /tmp/lockfile_pins.txt || true
           python3 "$summary_script" linked-issues "${REPO}#${PR_NUMBER}" /tmp/linked_issues.json
           python3 "$summary_script" stats /tmp/pr_diff.txt /tmp/pr_diff_summary.json
 
           python3 - <<'PYEOF'
-          import hashlib, json, os, pathlib
+          import hashlib, html, json, os, pathlib
 
           rules = pathlib.Path(os.environ["GITHUB_WORKSPACE"], ".claude/skills/agentbricks-review/SKILL.md").read_text()
           # Drop the skill's YAML front matter; the prompt needs only the body.
           if rules.startswith("---\n"):
               rules = rules.split("\n---\n", 1)[1]
+          workspace = pathlib.Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          changed_paths = json.loads(pathlib.Path("/tmp/pr_changed_paths.json").read_text())
+          candidates = {workspace / "REVIEW.md"}
+          for raw_path in changed_paths:
+              relative = pathlib.PurePosixPath(raw_path)
+              if relative.is_absolute() or ".." in relative.parts:
+                  continue
+              directories = relative.parts[:-1]
+              for depth in range(1, len(directories) + 1):
+                  candidates.add(workspace.joinpath(*directories[:depth], "REVIEW.md"))
+
+          review_files = []
+          for candidate in candidates:
+              if not candidate.is_file():
+                  continue
+              try:
+                  candidate.resolve().relative_to(workspace)
+              except ValueError:
+                  continue
+              review_files.append(candidate)
+          review_files.sort(key=lambda path: (len(path.relative_to(workspace).parts), path.as_posix()))
+          review_sources = [path.relative_to(workspace).as_posix() for path in review_files]
+          review_rules = "\n\n".join(
+              '<review_rules source="{}">\n{}\n</review_rules>'.format(
+                  html.escape(source, quote=True), path.read_text()
+              )
+              for source, path in zip(review_sources, review_files)
+          )
           meta = json.loads(pathlib.Path("/tmp/pr_meta.json").read_text())
           diff_sha256 = hashlib.sha256(pathlib.Path("/tmp/pr_diff.txt").read_bytes()).hexdigest()
           stats = json.loads(pathlib.Path("/tmp/pr_diff_summary.json").read_text())
@@ -466,6 +530,7 @@ jobs:
           {stats['markdown']}
 
           Changed test/support files: {json.dumps(stats['test_files'])}
+          Applicable review rule sources: {json.dumps(review_sources)}
 
           ## Where things are
           - The full PR diff is at `/tmp/pr_diff.txt` (SHA-256 `{diff_sha256}`). Pass the
@@ -480,6 +545,10 @@ jobs:
           configured LLM gateway.
 
           {rules}
+
+          <applicable_review_rules>
+          {review_rules or "(none discovered)"}
+          </applicable_review_rules>
 
           IMPORTANT: your output is posted directly as a PR comment. Output only the
           final review, with no coordination or status messages. Begin with the exact
@@ -568,6 +637,40 @@ jobs:
           } > /tmp/comment.md
           gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/comment.md
 
+      - name: Auto-approve if low risk
+        if: steps.reviewer.outputs.review_ready == 'true' && vars.AI_REVIEW_AUTO_APPROVE == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
+          MIN_SCORE: ${{ vars.AI_REVIEW_AUTO_APPROVE_MIN_SCORE || '95' }}
+          MAX_LINES: ${{ vars.AI_REVIEW_AUTO_APPROVE_MAX_LINES || '200' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # The gate reads the posted review and the diff; it never asks the model.
+          decision="$(python3 .github/scripts/agentbricks_auto_approve.py \
+            --review /tmp/review.txt --diff /tmp/pr_diff.txt --min-score "$MIN_SCORE" --max-lines "$MAX_LINES")"
+          mapfile -t reasons < <(jq -r '.reasons[]' <<<"$decision")
+          pr="$(gh api "repos/$REPO/pulls/$PR_NUMBER")"
+          author="$(jq -r .user.login <<<"$pr")"
+          if ! permission="$(gh api "repos/$REPO/collaborators/$author/permission" --jq .permission 2>/dev/null)"; then
+            permission=unknown
+          fi
+          case "$permission" in admin|maintain|write) ;; *) reasons+=("$author has '$permission' access") ;; esac
+          [ "$(jq -r .draft <<<"$pr")" = false ] || reasons+=("the PR is a draft")
+          [ "$(jq -r .head.sha <<<"$pr")" = "$HEAD_SHA" ] || reasons+=("the PR moved past the reviewed commit")
+          if [ "${#reasons[@]}" -gt 0 ]; then
+            printf -v joined '%s; ' "${reasons[@]}"
+            echo "::notice::Not auto-approving: ${joined%; }."
+            exit 0
+          fi
+          body="<!-- agentbricks-reviewer-approval -->
+          Auto-approved by AgentBricksReviewer for \`${HEAD_SHA:0:7}\`: merge safety at least ${MIN_SCORE}, every reviewer delivered, no blocking, security, or uncertain findings, at most ${MAX_LINES} changed lines, and no CI, dependency, or credential files. Pushing new commits dismisses this approval. [Workflow run](${RUN_URL})"
+          gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --silent \
+            -f event=APPROVE -f commit_id="$HEAD_SHA" -f body="$body" \
+            && echo "Approved ${HEAD_SHA:0:7}." \
+            || echo "::warning::Could not approve the PR; check that Actions may approve PRs in the repo settings."
+
       - name: Prepare diagnostics
         if: always() && steps.reviewer.outcome != '' && steps.reviewer.outcome != 'skipped'
         run: |
@@ -611,3 +714,36 @@ jobs:
             -f state="$state" -f context=AgentBricksReviewer \
             -f description="$description" -f target_url="$RUN_URL" \
             || echo "::warning::Could not post the final status on the PR."
+
+
+  # Approvals aren't dismissed on push by branch protection here, so drop
+  # AgentBricksReviewer's approval when the PR gets commits it didn't review.
+  dismiss-stale-approval:
+    name: AgentBricksReviewer approval
+    if: github.event_name == 'pull_request_target' && github.event.action == 'synchronize'
+    runs-on: ${{ fromJSON(vars.AI_REVIEW_RUNS_ON || '{"group":"databricks-protected-runner-group","labels":"linux-ubuntu-latest"}') }}
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Dismiss approvals of earlier commits
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          ids="$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews" --jq '.[]
+            | select(.state == "APPROVED" and .user.type == "Bot"
+                and (.body | contains("<!-- agentbricks-reviewer-approval -->"))
+                and .commit_id != $ENV.HEAD_SHA) | .id')"
+          if [ -z "$ids" ]; then
+            echo "No AgentBricksReviewer approval to dismiss."
+            exit 0
+          fi
+          for id in $ids; do
+            gh api -X PUT "repos/$REPO/pulls/$PR_NUMBER/reviews/$id/dismissals" --silent \
+              -f event=DISMISS -f message="New commits were pushed after AgentBricksReviewer approved. Comment /review to review them."
+            echo "Dismissed approval $id."
+          done

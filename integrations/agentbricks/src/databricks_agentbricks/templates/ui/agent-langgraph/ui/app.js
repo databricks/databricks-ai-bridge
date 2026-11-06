@@ -1719,7 +1719,7 @@ function renderModels(models) {
   for (const name of available) {
     const option = document.createElement("option");
     option.value = name;
-    option.textContent = name === models?.default ? `${name} (project default)` : name;
+    option.textContent = name === models?.default ? `${name} (default)` : name;
     option.selected = name === state.model;
     elements.modelSelect.append(option);
   }

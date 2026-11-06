@@ -1416,7 +1416,7 @@ default = "system.ai.claude-haiku-4-5"
 
 [experimental.model_services.writer]
 name = "main.my_agent.writer_llm"
-default = "system.ai.claude-sonnet-4-5"
+default = "system.ai.claude-sonnet-5-5"
 ```
 
 `agentbricks deploy` creates each service if it's missing (routed to its binding's default model), grants the app's service principal EXECUTE on it, and wires it in as `AGENT_MODEL_SERVICE_<ROLE>`; the agent reads it with `resolve_model_service("<role>")`. After that, switching the model behind a service takes effect without a code change or redeploy, and `models upgrade` searches every role's model, plus the prompts bound with [`experimental prompts`](#agentbricks-experimental-prompts), together. Upgrade runs and switches are recorded in `.agentbricks/model_upgrades.json`; switches can be rolled back.
