@@ -20,10 +20,11 @@ partitions memories but is not an access-control boundary: the memory store is. 
 a trusted identity (the signed-in user), never from a model-chosen or user-supplied field, and use
 separate stores for separate tenants.
 
-Each item is one cross-session memory (no ``session_id``) at ``{root}/{namespace...}/{key}``,
-each segment percent-encoded. Entries are kept under the storage actor ``<actor>:langgraph``, not
-the plain actor. Memory pipelines find the actors they process through sessions, and no session
-uses that id, so automatic pipeline runs leave these entries alone; that's a convention the
+Each item is one cross-session memory (no ``session_id``) at ``{root}/{namespace...}/{key}``, each
+segment percent-encoded. Entries are kept under the storage actor ``<actor>:langgraph``, not the
+plain actor, because a memory pipeline on the same memory store can rewrite, merge or delete the
+entries of any actor it processes. Pipelines find the actors they process through sessions, and no
+session uses that id, so automatic pipeline runs leave these entries alone; that's a convention the
 session and memory helpers enforce, not the service. ``memory_tools`` and sessions, which use the
 plain actor, don't see the entries. The content is a small JSON envelope, ``{"lg": 1, "v":
 <value>}``, plus ``"x"`` (expiry, epoch milliseconds) when the item has a TTL. Entries outside
@@ -452,7 +453,11 @@ class DatabricksMemoryStore(BaseStore):
 
     @staticmethod
     def storage_actor(actor: str) -> str:
-        """The actor id the service keeps ``actor``'s entries under, eg for the CLI."""
+        """The actor id the service keeps ``actor``'s entries under, eg for the CLI.
+
+        It's ``<actor>:langgraph``, kept apart from the plain actor so memory pipelines don't
+        rewrite the store's entries; ``databricks_agentkit._actors`` explains why.
+        """
         return check_actor(actor) + STORE_ACTOR_SUFFIX
 
     def sweep_ttl(self, *, actor: Optional[str] = None) -> int:
