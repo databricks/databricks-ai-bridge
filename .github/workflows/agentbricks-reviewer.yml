@@ -424,13 +424,16 @@ jobs:
           gh api "repos/$REPO/compare/${base_sha}...${head_sha}" \
             -H "Accept: application/vnd.github.v3.diff" > /tmp/pr_diff.txt
           chmod 444 /tmp/pr_diff.txt
+          merge_base_sha="$(gh api "repos/$REPO/compare/${base_sha}...${head_sha}" --jq .merge_base_commit.sha)"
           # Objects only, so reviewers can `git show <sha>:<path>`; nothing is checked out or run.
-          git fetch --quiet --no-tags --depth=1 origin "$base_sha" "$head_sha"
-          python3 - "$base_sha" "$head_sha" <<'PYCHANGED'
+          git fetch --quiet --no-tags --depth=1 origin "$base_sha" "$head_sha" "$merge_base_sha"
+          python3 - "$merge_base_sha" "$head_sha" <<'PYCHANGED'
           import json, pathlib, subprocess, sys
 
+          # GitHub resolved the merge base; shallow objects need no ancestry walk.
+          # Include both paths of moves so the old and new scopes receive review.
           changed = subprocess.check_output(
-              ["git", "diff", "--name-only", "-z", f"{sys.argv[1]}...{sys.argv[2]}"]
+              ["git", "diff", "--no-renames", "--name-only", "-z", sys.argv[1], sys.argv[2]]
           ).split(b"\0")
           paths = [path.decode("utf-8", "surrogateescape") for path in changed if path]
           pathlib.Path("/tmp/pr_changed_paths.json").write_text(json.dumps(paths))

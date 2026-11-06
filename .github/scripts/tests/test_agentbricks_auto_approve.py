@@ -107,6 +107,13 @@ class DecideTest(unittest.TestCase):
         for path, fragment in (
             (".github/workflows/agentbricks-reviewer.yml", "CI or review configuration"),
             (".claude/skills/agentbricks-review/SKILL.md", "CI or review configuration"),
+            (".agents/skills/agentbricks-review/SKILL.md", "CI or review configuration"),
+            ("REVIEW.md", "CI or review configuration"),
+            ("integrations/agentbricks/REVIEW.md", "CI or review configuration"),
+            ("integrations/openai/REVIEW.md", "CI or review configuration"),
+            ("AGENTS.md", "CI or review configuration"),
+            ("integrations/agentbricks/AGENTS.md", "CI or review configuration"),
+            ("CLAUDE.md", "CI or review configuration"),
             ("integrations/openai/pyproject.toml", "dependency manifest"),
             ("uv.lock", "dependency manifest"),
             ("integrations/langchainjs/package-lock.json", "dependency manifest"),
