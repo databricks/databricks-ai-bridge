@@ -41,7 +41,18 @@ ty check
 
 ## Code Review
 
-AgentBricksReviewer (`.github/workflows/agentbricks-reviewer.yml`) reviews PRs automatically and posts its review as a PR comment; comment `/review` to re-run it. Its rules live in [`.claude/skills/agentbricks-review/SKILL.md`](.claude/skills/agentbricks-review/SKILL.md), which also runs locally: `/agentbricks-review [PR number or URL]`, or with no argument to review the current branch against `origin/main`. CI always uses the copy on the default branch, so edits to the skill take effect after they merge.
+AutoReviewer (`.github/workflows/auto-reviewer.yml`) reviews all eligible PRs in this repository and posts its review as a PR comment; comment `/review` to re-run it. Its process lives in [`.claude/skills/auto-reviewer/SKILL.md`](.claude/skills/auto-reviewer/SKILL.md), which also runs locally: `/auto-reviewer [PR number or URL]`, or with no argument to review the current branch against `origin/main`. Reviews always load root [`REVIEW.md`](REVIEW.md), then auto-discover additional `REVIEW.md` files scoped to changed paths. CI uses these files from the default branch, so edits take effect after they merge.
+
+### Author/reviewer feedback
+
+When authorized to continue working on a PR after pushing:
+
+- Use the agent runtime's existing GitHub activity monitor to wait for AutoReviewer on that exact head commit.
+- Verify each concrete finding before changing code. Fix clear in-scope issues, test, and push another round only within the existing authorization.
+- Stop after three total review rounds.
+- Ask a human instead of continuing when you disagree with the review, suspect a false positive, encounter high-risk, security, or uncertain findings, would change intended behavior or architecture, need to expand scope, see another author move the branch, or reach the round or wait limit.
+
+Approval and risk labels apply only to the commit AutoReviewer assessed. These instructions do not authorize commenting, pushing, approving, or merging beyond the user's request.
 
 ## Integration Tests
 
