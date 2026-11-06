@@ -51,10 +51,8 @@ run-name: "AgentBricksReviewer #${{ github.event.pull_request.number || github.e
 #   reviewer delivered; no blocking, security, or uncertain findings; at most
 #   AI_REVIEW_AUTO_APPROVE_MAX_LINES changed lines, default 200; no CI, review
 #   rule, dependency, or credential files), the author has write access, and
-#   the PR head hasn't moved. The approver is the GitHub App in
-#   AGENTBRICKS_REVIEWER_APP_CLIENT_ID (variable) and
-#   AGENTBRICKS_REVIEWER_APP_PRIVATE_KEY (secret) when set, otherwise
-#   github-actions[bot]. A push to the PR dismisses the approval.
+#   the PR head hasn't moved. The approver is github-actions[bot], so the repo
+#   must allow Actions to approve PRs. A push to the PR dismisses the approval.
 
 on:
   pull_request_target:
@@ -581,20 +579,10 @@ jobs:
           } > /tmp/comment.md
           gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/comment.md
 
-      - name: Get AgentBricksReviewer app token
-        id: app_token
-        if: >-
-          steps.reviewer.outputs.review_ready == 'true' &&
-          vars.AI_REVIEW_AUTO_APPROVE == 'true' && vars.AGENTBRICKS_REVIEWER_APP_CLIENT_ID != ''
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          client-id: ${{ vars.AGENTBRICKS_REVIEWER_APP_CLIENT_ID }}
-          private-key: ${{ secrets.AGENTBRICKS_REVIEWER_APP_PRIVATE_KEY }}
-
       - name: Auto-approve if low risk
         if: steps.reviewer.outputs.review_ready == 'true' && vars.AI_REVIEW_AUTO_APPROVE == 'true'
         env:
-          GH_TOKEN: ${{ steps.app_token.outputs.token || github.token }}
+          GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
           MIN_SCORE: ${{ vars.AI_REVIEW_AUTO_APPROVE_MIN_SCORE || '95' }}
           MAX_LINES: ${{ vars.AI_REVIEW_AUTO_APPROVE_MAX_LINES || '200' }}
@@ -680,17 +668,9 @@ jobs:
     permissions:
       pull-requests: write
     steps:
-      - name: Get AgentBricksReviewer app token
-        id: app_token
-        if: vars.AGENTBRICKS_REVIEWER_APP_CLIENT_ID != ''
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          client-id: ${{ vars.AGENTBRICKS_REVIEWER_APP_CLIENT_ID }}
-          private-key: ${{ secrets.AGENTBRICKS_REVIEWER_APP_PRIVATE_KEY }}
-
       - name: Dismiss approvals of earlier commits
         env:
-          GH_TOKEN: ${{ steps.app_token.outputs.token || github.token }}
+          GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
