@@ -53,7 +53,9 @@ run-name: "AgentBricksReviewer #${{ github.event.pull_request.number || github.e
 #   integrations/agentbricks/ or .md/.rst docs; no CI, review rule, dependency,
 #   or credential files), the author has write access, and
 #   the PR head hasn't moved. The approver is github-actions[bot], so the repo
-#   must allow Actions to approve PRs. A push to the PR dismisses the approval.
+#   must allow Actions to approve PRs. The review comment ends with the decision,
+#   and lists the reasons when it doesn't approve. A push to the PR dismisses the
+#   approval.
 
 on:
   pull_request_target:
@@ -561,6 +563,42 @@ jobs:
             exit 1
           fi
 
+      - name: Decide auto-approval
+        id: approval
+        if: steps.reviewer.outputs.review_ready == 'true' && vars.AI_REVIEW_AUTO_APPROVE == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
+          MIN_SCORE: ${{ vars.AI_REVIEW_AUTO_APPROVE_MIN_SCORE || '95' }}
+          MAX_LINES: ${{ vars.AI_REVIEW_AUTO_APPROVE_MAX_LINES || '200' }}
+        run: |
+          set -euo pipefail
+          # The gate reads the review and the diff; it never asks the model.
+          decision="$(python3 .github/scripts/agentbricks_auto_approve.py \
+            --review /tmp/review.txt --diff /tmp/pr_diff.txt --min-score "$MIN_SCORE" --max-lines "$MAX_LINES")"
+          mapfile -t reasons < <(jq -r '.reasons[]' <<<"$decision")
+          pr="$(gh api "repos/$REPO/pulls/$PR_NUMBER")"
+          author="$(jq -r .user.login <<<"$pr")"
+          if ! permission="$(gh api "repos/$REPO/collaborators/$author/permission" --jq .permission 2>/dev/null)"; then
+            permission=unknown
+          fi
+          case "$permission" in admin|maintain|write) ;; *) reasons+=("$author has '$permission' access") ;; esac
+          [ "$(jq -r .draft <<<"$pr")" = false ] || reasons+=("the PR is a draft")
+          [ "$(jq -r .head.sha <<<"$pr")" = "$HEAD_SHA" ] || reasons+=("the PR moved past the reviewed commit")
+          # The comment step appends this, so authors see why a PR wasn't approved.
+          if [ "${#reasons[@]}" -gt 0 ]; then
+            printf -v joined '%s; ' "${reasons[@]}"
+            echo "::notice::Not auto-approving: ${joined%; }."
+            {
+              echo "**Auto-approval:** not approved; a maintainer needs to review. Reasons:"
+              printf -- '- %s\n' "${reasons[@]}"
+            } > /tmp/approval.md
+            echo "approve=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "**Auto-approval:** every check passed, so github-actions[bot] approves \`${HEAD_SHA:0:7}\`. Pushing new commits dismisses the approval." > /tmp/approval.md
+            echo "approve=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Post review comment
         if: steps.reviewer.outputs.review_ready == 'true'
         env:
@@ -574,41 +612,30 @@ jobs:
             echo "## AgentBricksReviewer"
             echo ""
             cat /tmp/review.txt
+            if [ -f /tmp/approval.md ]; then
+              echo ""
+              cat /tmp/approval.md
+            fi
             echo ""
             echo "---"
             echo "<sub>Automated review by AgentBricksReviewer for \`${HEAD_SHA:0:7}\` · [workflow run](${RUN_URL}) · comment \`/review\` to re-run</sub>"
           } > /tmp/comment.md
           gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/comment.md
 
-      - name: Auto-approve if low risk
-        if: steps.reviewer.outputs.review_ready == 'true' && vars.AI_REVIEW_AUTO_APPROVE == 'true'
+      - name: Auto-approve
+        if: steps.approval.outputs.approve == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
-          MIN_SCORE: ${{ vars.AI_REVIEW_AUTO_APPROVE_MIN_SCORE || '95' }}
-          MAX_LINES: ${{ vars.AI_REVIEW_AUTO_APPROVE_MAX_LINES || '200' }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          # The gate reads the posted review and the diff; it never asks the model.
-          decision="$(python3 .github/scripts/agentbricks_auto_approve.py \
-            --review /tmp/review.txt --diff /tmp/pr_diff.txt --min-score "$MIN_SCORE" --max-lines "$MAX_LINES")"
-          mapfile -t reasons < <(jq -r '.reasons[]' <<<"$decision")
-          pr="$(gh api "repos/$REPO/pulls/$PR_NUMBER")"
-          author="$(jq -r .user.login <<<"$pr")"
-          if ! permission="$(gh api "repos/$REPO/collaborators/$author/permission" --jq .permission 2>/dev/null)"; then
-            permission=unknown
-          fi
-          case "$permission" in admin|maintain|write) ;; *) reasons+=("$author has '$permission' access") ;; esac
-          [ "$(jq -r .draft <<<"$pr")" = false ] || reasons+=("the PR is a draft")
-          [ "$(jq -r .head.sha <<<"$pr")" = "$HEAD_SHA" ] || reasons+=("the PR moved past the reviewed commit")
-          if [ "${#reasons[@]}" -gt 0 ]; then
-            printf -v joined '%s; ' "${reasons[@]}"
-            echo "::notice::Not auto-approving: ${joined%; }."
+          if [ "$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha)" != "$HEAD_SHA" ]; then
+            echo "::notice::Not auto-approving: the PR moved past the reviewed commit."
             exit 0
           fi
           body="<!-- agentbricks-reviewer-approval -->
-          Auto-approved by AgentBricksReviewer for \`${HEAD_SHA:0:7}\`: merge safety at least ${MIN_SCORE}, every reviewer delivered, no blocking, security, or uncertain findings, at most ${MAX_LINES} changed lines, and no CI, dependency, or credential files. Pushing new commits dismisses this approval. [Workflow run](${RUN_URL})"
+          Auto-approved by AgentBricksReviewer for \`${HEAD_SHA:0:7}\`: merge safety at least the threshold, every reviewer delivered, no blocking, security, or uncertain findings, a small diff limited to integrations/agentbricks/ and docs, and no CI, dependency, or credential files. Pushing new commits dismisses this approval. [Workflow run](${RUN_URL})"
           gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --silent \
             -f event=APPROVE -f commit_id="$HEAD_SHA" -f body="$body" \
             && echo "Approved ${HEAD_SHA:0:7}." \

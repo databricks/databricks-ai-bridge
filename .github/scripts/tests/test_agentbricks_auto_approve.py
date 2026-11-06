@@ -135,6 +135,10 @@ class DecideTest(unittest.TestCase):
         docs = diff("README.md", "integrations/openai/README.md", "docs/source/index.rst", "CONTRIBUTING.md")
         self.assertTrue(gate.decide(review(), docs)["approve"])
 
+    def test_paths_in_reasons_are_code_spans_without_backticks(self):
+        reasons = gate.decide(review(), diff("src/@someone`[x](y).py"))["reasons"]
+        self.assertIn("`src/@someone[x](y).py` is outside integrations/agentbricks/ and isn't a doc", reasons)
+
     def test_renamed_path_counts_both_names(self):
         rename = "diff --git a/integrations/agentbricks/a.py b/.github/a.py\nsimilarity index 100%\n"
         self.assert_refused(gate.decide(review(), rename), "CI or review configuration")

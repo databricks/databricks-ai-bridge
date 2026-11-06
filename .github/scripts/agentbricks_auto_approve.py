@@ -62,14 +62,17 @@ def changed_files_and_lines(diff: str) -> tuple[list[str], int]:
 def protected_reason(path: str) -> str | None:
     pure = PurePosixPath(path)
     name = pure.name
+    # Reasons are posted in a PR comment; a code span keeps PR-chosen paths from
+    # rendering as Markdown, links, or mentions.
+    shown = "`" + path.replace("`", "") + "`"
     if path.startswith(PROTECTED_PREFIXES):
-        return f"{path} is CI or review configuration"
+        return f"{shown} is CI or review configuration"
     if name in PROTECTED_NAMES or name.endswith(".lock") or re.fullmatch(r"requirements.*\.(txt|in)", name):
-        return f"{path} is a dependency manifest or lockfile"
+        return f"{shown} is a dependency manifest or lockfile"
     if SENSITIVE_NAME.search(name):
-        return f"{path} looks like credential or auth code"
+        return f"{shown} looks like credential or auth code"
     if not path.startswith(AUTO_APPROVE_PREFIXES) and pure.suffix.lower() not in DOC_SUFFIXES:
-        return f"{path} is outside integrations/agentbricks/ and isn't a doc"
+        return f"{shown} is outside integrations/agentbricks/ and isn't a doc"
     return None
 
 
