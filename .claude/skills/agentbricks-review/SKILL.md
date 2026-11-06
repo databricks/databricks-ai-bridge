@@ -1,5 +1,5 @@
 ---
-name: auto-reviewer
+name: agentbricks-review
 description: Multi-lens review of a databricks-ai-bridge pull request or local branch, with auto-discovered REVIEW.md criteria, verified findings, and a merge safety score.
 ---
 
@@ -9,7 +9,7 @@ This skill is the review contract for this repository. Repository-wide criteria
 live in root `REVIEW.md`; directories can add scoped `REVIEW.md` files. It runs
 in two places:
 
-- **CI:** `.github/workflows/auto-reviewer.yml` reads this file from the
+- **CI:** `.github/workflows/agentbricks-reviewer.yml` reads this file from the
   default branch, never from the PR under review, so a PR cannot change the rules
   it is judged by. The workflow prepends PR metadata, the diff location, and the
   base and head commits, then posts the review as a PR comment.

@@ -14,7 +14,7 @@ class PromptTest(unittest.TestCase):
     def setUp(self):
         root = Path(__file__).resolve().parents[2]
         self.root = root
-        self.workflow = (root / ".github/workflows/auto-reviewer.yml").read_text()
+        self.workflow = (root / ".github/workflows/agentbricks-reviewer.yml").read_text()
         start = self.workflow.index(
             "          import hashlib, html, json, os, pathlib\n"
         )
@@ -56,7 +56,7 @@ class PromptTest(unittest.TestCase):
     def test_arbitrary_root_and_scoped_rules_are_injected_once(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            skill = workspace / ".claude/skills/auto-reviewer/SKILL.md"
+            skill = workspace / ".claude/skills/agentbricks-review/SKILL.md"
             skill.parent.mkdir(parents=True)
             skill.write_text((self.root / skill.relative_to(workspace)).read_text())
             root_rules = "# General rules\n\nGENERAL-001\n"
@@ -75,7 +75,7 @@ class PromptTest(unittest.TestCase):
         self.assertLess(prompt.index(root_rules), prompt.index(scoped_rules))
         self.assertIn('<review_rules source="REVIEW.md">', prompt)
         self.assertIn('<review_rules source="packages/example/REVIEW.md">', prompt)
-        self.assertNotIn("name: auto-reviewer", prompt)
+        self.assertNotIn("name: agentbricks-review", prompt)
         self.assertIn("# Part 1: Coordinator process", prompt)
 
     def test_agentbricks_change_loads_its_automation_policy(self):
