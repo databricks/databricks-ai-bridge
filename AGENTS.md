@@ -43,6 +43,17 @@ ty check
 
 AutoReviewer (`.github/workflows/auto-reviewer.yml`) reviews all eligible PRs in this repository and posts its review as a PR comment; comment `/review` to re-run it. Its process lives in [`.claude/skills/auto-reviewer/SKILL.md`](.claude/skills/auto-reviewer/SKILL.md), which also runs locally: `/auto-reviewer [PR number or URL]`, or with no argument to review the current branch against `origin/main`. Reviews always load root [`REVIEW.md`](REVIEW.md), then auto-discover additional `REVIEW.md` files scoped to changed paths. CI uses these files from the default branch, so edits take effect after they merge.
 
+### Author/reviewer feedback
+
+When authorized to continue working on a PR after pushing:
+
+- Use the agent runtime's existing GitHub activity monitor to wait for PRReviewer on that exact head commit.
+- Verify each concrete finding before changing code. Fix clear in-scope issues, test, and push another round only within the existing authorization.
+- Stop after three total review rounds.
+- Ask a human instead of continuing when you disagree with the review, suspect a false positive, encounter high-risk, security, or uncertain findings, would change intended behavior or architecture, need to expand scope, see another author move the branch, or reach the round or wait limit.
+
+Approval and risk labels apply only to the commit PRReviewer assessed. These instructions do not authorize commenting, pushing, approving, or merging beyond the user's request.
+
 ## Integration Tests
 
 Integration tests hit live Databricks APIs (no mocks). See [`tests/README.md`](tests/README.md) for what tests exist, their coverage, and how to run them. See [`.claude/skills/integration-tests.md`](.claude/skills/integration-tests.md) for principles and patterns when writing new tests (trigger with `/integration-tests`).
