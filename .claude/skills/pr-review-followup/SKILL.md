@@ -27,11 +27,38 @@ GitHub review. Match `github-actions[bot]` comments containing the exact line:
 <!-- agentbricks-reviewer-sha: FULL_HEAD_SHA -->
 ```
 
-Use the latest matching report for the current head. Track the processed
-comment ID/update time and reviewed SHA so unchanged feedback is not processed
-again. Ignore reports and approvals for older commits. Recheck the PR head
+Use the latest matching report to establish review coverage of the current
+head. Reports and approvals for older commits cannot establish completion,
+but their unresolved findings still need assessment. Recheck the PR head
 before acting; if someone else changes it, stop and hand back the new state
 rather than overwriting their work.
+
+## Track findings across rounds
+
+Keep a local ledger for the session, outside the committed changes. Give every
+substantive finding a stable key: feedback type and comment/review ID plus a
+finding index or quoted locator when a document contains several findings.
+Record its source URL, original reviewed SHA, body/version, concern, decision,
+and evidence. Include relevant human feedback, inline suggestions, and older
+unresolved concerns; a new report omitting a finding does not resolve it.
+
+Use these dispositions:
+
+- **Pending:** not yet assessed or fixed.
+- **Addressed:** link the fix commit/code and relevant validation. Recheck that
+  the fix still applies after subsequent changes.
+- **Not needed:** explain with evidence that it is a duplicate of another
+  tracked finding, already handled, or independent work outside the task.
+  Link duplicates to the original finding's disposition.
+- **Needs human:** disputed, unverifiable, or dependent on a human decision.
+  Record the evidence and hand off rather than silently dismissing it.
+
+Track every finding inside a summary separately. An approval, low severity,
+resolved thread, deleted comment, or omission from a later review is not by
+itself evidence that a concern was addressed. Preserve ledger entries when
+source comments disappear. If feedback is edited, reassess the affected
+entries; reuse previous reasoning only where it still matches the feedback
+and current code. Keep the ledger local; this skill does not require PR replies.
 
 Useful reads (set `repo`, `pr`, and `head` from the resolved PR):
 
@@ -76,21 +103,42 @@ severity and scores alone do not determine whether a finding needs fixing.
 - **Agree with actionable feedback:** make a focused fix, run relevant checks,
   commit, and push to the same PR branch. Count one fix round. Refresh the head
   and wait for its review using the rules above; the previous report no longer
-  covers it. If no further response is expected, hand off the pushed fixes.
+  covers it. Update the ledger with the fix and validation. If no further
+  response is expected, hand off the pushed fixes.
 - **Disagree, cannot verify, or need a product/security decision:** stop and
   present the finding, evidence, and decision needed from the human. Do not
   repeatedly rewrite code to satisfy a disputed assessment.
 - **No actionable feedback remains:** stop immediately after the current review
-  finishes. Do not wait for an approval or another unsolicited review. Check
-  reviewer coverage: incomplete coverage is a handoff, not a clean-review claim.
+  finishes and the final freshness check below passes. Do not wait for an
+  approval or another unsolicited review. Check reviewer coverage: incomplete
+  coverage is a handoff, not a clean-review claim.
 
 A high change-risk label can require human approval even with no findings;
 it is not a reason to manufacture changes or keep looping. A current-head bot
 approval is a completion signal only after checking for unresolved feedback.
 Never approve or merge the PR through this skill.
 
+## Check freshness before finishing
+
+Before claiming a clean completed review, confirm review completion first,
+then refetch all relevant feedback pages. Compare feedback IDs, bodies, and
+available update timestamps with the assessed snapshot so new or edited
+comments, submitted reviews, and inline feedback are included. Reconcile any
+changes with the ledger; retain older unresolved entries even if their source
+is now missing. Require every finding to have an evidenced addressed/not-needed
+disposition, with no pending or needs-human entries.
+
+After collecting feedback, reread the PR head and reviewer status/known runs.
+The head must still match the assessed SHA, and no known review may remain
+queued or running. If feedback changed, assess it and repeat this check within
+the existing round/time limits. If another actor changed the head, hand off as
+above. An in-flight review uses the existing wait deadline; freshness checks
+never restart it. If freshness or completion cannot be verified, report the
+remaining gap instead of calling the PR clean. Passing this check ends the
+loop; do not wait for a hypothetical future response.
+
 Stop on a closed/merged PR, the fix-round limit, an unsuccessful fix/check,
 authentication failure, or loss of a current-head review response. Summarize
 the PR URL, final head, fixes/checks, latest review coverage and approval state,
-round count, and any remaining human action. Distinguish a clean completed
+round count, finding dispositions with evidence, and any remaining human action. Distinguish a clean completed
 review from a stopped wait or an unreviewed final push.
