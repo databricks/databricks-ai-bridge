@@ -618,7 +618,7 @@ jobs:
             exit 1
           fi
 
-      - name: Assess change safety
+      - name: Assess change risk
         if: steps.reviewer.outputs.review_ready == 'true'
         env:
           MIN_SCORE: ${{ vars.AI_REVIEW_AUTO_APPROVE_MIN_SCORE || '95' }}

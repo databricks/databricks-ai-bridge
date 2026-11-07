@@ -165,36 +165,34 @@ to it; change risk is assessed separately below.
 If no reviewer delivered, say the review could not be completed instead of
 giving a score.
 
-## 5. Assess change safety separately
+## 5. Assess change risk separately
 
 The review score above measures findings and review coverage. Separately
-assess the impact of merging this change even when no defects were found.
-Report a **change safety** score from 0 to 100: higher means safer to automate,
-not a calibrated probability. Missing reviewer responses affect the review score
-and approval eligibility; they do not by themselves make the change high or
-critical risk. Use these bands:
+classify the impact of merging this change even when no defects were found.
+Use **LOW**, **MODERATE**, or **HIGH** change risk with a concrete rationale;
+do not assign a numerical safety score. Missing reviewer responses affect the
+review score and approval eligibility, not the impact classification itself.
 
-| Change safety | Change risk | Typical change |
-|---|---|---|
-| 90–100 | LOW | Small docs/test changes or isolated, compatible implementation changes with clear tests and easy rollback |
-| 70–89 | MODERATE | Public CLI/API behavior, runtime or persistence changes, cross-package behavior, or unclear rollback/test coverage |
-| 40–69 | HIGH | Credentials/permissions, sensitive data, migration/deletion, CI/release/dependency changes, or broad/hard-to-reverse effects |
-| 0–39 | CRITICAL | Potential irreversible data loss, credential exposure, or widespread disruption |
+| Change risk | Typical change |
+|---|---|
+| LOW | Small docs/test changes or isolated, compatible implementation changes with clear tests and easy rollback |
+| MODERATE | Public CLI/API behavior, runtime or persistence changes, cross-package behavior, or unclear rollback/test coverage |
+| HIGH | Credentials/permissions, sensitive data, migration/deletion, CI/release/dependency changes, broad disruption, or irreversible data loss |
 
 Assess the actual behavior, not just extensions or diff size. A template, shell
 script, config, or ordinary helper can change authorization, network access,
 data writes/deletes, billing, or published behavior. Consider compatibility,
 which users/components are affected, retry/idempotency, feature defaults,
 observability, test evidence, and whether rollback restores state. Explain the
-specific paths and behaviors that determine the score; flag unknown impact as
-at least moderate. If the impact cannot be assessed, report change safety as
+specific paths and behaviors that determine the classification; flag unknown
+impact as at least moderate. If the impact cannot be assessed, report change risk as
 **Unrated** and explain what is missing; do not invent a numerical score. Do not
 give low risk merely because the review found no bugs.
 
 CI applies minimum risk levels for protected paths, public/runtime components,
 multiple production packages, large diffs, and binary changes, using
-`.github/scripts/agentbricks_auto_approve.py`. CI may lower change safety and
-raise risk, and only the resulting low-risk assessment can be auto-approved.
+`.github/scripts/agentbricks_auto_approve.py`. CI may raise the classification,
+and only the resulting low-risk assessment can be auto-approved.
 The existing review-score threshold, findings, author, scope, and commit checks
 also apply. A low-risk label does not grant approval.
 
@@ -259,8 +257,8 @@ Start with one line: `**Review score:** <score>/100 · reviewers:
 checked, so list only the lenses with findings.
 
 Then add an independent line in this exact format:
-`**Change safety:** <score>/100 (<LOW|MODERATE|HIGH|CRITICAL> RISK)`.
-When the impact cannot be assessed, use `**Change safety:** Unrated` instead.
+`**Change risk:** <LOW|MODERATE|HIGH>`.
+When the impact cannot be assessed, use `**Change risk:** Unrated` instead.
 Follow it with `**Risk rationale:**` and a concise explanation of the affected
 paths/components, behavioral impact, test evidence, and reversibility. PR risk
 labels use this assessment with CI's risk floors, independently of the review score.

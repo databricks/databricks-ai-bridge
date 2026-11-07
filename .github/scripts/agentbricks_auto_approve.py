@@ -1,7 +1,7 @@
 """Decide whether AgentBricksReviewer may auto-approve a PR.
 
 The decision combines the review's findings/coverage score and independent
-change-safety assessment with deterministic path, component, and size checks.
+change-risk classification with deterministic path, component, and size checks.
 
 Usage: agentbricks_auto_approve.py --review REVIEW --diff DIFF [--min-score N] [--max-lines N]
 Prints a JSON object {"approve": bool, "reasons": [...]}; reasons explain a refusal.
@@ -21,13 +21,11 @@ REVIEW_SCORE = re.compile(
 )
 EMPTY_SECTIONS = ("Blocking issues", "Security vulnerabilities", "Uncertain findings")
 HEADING = re.compile(r"^#{1,6}\s+(?P<title>.+?)\s*$", re.MULTILINE)
-CHANGE_SAFETY = re.compile(
-    r"^\*\*Change safety:\*\*\s*(?P<score>\d+)/100\s*\((?P<risk>LOW|MODERATE|HIGH|CRITICAL) RISK\)\s*$",
-    re.MULTILINE,
-)
-RISK_LEVELS = ("low", "medium", "high", "critical")
-RISK_CAPS = {"low": 100, "medium": 89, "high": 69, "critical": 39}
+CHANGE_RISK = re.compile(r"^\*\*Change risk:\*\*[ \t]*(?P<risk>[^\r\n]*)$", re.MULTILINE)
+RISK_RATIONALE = re.compile(r"^\*\*Risk rationale:\*\*[ \t]*(?P<text>[^\r\n]*)$", re.MULTILINE)
+RISK_LEVELS = ("low", "medium", "high")
 RISK_NAMES = {"medium": "MODERATE"}
+RISK_VALUES = {"LOW": "low", "MODERATE": "medium", "HIGH": "high", "UNRATED": "unrated"}
 
 # Only the agentbricks integration (its code, tests, and docs) and docs elsewhere can
 # be auto-approved; the other packages ship on their own and need a human.
@@ -91,21 +89,22 @@ def section_body(review: str, title: str) -> str | None:
 
 def assess_change_risk(review: str, files: list[str], lines: int, diff: str = "") -> dict:
     """Keep contextual model assessment separate from findings, with risk floors."""
-    matches = list(CHANGE_SAFETY.finditer(review))
+    matches = list(CHANGE_RISK.finditer(review))
+    rationales = list(RISK_RATIONALE.finditer(review))
     reasons: list[str] = []
-    score = None
     level = "unrated"
-    if len(matches) == 1:
-        score = int(matches[0].group("score"))
-        expected = "low" if score >= 90 else "medium" if score >= 70 else "high" if score >= 40 else "critical"
-        if not 0 <= score <= 100 or matches[0].group("risk") != RISK_NAMES.get(expected, expected.upper()):
-            reasons.append("change-safety score or risk band is invalid")
-            score = None
-        else:
-            level = expected
+    if len(matches) != 1:
+        reasons.append("the review must contain exactly one change-risk assessment")
+    elif matches[0].group("risk").strip().upper() not in RISK_VALUES:
+        reasons.append("change risk must be LOW, MODERATE, HIGH, or UNRATED")
     else:
-        reasons.append("the review must contain exactly one change-safety assessment")
-    model_score = score
+        level = RISK_VALUES[matches[0].group("risk").strip().upper()]
+        if level == "unrated":
+            reasons.append("the reviewer could not assess change risk")
+    model_level = level
+    if len(rationales) != 1 or not rationales[0].group("text").strip():
+        level = "unrated"
+        reasons.append("the review must contain exactly one non-empty risk rationale")
 
     def floor(minimum: str, reason: str):
         nonlocal level
@@ -142,11 +141,9 @@ def assess_change_risk(review: str, files: list[str], lines: int, diff: str = ""
         floor("medium", "the change exceeds 10 paths")
     if "GIT binary patch" in diff or re.search(r"^Binary files .+ differ$", diff, re.MULTILINE):
         floor("high", "binary changes need human review")
-    if score is not None:
-        score = min(score, RISK_CAPS[level])
     return {
-        "level": level, "label": f"risk:{level}", "safety_score": score,
-        "model_safety_score": model_score, "reasons": list(dict.fromkeys(reasons)),
+        "level": level, "label": f"risk:{level}", "model_level": model_level,
+        "reasons": list(dict.fromkeys(reasons)),
     }
 
 
@@ -191,7 +188,6 @@ def safety_section(review: str, decision: dict) -> str:
     risk = decision["risk"]
     summary = REVIEW_SCORE.search(review)
     review_score = f"{summary.group('score')}/100" if summary else "unavailable"
-    safety = f"{risk['safety_score']}/100" if risk["safety_score"] is not None else "unrated"
     rationale = re.search(
         r"^\*\*Risk rationale:\*\*\s*(.*?)(?=\n\s*\n|\n## |\Z)", review,
         re.MULTILINE | re.DOTALL,
@@ -200,12 +196,12 @@ def safety_section(review: str, decision: dict) -> str:
         "### Safety assessment", "",
         "| Assessment | Result |", "|---|---|",
         f"| Review score (findings and coverage) | {review_score} |",
-        f"| Change safety (impact of the change) | {safety} |",
         f"| Change risk | **{RISK_NAMES.get(risk['level'], risk['level'].upper())}** · `{risk['label']}` |", "",
         "**Context:** " + (rationale[1].strip() if rationale else "The reviewer provided no change-risk rationale."),
     ]
-    if risk["model_safety_score"] != risk["safety_score"]:
-        lines += ["", f"Model change safety before CI adjustments: {risk['model_safety_score']}/100."]
+    if risk["model_level"] != risk["level"]:
+        model_name = RISK_NAMES.get(risk["model_level"], risk["model_level"].upper())
+        lines += ["", f"Model change risk before CI adjustments: {model_name}."]
     if risk["reasons"]:
         lines += ["", "**CI risk factors:**"] + ["- " + reason for reason in risk["reasons"]]
     lines += ["", "**Auto-approval content checks:** " + ("Passed." if decision["approve"] else "Not eligible.")]
