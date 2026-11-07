@@ -48,8 +48,17 @@ class LabelCleanupTest(unittest.TestCase):
         self.assertEqual(labels.reconcile(api, "org/repo", 1), "risk:medium")
         self.assertEqual(api.labels, {"unrelated", "risk:medium"})
 
+    def test_all_risk_labels_replace_previous_assessments(self):
+        for label in labels.LABELS:
+            with self.subTest(label=label):
+                api = FakeGitHub([comment("a", label)])
+                api.labels.update(labels.LABELS)
+                self.assertEqual(labels.reconcile(api, "org/repo", 1), label)
+                self.assertEqual(api.labels, {"unrelated", label})
+
     def test_unreviewed_head_clears_old_risk(self):
         api = FakeGitHub([comment("previous", "risk:low")])
+        api.labels.update(labels.LABELS)
         self.assertIsNone(labels.reconcile(api, "org/repo", 1))
         self.assertEqual(api.labels, {"unrelated"})
 

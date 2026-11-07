@@ -22,10 +22,12 @@ REVIEW_SCORE = re.compile(
 EMPTY_SECTIONS = ("Blocking issues", "Security vulnerabilities", "Uncertain findings")
 HEADING = re.compile(r"^#{1,6}\s+(?P<title>.+?)\s*$", re.MULTILINE)
 CHANGE_SAFETY = re.compile(
-    r"^\*\*Change safety:\*\*\s*(?P<score>\d+)/100\s*\((?P<risk>LOW|MEDIUM|HIGH) RISK\)\s*$",
+    r"^\*\*Change safety:\*\*\s*(?P<score>\d+)/100\s*\((?P<risk>LOW|MODERATE|HIGH|CRITICAL) RISK\)\s*$",
     re.MULTILINE,
 )
-RISK_LEVELS = ("low", "medium", "high")
+RISK_LEVELS = ("low", "medium", "high", "critical")
+RISK_CAPS = {"low": 100, "medium": 89, "high": 69, "critical": 39}
+RISK_NAMES = {"medium": "MODERATE"}
 
 # Only the agentbricks integration (its code, tests, and docs) and docs elsewhere can
 # be auto-approved; the other packages ship on their own and need a human.
@@ -92,11 +94,11 @@ def assess_change_risk(review: str, files: list[str], lines: int, diff: str = ""
     matches = list(CHANGE_SAFETY.finditer(review))
     reasons: list[str] = []
     score = None
-    level = "high"
+    level = "unrated"
     if len(matches) == 1:
         score = int(matches[0].group("score"))
-        expected = "low" if score >= 90 else "medium" if score >= 60 else "high"
-        if not 0 <= score <= 100 or matches[0].group("risk").lower() != expected:
+        expected = "low" if score >= 90 else "medium" if score >= 70 else "high" if score >= 40 else "critical"
+        if not 0 <= score <= 100 or matches[0].group("risk") != RISK_NAMES.get(expected, expected.upper()):
             reasons.append("change-safety score or risk band is invalid")
             score = None
         else:
@@ -107,7 +109,7 @@ def assess_change_risk(review: str, files: list[str], lines: int, diff: str = ""
 
     def floor(minimum: str, reason: str):
         nonlocal level
-        if RISK_LEVELS.index(minimum) > RISK_LEVELS.index(level):
+        if level != "unrated" and RISK_LEVELS.index(minimum) > RISK_LEVELS.index(level):
             level = minimum
         reasons.append(reason)
 
@@ -141,7 +143,7 @@ def assess_change_risk(review: str, files: list[str], lines: int, diff: str = ""
     if "GIT binary patch" in diff or re.search(r"^Binary files .+ differ$", diff, re.MULTILINE):
         floor("high", "binary changes need human review")
     if score is not None:
-        score = min(score, {"low": 100, "medium": 89, "high": 59}[level])
+        score = min(score, RISK_CAPS[level])
     return {
         "level": level, "label": f"risk:{level}", "safety_score": score,
         "model_safety_score": model_score, "reasons": list(dict.fromkeys(reasons)),
@@ -199,7 +201,7 @@ def safety_section(review: str, decision: dict) -> str:
         "| Assessment | Result |", "|---|---|",
         f"| Review score (findings and coverage) | {review_score} |",
         f"| Change safety (impact of the change) | {safety} |",
-        f"| Change risk | **{risk['level'].upper()}** · `{risk['label']}` |", "",
+        f"| Change risk | **{RISK_NAMES.get(risk['level'], risk['level'].upper())}** · `{risk['label']}` |", "",
         "**Context:** " + (rationale[1].strip() if rationale else "The reviewer provided no change-risk rationale."),
     ]
     if risk["model_safety_score"] != risk["safety_score"]:

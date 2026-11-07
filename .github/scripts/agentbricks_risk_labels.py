@@ -5,8 +5,8 @@ import json
 import re
 import subprocess
 
-LABELS = {"risk:low": "0e8a16", "risk:medium": "fbca04", "risk:high": "b60205"}
-RISK_LABEL = re.compile(r"^<!-- agentbricks-reviewer-risk-label: (risk:(?:low|medium|high)) -->$", re.MULTILINE)
+LABELS = {"risk:low": "0e8a16", "risk:medium": "fbca04", "risk:high": "d93f0b", "risk:critical": "b60205", "risk:unrated": "ededed"}
+RISK_LABEL = re.compile(r"^<!-- agentbricks-reviewer-risk-label: (risk:(?:low|medium|high|critical|unrated)) -->$", re.MULTILINE)
 
 
 def github(endpoint, data=None, method=None, paginate=False, allow_missing=False):

@@ -95,7 +95,9 @@ class DecideTest(unittest.TestCase):
                 self.assert_refused(gate.decide(text, diff("README.md")), "no review score line")
 
     def test_missing_reviewer_is_refused(self):
-        self.assert_refused(gate.decide(review(reviewers="1/2"), diff("README.md")), "1 of 2")
+        result = gate.decide(review(reviewers="1/2"), diff("README.md"))
+        self.assert_refused(result, "1 of 2")
+        self.assertEqual(result["risk"]["level"], "low")
 
     def test_single_reviewer_is_refused(self):
         self.assert_refused(gate.decide(review(reviewers="1/1"), diff("README.md")), "at least 2")
@@ -177,21 +179,22 @@ class DecideTest(unittest.TestCase):
 
 class ChangeRiskTest(unittest.TestCase):
     def test_findings_score_does_not_replace_change_risk(self):
-        result = gate.decide(review(change_safety=70, change_risk="MEDIUM"), diff(CODE))
+        result = gate.decide(review(change_safety=70, change_risk="MODERATE"), diff(CODE))
         self.assertFalse(result["approve"])
         self.assertEqual(result["risk"]["label"], "risk:medium")
         self.assertEqual(result["risk"]["safety_score"], 70)
 
     def test_risk_bands_at_boundaries(self):
-        for score, level in [(100, "low"), (90, "low"), (89, "medium"), (60, "medium"), (59, "high"), (0, "high")]:
+        for score, level in [(100, "low"), (90, "low"), (89, "medium"), (70, "medium"), (69, "high"), (40, "high"), (39, "critical"), (0, "critical")]:
             with self.subTest(score=score):
-                result = gate.decide(review(change_safety=score, change_risk=level.upper()), diff(CODE))
+                result = gate.decide(review(change_safety=score, change_risk=gate.RISK_NAMES.get(level, level.upper())), diff(CODE))
                 self.assertEqual(result["risk"]["level"], level)
                 self.assertEqual(result["approve"], level == "low")
 
     def test_missing_or_invalid_assessment_withholds_approval(self):
         for text in (
             review().replace("**Change safety:** 100/100 (LOW RISK)", ""),
+            review().replace("**Change safety:** 100/100 (LOW RISK)", "**Change safety:** Unrated"),
             review(change_safety=101),
             review(change_safety=100, change_risk="HIGH"),
             review() + "\n**Change safety:** 100/100 (LOW RISK)\n",
@@ -199,8 +202,24 @@ class ChangeRiskTest(unittest.TestCase):
             with self.subTest(text=text):
                 result = gate.decide(text, diff(CODE))
                 self.assertFalse(result["approve"])
-                self.assertEqual(result["risk"]["label"], "risk:high")
+                self.assertEqual(result["risk"]["label"], "risk:unrated")
                 self.assertIsNone(result["risk"]["safety_score"])
+
+    def test_unrated_is_preserved_even_for_sensitive_paths(self):
+        text = review().replace("**Change safety:** 100/100 (LOW RISK)", "")
+        decision = gate.decide(text, diff("REVIEW.md"))
+        self.assertFalse(decision["approve"])
+        self.assertEqual(decision["risk"]["label"], "risk:unrated")
+        self.assertIn("**UNRATED**", gate.safety_section(text, decision))
+        self.assertTrue(decision["risk"]["reasons"])
+
+    def test_critical_assessment_is_not_downgraded_by_lower_floors(self):
+        text = review(change_safety=20, change_risk="CRITICAL")
+        decision = gate.decide(text, diff("REVIEW.md"))
+        self.assertFalse(decision["approve"])
+        self.assertEqual(decision["risk"]["label"], "risk:critical")
+        self.assertEqual(decision["risk"]["safety_score"], 20)
+        self.assertIn("**CRITICAL**", gate.safety_section(text, decision))
 
     def test_public_interface_and_runtime_changes_have_medium_floor(self):
         for path in (
@@ -226,7 +245,7 @@ class ChangeRiskTest(unittest.TestCase):
             with self.subTest(path=path):
                 result = gate.decide(review(), diff(path))
                 self.assertFalse(result["approve"])
-                self.assertEqual(result["risk"]["safety_score"], 59)
+                self.assertEqual(result["risk"]["safety_score"], 69)
                 self.assertEqual(result["risk"]["label"], "risk:high")
 
     def test_cross_package_production_changes_have_medium_floor(self):
@@ -278,6 +297,7 @@ class ChangeRiskTest(unittest.TestCase):
         self.assertIn("### Safety assessment", section)
         self.assertIn("Review score (findings and coverage) | 100/100", section)
         self.assertIn("Change safety (impact of the change) | 89/100", section)
+        self.assertIn("**MODERATE**", section)
         self.assertIn("Small compatible change", section)
         self.assertIn("Model change safety before CI adjustments: 100/100", section)
         self.assertIn("Auto-approval content checks:** Not eligible.", section)
