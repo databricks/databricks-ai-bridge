@@ -57,6 +57,7 @@ def _render_detail(pipeline: dict) -> None:
 
 
 def _render_run(run: dict) -> None:
+    stats = field(run, "stats") or {}
     render.detail(
         "Dreamer Run",
         field(run, "name") or "—",
@@ -64,6 +65,10 @@ def _render_run(run: dict) -> None:
             "Resource name": field(run, "name"),
             "State": field(run, "state"),
             "Error": field(run, "error"),
+            "Actors succeeded": field(stats, "actors_succeeded"),
+            "Actors skipped": field(stats, "actors_skipped"),
+            "Actors failed": field(stats, "actors_failed"),
+            "Entries written": field(stats, "entries_written"),
             "Created": timefmt.absolute(field(run, "create_time")),
             "Finished": timefmt.absolute(field(run, "end_time")),
         },
