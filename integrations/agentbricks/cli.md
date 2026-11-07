@@ -775,7 +775,8 @@ agentbricks --profile dogfood memory pipeline runs get \
 
 `NAME` must be `memory-pipelines/<pipeline-id>/runs/<numeric-run-id>`. This command calls
 `GET /api/2.0/agents/{NAME}` using the selected profile and the complete run resource name.
-Text output renders pipeline run details; global `--output json` returns the native
+Text output renders pipeline run details, including actors succeeded, skipped, and failed and
+entries written from the run's `stats`; global `--output json` returns the native
 `PipelineRun` response. It no longer invokes `databricks jobs get-run` or returns the Jobs JSON schema.
 
 ##### `agentbricks memory pipeline run`
