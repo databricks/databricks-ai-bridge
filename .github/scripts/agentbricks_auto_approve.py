@@ -1,8 +1,7 @@
 """Decide whether AgentBricksReviewer may auto-approve a PR.
 
-The decision uses only facts the workflow can check itself: the posted review's
-score and finding sections, and the files and lines the diff changes. It never
-takes the model's word that a PR is safe to approve.
+The decision combines the review's findings/coverage score and independent
+change-risk classification with deterministic path, component, and size checks.
 
 Usage: agentbricks_auto_approve.py --review REVIEW --diff DIFF [--min-score N] [--max-lines N]
 Prints a JSON object {"approve": bool, "reasons": [...]}; reasons explain a refusal.
@@ -16,12 +15,17 @@ import re
 import sys
 from pathlib import Path, PurePosixPath
 
-MERGE_SAFETY = re.compile(
-    r"\*\*Merge safety:\*\*\s*(?P<score>\d+)/100\s*\((?P<risk>[A-Z ]+)\)"
+REVIEW_SCORE = re.compile(
+    r"\*\*Review score:\*\*\s*(?P<score>\d+)/100"
     r"\s*·\s*reviewers:\s*(?P<delivered>\d+)/(?P<dispatched>\d+)"
 )
 EMPTY_SECTIONS = ("Blocking issues", "Security vulnerabilities", "Uncertain findings")
 HEADING = re.compile(r"^#{1,6}\s+(?P<title>.+?)\s*$", re.MULTILINE)
+CHANGE_RISK = re.compile(r"^\*\*Change risk:\*\*[ \t]*(?P<risk>[^\r\n]*)$", re.MULTILINE)
+RISK_RATIONALE = re.compile(r"^\*\*Risk rationale:\*\*[ \t]*(?P<text>[^\r\n]*)$", re.MULTILINE)
+RISK_LEVELS = ("low", "medium", "high")
+RISK_NAMES = {"medium": "MODERATE"}
+RISK_VALUES = {"LOW": "low", "MODERATE": "medium", "HIGH": "high", "UNRATED": "unrated"}
 
 # Only the agentbricks integration (its code, tests, and docs) and docs elsewhere can
 # be auto-approved; the other packages ship on their own and need a human.
@@ -83,17 +87,78 @@ def section_body(review: str, title: str) -> str | None:
     return None
 
 
-def decide(review: str, diff: str, min_score: int = 95, max_lines: int = 200) -> dict:
+def assess_change_risk(review: str, files: list[str], lines: int, diff: str = "") -> dict:
+    """Keep contextual model assessment separate from findings, with risk floors."""
+    matches = list(CHANGE_RISK.finditer(review))
+    rationales = list(RISK_RATIONALE.finditer(review))
+    reasons: list[str] = []
+    level = "unrated"
+    if len(matches) != 1:
+        reasons.append("the review must contain exactly one change-risk assessment")
+    elif matches[0].group("risk").strip().upper() not in RISK_VALUES:
+        reasons.append("change risk must be LOW, MODERATE, HIGH, or UNRATED")
+    else:
+        level = RISK_VALUES[matches[0].group("risk").strip().upper()]
+        if level == "unrated":
+            reasons.append("the reviewer could not assess change risk")
+    model_level = level
+    if len(rationales) != 1 or not rationales[0].group("text").strip():
+        level = "unrated"
+        reasons.append("the review must contain exactly one non-empty risk rationale")
+
+    def floor(minimum: str, reason: str):
+        nonlocal level
+        if level != "unrated" and RISK_LEVELS.index(minimum) > RISK_LEVELS.index(level):
+            level = minimum
+        reasons.append(reason)
+
+    if not files:
+        floor("high", "no changed paths are available")
+    components = set()
+    for path in files:
+        pure = PurePosixPath(path)
+        protected = protected_reason(path)
+        if protected and "outside integrations/agentbricks/" not in protected:
+            floor("high", protected)
+        if pure.suffix.lower() in DOC_SUFFIXES or "tests" in pure.parts:
+            continue
+        parts = set(pure.parts)
+        if parts & {"auth", "oauth", "credentials", "secrets", "migrations", "deployment", "deploy", "release", "releases"} or pure.stem.startswith("release_"):
+            floor("high", f"{path} touches security, migration, deployment, or release behavior")
+        elif pure.name == "__init__.py" or pure.stem.endswith(("_store", "_store_client")) or parts & {"cli", "api", "runtime", "databricks_agentkit", "checkpoint", "checkpoints", "storage", "memory", "sessions"}:
+            floor("medium", f"{path} touches a public interface, runtime, or persisted state")
+        if len(pure.parts) >= 2 and pure.parts[0] == "integrations":
+            components.add(pure.parts[1])
+        elif path.startswith("src/databricks_ai_bridge/"):
+            components.add("core")
+        elif path.startswith("databricks_mcp/"):
+            components.add("mcp")
+    if len(components) > 1:
+        floor("medium", "production changes span multiple packages: " + ", ".join(sorted(components)))
+    if lines > 1000 or len(files) > 30:
+        floor("high", "the change exceeds 1000 lines or 30 paths")
+    elif len(files) > 10:
+        floor("medium", "the change exceeds 10 paths")
+    if "GIT binary patch" in diff or re.search(r"^Binary files .+ differ$", diff, re.MULTILINE):
+        floor("high", "binary changes need human review")
+    return {
+        "level": level, "label": f"risk:{level}", "model_level": model_level,
+        "reasons": list(dict.fromkeys(reasons)),
+    }
+
+
+def decide(review: str, diff: str, min_score: int = 95, max_lines: int = 200,
+           paths: list[str] | None = None) -> dict:
     reasons: list[str] = []
 
-    summary = MERGE_SAFETY.search(review)
+    summary = REVIEW_SCORE.search(review)
     if not summary:
-        reasons.append("the review has no merge safety line")
+        reasons.append("the review has no review score line")
     else:
         score = int(summary.group("score"))
         delivered, dispatched = int(summary.group("delivered")), int(summary.group("dispatched"))
         if score < min_score:
-            reasons.append(f"merge safety {score}/100 is below {min_score}")
+            reasons.append(f"review score {score}/100 is below {min_score}")
         if delivered < 2 or delivered != dispatched:
             reasons.append(f"only {delivered} of {dispatched} reviewers delivered (need all, and at least 2)")
 
@@ -105,13 +170,45 @@ def decide(review: str, diff: str, min_score: int = 95, max_lines: int = 200) ->
             reasons.append(f'"{title}" is not empty')
 
     files, lines = changed_files_and_lines(diff)
+    if paths is not None:
+        files = paths
     if not files:
         reasons.append("the diff changes no files")
     if lines > max_lines:
         reasons.append(f"{lines} changed lines is over the {max_lines}-line limit")
     reasons.extend(reason for path in files if (reason := protected_reason(path)))
+    risk = assess_change_risk(review, files, lines, diff)
+    if risk["level"] != "low":
+        reasons.append(f"change risk is {risk['level']}; automatic approval requires low risk")
 
-    return {"approve": not reasons, "reasons": reasons}
+    return {"approve": not reasons, "reasons": reasons, "risk": risk}
+
+
+def safety_section(review: str, decision: dict) -> str:
+    risk = decision["risk"]
+    summary = REVIEW_SCORE.search(review)
+    review_score = f"{summary.group('score')}/100" if summary else "unavailable"
+    rationale = re.search(
+        r"^\*\*Risk rationale:\*\*\s*(.*?)(?=\n\s*\n|\n## |\Z)", review,
+        re.MULTILINE | re.DOTALL,
+    )
+    lines = [
+        "### Safety assessment", "",
+        "| Assessment | Result |", "|---|---|",
+        f"| Review score (findings and coverage) | {review_score} |",
+        f"| Change risk | **{RISK_NAMES.get(risk['level'], risk['level'].upper())}** · `{risk['label']}` |", "",
+        "**Context:** " + (rationale[1].strip() if rationale else "The reviewer provided no change-risk rationale."),
+    ]
+    if risk["model_level"] != risk["level"]:
+        model_name = RISK_NAMES.get(risk["model_level"], risk["model_level"].upper())
+        lines += ["", f"Model change risk before CI adjustments: {model_name}."]
+    if risk["reasons"]:
+        lines += ["", "**CI risk factors:**"] + ["- " + reason for reason in risk["reasons"]]
+    lines += ["", "**Auto-approval content checks:** " + ("Passed." if decision["approve"] else "Not eligible.")]
+    if decision["reasons"]:
+        lines += ["- " + reason for reason in decision["reasons"]]
+    lines += ["", "Final approval also requires automation to be enabled, an eligible author, a non-draft PR, and the reviewed head to remain current."]
+    return "\n".join(lines) + "\n"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -120,13 +217,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--diff", required=True, type=Path)
     parser.add_argument("--min-score", type=int, default=95)
     parser.add_argument("--max-lines", type=int, default=200)
+    parser.add_argument("--paths", type=Path, help="JSON changed paths from the frozen Git comparison")
+    parser.add_argument("--safety-section", type=Path, help="Write the safety section for the PR comment")
     args = parser.parse_args(argv)
+    review = args.review.read_text(encoding="utf-8")
     result = decide(
-        args.review.read_text(encoding="utf-8"),
+        review,
         args.diff.read_text(encoding="utf-8", errors="replace"),
         min_score=args.min_score,
         max_lines=args.max_lines,
+        paths=json.loads(args.paths.read_text()) if args.paths else None,
     )
+    if args.safety_section:
+        args.safety_section.write_text(safety_section(review, result))
     json.dump(result, sys.stdout)
     sys.stdout.write("\n")
     return 0

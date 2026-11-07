@@ -47,7 +47,7 @@ run-name: "AgentBricksReviewer #${{ github.event.pull_request.number || github.e
 #
 # Auto-approval (off unless the variable AI_REVIEW_AUTO_APPROVE is "true"):
 #   approves the reviewed commit when .github/scripts/agentbricks_auto_approve.py
-#   passes (merge safety >= AI_REVIEW_AUTO_APPROVE_MIN_SCORE, default 95; every
+#   passes (review score >= AI_REVIEW_AUTO_APPROVE_MIN_SCORE, default 95; every
 #   reviewer delivered; no blocking, security, or uncertain findings; at most
 #   AI_REVIEW_AUTO_APPROVE_MAX_LINES changed lines, default 200; only files under
 #   integrations/agentbricks/ or .md/.rst docs; no CI, review rule, dependency,
@@ -106,7 +106,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      issues: read
+      issues: write
       pull-requests: write
       # Comment- and dispatch-triggered runs attach to the default branch, so they
       # post a commit status to appear in the PR's checks list.
@@ -618,6 +618,18 @@ jobs:
             exit 1
           fi
 
+      - name: Assess change risk
+        if: steps.reviewer.outputs.review_ready == 'true'
+        env:
+          MIN_SCORE: ${{ vars.AI_REVIEW_AUTO_APPROVE_MIN_SCORE || '95' }}
+          MAX_LINES: ${{ vars.AI_REVIEW_AUTO_APPROVE_MAX_LINES || '200' }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/agentbricks_auto_approve.py \
+            --review /tmp/review.txt --diff /tmp/pr_diff.txt --paths /tmp/pr_changed_paths.json \
+            --min-score "$MIN_SCORE" --max-lines "$MAX_LINES" \
+            --safety-section /tmp/risk_summary.md > /tmp/pr_review_decision.json
+
       - name: Post review comment
         if: steps.reviewer.outputs.review_ready == 'true'
         env:
@@ -628,7 +640,11 @@ jobs:
           set -euo pipefail
           {
             echo "<!-- agentbricks-reviewer-sha: ${HEAD_SHA} -->"
+            echo "<!-- agentbricks-reviewer-risk-sha: ${HEAD_SHA} -->"
+            echo "<!-- agentbricks-reviewer-risk-label: $(jq -r .risk.label /tmp/pr_review_decision.json) -->"
             echo "## AgentBricksReviewer"
+            echo ""
+            cat /tmp/risk_summary.md
             echo ""
             cat /tmp/review.txt
             echo ""
@@ -636,6 +652,13 @@ jobs:
             echo "<sub>Automated review by AgentBricksReviewer for \`${HEAD_SHA:0:7}\` · [workflow run](${RUN_URL}) · comment \`/review\` to re-run</sub>"
           } > /tmp/comment.md
           gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/comment.md
+
+      - name: Label reviewed change risk
+        if: steps.reviewer.outputs.review_ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .github/scripts/agentbricks_risk_labels.py --repo "$REPO" --pr "$PR_NUMBER"
 
       - name: Auto-approve if low risk
         if: steps.reviewer.outputs.review_ready == 'true' && vars.AI_REVIEW_AUTO_APPROVE == 'true'
@@ -647,9 +670,8 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          # The gate reads the posted review and the diff; it never asks the model.
-          decision="$(python3 .github/scripts/agentbricks_auto_approve.py \
-            --review /tmp/review.txt --diff /tmp/pr_diff.txt --min-score "$MIN_SCORE" --max-lines "$MAX_LINES")"
+          # Use the same assessment shown in the comment and risk label.
+          decision="$(cat /tmp/pr_review_decision.json)"
           mapfile -t reasons < <(jq -r '.reasons[]' <<<"$decision")
           pr="$(gh api "repos/$REPO/pulls/$PR_NUMBER")"
           author="$(jq -r .user.login <<<"$pr")"
@@ -665,7 +687,7 @@ jobs:
             exit 0
           fi
           body="<!-- agentbricks-reviewer-approval -->
-          Auto-approved by AgentBricksReviewer for \`${HEAD_SHA:0:7}\`: merge safety at least ${MIN_SCORE}, every reviewer delivered, no blocking, security, or uncertain findings, at most ${MAX_LINES} changed lines, and no CI, dependency, or credential files. Pushing new commits dismisses this approval. [Workflow run](${RUN_URL})"
+          Auto-approved by AgentBricksReviewer for \`${HEAD_SHA:0:7}\`: low change risk, review score at least ${MIN_SCORE}, every reviewer delivered, no blocking, security, or uncertain findings, at most ${MAX_LINES} changed lines, and no CI, dependency, or credential files. Pushing new commits dismisses this approval. [Workflow run](${RUN_URL})"
           gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --silent \
             -f event=APPROVE -f commit_id="$HEAD_SHA" -f body="$body" \
             && echo "Approved ${HEAD_SHA:0:7}." \
@@ -724,9 +746,26 @@ jobs:
     runs-on: ${{ fromJSON(vars.AI_REVIEW_RUNS_ON || '{"group":"databricks-protected-runner-group","labels":"linux-ubuntu-latest"}') }}
     timeout-minutes: 5
     permissions:
+      contents: read
       pull-requests: write
+      issues: write
     steps:
+      - name: Check out trusted label reconciler
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Clear risk labels for unreviewed commits
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python3 .github/scripts/agentbricks_risk_labels.py --repo "$REPO" --pr "$PR_NUMBER"
+
       - name: Dismiss approvals of earlier commits
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
