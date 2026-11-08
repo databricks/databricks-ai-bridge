@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import functools
+import http.server
 import json
 import os
 import pathlib
 import subprocess
 import sys
+import threading
 import types
 
 import pytest
@@ -16,10 +18,11 @@ from deploy_test import _DeployApi, _DeployRunner, _real_deploy_context
 
 from databricks_agentbricks import errors
 from databricks_agentbricks.cli import deploy as deploy_mod
-from databricks_agentbricks.clients.app_probe import ProbeOutcome, ProbeResult
+from databricks_agentbricks.clients.app_probe import AppProbe, ProbeOutcome, ProbeResult
 from databricks_agentbricks.projects.agent_project import AgentProject
 from databricks_agentbricks.services import deploy_service as deploy_service_mod
 from databricks_agentbricks.services.deployment import deploy_state
+from databricks_agentbricks.services.invoke import auth as invoke_auth_mod
 
 _APP = "agent-bricks-demo"
 # Larger than Linux's maximum pid, so no process can have it.
@@ -789,3 +792,131 @@ def test_deploy_help_and_reference_say_deploy_waits_for_the_answer():
     assert "Deploy finishes once the agent answers requests." in " ".join(result.output.split())
     assert "Deploy finishes once the agent answers requests." in reference
     assert "0 deployed and answering" in reference
+
+
+# --- readiness with a pat-labeled profile (a Databricks Sandbox's OAuth token) -------------------
+
+
+class _ScriptedApp(http.server.BaseHTTPRequestHandler):
+    statuses: list[int] = [200]
+    seen: list[str | None] = []
+
+    def do_GET(self) -> None:  # noqa: N802 - http.server's handler name
+        type(self).seen.append(self.headers.get("Authorization"))
+        statuses = type(self).statuses
+        self.send_response(statuses.pop(0) if len(statuses) > 1 else statuses[0])
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002 - base signature
+        pass
+
+
+@pytest.fixture
+def pat_app(monkeypatch: pytest.MonkeyPatch):
+    """A local App behind the real probe, called with a ``pat``-labeled profile's token.
+
+    Call it with the statuses the App answers, in order (the last repeats); it returns the
+    ``Authorization`` headers the App saw.
+    """
+    httpd = http.server.HTTPServer(("127.0.0.1", 0), _ScriptedApp)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    stub_url = f"http://127.0.0.1:{httpd.server_address[1]}"
+    config = types.SimpleNamespace(
+        auth_type="pat", authenticate=lambda: {"Authorization": "Bearer sandbox-oauth"}
+    )
+    monkeypatch.setattr(
+        invoke_auth_mod, "_workspace_client", lambda profile: types.SimpleNamespace(config=config)
+    )
+
+    class LocalAppProbe(AppProbe):
+        def probe(self, url: str) -> ProbeResult:
+            return super().probe(stub_url)
+
+    monkeypatch.setattr(deploy_mod, "AppProbe", LocalAppProbe)
+    monkeypatch.setattr(deploy_service_mod, "_READY_POLL_S", 0.0)
+
+    def script(*statuses: int) -> list[str | None]:
+        _ScriptedApp.statuses = list(statuses)
+        _ScriptedApp.seen = []
+        return _ScriptedApp.seen
+
+    try:
+        yield script
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_deploy_with_a_pat_labeled_token_the_app_accepts_waits_for_it(
+    project: pathlib.Path, monkeypatch: pytest.MonkeyPatch, pat_app
+):
+    seen = pat_app(502, 502, 200)
+
+    result = _deploy(project, monkeypatch)
+
+    assert result.exit_code == 0, result.output
+    assert seen == ["Bearer sandbox-oauth"] * 3
+    out = result.stdout
+    assert out.index("Agent answered") < out.index("Deployed agent 'agent-bricks-demo'")
+    assert "Couldn't check" not in result.stderr
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_deploy_with_a_pat_the_app_rejects_notes_and_succeeds(
+    project: pathlib.Path, monkeypatch: pytest.MonkeyPatch, pat_app, status: int
+):
+    pat_app(status)
+
+    result = _deploy(project, monkeypatch)
+
+    assert result.exit_code == 0, result.output
+    assert f"Couldn't check the agent answers: HTTP {status}." in result.stderr
+    assert "Deployed agent 'agent-bricks-demo'" in result.stdout
+
+
+@pytest.mark.parametrize(("status", "ready"), [(200, True), (401, None), (403, None)])
+def test_json_deploy_with_a_pat_labeled_token_reports_ready(
+    project: pathlib.Path, monkeypatch: pytest.MonkeyPatch, json_mode, pat_app, status, ready
+):
+    pat_app(status)
+
+    result = _deploy(project, monkeypatch, output="json")
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["ready"] is ready
+
+
+def test_wait_with_a_pat_labeled_token_returns_75_while_502_then_0(
+    project: pathlib.Path, monkeypatch: pytest.MonkeyPatch, pat_app
+):
+    monkeypatch.setattr(deploy_mod, "_databricks", _app_runner([_SUCCEEDED_APP], []))
+    pat_app(502)
+
+    booting = _wait(project, _APP, "--timeout", "0")
+
+    assert booting.exit_code == 75
+    assert booting.stdout.startswith("still deploying: Waiting for the agent to answer, ")
+
+    pat_app(200)
+
+    answered = _wait(project, _APP, "--timeout", "0")
+
+    assert answered.exit_code == 0, answered.output
+    assert "Deployed agent 'agent-bricks-demo'" in answered.stdout
+    assert "Couldn't check" not in answered.stderr
+
+
+@pytest.mark.parametrize(("status", "ready"), [(200, True), (401, None), (403, None)])
+def test_wait_with_a_pat_labeled_token_reports_ready(
+    project: pathlib.Path, monkeypatch: pytest.MonkeyPatch, json_mode, pat_app, status, ready
+):
+    monkeypatch.setattr(deploy_mod, "_databricks", _app_runner([_SUCCEEDED_APP], []))
+    pat_app(status)
+
+    result = _wait(project, _APP, "--timeout", "0", output="json")
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["ready"] is ready
+    noted = f"Couldn't check the agent answers: HTTP {status}." in result.stderr
+    assert noted is (ready is None)
