@@ -367,7 +367,12 @@ agentbricks --profile <profile> deploy my-agent
 ```
 
 Use the URL `agentbricks dev` prints (port 8000, or `--app-port`). Agents on different ports can run
-side by side. Requests can fail with HTTP 500 for a few seconds while the app starts.
+side by side. Requests can fail with HTTP 500 for a few seconds while the app starts. Before
+starting, `agentbricks dev` checks `agent.toml` and lists every problem it finds. A pyproject
+project's environment is built with `uv sync`, so only its declared dependencies are installed.
+
+A hand-written `DurableAgentServer` that uses no framework adapter sets `framework = "custom"` (or
+omits `framework`) with `server = "agentbricks"` in `agent.toml`.
 
 Use `--framework openai` for OpenAI Agents. Templates keep agent code separate from the runtime
 adapter and declare default Session and Memory Store bindings in `agent.toml`.

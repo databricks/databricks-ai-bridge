@@ -79,8 +79,12 @@ class DevPlan:
 
     preview: DevPreview
     entry_point: pathlib.Path
+    # Build the environment through `apps run-local --prepare-environment` (no pyproject.toml).
     prepare_environment: bool
     app_port: int
+    # Build it with `uv sync` first instead, so only the project's declared dependencies are
+    # installed (run-local's prepare also installs the Apps runtime's preinstalled packages).
+    install_dependencies: bool = False
 
 
 class DevService:
@@ -90,6 +94,7 @@ class DevService:
     It does not own output or a workspace client; those concerns are supplied by the CLI through
     ``LocalTracingClient`` and ``AppsClient``. ``port_in_use`` reports whether a local port is taken, and
     ``free_port`` picks one for the app behind run-local's proxy, so tests need no real sockets.
+    ``uv_sync`` builds a pyproject project's environment.
     """
 
     def __init__(
@@ -99,12 +104,14 @@ class DevService:
         local_tracing: LocalTracingClient,
         port_in_use: Callable[[int], bool],
         free_port: Callable[[], int],
+        uv_sync: Callable[[pathlib.Path], None],
     ) -> None:
         self._project_resolver = project_resolver
         self._apps_client = apps_client
         self._local_tracing = local_tracing
         self._port_in_use = port_in_use
         self._free_port = free_port
+        self._uv_sync = uv_sync
 
     @contextmanager
     def prepare(self, request: DevRequest) -> Iterator[DevPlan]:
@@ -147,9 +154,10 @@ class DevService:
         try:
             # Repeat runs reuse an existing environment; an explicit request overrides that
             # auto-detection exactly as the old Click command did.
-            prepare_environment = request.prepare_environment
-            if prepare_environment is None:
-                prepare_environment = not (source_dir / ".venv").exists()
+            build = request.prepare_environment
+            if build is None:
+                build = not (source_dir / ".venv").exists()
+            uses_pyproject = (source_dir / "pyproject.toml").is_file()
 
             local_env = dict(tracing_env)
             if memory_store:
@@ -177,10 +185,11 @@ class DevService:
             yield DevPlan(
                 preview=preview,
                 entry_point=entry_point,
-                prepare_environment=prepare_environment,
+                prepare_environment=build and not uses_pyproject,
                 # The user-facing port is run-local's proxy; the app gets a free port behind it so
                 # concurrent runs don't collide on run-local's default app or proxy port.
                 app_port=self._free_port(),
+                install_dependencies=build and uses_pyproject,
             )
         finally:
             # Keep cleanup independent: a failure removing the manifest must not orphan the tracing
@@ -203,6 +212,8 @@ class DevService:
         ``on_ready`` is called once the agent answers on its port, not when the command starts.
         ``quiet_status`` gives the line to show while run-local's output is quiet before then.
         """
+        if plan.install_dependencies:
+            self._uv_sync(plan.preview.source_dir)
         self._apps_client.run_local(
             plan.preview.source_dir,
             plan.entry_point.name,

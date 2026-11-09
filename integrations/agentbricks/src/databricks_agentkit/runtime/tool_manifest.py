@@ -288,8 +288,13 @@ def _tool(value: object) -> ToolRecord:
     return record
 
 
-def parse_tools(document: Mapping[str, Any], *, expected_framework: str) -> tuple[ToolRecord, ...]:
-    """Parse managed bindings from an already loaded manifest snapshot."""
+def parse_tools(
+    document: Mapping[str, Any], *, expected_framework: str | None
+) -> tuple[ToolRecord, ...]:
+    """Parse managed bindings from an already loaded manifest snapshot.
+
+    ``expected_framework`` is None for a hand-written agent whose agent.toml omits the framework.
+    """
     if document.get("schema_version") != 1:
         raise RuntimeError("Unsupported agent.toml schema; expected schema_version = 1.")
     agent = document.get("agent")

@@ -24,7 +24,8 @@ from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 
 from databricks_agentbricks.errors import AgentCliError
-from databricks_agentbricks.projects.agent_project import AgentProject
+from databricks_agentbricks.projects.agent_project import manifest_problems
+from databricks_agentbricks.projects.types import CUSTOM_FRAMEWORK
 from databricks_agentbricks.services.deployment.names import (
     _MAX_DEPLOYMENT_NAME_LEN,
     _prefixed_name,
@@ -209,43 +210,21 @@ def _agent_manifest(
         )
 
     assert result.data is not None
-    if result.data.get("schema_version") != 1:
-        detail = f"{path} must declare schema_version = 1."
-        return (
-            _check("agent_manifest", False, detail),
-            _check(
-                "agentbricks_server", False, "Cannot verify the server without a valid agent.toml."
-            ),
-            None,
-        )
     agent = result.data.get("agent")
-    if not isinstance(agent, dict):
-        detail = f"{path} must declare an [agent] table."
-        return (
-            _check("agent_manifest", False, detail),
-            _check(
-                "agentbricks_server", False, "Cannot verify the server without a valid agent.toml."
-            ),
-            None,
-        )
-    framework = _framework(agent.get("framework"))
-    if framework is None:
-        detail = f"{path} must declare agent.framework as langgraph or openai."
-        return (
-            _check("agent_manifest", False, detail),
-            _check(
-                "agentbricks_server", False, "Cannot verify the server without a valid agent.toml."
-            ),
-            None,
-        )
+    agent = agent if isinstance(agent, dict) else {}
     server = agent.get("server")
-    if server not in {"agentbricks", "custom"}:
-        detail = f"{path} must declare agent.server as agentbricks or custom."
+    framework = _framework(agent.get("framework"))
+    unverified_server = _check(
+        "agentbricks_server", False, "Cannot verify the server without a valid agent.toml."
+    )
+    # The same field checks every manifest-consuming command runs, so the messages never drift.
+    problems = manifest_problems(result.data)
+    if any(problem.field in {"schema_version", "agent", "agent.server"} for problem in problems):
         return (
-            _check("agent_manifest", False, detail),
             _check(
-                "agentbricks_server", False, "Cannot verify the server without a valid agent.toml."
+                "agent_manifest", False, f"Invalid agent.toml: {'; '.join(map(str, problems))}."
             ),
+            unverified_server,
             framework,
         )
 
@@ -258,25 +237,25 @@ def _agent_manifest(
             else "agent.server is custom; Agent Bricks onboarding requires agentbricks."
         ),
     )
-    # The bounded read above protects this authoritative loader from unbounded or escaping input.
-    # Reuse the same validation as every manifest-consuming Agent Bricks command so malformed tools,
-    # stores, deployment names, and other semantic errors cannot produce a false pass.
-    try:
-        project = AgentProject.load(root)
-    except AgentCliError as exc:
+    if problems:
         return (
-            _check("agent_manifest", False, f"Invalid agent.toml: {exc.message}"),
+            _check(
+                "agent_manifest", False, f"Invalid agent.toml: {'; '.join(map(str, problems))}."
+            ),
             server_check,
             framework,
         )
+    if framework is None:
+        # `framework = "custom"` or omitted: a hand-written agent on the Agent Bricks server.
+        return (
+            _check("agent_manifest", True, "Valid schema v1 manifest for a custom agent."),
+            server_check,
+            CUSTOM_FRAMEWORK,
+        )
     return (
-        _check(
-            "agent_manifest",
-            True,
-            f"Valid schema v1 manifest for {project.framework.value}.",
-        ),
+        _check("agent_manifest", True, f"Valid schema v1 manifest for {framework}."),
         server_check,
-        project.framework.value,
+        framework,
     )
 
 
@@ -405,6 +384,15 @@ def _dependency_check(
             continue
         extras = {str(canonicalize_name(extra)) for extra in requirement.extras}
         agentbricks_requirements.append((requirement, extras))
+    if framework == CUSTOM_FRAMEWORK:
+        # A custom agent uses only the runtime, so any extra (or none) will do.
+        return _check(
+            "agentbricks_dependency",
+            bool(agentbricks_requirements),
+            "Project depends on databricks-agentbricks."
+            if agentbricks_requirements
+            else "pyproject.toml needs a databricks-agentbricks project dependency.",
+        )
     if not agentbricks_requirements:
         return _check(
             "agentbricks_dependency",
@@ -1019,6 +1007,10 @@ def _source_checks(
             False,
             f"Cannot select an Agent Bricks framework adapter because the framework is unknown.{suffix}",
         )
+    elif framework == CUSTOM_FRAMEWORK:
+        adapter = _check(
+            "framework_adapter", True, f"Custom agent; no framework adapter needed.{suffix}"
+        )
     elif framework in evidence.adapters:
         adapter = _check(
             "framework_adapter",
@@ -1074,7 +1066,7 @@ def inspect_project(directory: pathlib.Path) -> dict[str, Any]:
         # Only the name is wrong: deploying under a name that fits records it, no migration needed.
         next_step = name_fix
     elif not onboarded:
-        framework_option = framework or "<langgraph|openai>"
+        framework_option = framework if framework in _SUPPORTED_FRAMEWORKS else "<langgraph|openai>"
         next_step = f"agentbricks init --framework {framework_option} --existing <directory>"
     return {
         "directory": str(root),

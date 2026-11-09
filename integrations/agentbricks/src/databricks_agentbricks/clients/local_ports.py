@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import http.client
 import socket
 import sys
 
@@ -11,6 +12,7 @@ import sys
 _APP_BIND_HOST = "0.0.0.0"
 _LOOPBACK_HOSTS = ("127.0.0.1", "::1")
 _CONNECT_TIMEOUT_S = 0.5
+_ROUTE_PROBE_TIMEOUT_S = 1.0
 
 
 def port_in_use(port: int) -> bool:
@@ -35,6 +37,21 @@ def port_in_use(port: int) -> bool:
 def accepts_connections(port: int) -> bool:
     """Whether a server is answering on ``port`` over IPv4 or IPv6 loopback (i.e. at ``localhost``)."""
     return any(_accepts_connections(host, port) for host in _LOOPBACK_HOSTS)
+
+
+def route_exists(port: int, path: str) -> bool | None:
+    """Whether the local app serves ``path``: a ``GET`` that answers anything but 404.
+
+    A POST-only route answers 405, so the probe has no side effects. None if nothing answered.
+    """
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=_ROUTE_PROBE_TIMEOUT_S)
+    try:
+        connection.request("GET", path)
+        return connection.getresponse().status != 404
+    except (OSError, http.client.HTTPException):
+        return None
+    finally:
+        connection.close()
 
 
 def free_port() -> int:

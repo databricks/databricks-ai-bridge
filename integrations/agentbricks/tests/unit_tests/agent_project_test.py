@@ -17,8 +17,9 @@ from databricks_agentbricks.projects.agent_project import (
     ToolSource,
     ToolSpec,
     default_store_name,
+    manifest_problems,
 )
-from databricks_agentbricks.projects.types import AgentFramework, AgentServer
+from databricks_agentbricks.projects.types import CUSTOM_FRAMEWORK, AgentFramework, AgentServer
 from databricks_agentkit.runtime import tool_manifest
 from databricks_agentkit.runtime.tool_manifest import ToolManifestError, load_tools
 
@@ -637,13 +638,12 @@ source = { kind = "python", entrypoint = "agent.tools.lookup_ticket:lookup_ticke
     with pytest.raises(AgentCliError) as error:
         AgentProject.load(tmp_path)
 
-    assert (
-        error.value.message == "Python tools are code-first and cannot be declared in agent.toml."
+    assert error.value.message.startswith(
+        "agent.toml: tools[0]: Python tools are code-first and cannot be declared in agent.toml."
     )
-    assert error.value.hint is not None
-    assert "Remove this entry" in error.value.hint
-    assert "framework-native agent code" in error.value.hint
-    assert "remain active" not in error.value.hint
+    assert "Remove this entry" in error.value.message
+    assert "framework-native agent code" in error.value.message
+    assert "remain active" not in error.value.message
 
 
 def test_write_is_atomic_when_replace_fails(tmp_path: pathlib.Path, monkeypatch):
@@ -743,19 +743,25 @@ def test_load_and_create_share_unsupported_selection_validation(
     with pytest.raises(AgentCliError) as loaded:
         AgentProject.load(tmp_path)
 
-    assert (
-        loaded.value.message
-        == created.value.message
-        == (f"Unsupported Agent Bricks {selection} 'unsupported'.")
+    assert created.value.message == f"Unsupported Agent Bricks {selection} 'unsupported'."
+    assert loaded.value.message.startswith(
+        f'agent.toml: agent.{selection}: "unsupported" is not valid'
     )
-    assert loaded.value.hint == created.value.hint
     assert path.read_text() == before
 
 
-@pytest.mark.parametrize("selection", ["framework", "server"])
-@pytest.mark.parametrize("raw", [None, '""', "42"])
+@pytest.mark.parametrize(
+    ("selection", "raw", "expected"),
+    [
+        ("server", None, "agent.server: missing; use agentbricks or custom"),
+        ("server", '""', 'agent.server: "" is not valid; use agentbricks or custom'),
+        ("server", "42", "agent.server: 42 is not valid; use agentbricks or custom"),
+        ("framework", '""', 'agent.framework: "" is not valid; use langgraph, openai, or custom'),
+        ("framework", "42", "agent.framework: 42 is not valid; use langgraph, openai, or custom"),
+    ],
+)
 def test_required_project_selections_name_agent_manifest(
-    tmp_path: pathlib.Path, selection: str, raw: str | None
+    tmp_path: pathlib.Path, selection: str, raw: str | None, expected: str
 ):
     values = {"framework": '"langgraph"', "server": '"agentbricks"', selection: raw}
     _write_manifest(
@@ -766,7 +772,82 @@ def test_required_project_selections_name_agent_manifest(
 
     with pytest.raises(AgentCliError) as error:
         AgentProject.load(tmp_path)
-    assert error.value.message == f"agent.toml must declare agent.{selection}."
+    assert error.value.message == f"agent.toml: {expected}"
+
+
+def test_load_lists_every_manifest_problem_in_one_error(tmp_path: pathlib.Path):
+    _write_manifest(
+        tmp_path,
+        'schema_version = 2\n\n[agent]\nframework = "durable"\ndeployment_name = ""\n'
+        '\n[[tools]]\nid = "lookup"\n',
+    )
+
+    with pytest.raises(AgentCliError) as error:
+        AgentProject.load(tmp_path)
+
+    assert error.value.message.splitlines() == [
+        "agent.toml has 5 problems:",
+        "  • schema_version: 2 is not supported; use 1",
+        '  • agent.framework: "durable" is not valid; use langgraph, openai, or custom',
+        "  • agent.server: missing; use agentbricks or custom",
+        "  • agent.deployment_name: must be a non-empty string",
+        "  • tools[0]: Each agent.toml tool must declare a source table.",
+    ]
+
+
+def test_manifest_problems_name_allowed_values_from_the_enums():
+    problems = {
+        problem.field: problem.message
+        for problem in manifest_problems({"agent": {"framework": "durable", "server": "fastapi"}})
+    }
+
+    assert set(problems) == {"schema_version", "agent.framework", "agent.server"}
+    assert problems["schema_version"] == "missing; use 1"
+    for value in [*(framework.value for framework in AgentFramework), CUSTOM_FRAMEWORK]:
+        assert value in problems["agent.framework"]
+    for value in (server.value for server in AgentServer):
+        assert value in problems["agent.server"]
+
+
+def test_manifest_problems_report_a_missing_agent_table():
+    assert [str(p) for p in manifest_problems({"schema_version": 1})] == [
+        "agent: missing; add an [agent] table with framework and server"
+    ]
+
+
+@pytest.mark.parametrize("framework_line", ['framework = "custom"\n', ""])
+def test_load_accepts_a_framework_less_agentbricks_server(
+    tmp_path: pathlib.Path, framework_line: str
+):
+    _write_manifest(
+        tmp_path, f'schema_version = 1\n\n[agent]\n{framework_line}server = "agentbricks"\n'
+    )
+
+    project = AgentProject.load(tmp_path)
+
+    assert project.framework is None
+    assert project.server is AgentServer.AGENTBRICKS
+
+
+@pytest.mark.parametrize(
+    ("framework_line", "expected"),
+    [
+        (
+            'framework = "custom"\n',
+            'agent.framework: "custom" needs agent.server = "agentbricks"; use langgraph or openai',
+        ),
+        ("", "agent.framework: missing; use langgraph or openai"),
+    ],
+)
+def test_load_rejects_a_framework_less_custom_server(
+    tmp_path: pathlib.Path, framework_line: str, expected: str
+):
+    _write_manifest(tmp_path, f'schema_version = 1\n\n[agent]\n{framework_line}server = "custom"\n')
+
+    with pytest.raises(AgentCliError) as error:
+        AgentProject.load(tmp_path)
+
+    assert error.value.message == f"agent.toml: {expected}"
 
 
 @pytest.mark.parametrize(

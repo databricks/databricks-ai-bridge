@@ -61,6 +61,7 @@ env:
 
     port_in_use = Mock(return_value=False)
     free_port = Mock(return_value=54321)
+    uv_sync = Mock()
 
     service = DevService(
         project_resolver=resolver,
@@ -68,6 +69,7 @@ env:
         local_tracing=tracing,
         port_in_use=port_in_use,
         free_port=free_port,
+        uv_sync=uv_sync,
     )
     return SimpleNamespace(
         apps=apps,
@@ -78,6 +80,7 @@ env:
         service=service,
         tracing=tracing,
         tracing_server=tracing_server,
+        uv_sync=uv_sync,
     )
 
 
@@ -379,3 +382,35 @@ def test_prepare_omits_the_bound_memory_store_note_when_none_is_bound(
         DevRequest(source=str(tmp_path), prepare_environment=False, app_port=None)
     ) as plan:
         assert "AGENTBRICKS_DEV_BOUND_MEMORY_STORE" not in _manifest_env(plan.entry_point)
+
+
+def test_pyproject_project_builds_with_uv_sync_instead_of_run_local_prepare(
+    service_fixture: SimpleNamespace, tmp_path: pathlib.Path
+) -> None:
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "echo"\n')
+    calls: list[str] = []
+    service_fixture.uv_sync.side_effect = lambda path: calls.append(f"sync {path}")
+    service_fixture.apps.run_local.side_effect = lambda *a, **k: calls.append("run-local")
+
+    with service_fixture.service.prepare(
+        DevRequest(source=str(tmp_path), prepare_environment=None, app_port=None)
+    ) as plan:
+        assert plan.install_dependencies is True
+        assert plan.prepare_environment is False
+        service_fixture.service.run(plan)
+
+    assert calls == [f"sync {tmp_path}", "run-local"]
+    assert service_fixture.apps.run_local.call_args.kwargs["prepare_environment"] is False
+
+
+def test_project_without_pyproject_keeps_run_local_prepare(
+    service_fixture: SimpleNamespace, tmp_path: pathlib.Path
+) -> None:
+    with service_fixture.service.prepare(
+        DevRequest(source=str(tmp_path), prepare_environment=None, app_port=None)
+    ) as plan:
+        assert plan.install_dependencies is False
+        assert plan.prepare_environment is True
+        service_fixture.service.run(plan)
+
+    service_fixture.uv_sync.assert_not_called()
