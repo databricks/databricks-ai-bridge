@@ -41,10 +41,10 @@ ty check
 
 ## Software Factory
 
-For factory-assigned work, use [factory-author](.claude/skills/factory-author/SKILL.md)
-for authoring, evidence and PR follow-through, and
+Use [author](.claude/skills/author/SKILL.md) for interactive or ticket-backed
+authoring, evidence and PR follow-through. Factory-assigned work also uses
 [factory-steering](.claude/skills/factory-steering/SKILL.md) for coordination and
-human decisions. These are the two factory skills; `.agents/skills/` aliases the
+human decisions. These are the two workflow skills; `.agents/skills/` aliases the
 same source files for Codex. The hosted factory packages committed snapshots so
 its steering model and native worker use the same reviewed policy.
 

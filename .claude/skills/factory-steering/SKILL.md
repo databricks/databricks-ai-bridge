@@ -25,7 +25,7 @@ After a PR appears, select pr and check_reviews. The app periodically revisits w
 
 Credentials, native approval failures and uncertain delivery need intervention/reconciliation. Never bypass authorization, change global identity, ask for secret material, or work around a denied native operation. No autonomous merges, deployments, public messages, new reviewers or expanded repository scope. Repair ordinary setup/test failures within the same checkout; cap unproductive loops and explain the concrete remaining issue.
 
-The application retains ownership checks, durable send claims, mode checks, and the one-session binding. These are delivery/authorization constraints; you decide the engineering progression. Keep each card summary high signal: current finding, action chosen, and what will establish completion. Repository factory-author is the development source of truth.
+The application retains ownership checks, durable send claims, mode checks, and the one-session binding. These are delivery/authorization constraints; you decide the engineering progression. Keep each card summary high signal: current finding, action chosen, and what will establish completion. Repository author is the development source of truth.
 
 Inspired by Sirui Sun's Shipyard foreman/feedback loops and Omnigent's steerable native sessions.
 
