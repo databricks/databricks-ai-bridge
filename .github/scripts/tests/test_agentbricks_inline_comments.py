@@ -88,7 +88,6 @@ class PlanTest(unittest.TestCase):
     def test_comment_body_has_markers_tags_and_continuation_lines(self):
         body = inline.plan(REVIEW, DIFF, HEAD)[0][0]["body"]
         self.assertIn(inline.INLINE_MARKER, body)
-        self.assertIn("<!-- agentbricks-reviewer-finding: 0 -->", body)
         self.assertIn("**[HIGH] [HIGH CONFIDENCE]** · Blocking issues", body)
         self.assertIn(f"Verified-against: `{CODE}:78-173`.", body)
 
@@ -103,26 +102,30 @@ class PlanTest(unittest.TestCase):
 
 
 class RewriteTest(unittest.TestCase):
-    def test_posted_findings_shrink_to_links_and_others_stay(self):
+    def test_posted_findings_become_one_count_line_per_section(self):
         _, anchored = inline.plan(REVIEW, DIFF, HEAD)
-        summary = inline.rewrite(REVIEW, anchored, {0: "https://example/c0", 1: "https://example/c1"})
+        summary = inline.rewrite(REVIEW, anchored)
+        self.assertIn("## Blocking issues\n- Left 1 inline comment on the changed lines.\n\n## Security", summary)
         self.assertIn(
-            f"- [HIGH] [HIGH CONFIDENCE] `{CODE}:163` — Passing `min_score=0.0` with a negative-scored row"
-            " → [inline comment](https://example/c0)",
+            "## Non-blocking notes\n- [LOW] [MEDIUM CONFIDENCE] `docs/index.md:4` — not in the diff → stays in the summary.\n"
+            "- Left 1 inline comment on the changed lines.\n",
             summary,
         )
         self.assertNotIn("Verified-against", summary)
-        self.assertIn("`docs/index.md:4` — not in the diff → stays in the summary.", summary)
-        self.assertIn("## Security vulnerabilities\nNone.", summary)
+        self.assertNotIn("Passing `min_score=0.0`", summary)
         self.assertTrue(summary.endswith("A change.\n"))
 
-    def test_findings_without_a_posted_url_stay_in_full(self):
-        _, anchored = inline.plan(REVIEW, DIFF, HEAD)
-        self.assertEqual(inline.rewrite(REVIEW, anchored, {}), REVIEW)
+    def test_count_is_plural_for_several_findings(self):
+        review = (
+            "## Blocking issues\n"
+            f"- [HIGH] [HIGH CONFIDENCE] `{CODE}:162` — a → b.\n"
+            f"- [HIGH] [HIGH CONFIDENCE] `{CODE}:163` — c → d.\n"
+        )
+        _, anchored = inline.plan(review, DIFF, HEAD)
+        self.assertEqual(inline.rewrite(review, anchored), "## Blocking issues\n- Left 2 inline comments on the changed lines.\n")
 
-    def test_short_form_keeps_code_spans_balanced(self):
-        text = "[LOW] `" + "x" * 200 + "` → y"
-        self.assertEqual(inline.short_form(text).count("`") % 2, 0)
+    def test_nothing_posted_leaves_the_review_unchanged(self):
+        self.assertEqual(inline.rewrite(REVIEW, []), REVIEW)
 
 
 if __name__ == "__main__":

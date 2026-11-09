@@ -2,9 +2,10 @@
 
 Each finding whose `path:line` falls on a line GitHub can comment on (an added or
 context line on the new side of the diff) becomes an inline comment in one
-COMMENT review on the reviewed commit. In the summary comment, that finding
-shrinks to one line linking to its inline comment. Findings that can't be
-anchored, such as ones about files outside the diff, stay in the summary in full.
+COMMENT review on the reviewed commit. In the summary comment, each section's
+posted findings are replaced by one line saying how many were left inline.
+Findings that can't be anchored, such as ones about files outside the diff, stay
+in the summary in full.
 Inline comments from earlier runs are minimized as outdated so re-reviews don't
 pile up.
 
@@ -32,8 +33,6 @@ TAGS = re.compile(r"^(?P<tags>(?:\[[^\]]+\]\s*)+)")
 LOCATION = re.compile(r"`?(?P<path>[\w.@+/-]+):(?P<start>\d+)(?:-(?P<end>\d+))?`?")
 HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,\d+)? @@")
 INLINE_MARKER = "<!-- agentbricks-reviewer-inline -->"
-FINDING_MARKER = re.compile(r"<!-- agentbricks-reviewer-finding: (\d+) -->")
-SUMMARY_LIMIT = 160
 
 
 def commentable_lines(diff: str) -> dict[str, set[int]]:
@@ -104,22 +103,11 @@ def anchor(finding: dict, lines: dict[str, set[int]]) -> dict | None:
     return None
 
 
-def short_form(text: str) -> str:
-    """The finding's tags and trigger, short enough for one summary line."""
-    first = text.split("\n", 1)[0]
-    head = first.split("→", 1)[0].rstrip(" —-")
-    if len(head) > SUMMARY_LIMIT:
-        head = head[:SUMMARY_LIMIT].rsplit(" ", 1)[0] + "…"
-    if head.count("`") % 2:
-        head = head[: head.rfind("`")].rstrip() + "…"
-    return head
-
-
 def plan(review: str, diff: str, head_sha: str) -> tuple[list[dict], list[dict]]:
     """Inline comments to post, and the findings they came from."""
     lines = commentable_lines(diff)
     comments, anchored = [], []
-    for number, finding in enumerate(parse_findings(review)):
+    for finding in parse_findings(review):
         position = anchor(finding, lines)
         if position is None:
             continue
@@ -127,23 +115,28 @@ def plan(review: str, diff: str, head_sha: str) -> tuple[list[dict], list[dict]]
         title = f"**{tags.group('tags').strip()}** · {finding['section']}" if tags else f"**{finding['section']}**"
         body_text = finding["text"][tags.end() :] if tags else finding["text"]
         body = (
-            f"{INLINE_MARKER}\n<!-- agentbricks-reviewer-finding: {number} -->\n"
+            f"{INLINE_MARKER}\n"
             f"{title}\n\n{body_text.strip()}\n\n"
             f"<sub>AgentBricksReviewer finding for `{head_sha[:7]}`.</sub>"
         )
         comments.append({**position, "body": body})
-        anchored.append({**finding, "number": number})
+        anchored.append(finding)
     return comments, anchored
 
 
-def rewrite(review: str, anchored: list[dict], urls: dict[int, str]) -> str:
-    """The review with each posted finding shrunk to a one-line link."""
+def rewrite(review: str, anchored: list[dict]) -> str:
+    """The review with each section's posted findings replaced by a count."""
     review_lines = review.splitlines()
-    for finding in sorted(anchored, key=lambda item: item["start"], reverse=True):
-        url = urls.get(finding["number"])
-        if not url:
-            continue
-        review_lines[finding["start"] : finding["end"]] = [f"- {short_form(finding['text'])} → [inline comment]({url})"]
+    by_section: dict[str, list[dict]] = {}
+    for finding in anchored:
+        by_section.setdefault(finding["section"], []).append(finding)
+    replacements = []
+    for findings in by_section.values():
+        count = len(findings)
+        note = f"- Left {count} inline comment{'s' if count != 1 else ''} on the changed lines."
+        replacements += [(f["start"], f["end"], [note] if i == 0 else []) for i, f in enumerate(findings)]
+    for start, end, lines in sorted(replacements, reverse=True):
+        review_lines[start:end] = lines
     return "\n".join(review_lines) + ("\n" if review.endswith("\n") else "")
 
 
@@ -175,25 +168,18 @@ def minimize_earlier(repo: str, pr: int) -> None:
                 ])
 
 
-def post(repo: str, pr: int, head_sha: str, comments: list[dict]) -> dict[int, str]:
-    """Post one COMMENT review and return each finding number's comment URL."""
-    review = github(
+def post(repo: str, pr: int, head_sha: str, comments: list[dict]) -> None:
+    """Post every inline comment in one COMMENT review; GitHub accepts all or none."""
+    github(
         [f"repos/{repo}/pulls/{pr}/reviews"],
         {
             "commit_id": head_sha,
             "event": "COMMENT",
-            "body": f"AgentBricksReviewer left {len(comments)} inline finding(s) on `{head_sha[:7]}`. "
+            "body": f"AgentBricksReviewer left {len(comments)} inline comment(s) on `{head_sha[:7]}`. "
             "The score and summary are in the review comment.",
             "comments": comments,
         },
     )
-    pages = github(["--paginate", "--slurp", f"repos/{repo}/pulls/{pr}/reviews/{review['id']}/comments?per_page=100"])
-    urls = {}
-    for page in pages or []:
-        for comment in page:
-            if marker := FINDING_MARKER.search(comment["body"]):
-                urls[int(marker.group(1))] = comment["html_url"]
-    return urls
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -216,9 +202,9 @@ def main(argv: list[str] | None = None) -> int:
     comments, anchored = plan(review, diff, args.head)
     if comments:
         try:
-            urls = post(args.repo, args.pr, args.head, comments)
-            summary = rewrite(review, anchored, urls)
-            print(f"Posted {len(urls)} inline finding(s).")
+            post(args.repo, args.pr, args.head, comments)
+            summary = rewrite(review, anchored)
+            print(f"Posted {len(comments)} inline comment(s).")
         except RuntimeError as error:
             print(f"::warning::Could not post inline findings; keeping them in the summary comment: {error}")
     else:
