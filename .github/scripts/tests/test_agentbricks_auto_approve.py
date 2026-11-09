@@ -18,8 +18,12 @@ def review(
     security="None.",
     uncertain="None.",
     notes="None.",
+    change_risk="LOW",
 ):
-    return f"""**Merge safety:** {score}/100 (LOW RISK) · reviewers: {reviewers} · findings by lens: none
+    return f"""**Review score:** {score}/100 · reviewers: {reviewers} · findings by lens: none
+
+**Change risk:** {change_risk}
+**Risk rationale:** Small compatible change with focused tests and straightforward rollback.
 
 ## Blocking issues
 
@@ -58,7 +62,7 @@ def diff(*paths, added=1):
     return "".join(hunks)
 
 
-CODE = "integrations/agentbricks/src/databricks_agentbricks/cli/app.py"
+CODE = "integrations/agentbricks/src/databricks_agentbricks/utils/formatting.py"
 TEST = "integrations/agentbricks/tests/unit_tests/agent_hint_test.py"
 
 
@@ -69,7 +73,9 @@ class DecideTest(unittest.TestCase):
 
     def test_clean_small_review_is_approved(self):
         result = gate.decide(review(), diff("README.md", CODE, TEST))
-        self.assertEqual(result, {"approve": True, "reasons": []})
+        self.assertTrue(result["approve"], result)
+        self.assertEqual(result["reasons"], [])
+        self.assertEqual(result["risk"]["label"], "risk:low")
 
     def test_non_blocking_notes_do_not_block_approval(self):
         notes = "- [LOW] [HIGH CONFIDENCE] `README.md:3` — typo → readers stumble."
@@ -78,8 +84,19 @@ class DecideTest(unittest.TestCase):
     def test_low_score_is_refused(self):
         self.assert_refused(gate.decide(review(score=94), diff("README.md")), "below 95")
 
+    def test_review_score_is_separate_from_risk_wording(self):
+        for old_line in (
+            "**Merge safety:** 100/100 (LOW RISK)",
+            "**Review score:** 100/100 (LOW RISK)",
+        ):
+            with self.subTest(old_line=old_line):
+                text = review().replace("**Review score:** 100/100", old_line)
+                self.assert_refused(gate.decide(text, diff("README.md")), "no review score line")
+
     def test_missing_reviewer_is_refused(self):
-        self.assert_refused(gate.decide(review(reviewers="1/2"), diff("README.md")), "1 of 2")
+        result = gate.decide(review(reviewers="1/2"), diff("README.md"))
+        self.assert_refused(result, "1 of 2")
+        self.assertEqual(result["risk"]["level"], "low")
 
     def test_single_reviewer_is_refused(self):
         self.assert_refused(gate.decide(review(reviewers="1/1"), diff("README.md")), "at least 2")
@@ -97,7 +114,7 @@ class DecideTest(unittest.TestCase):
     def test_missing_section_or_summary_line_is_refused(self):
         text = review().replace("## Security vulnerabilities\n\nNone.\n", "")
         self.assert_refused(gate.decide(text, diff(CODE)), 'no "Security vulnerabilities" section')
-        self.assert_refused(gate.decide("## Blocking issues\n\nNone.\n", diff(CODE)), "no merge safety line")
+        self.assert_refused(gate.decide("## Blocking issues\n\nNone.\n", diff(CODE)), "no review score line")
 
     def test_large_diff_is_refused(self):
         self.assert_refused(gate.decide(review(), diff(CODE, added=201)), "over the 200-line limit")
@@ -157,6 +174,172 @@ class DecideTest(unittest.TestCase):
 
     def test_empty_diff_is_refused(self):
         self.assert_refused(gate.decide(review(), ""), "changes no files")
+
+
+class ChangeRiskTest(unittest.TestCase):
+    def test_findings_score_does_not_replace_change_risk(self):
+        result = gate.decide(review(change_risk="MODERATE"), diff(CODE))
+        self.assertFalse(result["approve"])
+        self.assertEqual(result["risk"]["label"], "risk:medium")
+
+    def test_risk_classifications(self):
+        for name, level in (("LOW", "low"), ("MODERATE", "medium"), ("HIGH", "high"), ("Unrated", "unrated")):
+            with self.subTest(name=name):
+                result = gate.decide(review(change_risk=name), diff(CODE))
+                self.assertEqual(result["risk"]["level"], level)
+                self.assertEqual(result["approve"], level == "low")
+
+    def test_missing_or_invalid_assessment_withholds_approval(self):
+        for text in (
+            review().replace("**Change risk:** LOW", ""),
+            review(change_risk="Unrated"),
+            review(change_risk="CRITICAL"),
+            review(change_risk="100/100 (LOW RISK)"),
+            review() + "\n**Change risk:** LOW\n",
+            review() + "\n**Change risk:** UNKNOWN\n",
+            review().replace("**Change risk:** LOW", "**Change safety:** 100/100 (LOW RISK)"),
+        ):
+            with self.subTest(text=text):
+                result = gate.decide(text, diff(CODE))
+                self.assertFalse(result["approve"])
+                self.assertEqual(result["risk"]["label"], "risk:unrated")
+
+    def test_risk_rationale_is_required(self):
+        for text in (
+            review().replace("**Risk rationale:** Small compatible change with focused tests and straightforward rollback.", ""),
+            review().replace("Small compatible change with focused tests and straightforward rollback.", ""),
+            review() + "\n**Risk rationale:** Another assessment.\n",
+        ):
+            with self.subTest(text=text):
+                result = gate.decide(text, diff(CODE))
+                self.assertFalse(result["approve"])
+                self.assertEqual(result["risk"]["label"], "risk:unrated")
+
+    def test_unrated_is_preserved_even_for_sensitive_paths(self):
+        text = review().replace("**Change risk:** LOW", "")
+        decision = gate.decide(text, diff("REVIEW.md"))
+        self.assertFalse(decision["approve"])
+        self.assertEqual(decision["risk"]["label"], "risk:unrated")
+        self.assertIn("**UNRATED**", gate.safety_section(text, decision))
+        self.assertTrue(decision["risk"]["reasons"])
+
+    def test_high_assessment_is_not_downgraded_by_lower_floors(self):
+        text = review(change_risk="HIGH")
+        decision = gate.decide(text, diff(CODE))
+        self.assertFalse(decision["approve"])
+        self.assertEqual(decision["risk"]["label"], "risk:high")
+        self.assertIn("**HIGH**", gate.safety_section(text, decision))
+
+    def test_public_interface_and_runtime_changes_have_medium_floor(self):
+        for path in (
+            "integrations/agentbricks/src/databricks_agentbricks/cli/app.py",
+            "integrations/agentbricks/src/databricks_agentkit/runtime/client.py",
+            "integrations/agentbricks/src/databricks_agentbricks/__init__.py",
+            "integrations/agentbricks/src/databricks_agentbricks/clients/managed_runtime_store.py",
+            "integrations/agentbricks/src/databricks_agentbricks/clients/conversation_store_client.py",
+        ):
+            with self.subTest(path=path):
+                result = gate.decide(review(), diff(path))
+                self.assertFalse(result["approve"])
+                self.assertEqual(result["risk"]["level"], "medium")
+                self.assertEqual(result["risk"]["model_level"], "low")
+
+    def test_sensitive_paths_have_high_floor(self):
+        for path in (
+            "REVIEW.md", "integrations/agentbricks/REVIEW.md", "uv.lock",
+            ".github/workflows/main.yml",
+            "integrations/agentbricks/src/auth/helper.py",
+            "integrations/agentbricks/src/migrations/update.py",
+        ):
+            with self.subTest(path=path):
+                result = gate.decide(review(), diff(path))
+                self.assertFalse(result["approve"])
+                self.assertEqual(result["risk"]["label"], "risk:high")
+
+    def test_cross_package_production_changes_have_medium_floor(self):
+        result = gate.decide(review(), diff(CODE, "integrations/openai/src/helper.py"))
+        self.assertEqual(result["risk"]["label"], "risk:medium")
+        self.assertTrue(any("multiple packages" in reason for reason in result["risk"]["reasons"]))
+
+    def test_docs_and_tests_in_multiple_packages_can_remain_low_risk(self):
+        result = gate.decide(review(), diff("integrations/openai/README.md", "integrations/agentbricks/cli.md"))
+        self.assertTrue(result["approve"], result)
+        result = gate.decide(review(), diff(TEST))
+        self.assertTrue(result["approve"], result)
+
+    def test_size_and_binary_changes_raise_risk(self):
+        for content, expected in (
+            (diff(CODE, added=1001), "high"),
+            (diff(*[f"docs/{i}.md" for i in range(11)]), "medium"),
+            (diff(*[f"docs/{i}.md" for i in range(31)]), "high"),
+            (diff(CODE) + "Binary files a/image.png and b/image.png differ\n", "high"),
+        ):
+            with self.subTest(expected=expected):
+                self.assertEqual(gate.decide(review(), content)["risk"]["level"], expected)
+
+    def test_line_limit_controls_approval_without_changing_risk(self):
+        content = diff(CODE, added=201)
+        limited = gate.decide(review(), content)
+        self.assertEqual(limited["risk"]["level"], "low")
+        self.assertFalse(limited["approve"])
+        self.assertIn("201 changed lines is over the 200-line limit", limited["reasons"])
+        relaxed = gate.decide(review(), content, max_lines=300)
+        self.assertTrue(relaxed["approve"], relaxed)
+        self.assertEqual(relaxed["risk"], limited["risk"])
+
+    def test_canonical_changed_paths_drive_scope_and_risk(self):
+        paths = ["integrations/agentbricks/src/cli/new command.py"]
+        result = gate.decide(review(), diff("docs/example.md"), paths=paths)
+        self.assertEqual(result["risk"]["level"], "medium")
+        self.assertFalse(result["approve"])
+
+    def test_review_verdict_is_independent_of_risk_scope_and_size(self):
+        for path, risk, added in ((CODE, "LOW", 1), (CODE, "MODERATE", 1),
+                                 ("REVIEW.md", "LOW", 1), (CODE, "HIGH", 1),
+                                 (CODE, "Unrated", 1), (CODE, "LOW", 201),
+                                 ("integrations/openai/src/helper.py", "LOW", 1)):
+            with self.subTest(path=path, risk=risk, added=added):
+                result = gate.decide(review(change_risk=risk), diff(path, added=added))
+                self.assertTrue(result["review_passed"], result)
+                self.assertEqual(result["review_reasons"], [])
+                self.assertEqual(result["approve"], path == CODE and risk == "LOW" and added == 1)
+
+    def test_review_failures_withhold_ai_label_verdict(self):
+        for text in (review(score=94), review(score=101), review(reviewers="1/2"),
+                     review(blocking="A bug."), review(security="A vulnerability."),
+                     review(uncertain="Unverified finding."),
+                     review().replace("## Security vulnerabilities", "## Missing section")):
+            with self.subTest(text=text):
+                result = gate.decide(text, diff(CODE))
+                self.assertFalse(result["review_passed"])
+                self.assertFalse(result["approve"])
+                self.assertTrue(result["review_reasons"])
+
+    def test_low_risk_does_not_override_correctness_findings(self):
+        result = gate.decide(review(score=75, blocking="A verified bug."), diff("README.md"))
+        self.assertEqual(result["risk"]["label"], "risk:low")
+        self.assertFalse(result["approve"])
+
+    def test_safety_section_explains_assessment_and_eligibility(self):
+        text = review()
+        decision = gate.decide(text, diff("integrations/agentbricks/src/cli/app.py"))
+        section = gate.safety_section(text, decision)
+        self.assertIn("### Safety assessment", section)
+        self.assertIn("Review score (findings and coverage) | 100/100", section)
+        self.assertNotIn("Change safety", section)
+        self.assertEqual(section.count("/100"), 1)
+        self.assertIn("**MODERATE**", section)
+        self.assertIn("**AI review verdict:** Passed · `ai-approved`.", section)
+        self.assertIn("Small compatible change", section)
+        self.assertIn("Model change risk before CI adjustments: LOW.", section)
+        self.assertIn("Auto-approval content checks:** Not eligible.", section)
+        self.assertIn("public interface, runtime, or persisted state", section)
+
+    def test_safety_section_distinguishes_content_checks_from_final_approval(self):
+        text = review()
+        section = gate.safety_section(text, gate.decide(text, diff("README.md")))
+        self.assertIn("Auto-approval content checks:** Passed.", section)
+        self.assertIn("Final approval also requires automation to be enabled", section)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 ---
 name: agentbricks-review
-description: Multi-lens review of a databricks-ai-bridge pull request or local branch, with auto-discovered REVIEW.md criteria, verified findings, and a merge safety score.
+description: Multi-lens review of a databricks-ai-bridge pull request or local branch, with auto-discovered REVIEW.md criteria, verified findings, a review score, and separate change risk.
 ---
 
 # databricks-ai-bridge PR review
@@ -109,6 +109,9 @@ lens can still produce a Critical finding.
 - Give each reviewer the diff path and checksum, the base and head SHAs, its
   lens definitions, the PR title and description, Part 2 and Part 3 of this
   file, and every applicable `REVIEW.md`. Pass the diff as a path; do not paste it.
+- Ask each reviewer for change-risk factors as well as defects: affected
+  components, public behavior, persistent state, external effects, reversibility,
+  and evidence from tests. A risk factor is not itself a correctness finding.
 - Do not add your own summary of what the diff changes. Reviewers form their own
   understanding from the diff. Any file, symbol, or line you mention outside the
   diff text must appear in the diff.
@@ -153,18 +156,45 @@ Work in this order, so verification is spent only on findings that survive:
 | Medium | real issue with limited reach or an easy workaround | Non-blocking notes | −3 |
 | Low | minor issue with a concrete consequence | Non-blocking notes | −1 |
 
-Merge safety score = 100 minus the deductions, floored at 0, then capped at
+Review score = 100 minus the deductions, floored at 0, then capped at
 `floor(100 × reviewers that delivered / reviewers dispatched)`.
 
-| Score | Risk |
-|---|---|
-| 90–100 | LOW RISK |
-| 70–89 | MODERATE RISK |
-| 40–69 | HIGH RISK |
-| 0–39 | CRITICAL RISK |
+This score describes findings and reviewer coverage. Do not attach a risk band
+to it; change risk is assessed separately below.
 
 If no reviewer delivered, say the review could not be completed instead of
 giving a score.
+
+## 5. Assess change risk separately
+
+The review score above measures findings and review coverage. Separately
+classify the impact of merging this change even when no defects were found.
+Use **LOW**, **MODERATE**, or **HIGH** change risk with a concrete rationale;
+do not assign a numerical safety score. Missing reviewer responses affect the
+review score and approval eligibility, not the impact classification itself.
+
+| Change risk | Typical change |
+|---|---|
+| LOW | Small docs/test changes or isolated, compatible implementation changes with clear tests and easy rollback |
+| MODERATE | Public CLI/API behavior, runtime or persistence changes, cross-package behavior, or unclear rollback/test coverage |
+| HIGH | Credentials/permissions, sensitive data, migration/deletion, CI/release/dependency changes, broad disruption, or irreversible data loss |
+
+Assess the actual behavior, not just extensions or diff size. A template, shell
+script, config, or ordinary helper can change authorization, network access,
+data writes/deletes, billing, or published behavior. Consider compatibility,
+which users/components are affected, retry/idempotency, feature defaults,
+observability, test evidence, and whether rollback restores state. Explain the
+specific paths and behaviors that determine the classification; flag unknown
+impact as at least moderate. If the impact cannot be assessed, report change risk as
+**Unrated** and explain what is missing; do not invent a numerical score. Do not
+give low risk merely because the review found no bugs.
+
+CI applies minimum risk levels for protected paths, public/runtime components,
+multiple production packages, large diffs, and binary changes, using
+`.github/scripts/agentbricks_auto_approve.py`. CI may raise the classification,
+and only the resulting low-risk assessment can be auto-approved.
+The existing review-score threshold, findings, author, scope, and commit checks
+also apply. A low-risk label does not grant approval.
 
 # Part 2: Rules for every reviewer
 
@@ -221,10 +251,17 @@ or approval behavior.
 
 # Part 4: Output format
 
-Start with one line: `**Merge safety:** <score>/100 (<risk>) · reviewers:
+Start with one line: `**Review score:** <score>/100 · reviewers:
 <delivered>/<dispatched> · findings by lens: <lens (count), ...>`, or
 `findings by lens: none` when no lens found anything. Every lens is always
 checked, so list only the lenses with findings.
+
+Then add an independent line in this exact format:
+`**Change risk:** <LOW|MODERATE|HIGH>`.
+When the impact cannot be assessed, use `**Change risk:** Unrated` instead.
+Follow it with `**Risk rationale:**` and a concise explanation of the affected
+paths/components, behavioral impact, test evidence, and reversibility. PR risk
+labels use this assessment with CI's risk floors, independently of the review score.
 
 Then report `**Review rules:** <source paths/revision> · checked: <applicable
 rule IDs> · gaps: <incomplete coverage, or none>`. Retain rule IDs in applicable
