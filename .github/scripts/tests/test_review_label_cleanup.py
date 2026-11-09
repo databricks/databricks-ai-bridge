@@ -12,10 +12,11 @@ labels = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(labels)
 
 
-def comment(head, label, identifier=1, user="github-actions[bot]"):
+def comment(head, label, identifier=1, user="github-actions[bot]", passed=False):
     return {"id": identifier, "user": {"login": user}, "body": (
         f"<!-- agentbricks-reviewer-risk-sha: {head} -->\n"
         f"<!-- agentbricks-reviewer-risk-label: {label} -->\n"
+        f"<!-- agentbricks-reviewer-ai-approved: {str(passed).lower()} -->\n"
     )}
 
 
@@ -56,9 +57,31 @@ class LabelCleanupTest(unittest.TestCase):
                 self.assertEqual(labels.reconcile(api, "org/repo", 1), label)
                 self.assertEqual(api.labels, {"unrelated", label})
 
+    def test_passed_review_adds_ai_label_at_every_risk_level(self):
+        for risk in labels.LABELS:
+            with self.subTest(risk=risk):
+                api = FakeGitHub([comment("a", risk, passed=True)])
+                labels.reconcile(api, "org/repo", 1)
+                self.assertEqual(api.labels, {"unrelated", risk, "ai-approved"})
+
+    def test_failed_rereview_removes_ai_label_on_same_head(self):
+        api = FakeGitHub([comment("a", "risk:high", passed=True), comment("a", "risk:high", 2)])
+        api.labels.add("ai-approved")
+        labels.reconcile(api, "org/repo", 1)
+        self.assertEqual(api.labels, {"unrelated", "risk:high"})
+
+    def test_missing_or_ambiguous_verdict_does_not_add_ai_label(self):
+        for suffix in ("", "<!-- agentbricks-reviewer-ai-approved: true -->\n" * 2):
+            item = comment("a", "risk:low")
+            item["body"] = item["body"].replace("<!-- agentbricks-reviewer-ai-approved: false -->\n", suffix)
+            api = FakeGitHub([item])
+            api.labels.add("ai-approved")
+            labels.reconcile(api, "org/repo", 1)
+            self.assertNotIn("ai-approved", api.labels)
+
     def test_unreviewed_head_clears_old_risk(self):
         api = FakeGitHub([comment("previous", "risk:low")])
-        api.labels.update(labels.LABELS)
+        api.labels.update(labels.MANAGED_LABELS)
         self.assertIsNone(labels.reconcile(api, "org/repo", 1))
         self.assertEqual(api.labels, {"unrelated"})
 
@@ -67,7 +90,7 @@ class LabelCleanupTest(unittest.TestCase):
         self.assertIsNone(labels.reconcile(api, "org/repo", 1))
 
     def test_push_during_publication_is_reconciled(self):
-        api = FakeGitHub([comment("a", "risk:low")])
+        api = FakeGitHub([comment("a", "risk:low", passed=True)])
         api.on_mutation = lambda: setattr(api, "head", "b")
         self.assertIsNone(labels.reconcile(api, "org/repo", 1))
         self.assertEqual(api.labels, {"unrelated"})
@@ -92,7 +115,7 @@ class LabelCleanupTest(unittest.TestCase):
         def unstable(*args):
             nonlocal count
             count += 1
-            return str(count), None, None
+            return str(count), None, None, False
         with patch.object(labels, "assessment", side_effect=unstable):
             with self.assertRaisesRegex(RuntimeError, "kept changing"):
                 labels.reconcile(FakeGitHub(), "org/repo", 1)

@@ -642,6 +642,7 @@ jobs:
             echo "<!-- agentbricks-reviewer-sha: ${HEAD_SHA} -->"
             echo "<!-- agentbricks-reviewer-risk-sha: ${HEAD_SHA} -->"
             echo "<!-- agentbricks-reviewer-risk-label: $(jq -r .risk.label /tmp/pr_review_decision.json) -->"
+            echo "<!-- agentbricks-reviewer-ai-approved: $(jq -r .review_passed /tmp/pr_review_decision.json) -->"
             echo "## AgentBricksReviewer"
             echo ""
             cat /tmp/risk_summary.md

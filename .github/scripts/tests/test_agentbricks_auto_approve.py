@@ -293,6 +293,28 @@ class ChangeRiskTest(unittest.TestCase):
         self.assertEqual(result["risk"]["level"], "medium")
         self.assertFalse(result["approve"])
 
+    def test_review_verdict_is_independent_of_risk_scope_and_size(self):
+        for path, risk, added in ((CODE, "LOW", 1), (CODE, "MODERATE", 1),
+                                 ("REVIEW.md", "LOW", 1), (CODE, "HIGH", 1),
+                                 (CODE, "Unrated", 1), (CODE, "LOW", 201),
+                                 ("integrations/openai/src/helper.py", "LOW", 1)):
+            with self.subTest(path=path, risk=risk, added=added):
+                result = gate.decide(review(change_risk=risk), diff(path, added=added))
+                self.assertTrue(result["review_passed"], result)
+                self.assertEqual(result["review_reasons"], [])
+                self.assertEqual(result["approve"], path == CODE and risk == "LOW" and added == 1)
+
+    def test_review_failures_withhold_ai_label_verdict(self):
+        for text in (review(score=94), review(score=101), review(reviewers="1/2"),
+                     review(blocking="A bug."), review(security="A vulnerability."),
+                     review(uncertain="Unverified finding."),
+                     review().replace("## Security vulnerabilities", "## Missing section")):
+            with self.subTest(text=text):
+                result = gate.decide(text, diff(CODE))
+                self.assertFalse(result["review_passed"])
+                self.assertFalse(result["approve"])
+                self.assertTrue(result["review_reasons"])
+
     def test_low_risk_does_not_override_correctness_findings(self):
         result = gate.decide(review(score=75, blocking="A verified bug."), diff("README.md"))
         self.assertEqual(result["risk"]["label"], "risk:low")
@@ -307,6 +329,7 @@ class ChangeRiskTest(unittest.TestCase):
         self.assertNotIn("Change safety", section)
         self.assertEqual(section.count("/100"), 1)
         self.assertIn("**MODERATE**", section)
+        self.assertIn("**AI review verdict:** Passed · `ai-approved`.", section)
         self.assertIn("Small compatible change", section)
         self.assertIn("Model change risk before CI adjustments: LOW.", section)
         self.assertIn("Auto-approval content checks:** Not eligible.", section)

@@ -157,6 +157,8 @@ def decide(review: str, diff: str, min_score: int = 95, max_lines: int = 200,
     else:
         score = int(summary.group("score"))
         delivered, dispatched = int(summary.group("delivered")), int(summary.group("dispatched"))
+        if not 0 <= score <= 100:
+            reasons.append("review score is outside 0–100")
         if score < min_score:
             reasons.append(f"review score {score}/100 is below {min_score}")
         if delivered < 2 or delivered != dispatched:
@@ -169,6 +171,7 @@ def decide(review: str, diff: str, min_score: int = 95, max_lines: int = 200,
         elif body.rstrip(".").strip().lower() != "none":
             reasons.append(f'"{title}" is not empty')
 
+    review_reasons = list(reasons)
     files, lines = changed_files_and_lines(diff)
     if paths is not None:
         files = paths
@@ -181,7 +184,8 @@ def decide(review: str, diff: str, min_score: int = 95, max_lines: int = 200,
     if risk["level"] != "low":
         reasons.append(f"change risk is {risk['level']}; automatic approval requires low risk")
 
-    return {"approve": not reasons, "reasons": reasons, "risk": risk}
+    return {"review_passed": not review_reasons, "review_reasons": review_reasons,
+            "approve": not reasons, "reasons": reasons, "risk": risk}
 
 
 def safety_section(review: str, decision: dict) -> str:
@@ -199,6 +203,9 @@ def safety_section(review: str, decision: dict) -> str:
         f"| Change risk | **{RISK_NAMES.get(risk['level'], risk['level'].upper())}** · `{risk['label']}` |", "",
         "**Context:** " + (rationale[1].strip() if rationale else "The reviewer provided no change-risk rationale."),
     ]
+    lines += ["", "**AI review verdict:** " + ("Passed · `ai-approved`." if decision["review_passed"] else "Not passed; no `ai-approved` label.")]
+    if decision["review_reasons"]:
+        lines += ["- " + reason for reason in decision["review_reasons"]]
     if risk["model_level"] != risk["level"]:
         model_name = RISK_NAMES.get(risk["model_level"], risk["model_level"].upper())
         lines += ["", f"Model change risk before CI adjustments: {model_name}."]

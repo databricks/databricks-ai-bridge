@@ -1,4 +1,4 @@
-"""Reconcile risk labels against the latest head and published bot assessment."""
+"""Reconcile risk and AI-review labels against the latest head and published bot assessment."""
 
 import argparse
 import json
@@ -6,6 +6,8 @@ import re
 import subprocess
 
 LABELS = {"risk:low": "0e8a16", "risk:medium": "fbca04", "risk:high": "d93f0b", "risk:unrated": "ededed"}
+MANAGED_LABELS = {**LABELS, "ai-approved": "0e8a16"}
+AI_APPROVED = re.compile(r"^<!-- agentbricks-reviewer-ai-approved: (true|false) -->$", re.MULTILINE)
 RISK_LABEL = re.compile(r"^<!-- agentbricks-reviewer-risk-label: (risk:(?:low|medium|high|unrated)) -->$", re.MULTILINE)
 
 
@@ -43,20 +45,26 @@ def assessment(api, repo, pr):
                 continue
             matches = list(RISK_LABEL.finditer(body))
             if len(matches) == 1:
-                candidates.append((comment["id"], matches[0].group(1)))
-    identifier, label = max(candidates, default=(None, None))
-    return head, identifier, label
+                verdicts = list(AI_APPROVED.finditer(body))
+                passed = len(verdicts) == 1 and verdicts[0].group(1) == "true"
+                candidates.append((comment["id"], matches[0].group(1), passed))
+    identifier, label, passed = max(candidates, default=(None, None, False))
+    return head, identifier, label, passed
 
 
 def reconcile(api, repo, pr, ensure_label=lambda label: None, max_attempts=3):
     for _ in range(max_attempts):
         before = assessment(api, repo, pr)
         desired = before[2]
-        if desired:
-            ensure_label(desired)
-            api(f"repos/{repo}/issues/{pr}/labels", {"labels": [desired]}, method="POST")
-        for label in LABELS:
-            if label != desired:
+        wanted = {desired} if desired else set()
+        if before[3]:
+            wanted.add("ai-approved")
+        for label in sorted(wanted):
+            ensure_label(label)
+        if wanted:
+            api(f"repos/{repo}/issues/{pr}/labels", {"labels": sorted(wanted)}, method="POST")
+        for label in MANAGED_LABELS:
+            if label not in wanted:
                 api(f"repos/{repo}/issues/{pr}/labels/{label}", method="DELETE", allow_missing=True)
         # A push or newly published review can race with any label mutation.
         if assessment(api, repo, pr) == before:
@@ -72,8 +80,9 @@ def main():
 
     def ensure_label(label):
         subprocess.run(
-            ["gh", "label", "create", label, "--repo", args.repo, "--color", LABELS[label],
-             "--description", f"Change risk assessed by AgentBricksReviewer: {label[5:]}", "--force"],
+            ["gh", "label", "create", label, "--repo", args.repo, "--color", MANAGED_LABELS[label],
+             "--description", ("Passed AI findings and coverage checks; not a GitHub approval" if label == "ai-approved"
+                               else f"Change risk assessed by AgentBricksReviewer: {label[5:]}"), "--force"],
             check=True,
         )
 

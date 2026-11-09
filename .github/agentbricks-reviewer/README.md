@@ -58,3 +58,12 @@ head and assessment. If either changed, retry up to three times. This prevents
 an older publisher or delayed cleanup from leaving a newer head mislabeled.
 API failures surface except for missing labels, and approval invalidation runs
 independently even if label maintenance fails.
+
+A current-head review that passes the configured review-score threshold,
+complete reviewer coverage, and empty blocking/security/uncertain findings
+receives `ai-approved`, even when risk, path, size, or author restrictions
+prevent a GitHub approval. This label records the AI review verdict only.
+It does not satisfy a required GitHub approval. Moderate/high/unrated changes
+still need human approval; only eligible low-risk changes can receive the
+bot's GitHub approval when auto-approval is enabled. The same reconciler
+removes `ai-approved` on an unreviewed push or a failed subsequent review.

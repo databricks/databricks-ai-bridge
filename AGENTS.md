@@ -59,6 +59,8 @@ When the `AI_REVIEW_AUTO_APPROVE` repo variable is `true`, the workflow also app
 
 Reviews separately classify change risk as Low, Moderate, or High based on affected components, public behavior, sensitive operations, tests, and reversibility, with a rationale and no numerical safety score. CI applies minimum risk levels for sensitive paths/components and large changes, then assigns one of `risk:low`, `risk:medium` (moderate), `risk:high`, or `risk:unrated` even when automatic approval is disabled. Only low change risk can pass automatic approval, alongside the existing review-score and eligibility checks. Unavailable or invalid assessments are unrated and cannot be auto-approved. Pushing clears labels for the old head until the new head is reviewed.
 
+A current-head review that passes findings, review-score, and reviewer-coverage checks receives `ai-approved` independently of change risk and the auto-approval setting. This label is an AI verdict, not a GitHub approval; path, size, author, and low-risk requirements still gate bot approvals. Pushes clear the label until the new head is reviewed; a failed subsequent review removes it.
+
 ## Integration Tests
 
 Integration tests hit live Databricks APIs (no mocks). See [`tests/README.md`](tests/README.md) for what tests exist, their coverage, and how to run them. See [`.claude/skills/integration-tests.md`](.claude/skills/integration-tests.md) for principles and patterns when writing new tests (trigger with `/integration-tests`).
