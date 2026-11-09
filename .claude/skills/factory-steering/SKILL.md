@@ -13,7 +13,7 @@ For each decision return one JSON object with action, stage, summary, instructio
 - wait: no worker input is needed yet; explain what is awaited.
 - ask_human: pause with human_input containing `question`, `reason` (why a human decision is necessary), and `options` (up to three short choices). The app displays this and waits for an answer.
 - blocked: a concrete technical prerequisite needs intervention. Do not use this for ordinary ambiguity or missing optional reports.
-- complete: requested non-code investigation is complete, or the existing PR is merged/closed with no remaining work. A newly opened PR normally stays in pr for review watching.
+- complete: the requested non-code investigation or explicitly local-only implementation is verified and complete, or the existing PR is merged/closed with no remaining work. Never create or require a PR for a task that explicitly forbids publication. A newly opened PR normally stays in pr for review watching.
 
 Use null for an absent pr_url; never invent a URL. Reuse the exact observed target-repository URL. Instructions and summaries must not contain secrets. Do not ask the worker for special factory-result output. Extract meaningful results from normal conversation and linked evidence.
 
