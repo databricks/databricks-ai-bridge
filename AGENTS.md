@@ -41,13 +41,12 @@ ty check
 
 ## Software Factory
 
-For factory-assigned work, start with [factory-author](.claude/skills/factory-author/SKILL.md),
-then use [factory-evidence](.claude/skills/factory-evidence/SKILL.md) and
-[factory-pr](.claude/skills/factory-pr/SKILL.md) as needed. Use
-[factory-session](.claude/skills/factory-session/SKILL.md) only to launch or locate
-a session. These repository files are the source of truth; `.agents/skills/`
-links to the same files for Codex. The factory reads them from the task checkout,
-so a new checkout of `main` picks up updates after they merge.
+Use [author](.claude/skills/author/SKILL.md) for interactive or ticket-backed
+authoring, evidence and PR follow-through. Factory-assigned work also uses
+[factory-steering](.claude/skills/factory-steering/SKILL.md) for coordination and
+human decisions. These are the two workflow skills; `.agents/skills/` aliases the
+same source files for Codex. The hosted factory packages committed snapshots so
+its steering model and native worker use the same reviewed policy.
 
 ## Code Review
 
