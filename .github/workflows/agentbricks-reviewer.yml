@@ -2,7 +2,8 @@ name: AgentBricksReviewer
 run-name: "AgentBricksReviewer #${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}"
 
 # AgentBricksReviewer runs omnigent's Polly coordinator agent headlessly on a PR
-# and posts its review as a PR comment. The coordinator hands review lenses to
+# and posts its review as a PR comment, with findings on changed lines as inline
+# review comments. The coordinator hands review lenses to
 # Claude and GPT sub-agents through a Databricks AI Gateway, then verifies,
 # merges, and scores their findings. The process and rules are in
 # .claude/skills/agentbricks-review/SKILL.md, which also runs as a local skill.
@@ -630,6 +631,19 @@ jobs:
             --min-score "$MIN_SCORE" --max-lines "$MAX_LINES" \
             --safety-section /tmp/risk_summary.md > /tmp/pr_review_decision.json
 
+      - name: Post inline findings
+        if: steps.reviewer.outputs.review_ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
+        # Findings on diff lines become inline comments; the rest stay in the summary.
+        # On any failure the summary keeps every finding, so this never blocks the review.
+        run: |
+          python3 .github/scripts/agentbricks_inline_comments.py \
+            --repo "$REPO" --pr "$PR_NUMBER" --head "$HEAD_SHA" \
+            --review /tmp/review.txt --diff /tmp/pr_diff.txt --out /tmp/review_summary.md \
+            || cp /tmp/review.txt /tmp/review_summary.md
+
       - name: Post review comment
         if: steps.reviewer.outputs.review_ready == 'true'
         env:
@@ -647,7 +661,7 @@ jobs:
             echo ""
             cat /tmp/risk_summary.md
             echo ""
-            cat /tmp/review.txt
+            cat /tmp/review_summary.md
             echo ""
             echo "---"
             echo "<sub>Automated review by AgentBricksReviewer for \`${HEAD_SHA:0:7}\` · [workflow run](${RUN_URL}) · comment \`/review\` to re-run</sub>"
