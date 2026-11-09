@@ -164,8 +164,65 @@ class AgentBricksHelpFormatter(click.HelpFormatter):
         super().write_dl(grayed, col_max=col_max, col_spacing=col_spacing)
 
 
+_OUTPUT_CHOICES = ("text", "json")
+
+
+def _scan_output(args: list[str]) -> Optional[str]:
+    """Return the last valid `-o/--output` value in a leaf's raw args, before any `--`."""
+    found: Optional[str] = None
+    tokens = iter(args)
+    for token in tokens:
+        if token == "--":
+            break
+        if token in ("-o", "--output"):
+            value = next(tokens, None)
+        elif token.startswith("--output="):
+            value = token.partition("=")[2]
+        elif token.startswith("-o") and not token.startswith("--"):
+            value = token[2:]
+        else:
+            continue
+        if value in _OUTPUT_CHOICES:
+            found = value
+    return found
+
+
+def _apply_output(ctx: click.Context, _param: click.Parameter, value: Optional[str]) -> None:
+    """Let a leaf's `-o/--output` override the root group's choice."""
+    if value is None:
+        return
+    from databricks_agentbricks import errors
+
+    errors.set_output_mode(value)
+    # Duck-typed: commands read the mode from the root's `CliContext` on `ctx.obj`.
+    if ctx.obj is not None and hasattr(ctx.obj, "output"):
+        ctx.obj.output = value
+
+
+def _output_option() -> click.Option:
+    """The leaf-level `-o/--output`; `None` means "keep the root's value"."""
+    return click.Option(
+        ["--output", "-o"],
+        type=click.Choice(list(_OUTPUT_CHOICES)),
+        default=None,
+        expose_value=False,
+        is_eager=True,
+        callback=_apply_output,
+        help="Output format (default: text).",
+    )
+
+
 class AgentBricksCommand(_FlushEpilog, click.Command):
     """A leaf command whose help and invocation telemetry use Agent Bricks conventions."""
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        # Click reports a bad option before any callback runs, so pick up `-o json` first: usage
+        # errors then render as JSON even when the bad option precedes it.
+        if (output := _scan_output(args)) is not None:
+            from databricks_agentbricks import errors
+
+            errors.set_output_mode(output)
+        return super().parse_args(ctx, args)
 
     def invoke(self, ctx: click.Context):
         """Run one leaf and record its outcome without changing Click's exception behavior."""
@@ -290,5 +347,10 @@ def _upgrade(command: click.Command) -> None:
             command.__class__ = AgentBricksGroup
         for child in command.commands.values():
             _upgrade(child)
-    elif not isinstance(command, AgentBricksCommand):
-        command.__class__ = AgentBricksCommand
+    else:
+        if not isinstance(command, AgentBricksCommand):
+            command.__class__ = AgentBricksCommand
+        # Accept `-o/--output` after the command too, unless the leaf already defines it.
+        taken = {opt for param in command.params for opt in param.opts}
+        if not taken & {"-o", "--output"}:
+            command.params.append(_output_option())

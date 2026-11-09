@@ -3,9 +3,13 @@ delete confirmation, flag aliases, sessions get guard, and fork positional arg."
 
 from __future__ import annotations
 
+import json
+
+import click
 import pytest
 from click.testing import CliRunner
 
+from databricks_agentbricks import errors
 from databricks_agentbricks.cli.memory import _normalize_source_type, entries, stores
 from databricks_agentbricks.cli.sessions import sessions
 from databricks_agentbricks.errors import AgentCliError
@@ -180,3 +184,98 @@ def test_fork_ambiguous_source_errors():
     )
     assert result.exit_code != 0
     assert client.calls == []
+
+
+# --- -o/--output after the command -------------------------------------------
+
+
+class _StoreClient:
+    host = "https://example.databricks.com"
+
+    def create_session_store(self, name, description=None, metadata=None):
+        return {"name": f"session-stores/{name}", "description": description}
+
+    def create_memory_store(self, display_name, description=None):
+        return {"name": "memory-stores/new", "display_name": display_name}
+
+
+@pytest.fixture
+def root(monkeypatch):
+    """The real root group with a fake client; resets the process-global error mode afterwards."""
+    from databricks_agentbricks.cli import app
+
+    monkeypatch.setattr(app.CliContext, "client", lambda self: _StoreClient())
+    yield app.agentbricks
+    errors.set_output_mode("text")
+
+
+def _leaf_paths(group, prefix=()):
+    for name, command in group.commands.items():
+        if isinstance(command, click.Group):
+            yield from _leaf_paths(command, (*prefix, name))
+        else:
+            yield (*prefix, name)
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["sessions", "stores", "create", "--name", "s"],
+        ["memory", "stores", "create", "--name", "m"],
+    ],
+)
+def test_output_after_command_matches_root_placement(root, args):
+    before = CliRunner().invoke(root, ["-o", "json", *args])
+    after = CliRunner().invoke(root, [*args, "-o", "json"])
+    assert after.exit_code == before.exit_code == 0, after.output
+    assert after.stdout == before.stdout
+    assert json.loads(after.stdout)
+
+
+@pytest.mark.parametrize("flag", [["--output", "json"], ["--output=json"], ["-ojson"]])
+@pytest.mark.parametrize("first", [True, False])
+def test_output_spellings_anywhere_among_options(root, flag, first):
+    rest = ["--name", "s", "--description", "d"]
+    args = [*flag, *rest] if first else [*rest, *flag]
+    result = CliRunner().invoke(root, ["sessions", "stores", "create", *args])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["name"] == "session-stores/s"
+
+
+def test_output_after_command_wins_over_root(root):
+    cmd = ["sessions", "stores", "create", "--name", "s"]
+    as_json = CliRunner().invoke(root, ["-o", "text", *cmd, "-o", "json"])
+    assert json.loads(as_json.stdout)["name"] == "session-stores/s"
+    as_text = CliRunner().invoke(root, ["-o", "json", *cmd, "-o", "text"])
+    assert as_text.exit_code == 0
+    assert not as_text.stdout.lstrip().startswith("{")
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["sessions", "stores", "create", "--bogus", "-o", "json"],
+        ["sessions", "stores", "create", "-o", "json"],
+        ["memory", "stores", "create", "--bogus", "--output=json"],
+    ],
+)
+def test_usage_errors_render_json_with_output_after_command(root, args):
+    result = CliRunner().invoke(root, args)
+    assert result.exit_code == 2
+    error = json.loads(result.stderr[result.stderr.index("{") :])["error"]
+    assert error["message"] and error["hint"]
+
+
+def test_every_leaf_accepts_output_and_lists_it_in_help(root):
+    leaves = list(_leaf_paths(root))
+    assert len(leaves) > 50
+    for path in leaves:
+        result = CliRunner().invoke(root, [*path, "-o", "json", "--help"])
+        assert result.exit_code == 0, (path, result.output)
+        assert "-o, --output [text|json]" in result.stdout, path
+
+
+def test_invalid_output_after_command_lists_choices(root):
+    result = CliRunner().invoke(root, ["sessions", "stores", "create", "--name", "s", "-o", "yaml"])
+    assert result.exit_code == 2
+    assert "'yaml' is not one of 'text', 'json'" in result.stderr

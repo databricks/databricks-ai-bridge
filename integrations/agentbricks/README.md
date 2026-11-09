@@ -121,7 +121,8 @@ credentials.
 
 If Databricks SDK default authentication is already configured, you can skip `agentbricks login`.
 You can also pass the global `--profile/-p` option before an individual command, for example
-`agentbricks --profile <profile> tools list`. Use `--output json` for scripting.
+`agentbricks --profile <profile> tools list`. Use `--output json` (before or after the command) for
+scripting.
 
 The CLI sends best effort command usage telemetry after leaf commands. Its log records the static
 command path, package version, operating system, duration, and process outcome (exit code and, for
@@ -672,8 +673,8 @@ agentbricks memory stores permissions revoke memory-stores/<id> \
 
 Session stores accept their configured name or `session-stores/<name>`. Memory stores accept an ID
 or `memory-stores/<id>`; permission Get also accepts the display-name lookup supported by store Get
-and rejects ambiguous matches. The global `--profile` and `--output json` options go before
-`sessions` or `memory`. List follows the existing CLI pagination convention: one JSON/piped page
+and rejects ambiguous matches. The global `--profile` option goes before `sessions` or `memory`;
+`--output json` goes before or after the command. List follows the existing CLI pagination convention: one JSON/piped page
 with `next_page_token`, interactive text pages, or every page with `--all`.
 
 Get always returns the authenticated caller's effective permission, including
@@ -1085,7 +1086,7 @@ requests. By default, each App user's `X-Routing-Key` matches its generated user
 
 The final summary includes counts, throughput including drain, successful-only and all-completed
 latency percentiles, answer-text TTFT, token usage, coverage, incomplete attempts, and generator CPU
-warnings. With `--output json` before `endpoint`, stdout contains one Agent Bricks summary object;
+warnings. With `--output json`, stdout contains one Agent Bricks summary object;
 progress stays on stderr. This is the same object saved as `summary.json`.
 Locust's rounded histogram buckets are used for percentiles; all-completed timings include failures.
 These bounded tests measure the selected workload and do not establish sustainable capacity or answer quality.
@@ -1471,9 +1472,8 @@ agentbricks tools remove genie_agent
 to `user`; choose `--auth app` deliberately for App service-principal execution. Existing manifests
 without `auth` preserve App/default identity. Both add commands and `remove` accept `--source PATH`
 to select a project instead of the current directory. Discovery needs no project; read that
-project's `agent.toml` to inspect configured bindings. For scripted output, put the global
-`-o json` option before `tools`, as in
-`agentbricks -o json tools add genie-one --source ./my-agent`. Adding a binding is offline: it updates
+project's `agent.toml` to inspect configured bindings. For scripted output, add `-o json`, as in
+`agentbricks tools add genie-one --source ./my-agent -o json`. Adding a binding is offline: it updates
 `agent.toml` without contacting Genie or checking permissions. The corresponding sources are:
 
 ```toml

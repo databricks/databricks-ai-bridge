@@ -33,8 +33,8 @@ a profile, the Databricks SDK's default authentication resolution is used. See
 
 ## Global options
 
-These options apply to every command. Pass them before the command name, for example
-`agentbricks -p my-profile -o json sessions stores list`.
+These options apply to every command. `--profile` goes before the command name; `--output` goes
+before or after it, for example `agentbricks -p my-profile sessions stores list -o json`.
 
 | Option | Values | Default | Description |
 | --- | --- | --- | --- |
@@ -1935,7 +1935,7 @@ Warm-up has its own user identity. `{{uuid}}` is an alias for the current reques
 agents, use request_id as the invocation idempotency key and user_id as the session ID: reusing a
 fixed invocation ID can replay cached results. App routing defaults to the same per-user identity.
 
-With `--output json` before `endpoint`, stdout is the Agent Bricks summary object, identical to
+With `--output json`, stdout is the Agent Bricks summary object, identical to
 `summary.json`. Progress stays on stderr. The summary includes
 successful-only latency, all-completed latency, TTFT/usage coverage, and incomplete counts.
 Runtime usage sums distinct model messages, updating rather than recounting repeated message IDs.
