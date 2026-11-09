@@ -20,14 +20,13 @@ calls Databricks.
 ## Prerequisites
 
 - `uv` on PATH (resolves the script's inline dependencies - no venv needed).
-- A Databricks workspace profile in `~/.databrickscfg` with sandbox access (the demo was
-  validated on `personal-staging`).
+- A Databricks workspace profile in `~/.databrickscfg` with sandbox access.
 - Two OpenAI keys from the same org/project:
-  - application key - creates sessions. Default file `~/.oai_key_staging`, or `OPENAI_API_KEY`.
+  - application key - creates sessions. Set `OPENAI_API_KEY`, or pass `--app-key-file`.
   - environment key - created on the OpenAI Agents tab (Environments > keys) with every
-    other permission None; passed into the sandbox as `CODEX_API_KEY`. Default file
-    `~/.oai_env_key`, or `OPENAI_EXECUTOR_API_KEY`. A general key fails the executor
-    connect with `missing required scope api.agents.environments.connect`.
+    other permission None; passed into the sandbox as `CODEX_API_KEY`. Set
+    `OPENAI_EXECUTOR_API_KEY`, or pass `--executor-key-file`. A general key fails the
+    executor connect with `missing required scope api.agents.environments.connect`.
 - If your OpenAI org enforces an IP allowlist, the sandbox's egress IP must be on it. The
   demo prints that IP during setup; if the executor can't connect, add it on the org.
   (Sandboxes in the same workspace typically share one egress IP, so this is often already
@@ -36,7 +35,7 @@ calls Databricks.
 
 ## Run
 
-    uv run interactive.py --profile personal-staging
+    OPENAI_API_KEY=... OPENAI_EXECUTOR_API_KEY=... uv run interactive.py --profile <profile>
 
 Then, at the `you>` prompt, try:
 
@@ -63,11 +62,11 @@ setup inside the sandbox.
 | flag | default | meaning |
 | --- | --- | --- |
 | `--profile` | `$DATABRICKS_CONFIG_PROFILE` | Databricks config profile |
-| `--sandbox-id` | `openai-agent-demo` | sandbox to create or reuse |
+| `--sandbox-id` | `openai-agent-demo-<uuid>` | sandbox to create or reuse |
 | `--model` | `gpt-5.6-sol` | Agents API model |
 | `--inactivity-timeout` | `900` | sandbox auto-stop idle seconds |
-| `--app-key-file` | `~/.oai_key_staging` | file with the application key |
-| `--executor-key-file` | `~/.oai_env_key` | file with the environment key |
+| `--app-key-file` | (none) | file with the application key (instead of `OPENAI_API_KEY`) |
+| `--executor-key-file` | (none) | file with the environment key (instead of `OPENAI_EXECUTOR_API_KEY`) |
 | `--keep-sandbox` | off (deleted) | keep the sandbox on exit instead of deleting it |
 | `--verbose` | off | stream the agent's reasoning summary |
 
@@ -76,7 +75,7 @@ setup inside the sandbox.
 | Symptom | Cause / fix |
 | --- | --- |
 | `missing required scope api.agents.environments.connect` | executor key is a general key, not an Agents-tab environment key |
-| `codex exec-server did not stay connected` | OpenAI org IP allowlist is missing the sandbox egress IP the demo printed; add it, or reuse `oai-agent-cookbook-test`, or disable the allowlist on a test org |
+| `codex exec-server did not stay connected` | OpenAI org IP allowlist is missing the sandbox egress IP the demo printed; add it on the org, or disable the allowlist on a test org |
 | session creation 401/403 | application key wrong org/project, or Agents API not enabled for the org |
 | sandbox never reaches RUNNING | workspace profile lacks sandbox access, or region capacity |
 | `turn error: An internal error occurred` | transient Agents API error. The REPL auto-recovers the session to idle; just resend your message. It does not auto-resend (a dropped stream may hide a turn that still ran), so you decide whether to repeat it. |
@@ -85,6 +84,4 @@ setup inside the sandbox.
 ## Files
 
 - `interactive.py` - the demo (REPL + lifecycle). Run this.
-- `common.py` - provisioning, executor launch, and sandbox-exec helpers, taken verbatim
-  from the published cookbook example (`openai/openai-cookbook`,
-  `examples/agents_api/sandboxes/databricks`).
+- `common.py` - Databricks-side helpers: provisioning, executor launch, and sandbox-exec.

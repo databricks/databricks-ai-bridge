@@ -10,11 +10,11 @@ session, provisions a Databricks sandbox and launches ``codex exec-server`` insi
 a turn; the agent decides which shell commands to run in the sandbox, and this script
 streams back the command it ran, the command output, and the agent's reply.
 
-Run it (no venv needed, uv resolves the inline deps). Keys load from ~/.oai_key_staging
-(application key) and ~/.oai_env_key (Agents-tab environment key) by default, or from
-OPENAI_API_KEY / OPENAI_EXECUTOR_API_KEY, or from --app-key-file / --executor-key-file:
+Run it (no venv needed, uv resolves the inline deps). Provide two OpenAI keys via
+OPENAI_API_KEY (application key) and OPENAI_EXECUTOR_API_KEY (Agents-tab environment
+key), or via --app-key-file / --executor-key-file:
 
-    uv run interactive.py --profile personal-staging
+    OPENAI_API_KEY=... OPENAI_EXECUTOR_API_KEY=... uv run interactive.py --profile <profile>
 
 Type an instruction and press enter. Slash commands: /help, /sh <cmd>, /info, /verbose, /quit.
 """
@@ -209,9 +209,10 @@ async def _wait_until_idle(client, session_id: str, *, timeout_s: int = 180) -> 
     openai 3.36 has no turn-cancel API and a new turn needs an idle session, so after a
     failed or interrupted turn we wait for the one still running server-side to finish.
     """
-    deadline = asyncio.get_event_loop().time() + timeout_s
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
     status = None
-    while asyncio.get_event_loop().time() < deadline:
+    while loop.time() < deadline:
         try:
             session = await client.beta.agents.sessions.retrieve(session_id)
         except Exception:
@@ -370,35 +371,33 @@ def _banner(session_id: str, name: str, model: str) -> None:
     print()
 
 
-def _resolve_key(env_name: str, file_path: str | None, default_file: str) -> str | None:
-    """Key precedence: env var value, then --*-key-file path, then the default key file.
+def _resolve_key(env_name: str, file_path: str | None) -> str | None:
+    """Resolve a key from the env var, else a --*-key-file path.
 
     Reading from a file keeps the secret out of argv and the shell history.
     """
     if os.environ.get(env_name):
         return os.environ[env_name]
-    for candidate in (file_path, default_file):
-        if not candidate:
-            continue
-        path = Path(candidate).expanduser()
+    if file_path:
+        path = Path(file_path).expanduser()
         if path.exists():
             return path.read_text().strip()
     return None
 
 
 async def main(args) -> None:
-    app_key = _resolve_key("OPENAI_API_KEY", args.app_key_file, "~/.oai_key_staging")
+    app_key = _resolve_key("OPENAI_API_KEY", args.app_key_file)
     if not app_key:
         raise SystemExit(
-            "no OpenAI application key: set OPENAI_API_KEY, pass --app-key-file, or place it at "
-            "~/.oai_key_staging (drives session creation)"
+            "no OpenAI application key: set OPENAI_API_KEY or pass --app-key-file "
+            "(drives session creation)"
         )
-    executor_key = _resolve_key("OPENAI_EXECUTOR_API_KEY", args.executor_key_file, "~/.oai_env_key")
+    executor_key = _resolve_key("OPENAI_EXECUTOR_API_KEY", args.executor_key_file)
     if not executor_key:
         raise SystemExit(
-            "no OpenAI environment key: set OPENAI_EXECUTOR_API_KEY, pass --executor-key-file, or "
-            "place it at ~/.oai_env_key. It must be an environment key created on the OpenAI Agents "
-            "tab (every other permission None); a general API key is rejected with "
+            "no OpenAI environment key: set OPENAI_EXECUTOR_API_KEY or pass --executor-key-file. "
+            "It must be an environment key created on the OpenAI Agents tab (every other "
+            "permission None); a general API key is rejected with "
             "'missing required scope api.agents.environments.connect'"
         )
 
@@ -416,9 +415,8 @@ async def main(args) -> None:
                 )
             except AuthenticationError:
                 raise SystemExit(
-                    "OpenAI rejected the application key (401). Refresh it: set OPENAI_API_KEY "
-                    "or update ~/.oai_key_staging with a current key for the org whose Agents API "
-                    "is enabled."
+                    "OpenAI rejected the application key (401). Provide a current OPENAI_API_KEY "
+                    "for the org whose Agents API is enabled."
                 )
             print(green(f"  session {session.id}"), flush=True)
 
@@ -476,7 +474,10 @@ async def main(args) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--profile", default=os.environ.get("DATABRICKS_CONFIG_PROFILE") or "personal-staging"
+        "--profile",
+        default=os.environ.get("DATABRICKS_CONFIG_PROFILE"),
+        help="Databricks CLI config profile for the sandbox APIs. Defaults to "
+        "DATABRICKS_CONFIG_PROFILE, else the SDK's default auth.",
     )
     parser.add_argument(
         "--sandbox-id",
@@ -488,13 +489,12 @@ if __name__ == "__main__":
     parser.add_argument("--inactivity-timeout", type=int, default=900)
     parser.add_argument(
         "--app-key-file",
-        help="File holding the OpenAI application key. Overridden by OPENAI_API_KEY; "
-        "falls back to ~/.oai_key_staging.",
+        help="File holding the OpenAI application key. Overridden by OPENAI_API_KEY.",
     )
     parser.add_argument(
         "--executor-key-file",
         help="File holding the OpenAI environment key (passed to codex as CODEX_API_KEY). "
-        "Overridden by OPENAI_EXECUTOR_API_KEY; falls back to ~/.oai_env_key.",
+        "Overridden by OPENAI_EXECUTOR_API_KEY.",
     )
     parser.add_argument(
         "--keep-sandbox",
