@@ -13,6 +13,7 @@ from typing import Any, Literal, cast
 import tomlkit
 from tomlkit import TOMLDocument
 from tomlkit.exceptions import ParseError
+from tomlkit.items import Array
 
 from databricks_agentbricks.errors import AgentCliError
 from databricks_agentbricks.projects.types import (
@@ -466,6 +467,45 @@ def _tool_table(spec: ToolSpec) -> Any:
     return table
 
 
+def _tool_inline_table(spec: ToolSpec) -> Any:
+    # For hand-written `tools = [{...}]` arrays, where a `[[tools]]` table can't go.
+    table = tomlkit.inline_table()
+    table.update(_tool_table(spec).unwrap())
+    return table
+
+
+def _tool_fields(spec: ToolSpec) -> dict[str, str]:
+    scopes = " ".join(f"{scope.resource}:{scope.permission}" for scope in spec.policy.downscope)
+    values = {
+        "kind": spec.source.kind,
+        "service": spec.source.service,
+        "function": spec.source.function,
+        "space_id": spec.source.space_id,
+        "auth": spec.auth,
+        "scope": scopes or None,
+        "databricks_access_token_included": str(
+            spec.policy.databricks_access_token_included
+        ).lower(),
+    }
+    return {key: "none" if value is None else value for key, value in values.items()}
+
+
+def _tool_conflict(existing: ToolSpec, requested: ToolSpec) -> AgentCliError:
+    old, new = _tool_fields(existing), _tool_fields(requested)
+    fields = [key for key in old if old[key] != new[key]]
+    hint = f"Run `agentbricks tools remove {requested.id}` first, or use --name to add another binding."
+    if not fields:
+        return AgentCliError(
+            f"Tool {requested.id!r} already exists with a different configuration.", hint=hint
+        )
+    return AgentCliError(
+        f"Tool {requested.id!r} already exists with a different {', '.join(fields)} "
+        f"(existing: {', '.join(old[key] for key in fields)}; "
+        f"requested: {', '.join(new[key] for key in fields)}).",
+        hint=hint,
+    )
+
+
 class AgentProject:
     """Loaded mutable view of a project's canonical agent manifest."""
 
@@ -680,24 +720,21 @@ class AgentProject:
                 continue
             if existing == spec:
                 return False
-
-            def _summary(s: ToolSpec) -> str:
-                src = s.source
-                return src.service or src.function or src.space_id or src.kind
-
-            raise AgentCliError(
-                f"Tool id {spec.id!r} already exists with a different configuration "
-                f"(existing: {_summary(existing)}; requested: {_summary(spec)}).",
-                hint="Use --name to add it under a different id, or remove the existing "
-                "tool from agent.toml first.",
-            )
+            raise _tool_conflict(existing, spec)
         raw_tools = self._document.get("tools")
+        if isinstance(raw_tools, Array) and not raw_tools:
+            # An empty `tools = []` can't hold a `[[tools]]` table; replace it with one.
+            self._document.remove("tools")
+            raw_tools = None
         if raw_tools is None:
             raw_tools = tomlkit.aot()
             self._document.append("tools", raw_tools)
         elif not hasattr(raw_tools, "append"):
             raise AgentCliError("agent.toml tools must be an array of tables.")
-        raw_tools.append(_tool_table(spec))
+        if isinstance(raw_tools, Array):
+            raw_tools.append(_tool_inline_table(spec))
+        else:
+            raw_tools.append(_tool_table(spec))
         self.tools.append(spec)
         return True
 
@@ -710,6 +747,9 @@ class AgentProject:
             raise AgentCliError("agent.toml tools must be an array of tables.")
         del raw_tools[index]
         del self.tools[index]
+        if not raw_tools:
+            # tomlkit renders an empty array of tables as `tools = []`.
+            self._document.remove("tools")
         return True
 
     def bind_memory_store(self, name: str, store_id: str | None = None) -> bool:
@@ -907,6 +947,14 @@ class AgentProject:
         return True
 
     def write(self) -> pathlib.Path:
+        rendered = tomlkit.dumps(self._document)
+        try:
+            tomlkit.parse(rendered)
+        except ParseError as exc:
+            raise AgentCliError(
+                f"Refusing to write invalid agent manifest at {self.path}: {exc}.",
+                hint="The file was not changed. Report this as an agentbricks bug.",
+            ) from exc
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary: pathlib.Path | None = None
         try:
@@ -919,7 +967,7 @@ class AgentProject:
                 delete=False,
             ) as output:
                 temporary = pathlib.Path(output.name)
-                output.write(tomlkit.dumps(self._document))
+                output.write(rendered)
                 output.flush()
                 os.fsync(output.fileno())
             os.replace(temporary, self.path)
