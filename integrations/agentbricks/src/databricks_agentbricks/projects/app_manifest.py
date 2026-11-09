@@ -6,8 +6,9 @@ the document. Each caller keeps its own env policy on top of this - `deploy` ups
 named env entries when reconciling a deployment, while `dev` filters and rewrites the env
 list to build a local-only manifest. `dev`'s policy lives with `dev`; `deploy`'s lives here,
 as `AppManifest.upsert_env_file`, because it is the same merge `AppManifest.upsert_env`
-implements, one level up (read-or-scaffold the file, apply, write back) - and splitting the two
-halves across modules only hid that.
+implements, one level up (read the file, apply, write back) - and splitting the two halves across
+modules only hid that. `AppManifest.require_deployable` is deploy's preflight: deploy never writes a
+new `app.yaml`, so it refuses a source without a usable one before touching the workspace.
 
 Two divergences between the callers are preserved rather than unified:
 
@@ -29,7 +30,9 @@ import yaml
 
 from databricks_agentbricks.errors import AgentCliError
 
-_SCAFFOLD_COMMAND = ["# TODO: set your run command, e.g. ['uvicorn', 'app:app']"]
+# Placeholder commands from older deploy scaffolds and templates. An app.yaml still carrying one can
+# never start, so deploy refuses it (the same rule as doctor's `app_command` check).
+_PLACEHOLDER_MARKERS = ("# todo: set your run command", "replace_with")
 
 
 class AppManifest:
@@ -61,9 +64,32 @@ class AppManifest:
         return cls(loaded if isinstance(loaded, dict) else {})
 
     @classmethod
-    def scaffold(cls) -> "AppManifest":
-        """A fresh manifest for a source dir that has no ``app.yaml`` yet."""
-        return cls({"command": _SCAFFOLD_COMMAND, "env": []})
+    def require_deployable(cls, source: pathlib.Path) -> None:
+        """deploy's preflight: raise ``AgentCliError`` unless <source>/app.yaml exists, parses
+        strictly, and has no placeholder command. Paths in the error are absolute.
+        """
+        directory = source.resolve()
+        app_yaml = directory / "app.yaml"
+        if not app_yaml.is_file():
+            if (directory / "agent.toml").is_file():
+                raise AgentCliError(
+                    f"No app.yaml in {directory}.",
+                    hint="Add an app.yaml with your start command, or re-create the project with "
+                    "`agentbricks init`.",
+                )
+            raise AgentCliError(
+                f"No Agent Bricks project in {directory} (no agent.toml or app.yaml).",
+                hint="Run from your project directory, pass --source <dir>, or create one with "
+                "`agentbricks init`.",
+            )
+        command = cls.parse(app_yaml.read_text(), source=app_yaml)._doc.get("command")
+        parts = command if isinstance(command, list) else [command]
+        rendered = " ".join(str(part) for part in parts if part is not None).casefold()
+        if any(marker in rendered for marker in _PLACEHOLDER_MARKERS):
+            raise AgentCliError(
+                f"{app_yaml} has a placeholder command.",
+                hint="Set a real `command:` in it, or create a project with `agentbricks init`.",
+            )
 
     def raw_env(self) -> list:
         """The document's ``env`` list, or ``[]`` if absent or not a list."""
@@ -117,30 +143,23 @@ class AppManifest:
         removals: Sequence[str] = (),
         *,
         prune_prefixes: Sequence[str] = (),
-    ) -> bool:
+    ) -> None:
         """Reconcile env entries in <source>/app.yaml: upsert ``updates``, drop any named in ``removals``.
 
-        The file-level half of ``deploy``'s env policy - read-or-scaffold, apply, write back - next to the
+        The file-level half of ``deploy``'s env policy - read, apply, write back - next to the
         document-level half (:meth:`AppManifest.upsert_env`) it drives, so the manifest contract lives in
-        one module. Returns True if it scaffolded a new file.
+        one module. It never creates app.yaml; deploy checks it exists up front
+        (:meth:`AppManifest.require_deployable`).
 
         ``removals`` lets an unbind clear stale agentbricks-managed env (e.g. the ``MLFLOW_*`` keys when
         tracing is unbound) so the manifest stops pointing the deployed runtime at a resource that is no
-        longer configured; without it, the upsert-only merge would leave the stale entry behind. A
-        removal-only patch does not scaffold a missing app.yaml: without a manifest, there is no runtime
-        configuration to detach.
+        longer configured; without it, the upsert-only merge would leave the stale entry behind.
         ``updates`` and ``removals`` are expected to be disjoint.
         """
         app_yaml = source / "app.yaml"
-        if not app_yaml.exists() and not updates:
-            return False
-        if app_yaml.exists():
-            manifest = cls.parse_lenient(app_yaml.read_text())
-            scaffolded = False
-        else:
-            manifest = cls.scaffold()
-            scaffolded = True
-
+        if not app_yaml.is_file():
+            # Guard: require_deployable ran first, so app.yaml only goes missing mid-deploy.
+            raise AgentCliError(f"No app.yaml in {source.resolve()}.")
+        manifest = cls.parse_lenient(app_yaml.read_text())
         manifest.upsert_env(updates, removals, prune_prefixes=prune_prefixes)
         app_yaml.write_text(manifest.to_yaml())
-        return scaffolded
