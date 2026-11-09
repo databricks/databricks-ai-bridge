@@ -713,3 +713,21 @@ async def test_hydrate_extracts_safe_archive(mod: Any, monkeypatch: pytest.Monke
     payload = _tar_bytes("./a.txt")
     await session.hydrate_workspace(io.BytesIO(payload))
     assert uploaded == [payload]  # safe archive proceeded to upload + extract
+
+
+def test_tags_user_agent_on_supplied_client(mod: Any) -> None:
+    class _RecordingConfig:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def with_user_agent_extra(self, key: str, value: str) -> "_RecordingConfig":
+            self.calls.append((key, value))
+            return self
+
+    config = _RecordingConfig()
+    mod.DatabricksSandboxClient(client=types.SimpleNamespace(config=config))
+
+    assert len(config.calls) == 1
+    key, value = config.calls[0]
+    assert key == "databricks-openai"
+    assert isinstance(value, str) and value
