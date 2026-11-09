@@ -9,10 +9,10 @@ run-name: "AgentBricksReviewer #${{ github.event.pull_request.number || github.e
 #
 # Triggers:
 #   - pull_request_target opened/reopened/ready_for_review/synchronize, for non-draft PRs
-#     (including fork PRs) whose author has write, maintain, or admin access to
-#     this repo. The event's author_association can't be used for this: it misses
-#     members whose org membership is private. Other authors' PRs need a
-#     member's `/review`. GitHub blocks pull_request_target on public repos from
+#     (including fork PRs) from any non-bot author. Only authors with write,
+#     maintain, or admin access can be auto-approved; the event's
+#     author_association can't be used for that check because it misses members
+#     whose org membership is private. GitHub blocks pull_request_target on public repos from
 #     2026-12-02 unless a repo Actions policy allows it.
 #   - a `/review` comment from an OWNER/MEMBER/COLLABORATOR (`/review force`
 #     re-reviews a commit that already has a review)
@@ -143,17 +143,17 @@ jobs:
           if ! permission="$(gh api "repos/$REPO/collaborators/$AUTHOR/permission" --jq .permission 2>/dev/null)"; then
             permission=unknown
           fi
+          # Every author gets a review; only write-access authors can be auto-approved,
+          # which the auto-approve step checks again.
           case "$permission" in
             admin|maintain|write)
               echo "$AUTHOR has $permission access (author_association: $AUTHOR_ASSOCIATION); reviewing." ;;
             *)
-              echo "::notice::Not auto-reviewing: $AUTHOR has '$permission' access (author_association: $AUTHOR_ASSOCIATION). A member can comment /review."
-              echo "skip=true" >> "$GITHUB_OUTPUT" ;;
+              echo "::notice::$AUTHOR has '$permission' access (author_association: $AUTHOR_ASSOCIATION); reviewing, but this PR can't be auto-approved." ;;
           esac
 
       - name: Skip if this commit already has a review
         id: dupe
-        if: steps.author.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           COMMENT_BODY: ${{ github.event.comment.body }}
@@ -196,7 +196,7 @@ jobs:
 
       # Default branch for automatic runs; the selected ref for manual dispatch.
       - name: Check out trusted code
-        if: steps.author.outputs.skip != 'true' && steps.dupe.outputs.skip != 'true'
+        if: steps.dupe.outputs.skip != 'true'
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.repository.default_branch }}
@@ -206,7 +206,7 @@ jobs:
         id: push_budget
         if: >-
           github.event_name == 'pull_request_target' && github.event.action == 'synchronize' &&
-          steps.author.outputs.skip != 'true' && steps.dupe.outputs.skip != 'true'
+          steps.dupe.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           MAX_PUSH_REVIEWS: ${{ vars.AI_REVIEW_MAX_PUSH_REVIEWS || '3' }}
@@ -217,7 +217,7 @@ jobs:
             >> "$GITHUB_OUTPUT"
 
       - name: Get gateway credentials
-        if: steps.author.outputs.skip != 'true' && steps.dupe.outputs.skip != 'true' && steps.push_budget.outputs.skip != 'true'
+        if: steps.dupe.outputs.skip != 'true' && steps.push_budget.outputs.skip != 'true'
         id: creds
         env:
           GATEWAY_BASE_URL: ${{ secrets.GATEWAY_BASE_URL }}
